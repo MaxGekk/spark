@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.json
 import java.util.{Locale, TimeZone}
 
 import com.fasterxml.jackson.core.{JsonFactory, JsonParser}
+import org.apache.commons.codec.binary.Base64
 import org.apache.commons.lang3.time.FastDateFormat
 
 import org.apache.spark.internal.Logging
@@ -90,6 +91,10 @@ private[sql] class JSONOptions(
    * If charset is not specified (None), it will be detected automatically.
    */
   val charset: Option[String] = parameters.get("charset")
+
+  val delimiter: Option[Array[Byte]] = {
+    parameters.get("delimiter").map(Base64.decodeBase64(_))
+  }
 
   /** Sets config options on a Jackson [[JsonFactory]]. */
   def setJacksonOptions(factory: JsonFactory): Unit = {

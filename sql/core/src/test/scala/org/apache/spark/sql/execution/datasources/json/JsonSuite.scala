@@ -2069,12 +2069,11 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
   }
 
   test("json in UTF-16 with BOM") {
+    import java.util.Base64
     val fileName = "json-tests/utf16WithBOM.json"
     val schema = new StructType().add("firstName", StringType).add("lastName", StringType)
     val jsonDF = spark.read.schema(schema)
-      // The mode filters null rows produced because new line delimiter
-      // for UTF-8 is used by default.
-      .option("mode", "DROPMALFORMED")
+      .option("delimiter", Base64.getEncoder.encodeToString(Array(0xd.toByte, 0, 0xa.toByte, 0)))
       .json(testFile(fileName))
 
     checkAnswer(jsonDF, Seq(
