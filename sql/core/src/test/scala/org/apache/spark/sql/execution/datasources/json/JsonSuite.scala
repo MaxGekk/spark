@@ -2218,7 +2218,7 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
     withTempPath { path =>
       val ds = spark.createDataset(Seq(
         ("a", 1), ("b", 2), ("c", 3))
-      ).repartition(2)
+      ).repartition(1)
       ds.write
         .option("charset", charset)
         .format("json").mode("overwrite")
@@ -2227,9 +2227,7 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
         .read
         .schema(ds.schema)
         .option("charset", charset)
-        // Wrong (nulls) rows are produced because new line delimiter
-        // for UTF-8 is used by default.
-        .option("mode", "DROPMALFORMED")
+        .option("recordSeparator", "x00 0a")
         .json(path.getCanonicalPath)
 
       checkAnswer(savedDf.toDF(), ds.toDF())
