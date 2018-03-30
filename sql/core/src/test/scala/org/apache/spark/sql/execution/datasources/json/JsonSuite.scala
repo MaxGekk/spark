@@ -2073,9 +2073,7 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
     val fileName = "json-tests/utf16WithBOM.json"
     val schema = new StructType().add("firstName", StringType).add("lastName", StringType)
     val jsonDF = spark.read.schema(schema)
-      // This option will be replaced by .option("lineSep", "x00 0a")
-      // as soon as lineSep allows to specify sequence of bytes in hexadecimal format.
-      .option("mode", "DROPMALFORMED")
+      .option("recordDelimiter", "x0d 00 0a 00")
       .json(testFile(fileName))
 
     checkAnswer(jsonDF, Seq(
@@ -2225,9 +2223,7 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
       val savedDf = spark
         .read
         .schema(ds.schema)
-        // This option will be replaced by .option("lineSep", "x00 0a")
-        // as soon as lineSep allows to specify sequence of bytes in hexadecimal format.
-        .option("mode", "DROPMALFORMED")
+        .option("lineSep", "x00 0a")
         .json(path.getCanonicalPath)
 
       checkAnswer(savedDf.toDF(), ds.toDF())
@@ -2291,7 +2287,9 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
     ("\u000d\u000a", "encoding", "UTF-32BE", false),
     ("\u000a\u000d", "charset", "UTF-8", true),
     ("===", "encoding", "UTF-16", false),
-    ("$^+", "charset", "UTF-32LE", true)
+    ("$^+", "charset", "UTF-32LE", true),
+    ("x00 0a 00 0d", "charset", "UTF-16BE", false),
+    ("x0a.00.00.00 0d.00.00.00", "encoding", "UTF-32LE", true)
   ).zipWithIndex.foreach{case ((d, o, c, s), i) => checkReadJson(d, o, c, s, i)}
   // scalastyle:on nonascii
 
