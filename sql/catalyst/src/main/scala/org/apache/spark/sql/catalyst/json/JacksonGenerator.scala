@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.json
 
 import java.io.Writer
-import java.nio.charset.StandardCharsets
+import java.nio.charset.Charset
 
 import com.fasterxml.jackson.core._
 
@@ -75,7 +75,12 @@ private[sql] class JacksonGenerator(
 
   private val gen = new JsonFactory().createGenerator(writer).setRootValueSeparator(null)
 
-  private val lineSeparator: String = options.lineSeparatorInWrite
+  private val lineSeparator: String = {
+    new String(
+      options.lineSeparatorInWrite.getOrElse(Array(0x0A.toByte)),
+      Charset.forName(options.charset.getOrElse("UTF-8"))
+    )
+  }
 
   private def makeWriter(dataType: DataType): ValueWriter = dataType match {
     case NullType =>
@@ -255,7 +260,6 @@ private[sql] class JacksonGenerator(
   }
 
   def writeLineEnding(): Unit = {
-    // Note that JSON uses writer with UTF-8 charset. This string will be written out as UTF-8.
     gen.writeRaw(lineSeparator)
   }
 }

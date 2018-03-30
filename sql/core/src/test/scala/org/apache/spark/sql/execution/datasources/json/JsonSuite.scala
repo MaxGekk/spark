@@ -2073,9 +2073,10 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
     val fileName = "json-tests/utf16WithBOM.json"
     val schema = new StructType().add("firstName", StringType).add("lastName", StringType)
     val jsonDF = spark.read.schema(schema)
-      .option("recordDelimiter", "x0d 00 0a 00")
+      .option("lineSep", "x0d 00 0a 00")
       .json(testFile(fileName))
 
+    val a = jsonDF.collect()
     checkAnswer(jsonDF, Seq(
       Row("Chris", "Baird"), Row("Doug", "Rood")
     ))

@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.catalyst.json
 
-import java.nio.charset.StandardCharsets
+import java.nio.charset.{Charset, StandardCharsets}
 import java.util.{Locale, TimeZone}
 
 import com.fasterxml.jackson.core.{JsonFactory, JsonParser}
@@ -87,30 +87,51 @@ private[sql] class JSONOptions(
   val multiLine = parameters.get("multiLine").map(_.toBoolean).getOrElse(false)
 
   /**
-   * A sequence of bytes between two consecutive json records.
-   */
-  val lineSeparator: Option[String] = parameters.get("lineSep")
-
-  /**
    * Standard charset name. For example UTF-8, UTF-16 and UTF-32.
    * If charset is not specified (None), it will be detected automatically.
    */
-  val charset: Option[String] = parameters.get("charset")
-    .orElse(parameters.get("encoding")).map { cs =>
-      if (multiLine == false && cs != "UTF-8" && lineSeparator.isEmpty) {
-        throw new IllegalArgumentException(
-          s"""Please, set the 'lineSep' option for the given charset $cs.
-             |Example: .option("lineSep", "|^|")
-             |Note: lineSep can be detected automatically for UTF-8 only.""".stripMargin
-        )
-      }
-      cs
+  val charset: Option[String] = parameters.get("encoding").orElse(parameters.get("charset"))
+
+  /**
+   * A sequence of bytes between two consecutive json objects.
+   * Format of the option is:
+   *   selector (1 char) + separator spec (any length) | sequence of chars
+   *
+   * Currently the following selectors are supported:
+   * - 'x' + sequence of bytes in hexadecimal format. For example: "x0a 0d".
+   *   Hex pairs can be separated by any chars different from 0-9,A-F,a-f
+   * - '\' - reserved for a sequence of control chars like "\r\n"
+   *         and unicode escape like "\u000D\u000A"
+   * - 'r' and '/' - reserved for future use
+   */
+  val lineSeparator: Option[Array[Byte]] = parameters.get("lineSep").collect {
+    case hexs if hexs.startsWith("x") =>
+      hexs.replaceAll("[^0-9A-Fa-f]", "").sliding(2, 2).toArray
+        .map(Integer.parseInt(_, 16).toByte)
+    case reserved if reserved.startsWith("r") || reserved.startsWith("/") =>
+      throw new NotImplementedError(s"The $reserved selector has not supported yet")
+    case "" => throw new IllegalArgumentException("lineSep cannot be empty string")
+    case lineSep => lineSep.getBytes(charset.getOrElse("UTF-8"))
+  }.orElse {
+    if (multiLine == false && charset.isDefined && charset != Some("UTF-8")) {
+      throw new IllegalArgumentException(
+        s"""Please, set the 'lineSep' option for the given charset ${charset.get}.
+           |Example: .option("lineSep", "|^|")
+           |Note: lineSep can be detected automatically for UTF-8 only.""".stripMargin
+      )
+    }
+    None
   }
 
-  val lineSeparatorInRead: Option[Array[Byte]] = lineSeparator.map { lineSep =>
-    lineSep.getBytes(charset.getOrElse("UTF-8"))
-  }
-  val lineSeparatorInWrite: String = lineSeparator.getOrElse("\n")
+  /**
+   * A sequence of bytes between two consecutive json objects used by JSON Reader to
+   * split input stream/text.
+   */
+  val lineSeparatorInRead: Option[Array[Byte]] = lineSeparator
+  /**
+   * JSON Writer puts the string between json objects in output stream/text.
+   */
+  val lineSeparatorInWrite: Option[Array[Byte]] = lineSeparator
 
   /** Sets config options on a Jackson [[JsonFactory]]. */
   def setJacksonOptions(factory: JsonFactory): Unit = {
@@ -125,6 +146,7 @@ private[sql] class JSONOptions(
   }
 
   def getTextOptions: Map[String, String] = {
-    Map[String, String]() ++ charset.map("charset" -> _) ++ lineSeparator.map("lineSep" -> _)
+    Map[String, String]() ++ charset.map("charset" -> _) ++
+      lineSeparator.map("lineSep" -> _.map("x%02x".format(_)).mkString)
   }
 }

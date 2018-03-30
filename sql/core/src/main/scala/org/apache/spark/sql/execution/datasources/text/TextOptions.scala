@@ -43,16 +43,37 @@ private[text] class TextOptions(@transient private val parameters: CaseInsensiti
 
   val charset: Option[String] = Some("UTF-8")
 
-  val lineSeparator: Option[Array[Byte]] = parameters.get("lineSep").map { lineSep =>
-    require(lineSep.nonEmpty, s"'$LINE_SEPARATOR' cannot be an empty string.")
-    lineSep.getBytes(charset.getOrElse(
-      throw new IllegalArgumentException("Please, set the charset option for the delimiter")))
+  /**
+   * A sequence of bytes between two consecutive lines in a text.
+   * Format of the option is:
+   *   selector (1 char) + separator spec (any length) | sequence of chars
+   *
+   * Currently the following selectors are supported:
+   * - 'x' + sequence of bytes in hexadecimal format. For example: "x0a 0d".
+   *   Hex pairs can be separated by any chars different from 0-9,A-F,a-f
+   * - '\' - reserved for a sequence of control chars like "\r\n"
+   *         and unicode escape like "\u000D\u000A"
+   * - 'r' and '/' - reserved for future use
+   */
+  val lineSeparator: Option[Array[Byte]] = parameters.get("lineSep").collect {
+    case hexs if hexs.startsWith("x") =>
+      hexs.replaceAll("[^0-9A-Fa-f]", "").sliding(2, 2).toArray
+        .map(Integer.parseInt(_, 16).toByte)
+    case reserved if reserved.startsWith("r") || reserved.startsWith("/") =>
+      throw new NotImplementedError(s"The $reserved selector has not supported yet")
+    case "" => throw new IllegalArgumentException("lineSep cannot be empty string")
+    case lineSep => lineSep.getBytes(charset.getOrElse("UTF-8"))
   }
 
-  // Note that the option 'lineSep' uses a different default value in read and write.
+  /**
+   * A sequence of bytes between two consecutive lines used by Text Reader to
+   * split input stream/text.
+   */
   val lineSeparatorInRead: Option[Array[Byte]] = lineSeparator
-  val lineSeparatorInWrite: Array[Byte] =
-    lineSeparatorInRead.getOrElse("\n".getBytes(StandardCharsets.UTF_8))
+  /**
+   * Text Writer puts the string between lines in output stream/text.
+   */
+  val lineSeparatorInWrite: Option[Array[Byte]] = lineSeparator
 }
 
 private[datasources] object TextOptions {
