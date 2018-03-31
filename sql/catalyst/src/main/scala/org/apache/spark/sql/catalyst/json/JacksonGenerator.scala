@@ -78,7 +78,7 @@ private[sql] class JacksonGenerator(
   private val lineSeparator: String = {
     new String(
       options.lineSeparatorInWrite.getOrElse(Array(0x0A.toByte)),
-      Charset.forName(options.charset.getOrElse("UTF-8"))
+      Charset.forName(options.encoding.getOrElse("UTF-8"))
     )
   }
 

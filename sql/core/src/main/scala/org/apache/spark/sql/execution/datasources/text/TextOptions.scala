@@ -41,7 +41,7 @@ private[text] class TextOptions(@transient private val parameters: CaseInsensiti
    */
   val wholeText = parameters.getOrElse(WHOLETEXT, "false").toBoolean
 
-  val charset: Option[String] = Some("UTF-8")
+  val encoding: Option[String] = parameters.get(ENCODING)
 
   /**
    * A sequence of bytes between two consecutive lines in a text.
@@ -62,7 +62,7 @@ private[text] class TextOptions(@transient private val parameters: CaseInsensiti
     case reserved if reserved.startsWith("r") || reserved.startsWith("/") =>
       throw new NotImplementedError(s"The $reserved selector has not supported yet")
     case "" => throw new IllegalArgumentException("lineSep cannot be empty string")
-    case lineSep => lineSep.getBytes(charset.getOrElse("UTF-8"))
+    case lineSep => lineSep.getBytes(encoding.getOrElse("UTF-8"))
   }
 
   /**
@@ -79,5 +79,6 @@ private[text] class TextOptions(@transient private val parameters: CaseInsensiti
 private[datasources] object TextOptions {
   val COMPRESSION = "compression"
   val WHOLETEXT = "wholetext"
+  val ENCODING = "encoding"
   val LINE_SEPARATOR = "lineSep"
 }

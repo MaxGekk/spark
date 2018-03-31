@@ -17,7 +17,6 @@
 
 package org.apache.spark.sql.catalyst.json
 
-import java.nio.charset.{Charset, StandardCharsets}
 import java.util.{Locale, TimeZone}
 
 import com.fasterxml.jackson.core.{JsonFactory, JsonParser}
@@ -87,10 +86,19 @@ private[sql] class JSONOptions(
   val multiLine = parameters.get("multiLine").map(_.toBoolean).getOrElse(false)
 
   /**
-   * Standard charset name. For example UTF-8, UTF-16 and UTF-32.
-   * If charset is not specified (None), it will be detected automatically.
+   * Standard charset name. For example UTF-8, UTF-16LE and UTF-32BE.
+   * If the encoding is not specified (None), it will be detected automatically.
    */
-  val charset: Option[String] = parameters.get("encoding").orElse(parameters.get("charset"))
+  val encoding: Option[String] = parameters.get("encoding")
+    .orElse(parameters.get("charset")).map { enc =>
+    val blacklist = List("UTF16", "UTF32")
+    val isBlacklisted = blacklist.contains(enc.toUpperCase.replaceAll("-|_", ""))
+    require(multiLine || !isBlacklisted,
+      s"""The ${enc} encoding must not be included in the blacklist:
+         | ${blacklist.mkString(", ")}""".stripMargin)
+
+    enc
+  }
 
   /**
    * A sequence of bytes between two consecutive json objects.
@@ -111,15 +119,13 @@ private[sql] class JSONOptions(
     case reserved if reserved.startsWith("r") || reserved.startsWith("/") =>
       throw new NotImplementedError(s"The $reserved selector has not supported yet")
     case "" => throw new IllegalArgumentException("lineSep cannot be empty string")
-    case lineSep => lineSep.getBytes(charset.getOrElse("UTF-8"))
+    case lineSep => lineSep.getBytes(encoding.getOrElse("UTF-8"))
   }.orElse {
-    if (multiLine == false && charset.isDefined && charset != Some("UTF-8")) {
-      throw new IllegalArgumentException(
-        s"""Please, set the 'lineSep' option for the given charset ${charset.get}.
-           |Example: .option("lineSep", "|^|")
-           |Note: lineSep can be detected automatically for UTF-8 only.""".stripMargin
-      )
-    }
+    val forcingLineSep = multiLine || encoding.isEmpty || encoding == Some("UTF-8")
+    require(forcingLineSep,
+      s"""The lineSep option must be specified for the ${encoding.get} encoding.
+         |Example: .option("lineSep", "|^|")
+         |Note: lineSep can be detected automatically for UTF-8 only.""".stripMargin)
     None
   }
 
@@ -146,7 +152,7 @@ private[sql] class JSONOptions(
   }
 
   def getTextOptions: Map[String, String] = {
-    Map[String, String]() ++ charset.map("charset" -> _) ++
+    Map[String, String]() ++ encoding.map("encoding" -> _) ++
       lineSeparator.map("lineSep" -> _.map("x%02x".format(_)).mkString)
   }
 }
