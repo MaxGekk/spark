@@ -37,7 +37,8 @@ import org.apache.spark.util.Utils
  */
 class JacksonParser(
     schema: StructType,
-    val options: JSONOptions) extends Logging {
+    val options: JSONOptions,
+    caseSensitive: Boolean) extends Logging {
 
   import JacksonUtils._
   import com.fasterxml.jackson.core.JsonToken._
@@ -281,6 +282,14 @@ class JacksonParser(
         s"Failed to parse a value for data type ${dataType.catalogString} (current token: $token).")
   }
 
+  private def getCurrentName(parser: JsonParser): String = {
+    if (caseSensitive) {
+      parser.getCurrentName
+    } else {
+      parser.getCurrentName.toLowerCase
+    }
+  }
+
   /**
    * Parse an object from the token stream into a new Row representing the schema.
    * Fields in the json that are not defined in the requested schema will be dropped.
@@ -291,7 +300,7 @@ class JacksonParser(
       fieldConverters: Array[ValueConverter]): InternalRow = {
     val row = new GenericInternalRow(schema.length)
     while (nextUntil(parser, JsonToken.END_OBJECT)) {
-      schema.getFieldIndex(parser.getCurrentName) match {
+      schema.getFieldIndex(getCurrentName(parser)) match {
         case Some(index) =>
           row.update(index, fieldConverters(index).apply(parser))
 
@@ -312,7 +321,7 @@ class JacksonParser(
     val keys = ArrayBuffer.empty[UTF8String]
     val values = ArrayBuffer.empty[Any]
     while (nextUntil(parser, JsonToken.END_OBJECT)) {
-      keys += UTF8String.fromString(parser.getCurrentName)
+      keys += UTF8String.fromString(getCurrentName(parser))
       values += fieldConverter.apply(parser)
     }
 

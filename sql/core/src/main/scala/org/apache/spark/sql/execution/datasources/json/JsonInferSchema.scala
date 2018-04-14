@@ -41,7 +41,8 @@ private[sql] object JsonInferSchema {
   def infer[T](
       json: RDD[T],
       configOptions: JSONOptions,
-      createParser: (JsonFactory, T) => JsonParser): StructType = {
+      createParser: (JsonFactory, T) => JsonParser,
+      caseSensitive: Boolean): StructType = {
     val parseMode = configOptions.parseMode
     val columnNameOfCorruptRecord = configOptions.columnNameOfCorruptRecord
 
@@ -53,7 +54,7 @@ private[sql] object JsonInferSchema {
         try {
           Utils.tryWithResource(createParser(factory, row)) { parser =>
             parser.nextToken()
-            Some(inferField(parser, configOptions))
+            Some(inferField(parser, configOptions, caseSensitive))
           }
         } catch {
           case  e @ (_: RuntimeException | _: JsonProcessingException) => parseMode match {
@@ -98,14 +99,15 @@ private[sql] object JsonInferSchema {
   /**
    * Infer the type of a json document from the parser's token stream
    */
-  private def inferField(parser: JsonParser, configOptions: JSONOptions): DataType = {
+  private def inferField(parser: JsonParser, configOptions: JSONOptions,
+      caseSensitive: Boolean): DataType = {
     import com.fasterxml.jackson.core.JsonToken._
     parser.getCurrentToken match {
       case null | VALUE_NULL => NullType
 
       case FIELD_NAME =>
         parser.nextToken()
-        inferField(parser, configOptions)
+        inferField(parser, configOptions, caseSensitive)
 
       case VALUE_STRING if parser.getTextLength < 1 =>
         // Zero length strings and nulls have special handling to deal
@@ -121,8 +123,8 @@ private[sql] object JsonInferSchema {
         val builder = Array.newBuilder[StructField]
         while (nextUntil(parser, END_OBJECT)) {
           builder += StructField(
-            parser.getCurrentName,
-            inferField(parser, configOptions),
+            if (caseSensitive) parser.getCurrentName else parser.getCurrentName.toLowerCase,
+            inferField(parser, configOptions, caseSensitive),
             nullable = true)
         }
         val fields: Array[StructField] = builder.result()
@@ -137,7 +139,7 @@ private[sql] object JsonInferSchema {
         var elementType: DataType = NullType
         while (nextUntil(parser, END_ARRAY)) {
           elementType = compatibleType(
-            elementType, inferField(parser, configOptions))
+            elementType, inferField(parser, configOptions, caseSensitive))
         }
 
         ArrayType(elementType)

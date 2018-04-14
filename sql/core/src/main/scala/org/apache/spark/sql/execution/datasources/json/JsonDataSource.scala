@@ -94,13 +94,16 @@ object TextInputJsonDataSource extends JsonDataSource {
       parsedOptions: JSONOptions): StructType = {
     val json: Dataset[String] = createBaseDataset(
       sparkSession, inputPaths, parsedOptions.lineSeparator)
-    inferFromDataset(json, parsedOptions)
+    val caseSensitive = sparkSession.sessionState.conf.caseSensitiveAnalysis
+
+    inferFromDataset(json, parsedOptions, caseSensitive)
   }
 
-  def inferFromDataset(json: Dataset[String], parsedOptions: JSONOptions): StructType = {
+  def inferFromDataset(json: Dataset[String], parsedOptions: JSONOptions,
+      caseSensitive: Boolean): StructType = {
     val sampled: Dataset[String] = JsonUtils.sample(json, parsedOptions)
     val rdd: RDD[UTF8String] = sampled.queryExecution.toRdd.map(_.getUTF8String(0))
-    JsonInferSchema.infer(rdd, parsedOptions, CreateJacksonParser.utf8String)
+    JsonInferSchema.infer(rdd, parsedOptions, CreateJacksonParser.utf8String, caseSensitive)
   }
 
   private def createBaseDataset(
@@ -153,7 +156,9 @@ object MultiLineJsonDataSource extends JsonDataSource {
       parsedOptions: JSONOptions): StructType = {
     val json: RDD[PortableDataStream] = createBaseRdd(sparkSession, inputPaths)
     val sampled: RDD[PortableDataStream] = JsonUtils.sample(json, parsedOptions)
-    JsonInferSchema.infer(sampled, parsedOptions, createParser)
+    val caseSensitive = sparkSession.sessionState.conf.caseSensitiveAnalysis
+
+    JsonInferSchema.infer(sampled, parsedOptions, createParser, caseSensitive)
   }
 
   private def createBaseRdd(

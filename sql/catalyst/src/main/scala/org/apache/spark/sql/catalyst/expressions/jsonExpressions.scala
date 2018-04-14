@@ -524,6 +524,8 @@ case class JsonToStructs(
   // can generate incorrect files if values are missing in columns declared as non-nullable.
   val nullableSchema = if (forceNullableSchema) schema.asNullable else schema
 
+  val caseSensitive = SQLConf.get.getConf(SQLConf.CASE_SENSITIVE)
+
   override def nullable: Boolean = true
 
   // Used in `FunctionRegistry`
@@ -567,7 +569,8 @@ case class JsonToStructs(
   lazy val parser =
     new JacksonParser(
       rowSchema,
-      new JSONOptions(options + ("mode" -> FailFastMode.name), timeZoneId.get))
+      new JSONOptions(options + ("mode" -> FailFastMode.name), timeZoneId.get),
+      caseSensitive)
 
   override def dataType: DataType = nullableSchema
 

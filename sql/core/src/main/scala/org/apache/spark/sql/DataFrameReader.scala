@@ -419,9 +419,10 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
       extraOptions.toMap,
       sparkSession.sessionState.conf.sessionLocalTimeZone,
       sparkSession.sessionState.conf.columnNameOfCorruptRecord)
+    val caseSensitive = sparkSession.sessionState.conf.caseSensitiveAnalysis
 
     val schema = userSpecifiedSchema.getOrElse {
-      TextInputJsonDataSource.inferFromDataset(jsonDataset, parsedOptions)
+      TextInputJsonDataSource.inferFromDataset(jsonDataset, parsedOptions, caseSensitive)
     }
 
     verifyColumnNameOfCorruptRecord(schema, parsedOptions.columnNameOfCorruptRecord)
@@ -430,7 +431,7 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
     val createParser = CreateJacksonParser.string _
     val parsed = jsonDataset.rdd.mapPartitions { iter =>
-      val rawParser = new JacksonParser(actualSchema, parsedOptions)
+      val rawParser = new JacksonParser(actualSchema, parsedOptions, caseSensitive)
       val parser = new FailureSafeParser[String](
         input => rawParser.parse(input, createParser, UTF8String.fromString),
         parsedOptions.parseMode,

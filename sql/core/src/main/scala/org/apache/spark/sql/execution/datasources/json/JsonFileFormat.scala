@@ -126,9 +126,10 @@ class JsonFileFormat extends TextBasedFileFormat with DataSourceRegister {
         "df.filter($\"_corrupt_record\".isNotNull).count()."
       )
     }
+    val caseSensitive = sparkSession.sessionState.conf.caseSensitiveAnalysis
 
     (file: PartitionedFile) => {
-      val parser = new JacksonParser(actualSchema, parsedOptions)
+      val parser = new JacksonParser(actualSchema, parsedOptions, caseSensitive)
       JsonDataSource(parsedOptions).readFile(
         broadcastedHadoopConf.value.value,
         file,
