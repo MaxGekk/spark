@@ -2162,4 +2162,26 @@ class JsonSuite extends QueryTest with SharedSQLContext with TestJsonData {
 
     assert(ds.schema == new StructType().add("f1", LongType))
   }
+
+  test("Respect to spark.sql.caseSensitive while json parsing") {
+    withSQLConf(SQLConf.CASE_SENSITIVE.key -> "false") {
+      withTempPath { dir =>
+        val path = dir.getCanonicalPath
+        val data =
+          """{"field": "a"}
+            |{"Field": "b"}
+            |{"FIELD": "c"}""".stripMargin
+        Seq(data).toDF().repartition(1).write.text(path)
+        val readback = spark.read.json(path)
+
+        checkAnswer(readback, Seq(Row("a"), Row("b"), Row("c")))
+
+        val expectedSchema = new StructType().add("field", StringType)
+        assert(readback.schema == expectedSchema)
+
+        val readbackWithSchema = spark.read.schema(expectedSchema).json(path)
+        checkAnswer(readbackWithSchema, Seq(Row("a"), Row("b"), Row("c")))
+      }
+    }
+  }
 }
