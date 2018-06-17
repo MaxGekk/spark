@@ -2222,18 +2222,21 @@ def to_json(col, options={}):
 
 
 @since(1.5)
-def size(col):
+def size(col, sizeOfNull=-1):
     """
     Collection function: returns the length of the array or map stored in the column.
 
     :param col: name of column or expression
+    :param sizeOfNull: size of null input
 
-    >>> df = spark.createDataFrame([([1, 2, 3],),([1],),([],)], ['data'])
+    >>> df = spark.createDataFrame([([1, 2, 3],),([1],),([],),(None,)], ['data'])
     >>> df.select(size(df.data)).collect()
-    [Row(size(data)=3), Row(size(data)=1), Row(size(data)=0)]
+    [Row(size(data)=3), Row(size(data)=1), Row(size(data)=0), Row(size(data)=-1)]
+    >>> df.select(size(df.data, 0)).collect()
+    [Row(size(data)=3), Row(size(data)=1), Row(size(data)=0), Row(size(data)=0)]
     """
     sc = SparkContext._active_spark_context
-    return Column(sc._jvm.functions.size(_to_java_column(col)))
+    return Column(sc._jvm.functions.size(_to_java_column(col), sizeOfNull))
 
 
 @since(2.4)
