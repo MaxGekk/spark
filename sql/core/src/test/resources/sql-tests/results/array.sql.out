@@ -154,9 +154,11 @@ select
   size(double_array),
   size(float_array),
   size(date_array),
-  size(timestamp_array)
+  size(timestamp_array),
+  size(null),
+  size(null, 0)
 from primitive_arrays
 -- !query 11 schema
-struct<size(boolean_array):int,size(tinyint_array):int,size(smallint_array):int,size(int_array):int,size(bigint_array):int,size(decimal_array):int,size(double_array):int,size(float_array):int,size(date_array):int,size(timestamp_array):int>
+struct<size(boolean_array):int,size(tinyint_array):int,size(smallint_array):int,size(int_array):int,size(bigint_array):int,size(decimal_array):int,size(double_array):int,size(float_array):int,size(date_array):int,size(timestamp_array):int,size(NULL):int,size(NULL):int>
 -- !query 11 output
-1	2	2	2	2	2	2	2	2	2
+1	2	2	2	2	2	2	2	2	2	-1	0

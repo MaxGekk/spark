@@ -88,5 +88,7 @@ select
   size(double_array),
   size(float_array),
   size(date_array),
-  size(timestamp_array)
+  size(timestamp_array),
+  size(null),
+  size(null, 0)
 from primitive_arrays;

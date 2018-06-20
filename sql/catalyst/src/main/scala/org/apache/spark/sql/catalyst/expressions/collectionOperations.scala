@@ -66,24 +66,37 @@ trait BinaryArrayExpressionWithImplicitCast extends BinaryExpression
 
 
 /**
- * Given an array or map, returns its size. Returns -1 if null.
+ * Given an array or map, returns its size.
+ * Returns sizeOfNull (-1 by default) if the input is null.
  */
+// scalastyle:off line.size.limit
 @ExpressionDescription(
-  usage = "_FUNC_(expr) - Returns the size of an array or a map. Returns -1 if null.",
+  usage = "_FUNC_(expr[, sizeOfNull]) - Returns the size of an array or a map. Returns sizeOfNull (-1 by default) if null.",
   examples = """
     Examples:
       > SELECT _FUNC_(array('b', 'd', 'c', 'a'));
        4
   """)
-case class Size(child: Expression) extends UnaryExpression with ExpectsInputTypes {
+// scalastyle:on line.size.limit
+case class Size(
+    child: Expression,
+    sizeOfNull: Int = -1) extends UnaryExpression with ExpectsInputTypes {
+
+  def this(child: Expression, sizeOfNull: Expression) = {
+    this(child, sizeOfNull.eval(null).asInstanceOf[Int])
+  }
+  def this(child: Expression) = this(child, -1)
+
   override def dataType: DataType = IntegerType
-  override def inputTypes: Seq[AbstractDataType] = Seq(TypeCollection(ArrayType, MapType))
+  override def inputTypes: Seq[AbstractDataType] = {
+    Seq(TypeCollection(ArrayType, MapType), IntegerType)
+  }
   override def nullable: Boolean = false
 
   override def eval(input: InternalRow): Any = {
     val value = child.eval(input)
     if (value == null) {
-      -1
+      sizeOfNull
     } else child.dataType match {
       case _: ArrayType => value.asInstanceOf[ArrayData].numElements()
       case _: MapType => value.asInstanceOf[MapData].numElements()
@@ -95,7 +108,7 @@ case class Size(child: Expression) extends UnaryExpression with ExpectsInputType
     ev.copy(code = code"""
       boolean ${ev.isNull} = false;
       ${childGen.code}
-      ${CodeGenerator.javaType(dataType)} ${ev.value} = ${childGen.isNull} ? -1 :
+      ${CodeGenerator.javaType(dataType)} ${ev.value} = ${childGen.isNull} ? ${sizeOfNull} :
         (${childGen.value}).numElements();""", isNull = FalseLiteral)
   }
 }

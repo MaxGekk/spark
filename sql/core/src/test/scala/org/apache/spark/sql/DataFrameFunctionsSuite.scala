@@ -498,10 +498,14 @@ class DataFrameFunctionsSuite extends QueryTest with SharedSQLContext {
       df.select(size($"a")),
       Seq(Row(2), Row(0), Row(3), Row(-1))
     )
+    checkAnswer(df.select(size($"a", Int.MinValue)),
+      Seq(Row(2), Row(0), Row(3), Row(Int.MinValue)))
+
     checkAnswer(
       df.selectExpr("size(a)"),
       Seq(Row(2), Row(0), Row(3), Row(-1))
     )
+    checkAnswer(df.selectExpr("size(a, 0)"), Seq(Row(2), Row(0), Row(3), Row(0)))
 
     checkAnswer(
       df.selectExpr("cardinality(a)"),
@@ -567,10 +571,13 @@ class DataFrameFunctionsSuite extends QueryTest with SharedSQLContext {
       df.select(size($"a")),
       Seq(Row(2), Row(0), Row(3), Row(-1))
     )
+    checkAnswer(df.select(size($"a", 0)), Seq(Row(2), Row(0), Row(3), Row(0)))
     checkAnswer(
       df.selectExpr("size(a)"),
       Seq(Row(2), Row(0), Row(3), Row(-1))
     )
+    checkAnswer(df.selectExpr("size(a, -1)"),
+      Seq(Row(2), Row(0), Row(3), Row(-1)))
   }
 
   test("map_keys/map_values function") {

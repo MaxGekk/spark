@@ -3427,6 +3427,17 @@ object functions {
   def size(e: Column): Column = withExpr { Size(e.expr) }
 
   /**
+   * Returns length of array or map.
+   *
+   * @param e a column containing a struct or array.
+   * @param sizeOfNull - size of null input.
+   *
+   * @group collection_funcs
+   * @since 2.4.0
+   */
+  def size(e: Column, sizeOfNull: Int): Column = withExpr { Size(e.expr, sizeOfNull) }
+
+  /**
    * Sorts the input array for the given column in ascending order,
    * according to the natural ordering of the array elements.
    * Null elements will be placed at the beginning of the returned array.
