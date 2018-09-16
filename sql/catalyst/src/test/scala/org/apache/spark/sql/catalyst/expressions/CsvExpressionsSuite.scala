@@ -131,4 +131,8 @@ class CsvExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper with P
     val schemaToCompare = csvSchema.asNullable
     assert(schemaToCompare == schema)
   }
+
+  test("infer schema of CSV strings") {
+    checkEvaluation(SchemaOfCsv(Literal.create("1,abc")), "struct<_c0:int,_c1:string>")
+  }
 }
