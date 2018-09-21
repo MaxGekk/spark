@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql
 
+import collection.JavaConverters._
+
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SharedSQLContext
 import org.apache.spark.sql.types._
@@ -70,5 +72,11 @@ class CsvFunctionsSuite extends QueryTest with SharedSQLContext {
     checkAnswer(
       df1.selectExpr("from_csv(value, 'a INT')"),
       Row(Row(1)) :: Nil)
+  }
+
+  test("infers schemas using options") {
+    val df = spark.range(1)
+      .select(schema_of_csv(lit("0.1 1"), Map("sep" -> " ").asJava))
+    checkAnswer(df, Seq(Row("struct<_c0:double,_c1:int>")))
   }
 }
