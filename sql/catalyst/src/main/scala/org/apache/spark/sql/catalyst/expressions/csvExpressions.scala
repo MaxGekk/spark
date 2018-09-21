@@ -114,9 +114,6 @@ case class CsvToStructs(
   override def inputTypes: Seq[AbstractDataType] = StringType :: Nil
 }
 
-/**
- * A function infers schema of CSV string.
- */
 @ExpressionDescription(
   usage = "_FUNC_(csv[, options]) - Returns schema in the DDL format of CSV string.",
   examples = """
@@ -124,12 +121,20 @@ case class CsvToStructs(
       > SELECT _FUNC_('1,abc');
        struct<_c0:int,_c1:string>
   """,
-  since = "3.0.0")
-case class SchemaOfCsv(child: Expression)
+  since = "2.5.0")
+case class SchemaOfCsv(
+    child: Expression,
+    options: Map[String, String])
   extends UnaryExpression with String2StringExpression with CodegenFallback {
 
+  def this(child: Expression) = this(child, Map.empty[String, String])
+
+  def this(child: Expression, options: Expression) = this(
+    child = child,
+    options = ExprUtils.convertToMapData(options))
+
   override def convert(v: UTF8String): UTF8String = {
-    val parsedOptions = new CSVOptions(Map.empty, true, "UTC")
+    val parsedOptions = new CSVOptions(options, true, "UTC")
     val parser = new CsvParser(parsedOptions.asParserSettings)
     val row = parser.parseLine(v.toString)
 
