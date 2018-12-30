@@ -196,25 +196,17 @@ class QueryExecution(
     val rope = new StringRope()
 
     rope.append("== Physical Plan ==\n")
-    appendOrError(rope.append)(
-      executedPlan.treeString(_, false, false, SQLConf.get.maxToStringFields))
+    executedPlan.appendOrError(rope.append, verbose = false, addSuffix = false)
     rope.append("\n")
 
     rope.toString
-  }
-
-  private def appendOrError(append: String => Unit)(f: (String => Unit) => Unit): Unit = {
-    try f(append)
-    catch {
-      case e: AnalysisException => append(e.toString)
-    }
   }
 
   private def writePlans(append: String => Unit, maxFields: Int): Unit = {
     val (verbose, addSuffix) = (true, false)
 
     append("== Parsed Logical Plan ==\n")
-    appendOrError(append)(logical.treeString(_, verbose, addSuffix, maxFields))
+    logical.appendOrError(append, verbose, addSuffix, maxFields)
     append("\n== Analyzed Logical Plan ==\n")
     val analyzedOutput = try {
       truncatedString(
@@ -224,11 +216,11 @@ class QueryExecution(
     }
     append(analyzedOutput)
     append("\n")
-    appendOrError(append)(analyzed.treeString(_, verbose, addSuffix, maxFields))
+    analyzed.appendOrError(append, verbose, addSuffix, maxFields)
     append("\n== Optimized Logical Plan ==\n")
-    appendOrError(append)(optimizedPlan.treeString(_, verbose, addSuffix, maxFields))
+    optimizedPlan.appendOrError(append, verbose, addSuffix, maxFields)
     append("\n== Physical Plan ==\n")
-    appendOrError(append)(executedPlan.treeString(_, verbose, addSuffix, maxFields))
+    executedPlan.appendOrError(append, verbose, addSuffix, maxFields)
   }
 
   override def toString: String = withRedaction {
@@ -240,16 +232,15 @@ class QueryExecution(
 
   def stringWithStats: String = withRedaction {
     val rope = new StringRope()
-    val maxFields = SQLConf.get.maxToStringFields
 
     // trigger to compute stats for logical plans
     optimizedPlan.stats
 
     // only show optimized logical plan and physical plan
     rope.append("== Optimized Logical Plan ==\n")
-    appendOrError(rope.append)(optimizedPlan.treeString(_, true, true, maxFields))
+    optimizedPlan.appendOrError(rope.append, verbose = true, addSuffix = true)
     rope.append("\n== Physical Plan ==\n")
-    appendOrError(rope.append)(executedPlan.treeString(_, true, false, maxFields))
+    executedPlan.appendOrError(rope.append, verbose = true, addSuffix = false)
     rope.append("\n")
 
     rope.toString
