@@ -26,7 +26,6 @@ import org.apache.hadoop.hive.ql.io.sarg.PredicateLeaf.{Operator => OrcOperator}
 import org.apache.hadoop.hive.serde2.io.{DateWritable, HiveDecimalWritable}
 
 import org.apache.spark.sql.catalyst.expressions.SpecializedGetters
-import org.apache.spark.sql.execution.datasources.DaysWritable
 import org.apache.spark.sql.types.Decimal
 
 /**

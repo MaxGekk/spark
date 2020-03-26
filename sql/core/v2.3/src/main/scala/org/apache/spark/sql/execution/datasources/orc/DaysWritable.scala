@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.execution.datasources
+package org.apache.spark.sql.execution.datasources.orc
 
 import java.io.{DataInput, DataOutput, IOException}
 import java.sql.Date
