@@ -17,12 +17,15 @@
 
 package org.apache.spark.sql.catalyst.util
 
+import java.time.ZoneId
 import java.util.TimeZone
 
 /**
  * Helper functions for testing date and time functionality.
  */
 object DateTimeTestUtils {
+
+  val LA = ZoneId.of("America/Los_Angeles")
 
   val ALL_TIMEZONES: Seq[TimeZone] = TimeZone.getAvailableIDs.toSeq.map(TimeZone.getTimeZone)
 
