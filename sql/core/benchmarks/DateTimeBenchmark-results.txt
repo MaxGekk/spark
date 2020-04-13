@@ -1,0 +1,14 @@
+================================================================================================
+Conversion from/to external types
+================================================================================================
+
+OpenJDK 64-Bit Server VM 1.8.0_242-8u242-b08-0ubuntu3~18.04-b08 on Linux 4.15.0-1063-aws
+Intel(R) Xeon(R) CPU E5-2670 v2 @ 2.50GHz
+To/from java.sql.Timestamp:               Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------
+From java.sql.Date                                  614            655          43          8.1         122.8       1.0X
+From java.sql.Timestamp                             364            398          44         13.7          72.8       1.7X
+Collect longs                                      1933           2468         902          2.6         386.5       0.3X
+Collect timestamps                                 2245           3038        1301          2.2         449.0       0.3X
+
+
