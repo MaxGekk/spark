@@ -138,12 +138,12 @@ object DateTimeBenchmark extends SqlBasedBenchmark {
           benchmark.addCase("From java.sql.Date", numIters) { _ =>
             spark.range(rowsNum)
               .map(millis => new java.sql.Date(millis))
-              .noop()
+              .queryExecution.toRdd.foreach(_ => ())
           }
           benchmark.addCase("From java.sql.Timestamp", numIters) { _ =>
             spark.range(rowsNum)
               .map(millis => new Timestamp(millis))
-              .noop()
+              .queryExecution.toRdd.foreach(_ => ())
           }
           benchmark.addCase("Collect longs", numIters) { _ =>
             spark.range(0, rowsNum, 1, 1)
