@@ -25,7 +25,7 @@ import org.apache.spark.sql.catalyst.expressions.Cast._
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, CodeGenerator, ExprCode}
 import org.apache.spark.sql.catalyst.expressions.codegen.Block.BlockHelper
 import org.apache.spark.sql.catalyst.util.ToNumberParser
-import org.apache.spark.sql.types.{AbstractDataType, DataType, Decimal, DecimalType, StringType}
+import org.apache.spark.sql.types.{AbstractDataType, DataType, DatetimeType, Decimal, DecimalType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 
 abstract class ToNumberBase(left: Expression, right: Expression, errorOnFail: Boolean)
@@ -222,7 +222,7 @@ case class TryToNumber(left: Expression, right: Expression)
   """,
   since = "3.4.0",
   group = "string_funcs")
-case class ToCharacter(left: Expression, right: Expression)
+case class NumberToCharacter(left: Expression, right: Expression)
   extends BinaryExpression with ImplicitCastInputTypes with NullIntolerant {
   private lazy val numberFormatter = {
     val value = right.eval()
@@ -278,6 +278,18 @@ case class ToCharacter(left: Expression, right: Expression)
     ev.copy(code = stripped)
   }
   override protected def withNewChildrenInternal(
-      newLeft: Expression, newRight: Expression): ToCharacter =
+      newLeft: Expression, newRight: Expression): NumberToCharacter =
     copy(left = newLeft, right = newRight)
+}
+
+case class ToCharacter(left: Expression, right: Expression) extends RuntimeReplaceable {
+  override def children: Seq[Expression] = Seq(left, right)
+  override def replacement: Expression = left.dataType match {
+    case _: DatetimeType => DateFormatClass(left, right)
+    case _ => NumberToCharacter(left, right)
+  }
+
+  override def withNewChildrenInternal(newChildren: IndexedSeq[Expression]): Expression = {
+    copy(left = newChildren(0), right = newChildren(1))
+  }
 }
