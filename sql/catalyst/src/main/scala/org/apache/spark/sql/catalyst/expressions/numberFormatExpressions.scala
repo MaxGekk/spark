@@ -222,6 +222,23 @@ case class TryToNumber(left: Expression, right: Expression)
   """,
   since = "3.4.0",
   group = "string_funcs")
+case class ToCharacter(left: Expression, right: Expression, replacement: Expression)
+  extends RuntimeReplaceable with InheritAnalysisRules {
+  def this(left: Expression, right: Expression) = this(left, right,
+    left.dataType match {
+      case _: DatetimeType => DateFormatClass(left, right)
+      case _ => NumberToCharacter(left, right)
+    }
+  )
+
+  override def prettyName: String = "to_char"
+
+  override def parameters: Seq[Expression] = Seq(left, right)
+
+  override protected def withNewChildInternal(newChild: Expression): Expression =
+    this.copy(replacement = newChild)
+}
+
 case class NumberToCharacter(left: Expression, right: Expression)
   extends BinaryExpression with ImplicitCastInputTypes with NullIntolerant {
   private lazy val numberFormatter = {
@@ -256,7 +273,6 @@ case class NumberToCharacter(left: Expression, right: Expression)
       inputTypeCheck
     }
   }
-  override def prettyName: String = "to_char"
   override def nullSafeEval(decimal: Any, format: Any): Any = {
     val input = decimal.asInstanceOf[Decimal]
     numberFormatter.format(input)
@@ -280,16 +296,4 @@ case class NumberToCharacter(left: Expression, right: Expression)
   override protected def withNewChildrenInternal(
       newLeft: Expression, newRight: Expression): NumberToCharacter =
     copy(left = newLeft, right = newRight)
-}
-
-case class ToCharacter(left: Expression, right: Expression) extends RuntimeReplaceable {
-  override def children: Seq[Expression] = Seq(left, right)
-  override def replacement: Expression = left.dataType match {
-    case _: DatetimeType => DateFormatClass(left, right)
-    case _ => NumberToCharacter(left, right)
-  }
-
-  override def withNewChildrenInternal(newChildren: IndexedSeq[Expression]): Expression = {
-    copy(left = newChildren(0), right = newChildren(1))
-  }
 }

@@ -481,7 +481,7 @@ Aggregate [max(q1#xL) AS max(q1)#xL, max(q2#xL) AS max(q2)#xL]
 SELECT '' AS to_char_1, to_char(q1, '9G999G999G999G999G999'), to_char(q2, '9,999,999,999,999,999')
 FROM INT8_TBL
 -- !query analysis
-Project [ AS to_char_1#x, to_char(cast(q1#xL as decimal(20,0)), 9G999G999G999G999G999) AS to_char(q1, 9G999G999G999G999G999)#x, to_char(cast(q2#xL as decimal(20,0)), 9,999,999,999,999,999) AS to_char(q2, 9,999,999,999,999,999)#x]
+Project [ AS to_char_1#x, to_char(q1#xL, 9G999G999G999G999G999) AS to_char(q1, 9G999G999G999G999G999)#x, to_char(q2#xL, 9,999,999,999,999,999) AS to_char(q2, 9,999,999,999,999,999)#x]
 +- SubqueryAlias spark_catalog.default.int8_tbl
    +- Relation spark_catalog.default.int8_tbl[q1#xL,q2#xL] parquet
 
@@ -490,7 +490,7 @@ Project [ AS to_char_1#x, to_char(cast(q1#xL as decimal(20,0)), 9G999G999G999G99
 SELECT '' AS to_char_3, to_char( (q1 * -1), '9999999999999999PR'), to_char( (q2 * -1), '9999999999999999.999PR')
 FROM INT8_TBL
 -- !query analysis
-Project [ AS to_char_3#x, to_char(cast((q1#xL * cast(-1 as bigint)) as decimal(20,0)), 9999999999999999PR) AS to_char((q1 * -1), 9999999999999999PR)#x, to_char(cast((q2#xL * cast(-1 as bigint)) as decimal(20,0)), 9999999999999999.999PR) AS to_char((q2 * -1), 9999999999999999.999PR)#x]
+Project [ AS to_char_3#x, to_char((q1#xL * cast(-1 as bigint)), 9999999999999999PR) AS to_char((q1 * -1), 9999999999999999PR)#x, to_char((q2#xL * cast(-1 as bigint)), 9999999999999999.999PR) AS to_char((q2 * -1), 9999999999999999.999PR)#x]
 +- SubqueryAlias spark_catalog.default.int8_tbl
    +- Relation spark_catalog.default.int8_tbl[q1#xL,q2#xL] parquet
 
@@ -499,7 +499,7 @@ Project [ AS to_char_3#x, to_char(cast((q1#xL * cast(-1 as bigint)) as decimal(2
 SELECT '' AS to_char_4, to_char( (q1 * -1), '9999999999999999S'), to_char( (q2 * -1), 'S9999999999999999')
 FROM INT8_TBL
 -- !query analysis
-Project [ AS to_char_4#x, to_char(cast((q1#xL * cast(-1 as bigint)) as decimal(20,0)), 9999999999999999S) AS to_char((q1 * -1), 9999999999999999S)#x, to_char(cast((q2#xL * cast(-1 as bigint)) as decimal(20,0)), S9999999999999999) AS to_char((q2 * -1), S9999999999999999)#x]
+Project [ AS to_char_4#x, to_char((q1#xL * cast(-1 as bigint)), 9999999999999999S) AS to_char((q1 * -1), 9999999999999999S)#x, to_char((q2#xL * cast(-1 as bigint)), S9999999999999999) AS to_char((q2 * -1), S9999999999999999)#x]
 +- SubqueryAlias spark_catalog.default.int8_tbl
    +- Relation spark_catalog.default.int8_tbl[q1#xL,q2#xL] parquet
 
@@ -507,7 +507,7 @@ Project [ AS to_char_4#x, to_char(cast((q1#xL * cast(-1 as bigint)) as decimal(2
 -- !query
 SELECT '' AS to_char_5,  to_char(q2, 'MI9999999999999999')     FROM INT8_TBL
 -- !query analysis
-Project [ AS to_char_5#x, to_char(cast(q2#xL as decimal(20,0)), MI9999999999999999) AS to_char(q2, MI9999999999999999)#x]
+Project [ AS to_char_5#x, to_char(q2#xL, MI9999999999999999) AS to_char(q2, MI9999999999999999)#x]
 +- SubqueryAlias spark_catalog.default.int8_tbl
    +- Relation spark_catalog.default.int8_tbl[q1#xL,q2#xL] parquet
 
@@ -515,7 +515,7 @@ Project [ AS to_char_5#x, to_char(cast(q2#xL as decimal(20,0)), MI99999999999999
 -- !query
 SELECT '' AS to_char_9,  to_char(q2, '0999999999999999')       FROM INT8_TBL
 -- !query analysis
-Project [ AS to_char_9#x, to_char(cast(q2#xL as decimal(20,0)), 0999999999999999) AS to_char(q2, 0999999999999999)#x]
+Project [ AS to_char_9#x, to_char(q2#xL, 0999999999999999) AS to_char(q2, 0999999999999999)#x]
 +- SubqueryAlias spark_catalog.default.int8_tbl
    +- Relation spark_catalog.default.int8_tbl[q1#xL,q2#xL] parquet
 
@@ -523,7 +523,7 @@ Project [ AS to_char_9#x, to_char(cast(q2#xL as decimal(20,0)), 0999999999999999
 -- !query
 SELECT '' AS to_char_10, to_char(q2, 'S0999999999999999')      FROM INT8_TBL
 -- !query analysis
-Project [ AS to_char_10#x, to_char(cast(q2#xL as decimal(20,0)), S0999999999999999) AS to_char(q2, S0999999999999999)#x]
+Project [ AS to_char_10#x, to_char(q2#xL, S0999999999999999) AS to_char(q2, S0999999999999999)#x]
 +- SubqueryAlias spark_catalog.default.int8_tbl
    +- Relation spark_catalog.default.int8_tbl[q1#xL,q2#xL] parquet
 
