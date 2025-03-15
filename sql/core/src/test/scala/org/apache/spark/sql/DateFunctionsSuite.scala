@@ -19,11 +19,12 @@ package org.apache.spark.sql
 
 import java.sql.{Date, Timestamp}
 import java.text.SimpleDateFormat
-import java.time.{Instant, LocalDateTime, ZoneId}
+import java.time.{Instant, LocalDateTime, LocalTime, ZoneId}
 import java.util.{Locale, TimeZone}
 import java.util.concurrent.TimeUnit
 
 import org.apache.spark.{SPARK_DOC_ROOT, SparkConf, SparkUpgradeException}
+
 import org.apache.spark.sql.catalyst.util.DateTimeTestUtils.{CEST, LA}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.functions._
@@ -1469,5 +1470,14 @@ class DateFunctionsSuite extends QueryTest with SharedSparkSession {
 
     checkAnswer(df.selectExpr("try_to_timestamp(a)"), Seq(Row(ts)))
     checkAnswer(df.select(try_to_timestamp(col("a"))), Seq(Row(ts)))
+  }
+
+  test("aaa") {
+    val df = Seq(("12:13:14", "HH:mm:ss")).toDF("s", "f")
+
+    checkAnswer(df.selectExpr("to_time(s)"), Seq(Row(LocalTime.of(12, 13, 14))))
+    checkAnswer(df.selectExpr("to_time(s, f)"), Seq(Row(LocalTime.of(12, 13, 14))))
+    checkAnswer(df.selectExpr("to_time(s, 'HH:mm:ss')"), Seq(Row(LocalTime.of(12, 13, 14))))
+
   }
 }

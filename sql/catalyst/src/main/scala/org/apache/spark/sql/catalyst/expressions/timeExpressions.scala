@@ -17,10 +17,10 @@
 
 package org.apache.spark.sql.catalyst.expressions
 
-import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
+import org.apache.spark.sql.catalyst.expressions.objects.Invoke
 import org.apache.spark.sql.catalyst.util.TimeFormatter
 import org.apache.spark.sql.internal.types.StringTypeWithCollation
-import org.apache.spark.sql.types.{AbstractDataType, TimeType, TypeCollection}
+import org.apache.spark.sql.types.{AbstractDataType, ObjectType, TimeType, TypeCollection}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -54,19 +54,34 @@ case class ParseToTime(
     format: Option[Expression])
   extends RuntimeReplaceable with ImplicitCastInputTypes {
 
-  override lazy val replacement: Expression = StaticInvoke(
-    classOf[ParseToTime],
-    TimeType(),
-    "parse",
-    children,
-    children.map(_.dataType))
-
   def this(left: Expression, format: Expression) = {
     this(left, Option(format))
   }
 
   def this(left: Expression) = {
     this(left, None)
+  }
+
+  override lazy val replacement: Expression = format match {
+    case None => Invoke(
+      targetObject = Literal.create(DefaultTimeParser(), ObjectType(classOf[DefaultTimeParser])),
+      functionName = "parse",
+      dataType = TimeType(),
+      arguments = Seq(left),
+      methodInputTypes = Seq(left.dataType))
+    case Some(expr) if expr.foldable => Invoke(
+      targetObject = Literal.create(
+        TimeParserByFormat(expr.eval().toString), ObjectType(classOf[TimeParserByFormat])),
+      functionName = "parse",
+      dataType = TimeType(),
+      arguments = Seq(left),
+      methodInputTypes = Seq(left.dataType))
+    case _ => Invoke(
+      targetObject = Literal.create(TimeParser(), ObjectType(classOf[TimeParser])),
+      functionName = "parse",
+      dataType = TimeType(),
+      arguments = children,
+      methodInputTypes = children.map(_.dataType))
   }
 
   override def prettyName: String = "to_time"
@@ -89,12 +104,18 @@ case class ParseToTime(
   }
 }
 
-object ParseToTime {
+case class DefaultTimeParser() {
+  private val formatter = TimeFormatter(isParsing = true)
+  def parse(s: UTF8String): Long = formatter.parse(s.toString)
+}
+
+case class TimeParserByFormat(fmt: String) {
+  private val formatter = TimeFormatter(format = fmt, isParsing = true)
+  def parse(s: UTF8String): Long = formatter.parse(s.toString)
+}
+
+case class TimeParser() {
   def parse(s: UTF8String, fmt: UTF8String): Long = {
     TimeFormatter(fmt.toString, isParsing = true).parse(s.toString)
-  }
-
-  def parse(s: UTF8String): Long = {
-    TimeFormatter(isParsing = true).parse(s.toString)
   }
 }
