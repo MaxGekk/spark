@@ -1,7 +1,7 @@
 # Varka MVP Implementation Plan
 
 This is the implementation plan for the Varka MVP (Date Arithmetic Over
-ArrowColumnarBatch). It supersedes the sketch in `Varka_MVP_Plan.md` where the
+ArrowColumnarBatch). It supersedes the sketch in `Varka_MVP.md` where the
 two disagree; `VISION.md` remains the architectural source of truth.
 
 ## 1. Corrections to the design docs (ground truth in this repo)
@@ -26,7 +26,7 @@ contain details that do not match this codebase; they are corrected here:
 ```
 sql/varka/
   VISION.md                      (unchanged)
-  Varka_MVP_Plan.md              (unchanged)
+  Varka_MVP.md                   (unchanged)
   IMPLEMENTATION_PLAN.md         <- this file
   engine/                        <- STANDALONE Java 25 module (Task 1-2). NOT in Spark reactor.
     pom.xml                      (--release 25, --add-modules jdk.incubator.vector)
