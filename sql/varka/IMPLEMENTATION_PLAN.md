@@ -8,6 +8,8 @@ Per-task detail lives in separate files:
 
 - `PLAN_TASK_1.md` - standalone engine module + `VarkaMorsel` (completed).
 - `PLAN_TASK_2.md` - `DateVectorOps` SIMD kernels (in progress).
+- `PLAN_TASK_3.md` - `VarkaClassLoader` + per-task lifecycle (plan saved;
+  implementation pending).
 
 ## 1. Corrections to the design docs (ground truth in this repo)
 
@@ -35,13 +37,14 @@ sql/varka/
   IMPLEMENTATION_PLAN.md         <- this file (high-level)
   PLAN_TASK_1.md                 <- Task 1 detail (completed)
   PLAN_TASK_2.md                 <- Task 2 detail
-  engine/                        <- STANDALONE Java 25 module (Task 1-2). NOT in Spark reactor.
+  engine/                        <- STANDALONE Java 25 module (Tasks 1-3). NOT in Spark reactor.
     pom.xml                      (--release 25, --add-modules jdk.incubator.vector)
     src/main/java/org/apache/spark/sql/varka/
       memory/VarkaMorsel.java    (Task 1)
       vector/DateVectorOps.java  (Task 2)
-    src/test/java/...            (Task 1/2 unit tests)
-  spark/                         <- FUTURE Spark-side integration module (Tasks 3+); integration
+      execution/VarkaClassLoader.java  (Task 3)
+    src/test/java/...            (Task 1-3 unit tests)
+  spark/                         <- FUTURE Spark-side integration module (Tasks 4+); integration
                                     strategy TBD
 ```
 
@@ -56,14 +59,16 @@ ghost Janino fallback only in the Spark-side compile hook (Task 5).
 | :--- | :--- | :--- | :--- | :--- |
 | 1 | **Standalone module + `VarkaMorsel`** | `sql/varka/engine/` Maven module; Arrow `DateDayVector` -> `MemorySegment` mapping | `VarkaMorselTest` | DONE (`PLAN_TASK_1.md`) |
 | 2 | `DateVectorOps` SIMD kernels | `vectorAddDays` / `vectorSubDays` / `vectorDateDiff` (IntVector + bit-packed mask + scalar tail) | Differential unit test vs scalar reference; JMH vs scalar loop (follow-up) | `PLAN_TASK_2.md` |
-| 3 | `VarkaClassLoader` + `TaskContext` lifecycle | Scala loader with `release()` via `TaskCompletionListener` | Metaspace plateau under 10k-query loop | TBD |
+| 3 | `VarkaClassLoader` + per-task lifecycle | Java loader in the engine with `release()`; registry + `findClass`; `TaskCompletionListener` wiring deferred to the Spark-side integration | Unloadability proof via weak references (1000-loader batch) | `PLAN_TASK_3.md` |
 | 4 | Catalyst hooks | `ClassFileCodegenSupport` trait; `DateAdd`/`DateSub`/`DateDiff` emit `invokestatic` to `DateVectorOps` | Bytecode disassembly matches expected stack order | TBD |
 | 5 | Class assembly + Ghost fallback | `JavaClassFileEngine` (Class-File API); hook in `CodeCompiler`/`CodeGenerator.compile`; lazy Janino string + cache on failure | Compile-failure injection test hits Janino path, no crash | TBD |
 | 6 | Execution-path integration | Intercept in `ColumnarToRowExec` (Columnar.scala:134) when batch is Arrow-backed and projection is Varka-eligible | `SELECT DATE_ADD(...)` matches Janino result | TBD |
 | 7 | Differential + perf testing | `QueryTest` suite (Varka on/off), JMH integrated, Metaspace stress | `checkAnswer` equality; throughput/Gen-time metrics | TBD |
 | 8 | Config flags + docs | `spark.sql.codegen.varka.enabled/.patch.threshold/.fallback.ghost.enabled` in `SQLConf` | flag toggling tests | TBD |
 
-**Open decision (deferred):** Tasks 3+ need a Spark-side home. Options:
-(a) in-reactor optional module `sql/varka/spark/` (touches root `pom.xml`
-module list + enforcer), or (b) standalone build against published Spark
-jars. Revisit at the end of Task 2.
+**Open decision (deferred):** The `TaskCompletionListener` wiring (Tasks 4+)
+needs a Spark-side home. Options: (a) in-reactor optional module
+`sql/varka/spark/` (touches root `pom.xml` module list + enforcer), or
+(b) standalone build against published Spark jars. Task 3's loader itself
+lives in the standalone Java engine module (pure JDK, no Spark deps), so this
+decision is not needed until Tasks 4+.
