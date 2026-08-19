@@ -25,7 +25,7 @@ contain details that do not match this codebase; they are corrected here:
 | `VectorMask.fromMemorySegment(SPECIES, validity, i, JAVA_BYTE)` | Arrow validity buffers are **bit-packed (1 bit/row)**; a byte-per-lane read is a correctness bug | Load a `long` from the validity segment and build the mask with `VectorMask.fromLong(SPECIES, bits)` (verified present in JDK 25). |
 | "64-byte alignment guaranteed by Arrow's allocator" | Not a guarantee | Treat alignment as a **diagnostic** in tests, never an assertion. Vector-API masked loads/stores work unaligned. |
 | `CodeGenerator.doCompile` / `currentContext` | `doCompile` was lifted into the pluggable `CodeCompiler` backend (CodeCompiler.scala:63); no `currentContext` ThreadLocal exists | The Ghost-fallback hook lives in `CodeCompiler`/`CodeGenerator.compile` (CodeGenerator.scala:1567). |
-| Repo builds at Java 25 | Repo builds at **Java 17** (`--release 17`, enforcer pins bytecode version) | The engine is a **standalone module outside the Spark reactor**, built on JDK 25. Spark stays on 17. |
+| Repo builds at Java 25 | Repo builds at **Java 17** (`--release 17`, enforcer pins bytecode version) | The engine is a **standalone module outside the Spark reactor**, built on JDK 25. **Decision (review of Task 4): bump the repo baseline to Java 25** (`pom.xml` `java.version=25`) so catalyst can use `java.lang.classfile`; the engine stays standalone by design (native-access test flags). |
 | `spark.sql.varka.enabled` (testing section) vs `spark.sql.codegen.varka.enabled` | Inconsistent | Standardize on `spark.sql.codegen.varka.*`. |
 | `arrow-vector` version | `19.0.0` (pom.xml:240) | Engine depends on `org.apache.arrow:arrow-vector:19.0.0`. |
 
@@ -39,8 +39,9 @@ sql/varka/
   PLAN_TASK_1.md                 <- Task 1 detail (completed)
   PLAN_TASK_2.md                 <- Task 2 detail
   PLAN_TASK_3.md                 <- Task 3 detail (completed)
-  PLAN_TASK_4.md                 <- Task 4 detail (plan saved)
-  engine/                        <- STANDALONE Java 25 module (Tasks 1-3). NOT in Spark reactor.
+  PLAN_TASK_4.md                 <- Task 4 detail (implemented, PR #5)
+  engine/                        <- STANDALONE Java 25 module (Tasks 1-3). NOT in Spark reactor
+                                    (by design: needs native-access test flags).
     pom.xml                      (--release 25, --add-modules jdk.incubator.vector)
     src/main/java/org/apache/spark/sql/varka/
       memory/VarkaMorsel.java    (Task 1)
@@ -48,7 +49,8 @@ sql/varka/
       execution/VarkaClassLoader.java  (Task 3)
     src/test/java/...            (Task 1-3 unit tests)
   catalyst/                      <- Task 4 additions are additive source in the existing
-                                    sql/catalyst module (no new module, no pom changes)
+                                    sql/catalyst module; Class-File assembly lives here on the
+                                    Java 25 baseline (no new module)
   spark/                         <- FUTURE Spark-side integration module (Tasks 5+); integration
                                     strategy TBD
 ```

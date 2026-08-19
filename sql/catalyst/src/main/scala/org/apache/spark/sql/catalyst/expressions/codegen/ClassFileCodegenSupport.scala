@@ -17,6 +17,10 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen
 
+import java.lang.classfile.{ClassBuilder, ClassFile, CodeBuilder, TypeKind}
+import java.lang.constant.{ClassDesc, ConstantDescs, MethodTypeDesc}
+import java.lang.reflect.AccessFlag
+
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, Literal}
 import org.apache.spark.sql.types.DateType
 
@@ -29,9 +33,9 @@ object ClassFileGenOpKind extends Enumeration {
 
 /**
  * The declarative `invokestatic` contract of a Varka batch kernel (Task 4). The argument
- * order of [[DateVectorOpsOwner]] methods IS the JVM stack order, so the descriptor fully
- * pins the bytecode emission. This is a pure-data value consumed by the engine-side
- * Class-File assembler (Task 5); the engine module is referenced only by name.
+ * order of the DateVectorOps methods IS the JVM stack order, so the descriptor fully pins
+ * the bytecode emission. Catalyst owns the Class-File assembly on the Java 25+ baseline;
+ * the engine module is referenced only by name.
  *
  * @param ownerClassName the binary name of the class owning the kernel.
  * @param methodName the static method name.
@@ -71,10 +75,10 @@ trait ClassFileCodegenSupport extends Expression {
 }
 
 /**
- * Plan-level helpers for the Varka Class-File path (Task 4). The constants are the
- * compile-time contract with the standalone engine module: they must match
- * `DateVectorOps` exactly, which the engine-side emission test enforces by deriving the
- * descriptor from the actual method via reflection.
+ * Plan-level helpers for the Varka Class-File path (Task 4). Catalyst owns the Class-File
+ * assembly (Java 25+ baseline), so the kernel contract below is both declared and assembled
+ * here; the engine-side integration test independently cross-checks the descriptors against
+ * `DateVectorOps` via reflection.
  */
 object VarkaClassFileGen {
 
@@ -90,6 +94,48 @@ object VarkaClassFileGen {
     projectList.collect {
       case e: ClassFileCodegenSupport if e.isClassFileGenEligible => e.classFileGenOp
     }
+  }
+
+  /**
+   * Assembles the class bytes of a probe that invokes the op's kernel: a public class with a
+   * default constructor and a static `run` method that loads the kernel parameters in order
+   * and invokes them with a single `invokestatic`. A later task routes eligible expressions
+   * to this and defines the result via the engine's VarkaClassLoader.
+   */
+  def assembleKernelClass(className: String, op: ClassFileGenOp): Array[Byte] = {
+    val classDesc = ClassDesc.of(className)
+    val kernelDesc = MethodTypeDesc.ofDescriptor(op.methodDescriptor)
+    ClassFile.of().build(classDesc, (b: ClassBuilder) => b
+      .withFlags(AccessFlag.PUBLIC)
+      .withMethodBody("<init>", MethodTypeDesc.of(ConstantDescs.CD_void),
+        AccessFlag.PUBLIC.mask(),
+        (cb: CodeBuilder) => {
+          cb.aload(0)
+          cb.invokespecial(ConstantDescs.CD_Object, "<init>",
+            MethodTypeDesc.of(ConstantDescs.CD_void))
+          cb.return_()
+          ()
+        })
+      .withMethodBody("run", kernelDesc, AccessFlag.PUBLIC.mask() | AccessFlag.STATIC.mask(),
+        (cb: CodeBuilder) => {
+          var slot = 0
+          var i = 0
+          while (i < kernelDesc.parameterCount()) {
+            val pDesc = kernelDesc.parameterList().get(i).descriptorString()
+            val kind = TypeKind.fromDescriptor(pDesc.substring(0, 1))
+            if (kind == TypeKind.LONG) {
+              cb.lload(slot)
+              slot += 2
+            } else {
+              cb.iload(slot)
+              slot += 1
+            }
+            i += 1
+          }
+          cb.invokestatic(ClassDesc.of(op.ownerClassName), op.methodName, kernelDesc)
+          cb.return_()
+          ()
+        }))
   }
 
   /**

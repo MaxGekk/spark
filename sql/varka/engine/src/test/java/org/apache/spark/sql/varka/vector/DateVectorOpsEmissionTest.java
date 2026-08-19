@@ -45,11 +45,13 @@ import org.junit.jupiter.api.Test;
 import org.apache.spark.sql.varka.execution.VarkaClassLoader;
 
 /**
- * Task 4: end-to-end Class-File emission of the DateVectorOps kernels. Assembles a probe
- * class with the Class-File API (the shape the catalyst contract describes), defines it via
- * {@link VarkaClassLoader}, runs it against native memory, and asserts the bytecode shape:
- * parameter loads in kernel order followed by a single invokestatic to
- * {@link DateVectorOps}. This pins the contract strings used by the catalyst side.
+ * Task 4: define-and-run integration of the DateVectorOps kernels. Catalyst owns the
+ * Class-File assembly (Java 25+ baseline; see VarkaClassFileGen.assembleKernelClass), so
+ * this test independently assembles a probe class of the same shape (mirroring the catalyst
+ * assembler, which this module cannot depend on), defines it via {@link VarkaClassLoader},
+ * runs it against native memory, and asserts the result. It also pins the kernel descriptors
+ * from the actual methods via reflection, so the contract strings on the catalyst side
+ * cannot silently drift.
  */
 class DateVectorOpsEmissionTest {
 

@@ -21,10 +21,11 @@
   <modelVersion>4.0.0</modelVersion>
 
   <!--
-    Standalone Java 25 engine for the Varka project. Deliberately NOT part of the Spark
-    reactor: Spark builds at Java 17 (release flag 17) and its enforcer pins the bytecode
-    version, while this module requires JDK 25 APIs (jdk.incubator.vector and, from Task 2
-    on, java.lang.classfile). See sql/varka/IMPLEMENTATION_PLAN.md.
+    Standalone Java 25 engine for the Varka project. Built with the Maven wrapper via
+    `./build/mvn -f sql/varka/engine/pom.xml`. The Spark reactor shares the Java 25 baseline
+    (root pom java.version), but the engine stays a separate module by design; its tests need
+    the native-access and incubator-vector flags, which are not part of the Spark build.
+    See sql/varka/IMPLEMENTATION_PLAN.md.
   -->
   <groupId>org.apache.spark.varka</groupId>
   <artifactId>varka-engine</artifactId>

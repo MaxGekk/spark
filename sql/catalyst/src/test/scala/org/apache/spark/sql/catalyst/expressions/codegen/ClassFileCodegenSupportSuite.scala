@@ -23,8 +23,9 @@ import org.apache.spark.sql.types.{DateType, IntegerType}
 
 /**
  * Task 4: declarative Varka Class-File codegen support for DateAdd/DateSub/DateDiff.
- * Asserts the emission contract (owner/name/descriptor), the eligibility matrix, and that
- * genCode registers into the [[CodegenContext]] while keeping the string path intact.
+ * Asserts the emission contract (owner/name/descriptor), the assembled bytecode shape (via
+ * the Java [[ClassFileGenOpVerifier]] helper), the eligibility matrix, and that genCode
+ * registers into the [[CodegenContext]] while keeping the string path intact.
  */
 class ClassFileCodegenSupportSuite extends SparkFunSuite {
 
@@ -54,6 +55,18 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
     assert(op.methodName == "vectorDateDiff")
     assert(op.methodDescriptor == "(JJIJJIJJI)V")
     assert(op.kind == ClassFileGenOpKind.DateDiff)
+  }
+
+  test("assembleKernelClass emits the invokestatic contract") {
+    val ops = Seq(
+      DateAdd(startAttr, Literal(3)),
+      DateSub(startAttr, Literal(3)),
+      DateDiff(endAttr, otherDateAttr)).map(_.classFileGenOp)
+    ops.foreach { op =>
+      val bytes = VarkaClassFileGen.assembleKernelClass("EmissionProbe", op)
+      ClassFileGenOpVerifier.assertKernelInvocation(
+        bytes, op.ownerClassName.replace('.', '/'), op.methodName, op.methodDescriptor)
+    }
   }
 
   test("daysOffsetConstant folds integral literals") {

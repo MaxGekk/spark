@@ -1,12 +1,13 @@
 # Varka Task 4 - Catalyst hooks (`ClassFileCodegenSupport`)
 
-**Status: PLAN SAVED - implementation pending.** See
-`IMPLEMENTATION_PLAN.md` for the high-level MVP plan. Task 4 is the declarative
-Catalyst hook: a marker trait + emission contract that marks `DateAdd` /
-`DateSub` / `DateDiff` as Varka-eligible and pins the exact `invokestatic`
-stack order for the `DateVectorOps` batch kernels. Runtime routing (the
-`JavaClassFileEngine` assembler + ghost fallback) is Task 5; execution
-interception is Task 6.
+**Status: IMPLEMENTED (PR #5), updated after the Java 25 baseline decision.**
+See `IMPLEMENTATION_PLAN.md` for the high-level MVP plan. Task 4 is the
+declarative Catalyst hook: a marker trait + emission contract that marks
+`DateAdd` / `DateSub` / `DateDiff` as Varka-eligible, pins the exact
+`invokestatic` stack order for the `DateVectorOps` batch kernels, and
+assembles the probe class with the Class-File API in catalyst (Java 25+
+baseline). Runtime routing (the `JavaClassFileEngine` assembler + ghost
+fallback) is Task 5; execution interception is Task 6.
 
 ## 1. Goal
 
@@ -15,9 +16,12 @@ interception is Task 6.
   (`ClassFileGenOp`) plus an eligibility rule.
 - A `CodegenContext` registry (`classFileGenExpressions` /
   `isClassFileGenEligible`) - the hook Task 5's router consumes.
-- An engine-side (Java 25) probe test that assembles the `invokestatic`
-  sequence for each kernel, defines it via `VarkaClassLoader`, runs it
-  functionally, and **disassembles** it to prove the stack order.
+- Catalyst-owned Class-File assembly: `VarkaClassFileGen.assembleKernelClass`
+  emits the `invokestatic` probe for each kernel, and the catalyst test
+  **disassembles** it to prove the stack order.
+- An engine-side (Java 25) **define-and-run integration** test that defines a
+  probe of the same shape via `VarkaClassLoader`, runs it functionally, and
+  cross-checks the kernel descriptors via reflection.
 - **Zero-risk:** the runtime string codegen of the three expressions is
   unchanged in Task 4. Existing behavior is preserved; routing is deferred.
 
@@ -59,19 +63,20 @@ interception is Task 6.
   long dstData, long dstValidity, int length)` ->
   descriptor `(JJIJJIJJI)V`.
 
-### 2.4 Module constraint (the "Spark-side home" resolution)
+### 2.4 Module constraint (resolved: Java 25+ baseline)
 
-- Catalyst compiles in-reactor at `--release 17`; it CANNOT use
-  `java.lang.classfile` (JDK 22+).
-- The engine is a standalone module at `--release 25`
-  (`org.apache.spark.varka:varka-engine:0.1.0-SNAPSHOT`).
-- Consequence: the emission contract must be **plain strings** in catalyst;
-  real assembly/disassembly lives in the engine. The descriptor strings are
-  the compile-time linkage between the modules.
+- The repo now builds at Java 25 (`pom.xml` `java.version=25`; the enforcer and
+  `--release` flags follow `java.version`). Catalyst CAN use `java.lang.classfile`
+  (JDK 22+), so the assembler lives in catalyst.
+- The engine remains a standalone module at `--release 25`
+  (`org.apache.spark.sql.varka:varka-engine:0.1.0-SNAPSHOT`) by design, not by a
+  version split: its tests need `--add-modules jdk.incubator.vector` /
+  `--enable-native-access` flags that are not part of the Spark build.
 - **No new Spark-side module is needed for Task 4**: additive source in the
-  existing `sql/catalyst` module plus the existing engine module. No root pom,
-  no enforcer, no engine dependency in catalyst. Runtime linkage of the engine
-  (Task 5) will be by name/reflection.
+  existing `sql/catalyst` module plus the existing engine module. No engine
+  dependency in catalyst; the kernel class is referenced by name
+  (`ClassDesc.of`). Runtime linkage of the engine (Task 5) will be by
+  name/reflection.
 
 ### 2.5 Disassembly surface (verified)
 
@@ -95,8 +100,7 @@ case class ClassFileGenOp(
 ### 3.2 `trait ClassFileCodegenSupport` (catalyst)
 
 ```scala
-trait ClassFileCodegenSupport {
-  self: Expression =>
+trait ClassFileCodegenSupport extends Expression {
   def classFileGenOp: ClassFileGenOp
   def isClassFileGenEligible: Boolean
   def daysOffsetConstant: Option[Int]
@@ -124,26 +128,31 @@ registry populated for Task 5's router.
 - `registerClassFileGenExpression(e)`
 - `isClassFileGenEligible: Boolean`
 
-### 3.5 Plan-level collector `VarkaClassFileGen` (catalyst)
+### 3.5 Plan-level collector + assembler `VarkaClassFileGen` (catalyst)
 
-`def eligibleOps(projectList: Seq[Expression]): Seq[ClassFileGenOp]` - used by
-Task 6 (ColumnarToRowExec interception) and Task 5 (assembler input). Unit
-tested in Task 4.
+- `def eligibleOps(projectList: Seq[Expression]): Seq[ClassFileGenOp]` - used by
+  Task 6 (ColumnarToRowExec interception) and Task 5 (assembler input). Unit
+  tested in Task 4.
+- `def assembleKernelClass(className: String, op: ClassFileGenOp): Array[Byte]`
+  - Class-File API assembly (Java 25+): a public class with a default
+  constructor and a static `run` method that loads the kernel parameters in
+  order and emits a single `invokestatic` to the kernel. Task 5 defines the
+  result via the engine's `VarkaClassLoader`.
 
 ## 4. Validation - "bytecode disassembly matches expected stack order"
 
-- **Engine-side** `DateVectorOpsEmissionTest` (Java 25): for each kernel,
-  assemble a probe class via the Class-File API with a
-  `public void run(<prims>)` method whose body loads the args in stack order
-  and `invokestatic`s the kernel; define it via `VarkaClassLoader`; run it on a
-  small native buffer (functional check vs a scalar reference); then
-  `ClassFile.of().parse(bytes)` and assert exactly one `InvokeInstruction`
-  with the right owner/name/`typeSymbol`, preceded by the `LoadInstruction`
-  sequence in the exact argument order.
-- **Catalyst-side** `ClassFileCodegenSupportSuite`: asserts the emitted spec
-  strings equal the engine's actual descriptor constants; the eligibility
+- **Catalyst-side** `ClassFileCodegenSupportSuite`: asserts the emission spec
+  strings equal the engine's actual descriptor constants; assembles via
+  `assembleKernelClass` and `ClassFile.of().parse(bytes)` to assert exactly one
+  `InvokeInstruction` with the right owner/name/`typeSymbol`, preceded by the
+  `LoadInstruction` sequence in the exact argument order; the eligibility
   matrix (literal vs non-literal days; byte/short/int literals; non-date
   children; DateDiff nested-child exclusion); the `CodegenContext` registry.
+- **Engine-side** `DateVectorOpsEmissionTest` (Java 25): defines a probe of the
+  same shape (mirrored assembler - the engine cannot depend on catalyst) via
+  `VarkaClassLoader`; runs it on a small native buffer (functional check vs a
+  scalar reference); and pins the kernel descriptors from the actual methods
+  via reflection, so the catalyst contract strings cannot silently drift.
 
 ## 5. File layout
 
@@ -161,7 +170,8 @@ sql/varka/PLAN_TASK_4.md
 sql/varka/IMPLEMENTATION_PLAN.md   (task table update)
 ```
 
-No pom changes: `sql/catalyst` and the engine are existing modules.
+No new modules: `sql/catalyst` and the engine are existing modules. The root
+`pom.xml` bumps `java.version` 17 -> 25 (the Java 25 baseline decision).
 
 ## 6. Definition of done (Task 4)
 
@@ -169,9 +179,10 @@ No pom changes: `sql/catalyst` and the engine are existing modules.
   existing codegen suites.
 - Engine suite green (`build/mvn -f sql/varka/engine/pom.xml test`, all prior
   + new emission test).
-- Stack order proven by disassembly on the engine side; the catalyst test
-  asserts the exact descriptor strings.
-- Only `sql/varka/` + additive catalyst sources; ASCII, <=100-char lines.
+- Stack order proven by disassembly in catalyst; the engine integration test
+  cross-checks the descriptors via reflection.
+- Only `sql/varka/` + additive catalyst sources + the root `java.version` bump;
+  ASCII, <=100-char lines.
 
 ## 7. Explicitly deferred
 
