@@ -550,9 +550,7 @@ case class DateAdd(startDate: Expression, days: Expression)
     ClassFileGenOpKind.DateAdd)
 
   override def isClassFileGenEligible: Boolean =
-    VarkaClassFileGen.isDateAttribute(startDate) && daysOffsetConstant.isDefined
-
-  override def daysOffsetConstant: Option[Int] = VarkaClassFileGen.foldDaysOffset(days)
+    VarkaClassFileGen.isDateAttribute(startDate) && VarkaClassFileGen.foldDaysOffset(days).isDefined
 
   override def prettyName: String = "date_add"
 
@@ -608,9 +606,7 @@ case class DateSub(startDate: Expression, days: Expression)
     ClassFileGenOpKind.DateSub)
 
   override def isClassFileGenEligible: Boolean =
-    VarkaClassFileGen.isDateAttribute(startDate) && daysOffsetConstant.isDefined
-
-  override def daysOffsetConstant: Option[Int] = VarkaClassFileGen.foldDaysOffset(days)
+    VarkaClassFileGen.isDateAttribute(startDate) && VarkaClassFileGen.foldDaysOffset(days).isDefined
 
   override def prettyName: String = "date_sub"
 

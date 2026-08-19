@@ -69,13 +69,12 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
     }
   }
 
-  test("daysOffsetConstant folds integral literals") {
-    assert(DateAdd(startAttr, Literal(3)).daysOffsetConstant == Some(3))
-    assert(DateAdd(startAttr, Literal(3: Short)).daysOffsetConstant == Some(3))
-    assert(DateAdd(startAttr, Literal(3.toByte)).daysOffsetConstant == Some(3))
-    assert(DateAdd(startAttr, Literal(-7)).daysOffsetConstant == Some(-7))
-    assert(DateAdd(startAttr, Literal(null, IntegerType)).daysOffsetConstant.isEmpty)
-    assert(DateSub(startAttr, Literal(2)).daysOffsetConstant == Some(2))
+  test("foldDaysOffset folds integral literals") {
+    assert(VarkaClassFileGen.foldDaysOffset(Literal(3)) == Some(3))
+    assert(VarkaClassFileGen.foldDaysOffset(Literal(3: Short)) == Some(3))
+    assert(VarkaClassFileGen.foldDaysOffset(Literal(3.toByte)) == Some(3))
+    assert(VarkaClassFileGen.foldDaysOffset(Literal(-7)) == Some(-7))
+    assert(VarkaClassFileGen.foldDaysOffset(Literal(null, IntegerType)).isEmpty)
   }
 
   test("DateAdd/DateSub eligibility requires a plain date attribute and foldable days") {

@@ -103,7 +103,6 @@ case class ClassFileGenOp(
 trait ClassFileCodegenSupport extends Expression {
   def classFileGenOp: ClassFileGenOp
   def isClassFileGenEligible: Boolean
-  def daysOffsetConstant: Option[Int]
 }
 ```
 
@@ -115,8 +114,9 @@ registry populated for Task 5's router.
 
 - `DateAdd`/`DateSub`: `classFileGenOp` = the add/sub kernel spec;
   `isClassFileGenEligible` = `startDate` is a plain `Attribute` of `DateType`
-  and `days` is a foldable integral literal (`daysOffsetConstant` folds it via
-  `Number.intValue()`; null or non-foldable days -> not eligible).
+  and `days` folds to an integral constant (`VarkaClassFileGen.foldDaysOffset`
+  via `Number.intValue()`; null or non-foldable days -> not eligible). The
+  fold helper lives with the plan-level logic, not on the trait.
 - `DateDiff`: `classFileGenOp` = the diff kernel spec; eligible when both
   children are plain `Attribute`s of `DateType`.
 - Nested Varka expressions (e.g. `DateDiff(DateAdd(a, 1), b)`) are out of MVP

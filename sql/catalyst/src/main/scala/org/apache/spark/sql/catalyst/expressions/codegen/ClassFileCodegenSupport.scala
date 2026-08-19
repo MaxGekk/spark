@@ -62,12 +62,6 @@ trait ClassFileCodegenSupport extends Expression {
   /** Whether this expression is eligible for the Varka batch-kernel path (MVP rules). */
   def isClassFileGenEligible: Boolean
 
-  /**
-   * Folded `days` offset for DateAdd/DateSub. `Some(intValue)` when `days` is a non-null
-   * integral literal, `None` otherwise (runtime or null days keep the string path).
-   */
-  def daysOffsetConstant: Option[Int] = None
-
   override def genCode(ctx: CodegenContext): ExprCode = {
     ctx.registerClassFileGenExpression(this)
     super.genCode(ctx)
