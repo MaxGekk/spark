@@ -509,10 +509,12 @@ case class CurrentBatchTimestamp(
  */
 private[expressions] object DateVarkaSupport {
 
-  /** A plain date attribute: an [[Attribute]] of [[DateType]]. The batch kernels read a
-   * whole Arrow column's buffers, so only direct column references are MVP-eligible. */
+  /** A plain date attribute: an [[Attribute]] or a bound column reference of [[DateType]].
+   * The batch kernels read a whole Arrow column's buffers, so only direct column references
+   * are MVP-eligible. At codegen time the plan-level [[Attribute]] has already been replaced
+   * by a [[BoundReference]], so both shapes must be recognized. */
   def isDateAttribute(e: Expression): Boolean = {
-    e.isInstanceOf[Attribute] && e.dataType == DateType
+    (e.isInstanceOf[Attribute] || e.isInstanceOf[BoundReference]) && e.dataType == DateType
   }
 
   /** Folds a literal integer/short/byte `days` argument to an int offset. */

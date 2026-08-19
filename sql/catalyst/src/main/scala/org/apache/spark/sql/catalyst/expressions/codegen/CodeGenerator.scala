@@ -1443,8 +1443,15 @@ abstract class GeneratedClass {
 
 /**
  * A wrapper for the source code to be compiled by [[CodeGenerator]].
+ *
+ * @param classFileGenOps Class-File operations discovered while generating `body`. Non-empty
+ *                        only when the codegen funnel may assemble a Varka batch kernel class
+ *                        instead of compiling the string with Janino.
  */
-class CodeAndComment(val body: String, val comment: collection.Map[String, String])
+class CodeAndComment(
+    val body: String,
+    val comment: collection.Map[String, String],
+    val classFileGenOps: Seq[ClassFileGenOp] = Nil)
   extends Serializable {
   override def equals(that: Any): Boolean = that match {
     case t: CodeAndComment if t.body == body => true
@@ -1571,6 +1578,9 @@ object CodeGenerator extends Logging {
   // Visible for testing
   def resetCompileTime(): Unit = _compileTime.reset()
 
+  /** Invalidates the codegen cache so the next compile always runs the loader. For testing. */
+  private[codegen] def invalidateCodegenCache(): Unit = cache.invalidateAll()
+
   /**
    * Compile the Java source code into a Java class via the active [[CodeCompiler]]
    * backend (normally the one [[SQLConf.CODEGEN_COMPILER]] selects; see
@@ -1614,7 +1624,12 @@ object CodeGenerator extends Logging {
         => (GeneratedClass, ByteCodeStats) = {
       case (_, backend, code) =>
         val startTime = System.nanoTime()
-        val result = backend.compile(code)
+        val result =
+          if (code.classFileGenOps.nonEmpty && JavaClassFileEngine.routingEnabledForTesting) {
+            JavaClassFileEngine.assembleOrFallback(code, backend)
+          } else {
+            backend.compile(code)
+          }
         val endTime = System.nanoTime()
         val duration = endTime - startTime
         val timeMs: Double = duration.toDouble / NANOS_PER_MILLIS

@@ -1,8 +1,9 @@
 # Varka Task 5 - Class assembly + Ghost fallback
 
-**Status: PLAN** (decisions recorded). See `IMPLEMENTATION_PLAN.md` for the
-high-level MVP plan. Task 5 builds on the Task 4 hooks: a Class-File API
-engine that assembles the full `GeneratedClass` shape, routing in the single
+**Status: DONE** (see "Implementation notes" in 3.6 for the decisions resolved
+during implementation). See `IMPLEMENTATION_PLAN.md` for the high-level MVP
+plan. Task 5 builds on the Task 4 hooks: a Class-File API engine that
+assembles the full `GeneratedClass` shape, routing in the single
 `CodeGenerator.compile` funnel, a lazy Janino ghost fallback, and a
 catalyst-side class loader mirroring the engine's `VarkaClassLoader`.
 Execution-path interception (the real batch dispatch) is Task 6.
@@ -75,6 +76,12 @@ final safety net below the ghost fallback.
 - Scala 2.13 hits a cyclic-reference bug when it reads the sealed Class-File
   instruction hierarchy (`UnboundRetInstruction`); disassembly assertions
   must live in a Java helper (precedent: `ClassFileGenOpVerifier`, Task 4).
+  The same bug also strikes during ASSEMBLY typechecking (it fired on the
+  `withField` call), so the Class-File assembly itself lives in a Java helper
+  (`ClassFileAssembler.java`), not in Scala. To be safe, no Class-File type
+  appears in any Java helper's method signature either (Scala loads a Java
+  class's full member list and re-triggers the bug on classfile-typed
+  signatures).
 
 ### 2.6 Engine linkage
 
@@ -90,40 +97,66 @@ final safety net below the ghost fallback.
 
 - Add `val classFileGenOps: Seq[ClassFileGenOp] = Nil`; excluded from
   `equals`/`hashCode` (like `comment`) since it is a function of the body.
-- Generators attach the ops when building the `CodeAndComment`:
-  `GenerateUnsafeProjection`, `GenerateMutableProjection`,
-  `WholeStageCodegenExec`, `WholeStageCodegenEvaluatorFactory`. Other call
-  sites (predicate/ordering/etc.) leave the list empty and keep Janino.
+- `CodeFormatter.stripOverlappingComments` reconstructs the `CodeAndComment`
+  and must carry the ops through (it drops unknown fields otherwise).
+- Generators attach the ops when building the `CodeAndComment`. In Task 5 only
+  `GenerateUnsafeProjection` attaches (its generated class is the
+  `UnsafeProjection` shape the stub assembles); `GenerateMutableProjection`,
+  `WholeStageCodegenExec` and `WholeStageCodegenEvaluatorFactory` attach in
+  Task 6 with their own class shapes. Other call sites (predicate/ordering/
+  etc.) leave the list empty and keep Janino.
+- Codegen-time eligibility: at plan level the start/end operands are
+  `Attribute`s, but by the time the funnel runs they are `BoundReference`s.
+  `DateVarkaSupport.isDateAttribute` therefore accepts either shape.
 
 ### 3.2 Routing + ghost fallback in `CodeGenerator.compile`
 
-- Inside the cache `loadFunc`: if `code.classFileGenOps.nonEmpty`, try
-  `JavaClassFileEngine.assembleGeneratedClass` -> define via
+- Inside the cache `loadFunc`: if `code.classFileGenOps.nonEmpty` AND routing
+  is enabled, try `JavaClassFileEngine.assembleAndLoad` -> define via
   `VarkaGeneratedClassLoader` -> instantiate -> return
   `(GeneratedClass, ByteCodeStats)`. On `NonFatal` -> `logWarning` and fall
   through to `backend.compile(code)` (Janino).
 - Because both paths run inside `loadFunc`, the `NonFateSharingCache` caches
   whichever path won under the same key `(classLoaderRef, backend, code)`; a
   failed assembly is never retried.
-- `ByteCodeStats`: compute from the assembled model (max method code size /
-  const pool size) via a Java helper, or return `ByteCodeStats.UNAVAILABLE`
-  initially. Minor decision, resolved during implementation.
+- Routing is gated behind `@volatile var routingEnabledForTesting` (default
+  false): the assembled `apply` stub throws, so the happy path must stay
+  inert until Task 6 wires the real batch dispatch. A compile-failure
+  injection (`failAssemblyForTesting`) exercises the ghost fallback.
+- `ByteCodeStats`: reuse `CodeCompiler.computeByteCodeStats` on the two
+  assembled classes (ASM-based, no Class-File parse in Scala).
 
 ### 3.3 `JavaClassFileEngine` (catalyst, Class-File API)
 
-- `assembleGeneratedClass(className, ctx, ops, schema): Array[Byte]`
-  producing the Janino-equivalent shape:
+- The Class-File assembly lives in `ClassFileAssembler.java` (main, see 2.5);
+  `JavaClassFileEngine.assembleGeneratedClass(className): Seq[(String,
+  Array[Byte])]` delegates to it. `ctx`/`ops`/`schema` parameters were not
+  needed for the stub shape and were dropped from the signature; Task 6 will
+  extend the engine when the dispatch body needs them.
+- Produces the Janino-equivalent shape:
   - public wrapper class extending `GeneratedClass` with
-    `generate(Object[])` returning `new SpecificVarkaProjection(references)`;
+    `generate(Object[])` returning `new SpecificVarkaProjection(references)`
+    (the parameter is local slot 1: slot 0 is `this` - a slot bug here
+    surfaced as a `VerifyError` in the first test run);
   - `SpecificVarkaProjection` extends `UnsafeProjection`: references field,
-    no-arg constructor, `initialize(int)` no-op, and `apply(InternalRow)`
+    constructor storing it, `initialize(int)` no-op, and `apply(InternalRow)`
     **stub** throwing `UnsupportedOperationException` ("Varka batch
     execution wired in Task 6").
 - The stub is honest about Task 5 scope: the batch kernels cannot run per-row;
   real dispatch lands in Task 6's `ColumnarToRowExec` interception.
-- Test hook: `@volatile var failAssemblyForTesting: Boolean` in the companion
-  (`private[expressions]`), checked at the top of assembly, forcing the ghost
-  path in tests.
+- Test hooks in the companion (`private[expressions]`):
+  `@volatile var routingEnabledForTesting`, `@volatile
+  failAssemblyForTesting`, and an `assemblyAttempts` counter proving a cached
+  assembly is not retried.
+
+### 3.6 Implementation notes
+
+- `CodeGenerator.invalidateCodegenCache()` (test-visible) clears the static
+  cache so the suite is deterministic even though the persistent sbt server
+  JVM keeps `CodeGenerator.cache` alive across invocations.
+- The loader resolves the `DateVectorOps` FQCN from the parent classloader:
+  the test verifies `loader.loadClass("...varka.vector.DateVectorOps")`
+  against the test stub.
 
 ### 3.4 `VarkaGeneratedClassLoader` (catalyst mirror)
 
@@ -159,20 +192,22 @@ final safety net below the ghost fallback.
 ## 5. File layout
 
 ```
+sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen/
+  ClassFileAssembler.java           (new Java Class-File assembler, see 2.5)
 sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/codegen/
   JavaClassFileEngine.scala            (new)
   VarkaGeneratedClassLoader.scala      (new)
-  CodeGenerator.scala                  (CodeAndComment.classFileGenOps + loadFunc routing)
+  CodeGenerator.scala                  (CodeAndComment.classFileGenOps + loadFunc
+                                        routing + invalidateCodegenCache)
+  CodeFormatter.scala                  (stripOverlappingComments carries ops)
   GenerateUnsafeProjection.scala       (attach ops)
-  GenerateMutableProjection.scala      (attach ops)
-sql/core/src/main/scala/org/apache/spark/sql/execution/
-  WholeStageCodegenExec.scala          (attach ops)
-  WholeStageCodegenEvaluatorFactory.scala (attach ops)
+  datetimeExpressions.scala            (isDateAttribute accepts BoundReference)
 sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/expressions/codegen/
   ClassFileShapeVerifier.java          (new Java disassembly helper)
 sql/catalyst/src/test/java/org/apache/spark/sql/varka/vector/
   DateVectorOps.java                   (test stub, same FQCN as engine kernel)
 sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/codegen/
+  ClassFileCodegenSupportSuite.scala   (BoundReference eligibility tests)
   JavaClassFileEngineSuite.scala       (new)
 sql/varka/PLAN_TASK_5.md               (this file)
 sql/varka/IMPLEMENTATION_PLAN.md       (task table update)
@@ -205,7 +240,11 @@ sql/varka/IMPLEMENTATION_PLAN.md       (task table update)
   concatenation; Janino parsing/compilation is what is skipped). VISION's
   strict "zero strings" would require early routing before string build - a
   follow-up refinement to revisit when Task 6 touches the generators.
-- The `apply` stub is a landmine if anything invokes it before Task 6; tests
-  must never call it (the ghost test forces assembly failure, so the stub is
-  never reached).
-- ArrayBuffer invariance at the `eligibleOps` call site (see 2.3).
+- The `apply` stub is a landmine if anything invokes it before Task 6; routing
+  is gated behind `routingEnabledForTesting` (default false) so the stub is
+  never produced for real queries, and the ghost test never reaches it.
+- `CodeFormatter.stripOverlappingComments` and any future `CodeAndComment`
+  transformation must carry `classFileGenOps` through.
+- The Class-File API differs between JDK majors (e.g. `MethodModel.methodType`
+  returns `Utf8Entry` in JDK 25 vs `MethodTypeDesc` in 24); the Java helpers
+  pin the JDK 25 shapes and the shape verifier keeps that contract honest.
