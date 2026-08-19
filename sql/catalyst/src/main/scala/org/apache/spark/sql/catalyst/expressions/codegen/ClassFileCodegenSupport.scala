@@ -24,13 +24,6 @@ import java.lang.reflect.AccessFlag
 import org.apache.spark.sql.catalyst.expressions.Expression
 
 /**
- * The kind of Varka batch kernel backing an expression (Task 4).
- */
-object ClassFileGenOpKind extends Enumeration {
-  val DateAdd, DateSub, DateDiff = Value
-}
-
-/**
  * The declarative `invokestatic` contract of a Varka batch kernel (Task 4). The argument
  * order of the DateVectorOps methods IS the JVM stack order, so the descriptor fully pins
  * the bytecode emission. Catalyst owns the Class-File assembly on the Java 25+ baseline;
@@ -39,13 +32,11 @@ object ClassFileGenOpKind extends Enumeration {
  * @param ownerClassName the binary name of the class owning the kernel.
  * @param methodName the static method name.
  * @param methodDescriptor the JVM method descriptor, e.g. `(JJIJJII)V`.
- * @param kind which expression this op backs.
  */
 case class ClassFileGenOp(
     ownerClassName: String,
     methodName: String,
-    methodDescriptor: String,
-    kind: ClassFileGenOpKind.Value)
+    methodDescriptor: String)
 
 /**
  * Marker trait for expressions that can be compiled to a Varka batch-kernel call instead of

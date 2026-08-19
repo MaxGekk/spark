@@ -38,7 +38,6 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
     assert(op.ownerClassName == "org.apache.spark.sql.varka.vector.DateVectorOps")
     assert(op.methodName == "vectorAddDays")
     assert(op.methodDescriptor == "(JJIJJII)V")
-    assert(op.kind == ClassFileGenOpKind.DateAdd)
   }
 
   test("DateSub emission contract") {
@@ -46,7 +45,6 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
     assert(op.ownerClassName == "org.apache.spark.sql.varka.vector.DateVectorOps")
     assert(op.methodName == "vectorSubDays")
     assert(op.methodDescriptor == "(JJIJJII)V")
-    assert(op.kind == ClassFileGenOpKind.DateSub)
   }
 
   test("DateDiff emission contract") {
@@ -54,7 +52,6 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
     assert(op.ownerClassName == "org.apache.spark.sql.varka.vector.DateVectorOps")
     assert(op.methodName == "vectorDateDiff")
     assert(op.methodDescriptor == "(JJIJJIJJI)V")
-    assert(op.kind == ClassFileGenOpKind.DateDiff)
   }
 
   test("assembleKernelClass emits the invokestatic contract") {

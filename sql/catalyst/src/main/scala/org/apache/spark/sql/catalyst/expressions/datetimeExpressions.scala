@@ -566,8 +566,7 @@ case class DateAdd(startDate: Expression, days: Expression)
   override def classFileGenOp: ClassFileGenOp = ClassFileGenOp(
     "org.apache.spark.sql.varka.vector.DateVectorOps",
     "vectorAddDays",
-    "(JJIJJII)V",
-    ClassFileGenOpKind.DateAdd)
+    "(JJIJJII)V")
 
   override def isClassFileGenEligible: Boolean =
     DateVarkaSupport.isDateAttribute(startDate) &&
@@ -623,8 +622,7 @@ case class DateSub(startDate: Expression, days: Expression)
   override def classFileGenOp: ClassFileGenOp = ClassFileGenOp(
     "org.apache.spark.sql.varka.vector.DateVectorOps",
     "vectorSubDays",
-    "(JJIJJII)V",
-    ClassFileGenOpKind.DateSub)
+    "(JJIJJII)V")
 
   override def isClassFileGenEligible: Boolean =
     DateVarkaSupport.isDateAttribute(startDate) &&
@@ -3588,8 +3586,7 @@ case class DateDiff(endDate: Expression, startDate: Expression)
   override def classFileGenOp: ClassFileGenOp = ClassFileGenOp(
     "org.apache.spark.sql.varka.vector.DateVectorOps",
     "vectorDateDiff",
-    "(JJIJJIJJI)V",
-    ClassFileGenOpKind.DateDiff)
+    "(JJIJJIJJI)V")
 
   override def isClassFileGenEligible: Boolean =
     DateVarkaSupport.isDateAttribute(endDate) && DateVarkaSupport.isDateAttribute(startDate)

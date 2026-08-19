@@ -91,10 +91,9 @@ yields instruction views: `InvokeInstruction` (`owner()`, `name()`,
 
 ```scala
 case class ClassFileGenOp(
-    ownerClassName: String,    // "org.apache.spark.sql.varka.vector.DateVectorOps"
-    methodName: String,        // "vectorAddDays" | "vectorSubDays" | "vectorDateDiff"
-    methodDescriptor: String,  // "(JJIJJII)V" | "(JJIJJIJJI)V"
-    kind: ClassFileGenOpKind)  // DateAdd | DateSub | DateDiff
+    ownerClassName: String,     // "org.apache.spark.sql.varka.vector.DateVectorOps"
+    methodName: String,         // "vectorAddDays" | "vectorSubDays" | "vectorDateDiff"
+    methodDescriptor: String)   // "(JJIJJII)V" | "(JJIJJIJJI)V"
 ```
 
 ### 3.2 `trait ClassFileCodegenSupport` (catalyst)
