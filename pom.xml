@@ -2802,8 +2802,8 @@
               <arg>-deprecation</arg>
               <arg>-feature</arg>
               <arg>-explaintypes</arg>
-              <arg>-release</arg>
-              <arg>17</arg>
+               <arg>-release</arg>
+               <arg>${java.version}</arg>
               <arg>-Wconf:any:e</arg>
               <arg>-Wconf:cat=deprecation:wv</arg>
               <arg>-Wunused:imports</arg>
