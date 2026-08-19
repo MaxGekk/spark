@@ -522,7 +522,7 @@ case class CurrentBatchTimestamp(
   group = "datetime_funcs",
   since = "1.5.0")
 case class DateAdd(startDate: Expression, days: Expression)
-  extends BinaryExpression with ExpectsInputTypes {
+  extends BinaryExpression with ExpectsInputTypes with ClassFileCodegenSupport {
   override def nullIntolerant: Boolean = true
   override def left: Expression = startDate
   override def right: Expression = days
@@ -542,6 +542,17 @@ case class DateAdd(startDate: Expression, days: Expression)
       s"""${ev.value} = $sd + $d;"""
     })
   }
+
+  override def classFileGenOp: ClassFileGenOp = ClassFileGenOp(
+    VarkaClassFileGen.DateVectorOpsClassName,
+    "vectorAddDays",
+    VarkaClassFileGen.AddDaysMethodDescriptor,
+    ClassFileGenOpKind.DateAdd)
+
+  override def isClassFileGenEligible: Boolean =
+    VarkaClassFileGen.isDateAttribute(startDate) && daysOffsetConstant.isDefined
+
+  override def daysOffsetConstant: Option[Int] = VarkaClassFileGen.foldDaysOffset(days)
 
   override def prettyName: String = "date_add"
 
@@ -569,7 +580,7 @@ case class DateAdd(startDate: Expression, days: Expression)
   group = "datetime_funcs",
   since = "1.5.0")
 case class DateSub(startDate: Expression, days: Expression)
-  extends BinaryExpression with ExpectsInputTypes {
+  extends BinaryExpression with ExpectsInputTypes with ClassFileCodegenSupport {
   override def nullIntolerant: Boolean = true
   override def left: Expression = startDate
   override def right: Expression = days
@@ -589,6 +600,17 @@ case class DateSub(startDate: Expression, days: Expression)
       s"""${ev.value} = $sd - $d;"""
     })
   }
+
+  override def classFileGenOp: ClassFileGenOp = ClassFileGenOp(
+    VarkaClassFileGen.DateVectorOpsClassName,
+    "vectorSubDays",
+    VarkaClassFileGen.SubDaysMethodDescriptor,
+    ClassFileGenOpKind.DateSub)
+
+  override def isClassFileGenEligible: Boolean =
+    VarkaClassFileGen.isDateAttribute(startDate) && daysOffsetConstant.isDefined
+
+  override def daysOffsetConstant: Option[Int] = VarkaClassFileGen.foldDaysOffset(days)
 
   override def prettyName: String = "date_sub"
 
@@ -3529,7 +3551,7 @@ case class TruncTimestamp(
   group = "datetime_funcs",
   since = "1.5.0")
 case class DateDiff(endDate: Expression, startDate: Expression)
-  extends BinaryExpression with ImplicitCastInputTypes {
+  extends BinaryExpression with ImplicitCastInputTypes with ClassFileCodegenSupport {
   override def nullIntolerant: Boolean = true
 
   override def left: Expression = endDate
@@ -3544,6 +3566,15 @@ case class DateDiff(endDate: Expression, startDate: Expression)
   override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
     defineCodeGen(ctx, ev, (end, start) => s"$end - $start")
   }
+
+  override def classFileGenOp: ClassFileGenOp = ClassFileGenOp(
+    VarkaClassFileGen.DateVectorOpsClassName,
+    "vectorDateDiff",
+    VarkaClassFileGen.DateDiffMethodDescriptor,
+    ClassFileGenOpKind.DateDiff)
+
+  override def isClassFileGenEligible: Boolean =
+    VarkaClassFileGen.isDateAttribute(endDate) && VarkaClassFileGen.isDateAttribute(startDate)
 
   override protected def withNewChildrenInternal(
       newLeft: Expression, newRight: Expression): DateDiff =

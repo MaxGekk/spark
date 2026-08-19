@@ -149,6 +149,20 @@ class CodegenContext extends Logging {
   }
 
   /**
+   * Expressions registered for the Varka Class-File codegen path (Task 4). Populated by
+   * `ClassFileCodegenSupport.genCode`; consumed by the Class-File router (Task 5). The
+   * per-expression string codegen is unaffected.
+   */
+  val classFileGenExpressions: mutable.ArrayBuffer[ClassFileCodegenSupport] =
+    new mutable.ArrayBuffer[ClassFileCodegenSupport]()
+
+  def registerClassFileGenExpression(e: ClassFileCodegenSupport): Unit = {
+    classFileGenExpressions += e
+  }
+
+  def isClassFileGenEligible: Boolean = classFileGenExpressions.nonEmpty
+
+  /**
    * Holding the variable name of the input row of the current operator, will be used by
    * `BoundReference` to generate code.
    *
