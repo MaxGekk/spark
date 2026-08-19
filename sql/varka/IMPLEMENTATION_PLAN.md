@@ -9,8 +9,9 @@ Per-task detail lives in separate files:
 - `PLAN_TASK_1.md` - standalone engine module + `VarkaMorsel` (completed).
 - `PLAN_TASK_2.md` - `DateVectorOps` SIMD kernels (in progress).
 - `PLAN_TASK_3.md` - `VarkaClassLoader` + per-task lifecycle (completed).
-- `PLAN_TASK_4.md` - Catalyst hooks (`ClassFileCodegenSupport`) (plan saved;
-  implementation pending).
+- `PLAN_TASK_4.md` - Catalyst hooks (`ClassFileCodegenSupport`) (completed).
+- `PLAN_TASK_5.md` - Class assembly + Ghost fallback (`JavaClassFileEngine`)
+  (plan saved; implementation pending).
 
 ## 1. Corrections to the design docs (ground truth in this repo)
 
@@ -51,8 +52,8 @@ sql/varka/
   catalyst/                      <- Task 4 additions are additive source in the existing
                                     sql/catalyst module; Class-File assembly lives here on the
                                     Java 25 baseline (no new module)
-  spark/                         <- FUTURE Spark-side integration module (Tasks 5+); integration
-                                    strategy TBD
+spark/                         <- FUTURE Spark-side integration module (Tasks 6+);
+                                     strategy TBD (see open decision below)
 ```
 
 Design rules carried from VISION: zero string generation on the happy path;
@@ -68,15 +69,17 @@ ghost Janino fallback only in the Spark-side compile hook (Task 5).
 | 2 | `DateVectorOps` SIMD kernels | `vectorAddDays` / `vectorSubDays` / `vectorDateDiff` (IntVector + bit-packed mask + scalar tail) | Differential unit test vs scalar reference; JMH vs scalar loop (follow-up) | `PLAN_TASK_2.md` |
 | 3 | `VarkaClassLoader` + per-task lifecycle | Java loader in the engine with `release()`; registry + `findClass`; `TaskCompletionListener` wiring deferred to the Spark-side integration | Unloadability proof via weak references (1000-loader batch) | `PLAN_TASK_3.md` |
 | 4 | Catalyst hooks | `ClassFileCodegenSupport` trait; `DateAdd`/`DateSub`/`DateDiff` emit `invokestatic` to `DateVectorOps` | Bytecode disassembly matches expected stack order | `PLAN_TASK_4.md` |
-| 5 | Class assembly + Ghost fallback | `JavaClassFileEngine` (Class-File API); hook in `CodeCompiler`/`CodeGenerator.compile`; lazy Janino string + cache on failure | Compile-failure injection test hits Janino path, no crash | TBD |
+| 5 | Class assembly + Ghost fallback | `JavaClassFileEngine` (Class-File API); hook in `CodeCompiler`/`CodeGenerator.compile`; lazy Janino string + cache on failure | Compile-failure injection test hits Janino path, no crash | `PLAN_TASK_5.md` |
 | 6 | Execution-path integration | Intercept in `ColumnarToRowExec` (Columnar.scala:134) when batch is Arrow-backed and projection is Varka-eligible | `SELECT DATE_ADD(...)` matches Janino result | TBD |
 | 7 | Differential + perf testing | `QueryTest` suite (Varka on/off), JMH integrated, Metaspace stress | `checkAnswer` equality; throughput/Gen-time metrics | TBD |
 | 8 | Config flags + docs | `spark.sql.codegen.varka.enabled/.patch.threshold/.fallback.ghost.enabled` in `SQLConf` | flag toggling tests | TBD |
 
-**Open decision (deferred):** The `TaskCompletionListener` wiring (Tasks 5+)
-needs a Spark-side home. Options: (a) in-reactor optional module
-`sql/varka/spark/` (touches root `pom.xml` module list + enforcer), or
-(b) standalone build against published Spark jars. Task 4 is additive source
-in the existing `sql/catalyst` module (no new module, no pom changes): the
-emission contract is plain strings, and the engine is referenced only by name.
-The Spark-side home is still open for Task 5's runtime engine linkage.
+**Open decision (resolved for Task 5):** Task 5 keeps the Task 4 pattern -
+additive source in the existing `sql/catalyst` module (no new module, no pom
+changes). A catalyst-side `VarkaGeneratedClassLoader` mirrors the engine's
+`VarkaClassLoader` contract, and the kernel is referenced only by name
+(Class-File assembly; test-only stub on the catalyst test classpath). The
+real `TaskCompletionListener` wiring and the engine jar on the Spark runtime
+classpath are Task 6; whether that needs an in-reactor `sql/varka/spark/`
+module (touching the root `pom.xml` module list + enforcer) stays open for
+Task 6.
