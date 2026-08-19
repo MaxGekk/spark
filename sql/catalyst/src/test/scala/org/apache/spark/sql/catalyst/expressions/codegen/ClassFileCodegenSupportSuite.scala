@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{AttributeReference, BoundReference, DateAdd, DateDiff, DateSub, Literal}
+import org.apache.spark.sql.catalyst.expressions.{AttributeReference, BoundReference, DateAdd, DateDiff, DateSub, DateVarkaSupport, Literal}
 import org.apache.spark.sql.types.{DateType, IntegerType}
 
 /**
@@ -35,7 +35,7 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
 
   test("DateAdd emission contract") {
     val op = DateAdd(startAttr, Literal(3)).classFileGenOp
-    assert(op.ownerClassName == VarkaClassFileGen.DateVectorOpsClassName)
+    assert(op.ownerClassName == "org.apache.spark.sql.varka.vector.DateVectorOps")
     assert(op.methodName == "vectorAddDays")
     assert(op.methodDescriptor == "(JJIJJII)V")
     assert(op.kind == ClassFileGenOpKind.DateAdd)
@@ -43,7 +43,7 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
 
   test("DateSub emission contract") {
     val op = DateSub(startAttr, Literal(3)).classFileGenOp
-    assert(op.ownerClassName == VarkaClassFileGen.DateVectorOpsClassName)
+    assert(op.ownerClassName == "org.apache.spark.sql.varka.vector.DateVectorOps")
     assert(op.methodName == "vectorSubDays")
     assert(op.methodDescriptor == "(JJIJJII)V")
     assert(op.kind == ClassFileGenOpKind.DateSub)
@@ -51,7 +51,7 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
 
   test("DateDiff emission contract") {
     val op = DateDiff(endAttr, startAttr).classFileGenOp
-    assert(op.ownerClassName == VarkaClassFileGen.DateVectorOpsClassName)
+    assert(op.ownerClassName == "org.apache.spark.sql.varka.vector.DateVectorOps")
     assert(op.methodName == "vectorDateDiff")
     assert(op.methodDescriptor == "(JJIJJIJJI)V")
     assert(op.kind == ClassFileGenOpKind.DateDiff)
@@ -70,11 +70,11 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
   }
 
   test("foldDaysOffset folds integral literals") {
-    assert(VarkaClassFileGen.foldDaysOffset(Literal(3)) == Some(3))
-    assert(VarkaClassFileGen.foldDaysOffset(Literal(3: Short)) == Some(3))
-    assert(VarkaClassFileGen.foldDaysOffset(Literal(3.toByte)) == Some(3))
-    assert(VarkaClassFileGen.foldDaysOffset(Literal(-7)) == Some(-7))
-    assert(VarkaClassFileGen.foldDaysOffset(Literal(null, IntegerType)).isEmpty)
+    assert(DateVarkaSupport.foldDaysOffset(Literal(3)) == Some(3))
+    assert(DateVarkaSupport.foldDaysOffset(Literal(3: Short)) == Some(3))
+    assert(DateVarkaSupport.foldDaysOffset(Literal(3.toByte)) == Some(3))
+    assert(DateVarkaSupport.foldDaysOffset(Literal(-7)) == Some(-7))
+    assert(DateVarkaSupport.foldDaysOffset(Literal(null, IntegerType)).isEmpty)
   }
 
   test("DateAdd/DateSub eligibility requires a plain date attribute and foldable days") {
@@ -102,7 +102,7 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
       DateAdd(startAttr, ineligible))
     val ops = VarkaClassFileGen.eligibleOps(projectList)
     assert(ops.map(_.methodName) == Seq("vectorAddDays", "vectorDateDiff", "vectorSubDays"))
-    assert(ops.forall(_.ownerClassName == VarkaClassFileGen.DateVectorOpsClassName))
+    assert(ops.forall(_.ownerClassName == "org.apache.spark.sql.varka.vector.DateVectorOps"))
   }
 
   test("genCode registers into the CodegenContext and keeps the string path") {

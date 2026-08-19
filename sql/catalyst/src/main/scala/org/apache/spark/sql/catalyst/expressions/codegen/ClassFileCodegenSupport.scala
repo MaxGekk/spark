@@ -21,8 +21,7 @@ import java.lang.classfile.{ClassBuilder, ClassFile, CodeBuilder, TypeKind}
 import java.lang.constant.{ClassDesc, ConstantDescs, MethodTypeDesc}
 import java.lang.reflect.AccessFlag
 
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, Literal}
-import org.apache.spark.sql.types.DateType
+import org.apache.spark.sql.catalyst.expressions.Expression
 
 /**
  * The kind of Varka batch kernel backing an expression (Task 4).
@@ -76,13 +75,6 @@ trait ClassFileCodegenSupport extends Expression {
  */
 object VarkaClassFileGen {
 
-  /** Binary name of the engine class owning the batch kernels. */
-  val DateVectorOpsClassName = "org.apache.spark.sql.varka.vector.DateVectorOps"
-
-  val AddDaysMethodDescriptor = "(JJIJJII)V"
-  val SubDaysMethodDescriptor = "(JJIJJII)V"
-  val DateDiffMethodDescriptor = "(JJIJJIJJI)V"
-
   /** The Varka-eligible ops of a projection's expression list, in order. */
   def eligibleOps(projectList: Seq[Expression]): Seq[ClassFileGenOp] = {
     projectList.collect {
@@ -130,21 +122,5 @@ object VarkaClassFileGen {
           cb.return_()
           ()
         }))
-  }
-
-  /**
-   * A plain date attribute: an [[Attribute]] of [[DateType]]. The batch kernels read a
-   * whole Arrow column's buffers, so only direct column references are MVP-eligible.
-   */
-  private[expressions] def isDateAttribute(e: Expression): Boolean = {
-    e.isInstanceOf[Attribute] && e.dataType == DateType
-  }
-
-  /**
-   * Folds a literal integer/short/byte `days` argument to an int offset.
-   */
-  private[expressions] def foldDaysOffset(days: Expression): Option[Int] = days match {
-    case Literal(value: Number, _) => Some(value.intValue())
-    case _ => None
   }
 }
