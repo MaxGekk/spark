@@ -69,7 +69,7 @@ class JavaClassFileEngineSuite extends SparkFunSuite {
   test("routing assembles the Varka shell and caches the result") {
     routingEnabledForTesting = true
     val proj = GenerateUnsafeProjection.generate(Seq(DateSub(startAttr, Literal(5))), schema)
-    assert(proj.getClass.getName == "org.apache.spark.sql.varka.execution.SpecificVarkaProjection")
+    assert(proj.getClass.getName == "org.apache.spark.sql.varka.execution.VarkaProjection")
     assert(assemblyAttempts.get() == 1)
     val e = intercept[UnsupportedOperationException] {
       proj.apply(dateRow(19244))
@@ -112,7 +112,7 @@ class JavaClassFileEngineSuite extends SparkFunSuite {
     val (wrapperName, wrapperBytes) = classes.head
     val (specName, specBytes) = classes(1)
     assert(wrapperName == "org.apache.spark.sql.varka.execution.GeneratedClass")
-    assert(specName == "org.apache.spark.sql.varka.execution.SpecificVarkaProjection")
+    assert(specName == "org.apache.spark.sql.varka.execution.VarkaProjection")
     ClassFileShapeVerifier.assertGeneratedClassShape(wrapperBytes, specBytes)
   }
 
@@ -123,7 +123,7 @@ class JavaClassFileEngineSuite extends SparkFunSuite {
     val clazz = loader.loadClass("org.apache.spark.sql.varka.execution.GeneratedClass")
     val generated = clazz.getConstructor().newInstance().asInstanceOf[GeneratedClass]
     val proj = generated.generate(Array.empty[Any]).asInstanceOf[UnsafeProjection]
-    assert(proj.getClass.getName == "org.apache.spark.sql.varka.execution.SpecificVarkaProjection")
+    assert(proj.getClass.getName == "org.apache.spark.sql.varka.execution.VarkaProjection")
     // The kernel owner FQCN resolves via the parent loader (test stub on the classpath).
     val kernel = loader.loadClass("org.apache.spark.sql.varka.vector.DateVectorOps")
     assert(kernel.getName == "org.apache.spark.sql.varka.vector.DateVectorOps")

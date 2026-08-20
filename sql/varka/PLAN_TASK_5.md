@@ -137,10 +137,10 @@ final safety net below the ghost fallback.
   extend the engine when the dispatch body needs them.
 - Produces the Janino-equivalent shape:
   - public wrapper class extending `GeneratedClass` with
-    `generate(Object[])` returning `new SpecificVarkaProjection(references)`
+    `generate(Object[])` returning `new VarkaProjection(references)`
     (the parameter is local slot 1: slot 0 is `this` - a slot bug here
     surfaced as a `VerifyError` in the first test run);
-  - `SpecificVarkaProjection` extends `UnsafeProjection`: references field,
+  - `VarkaProjection` extends `UnsafeProjection`: references field,
     constructor storing it, `initialize(int)` no-op, and `apply(InternalRow)`
     **stub** throwing `UnsupportedOperationException` ("Varka batch
     execution wired in Task 6").

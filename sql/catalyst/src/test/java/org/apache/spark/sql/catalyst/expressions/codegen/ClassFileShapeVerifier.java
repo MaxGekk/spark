@@ -26,7 +26,7 @@ import java.lang.reflect.AccessFlag;
  * Task 5 test helper: asserts that the bytes assembled by
  * {@code JavaClassFileEngine.assembleGeneratedClass} expose the full {@code GeneratedClass}
  * shape -- a public wrapper extending {@code GeneratedClass} with a default constructor and
- * {@code generate(Object[])}, plus a public {@code SpecificVarkaProjection} extending
+ * {@code generate(Object[])}, plus a public {@code VarkaProjection} extending
  * {@code UnsafeProjection} with a {@code references} field and the {@code apply}/{@code
  * initialize} methods. A Java helper is used because Scala 2.13 hits a cyclic-reference bug
  * when it reads the sealed Class-File hierarchy; for the same reason no Class-File type

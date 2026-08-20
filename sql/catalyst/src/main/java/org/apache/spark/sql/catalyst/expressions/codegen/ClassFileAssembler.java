@@ -28,7 +28,7 @@ import java.lang.reflect.AccessFlag;
 /**
  * Assembles the Varka {@code GeneratedClass} shell with the Class-File API (Task 5): a public
  * wrapper extending {@code GeneratedClass} with {@code generate(Object[])}, plus a public
- * {@code SpecificVarkaProjection} extending {@code UnsafeProjection} with a {@code references}
+ * {@code VarkaProjection} extending {@code UnsafeProjection} with a {@code references}
  * field and the {@code apply}/{@code initialize} methods. A Java helper is used because Scala
  * 2.13 hits a cyclic-reference bug when it typechecks the Class-File API's sealed instruction
  * hierarchy.

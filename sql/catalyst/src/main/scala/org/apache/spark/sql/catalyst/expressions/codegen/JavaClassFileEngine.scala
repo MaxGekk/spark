@@ -42,7 +42,7 @@ private[expressions] object JavaClassFileEngine extends Logging {
   private val WrapperClassName = "org.apache.spark.sql.varka.execution.GeneratedClass"
 
   /** The binary name of the assembled projection class. */
-  private val SpecClassName = "org.apache.spark.sql.varka.execution.SpecificVarkaProjection"
+  private val SpecClassName = "org.apache.spark.sql.varka.execution.VarkaProjection"
 
   /**
    * Whether the `CodeGenerator.compile` funnel routes Class-File-eligible units through
@@ -87,7 +87,7 @@ private[expressions] object JavaClassFileEngine extends Logging {
 
   /**
    * Assembles the full [[GeneratedClass]] shell as two classes: a public wrapper `className`
-   * extending [[GeneratedClass]] with `generate(Object[])`, and `SpecificVarkaProjection`
+   * extending [[GeneratedClass]] with `generate(Object[])`, and `VarkaProjection`
    * extending [[UnsafeProjection]]. Returns each class's binary name and bytes.
    */
   def assembleGeneratedClass(className: String): Seq[(String, Array[Byte])] = {
