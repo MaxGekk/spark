@@ -89,6 +89,18 @@ class ClassFileCodegenSupportSuite extends SparkFunSuite {
     assert(!DateDiff(Literal(19244, DateType), startAttr).isClassFileGenEligible)
   }
 
+  test("eligibility accepts bound date column references at codegen time") {
+    assert(DateAdd(BoundReference(0, DateType, nullable = true), Literal(3))
+      .isClassFileGenEligible)
+    assert(DateSub(BoundReference(0, DateType, nullable = true), Literal(3))
+      .isClassFileGenEligible)
+    assert(DateDiff(
+      BoundReference(0, DateType, nullable = true),
+      BoundReference(1, DateType, nullable = true)).isClassFileGenEligible)
+    assert(!DateAdd(BoundReference(0, IntegerType, nullable = true), Literal(3))
+      .isClassFileGenEligible)
+  }
+
   test("VarkaClassFileGen.eligibleOps collects eligible ops in order") {
     val ineligible = AttributeReference("d", IntegerType)()
     val projectList = Seq(
