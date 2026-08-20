@@ -152,6 +152,12 @@
       <groupId>org.apache.datasketches</groupId>
       <artifactId>datasketches-java</artifactId>
     </dependency>
+    <dependency>
+      <groupId>org.apache.spark.varka</groupId>
+      <artifactId>varka-engine</artifactId>
+      <version>0.1.0-SNAPSHOT</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
   <build>
     <outputDirectory>target/scala-${scala.binary.version}/classes</outputDirectory>
