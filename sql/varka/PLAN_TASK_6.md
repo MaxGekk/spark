@@ -1,6 +1,6 @@
 # Varka Task 6 - Execution-path integration
 
-**Status: PLAN** (decisions recorded). See `IMPLEMENTATION_PLAN.md` for the
+**Status: DONE** (implementation + tests landed). See `IMPLEMENTATION_PLAN.md` for the
 high-level MVP plan. Task 6 wires the Task 5 machinery into the real query
 path so `SELECT date_add(d, 3)` over an Arrow-backed `ColumnarBatch` runs the
 `DateVectorOps` SIMD kernels instead of per-row codegen, with graceful
@@ -48,11 +48,20 @@ per-batch fallback and an end-to-end test that matches the Janino result.
 implementations. The rule rewrites
 
     ProjectExec(projectList, c2r@ColumnarToRowExec(child))
-      ->  VarkaColumnarToRowExec(projectList, c2r)
+      ->  VarkaColumnarToRowExec(projectList, inner)
 
 when `spark.sql.codegen.varka.enabled` is true AND the projection is fully
 Varka-eligible (`VarkaClassFileGen.eligibleOps(projectList)` covers every
-expression). Mixed/ineligible projections are not rewritten. Registration via
+expression). Two plan-shape details:
+- The transition is *absorbed*, not wrapped: `VarkaColumnarToRowExec` consumes
+  the inner columnar child (`inner`), because the node drives it with
+  `executeColumnar()` and a `ColumnarToRowExec` is row-only.
+- A dual-mode source (e.g. a cached scan: `supportsRowBased` and
+  `supportsColumnar`) feeding a row-based parent gets no transition at all;
+  the rule fuses over it directly when `child.supportsColumnar`, switching it
+  to its columnar output.
+
+Mixed/ineligible projections are not rewritten. Registration via
 `SparkSessionExtensions.injectColumnar` (ColumnarRuleBuilder =
 `SparkSession => ColumnarRule`); the e2e suite injects it, config-driven
 auto-registration is deferred to Task 8.
@@ -68,40 +77,46 @@ codegen support is a follow-up). `doExecute` mirrors `ColumnarToRowExec`
 Per batch the evaluator:
 
 1. **Bind + dispatch plan**: bind `projectList` against `child.output`
-   (`BindReferences.bindReference`); pattern-match each expression to a
-   `VarkaOp` (`DateAdd(BoundReference, Literal)` -> `vectorAddDays`,
-   `DateSub` -> `vectorSubDays`, `DateDiff(BoundReference, BoundReference)` ->
-   `vectorDateDiff`) carrying the input ordinals, the folded days offset, the
-   output attribute, and the `ClassFileGenOp`.
+   (`BindReferences.bindReference`, unwrapping the bound `Alias`); pattern-match
+   each expression to an `OutputOp` (`DateAdd(BoundReference, Literal)` ->
+   `vectorAddDays`, `DateSub` -> `vectorSubDays`,
+   `DateDiff(BoundReference, BoundReference)` -> `vectorDateDiff`) carrying the
+   input ordinals, the folded days offset, the output type, and the
+   `ClassFileGenOp`. A non-foldable offset makes the whole projection ineligible.
 2. **Runtime guard**: every referenced column must be an `ArrowColumnVector`
    whose `getValueVector()` is a `DateDayVector` (ArrowColumnVector.java:47);
    otherwise the batch runs the standard Janino path
    (`UnsafeProjection.create(projectList, child.output)` over the input rows).
    No crash.
-3. **Input morsels**: `VarkaMorsel.extractDate(dateDayVector, batch.numRows())`
-   -> data/validity segments + nullCount. Per the engine contract the source
-   validity pointer is `0L` when the column is all-null or null-free.
+3. **Input morsels**: a self-contained mirror of the engine's
+   `VarkaMorsel.extractDate` maps each `DateDayVector` to its data/validity
+   segments + nullCount. Per the engine contract the source validity pointer is
+   `0L` when the column is all-null or null-free (the kernel never dereferences
+   it then).
 4. **Kernel invocation (VISION-aligned)**: per distinct op, assemble the
    runner class via `VarkaClassFileGen.assembleKernelClass(op)`, define it in
    a per-task `VarkaGeneratedClassLoader` (widened to `private[sql]`), cache
    the reflective `Method` (`run` with primitive param classes parsed from the
    descriptor), and invoke it per batch with the addresses + days offset as
    runtime args. Precedent for reflective invocation:
-   `DateVectorOpsEmissionTest.java:122`.
-5. **Destination buffers**: per output expression allocate ArrowBufs via
-   `ArrowUtils.rootAllocator.newChildAllocator(...)`: data (`len * 4`) +
-   validity (`(len + 7) / 8`). Kernels write into `buf.memoryAddress()`
-   (zero-copy). The result vector is built with Arrow `VectorLoader`
-   (buffers `[validity, data]`, in-tree precedent ArrowCachedBatchSerializer.scala:1230)
-   over a prototype vector: `DateDayVector` for add/sub, `IntVector` for
-   `date_diff` (its output type is `IntegerType`), then `setValueCount(len)`,
-   wrapped in `ArrowColumnVector` and assembled into a result `ColumnarBatch`.
+   `DateVectorOpsEmissionTest.java:122`. The loader is released on task
+   completion.
+5. **Destination buffers**: per output expression allocate a fresh Arrow vector
+   directly (`DateDayVector` for add/sub, `IntVector` for `date_diff`, whose
+   output type is `IntegerType`), `allocateNew(len)`, run the kernel into its
+   validity and data buffer addresses (zero-copy), then `setValueCount(len)`.
+   The kernel zeroes the destination validity buffer first, so only the valid
+   rows get set bits; null lanes of the data buffer are undefined (engine
+   contract). The vectors are wrapped in `ArrowColumnVector`s and assembled into
+   a result `ColumnarBatch`.
 6. **Row output + lifecycle**: convert the result batch with
-   `UnsafeProjection.create(output, output)` over `rowIterator()`, close the
-   result batch and its vectors, and close the per-task child allocator via a
-   `TaskCompletionListener` (plus `try/finally` around each batch).
-7. **Metrics**: `numVarkaBatches` (new) + reuse `numOutputRows` /
-   `numInputBatches`.
+   `UnsafeProjection.create(output, output)` over `rowIterator()`; rows stream
+   lazily and the batch + per-task child allocator are closed via a
+   `TaskCompletionListener` (a build failure closes them immediately and
+   rethrows, which the per-batch guard converts to the fallback).
+7. **Metrics**: `numVarkaBatches` increments only on a *successful* kernel run
+   (not on an attempted-and-fallen-back batch), so it proves kernels executed;
+   `numOutputRows` / `numInputBatches` are reused.
 
 ### 3.3 Config
 
@@ -112,43 +127,54 @@ test-only for the `GenerateUnsafeProjection` funnel; the throwing
 
 ### 3.4 Engine jar on the classpath
 
-`sql/core/pom.xml` gains a test-scoped dependency on
+`sql/core/pom.xml` and `sql/catalyst/pom.xml` gain a test-scoped dependency on
 `org.apache.spark.varka:varka-engine:0.1.0-SNAPSHOT`. Build order:
 `./build/mvn -f sql/varka/engine/pom.xml install` first. Runtime deployment is
-external (`--jars`), documented here. The catalyst test stub
-`DateVectorOps` stays (separate module classpath, no conflict).
+external (`--jars`), documented here. The catalyst test stub `DateVectorOps`
+from Task 5 was *deleted*: it shadowed the real kernel on the sql/core test
+classpath (sql/core's `test->test` dependency on catalyst puts catalyst's test
+classes ahead of the jar), which is now on the classpath everywhere it is
+needed.
 
 ## 4. Validation
 
-- **`VarkaColumnarToRowExecSuite`** (sql/core, `SparkFunSuite`, no session):
+- **`VarkaColumnarToRowExecSuite`** (sql/core, `QueryTest` +
+  `SharedSparkSession`; batches built in-task from a serializable spec):
   - add/sub/diff over hand-built Arrow `DateDayVector` batches (via
     `ArrowUtils.rootAllocator`) equal a scalar/Janino reference;
   - null patterns (mixed / all-null / null-free), empty batch, offsets near
     `Integer.MAX_VALUE`;
   - non-Arrow batch (`OnHeapColumnVector`) and ineligible `projectList` ->
     standard path, results still correct;
-  - kernel-linkage failure injection (test flag) -> per-batch fallback, no
-    crash, no partial rows;
-  - `numVarkaBatches` increments only on the kernel path.
+  - kernel-linkage failure injection (thread-scoped test flag) -> per-batch
+    fallback, no crash, no partial rows;
+  - `numVarkaBatches` increments only on a successful kernel run;
+  - rule rewrite conditions (eligible/ineligible/disabled) and kernel
+    descriptors against the engine signatures.
 - **`VarkaEndToEndSuite`** (`QueryTest` + `SharedSparkSession`):
   - session injects `VarkaColumnarRule`, `SPARK_CACHE_SERIALIZER` =
-    Arrow, `CACHE_VECTORIZED_READER_ENABLED`;
-  - `SELECT date_add(d, 3), date_sub(d, 2), date_diff(d2, d) FROM t` with
-    `varka.enabled=true` `checkAnswer`-equals the disabled run; the plan
-    contains `VarkaColumnarToRowExec`; null dates included.
+    Arrow, `CACHE_VECTORIZED_READER_ENABLED`; data cached per session (each
+    session has its own catalog);
+  - `SELECT date_add(d, 3), date_sub(d, 5)` and `SELECT datediff(d2, d)` with
+    `varka.enabled=true` `checkAnswer`-equal the row-engine run, the plan
+    contains `VarkaColumnarToRowExec`, and `numVarkaBatches > 0` proves the
+    kernels actually ran (null dates included);
+  - a non-foldable offset and the disabled config leave the plan untouched.
 - **Regression**: existing columnar + codegen suites green; engine 23 tests
   green; scalastyle + `dev/lint-java`; ASCII/<=100-char scan.
 
 ## 5. File layout
 
 ```
-sql/catalyst/src/main/scala/.../expressions/codegen/
+sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/codegen/
   VarkaGeneratedClassLoader.scala     (widen private[codegen] -> private[sql])
+  ClassFileCodegenSupport.scala       (eligibleOps unwraps Alias)
+sql/catalyst/src/main/scala/org/apache/spark/sql/internal/
+  SQLConf.scala                       (+ spark.sql.codegen.varka.enabled)
 sql/core/src/main/scala/org/apache/spark/sql/execution/
   VarkaColumnarRule.scala             (new ColumnarRule rewrite)
   VarkaColumnarToRowExec.scala        (new node + evaluator + runner cache)
-sql/core/src/main/scala/org/apache/spark/sql/internal/
-  SQLConf.scala                       (+ spark.sql.codegen.varka.enabled)
+sql/catalyst/pom.xml                  (test-scoped dep on varka-engine)
 sql/core/pom.xml                      (test-scoped dep on varka-engine)
 sql/core/src/test/scala/org/apache/spark/sql/execution/
   VarkaColumnarToRowExecSuite.scala   (new unit tests)

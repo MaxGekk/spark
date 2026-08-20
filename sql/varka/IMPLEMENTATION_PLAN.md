@@ -51,11 +51,11 @@ sql/varka/
       vector/DateVectorOps.java  (Task 2)
       execution/VarkaClassLoader.java  (Task 3)
     src/test/java/...            (Task 1-3 unit tests)
-catalyst/                      <- Task 4 additions are additive source in the existing
+  catalyst/                      <- Task 4 additions are additive source in the existing
                                     sql/catalyst module; Class-File assembly lives here on the
                                     Java 25 baseline (no new module)
   spark/                         <- FUTURE Spark-side integration module (Tasks 6+);
-                                     strategy TBD (see open decision below)
+                                    strategy TBD (see open decision below)
 ```
 
 Design rules carried from VISION: zero string generation on the happy path;

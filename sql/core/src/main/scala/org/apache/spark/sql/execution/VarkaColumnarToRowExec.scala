@@ -66,7 +66,7 @@ import org.apache.spark.util.Utils
 case class VarkaColumnarToRowExec(
     projectList: Seq[NamedExpression],
     child: SparkPlan)
-    extends ColumnarToRowTransition {
+    extends ColumnarToRowTransition with SafeForKWayMerge {
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
 
@@ -105,16 +105,16 @@ case class VarkaColumnarToRowExec(
 private[sql] object VarkaColumnarToRowExec {
 
   // Test-only hook that makes the kernel invocation fail (simulating a linkage failure), forcing
-  // the per-batch fallback. Thread-local so parallel test suites cannot interfere.
-  private val failKernelForTesting = new ThreadLocal[java.lang.Boolean] {
-    override def initialValue(): java.lang.Boolean = false
-  }
+  // the per-batch fallback. Static, not thread-local: Spark runs tasks on separate threads, so a
+  // thread-local set by the test thread would never be visible to the task. Suites that use it
+  // must reset it in a finally block.
+  @volatile private var failKernelForTesting = false
 
   private[sql] def setFailKernelForTesting(fail: Boolean): Unit = {
-    failKernelForTesting.set(fail)
+    failKernelForTesting = fail
   }
 
-  private[sql] def isFailKernelForTesting: Boolean = failKernelForTesting.get()
+  private[sql] def isFailKernelForTesting: Boolean = failKernelForTesting
 }
 
 private[sql] class VarkaColumnarToRowEvaluatorFactory(
@@ -165,16 +165,17 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
       inputs.head.flatMap { input =>
         numInputBatches += 1
         numOutputRows += input.numRows()
-        process(input).iterator
+        process(input)
       }
     }
 
-    private def process(input: ColumnarBatch): Array[InternalRow] = {
+    private def process(input: ColumnarBatch): Iterator[InternalRow] = {
       (outputPlan, kernelRunners) match {
         case (Some(ops), Some(runners)) if input.numRows() > 0 && isArrowBacked(ops, input) =>
-          numVarkaBatches += 1
           try {
-            runKernels(ops, runners, input)
+            val rows = runKernels(ops, runners, input)
+            numVarkaBatches += 1
+            rows
           } catch {
             case e if isCatchable(e) =>
               logWarning("The Varka SIMD kernels failed on this batch; falling back to the " +
@@ -186,8 +187,8 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
       }
     }
 
-    private def fallback(input: ColumnarBatch): Array[InternalRow] = {
-      input.rowIterator().asScala.map(r => fallbackProjection(r).copy()).toArray
+    private def fallback(input: ColumnarBatch): Iterator[InternalRow] = {
+      input.rowIterator().asScala.map(r => fallbackProjection(r).copy())
     }
 
     private def isArrowBacked(ops: Seq[OutputOp], input: ColumnarBatch): Boolean = {
@@ -204,7 +205,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     private def runKernels(
         ops: Seq[OutputOp],
         runners: KernelRunners,
-        input: ColumnarBatch): Array[InternalRow] = {
+        input: ColumnarBatch): Iterator[InternalRow] = {
       val len = input.numRows()
       val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-kernels", 0, Long.MaxValue)
       val vectors = new java.util.ArrayList[ColumnVector]()
@@ -215,14 +216,22 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
         }
         resultBatch = new ColumnarBatch(vectors.toArray(new Array[ColumnVector](vectors.size())))
         resultBatch.setNumRows(len)
-        resultBatch.rowIterator().asScala.map(r => toRow(r).copy()).toArray
-      } finally {
-        if (resultBatch != null) {
+        // The rows stream lazily, so close the batch and its child allocator when the task
+        // completes rather than in a finally here.
+        TaskContext.get().addTaskCompletionListener[Unit] { _ =>
           resultBatch.close()
-        } else {
-          vectors.forEach(_.close())
+          allocator.close()
         }
-        allocator.close()
+        resultBatch.rowIterator().asScala.map(r => toRow(r).copy())
+      } catch {
+        case e: Throwable =>
+          if (resultBatch != null) {
+            resultBatch.close()
+          } else {
+            vectors.forEach(_.close())
+          }
+          allocator.close()
+          throw e
       }
     }
 

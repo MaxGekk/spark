@@ -149,10 +149,10 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
       project(Alias(DateAdd(attrD, Literal(3)), "add")()), child)
     VarkaColumnarToRowExec.setFailKernelForTesting(true)
     try {
-      // The kernel path is attempted (the metric is bumped before the run) but the rows are
-      // still produced by the fallback, so the result is identical.
+      // The kernel path is attempted but fails, so the batch counts no successful kernel run;
+      // the rows are still produced by the fallback and the result is identical.
       assert(run(node).map(_.getInt(0)) === dates.map(_ + 3))
-      assert(node.metrics("numVarkaBatches").value === 1)
+      assert(node.metrics("numVarkaBatches").value === 0)
     } finally {
       VarkaColumnarToRowExec.setFailKernelForTesting(false)
     }

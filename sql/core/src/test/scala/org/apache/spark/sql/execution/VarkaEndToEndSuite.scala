@@ -106,7 +106,8 @@ class VarkaEndToEndSuite extends QueryTest with SharedSparkSession {
   }
 
   private def assertKernelsRan(plan: SparkPlan): Unit = {
-    val node = plan.collectFirst { case v: VarkaColumnarToRowExec => v }.get
+    val node = plan.collectFirst { case v: VarkaColumnarToRowExec => v }
+      .getOrElse(fail(s"expected a VarkaColumnarToRowExec in the plan:\n${plan.treeString}"))
     val varkaBatches = node.metrics.get("numVarkaBatches").map(_.value).getOrElse(0L)
     assert(varkaBatches > 0L,
       s"expected the SIMD kernels to process the cached Arrow batches, got $varkaBatches")
