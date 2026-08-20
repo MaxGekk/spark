@@ -59,11 +59,11 @@ public final class ClassFileShapeVerifier {
   private static void assertWrapperShape(byte[] bytes) {
     var model = ClassFile.of().parse(bytes);
     if ((model.flags().flagsMask() & AccessFlag.PUBLIC.mask()) == 0) {
-      throw new AssertionError("wrapper class is not public");
+      throw new IllegalStateException("wrapper class is not public");
     }
     ClassEntry superclass = model.superclass().orElse(null);
     if (superclass == null || !superclass.asSymbol().equals(GENERATED_CLASS)) {
-      throw new AssertionError(
+      throw new IllegalStateException(
           "wrapper superclass must be " + GENERATED_CLASS.displayName() + ", got " + superclass);
     }
     assertHasMethod(bytes, "<init>", "()V", true, "wrapper default constructor");
@@ -73,11 +73,11 @@ public final class ClassFileShapeVerifier {
   private static void assertProjectionShape(byte[] bytes) {
     var model = ClassFile.of().parse(bytes);
     if ((model.flags().flagsMask() & AccessFlag.PUBLIC.mask()) == 0) {
-      throw new AssertionError("projection class is not public");
+      throw new IllegalStateException("projection class is not public");
     }
     ClassEntry superclass = model.superclass().orElse(null);
     if (superclass == null || !superclass.asSymbol().equals(UNSAFE_PROJECTION)) {
-      throw new AssertionError(
+      throw new IllegalStateException(
           "projection superclass must be " + UNSAFE_PROJECTION.displayName()
               + ", got " + superclass);
     }
@@ -85,7 +85,7 @@ public final class ClassFileShapeVerifier {
         .anyMatch(f -> f.fieldName().stringValue().equals("references")
             && f.fieldTypeSymbol().equals(OBJECT_ARRAY));
     if (!hasField) {
-      throw new AssertionError("missing field references:" + OBJECT_ARRAY.displayName());
+      throw new IllegalStateException("missing field references:" + OBJECT_ARRAY.displayName());
     }
     assertHasMethod(bytes, "<init>", SPEC_INIT, true, "projection constructor");
     assertHasMethod(bytes, "apply", SPEC_APPLY, true, "projection apply");
@@ -100,11 +100,12 @@ public final class ClassFileShapeVerifier {
             && m.methodType().stringValue().equals(descriptor))
         .toList();
     if (found.isEmpty()) {
-      throw new AssertionError("missing method " + name + descriptor + " (" + what + ")");
+      throw new IllegalStateException("missing method " + name + descriptor + " (" + what + ")");
     }
     if (isPublic
         && (found.get(0).flags().flagsMask() & AccessFlag.PUBLIC.mask()) == 0) {
-      throw new AssertionError("method " + name + descriptor + " (" + what + ") is not public");
+      throw new IllegalStateException(
+          "method " + name + descriptor + " (" + what + ") is not public");
     }
   }
 }

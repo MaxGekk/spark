@@ -42,12 +42,14 @@ class JavaClassFileEngineSuite extends SparkFunSuite {
     CodeGenerator.invalidateCodegenCache()
     routingEnabledForTesting = false
     failAssemblyForTesting = false
+    corruptAssemblyForTesting = false
     assemblyAttempts.set(0)
   }
 
   override def afterEach(): Unit = {
     routingEnabledForTesting = false
     failAssemblyForTesting = false
+    corruptAssemblyForTesting = false
     super.afterEach()
   }
 
@@ -88,6 +90,20 @@ class JavaClassFileEngineSuite extends SparkFunSuite {
     // The failed attempt's Janino result is cached under the same key.
     GenerateUnsafeProjection.generate(Seq(DateAdd(startAttr, Literal(9))), schema)
     assert(assemblyAttempts.get() == 0)
+  }
+
+  test("a LinkageError during class definition falls back to the string backend") {
+    routingEnabledForTesting = true
+    corruptAssemblyForTesting = true
+    val proj = GenerateUnsafeProjection.generate(Seq(DateSub(startAttr, Literal(5))), schema)
+    assert(!proj.getClass.getName.startsWith("org.apache.spark.sql.varka"))
+    // Unlike failAssemblyForTesting (which short-circuits), assembly was actually attempted
+    // and the JVM rejected the corrupt bytes with a ClassFormatError (a LinkageError).
+    assert(assemblyAttempts.get() == 1)
+    assert(proj.apply(dateRow(19244)).getInt(0) == 19239)
+    // The failed attempt's Janino result is cached under the same key.
+    GenerateUnsafeProjection.generate(Seq(DateSub(startAttr, Literal(5))), schema)
+    assert(assemblyAttempts.get() == 1)
   }
 
   test("assembleGeneratedClass exposes the full GeneratedClass shape") {

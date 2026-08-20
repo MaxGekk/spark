@@ -48,14 +48,39 @@ private[expressions] object JavaClassFileEngine extends Logging {
    * Whether the `CodeGenerator.compile` funnel routes Class-File-eligible units through
    * this engine. Off by default so the Varka machinery is fully inert until a later task
    * wires the actual batch execution; tests enable it explicitly.
+   *
+   * Thread-scoped: sbt runs test suites in parallel within one JVM (`Test / parallelExecution`
+   * is true by default), and the funnel reads this flag on the compiling thread. Scoping it
+   * to the thread keeps the test knob from ever leaking into a concurrently-running suite.
    */
-  @volatile var routingEnabledForTesting: Boolean = false
+  private val routingEnabledForTestingLocal = new ThreadLocal[Boolean] {
+    override def initialValue(): Boolean = false
+  }
+  private[expressions] def routingEnabledForTesting: Boolean =
+    routingEnabledForTestingLocal.get()
+  private[expressions] def routingEnabledForTesting_=(value: Boolean): Unit =
+    routingEnabledForTestingLocal.set(value)
 
   /**
    * Test injection: when true, `assembleOrFallback` skips assembly and falls back to the
-   * string backend. Exercises the ghost-fallback path of the compile funnel.
+   * string backend. Exercises the ghost-fallback path of the compile funnel. Thread-scoped
+   * like [[routingEnabledForTesting]].
    */
-  @volatile private[expressions] var failAssemblyForTesting: Boolean = false
+  private val failAssemblyForTestingLocal = new ThreadLocal[Boolean] {
+    override def initialValue(): Boolean = false
+  }
+  private[expressions] def failAssemblyForTesting: Boolean = failAssemblyForTestingLocal.get()
+  private[expressions] def failAssemblyForTesting_=(value: Boolean): Unit =
+    failAssemblyForTestingLocal.set(value)
+
+  /**
+   * Test injection: when true, `assembleGeneratedClass` flips the wrapper class's magic
+   * number so the JVM rejects the bytes at definition time with a `ClassFormatError` (a
+   * [[LinkageError]]). Exercises the real assembly/load catch path of the funnel, as opposed
+   * to [[failAssemblyForTesting]], which short-circuits before assembly. Only reachable when
+   * routing is enabled on the same thread, so it cannot affect concurrent suites.
+   */
+  @volatile private[expressions] var corruptAssemblyForTesting: Boolean = false
 
   /** Number of times `assembleGeneratedClass` has run; lets tests assert no re-assembly. */
   private[expressions] val assemblyAttempts = new AtomicInteger(0)
@@ -68,8 +93,18 @@ private[expressions] object JavaClassFileEngine extends Logging {
   def assembleGeneratedClass(className: String): Seq[(String, Array[Byte])] = {
     assemblyAttempts.incrementAndGet()
     val bytes = ClassFileAssembler.assembleGeneratedClass(className, SpecClassName)
-    Seq((className, bytes(0)), (SpecClassName, bytes(1)))
+    if (corruptAssemblyForTesting) {
+      val corruptedWrapper = bytes(0).clone()
+      corruptedWrapper(0) = (corruptedWrapper(0) ^ 0xff.toByte).toByte
+      Seq((className, corruptedWrapper), (SpecClassName, bytes(1)))
+    } else {
+      Seq((className, bytes(0)), (SpecClassName, bytes(1)))
+    }
   }
+
+  /** Fallback-catchable failures: [[NonFatal]] plus [[LinkageError]] (bad bytecode surfaces
+   * as `VerifyError`/`ClassFormatError`, a missing class as `NoClassDefFoundError`). */
+  private def isCatchable(e: Throwable): Boolean = NonFatal(e) || e.isInstanceOf[LinkageError]
 
   /** Assembles, loads and instantiates the [[GeneratedClass]] for `code`. */
   def assembleAndLoad(code: CodeAndComment): (GeneratedClass, ByteCodeStats) = {
@@ -81,7 +116,7 @@ private[expressions] object JavaClassFileEngine extends Logging {
       val generated = clazz.getConstructor().newInstance().asInstanceOf[GeneratedClass]
       (generated, CodeCompiler.computeByteCodeStats(classes))
     } catch {
-      case NonFatal(e) =>
+      case e: Throwable if isCatchable(e) =>
         loader.release()
         throw e
     }
@@ -102,7 +137,7 @@ private[expressions] object JavaClassFileEngine extends Logging {
       try {
         assembleAndLoad(code)
       } catch {
-        case NonFatal(e) =>
+        case e: Throwable if isCatchable(e) =>
           logWarning("Varka Class-File assembly failed; " +
             "falling back to the string codegen backend.", e)
           fallback.compile(code)

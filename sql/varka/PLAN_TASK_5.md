@@ -119,9 +119,11 @@ final safety net below the ghost fallback.
 - Because both paths run inside `loadFunc`, the `NonFateSharingCache` caches
   whichever path won under the same key `(classLoaderRef, backend, code)`; a
   failed assembly is never retried.
-- Routing is gated behind `@volatile var routingEnabledForTesting` (default
+- Routing is gated behind a thread-scoped `routingEnabledForTesting` (default
   false): the assembled `apply` stub throws, so the happy path must stay
-  inert until Task 6 wires the real batch dispatch. A compile-failure
+  inert until Task 6 wires the real batch dispatch. Thread scoping keeps the
+  test knob from leaking into suites that run concurrently in the same JVM
+  (`Test / parallelExecution` is true by default). A compile-failure
   injection (`failAssemblyForTesting`) exercises the ghost fallback.
 - `ByteCodeStats`: reuse `CodeCompiler.computeByteCodeStats` on the two
   assembled classes (ASM-based, no Class-File parse in Scala).
@@ -154,6 +156,12 @@ final safety net below the ghost fallback.
 - `CodeGenerator.invalidateCodegenCache()` (test-visible) clears the static
   cache so the suite is deterministic even though the persistent sbt server
   JVM keeps `CodeGenerator.cache` alive across invocations.
+- The fallback catches `NonFatal` **and** `LinkageError`: bad bytecode
+  surfaces as `VerifyError`/`ClassFormatError` and a missing kernel as
+  `NoClassDefFoundError`, all `LinkageError`s, which `NonFatal` alone would
+  let escape. A byte-corruption injection (`corruptAssemblyForTesting`) makes
+  the JVM reject the wrapper at definition time so the real catch path (not
+  just the short-circuit flag) is tested.
 - The loader resolves the `DateVectorOps` FQCN from the parent classloader:
   the test verifies `loader.loadClass("...varka.vector.DateVectorOps")`
   against the test stub.

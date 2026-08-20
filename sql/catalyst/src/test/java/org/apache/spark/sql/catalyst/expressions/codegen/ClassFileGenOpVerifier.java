@@ -64,24 +64,24 @@ public final class ClassFileGenOpVerifier {
       slot += (kind == TypeKind.LONG) ? 2 : 1;
     }
     if (loads.size() != expectedLoads.size()) {
-      throw new AssertionError(
+      throw new IllegalStateException(
           "expected " + expectedLoads.size() + " loads, got " + loads.size());
     }
     for (int i = 0; i < expectedLoads.size(); i++) {
       if ((Integer) expectedLoads.get(i)[0] != loads.get(i).slot()
           || !expectedLoads.get(i)[1].equals(loads.get(i).typeKind())) {
-        throw new AssertionError("load at index " + i + " does not match kernel parameter");
+        throw new IllegalStateException("load at index " + i + " does not match kernel parameter");
       }
     }
     if (invokes.size() != 1) {
-      throw new AssertionError("expected one invokestatic, got " + invokes.size());
+      throw new IllegalStateException("expected one invokestatic, got " + invokes.size());
     }
     InvokeInstruction invoke = invokes.get(0);
     if (invoke.opcode() != Opcode.INVOKESTATIC
         || !invoke.owner().asInternalName().equals(ownerInternalName)
         || !invoke.name().stringValue().equals(methodName)
         || !invoke.typeSymbol().equals(kernelDesc)) {
-      throw new AssertionError("invokestatic target does not match the kernel contract");
+      throw new IllegalStateException("invokestatic target does not match the kernel contract");
     }
   }
 }
