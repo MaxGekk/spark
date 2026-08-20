@@ -21,7 +21,7 @@ import java.lang.classfile.{ClassBuilder, ClassFile, CodeBuilder, TypeKind}
 import java.lang.constant.{ClassDesc, ConstantDescs, MethodTypeDesc}
 import java.lang.reflect.AccessFlag
 
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Alias, Expression}
 
 /**
  * The declarative `invokestatic` contract of a Varka batch kernel (Task 4). The argument
@@ -69,6 +69,7 @@ object VarkaClassFileGen {
   /** The Varka-eligible ops of a projection's expression list, in order. */
   def eligibleOps(projectList: Seq[Expression]): Seq[ClassFileGenOp] = {
     projectList.collect {
+      case Alias(e: ClassFileCodegenSupport, _) if e.isClassFileGenEligible => e.classFileGenOp
       case e: ClassFileCodegenSupport if e.isClassFileGenEligible => e.classFileGenOp
     }
   }

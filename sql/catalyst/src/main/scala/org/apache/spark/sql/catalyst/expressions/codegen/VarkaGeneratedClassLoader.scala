@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
  * `InMemoryClassLoader` (CodeCompiler.scala), so callers can use `loadClass(name)` after
  * [[defineGeneratedClass]].
  */
-private[codegen] class VarkaGeneratedClassLoader(parent: ClassLoader) extends ClassLoader(parent) {
+private[sql] class VarkaGeneratedClassLoader(parent: ClassLoader) extends ClassLoader(parent) {
 
   private val definedClasses = new ConcurrentHashMap[String, Class[_]]()
 

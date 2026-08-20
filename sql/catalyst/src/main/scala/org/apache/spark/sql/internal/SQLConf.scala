@@ -2923,6 +2923,16 @@ object SQLConf {
     .intConf
     .createWithDefault(100)
 
+  val VARKA_ENABLED = buildConf("spark.sql.codegen.varka.enabled")
+    .internal()
+    .doc("When true, a projection that is fully Varka-eligible (date arithmetic over Arrow" +
+      " DateDayVector columns) is fused with the columnar-to-row transition into a" +
+      " VarkaColumnarToRowExec that runs the SIMD kernels instead of per-row codegen." +
+      " Batches that are not Arrow-backed fall back to the standard per-row path.")
+    .version("5.0.0")
+    .booleanConf
+    .createWithDefault(false)
+
   val CODEGEN_FACTORY_MODE = buildConf("spark.sql.codegen.factoryMode")
     .internal()
     .doc("This config determines the fallback behavior of several codegen generators " +
@@ -8890,6 +8900,8 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
   def wholeStageUseIdInClassName: Boolean = getConf(WHOLESTAGE_CODEGEN_USE_ID_IN_CLASS_NAME)
 
   def wholeStageMaxNumFields: Int = getConf(WHOLESTAGE_MAX_NUM_FIELDS)
+
+  def varkaEnabled: Boolean = getConf(VARKA_ENABLED)
 
   def codegenFallback: Boolean = getConf(CODEGEN_FALLBACK)
 

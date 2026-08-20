@@ -299,6 +299,12 @@
       <artifactId>arrow-compression</artifactId>
     </dependency>
     <dependency>
+      <groupId>org.apache.spark.varka</groupId>
+      <artifactId>varka-engine</artifactId>
+      <version>0.1.0-SNAPSHOT</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-udf-worker-proto_${scala.binary.version}</artifactId>
       <version>${project.version}</version>
