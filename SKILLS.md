@@ -75,6 +75,46 @@ Each step either pins the fault or narrows it.
 - `SparkPlan.executeCollect()` goes through `getByteArrayRdd()` and casts rows to
   `UnsafeRow`; row-producing evaluators must emit `UnsafeRow`.
 
+## Columnar Transition Wiring (plan level)
+
+- `ApplyColumnarRulesAndInsertTransitions` runs `preColumnarTransitions`, then
+  `insertTransitions`, then `postColumnarTransitions`. A `postColumnarTransitions`
+  rule sees the transitions already inserted.
+- `ensureOutputsRowBased` gives a dual-mode plan (`supportsRowBased` and
+  `supportsColumnar`, e.g. `InMemoryTableScanExec`) row output when its parent
+  consumes rows, so above a cached scan there is often *no* `ColumnarToRowExec` to
+  pattern-match on. Fuse on `child.supportsColumnar` (and switch the dual-mode
+  child to columnar output), not on the presence of a transition.
+- `ColumnarToRowExec` is row-only: it has no `doExecuteColumnar`, so calling
+  `executeColumnar()` on it throws. A fusion node that consumes a columnar child
+  must absorb the transition (`case ColumnarToRowExec(inner) => inner`) instead of
+  wrapping it.
+
+## Metrics as the "did it really run" proof
+
+- A fused plan plus correct results does not prove the kernels ran: the per-batch
+  fallback also returns correct results. Prove execution with a metric
+  (`numVarkaBatches`) bumped only on the kernel path.
+- Read metrics *after* execution: run `checkAnswer`/`collect` first, then read.
+  Reading before execution returns 0 even though every guard passed.
+- The executed-plan root is often a `WholeStageCodegenExec` whose `metrics` map
+  only has `pipelineTime`. Read the node's own metric via
+  `plan.collectFirst { case v: VarkaColumnarToRowExec => v }`, not `plan.metrics`.
+
+## Extra Sessions on the Shared Context
+
+- For side-by-side engine comparison, build extra sessions on the same context:
+  `SparkSession.builder().sparkContext(spark.sparkContext)`. Clear the active and
+  default sessions between creations (`SparkSession.clearActiveSession()` /
+  `clearDefaultSession()`).
+- Sessions have separate catalogs: a temp view cached in one is not visible in
+  another; register and cache the data in every session.
+- `InMemoryRelation` holds the cache serializer in a process-wide static
+  initialized on first use; call `InMemoryRelation.clearSerializer()` in
+  `beforeAll` and again in `afterAll` so the choice does not leak to later suites.
+- AQE is on by default in the test framework's shared session; disable it
+  explicitly on custom sessions, or plans change shape and QueryStage threads leak.
+
 ## Build Gotchas
 
 - The engine module is built with Maven, not sbt: `./build/mvn -o -f
@@ -82,3 +122,17 @@ Each step either pins the fault or narrows it.
   `./build/mvn`.
 - sql/core test-scope depends on the engine jar from `~/.m2`; after editing engine
   sources, rebuild + reinstall or the test classpath keeps the old bytes.
+- scalastyle requires a trailing newline at EOF ("File must end with newline
+  character") and rejects `throw new XxxError` via the `throwerror` rule. For a
+  deliberate `NoClassDefFoundError` test hook, wrap the throw in
+  `// scalastyle:off throwerror` / `// scalastyle:on throwerror`.
+
+## Repo Workflow (vecbricks/varka)
+
+- Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
+  `MaxGekk/spark` (PR head). Push the PR branch to `fork`, then open against
+  `vecbricks/varka:master`.
+- No JIRA IDs. Titles are `[VARKA] <short summary>`; PR descriptions are prose in
+  the five standard template sections; sign off with `Generated-by: opencode`.
+- Branch naming: `varka-<topic>` tracks `origin/master` and stays one commit ahead
+  per PR.
