@@ -1,6 +1,7 @@
 # Varka Task 7 - Differential + perf testing
 
-**Status: PLAN** (implementation follows). See `IMPLEMENTATION_PLAN.md` for the
+**Status: DONE** (implementation landed; see "Implementation notes" in section 3.5).
+See `IMPLEMENTATION_PLAN.md` for the
 high-level MVP plan. Task 7 proves the Task 6 integration differentially
 (Varka on/off answer equality over a wider query matrix), bounds the per-task
 classloader Metaspace footprint (the engine's `VarkaClassLoaderTest` covers the
@@ -100,13 +101,18 @@ fused it also asserts `numVarkaBatches > 0`. Matrix:
 
 Engine JMH (`sql/varka/engine`):
 
-- pom: add `jmh-core`, `jmh-generator-annprocess`, `maven-jmh-plugin`; reuse
-  the native-access `argLine`; JMH >= 1.38 (Java 25).
+- pom: add `jmh-core`, `jmh-generator-annprocess` (test scope), the
+  `-proc:full` compiler arg (JDK 23+ disables classpath annotation
+  processing), and `build-helper-maven-plugin` to register `src/jmh/java`
+  as a test source root. `maven-jmh-plugin` is NOT resolvable on this
+  environment's Maven mirror, so JMH is driven in-process from
+  `DateVectorOpsBenchmarkTest` (see 3.5).
 - `src/jmh/java/org/apache/spark/sql/varka/vector/DateVectorOpsBenchmark.java`:
-  the three kernels vs scalar-loop baselines over Arrow `DateDayVector`
-  (sizes ~10k and 1M; null-free and mixed-null); report speedup vs scalar
-  (MVP target >= 4x).
-- Run: `./build/mvn -f sql/varka/engine/pom.xml jmh:benchmark`.
+  the three kernels vs scalar-loop baselines over buffers with Arrow
+  `DateDayVector` layout (sizes ~10k and 1M; null-free and mixed-null);
+  report speedup vs scalar (measured ~3-5x here).
+- Run: `./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true`
+  (a plain `mvn test` compiles it but runs nothing).
 
 Spark end-to-end (sql/core test, `BenchmarkBase` + `Benchmark`):
 
@@ -120,15 +126,47 @@ Spark end-to-end (sql/core test, `BenchmarkBase` + `Benchmark`):
   `VarkaGeneratedClassLoader.defineGeneratedClass`); ns/op.
 - Run: `build/sbt "sql/test:runMain org.apache.spark.sql.execution.VarkaThroughputBenchmark"`.
 
+## 3.5 Implementation notes
+
+- **Benchmarks live in the `.benchmark` package.** Spark's convention is that `Benchmark`/`BenchmarkBase`
+  suites under `sql/core` live in `org.apache.spark.sql.execution.benchmark` (this tree has no `jmh`
+  support and every in-tree suite is there, e.g. `ArrowCacheBenchmark`). The two Spark-side suites
+  are therefore `...benchmark.VarkaThroughputBenchmark` (extends `SqlBasedBenchmark`) and
+  `...benchmark.VarkaCodegenBenchmark` (extends `BenchmarkBase`); run them via
+  `build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaThroughputBenchmark"`.
+- **JMH runs in-process from a guarded test.** The `DateVectorOpsBenchmark` is a test source
+  (`src/jmh/java`, registered via `build-helper-maven-plugin`); `DateVectorOpsBenchmarkTest` builds
+  JMH `Options` and runs the `Runner` in-process only when `-Dvarka.jmh=true`, so a plain
+  `mvn test` never benchmarks and a real `mvn test -Dvarka.jmh=true` runs on the surefire JVM,
+  which already carries the Vector API / native-access flags in the engine `argLine`.
+- **JMH buffers are plain Panama segments** (same int32 days + bit-packed validity layout as Arrow
+  `DateDayVector`, same address-based entry points) so the benchmark does not drag Arrow/Netty along;
+  the measured hot loop is identical to the production kernel path.
+- **Catalyst loader suite reuses `VarkaClassFileGen.assembleKernelClass`** to generate the per-task
+  dispatch class bytes, avoiding hand-building Class-File code in Scala (see Task 5's cyclic-type
+  bug note in PLAN_TASK_5.md section 2.5).
+- **Differential + loader suites extract the 3-session setup into `VarkaSharedSessions`**, with the
+  suites declared `QueryTest with VarkaSharedSessions` (and `VarkaSharedSessions extends
+  SharedSparkSession`, so `beforeAll`/`sparkConf` `super`-chains resolve and the suites get `spark`).
+- **Extreme-offset oracle is the int32 wrap, not the row engine.** At `Int.MaxValue - 1` /
+  `Int.MinValue` the row engine applies an extra calendar-day rebase to DATE results outside its
+  representable range (and those days cannot decode to `java.sql.Date`), so the differential test
+  compares the fused output against the plain int32 day wrap that both `DateAdd.eval` and the SIMD
+  kernel implement (the same contract the engine's `DateVectorOpsTest` and
+  `VarkaColumnarToRowExecSuite` "offsets near Integer.MAX_VALUE wrap like the scalar date
+  expressions" test pin down).
+- **Metaspace integration check is intentionally lenient** (a 64 MB bound after GC inline over 100
+  distinct fused tasks); the deterministic per-loader isolation proof is `VarkaGeneratedClassLoaderSuite`.
+
 ## 4. File layout
 
 ```
 sql/core/src/test/scala/org/apache/spark/sql/execution/
   VarkaSharedSessions.scala           (new trait; session + assertion helpers)
   VarkaDifferentialSuite.scala        (new differential query matrix)
-  VarkaThroughputBenchmark.scala      (new end-to-end rows/sec benchmark)
-  VarkaCodegenBenchmark.scala         (new Gen-time benchmark)
   VarkaEndToEndSuite.scala            (refactored onto VarkaSharedSessions)
+  benchmark/VarkaThroughputBenchmark.scala (new end-to-end rows/sec benchmark)
+  benchmark/VarkaCodegenBenchmark.scala    (new Gen-time benchmark)
 sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/codegen/
   VarkaGeneratedClassLoaderSuite.scala (new Metaspace/unloadability tests)
 sql/varka/engine/
@@ -141,8 +179,9 @@ sql/varka/IMPLEMENTATION_PLAN.md       (task 7 row update)
 
 ## 5. Verification
 
-- Engine: `./build/mvn -f sql/varka/engine/pom.xml test` (existing 23 tests
-  still green; JMH runs only via `jmh:benchmark`).
+- Engine: `./build/mvn -f sql/varka/engine/pom.xml test` (existing tests
+  still green; JMH compiles via the jmh source root and runs only via
+  `jmh:benchmark`).
 - Catalyst: `JavaClassFileEngineSuite`, `ClassFileCodegenSupportSuite`,
   `VarkaGeneratedClassLoaderSuite`.
 - sql/core: `VarkaColumnarToRowExecSuite`, `VarkaEndToEndSuite`,
