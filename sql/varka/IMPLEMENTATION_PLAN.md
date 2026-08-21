@@ -15,6 +15,8 @@ Per-task detail lives in separate files:
 - `PLAN_TASK_6.md` - Execution-path integration (`VarkaColumnarToRowExec`)
   (completed).
 - `PLAN_TASK_7.md` - Differential + perf testing (completed).
+- `PLAN_TASK_8.md` - Config-driven activation + comprehensive docs
+  (completed).
 
 ## 1. Corrections to the design docs (ground truth in this repo)
 
@@ -70,6 +72,12 @@ engine jar is wired as a test-scoped dependency on `sql/core/pom.xml` (build
 order: `./build/mvn -f sql/varka/engine/pom.xml install`). Runtime deployment
 of the jar is external (`--jars`).
 
+**Correction (Task 8):** `VarkaColumnarRule` is auto-registered on every
+`SparkSession` (`SparkSession.Builder`); it is inert while
+`spark.sql.codegen.varka.enabled` is off, so enabling Varka is purely
+config-driven. No new `spark.sql.codegen.varka.*` configs were added beyond
+`varka.enabled` (no unused configs).
+
 ## 3. MVP task breakdown
 
 | # | Task | Deliverable | Validation | Plan |
@@ -81,7 +89,7 @@ of the jar is external (`--jars`).
 | 5 | Class assembly + Ghost fallback | `JavaClassFileEngine` (Class-File API); routing in `CodeGenerator.compile` (gated, inert by default); lazy Janino fallback cached under the same key | Compile-failure injection test hits Janino path, no crash | DONE (`PLAN_TASK_5.md`) |
 | 6 | Execution-path integration | `VarkaColumnarRule` (`postColumnarTransitions`) rewrites `ProjectExec(projectList, ColumnarToRowExec)` -> `VarkaColumnarToRowExec` when the projection is fully Varka-eligible and `spark.sql.codegen.varka.enabled`; SIMD kernels over Arrow `DateDayVector` buffers; per-batch fallback to the Janino projection | `SELECT DATE_ADD(...)` matches Janino result; `VarkaColumnarToRowExecSuite` + `VarkaEndToEndSuite` green | DONE (`PLAN_TASK_6.md`) |
 | 7 | Differential + perf testing | `VarkaDifferentialSuite` (Varka on/off `checkAnswer` equality over a query matrix), `VarkaGeneratedClassLoaderSuite` (Metaspace/unloadability), JMH kernel benchmark in the engine module, Spark `BenchmarkBase` throughput + Gen-time benchmarks | `checkAnswer` equality; `numVarkaBatches > 0` on fused plans; loader collection after `release`; throughput/Gen-time metrics | DONE (`PLAN_TASK_7.md`) |
-| 8 | Config flags + docs | `spark.sql.codegen.varka.enabled/.patch.threshold/.fallback.ghost.enabled` in `SQLConf` | flag toggling tests | TBD |
+| 8 | Config-driven activation + docs | Auto-register `VarkaColumnarRule` on every `SparkSession` (inert unless `spark.sql.codegen.varka.enabled`); `VarkaAutoRegistrationSuite`; comprehensive `docs/sql-varka.md`. Note: no unused configs - `patch.threshold`/`fallback.ghost.enabled` stay design intentions until their code paths exist | Fusion on/off purely by config; existing Varka suites green | DONE (`PLAN_TASK_8.md`) |
 
 **Open decision (resolved for Task 5):** Task 5 keeps the Task 4 pattern -
 additive source in the existing `sql/catalyst` module (no new module, no pom
