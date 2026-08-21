@@ -681,8 +681,22 @@ def _do_cherry_pick(pr_num, merge_hash, pick_ref):
     except Exception as e:
         msg = "Error cherry-picking: %s\nWould you like to manually fix-up this merge?" % e
         continue_maybe(msg, True)
-        msg = "Okay, please fix any conflicts and finish the cherry-pick. Finished?"
+        msg = "Okay, please fix any conflicts and 'git add' conflicting files... Finished?"
         continue_maybe(msg, True)
+        # Finish the pick here so the committer never runs `cherry-pick --continue`
+        # (that opens an editor and defaults to --cleanup=strip, which drops lines
+        # that begin with '#'). Match the no-editor path used for clean picks and
+        # for conflicted squash-merges above.
+        run_cmd(
+            [
+                "git",
+                "-c",
+                "commit.cleanup=whitespace",
+                "cherry-pick",
+                "--continue",
+                "--no-edit",
+            ]
+        )
 
     continue_maybe(
         "Pick complete (local ref %s). Push to %s?" % (pick_branch_name, PUSH_REMOTE_NAME)
@@ -1050,6 +1064,8 @@ def jira_components_from_title_tags(tags):
     ['PySpark', 'Documentation']
     >>> jira_components_from_title_tags(["SQL", "TEST"])
     ['SQL', 'Tests']
+    >>> jira_components_from_title_tags(["UDF"])
+    ['UDF']
     >>> jira_components_from_title_tags(["SQL", "FOLLOWUP", "4.X", "BOGUS"])
     ['SQL']
     >>> jira_components_from_title_tags(["SQL", "SQL"])
@@ -1449,6 +1465,7 @@ COMPONENTS = (
     Component("STREAMING", ("DSTREAM", "DSTREAMS"), primary=True, jira_name="DStreams"),
     Component("SUBMIT", jira_name="Spark Submit"),
     Component("TEST", ("TESTS", "TEST-ONLY", "TESTS-ONLY"), jira_name="Tests"),
+    Component("UDF", primary=True, jira_name="UDF"),
     Component("UI", ("WEBUI", "WEB_UI"), primary=True, jira_name="Web UI"),
     Component("WINDOWS", primary=True, jira_name="Windows"),
     Component("YARN", primary=True, jira_name="YARN"),
