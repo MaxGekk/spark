@@ -23,6 +23,11 @@ on:
   schedule:
     - cron: '0 4 */2 * *'
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build and test'
+        required: false
+        default: 'master'
 
 jobs:
   run-build:
@@ -33,7 +38,7 @@ jobs:
     if: github.repository == 'apache/spark' || github.event_name == 'workflow_dispatch'
     with:
       java: 25
-      branch: master
+      branch: ${{ github.event.inputs.branch || 'master' }}
       hadoop: hadoop3
       envs: >-
         {
