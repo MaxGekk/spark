@@ -28,8 +28,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.varka.vector.DateVectorOps
 
 /**
- * The emitter's gates as a benchmark (see `sql/varka/plans/PLAN_TASK_9.md` and
- * `PLAN_TASK_10.md`).
+ * The emitter's gates as a benchmark (see `sql/varka/plans/PLAN_TASK_9.md`,
+ * `PLAN_TASK_10.md` and `PLAN_TASK_11.md`).
  *
  * The parity gates: an emitted single-op loop must reach the hand-written kernel within noise
  * (acceptance: at least 0.9x its best-time throughput) - anything worse means C2 did not
@@ -39,7 +39,9 @@ import org.apache.spark.sql.varka.vector.DateVectorOps
  * same buffers. Task 10 adds the DAG cases: a subchain shared by two outputs with CSE on, with
  * the memo disabled (pricing CSE itself), and as sequential kernel passes; and the widest shape
  * the emitter accepts (`MAX_FUSED_NODES` ops), which must scale with its op count rather than
- * fall off a cliff at the cap.
+ * fall off a cliff at the cap. Task 11 adds the predication cases - a CASE WHEN blend against
+ * the same-depth plain arithmetic - and `dayofweek` as the shipped digit-sum mod-7 against the
+ * lanewise-DIV reference variant and the per-row `LocalDate` path Spark uses today.
  *
  * To run this benchmark:
  * {{{
@@ -233,10 +235,85 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.run()
       }
 
-      runBenchmark("widest shape: MAX_FUSED_NODES ops in one loop") {
-        // Four disjoint depth-16 chains: 64 distinct ops, the cap exactly. The fused loop must
-        // scale with its op count (roughly a quarter of one depth-16 chain's rate), not fall
-        // off a cliff at the cap; the sequential version is the same 64 kernel passes.
+      runBenchmark("predication: CASE WHEN blend vs plain arithmetic (task 11)") {
+        // The same depth-4 arithmetic with and without a comparison + blend wrapped around
+        // it - pricing predication itself, in both bodies. The arms are disjoint chains over
+        // each input so the predicated case does strictly more work.
+        val benchmark = new Benchmark(s"depth-4 arms over $numRows rows", numRows,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        def chainOver(base: VarkaVectorIR, depth: Int, slotBase: Int): VarkaVectorIR = {
+          var node = base
+          for (level <- 0 until depth) {
+            node = if (level % 2 == 0) new AddDays(node, new LiteralSlot(slotBase + level))
+            else new SubDays(node, new LiteralSlot(slotBase + level))
+          }
+          node
+        }
+        val offsets = (0 until 8).map(level => level * 13 + 1).toArray
+        val plain = emit(Seq(chainOver(new ColumnRef(0), 4, 0)), 2, 8, loader, 400)
+        val blended = emit(Seq(new IfElse(
+          new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1)),
+          chainOver(new ColumnRef(0), 4, 0),
+          chainOver(new ColumnRef(1), 4, 4))), 2, 8, loader, 401)
+        def run(kernel: VarkaFusedKernel, d1: Long, v1: Long, n1: Int, d2v: Long, v2: Long,
+            n2: Int): Unit = {
+          kernel.run(Array(d1, d2v), Array(v1, v2), Array(n1, n2),
+            Array(dst.address()), Array(dstValidity.address()), offsets, numRows)
+        }
+        benchmark.addCase("arithmetic depth 4, null-free") { _ =>
+          run(plain, nfData.address(), 0L, 0, nf2Data.address(), 0L, 0)
+        }
+        benchmark.addCase("CASE WHEN, depth-4 arms, null-free") { _ =>
+          run(blended, nfData.address(), 0L, 0, nf2Data.address(), 0L, 0)
+        }
+        benchmark.addCase("arithmetic depth 4, mixed nulls") { _ =>
+          run(plain, mxData.address(), mxValidity.address(), mxNulls,
+            mx2Data.address(), mx2Validity.address(), mx2Nulls)
+        }
+        benchmark.addCase("CASE WHEN, depth-4 arms, mixed nulls") { _ =>
+          run(blended, mxData.address(), mxValidity.address(), mxNulls,
+            mx2Data.address(), mx2Validity.address(), mx2Nulls)
+        }
+        benchmark.run()
+      }
+
+      runBenchmark("dayofweek: digit sum vs lanewise DIV vs LocalDate (task 11)") {
+        val benchmark = new Benchmark(s"dayofweek over $numRows rows", numRows,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 500)
+        VarkaEmitterTestSupport.setDivFloorMod(true)
+        val dowDiv =
+          try emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 501)
+          finally VarkaEmitterTestSupport.setDivFloorMod(false)
+        benchmark.addCase("digit sum, null-free") { _ =>
+          dow.run(Array(nfData.address()), Array(0L), Array(0),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        benchmark.addCase("digit sum, mixed nulls") { _ =>
+          dow.run(Array(mxData.address()), Array(mxValidity.address()), Array(mxNulls),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        benchmark.addCase("lanewise DIV, null-free") { _ =>
+          dowDiv.run(Array(nfData.address()), Array(0L), Array(0),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        benchmark.addCase("per-row LocalDate (the path Spark uses today)") { _ =>
+          var i = 0
+          while (i < numRows) {
+            val days = nfData.get(ValueLayout.JAVA_INT, i * 4L)
+            dst.set(ValueLayout.JAVA_INT, i * 4L,
+              java.time.LocalDate.ofEpochDay(days).getDayOfWeek.plus(1).getValue)
+            i += 1
+          }
+        }
+        benchmark.run()
+      }
+
+      runBenchmark("widest shape: MAX_FUSED_NODES ops in one kernel") {
+        // Four disjoint depth-16 chains: 64 distinct ops, the cap exactly - emitted as four
+        // GROUP_BUDGET-sized loop methods since task 11, which is what keeps this case honest
+        // in a JVM that has compiled every other kernel in this file first (see
+        // PLAN_TASK_11.md section 6). The sequential version is the same 64 kernel passes.
         val benchmark = new Benchmark(s"4 outputs x depth 16 over $numRows rows", numRows,
           minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
         val roots = (0 until 4).map(k => chain(16, slotBase = k * 16))
