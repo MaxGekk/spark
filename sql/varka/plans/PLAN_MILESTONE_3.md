@@ -26,6 +26,19 @@ day or month intervals on zoned timestamps stays out until the semantics are
 written down with the same care as milestone 2's section 2.6. `LongVector`
 species has half the lanes of int, so the JMH parity gate reruns at both widths.
 
+When zoned operations do enter, the datetime vector-algorithms note (its
+group 5) names the technique: pack the IANA tzdata transition rules into flat
+`long[]` interval arrays and resolve a vector of timestamps against them with
+a SIMD binary search, instead of per-row `ZoneRules` lookups. That is a design
+input for the zoned follow-on, not for the NTZ subset this item starts with.
+The second-to-day and micros-to-second conversions this item needs are
+divisions by invariant constants (86400, 60) - Granlund-Montgomery magic
+multiplies (Hacker's Delight chapter 10). Task 11's pre-measurement settled
+the enabling question for int lanes: JDK 25's Vector API has no multiply-high
+operator, so on long lanes this either waits for one or goes through 128-bit
+tricks; the fallback ladder task 11 measured (lanewise `DIV` scalarizes but
+still beats allocating paths comfortably) applies here too.
+
 ## 2. Cross-task cache of assembled bytes
 
 Deferred from milestone 2 (its section 2.7) for two recorded reasons: it is pure
@@ -60,6 +73,15 @@ the civil-from-days algorithm (Neri-Schneider style: multiplies and shifts, so
 SIMD-able), which is real kernel work with a real correctness surface - the
 `LocalDate` oracle and a wide-range differential matrix, negative epoch days
 included, exactly as milestone 2 did for `dayofweek`.
+
+The datetime vector-algorithms note (group 1) fixes the candidate set by name:
+Neri-Schneider (branchless O(1) civil-from-days over the 400-year Gregorian
+cycle - the preferred fit for lanes), Cassels' March-shifted year (month/day
+from a linear formula like `(5 * d + 2) / 153`), and Howard Hinnant's
+`std::chrono` decomposition (the one Velox and DuckDB borrow). All three lean
+on division by invariant constants, so the Granlund-Montgomery machinery from
+item 1 is a prerequisite worth building once and sharing; whichever ships, the
+`LocalDate` differential stays the oracle.
 
 ## 6. Plain integer arithmetic, ANSI-correct
 
@@ -105,3 +127,40 @@ is where the project decides whether Varka ever owns whole-stage generation
 full apparatus) or whether its identity is the columnar fast path beside
 whole-stage, with the limit explicitly out of charter. Both are defensible;
 leaving it unstated is not.
+
+## 11. Reaching real Parquet scans: the Arrow-native reader/writer
+
+The Varka path today serves only Arrow-backed batches - in practice, tables
+cached with `ArrowCachedBatchSerializer`. Vectorized Parquet produces
+`OnHeapColumnVector`/`OffHeapColumnVector` and falls back
+(`docs/sql-varka.md` records the limitation, but until this item nothing
+recorded the reach) - and real workloads live on scans, not cached tables.
+
+The direction is decided: a new vectorized Parquet reader and writer that
+returns and accepts *Arrow* batches, planned by the project owner. The data
+arrives Arrow-shaped and the Varka path stays Arrow-only - the kernels, the
+emitted loops and the morsel contract change not at all, which is the point.
+The write side pairs with the columnar-write split already in the tree (a
+DSv2 write has no columnar API, so the plan-level route `VarkaProjectExec`
+feeds is the landing zone).
+
+The alternative that is *not* the plan, recorded so it is not re-proposed:
+adapting the kernel contract to Spark's writable column vectors. Their null
+encoding is one byte per row, not bit-packed validity, so that road means a
+validity-format dimension in the contract or a byte-to-bit repack per batch
+- complexity the Arrow-native reader makes unnecessary. It would return only
+if the reader plan were abandoned and a measurement showed the repack beats
+the fallback.
+
+## 12. SWAR string-to-date parsing
+
+`CAST(string AS DATE)` / `to_date` on `yyyy-MM-dd` input, from the datetime
+vector-algorithms note (group 3): load the digit bytes as one word, subtract
+`0x30303030`, collapse to an integer with a multiply-add - three or four
+instructions per field, no per-character loop - and validate the separators
+with one vector compare whose failing lanes send the whole batch to the
+existing parser. That fallback shape is exactly Varka's ghost-fallback
+discipline, which is why the idea fits the project at all. Deferred past the
+items above because it is the first work outside int lanes: variable-width
+Arrow string vectors, byte-lane processing, and Spark's cast-error semantics
+under ANSI all need design before any kernel is written.
