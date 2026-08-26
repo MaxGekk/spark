@@ -1,6 +1,7 @@
 # Task 14: benchmarks and docs
 
-**Status: PLANNED.** The milestone's closing task (`PLAN_MILESTONE_2.md`,
+**Status: DONE.** Outcome in section 7; the predictions of section 3 scored
+1.5 of 4 (section 7.3). The milestone's closing task (`PLAN_MILESTONE_2.md`,
 task row 14): measure what milestones 1 and 2 actually bought, end to end and
 honestly, then rewrite the public story - `docs/sql-varka.md`, `VISION.md`,
 and (added to the task by the milestone owner) the repository's `README.md`,
@@ -283,3 +284,175 @@ Acceptance, from the milestone's validation row plus this plan:
   will drift as the code moves. Mitigation: the README states the commit
   and date of its numbers and points at the results files as the living
   source, so drift is visible rather than silent.
+
+## 7. Outcome
+
+### 7.1 What ran, and under what conditions
+
+All four results files were regenerated on the committed methodology
+(2.1: `minNumIters = 5`, two-second warmup and measurement windows,
+machine otherwise idle): `VarkaThroughputBenchmark` (twice, back to back -
+the second run doubles as the A/B check below), the new
+`VarkaColdStartBenchmark`, `VarkaCodegenBenchmark` with its new fused case,
+and `VarkaEmitterParityBenchmark` unchanged. Hardware and conditions, stated
+once for every number this task quotes: AMD Ryzen AI 9 HX PRO 370 (Zen 5,
+AVX-512), OpenJDK 25.0.4, Linux 7.0, `local[1]`, 2M-row Arrow-cached tables
+(100K for cold start).
+
+Two harness hardenings landed beyond the plan. Every throughput case now
+runs an untimed guard first that executes the query and requires
+`numVarkaBatches > 0` off the plan's Varka node - plan-shape checking alone
+cannot see a runtime ghost fallback, and the `dayofweek` result below is
+exactly the case that made the stronger guard worth having (it passed: the
+kernels really ran). And the cold-start timer acts on the pre-planned
+`queryExecution.toRdd` rather than a `noop` write, because the write API
+re-plans a fresh command inside the timer; planning stays in setup, so the
+timed region is Janino compile / kernel emission plus the small compute.
+
+### 7.2 The numbers
+
+Columnar consumer, best-of->=5, relative to Janino: `date_add` 1.9x,
+`date_sub` 2.1x, `datediff` 2.4x, nested `datediff(date_add(d, 1), d2)`
+2.2x, shared subchain (DAG-CSE) 1.8x, mixed projection 1.6x, `CASE WHEN`
+1.9x on predictable data and 2.1x on pseudo-random data, `dayofweek` 0.9x.
+Chain depth 1/2/4/8: 2.2x/2.0x/1.7x/1.4x columnar, 0.7x/0.6x/0.6x/0.5x
+through `toRdd`. Cold start: 18 ms vs 27 ms best (22 vs 36 average) per
+fresh plan shape - 1.5x. Fused emit+define+load+instantiate: ~80 us, 75x
+under one Janino projection compile (the milestone-1 dispatcher case: 418x).
+
+The claims-under-1.3x rule (2.1) applied twice. The `CASE WHEN` gap: varka
+is 27 ms on both data patterns in both runs (blend is data-oblivious), while
+Janino pays +6 ms (~12%) on the unpredictable table - direction and size
+replicated across the two generations, so the gap is committed as Janino's
+misprediction cost, though at ~12% it fell short of the predicted >=15%.
+`dayofweek` 0.9x also replicated exactly (72 ms vs 64 ms both runs).
+
+### 7.3 Predictions scored: 1.5 of 4
+
+1. **Wrong, instructively.** The columnar depth relative does not grow - it
+   falls, 2.2x at depth 1 to 1.4x at depth 8. Janino's cost is *flat* in
+   depth (~21 ns/row whatever the chain: eight dependent int adds vanish
+   inside per-row overhead on a 5 GHz core) - the premise "Janino pays
+   per-row call overhead per op" was milestone-1 thinking; inside one
+   compiled row loop, an op costs well under a nanosecond. The varka side's
+   growth with depth was first attributed to masked ops accumulating per op;
+   the post-commit diagnosis (7.5) corrected that: it is a *fixed per-task*
+   JIT warm-up cost that grows with op count, not steady-state loop cost.
+   What fusion buys end to end at the committed task size is
+   batch-versus-per-row overhead - about 2x on this hardware - and the
+   per-task compile erodes it with depth.
+2. **Wrong.** No row-consumer break-even exists: 0.7x at depth 1 *falling*
+   to 0.5x at depth 8, for the same reason as (1) - the varka side's cost
+   grows with depth, Janino's does not, so the curves diverge. Recorded in
+   `PLAN_MILESTONE_3.md`'s register as a measured answer: the profitability
+   question is not "how deep" but "should the rule decline row consumers".
+3. **Half right.** The headline held (2.1x >= 1.8x on unpredictable data)
+   but the data-pattern gap is ~12% relative, under the predicted 15%.
+4. **Right.** Milliseconds per fresh shape (9 ms best, 14 ms average),
+   visible and committed, nowhere near the isolated 636x - the scan and
+   framework dominate both sides, exactly as reasoned.
+
+Running score across tasks 12 and 14: 2.5 of 8.
+
+### 7.4 Deviations and notes
+
+* The JMH fused-chain case was resolved as planned deviation 2.5 (module
+  boundary); the parity benchmark's chain-depth case remains the buffer-level
+  fused-chain number and was regenerated with everything else.
+* `dayofweek` was expected (2.2) to be "the one case where Varka replaces an
+  allocating path"; at query level it is a small honest loss (0.9x). Half
+  the story: C2 scalar-replaces the `LocalDate` allocation inside the
+  compiled row loop, so the stock path is already allocation-free where it
+  matters. The other half was diagnosed after commit (7.5): the fold's
+  deficit is the per-task JIT warm-up of its larger loop method, a fixed
+  ~50 ms per task, not per-element compute. Docs and README carry the loss
+  at the committed shape, per the no-promises rule, with the mechanism
+  named.
+* The depth cases run over `varka_dates` (mixed nulls), so they price the
+  masked body - the general case, not the dense fast path.
+* `date_add` at 1.9x vs "chain depth 1" at 2.2x is the same query modulo
+  literal and table position in the run; the spread is the honest remaining
+  noise band at these sub-50 ms case times, which is why the docs quote
+  each number from its own committed case rather than averaging cousins.
+
+### 7.5 Post-commit diagnosis: the op-count cost is per-task JIT warm-up
+
+Asked why `dayofweek` lost to a path it beats 36x at buffer level, this task's
+review dug further, and the answer revises 7.3's causal story (the *numbers*
+stand; the mechanism behind two of them was misattributed). Two experiments:
+
+* **Scaling discriminator.** The same three queries over 2M and 8M-row
+  copies of `varka_dates`, per-iteration minimums. The extra cost of the
+  op-heavier kernels over `date_add` is *flat* across the 4x growth: chain
+  depth 8 costs +13.4 ms at 2M and +13.3 ms at 8M; `dayofweek` +53.1 ms and
+  +50.6 ms. A per-row cost would have quadrupled; a fixed per-task cost
+  stays put - and it stayed put to within 5%.
+* **`-XX:+PrintCompilation`.** One tier-4 OSR compile of
+  `VarkaFusedProjection::loopMasked0` *per task* - 48 of them for 48 tasks -
+  each preceded by the interpreter and tier-3 (boxed vectors) phases and
+  followed by "made not entrant: OSR invalidation" as the task's class dies.
+  Method sizes 254/396/426 bytes for `date_add`/chain-8/`dayofweek`.
+
+The mechanism: the evaluator defines a fresh kernel class per task (the
+per-task loader), so HotSpot re-runs the full tier ladder every query
+execution; until the C2 OSR lands, the loop runs interpreted or C1 with
+boxed vectors. The buffer-level parity benchmark compiles once and measures
+steady state, which is why the two disagree.
+
+A second pass over the same `PrintCompilation2` log decomposed the fixed
+cost per kernel variant (its `time:` lines are per-compile durations; the
+tier-3-OSR trigger anchors the phases, with `date_add` as the control):
+
+| loop method | vector ops | C2 OSR compile | tier-3 to tier-4 delay | fixed surcharge |
+|---|---|---|---|---|
+| `date_add`, 254 B | ~3 | ~2 ms | 6 ms | baseline |
+| chain-8, 396 B | ~10 | 10 ms | mid | +13 ms |
+| `dayofweek`, 426 B | ~20 | 19-25 ms | 17 ms | +50 ms |
+
+The `dayofweek` surcharge splits into ~18 ms extra interpreted phase (a
+boxed iteration costs per op, so the same backedge threshold takes
+op-count-times longer to reach), ~11 ms extra C1-boxed profiling delay
+before tier-4 triggers (the same counter logic), and ~18-23 ms extra C2
+compile in flight (compile time scales roughly linearly with vector-op
+count, about 1 ms per op). Every phase scales with op count, which is why
+the fixed cost tracked op count in the scaling experiment. One tempting
+mitigation is refuted by this decomposition: a scratch-batch warm spin in
+the evaluator saves nothing, because the tier counters advance per backedge
+at the same boxed-execution rate whatever the batch size - only threshold
+scaling (a deploy flag), a smaller loop method, or class reuse shortens the
+ladder. Consequences:
+
+* `dayofweek` 0.9x is a short-task artifact: the ~50 ms fixed cost happens
+  to eat a 2M-row task; at 8M rows the same query is ~1.8x `date_add`'s
+  time while Janino's scales per-row - roughly 2x in Varka's favor.
+* The columnar depth-curve erosion (7.3 point 1) is mostly this fixed cost,
+  not steady-state op cost - at buffer level depth 8 runs within 10% of
+  depth 1 (14.3 vs 15.9 G rows/s, parity file). Prediction 1's premise
+  about Janino was still wrong; the varka-side attribution is corrected.
+* The row-consumer conclusion (7.3 point 2) survives with its mechanism
+  split: the ~16 ns/row read-back genuinely keeps row consumers under 1.0x,
+  but the *decline* with depth is the per-task compile; with class reuse
+  the curve flattens near 0.7x. No crossing either way.
+* The fix is specific, and it corrects `PLAN_MILESTONE_3.md` item 2's
+  design: caching assembled *bytes* does not help - a re-defined class is a
+  new class to HotSpot and re-pays the ladder. Only reusing the *loaded
+  class* across tasks preserves the C2 code, which tenses against the
+  per-task-unload Metaspace principle: the cache must be a bounded
+  class/loader cache, not a byte cache. The item carries the correction.
+
+The lesson joined `SKILLS.md`'s C2-latency section; the diagnosis driver was
+scratch code and is not committed. The committed benchmark files are
+unchanged by this - 2M-row tasks are the committed shape, honestly labeled.
+
+### 7.6 Docs delivered
+
+`docs/sql-varka.md` revised to milestone 2 (fused-loop architecture,
+semantics section, telemetry, all numbers from 7.2, limitations rewritten -
+including the row-consumer cost stated with its number); `VISION.md` given
+its status pass (top banner, sections 7 and 12 annotated, roadmap pointed at
+the milestone plans); `README.md` rewritten as the fork's front page (what
+it is, the main ideas as one-liners, the benchmark table honest rows
+included, quick start, status/roadmap/docs map, upstream attribution
+replacing the stock badge wall). `PLAN_MILESTONE_2.md` task row and closing
+note, and the two `PLAN_MILESTONE_3.md` register entries, updated as 2.8
+required.
