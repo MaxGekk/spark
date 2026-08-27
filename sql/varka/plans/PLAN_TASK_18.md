@@ -338,3 +338,36 @@ lowering, the review's original motivation, came out clean. What changed:
   cache and `kernelIdentity`; and the evaluator builds the execution
   identity bounded to what the table keeps rather than rendering a wide
   projection per task.
+
+## 9. Third round: convergence
+
+Re-running the same max-effort review on the fixed tree returned seven
+findings - none of production-outage class, five of them residue of the
+section 8 fixes. Both of that section's structural decisions held: the
+loader-in-key design survived against its recorded limitation, and the
+fate-sharing stack was not re-flagged. What round three changed:
+
+* **The hook guard got a write-generation.** Sampling the hook values
+  around the emission cannot catch a hook set *and cleared* inside the
+  window, so the guard's old comment overclaimed. The hook fields are
+  private now, written only through setters that bump an `AtomicLong`
+  generation; `emit` snapshots the generation and refuses to cache if it
+  moved at all. A reflection test closes the other end: every `*ForTesting`
+  field must register in `anyTestHookSet()`, so a future hook cannot
+  bypass the guard unnoticed.
+* **The conf read consults the source that has the key.** Section 8's
+  `SparkEnv`-first read missed static confs set through a `SparkSession`
+  builder over a pre-existing context (they land in the session, and `SET`
+  reports them, but never reach `SparkEnv`'s `SparkConf`). The order is
+  now: the SQL view if it carries the key, else the JVM-wide `SparkConf`
+  (`--conf` statics, for the non-propagated-task first touch), else the
+  default - covering both this and the round-one freeze case.
+* **Both pinned-hash gaps closed**: a second golden-hash test uses a key
+  with all 14 IR node types, so no canonical rendering is unguarded (the
+  chain-only test covered 4 of 14 despite the javadoc's claim).
+* **The side table is floored at 64 shapes** independently of capacity, so
+  the diagnostics join works at `maxEntries = 0` beyond four live shapes;
+  its reinstate-after-eviction is now `putIfAbsent`-with-retry, closing the
+  lost-update window the plain reinstate had; and identities are bounded
+  through the shared `SparkStringUtils.abbreviate` (marker inside the 256,
+  not appended past it).

@@ -200,14 +200,14 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val cache = new VarkaShapeCacheImpl(4)
     val key = keyOf(chain(bits = 3, depth = 2))
     assert(!cache.getOrEmit(key, "exec").hit) // cached plain, before any hook
-    VarkaLoopEmitter.disableCseForTesting = true
+    VarkaLoopEmitter.setDisableCseForTesting(true)
     try {
       // Both directions are wrong and both are refused: a hit would serve plain bytes to a
       // hooked caller, a miss would cache hooked bytes under the plain key.
       intercept[IllegalStateException](cache.getOrEmit(key, "exec"))
       intercept[IllegalStateException](cache.getOrEmit(keyOf(chain(bits = 9, depth = 2)), "e"))
     } finally {
-      VarkaLoopEmitter.disableCseForTesting = false
+      VarkaLoopEmitter.setDisableCseForTesting(false)
     }
     assert(cache.size === 1, "a refused lookup must cache nothing")
     // With the hook reset, the pre-hook entry serves again and new shapes emit normally.
@@ -245,6 +245,49 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     // that is intended, then update the value here and say so in the task plan.
     val key = keyOf(chain(bits = 9, depth = 4))
     assert(VarkaShapeCache.shapeHash(key) === "586434f9b9739c40")
+  }
+
+  test("every node type's canonical rendering is pinned, not only the chain ops") {
+    // One key that uses all 14 IR node types (and three CompareOps), so a rendering change
+    // to any of them - operand order, a token - fails here even though the chain-based
+    // pinned hash above would still pass. Same update rule as above when intended.
+    import VarkaVectorIR._
+    val cond = new And(
+      new Or(
+        new Compare(CompareOp.LT, columnRef, literal),
+        new Not(new Compare(CompareOp.EQ, columnRef, literal))),
+      new Compare(CompareOp.GE, columnRef, literal))
+    val everyNode = new IfElse(
+      cond,
+      new Greatest(new AddDays(columnRef, literal), new SubDays(columnRef, literal)),
+      new Least(new DateDiff(columnRef, new DayOfWeek(columnRef)), new WeekDay(columnRef)))
+    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "00437a3d4db2c50f")
+  }
+
+  test("every *ForTesting hook field registers in anyTestHookSet") {
+    // The guard hand-enumerates the hook fields; this closes the enumeration by reflection,
+    // so a future byte-affecting hook cannot silently bypass the cache's refusal. Hooks are
+    // written via reflection here on purpose - the setters are what production-path code
+    // uses, while this test checks the fields behind them.
+    val hookFields = classOf[VarkaLoopEmitter].getDeclaredFields.toSeq
+      .filter(_.getName.endsWith("ForTesting"))
+    assert(hookFields.nonEmpty, "the hook fields moved; update this test's discovery rule")
+    hookFields.foreach { field =>
+      field.setAccessible(true)
+      assert(!VarkaLoopEmitter.anyTestHookSet(), s"a hook was left set before ${field.getName}")
+      val original = field.get(null)
+      try {
+        field.set(null, field.getType match {
+          case java.lang.Boolean.TYPE => java.lang.Boolean.TRUE
+          case java.lang.Integer.TYPE => Int.box(1)
+          case other => fail(s"unhandled hook field type $other for ${field.getName}")
+        })
+        assert(VarkaLoopEmitter.anyTestHookSet(),
+          s"${field.getName} is a *ForTesting hook that anyTestHookSet() does not check")
+      } finally {
+        field.set(null, original)
+      }
+    }
   }
 
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {

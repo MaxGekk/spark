@@ -146,7 +146,8 @@ public sealed interface VarkaVectorIR
    * no such promise: its spec fixes only what the string mentions, not the exact format.
    * The switch is exhaustive over the sealed interface, so adding a node type refuses to
    * compile until it renders here; changing an existing rendering changes every committed
-   * hash and is caught by the pinned-hash test in {@code VarkaShapeCacheSuite}.
+   * hash and is caught by the pinned-hash tests in {@code VarkaShapeCacheSuite} - one over a
+   * plain chain, one over a key that uses every node type, so no rendering is unguarded.
    */
   static String canonical(VarkaVectorIR node) {
     return switch (node) {

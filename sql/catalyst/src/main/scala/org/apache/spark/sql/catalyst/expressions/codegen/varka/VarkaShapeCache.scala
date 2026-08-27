@@ -30,7 +30,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.network.util.JavaUtils
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
-import org.apache.spark.util.{NonFateSharingCache, Utils}
+import org.apache.spark.util.{NonFateSharingCache, SparkStringUtils, Utils}
 
 /**
  * The structural identity of one emitted fused-kernel class: exactly the [[VarkaLoopEmitter]]
@@ -109,8 +109,9 @@ private[sql] case class VarkaShapeLookup(entry: VarkaShapeEntry, hit: Boolean)
  * never assembled by hand at a call site; the differential suites run warm as well as cold.
  * The one emit input outside the shape - the emitter's static test hooks - is guarded
  * instead: [[getOrEmit]] refuses every lookup while a hook is set (a hit would serve plain
- * bytes to a hooked caller), and [[emit]] re-checks after emitting so a hook flipped
- * mid-emission cannot cache its bytes either.
+ * bytes to a hooked caller), and [[emit]] snapshots the emitter's hook-write generation
+ * around the emission - a hook set and cleared mid-emission restores the values but not the
+ * generation, so its bytes are never cached.
  *
  * '''The loader is part of the key.''' Each entry's generated loader parents the context
  * class loader of the task that emitted it (`Utils.getContextOrSparkClassLoader`, as the
@@ -183,9 +184,13 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
   // because it is diagnostics, not bookkeeping: it answers "which operators ran
   // VarkaFusedProjection_<hash>?" for a name seen in a profile, a class dump or a JFR event,
   // without that identity riding the shared bytes.
+  // Floored at 64 shapes so the diagnostics join works at every capacity: with maxEntries = 0
+  // the classes still carry only their shape name, and a table sized off the (zero) class
+  // capacity would evict live shapes' identities mid-query. 64 shapes of 8 truncated
+  // identities is at most a few hundred KB.
   private val executions: Cache[String, java.util.LinkedHashSet[String]] =
     CacheBuilder.newBuilder()
-      .maximumSize(math.max(maxEntries, 1).toLong * 4)
+      .maximumSize(math.max(maxEntries.toLong * 4, 64))
       .build[String, java.util.LinkedHashSet[String]]()
 
   /**
@@ -247,13 +252,17 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
     val hash = VarkaShapeCache.shapeHash(key)
     val className = VarkaShapeCache.classNameFor(hash)
     val sourceFile = VarkaShapeCache.sourceFileFor(hash)
+    // The getOrEmit gate races a concurrently flipped hook, and the emit walk reads the
+    // (volatile) hooks at its own sites - a hook set and cleared inside the window would
+    // restore the values, so sampling them again is not enough. The write generation cannot
+    // be restored: if it moved at all during the emission, these bytes are not provably
+    // plain and must not be cached.
+    val hookGeneration = VarkaLoopEmitter.currentTestHookGeneration()
     val bytes = VarkaLoopEmitter.emit(className, key.outputs.asJava, key.numInputs,
       key.numLiterals, sourceFile, s"shape $hash")
-    if (VarkaLoopEmitter.anyTestHookSet()) {
-      // The entry check races a concurrently flipped hook; re-checking after the emit walk
-      // read the (volatile) hooks keeps a mid-emission flip from caching its bytes.
+    if (VarkaLoopEmitter.currentTestHookGeneration() != hookGeneration) {
       throw new IllegalStateException(
-        "a VarkaLoopEmitter test hook was set while emitting; refusing to cache the bytes")
+        "a VarkaLoopEmitter test hook was written while emitting; refusing to cache the bytes")
     }
     val loader = new VarkaGeneratedClassLoader(loaderKey.parent)
     val klass = loader.defineGeneratedClass(className, bytes)
@@ -262,29 +271,33 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
   }
 
   private def recordExecution(hash: String, execution: String): Unit = {
-    val identity = if (execution.length > VarkaShapeCache.maxExecutionIdentityLength) {
-      execution.substring(0, VarkaShapeCache.maxExecutionIdentityLength) + "..."
-    } else {
-      execution
-    }
-    val set = executions.get(hash, new Callable[java.util.LinkedHashSet[String]] {
-      override def call(): java.util.LinkedHashSet[String] =
-        new java.util.LinkedHashSet[String]()
-    })
-    set.synchronized {
-      // Re-adding moves nothing in a LinkedHashSet; remove first so recency order holds.
-      set.remove(identity)
-      set.add(identity)
-      while (set.size() > maxExecutionsPerShape) {
-        val it = set.iterator()
-        it.next()
-        it.remove()
+    // The shared helper keeps the marker inside the bound, so the stored identity never
+    // exceeds maxExecutionIdentityLength.
+    val identity =
+      SparkStringUtils.abbreviate(execution, VarkaShapeCache.maxExecutionIdentityLength)
+    var recorded = false
+    while (!recorded) {
+      val set = executions.get(hash, new Callable[java.util.LinkedHashSet[String]] {
+        override def call(): java.util.LinkedHashSet[String] =
+          new java.util.LinkedHashSet[String]()
+      })
+      set.synchronized {
+        // Re-adding moves nothing in a LinkedHashSet; remove first so recency order holds.
+        set.remove(identity)
+        set.add(identity)
+        while (set.size() > maxExecutionsPerShape) {
+          val it = set.iterator()
+          it.next()
+          it.remove()
+        }
       }
-    }
-    // Eviction between get() and the write above orphans the set and would silently drop the
-    // identity; reinstate it. (A put after a test's invalidateAll resurrects one set - benign.)
-    if (!(executions.getIfPresent(hash) eq set)) {
-      executions.put(hash, set)
+      // Eviction between get() and the write orphans the set and would silently drop the
+      // identity. Reinstate only into an empty slot - a plain put could overwrite a set a
+      // concurrent thread created (and recorded into) after the eviction; if the slot is
+      // taken, loop and record into the live set instead. Converges because a re-eviction
+      // of a just-touched key needs another full capacity churn per iteration.
+      recorded = (executions.getIfPresent(hash) eq set) ||
+        executions.asMap().putIfAbsent(hash, set) == null
     }
   }
 }
@@ -292,28 +305,40 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
 /**
  * The executor-wide instance (milestone 3 open question 1, settled as per-JVM: the key
  * carries no session state the linkage does not, and Janino's codegen cache is the
- * precedent). Sized once, from `SparkConf` when a `SparkEnv` exists: the conf is static, and
- * the first touch of this object can happen inside a task whose `SQLConf.get` view carries no
- * SQL confs (a non-`SQLExecution` action), which would silently freeze the default in.
- * `SQLConf.get` remains the fallback for env-less unit-test JVMs.
+ * precedent). Sized once, from whichever conf source actually carries the key: the SQL view
+ * first (builder-set static confs land in the session, not in `SparkEnv`'s `SparkConf`),
+ * then the JVM-wide `SparkConf` (a task touching this first through a non-`SQLExecution`
+ * action sees an empty SQL view, but `--conf`-set statics are in the env), then the default.
  */
 private[sql] object VarkaShapeCache {
 
   /**
-   * The longest execution identity the side table records; longer ones are cut mid-string.
-   * Operator, stage and the leading projection entries survive, which is what the diagnostics
-   * join needs - and callers building an identity string need not render more than this.
+   * The longest execution identity the side table stores; longer ones are abbreviated to
+   * exactly this length, marker included. Operator, stage and the leading projection entries
+   * survive, which is what the diagnostics join needs - and callers building an identity
+   * string need not render more than this.
    */
   private[sql] val maxExecutionIdentityLength = 256
 
   private lazy val instance = new VarkaShapeCacheImpl(configuredMaxEntries())
 
   private def configuredMaxEntries(): Int = {
-    val env = SparkEnv.get
-    if (env != null) {
-      env.conf.get(StaticSQLConf.VARKA_CACHE_MAX_ENTRIES)
+    val entry = StaticSQLConf.VARKA_CACHE_MAX_ENTRIES
+    val sqlConf = SQLConf.get
+    if (sqlConf.contains(entry.key)) {
+      // The SQL view has the key: a session on the driver (builder-set static confs land
+      // here, not in SparkEnv's SparkConf), or a task with propagated SQL confs.
+      sqlConf.getConf(entry)
     } else {
-      SQLConf.get.getConf(StaticSQLConf.VARKA_CACHE_MAX_ENTRIES)
+      // A task without conf propagation (a non-SQLExecution action) sees an empty SQL view;
+      // --conf-set static confs are still in the JVM-wide SparkConf. Failing both, the
+      // entry's default applies.
+      val env = SparkEnv.get
+      if (env != null && env.conf.contains(entry.key)) {
+        env.conf.get(entry)
+      } else {
+        sqlConf.getConf(entry)
+      }
     }
   }
 
