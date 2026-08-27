@@ -178,17 +178,50 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
       s"Metaspace grew by ${after - before} bytes across $shapes shapes")
   }
 
-  test("capacity 0 disables sharing: every lookup emits its own unshared entry") {
+  test("capacity 0 disables sharing: every lookup emits, evicted and released on load") {
     val cache = new VarkaShapeCacheImpl(0)
-    val first = cache.getOrEmit(keyOf(chain(bits = 5, depth = 3)), "exec")
-    val second = cache.getOrEmit(keyOf(chain(bits = 5, depth = 3)), "exec")
+    val key = keyOf(chain(bits = 5, depth = 3))
+    val first = cache.getOrEmit(key, "exec")
+    val second = cache.getOrEmit(key, "exec")
     assert(!first.hit && !second.hit)
     assert(!(first.entry eq second.entry))
-    assert(!first.entry.shared && !second.entry.shared)
     assert(cache.size === 0 && cache.missCount === 2)
-    // The caller owns the lifecycle of an unshared entry, the pre-task-18 contract.
-    first.entry.loader.release()
-    second.entry.loader.release()
+    // The single cache path degenerates to the pre-task-18 lifecycle: `maximumSize(0)` evicts
+    // each entry as it loads and the removal listener releases its loader - a caller's strong
+    // references (here, the lookup results) keep the class usable to task end regardless.
+    assert(first.entry.loader.isReleased && second.entry.loader.isReleased)
+    assert(first.entry.newKernel() != null)
+    // Diagnostics record nothing while the cache is disabled.
+    assert(cache.executionsFor(first.entry.shapeHash) === Seq.empty)
+  }
+
+  test("an emitter test hook refuses the cache's emit path, unwrapped from Guava") {
+    val cache = new VarkaShapeCacheImpl(4)
+    VarkaLoopEmitter.disableCseForTesting = true
+    try {
+      // The unwrap matters as much as the refusal: Guava would wrap this in
+      // UncheckedExecutionException, which must not reach the evaluator's catch.
+      intercept[IllegalStateException] {
+        cache.getOrEmit(keyOf(chain(bits = 3, depth = 2)), "exec")
+      }
+    } finally {
+      VarkaLoopEmitter.disableCseForTesting = false
+    }
+    assert(cache.size === 0, "a refused emit must cache nothing")
+    // With the hook reset, the same shape emits and caches normally.
+    assert(!cache.getOrEmit(keyOf(chain(bits = 3, depth = 2)), "exec").hit)
+    assert(cache.size === 1)
+  }
+
+  test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {
+    val cache = new VarkaShapeCacheImpl(4)
+    val key = keyOf(chain(bits = 6, depth = 3))
+    val longIdentity = "Varka_Project_Stage1: " + ("x" * 1000)
+    cache.getOrEmit(key, longIdentity)
+    val recorded = cache.executionsFor(cache.getOrEmit(key, "short").entry.shapeHash)
+    assert(recorded.exists(_.endsWith("...")), recorded.mkString("; "))
+    assert(recorded.forall(_.length < 300), "identities must be bounded")
+    assert(recorded.contains("short"))
   }
 
   test("the side table joins a shape hash back to its recorded executions, bounded") {

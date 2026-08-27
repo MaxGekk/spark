@@ -56,7 +56,7 @@ the table too - this fork commits its losses:
 | Chain of 8 date ops, columnar consumer | 7.0x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
 | Same chains through a row consumer | 0.8x - fusion still loses there (was 0.6-0.7x) |
 | `dayofweek` | 9.2x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
-| Cold start: first run of a fresh plan shape (100K rows) | 1.9x (a fresh shape misses the class cache by design) |
+| Cold start: first run of a fresh plan shape (100K rows) | 1.7x (a fresh shape misses the class cache by design) |
 | Emit+define+load+instantiate a fused kernel vs one Janino compile | 68x cheaper (~130 us vs ~9 ms) |
 
 Regenerate with `SPARK_GENERATE_BENCHMARK_FILES=1`:

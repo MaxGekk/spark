@@ -216,6 +216,17 @@ public final class VarkaLoopEmitter {
    */
   static volatile int groupBudgetForTesting = 0;
 
+  /**
+   * Whether any of the hooks above is set. They are emit inputs the shape key deliberately
+   * does not carry - production never sets them - so the shape cache refuses to emit while
+   * one is set: a hook-affected class cached under the plain key would be served, wrong,
+   * after the hook is reset. Suites that set hooks call {@link #emit} directly instead.
+   */
+  static boolean anyTestHookSet() {
+    return misdescribeAddForTesting || disableCseForTesting || divFloorModForTesting
+        || digitSumFloorModForTesting || groupBudgetForTesting != 0;
+  }
+
   private VarkaLoopEmitter() {
   }
 

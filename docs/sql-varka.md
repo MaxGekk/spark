@@ -379,10 +379,12 @@ committed results files, which are the source of truth as the code moves):
   loop method paid the heaviest per-task warm-up (~50 ms), so removing the
   ladder moved it furthest.
 * **Cold start** (`VarkaColdStartBenchmark`, first execution of a fresh plan
-  shape over 100K rows): 1.9x - 18 ms vs 33 ms best, 23 ms vs 41 ms average.
-  A fresh shape misses the class cache by construction, so the varka side
-  still pays emission here, unchanged at 18 ms; only repeated shapes get the
-  cache's win.
+  shape over 100K rows): 1.7x - 19 ms vs 31 ms best, 25 ms vs 38 ms average.
+  A fresh shape misses the class cache, and the benchmark enforces that by
+  invalidating the cache before each timed iteration - its column-and-literal
+  freshness is invisible to the structural shape key. The varka side pays
+  emission plus the class define here, essentially the per-task era's 18 ms;
+  only repeated shapes get the cache's win.
 * **Class generation in isolation** (`VarkaCodegenBenchmark`): emitting,
   defining, loading and instantiating a fused two-output kernel takes
   ~130 us against ~9 ms for one Janino projection compile - 68x. (The

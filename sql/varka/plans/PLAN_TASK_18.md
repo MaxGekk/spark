@@ -241,3 +241,51 @@ capacity with every evicted loader weak-reference-collected.
 * Docs and README requoted from this run per the settled docs-timing
   decision; task 19 regenerates again from its own run and should expect
   the row-consumer matrix at 0.8x flat as its starting point.
+
+## 7. Ultra-review follow-up
+
+An ultra review of the PR (vecbricks/varka #46) returned ten verified
+findings against the sections above; all ten were fixed on the branch
+before merge. The ones that correct this file's own record first:
+
+* **The committed cold-start run measured hits, not cold shapes.** Section
+  6.1's 1.9x row and 6.2's "unchanged at 18 ms" were wrong about what ran:
+  `VarkaColdStartBenchmark` manufactures freshness through distinct columns
+  and literals, which the shape key ignores by design, so after this task
+  the guard query warmed the process-wide cache and every timed "cold"
+  iteration was a hit. The benchmark now invalidates the shape cache before
+  each timed iteration, and the regenerated committed file reads 1.7x -
+  19 ms vs 31 ms best, 25 ms vs 38 ms average. The genuinely cold varka
+  side is essentially the per-task era's 18 ms (this chain's emit, define
+  and ladder are small), so the mislabeling flattered nothing material -
+  but the harness's promise and the measurement now agree again. Lesson
+  recorded in `SKILLS.md`.
+* **The loader parent broke the documented `--jars` deployment.** Section
+  2.2's parent-pinning rationale missed that the emitted bytes call the
+  engine's `VarkaVectorSupport`, which in production arrives via `--jars`
+  and is visible only through the context class loader - the loader of
+  `VarkaFusedKernel` (catalyst, app classpath) cannot see it, so every task
+  would have thrown `NoClassDefFoundError` into the ghost fallback,
+  silently, while tests (engine on the test classpath) stayed green. The
+  parent is the context loader at emit time again, as the per-task loaders
+  had it; the loader stays out of the key because the bytes reference only
+  JVM-wide classes, never session-isolated user code.
+
+The rest, briefly: Guava's `get(key, callable)` wrappers (`ExecutionError`
+and friends) would have let an OOM or interrupt during emit degrade to the
+ghost fallback - `getOrEmit` unwraps to the cause before rethrowing. The
+emitter's byte-affecting test hooks are emit inputs outside the key; the
+cache now refuses to emit while one is set. The capacity conf's lazy
+`SQLConf.get` read could freeze the default in when first touched on a
+non-`SQLExecution` action; it reads `SparkEnv.get.conf` now (static confs
+travel in `SparkConf`), with `SQLConf.get` kept for env-less test JVMs.
+The side table records identities truncated to 256 chars and not at all
+when the cache is disabled (it previously retained unbounded projection
+strings JVM-wide, visible across Thrift Server sessions). The class dump
+writes once per shape and directory instead of on every task. The shape
+hash is computed on the miss path only; hits read the entry's stored hash.
+The `maxEntries = 0` escape hatch collapsed into the one Guava path -
+`maximumSize(0)` evicts each entry as it loads and the removal listener
+releases it, so the separate unshared-entry lifecycle, its `shared` flag
+and the evaluator's release listener are gone. And the never-called
+`SQLConf.varkaCacheMaxEntries` accessor was deleted.

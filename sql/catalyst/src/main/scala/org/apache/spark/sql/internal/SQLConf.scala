@@ -9005,8 +9005,6 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
 
   def varkaClassDumpDirectory: Option[String] = getConf(VARKA_CLASS_DUMP_DIRECTORY)
 
-  def varkaCacheMaxEntries: Int = getConf(StaticSQLConf.VARKA_CACHE_MAX_ENTRIES)
-
   def codegenFallback: Boolean = getConf(CODEGEN_FALLBACK)
 
   def codegenFactoryMode: CodegenObjectFactoryMode.Value = getConf(CODEGEN_FACTORY_MODE)

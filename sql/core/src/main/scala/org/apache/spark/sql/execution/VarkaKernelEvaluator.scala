@@ -457,15 +457,20 @@ private[sql] class VarkaKernelEvaluator(
    * Writes the emitted class to the configured dump directory under its `SourceFile` name
    * (task 16), so `javap -c -p` reaches a generated loop with no debugger. Diagnostics only:
    * every failure is logged and swallowed, because a query must not fail over a debug write.
-   * Every task of a shape holds identical bytes (task 18), so they overwrite one file.
+   * Every task of a shape holds identical bytes (task 18), so an existing file is already the
+   * right one and is left alone - the shape's first task with the directory configured writes
+   * it once, instead of every task re-writing it on the task-setup path. (Two first tasks can
+   * still race past the check; they write the same bytes, so the race is benign.)
    */
   private def dumpClass(sourceFile: String, bytes: Array[Byte]): Unit = {
     classDumpDirectory.foreach { directory =>
       try {
         val target = new File(directory, sourceFile.stripSuffix(".java") + ".class")
-        Files.createDirectories(target.toPath.getParent)
-        Files.write(target.toPath, bytes)
-        logInfo(s"Wrote the Varka kernel class to ${target.getAbsolutePath}")
+        if (!target.exists()) {
+          Files.createDirectories(target.toPath.getParent)
+          Files.write(target.toPath, bytes)
+          logInfo(s"Wrote the Varka kernel class to ${target.getAbsolutePath}")
+        }
       } catch {
         case NonFatal(e) =>
           logWarning(s"Could not dump the Varka kernel class to $directory; " +
@@ -512,8 +517,9 @@ private[sql] class VarkaKernelEvaluator(
    * refilled per batch - nothing is allocated per call. Since task 18 the class comes from
    * [[VarkaShapeCache]] - shared across tasks and released on cache eviction, so its C2 code
    * survives the task boundary - and only the kernel instance and these arrays are the
-   * task's own. With the cache disabled (`maxEntries` = 0) the entry is unshared and the
-   * pre-task-18 lifecycle applies: this runner's task releases the loader on completion.
+   * task's own. The cache owns the loader in every configuration: with `maxEntries` = 0 it
+   * evicts (and releases) each entry as it is loaded, and this task's strong references
+   * carry the class to task end - the pre-task-18 lifecycle through the same path.
    */
   private class FusedRunner(plan: CompiledVarkaProjection) {
     // The lookup records this execution (operator, stage, the whole projection - forwarded
@@ -527,8 +533,9 @@ private[sql] class VarkaKernelEvaluator(
     val sourceFile: String = entry.sourceFile
 
     val classBytes: Array[Byte] = {
-      // Every task of a shape dumps identical bytes, so they overwrite one file - and a hit
-      // in a session that configured the dump directory after the miss still gets its file.
+      // dumpClass writes once per shape and directory (an existing file is left alone), and
+      // runs on hit and miss alike so a session that configured the dump directory after the
+      // shape was cached still gets its file.
       dumpClass(sourceFile, entry.classBytes)
       entry.classBytes
     }
@@ -541,12 +548,6 @@ private[sql] class VarkaKernelEvaluator(
     val dstData = new Array[Long](plan.outputs.size)
     val dstValidity = new Array[Long](plan.outputs.size)
     val scalarArgs: Array[Int] = plan.literals.toArray
-
-    if (!entry.shared) {
-      TaskContext.get().addTaskCompletionListener[Unit] { _ =>
-        entry.loader.release()
-      }
-    }
   }
 }
 
