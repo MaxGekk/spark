@@ -48,16 +48,16 @@ the table too - this fork commits its losses:
 
 | Case | vs stock Spark (Janino) |
 | :--- | :--- |
-| `date_add` / `datediff`, columnar consumer | 1.8x / 2.3x |
-| Nested `datediff(date_add(d, 1), d2)` | 2.2x |
-| Two outputs sharing a subchain (DAG-CSE) | 1.8x |
-| `CASE WHEN`, unpredictable condition | 2.1x |
-| `CASE WHEN`, predictable condition | 2.0x |
-| Chain of 8 date ops, columnar consumer | 1.3x (2.2x at depth 1) |
-| Same chains through a row consumer | 0.6-0.7x - fusion loses there today |
-| `dayofweek` | 1.2x - was 0.9x until the magic-multiply mod-7 lowering (see the docs) |
-| Cold start: first run of a fresh plan shape (100K rows) | 1.5x (~9 ms saved per shape) |
-| Emit+define+load+instantiate a fused kernel vs one Janino compile | 75x cheaper (80 us vs 6 ms) |
+| `date_add` / `datediff`, columnar consumer | 3.8x / 5.2x |
+| Nested `datediff(date_add(d, 1), d2)` | 5.7x |
+| Two outputs sharing a subchain (DAG-CSE) | 5.9x |
+| `CASE WHEN`, unpredictable condition | 7.0x |
+| `CASE WHEN`, predictable condition | 6.2x |
+| Chain of 8 date ops, columnar consumer | 7.0x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
+| Same chains through a row consumer | 0.8x - fusion still loses there (was 0.6-0.7x) |
+| `dayofweek` | 9.2x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
+| Cold start: first run of a fresh plan shape (100K rows) | 1.9x (a fresh shape misses the class cache by design) |
+| Emit+define+load+instantiate a fused kernel vs one Janino compile | 68x cheaper (~130 us vs ~9 ms) |
 
 Regenerate with `SPARK_GENERATE_BENCHMARK_FILES=1`:
 
@@ -105,10 +105,11 @@ task, each with a recorded outcome:
   Class-File emitter, nested chains with DAG-CSE, predication, partial
   eligibility with zero-copy forwarding, telemetry attributes, and the
   benchmark/docs pass that produced the numbers above.
-* **Milestone 3 (next)**: *reach* - the task plan is in
+* **Milestone 3 (in progress)**: *reach* - the task plan is in
   [`sql/varka/plans/PLAN_MILESTONE_3.md`](sql/varka/plans/PLAN_MILESTONE_3.md).
-  Its spine: reuse the emitted class across tasks (the per-task JIT warm-up is
-  the measured cost, not emission), fuse date *filters* rather than only
+  Its spine: reuse the emitted class across tasks (done - task 18's shape
+  cache removed the per-task JIT warm-up and moved every committed
+  end-to-end number above), fuse date *filters* rather than only
   projections (where a corpus survey found 53-78% of real date references
   live), lower `IN` lists and `Coalesce` onto the mask algebra - Spark's own
   benchmark puts `IN` over dates at 27.4 M rows/s, its slowest primitive, and

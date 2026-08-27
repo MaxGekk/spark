@@ -110,13 +110,21 @@ the `ClassFileCodegenSupport` trait, the `VarkaClassFileGen` assembler and the
 kernel-shape interfaces - was retired in task 17, along with the
 `CodeAndComment` cache-key field it fed (`PLAN_MILESTONE_2.md` section 8).
 
-### Per-task class loader and Metaspace
+### The shape cache, class loaders and Metaspace
 
-Spark's codegen cache keeps compiled classes (and their loaders) alive under
-high query diversity, which retains Metaspace. Varka instead loads its
-generated classes into a `VarkaClassLoader` scoped to a Spark task
-and calls `release()` when the task completes. Once the loader becomes
-unreachable, the JVM unloads its classes and frees Metaspace. A registry +
+Task 14 measured the cost of the original per-task lifecycle: every task
+defined a fresh class, so HotSpot re-ran the whole tier ladder - interpreter,
+C1 with boxed vectors, C2 OSR - a fixed 13-50 ms per task that emission (~80
+us) never was. Since task 18 the loaded class is shared instead:
+`VarkaShapeCache` is a JVM-wide LRU keyed on the kernel's structural shape -
+the IR (whose literal slots carry indices, never values), the input count and
+the literal count, exactly the inputs the emitted bytes are a function of -
+so tasks and sessions computing the same shape reuse one class, C2 code and
+all. Each class lives in its own `VarkaClassLoader`, `release()`d when the
+cache evicts it; once the last running task drops its reference the JVM
+unloads the class, so Metaspace is bounded by the cache capacity rather than
+by churn (Spark's codegen cache never releases a loader) or by task lifetime
+(the pre-task-18 contract, still available at capacity 0). A registry +
 `findClass` mirror Spark's `InMemoryClassLoader`.
 
 ### Null semantics and predication
@@ -145,23 +153,29 @@ is the normative statement of the rules. In brief:
 
 ### Telemetry and debuggability
 
-Every emitted class is self-describing (task 13): a `SourceFile` attribute
-named for the operator and stage (`Varka_Project_Stage3.java`), so stack
-traces, profilers and heap dumps name the plan node with no mapping table,
-and a `VarkaDebugInfo` custom attribute carrying the vector IR and the plan
-fragment it was compiled from. Task 16 extends that to the questions the
+Every emitted class is self-describing (task 13, reconciled with sharing in
+task 18): a `SourceFile` attribute named for the shape
+(`VarkaFusedProjection_<hash>.java`, 16 hex chars of the shape's SHA-256), so
+stack traces, profilers and heap dumps name the kernel with no mapping table,
+and a `VarkaDebugInfo` custom attribute carrying the vector IR and the shape
+identity. The class is shared across tasks, so the per-execution identity -
+operator, stage, the projection list - is not in the bytes: the cache records
+it per lookup in a bounded side table, and
+`VarkaShapeCache.executionsFor(hash)` joins a shape name seen in a profile
+back to the plan nodes that ran it. Task 16 extends that to the questions the
 attributes alone did not answer:
 
 * **Bytecode maps back to IR nodes.** The class carries a `LineNumberTable`
   whose line `n` is the `n`-th IR node in topological order, and
   `VarkaDebugInfo` records the decoding key (`<line>=<node>` per line). A
-  stack frame reading `Varka_Project_Stage3.java:7` therefore names the node
+  stack frame reading `VarkaFusedProjection_<hash>.java:7` therefore names the node
   that threw, not merely the method - and profilers and crash logs inherit
   the same resolution for free.
 * **Fallbacks name their kernel.** Every warning on the ghost-fallback path -
   emission failure and per-batch kernel failure, in both exec nodes - carries
-  the kernel's `SourceFile` name and the IR it computes, so a log line
-  identifies the plan node without correlating timestamps.
+  the kernel's `SourceFile` name, the IR it computes and the operator/stage it
+  served, so a log line identifies the plan node without correlating
+  timestamps.
 * **The class reaches disk.** `spark.sql.codegen.varka.classDumpDirectory`
   writes each emitted class under its `SourceFile` name, so `javap -c -p`
   disassembles a generated loop with no debugger attached. Diagnostics only:
@@ -210,9 +224,13 @@ Per task and Arrow-supported batch:
 1. Bind the projection and compile it with `VarkaExpressionCompiler` into
    fused entries (the IR), forwarded entries (bare input columns, passed
    through zero-copy) and residual entries (everything else).
-2. Emit the fused-kernel class once per task, lazily, into a per-task loader
-   (`VarkaGeneratedClassLoader`); the literals travel as runtime arguments,
-   so one class serves every batch of the task.
+2. Look the fused shape up, lazily, in the JVM-wide class cache
+   (`VarkaShapeCache`, task 18): a miss emits and defines the class - named
+   by its shape hash - in its own `VarkaGeneratedClassLoader`, and every
+   task (or session) computing the same shape reuses the loaded class, C2
+   code and all, skipping the fixed per-task JIT warm-up. The literals never
+   enter the shape, they travel as runtime arguments - so one class serves
+   every batch of every task of the shape.
 3. Guard per batch that every referenced column is an `ArrowColumnVector`
    backed by a `DateDayVector`; otherwise the batch takes the per-row path.
 4. Run the kernel: one vector loop writes every fused output into freshly
@@ -221,9 +239,12 @@ Per task and Arrow-supported batch:
    row-consumer node (the escape hatch task 12 measured both ways), into a
    writable batch on the columnar one.
 5. Track `numVarkaBatches`, which only counts batches where the kernels
-   succeeded, and release the per-task loader on task completion. The Janino
-   fallback projection is compiled lazily, only if a batch actually needs it
-   (task 15).
+   succeeded, and the class-cache hit/miss per task. A class's loader is
+   released when the bounded cache
+   (`spark.sql.codegen.varka.cache.maxEntries`, default 100) evicts it, so
+   Metaspace is bounded by cache capacity; running tasks keep their instance
+   until they finish. The Janino fallback projection is compiled lazily,
+   only if a batch actually needs it (task 15).
 
 Neither node is `CodegenSupport`; whole-stage codegen splits at the boundary
 with the columnar producer. They depend on the engine only by kernel
@@ -254,7 +275,8 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
   `DateAdd.eval` and the kernels implement; Spark's end-to-end row engine adds a
   calendar-day rebase for out-of-range `DATE` results.
 * **No unused configuration.** Every `spark.sql.codegen.varka.*` entry must be
-  consumed. Today only `spark.sql.codegen.varka.enabled` exists.
+  consumed. Today `enabled`, `classDumpDirectory` and `cache.maxEntries`
+  exist, and each is read on the execution path that documents it.
 
 ## Module and file layout
 
@@ -267,12 +289,13 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
 
 ## Configuration
 
-Both Varka configurations are internal:
+All Varka configurations are internal:
 
 | Config | Default | Description |
 | :--- | :--- | :--- |
 | `spark.sql.codegen.varka.enabled` | `false` | When true, an eligible projection (at least one fusable entry) over Arrow `DateDayVector` columns runs the fused SIMD kernel instead of per-row codegen - as `VarkaProjectExec` where the consumer takes batches, and as `VarkaColumnarToRowExec` where it wants rows; ineligible entries run the row path per row and merge, and non-Arrow batches fall back entirely. |
-| `spark.sql.codegen.varka.classDumpDirectory` | (none) | Diagnostics (task 16). When set, every emitted kernel class is written to this directory under its `SourceFile` name, for `javap`. A failed write is logged and never fails the query; tasks of one stage emit identical bytes and overwrite one file. |
+| `spark.sql.codegen.varka.classDumpDirectory` | (none) | Diagnostics (task 16). When set, every emitted kernel class is written to this directory under its `SourceFile` name, for `javap`. A failed write is logged and never fails the query; every task of a shape holds identical bytes and overwrites one file. |
+| `spark.sql.codegen.varka.cache.maxEntries` | `100` | Static (task 18). Capacity of the JVM-wide cache of loaded fused-kernel classes, keyed on the kernel's structural shape; the least recently used class is released on eviction, bounding Metaspace by this size. `0` restores the per-task emit-and-unload lifecycle. |
 
 The rule is registered on every `SparkSession` but does nothing while the
 config is off, so enabling the config is all that is needed:
@@ -309,63 +332,62 @@ exist.
 * **sql/core tests** (`VarkaColumnarToRowExecSuite`, `VarkaProjectExecSuite`,
   `VarkaColumnarWriteSuite`, `VarkaEndToEndSuite`,
   `VarkaDifferentialSuite`, `VarkaAutoRegistrationSuite`) prove plan fusion,
-  `checkAnswer` equality over a query matrix, `numVarkaBatches > 0` on fused
-  plans, Metaspace bounds, and config-driven activation.
-* **Metaspace proof** (`VarkaGeneratedClassLoaderSuite`) verifies with weak
-  references that a released loader is collected and that a batch of 1000
-  loaders is fully collected.
+  `checkAnswer` equality over a query matrix - re-run warm so a cache hit is
+  differentially checked too - `numVarkaBatches > 0` on fused plans,
+  Metaspace bounds, and config-driven activation.
+* **Metaspace proof** (`VarkaGeneratedClassLoaderSuite`,
+  `VarkaShapeCacheSuite`) verifies with weak references that a released
+  loader is collected, that a batch of 1000 loaders is fully collected, and -
+  since task 18 - that a 10k-distinct-shape stress stays at cache capacity
+  with every evicted loader collected.
 
-Benchmark highlights from the task 14 committed runs (AMD Ryzen AI 9 HX PRO
-370, JDK 25, Linux, machine otherwise idle; every number below is the best of
-at least five two-second-windowed iterations and lives in the committed
-results files, which are the source of truth as the code moves):
+Benchmark highlights from the task 18 committed runs - the first with the
+cross-task class cache, which moved every end-to-end number (AMD Ryzen AI 9
+HX PRO 370, JDK 25, Linux, machine otherwise idle; every number below is the
+best of at least five two-second-windowed iterations and lives in the
+committed results files, which are the source of truth as the code moves):
 
 * **End-to-end columnar throughput** over 2M Arrow-cached rows
-  (`VarkaThroughputBenchmark`): 1.7-2.3x Janino for single ops
-  (`date_add` 1.8x, `datediff` 2.3x), 2.2x for the nested
-  `datediff(date_add(d, 1), d2)`, 1.8x for the two-output shared subchain,
-  1.7x for a mixed projection where only one entry fuses.
-* **`CASE WHEN` by mask blend**: 2.1x on data where the condition flips
-  pseudo-randomly, 2.0x where it is perfectly predictable. The varka side
-  costs the same on both (branch-free execution is data-oblivious, 27 ms in
-  every committed run); the gap is Janino's branch misprediction, ~12% of
-  its runtime on this shape.
+  (`VarkaThroughputBenchmark`): 3.8-5.9x Janino for single ops and small
+  trees (`date_add` 3.8x, `datediff` 5.2x, the nested
+  `datediff(date_add(d, 1), d2)` 5.7x, the two-output shared subchain 5.9x),
+  2.5x for a mixed projection where only one entry fuses. Before the class
+  cache these read 1.7-2.3x: the per-task JIT warm-up was most of the gap
+  between the buffer-level kernels and the end-to-end numbers.
+* **`CASE WHEN` by mask blend**: 7.0x on data where the condition flips
+  pseudo-randomly, 6.2x where it is perfectly predictable. The varka side
+  costs the same on both (branch-free execution is data-oblivious, 8 ms best
+  in both committed cases); the gap is Janino's branch misprediction on the
+  unpredictable data.
 * **Chain depth** (alternating `date_add`/`date_sub`, columnar consumer):
-  2.2x at depth 1 falling to 1.3x at depth 8. The relative *shrinks* with
-  depth - the opposite of the pre-run prediction - for two diagnosed
-  reasons (`PLAN_TASK_14.md` 7.5): Janino's cost is flat in depth (eight
-  dependent int adds hide entirely behind its per-row overhead at
-  ~21 ns/row), and the varka side pays a *fixed per-task* JIT warm-up that
-  grows with the loop method's op count - each task defines a fresh kernel
-  class, so HotSpot re-runs the tier ladder every task, while at buffer
-  level depth 8 runs within 10% of depth 1. Fusion's end-to-end win at this
-  task size is batch-versus-per-row overhead; class reuse across tasks
-  (milestone 3's cache item) is the identified fix for the erosion.
+  6.5-7.2x, *flat* from depth 1 to depth 8. Task 14 committed this curve as
+  2.2x eroding to 1.3x and diagnosed the erosion as the fixed per-task JIT
+  warm-up that grew with the loop method's op count (`PLAN_TASK_14.md` 7.5);
+  task 18's cross-task class cache removed exactly that term - every task
+  now runs the C2-compiled loop from its first row - and the end-to-end
+  curve became what the buffer-level numbers always predicted (depth 8
+  within 10% of depth 1).
 * **The row-consumer cost, stated plainly**: through `toRdd` the same chains
-  measure 0.6-0.7x at every depth - there is no break-even depth. The
-  ~16 ns/row read-back of the assembled batch genuinely keeps row consumers
-  under 1.0x, and the per-task warm-up erodes deeper chains further within
-  that band. Fusing row-consumer projections of this shape is currently
-  unprofitable at any depth (`PLAN_MILESTONE_3.md` carries the
-  profitability question).
-* **`dayofweek`**: 1.2x. This case shipped as the honest loss of the
-  original task 14 run (0.9x): C2 scalar-replaces the stock path's
-  `LocalDate` allocation, and the old six-fold digit sum's ~20-op loop
-  method paid a heavy per-task JIT warm-up (`PLAN_TASK_14.md` 7.5 has the
-  diagnosis). The follow-up (7.7) replaced the mod-7 lowering with two
-  folds plus an exact magic multiply - 1.7-2.3x the digit sum at buffer
-  level, ~58x the per-row `LocalDate` loop, and a ~10-op-smaller method
-  whose shorter warm-up flipped the committed query-level number.
+  measure 0.8x at every depth - flat now that the warm-up is gone (task 14
+  committed 0.6-0.7x falling with depth), but still under 1.0x: the
+  ~16 ns/row read-back of the assembled batch is what fusion cannot buy back
+  on this shape. There is no break-even depth; task 19 decides the
+  profitability rule on these numbers.
+* **`dayofweek`**: 9.2x - 7 ms against Janino's 64 ms, the largest committed
+  win. This case shipped as the honest loss of the original task 14 run
+  (0.9x, the magic-multiply lowering of 7.7 took it to 1.2x): its ~12-op
+  loop method paid the heaviest per-task warm-up (~50 ms), so removing the
+  ladder moved it furthest.
 * **Cold start** (`VarkaColdStartBenchmark`, first execution of a fresh plan
-  shape over 100K rows): 1.5x - 18 ms vs 27 ms best, 22 ms vs 36 ms average -
-  about 9-14 ms saved per fresh query shape. Visible, but far from the
-  isolated generation-time ratio, because the scan and the execution
-  framework spend the same time on both sides.
+  shape over 100K rows): 1.9x - 18 ms vs 33 ms best, 23 ms vs 41 ms average.
+  A fresh shape misses the class cache by construction, so the varka side
+  still pays emission here, unchanged at 18 ms; only repeated shapes get the
+  cache's win.
 * **Class generation in isolation** (`VarkaCodegenBenchmark`): emitting,
-  defining, loading and instantiating a fused two-output kernel takes ~80 us
-  against ~6 ms for one Janino projection compile - 75x. (The milestone-1
-  single-op dispatcher case that used to sit beside it, at ~420x, went with the
-  dispatchers in task 17.)
+  defining, loading and instantiating a fused two-output kernel takes
+  ~130 us against ~9 ms for one Janino projection compile - 68x. (The
+  milestone-1 single-op dispatcher case that used to sit beside it, at
+  ~420x, went with the dispatchers in task 17.)
 
 ## Deployment and requirements
 
@@ -389,11 +411,12 @@ The real current edges, stated with their numbers where they have one:
   integer `Add` over a `datediff` result is not a date expression, and ANSI
   overflow cannot throw row-accurately from a SIMD lane, so such entries stay
   residual.
-* **The row-consumer read-back costs more than fusion saves**: 0.6-0.7x at
+* **The row-consumer read-back costs more than fusion saves**: 0.8x at
   every measured chain depth (committed in
-  `VarkaThroughputBenchmark`). Varka currently pays off on columnar
+  `VarkaThroughputBenchmark`; 0.6-0.7x before the class cache flattened the
+  curve). Varka currently pays off on columnar
   consumers; whether the rule should decline row-consumer fusions is
-  milestone 3's profitability item.
+  milestone 3's profitability item, task 19.
 * **Vectorized Parquet falls back**: `OnHeap`/`OffHeapColumnVector` batches
   are not Arrow. The Arrow cache serializer is the production source of
   eligible batches.

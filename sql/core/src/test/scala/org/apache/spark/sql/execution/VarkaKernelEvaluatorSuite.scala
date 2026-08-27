@@ -23,7 +23,7 @@ import java.nio.file.Files
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, DateAdd, LessThan, Literal, NamedExpression}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDebugInfoReader
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaShapeCache}
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.{DateType, IntegerType}
 import org.apache.spark.sql.util.ArrowUtils
@@ -167,21 +167,27 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("the emitted class carries the task 13 telemetry, read back off the bytes that ran") {
+  test("the emitted class carries shape-level telemetry, joined back to this execution") {
     withTask { (input, completeTask) =>
       val kernels = evaluator()
       kernels.release(kernels.project(input))
       val bytes = kernels.emittedClassBytes.get
-      // The custom attribute through the diagnostics reader: the fused IR, and the whole
-      // projection as the plan fragment - the residual entry included, since the point is the
-      // fused entries in their context.
+      // The custom attribute through the diagnostics reader: the bytes describe the shape
+      // (task 18) - the fused IR, the shape-hash SourceFile, `shape <hash>` as the plan
+      // fragment - because the class is shared and must not replay one execution's identity
+      // for another.
       assert(VarkaDebugInfoReader.ir(bytes).contains("AddDays"))
-      val fragment = VarkaDebugInfoReader.planFragment(bytes)
-      assert(fragment.contains("date_add"))
-      assert(fragment.contains("inc"))
-      // The SourceFile attribute names the operator and this task's stage.
-      assert(VarkaDebugInfoReader.sourceFile(bytes) ===
-        s"Varka_Test_Stage${TaskContext.get().stageId()}.java")
+      val sourceFile = VarkaDebugInfoReader.sourceFile(bytes)
+      assert(sourceFile.matches("VarkaFusedProjection_[0-9a-f]{16}\\.java"), sourceFile)
+      val hash = sourceFile.stripPrefix("VarkaFusedProjection_").stripSuffix(".java")
+      assert(VarkaDebugInfoReader.planFragment(bytes) === s"shape $hash")
+      // The per-execution identity - operator, stage, and the whole projection with the
+      // residual entry included - lives in the cache's side table, joined by the hash.
+      val executions = VarkaShapeCache.executionsFor(hash)
+      assert(executions.exists { e =>
+        e.startsWith(s"Varka_Test_Stage${TaskContext.get().stageId()}") &&
+          e.contains("date_add") && e.contains("inc")
+      }, s"side table misses this execution: ${executions.mkString("; ")}")
       completeTask()
     }
   }
@@ -192,7 +198,10 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
         val kernels = evaluator(classDumpDirectory = Some(dumpDir.getAbsolutePath))
         kernels.release(kernels.project(input))
         val bytes = kernels.emittedClassBytes.get
-        val dumped = new File(dumpDir, s"Varka_Test_Stage${TaskContext.get().stageId()}.class")
+        // Shape-named since task 18; the dump happens on hit and miss alike, so a session
+        // that configured the directory after the shape was cached still gets its file.
+        val sourceFile = VarkaDebugInfoReader.sourceFile(bytes)
+        val dumped = new File(dumpDir, sourceFile.stripSuffix(".java") + ".class")
         assert(dumped.exists(), s"no class dumped into $dumpDir")
         // Byte-identical to what ran, and still a class the reader can parse - which is what
         // makes `javap` on it worth anything.

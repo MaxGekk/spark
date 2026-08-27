@@ -83,7 +83,11 @@ case class VarkaColumnarToRowExec(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
     "numInputBatches" -> SQLMetrics.createMetric(sparkContext, "number of input batches"),
     "numVarkaBatches" -> SQLMetrics.createMetric(
-      sparkContext, "number of input batches processed by the Varka SIMD kernels"))
+      sparkContext, "number of input batches processed by the Varka SIMD kernels"),
+    "numVarkaCacheHits" -> SQLMetrics.createMetric(
+      sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
+    "numVarkaCacheMisses" -> SQLMetrics.createMetric(
+      sparkContext, "number of tasks that emitted and defined the Varka kernel class"))
 
   // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -105,7 +109,9 @@ case class VarkaColumnarToRowExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      longMetric("numVarkaBatches"))
+      longMetric("numVarkaBatches"),
+      longMetric("numVarkaCacheHits"),
+      longMetric("numVarkaCacheMisses"))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -139,7 +145,9 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
-    numVarkaBatches: SQLMetric)
+    numVarkaBatches: SQLMetric,
+    numVarkaCacheHits: SQLMetric,
+    numVarkaCacheMisses: SQLMetric)
     extends PartitionEvaluatorFactory[ColumnarBatch, InternalRow] with Logging {
 
   override def createEvaluator(): PartitionEvaluator[ColumnarBatch, InternalRow] = {
@@ -170,7 +178,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
 
     private val kernels = new VarkaKernelEvaluator(
       projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "ProjectToRow",
-      classDumpDirectory)
+      classDumpDirectory, Some(numVarkaCacheHits), Some(numVarkaCacheMisses))
 
     // Merge-at-row (task 12, 2.3): for a projection with forwarded or residual entries the
     // kernels produce only the fused columns, and this projection - over the input row joined

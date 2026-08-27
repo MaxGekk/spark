@@ -220,7 +220,10 @@ apparent small wins turned out to be noise.
   cross-task cache: caching `byte[]` does not help - a re-defined class is a new
   class and re-pays the ladder; only reusing the *loaded class* preserves the C2
   code. And benchmark tasks must be long enough to amortise the ladder, or the
-  committed number prices JIT warm-up, not the kernel.
+  committed number prices JIT warm-up, not the kernel. Task 18 acted on the
+  corollary - `VarkaShapeCache` shares the loaded class across tasks, keyed on
+  the IR shape - and the committed depth curve flattened from 2.2x-eroding-to-1.3x
+  into 6.5-7.2x flat, confirming the ladder was the whole erosion.
 
 ## Vector API on HotSpot, Measured (JDK 25, x86-64)
 

@@ -58,10 +58,12 @@ import java.util.Optional;
  * {@link VarkaDebugInfoReader}, which adds the {@code SourceFile} accessor and keeps all
  * class-file parsing on the Java side.
  *
- * <p>Milestone 3's cross-task byte cache must reconcile with this attribute (and with the
- * emitted {@code SourceFile} name): cached bytes would replay another query's telemetry
- * verbatim. That reconciliation is part of the cache's design, recorded in
- * {@code PLAN_MILESTONE_3.md}, not something this class anticipates.
+ * <p>Task 18's cross-task class cache reconciled this attribute (and the emitted
+ * {@code SourceFile} name) with sharing: the bytes now describe the <i>shape</i> - the class
+ * is named by its shape hash, the plan-fragment field carries {@code shape <hash>} - and the
+ * per-execution identity (operator, stage, projection list) lives in
+ * {@code VarkaShapeCache}'s side table, joined by that hash. The byte format here did not
+ * change; only what the caller passes did.
  */
 public final class VarkaDebugInfo {
 
@@ -93,8 +95,9 @@ public final class VarkaDebugInfo {
 
   /**
    * The {@code LineNumberTable}'s decoding key (task 16): one {@code <line>=<node>} entry per
-   * distinct IR node, newline separated, so a frame at {@code Varka_Project_Stage3.java:7}
-   * resolves to the node the emitter attributed that line to. Empty for a class emitted with
+   * distinct IR node, newline separated, so a frame at
+   * {@code VarkaFusedProjection_<hash>.java:7} resolves to the node the emitter attributed
+   * that line to. Empty for a class emitted with
    * no nodes to map.
    */
   public String lineMap() {

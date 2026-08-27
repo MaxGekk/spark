@@ -22,7 +22,6 @@ import java.lang.foreign.MemorySegment
 import java.nio.file.Files
 
 import scala.collection.mutable
-import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.arrow.memory.{ArrowBuf, BufferAllocator}
@@ -31,26 +30,30 @@ import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntVector, 
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, UnsafeProjection}
-import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler, VarkaGeneratedClassLoader}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFusedKernel, VarkaLoopEmitter}
+import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFusedKernel, VarkaShapeCache, VarkaShapeKey}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
+import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.{DateType, IntegerType, StructType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
-import org.apache.spark.util.Utils
 
 /**
  * The kernel half of the Varka projection, for one partition: it turns an input `ColumnarBatch`
  * into a batch of the projection's output, and owns everything that costs a task to set up - the
- * compiled IR, the emitted fused-loop class, the Arrow allocator and the batches handed out.
+ * compiled IR, the fused-loop kernel instance, the Arrow allocator and the batches handed out.
  *
  * Since task 10 the compute is one [[VarkaFusedKernel]] emitted by
- * [[VarkaLoopEmitter]] for the whole projection - every output computed in a single pass with
+ * `VarkaLoopEmitter` for the whole projection - every output computed in a single pass with
  * intermediates in vector registers - instead of one dispatcher call per output op. The
  * projection is compiled to IR by [[VarkaExpressionCompiler]], the same call
  * `VarkaColumnarRule` decided eligibility with, so the plan the rule fused is by construction a
- * plan this evaluator serves.
+ * plan this evaluator serves. Since task 18 the emitted ''class'' is not per-task state: it
+ * comes from [[VarkaShapeCache]], the JVM-wide cache keyed on the kernel's structural shape,
+ * so tasks (and sessions) computing the same shape share one loaded class and skip its
+ * per-task JIT warm-up - the fixed 13-50 ms `PLAN_TASK_14.md` 7.5 diagnosed. Only the kernel
+ * ''instance'' and its argument arrays stay per-task.
  *
  * Since task 12 eligibility is partial and the output batch is assembled column by column in
  * projection order: fused entries come from the kernel's freshly allocated Arrow vectors,
@@ -72,31 +75,35 @@ import org.apache.spark.util.Utils
  * nodes' iterators already obeyed this order for memory reasons; with forwarding it is
  * load-bearing for correctness.
  *
- * '''Telemetry''' (task 13). The emitted class names its `SourceFile` after the operator and
- * stage (`Varka_<operatorName>_Stage<n>.java`), so a stack trace through the generated `run`
- * identifies the plan node, and carries a `VarkaDebugInfo` attribute holding the vector IR and
- * this projection's expression list - the emitted bytes are self-describing, and they are kept
- * for the task's lifetime behind [[emittedClassBytes]] so diagnostics can read the attributes
- * back off exactly what ran.
- *
- * Task 16 extends that telemetry outward: the emitted class also carries a `LineNumberTable`
- * whose lines are IR nodes, every fallback this class logs names the kernel it gave up on
- * ([[kernelIdentity]]), and `spark.sql.codegen.varka.classDumpDirectory` writes the emitted
- * bytes to disk under the same `SourceFile` name, so `javap` reaches a generated loop with no
- * debugger attached.
+ * '''Telemetry''' (tasks 13 and 16, reconciled with the shared class in task 18). The emitted
+ * class is named by its shape (`VarkaFusedProjection_<hash>`, `SourceFile` to match), and its
+ * `VarkaDebugInfo` attribute and `LineNumberTable` describe the shape - the vector IR, the
+ * line-to-node map - because the bytes are shared and must not replay one query's identity for
+ * another. The per-execution identity that used to ride the bytes (operator, stage, this
+ * projection's expression list) is recorded in [[VarkaShapeCache]]'s side table on every
+ * lookup, keyed by the shape hash, and every fallback this class logs still names both halves
+ * ([[kernelIdentity]]: the shape name, the IR, and the operator/stage). The bytes are kept
+ * behind [[emittedClassBytes]] so diagnostics read the attributes off exactly what ran, and
+ * `spark.sql.codegen.varka.classDumpDirectory` writes them to disk under the `SourceFile`
+ * name, so `javap` reaches a generated loop with no debugger attached.
  *
  * One instance per partition, created inside the task: it registers a task-completion listener
  * on first use, and its state must not be shared across partitions (see [[SafeForKWayMerge]]).
  *
  * @param operatorName the exec node this evaluator serves, for the telemetry names above.
  * @param classDumpDirectory where to write each emitted class, or None to write none.
+ * @param cacheHitMetric incremented once per task whose kernel class came from the cache,
+ *                       when the exec node passes its metric down; None outside an exec node.
+ * @param cacheMissMetric the same for a task that had to emit and define the class.
  */
 private[sql] class VarkaKernelEvaluator(
     projectList: Seq[NamedExpression],
     childOutput: Seq[Attribute],
     offHeapColumnVectorEnabled: Boolean,
     operatorName: String,
-    classDumpDirectory: Option[String] = None)
+    classDumpDirectory: Option[String] = None,
+    cacheHitMetric: Option[SQLMetric] = None,
+    cacheMissMetric: Option[SQLMetric] = None)
     extends Logging {
 
   // The projection classified entry by entry and its fused sub-projection compiled to vector
@@ -159,24 +166,34 @@ private[sql] class VarkaKernelEvaluator(
   private[execution] def partialPlan: Option[PartialVarkaProjection] = compiled
 
   /**
-   * The `SourceFile` name the emitted class carries: the operator and this task's stage, the
-   * identity available at emission time. Outside a task (diagnostics, tests) the stage reads
-   * as -1 rather than throwing.
+   * This execution's identity - the operator and this task's stage - which since task 18 goes
+   * to [[VarkaShapeCache]]'s side table rather than into the shared class bytes. Outside a
+   * task (diagnostics, tests) the stage reads as -1 rather than throwing.
    */
-  private def sourceFileName: String = {
+  private def executionName: String = {
     val stage = Option(TaskContext.get()).map(_.stageId()).getOrElse(-1)
-    s"Varka_${operatorName}_Stage$stage.java"
+    s"Varka_${operatorName}_Stage$stage"
   }
 
+  /** The cache key of the fused sub-projection: exactly the emitter inputs the bytes follow. */
+  private def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
+    VarkaShapeKey(plan.outputs, plan.inputOrdinals.size, plan.literals.size)
+
   /**
-   * The kernel named the way its telemetry names it (task 16): the `SourceFile` of the emitted
-   * class and the IR it computes. Every fallback warning - here and in both exec nodes - says
-   * which kernel it gave up on, so a log line identifies the plan node without correlation.
-   * Reading it forces no emission.
+   * The kernel named the way its telemetry names it (task 16, shape-based since task 18): the
+   * `SourceFile` of the shared class, the IR it computes, and this execution's operator and
+   * stage. Every fallback warning - here and in both exec nodes - says which kernel it gave up
+   * on, so a log line identifies both the class and the plan node without correlation.
+   * Reading it forces no emission: the shape hash is computed from the IR, not the bytes.
    */
   private[execution] def kernelIdentity: String = {
-    val ir = compiled.map(_.fused.outputs.mkString(", ")).getOrElse("no compiled projection")
-    s"$sourceFileName [$ir]"
+    compiled match {
+      case Some(partial) =>
+        val ir = partial.fused.outputs.mkString(", ")
+        val hash = VarkaShapeCache.shapeHash(shapeKey(partial.fused))
+        s"VarkaFusedProjection_$hash.java [$ir] ($executionName)"
+      case None => s"[no compiled projection] ($executionName)"
+    }
   }
 
   /**
@@ -440,7 +457,7 @@ private[sql] class VarkaKernelEvaluator(
    * Writes the emitted class to the configured dump directory under its `SourceFile` name
    * (task 16), so `javap -c -p` reaches a generated loop with no debugger. Diagnostics only:
    * every failure is logged and swallowed, because a query must not fail over a debug write.
-   * Tasks of one stage emit identical bytes for one projection, so they overwrite one file.
+   * Every task of a shape holds identical bytes (task 18), so they overwrite one file.
    */
   private def dumpClass(sourceFile: String, bytes: Array[Byte]): Unit = {
     classDumpDirectory.foreach { directory =>
@@ -491,32 +508,32 @@ private[sql] class VarkaKernelEvaluator(
   }
 
   /**
-   * The emitted fused loop of one task, plus the `run` argument arrays, allocated once here and
-   * refilled per batch - nothing is allocated per call. The class behind the kernel lives for
-   * the task: the loader is released on completion so it unloads from Metaspace, exactly as the
-   * per-op dispatcher classes did before task 10.
+   * The fused loop serving one task, plus the `run` argument arrays, allocated once here and
+   * refilled per batch - nothing is allocated per call. Since task 18 the class comes from
+   * [[VarkaShapeCache]] - shared across tasks and released on cache eviction, so its C2 code
+   * survives the task boundary - and only the kernel instance and these arrays are the
+   * task's own. With the cache disabled (`maxEntries` = 0) the entry is unshared and the
+   * pre-task-18 lifecycle applies: this runner's task releases the loader on completion.
    */
   private class FusedRunner(plan: CompiledVarkaProjection) {
-    private val loader = new VarkaGeneratedClassLoader(Utils.getContextOrSparkClassLoader)
-    private val className = "org.apache.spark.sql.varka.execution.VarkaFusedProjection"
+    // The lookup records this execution (operator, stage, the whole projection - forwarded
+    // and residual entries included) in the cache's side table, so the shape-named class
+    // joins back to the plan nodes that ran it.
+    private val lookup =
+      VarkaShapeCache.getOrEmit(shapeKey(plan), s"$executionName: ${projectList.mkString(", ")}")
+    private val entry = lookup.entry
+    (if (lookup.hit) cacheHitMetric else cacheMissMetric).foreach(_ += 1)
 
-    // Task 13 telemetry, threaded into the emitted bytes: the SourceFile names the operator
-    // and this task's stage (the identity available at emission - the runner is built inside
-    // the task), and the debug attribute carries the whole projection - forwarded and residual
-    // entries included, so a captured class shows the fused entries in their context.
-    val sourceFile: String = sourceFileName
+    val sourceFile: String = entry.sourceFile
 
     val classBytes: Array[Byte] = {
-      val bytes = VarkaLoopEmitter.emit(className, plan.outputs.asJava,
-        plan.inputOrdinals.size, plan.literals.size, sourceFile, projectList.mkString(", "))
-      dumpClass(sourceFile, bytes)
-      bytes
+      // Every task of a shape dumps identical bytes, so they overwrite one file - and a hit
+      // in a session that configured the dump directory after the miss still gets its file.
+      dumpClass(sourceFile, entry.classBytes)
+      entry.classBytes
     }
 
-    val kernel: VarkaFusedKernel = {
-      loader.defineGeneratedClass(className, classBytes)
-      loader.loadClass(className).getConstructor().newInstance().asInstanceOf[VarkaFusedKernel]
-    }
+    val kernel: VarkaFusedKernel = entry.newKernel()
 
     val srcData = new Array[Long](plan.inputOrdinals.size)
     val srcValidity = new Array[Long](plan.inputOrdinals.size)
@@ -525,8 +542,10 @@ private[sql] class VarkaKernelEvaluator(
     val dstValidity = new Array[Long](plan.outputs.size)
     val scalarArgs: Array[Int] = plan.literals.toArray
 
-    TaskContext.get().addTaskCompletionListener[Unit] { _ =>
-      loader.release()
+    if (!entry.shared) {
+      TaskContext.get().addTaskCompletionListener[Unit] { _ =>
+        entry.loader.release()
+      }
     }
   }
 }

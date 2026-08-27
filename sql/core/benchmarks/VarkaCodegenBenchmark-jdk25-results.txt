@@ -2,11 +2,11 @@
 Varka per-op class generation (Gen-time)
 ================================================================================================
 
-OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-29-generic
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 class generation time:                           Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------
-janino: GenerateUnsafeProjection.generate                    9             10           1          0.0     8977370.0       1.0X
-varka: fused emit + define + load + instantiate              0              0           0          0.0      115797.0      77.5X
+janino: GenerateUnsafeProjection.generate                    9             10           2          0.0     8708588.0       1.0X
+varka: fused emit + define + load + instantiate              0              0           0          0.0      128030.0      68.0X
 
 

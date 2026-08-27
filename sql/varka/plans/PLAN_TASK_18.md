@@ -1,0 +1,243 @@
+# Task 18: cross-task class reuse
+
+**Status: DONE** - the outcome is section 6. The plan below is as written
+before the work; where it deviated, section 6 says so.
+
+## 1. Why
+
+Every Varka task today emits and defines a fresh `VarkaFusedProjection` class,
+so HotSpot re-runs the whole tier ladder per task - interpreter, C1 with boxed
+vectors, C2 OSR - a fixed 13-50 ms per task that grows with the loop method's
+op count (`PLAN_TASK_14.md` 7.5). It is the dominant term behind the committed
+depth-curve erosion (2.2x at depth 1 down to 1.3x at depth 8 in
+`VarkaThroughputBenchmark`) and most of what `dayofweek` still pays after the
+magic-multiply lowering. Task 14 also proved the fix cannot be a byte cache: a
+re-defined class is a new class to the JVM and re-pays the ladder, so only
+reusing the **loaded class** amortises it. This task is `PLAN_MILESTONE_3.md`
+2.1, and its numbers gate is stated there: the committed `dayofweek` and
+depth-8 columnar cases lose the per-task surcharge (depth 8 back above 2x),
+and a 10k-distinct-shape stress keeps Metaspace bounded with eviction proven
+by weak reference.
+
+Two questions the milestone left open are settled here with the project owner:
+
+* **Cache scope** (milestone open question 1): per-JVM, executor-wide. The
+  shape key is purely structural - IR records, input count, literal count - so
+  it carries no session state and cross-session sharing is safe by
+  construction; Janino's codegen cache is the precedent.
+* **Docs timing**: this task regenerates the affected committed results files
+  (its gate needs them) and requotes the docs from that same run, per the
+  one-run discipline; task 19 regenerates again from its own run. The
+  milestone's "once 18 and 19 land" reading loses to "docs never contradict
+  committed files".
+
+## 2. Design
+
+### 2.1 The key: exactly the byte-affecting emit inputs
+
+The emitted bytes are a pure function of `(outputs, numInputs, numLiterals)` -
+the first four parameters of `VarkaLoopEmitter.emit` minus the name - plus the
+name and debug strings the cache itself derives. So the key is
+
+    VarkaShapeKey(outputs: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int)
+
+with structural equality for free: the IR nodes are Java records, literal
+slots and column refs carry dense first-occurrence indices and never values
+(the property `PLAN_TASK_10.md` built for exactly this key, pinned by
+`VarkaExpressionCompilerSuite`). Two queries with the same shape and different
+constants hit one class; the constants travel as runtime `scalarArgs`.
+
+**Deviation from the milestone 2.1 wording, recorded here:** the spec lists
+"input ordinals ... lane and output types" as key components. Neither affects
+the bytes - `ColumnRef` carries the dense kernel input index (the child plan
+ordinals live only in `CompiledVarkaProjection.inputOrdinals`, bound per task
+by the evaluator), and `outputTypes` never reaches the emitter. Leaving them
+out is safe by the same argument that makes literal values safe, and raises
+the hit rate: `date_add(a, 1)` and `date_add(b, 2)` share one class. Lane
+types need no separate component because they ride the IR records themselves.
+`numLiterals` stays in the key independently of the IR: it changes the emitted
+bytecode even for unreferenced slots (per-slot locals, and the
+broadcast-hoist regime gate).
+
+### 2.2 The cache: a bounded loader/class LRU, one loader per shape
+
+`VarkaShapeCache` (catalyst, `codegen/varka/` - no Class-File API type in
+sight, so Scala is fine under the house rule): a JVM-wide Guava cache,
+`maximumSize` from the new static conf, with a removal listener that calls
+`release()` on the evicted entry's `VarkaGeneratedClassLoader`. One loader per
+entry, one class per loader, so eviction keeps the unload granularity the
+Metaspace proof relies on. Lookups go through `get(key, callable)`, so tasks
+racing on one shape emit once.
+
+* **Eviction is safe mid-flight.** `release()` only clears the loader's
+  registry and blocks new defines; a running task's strong references to the
+  kernel instance and its `Class` keep them alive until the task drops them -
+  the owner-side unload contract the engine's `VarkaClassLoader` javadoc has
+  documented since task 3. Metaspace is now bounded by cache size instead of
+  task lifetime - a weaker guarantee than milestone 1's, proven the same way
+  (weak references, now against eviction).
+* **Fate sharing.** Spark's `NonFateSharingCache` exists because a task
+  cancelled while populating an entry fails other waiters; it cannot be used
+  here (no removal listener), and it is not needed: any failure out of the
+  cache lookup lands in the evaluator's existing catch and degrades to the
+  ghost fallback, so a poisoned lookup can never fail a query. Guava swallows
+  removal-listener exceptions; `release()` does not throw.
+* **Parent loader pinned** to `classOf[VarkaFusedKernel].getClassLoader`
+  rather than the context class loader, which removes the loader from the key
+  (Janino keys on it weakly; Varka does not need to): the generated bytes
+  reference only the JDK, `jdk.incubator.vector`, and Varka support classes on
+  Spark's own classpath, never user code - and the evaluator's cast to
+  `VarkaFusedKernel` needs that exact interface class anyway.
+* **Escape hatch.** `spark.sql.codegen.varka.cache.maxEntries` = 0 disables
+  sharing: the entry is emitted uncached and the evaluator releases its loader
+  on task completion, exactly the pre-task-18 lifecycle.
+
+### 2.3 Naming and telemetry reconciliation
+
+The class is named by its shape: SHA-256 over a canonical rendering of the
+key, truncated to 16 hex characters -
+`VarkaFusedProjection_<hash>`, `SourceFile` `VarkaFusedProjection_<hash>.java`.
+The cache map is keyed on the full structural key, so a hash collision cannot
+cause a wrong hit; it could only give two distinct shapes the same *name*
+(distinct loaders keep the runtime classes distinct; the class dump would
+overwrite one file - astronomically unlikely and diagnostics-only).
+
+Per-execution identity moves out of the bytes into a side table: the
+`VarkaDebugInfo` attribute keeps its three-field format, `SourceFile` and the
+line map stay properties of the shape (task 16's `LineNumberTable` is indexed
+by IR node, so it is exactly what should be shared), and the attribute's
+`planFragment` field now carries the shape identity (`shape <hash>`) instead
+of one query's projection list. The cache records each lookup's execution
+identity - `Varka_<operator>_Stage<n>: <projection list>` - in a bounded map
+keyed by the hash, and `executionsFor(hash)` is the diagnostics join. Ghost
+fallback warnings stay fully attributed because the evaluator knows its own
+operator and stage: `kernelIdentity` becomes the shape name plus the IR plus
+the per-execution operator/stage.
+
+Cache hit/miss counts surface twice: `LongAdder` counters on the cache (tests,
+and task 22's JFR events later), and two new `SQLMetric`s on both exec nodes
+("Varka class cache hits"/"misses") threaded through the evaluator factories
+like the existing three.
+
+## 3. Files
+
+New: `VarkaShapeCache.scala` (catalyst `codegen/varka/`), its suite, this
+plan. Changed: `VarkaKernelEvaluator` (cache lookup instead of per-task
+emission), both exec nodes and their factories (metrics), `StaticSQLConf` /
+`SQLConf` (the cache-size conf and accessor), doc-only updates to both class
+loaders and `VarkaDebugInfo` (their per-task and deferred-conflict paragraphs),
+`VarkaDifferentialSuite` (warm runs, wrong-hit guards, the reworked Metaspace
+test), `VarkaKernelEvaluatorSuite` (shape naming, side-table join),
+`VarkaProjectExecSuite` (metrics), `docs/sql-varka.md` and `README.md`
+(requoted from the regeneration run). Unchanged on purpose: `VarkaLoopEmitter`
+(the name and debug strings were already parameters), the `VarkaDebugInfo`
+byte format, `VarkaGeneratedClassLoader` behaviour, the engine module.
+
+## 4. Validation
+
+* Differential suites warm as well as cold: `checkDifferential` runs the
+  Varka side twice, so every case checks a cache-hit execution against the row
+  engine. Wrong-hit guards run near-miss shape pairs back to back:
+  `date_add` vs `date_sub` on the same operands, same structure with a
+  different literal count, same shape with different literal values.
+* `VarkaShapeCacheSuite`: same shape different constants share one entry
+  (hit); distinct structure / input count / literal count each miss;
+  concurrent lookups emit once; eviction releases the evicted loader and the
+  weak-reference proof collects it; a 10k-distinct-shape stress (op pattern
+  from the bit pattern of the index) keeps the cache at capacity and Metaspace
+  bounded; capacity 0 shares nothing.
+* The reworked integration Metaspace test: 100 distinct-literal queries are
+  now one shape - the suite asserts they hit (misses <= 1) and the footprint
+  stays bounded.
+* The gate: `VarkaThroughputBenchmark` regenerated in one run - `chain depth
+  8` columnar back above 2x, `dayofweek` sheds the ~50 ms surcharge class
+  reuse was diagnosed to fix; `VarkaColdStartBenchmark` and
+  `VarkaCodegenBenchmark` regenerated with it (cold start emits fresh shapes
+  per iteration, so it should stay near 1.5x - a prediction to score).
+  Docs requoted from that run.
+* Standing gates: everything green at the preferred width and
+  `-XX:MaxVectorSize=16`; engine module untouched and green; `catalyst/doc`.
+
+## 5. Explicitly out of task 18
+
+The row-consumer profitability decision (task 19 - this task hands it the
+flattened matrix it was waiting for), fallback-cause SQL-UI metrics and JFR
+events (task 22 - the counters land here, the events do not), the four gating
+shapes and filters (tasks 20-21), any emitter change, any engine-module code
+change.
+
+## 6. Outcome
+
+Built as planned: `VarkaShapeCache` (key, entry, impl, side table, counters)
+in catalyst `codegen/varka/`, the static conf
+`spark.sql.codegen.varka.cache.maxEntries` (default 100, 0 = the per-task
+lifecycle), the evaluator's `FusedRunner` reduced to a cache lookup plus a
+per-task kernel instance, shape-hash naming end to end, two new SQL metrics
+on both exec nodes, and the suites: 8 new cache tests (sharing, near-miss
+distinctness, concurrency, eviction-with-weak-reference proof, the
+10k-distinct-shape stress at capacity 64 with every evicted loader
+collected, capacity 0, the side-table join), warm re-runs inside
+`checkDifferential` so all differential cases check a cache-hit execution,
+and the near-miss guard test. Everything green at the preferred width and
+`-XX:MaxVectorSize=16`; engine module untouched and green; `catalyst/doc`
+and scalastyle clean.
+
+### 6.1 The gate, and the numbers
+
+`VarkaThroughputBenchmark` regenerated in one run (a first run carried a
+one-case Janino-baseline outlier - `date_add` at 76 ms against its usual
+~50 - so the file was regenerated once more whole; the committed file is the
+second run, and the two runs agree on every varka-side number within noise):
+
+| case | task 17 file | task 18 file |
+|---|---|---|
+| `date_add` / `date_sub` / `datediff` | 1.8x / 1.7x / 2.3x | 3.8x / 4.2x / 5.2x |
+| nested / shared subchain / mixed | 2.2x / 1.8x / 1.7x | 5.7x / 5.9x / 2.5x |
+| `CASE WHEN` unpredictable / predictable | 2.1x / 2.0x | 7.0x / 6.2x |
+| `dayofweek` | 1.2x | **9.2x** (7 ms vs 64 ms) |
+| chain depth 1 / 2 / 4 / 8, columnar | 2.2x / 1.9x / 1.8x / 1.3x | 6.5x / 6.7x / 7.2x / **7.0x** |
+| chain depth 1-8, row consumer | 0.6x falling | 0.8x flat |
+| cold start (fresh shape, 100K rows) | 1.5x | 1.9x |
+| emit+define+load+instantiate vs Janino | 77.5x | 68x |
+
+The gate asked for depth 8 "back above 2x" and `dayofweek` shedding its
+surcharge: both cleared with room - the whole depth curve is flat, exactly
+the shape the buffer-level parity numbers always predicted (depth 8 within
+10% of depth 1). The wins exceed the 7.5 surcharge arithmetic because that
+arithmetic measured surcharges *relative to `date_add`'s own ladder*:
+removing the whole ladder also recovers the baseline's share (`date_add`
+itself went 27 ms to 13 ms). The 10k-shape stress holds Metaspace at cache
+capacity with every evicted loader weak-reference-collected.
+
+### 6.2 Predictions scored: 2.5 of 3
+
+* **Depth-8 recovery (7.5): right, and understated.** Predicted -13 ms;
+  actual -25 ms at depth 8, for the relative-baseline reason above.
+* **Row-consumer curve flattens near 0.7x (7.5): right.** Flat at 0.8x
+  (mixed 0.9x, residual-heavy 0.7x) - no crossing, no break-even depth.
+  Task 19 now decides the profitability rule on numbers that mean something.
+* **Cold start stays near 1.5x (this plan): half.** The mechanism held - a
+  fresh shape misses by construction and the varka side is unchanged at
+  18 ms best - but the committed ratio moved to 1.9x anyway because the
+  Janino baseline read 33 ms against task 14's 27 in this run (stdev 7 on a
+  cold-start measurement; the ratio is not load-bearing for any decision).
+
+### 6.3 Deviations and findings
+
+* **The key is narrower than the milestone 2.1 wording**, as section 2.1
+  planned: input ordinals and output Spark types are out (neither affects
+  the bytes), lane types ride the IR records. No other deviation from the
+  plan's design sections.
+* **Fallback tasks now cost a lookup, not an emission.** `canRun` forces the
+  runner, so before this task a partition whose batches all fell back still
+  emitted and defined a whole class it never ran; now it takes a cache hit.
+  Surfaced by the exec-suite metrics test, which counts one lookup per task
+  including the fallback task.
+* **A GC-proof lesson**: a block-scoped `val` holding the to-be-evicted
+  entry stays live in the test method's local slots and pins the loader -
+  the eviction proof only passes with the emission extracted into its own
+  method frame (`emitForEviction`). The loader suite's `var x = null`
+  pattern is the same lesson in another shape.
+* Docs and README requoted from this run per the settled docs-timing
+  decision; task 19 regenerates again from its own run and should expect
+  the row-consumer matrix at 0.8x flat as its starting point.
