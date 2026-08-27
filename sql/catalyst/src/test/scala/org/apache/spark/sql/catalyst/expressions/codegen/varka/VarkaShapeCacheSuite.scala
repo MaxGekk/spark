@@ -191,26 +191,60 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     // references (here, the lookup results) keep the class usable to task end regardless.
     assert(first.entry.loader.isReleased && second.entry.loader.isReleased)
     assert(first.entry.newKernel() != null)
-    // Diagnostics record nothing while the cache is disabled.
-    assert(cache.executionsFor(first.entry.shapeHash) === Seq.empty)
+    // Diagnostics still record while sharing is off: with the bytes carrying only the shape,
+    // the side table is the one place the execution identity lives.
+    assert(cache.executionsFor(first.entry.shapeHash) === Seq("exec"))
   }
 
-  test("an emitter test hook refuses the cache's emit path, unwrapped from Guava") {
+  test("an emitter test hook refuses every cache lookup, hit and miss alike") {
     val cache = new VarkaShapeCacheImpl(4)
+    val key = keyOf(chain(bits = 3, depth = 2))
+    assert(!cache.getOrEmit(key, "exec").hit) // cached plain, before any hook
     VarkaLoopEmitter.disableCseForTesting = true
     try {
-      // The unwrap matters as much as the refusal: Guava would wrap this in
-      // UncheckedExecutionException, which must not reach the evaluator's catch.
-      intercept[IllegalStateException] {
-        cache.getOrEmit(keyOf(chain(bits = 3, depth = 2)), "exec")
-      }
+      // Both directions are wrong and both are refused: a hit would serve plain bytes to a
+      // hooked caller, a miss would cache hooked bytes under the plain key.
+      intercept[IllegalStateException](cache.getOrEmit(key, "exec"))
+      intercept[IllegalStateException](cache.getOrEmit(keyOf(chain(bits = 9, depth = 2)), "e"))
     } finally {
       VarkaLoopEmitter.disableCseForTesting = false
     }
-    assert(cache.size === 0, "a refused emit must cache nothing")
-    // With the hook reset, the same shape emits and caches normally.
-    assert(!cache.getOrEmit(keyOf(chain(bits = 3, depth = 2)), "exec").hit)
-    assert(cache.size === 1)
+    assert(cache.size === 1, "a refused lookup must cache nothing")
+    // With the hook reset, the pre-hook entry serves again and new shapes emit normally.
+    assert(cache.getOrEmit(key, "exec").hit)
+    assert(!cache.getOrEmit(keyOf(chain(bits = 9, depth = 2)), "exec").hit)
+  }
+
+  test("the context class loader is part of the key: another loader gets its own entry") {
+    val cache = new VarkaShapeCacheImpl(8)
+    val key = keyOf(chain(bits = 5, depth = 3))
+    val original = Thread.currentThread().getContextClassLoader
+    val first = cache.getOrEmit(key, "sessionA")
+    val isolated = new java.net.URLClassLoader(Array.empty, original)
+    val second = try {
+      Thread.currentThread().setContextClassLoader(isolated)
+      cache.getOrEmit(key, "sessionB")
+    } finally {
+      Thread.currentThread().setContextClassLoader(original)
+    }
+    // Same shape, different linkage context: no sharing across loaders (a class linked
+    // through one session's chain must not serve another), same shape identity outward.
+    assert(!second.hit)
+    assert(!(first.entry eq second.entry))
+    assert(second.entry.loader.getParent eq isolated)
+    assert(first.entry.shapeHash === second.entry.shapeHash)
+    assert(cache.size === 2)
+    // The original loader's entry still hits for the original context.
+    assert(cache.getOrEmit(key, "sessionC").hit)
+  }
+
+  test("the canonical rendering pins the hash: the committed value never drifts") {
+    // SHA-256 over VarkaVectorIR.canonical, not Record.toString - this exact value must
+    // hold on every JVM and JDK release, or cluster-wide diagnostics joins break. If this
+    // fails, the canonical rendering changed, which renames every dumped class: make sure
+    // that is intended, then update the value here and say so in the task plan.
+    val key = keyOf(chain(bits = 9, depth = 4))
+    assert(VarkaShapeCache.shapeHash(key) === "586434f9b9739c40")
   }
 
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {

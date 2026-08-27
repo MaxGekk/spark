@@ -289,3 +289,52 @@ The `maxEntries = 0` escape hatch collapsed into the one Guava path -
 releases it, so the separate unshared-entry lifecycle, its `shared` flag
 and the evaluator's release listener are gone. And the never-called
 `SQLConf.varkaCacheMaxEntries` accessor was deleted.
+
+## 8. The second review round: max effort, on the tree
+
+A local max-effort review over both varka catalyst directories, run after
+section 7 landed, returned ten more findings - five of them critiques of
+section 7's own fixes, which is the loop working as intended: fixed code is
+new code and gets reviewed again. The emitter and the mod-7 magic-multiply
+lowering, the review's original motivation, came out clean. What changed:
+
+* **The loader question, settled properly.** Section 7's context-loader
+  parent fixed `--jars` but would pin one session's isolated loader
+  JVM-wide - and link other sessions' kernels through it - under
+  executor-side artifact isolation. The parent loader is now part of the
+  cache key by identity (`VarkaLoaderShapeKey`): with the one executor-wide
+  context loader of the `--jars` deployment nothing changes (one class per
+  shape), and under artifact isolation each session's loader gets its own
+  entries. A closed session's entries are not released eagerly - nothing in
+  catalyst observes session close - they age out of the LRU, bounded by
+  capacity; recorded here as the accepted limitation.
+* **Fate sharing, corrected twice.** The claim that `NonFateSharingCache`
+  "exposes no removal listener" was wrong - its `apply(cache)` wraps a
+  pre-built cache, listener intact. Lookups now go through it, so a
+  cancelled or failed emit fails only its own task instead of cascading to
+  every co-waiter (SPARK-43300); section 7's unwrap stays on top for the
+  wrappers Guava still adds.
+* **The hook guard moved to lookup entry** - a warm hit would have served
+  *plain* bytes to a hooked caller, the mirror image of the poisoning the
+  emit-path check stopped - plus a post-emit re-check so a hook flipped
+  mid-emission cannot cache its bytes.
+* **The hash no longer rides `Record.toString`**, whose exact format no
+  JDK promises: `VarkaVectorIR.canonical` is a hand-pinned rendering,
+  exhaustive over the sealed interface (a new node type refuses to compile
+  until it renders), digested through the shared `JavaUtils.sha256Hex`.
+  The suite pins the committed value (`586434f9b9739c40`) so any future
+  drift - JDK or rendering change - fails loudly instead of silently
+  renaming every dumped class across a cluster.
+* **The dump memo is per-JVM** instead of skip-if-exists on disk: a file
+  left by an older emitter under the same shape name is refreshed by each
+  process's first write, while later tasks still skip.
+* **Capacity 0 records identities again.** Section 7 stopped recording
+  with the cache disabled, which broke the one remaining join from a
+  shape-named class to its plan nodes; with truncation and the entry
+  bounds, recording is safe at every capacity, so it is back.
+* Smaller: `recordExecution` reinstates a side-table set evicted mid-write
+  instead of silently dropping the identity; the class/`SourceFile` naming
+  has one rendering (`classNameFor`/`sourceFileFor`) used by both the
+  cache and `kernelIdentity`; and the evaluator builds the execution
+  identity bounded to what the table keeps rather than rendering a wide
+  projection per task.

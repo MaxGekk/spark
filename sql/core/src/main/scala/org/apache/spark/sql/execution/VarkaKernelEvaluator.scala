@@ -175,6 +175,23 @@ private[sql] class VarkaKernelEvaluator(
     s"Varka_${operatorName}_Stage$stage"
   }
 
+  /**
+   * The identity recorded in the cache's side table: the execution name, then as much of the
+   * projection list - forwarded and residual entries included - as the table keeps
+   * ([[VarkaShapeCache.maxExecutionIdentityLength]]). Bounded while building: rendering all
+   * of a wide projection on every task's setup path would be paid only to be truncated on
+   * arrival, or discarded outright when the cache is disabled.
+   */
+  private def executionIdentity(): String = {
+    val sb = new StringBuilder(executionName).append(": ")
+    val it = projectList.iterator
+    while (it.hasNext && sb.length <= VarkaShapeCache.maxExecutionIdentityLength) {
+      sb.append(it.next().toString)
+      if (it.hasNext) sb.append(", ")
+    }
+    sb.toString
+  }
+
   /** The cache key of the fused sub-projection: exactly the emitter inputs the bytes follow. */
   private def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
     VarkaShapeKey(plan.outputs, plan.inputOrdinals.size, plan.literals.size)
@@ -191,7 +208,7 @@ private[sql] class VarkaKernelEvaluator(
       case Some(partial) =>
         val ir = partial.fused.outputs.mkString(", ")
         val hash = VarkaShapeCache.shapeHash(shapeKey(partial.fused))
-        s"VarkaFusedProjection_$hash.java [$ir] ($executionName)"
+        s"${VarkaShapeCache.sourceFileFor(hash)} [$ir] ($executionName)"
       case None => s"[no compiled projection] ($executionName)"
     }
   }
@@ -457,24 +474,28 @@ private[sql] class VarkaKernelEvaluator(
    * Writes the emitted class to the configured dump directory under its `SourceFile` name
    * (task 16), so `javap -c -p` reaches a generated loop with no debugger. Diagnostics only:
    * every failure is logged and swallowed, because a query must not fail over a debug write.
-   * Every task of a shape holds identical bytes (task 18), so an existing file is already the
-   * right one and is left alone - the shape's first task with the directory configured writes
-   * it once, instead of every task re-writing it on the task-setup path. (Two first tasks can
-   * still race past the check; they write the same bytes, so the race is benign.)
+   * Every task of a shape holds identical bytes (task 18), so a per-JVM memo makes the
+   * shape's first task with the directory configured write the file once, instead of every
+   * task re-writing it on the task-setup path. The memo is per-process on purpose: the file
+   * name derives from the shape, not the bytes, so a file left by an *older* emitter must be
+   * overwritten, not trusted - each JVM's first write refreshes it. (Two first tasks can
+   * still race past the memo; they write the same bytes, so the race is benign.)
    */
   private def dumpClass(sourceFile: String, bytes: Array[Byte]): Unit = {
     classDumpDirectory.foreach { directory =>
-      try {
-        val target = new File(directory, sourceFile.stripSuffix(".java") + ".class")
-        if (!target.exists()) {
+      val memoKey = s"$directory|$sourceFile"
+      if (VarkaKernelEvaluator.dumpedClassFiles.add(memoKey)) {
+        try {
+          val target = new File(directory, sourceFile.stripSuffix(".java") + ".class")
           Files.createDirectories(target.toPath.getParent)
           Files.write(target.toPath, bytes)
           logInfo(s"Wrote the Varka kernel class to ${target.getAbsolutePath}")
+        } catch {
+          case NonFatal(e) =>
+            VarkaKernelEvaluator.dumpedClassFiles.remove(memoKey)
+            logWarning(s"Could not dump the Varka kernel class to $directory; " +
+              "execution is unaffected.", e)
         }
-      } catch {
-        case NonFatal(e) =>
-          logWarning(s"Could not dump the Varka kernel class to $directory; " +
-            "execution is unaffected.", e)
       }
     }
   }
@@ -522,11 +543,10 @@ private[sql] class VarkaKernelEvaluator(
    * carry the class to task end - the pre-task-18 lifecycle through the same path.
    */
   private class FusedRunner(plan: CompiledVarkaProjection) {
-    // The lookup records this execution (operator, stage, the whole projection - forwarded
-    // and residual entries included) in the cache's side table, so the shape-named class
-    // joins back to the plan nodes that ran it.
-    private val lookup =
-      VarkaShapeCache.getOrEmit(shapeKey(plan), s"$executionName: ${projectList.mkString(", ")}")
+    // The lookup records this execution (operator, stage, the projection's leading entries)
+    // in the cache's side table, so the shape-named class joins back to the plan nodes that
+    // ran it.
+    private val lookup = VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
     private val entry = lookup.entry
     (if (lookup.hit) cacheHitMetric else cacheMissMetric).foreach(_ += 1)
 
@@ -549,6 +569,13 @@ private[sql] class VarkaKernelEvaluator(
     val dstValidity = new Array[Long](plan.outputs.size)
     val scalarArgs: Array[Int] = plan.literals.toArray
   }
+}
+
+private[execution] object VarkaKernelEvaluator {
+  // The (directory, SourceFile) pairs this JVM has dumped, so a shape's class file is
+  // written once per process rather than once per task - and exactly once per process,
+  // because a file left by an older emitter under the same shape name must be refreshed.
+  private val dumpedClassFiles = java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
 }
 
 private case class Morsel(data: MemorySegment, validity: MemorySegment, nullCount: Long) {

@@ -138,4 +138,34 @@ public sealed interface VarkaVectorIR
 
   /** Spark's {@code weekday} (task 11): {@code floorMod(days + 3, 7)}, Monday = 0. */
   record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {}
+
+  /**
+   * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is
+   * derived from it and must be stable across JVMs, restarts and JDK releases - one shape,
+   * one {@code VarkaFusedProjection_<hash>} name, everywhere. {@link Record#toString} makes
+   * no such promise: its spec fixes only what the string mentions, not the exact format.
+   * The switch is exhaustive over the sealed interface, so adding a node type refuses to
+   * compile until it renders here; changing an existing rendering changes every committed
+   * hash and is caught by the pinned-hash test in {@code VarkaShapeCacheSuite}.
+   */
+  static String canonical(VarkaVectorIR node) {
+    return switch (node) {
+      case ColumnRef n -> "col:" + n.ordinal();
+      case LiteralSlot n -> "lit:" + n.index();
+      case AddDays n -> "(addDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
+      case SubDays n -> "(subDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
+      case DateDiff n -> "(dateDiff " + canonical(n.end()) + " " + canonical(n.start()) + ")";
+      case Compare n ->
+          "(cmp:" + n.op().name() + " " + canonical(n.left()) + " " + canonical(n.right()) + ")";
+      case And n -> "(and " + canonical(n.left()) + " " + canonical(n.right()) + ")";
+      case Or n -> "(or " + canonical(n.left()) + " " + canonical(n.right()) + ")";
+      case Not n -> "(not " + canonical(n.child()) + ")";
+      case IfElse n -> "(if " + canonical(n.cond()) + " " + canonical(n.thenNode()) + " "
+          + canonical(n.elseNode()) + ")";
+      case Greatest n -> "(greatest " + canonical(n.left()) + " " + canonical(n.right()) + ")";
+      case Least n -> "(least " + canonical(n.left()) + " " + canonical(n.right()) + ")";
+      case DayOfWeek n -> "(dayOfWeek " + canonical(n.days()) + ")";
+      case WeekDay n -> "(weekDay " + canonical(n.days()) + ")";
+    };
+  }
 }

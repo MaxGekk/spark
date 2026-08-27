@@ -17,9 +17,6 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
-import java.util.HexFormat
 import java.util.concurrent.{Callable, ExecutionException}
 import java.util.concurrent.atomic.LongAdder
 
@@ -30,9 +27,10 @@ import com.google.common.util.concurrent.{ExecutionError, UncheckedExecutionExce
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
+import org.apache.spark.network.util.JavaUtils
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
-import org.apache.spark.util.Utils
+import org.apache.spark.util.{NonFateSharingCache, Utils}
 
 /**
  * The structural identity of one emitted fused-kernel class: exactly the [[VarkaLoopEmitter]]
@@ -52,13 +50,25 @@ import org.apache.spark.util.Utils
  * carries the dense kernel input index; the evaluator binds actual columns per task) and the
  * output Spark types (they size the evaluator's output vectors and never reach the emitter).
  * Neither affects the bytes, and leaving them out raises the hit rate. The emitter's static
- * test hooks are byte-affecting emit inputs the key also does not carry; the cache refuses to
- * emit while one is set (see [[VarkaShapeCacheImpl]]), so they can never poison an entry.
+ * test hooks are byte-affecting emit inputs the key also does not carry; the cache refuses
+ * every lookup - hit or miss - while one is set (see [[VarkaShapeCacheImpl]]), so a hooked
+ * caller can neither cache poisoned bytes nor be served plain ones.
  */
 private[sql] case class VarkaShapeKey(
     outputs: Seq[VarkaVectorIR],
     numInputs: Int,
     numLiterals: Int)
+
+/**
+ * The full cache key: the shape, plus the identity of the class loader the entry's generated
+ * loader parents. The parent loader is an input to how the class links (it resolves the
+ * engine's support classes), so two contexts with different loaders must not share an entry -
+ * under executor-side session artifact isolation each session has its own context loader, and
+ * a class linked through session A's chain must not serve session B. In the documented
+ * `--jars` deployment the executor has one context loader, so this key degenerates to the
+ * shape alone. `ClassLoader` has identity equality, which is exactly the sharing rule wanted.
+ */
+private case class VarkaLoaderShapeKey(parent: ClassLoader, shape: VarkaShapeKey)
 
 /**
  * One cached shape: the loader that defined the class, the class itself, and the bytes it was
@@ -97,49 +107,53 @@ private[sql] case class VarkaShapeLookup(entry: VarkaShapeEntry, hit: Boolean)
  * fallback cannot catch it - it catches failures, not silently different answers. The key is
  * therefore [[VarkaShapeKey]], derived structurally from the same records the emitter walks,
  * never assembled by hand at a call site; the differential suites run warm as well as cold.
- * The one emit input outside the key - the emitter's static test hooks - is guarded instead:
- * [[getOrEmit]] refuses to emit while a hook is set, so hook-affected bytes cannot be cached
- * under the plain key and served after the hook is reset.
+ * The one emit input outside the shape - the emitter's static test hooks - is guarded
+ * instead: [[getOrEmit]] refuses every lookup while a hook is set (a hit would serve plain
+ * bytes to a hooked caller), and [[emit]] re-checks after emitting so a hook flipped
+ * mid-emission cannot cache its bytes either.
+ *
+ * '''The loader is part of the key.''' Each entry's generated loader parents the context
+ * class loader of the task that emitted it (`Utils.getContextOrSparkClassLoader`, as the
+ * per-task loaders had it): the emitted bytes call the engine's `VarkaVectorSupport`, which
+ * in the documented deployment arrives via `--jars` and is visible only through the context
+ * loader - the loader of [[VarkaFusedKernel]] (catalyst, app classpath) cannot see it. That
+ * makes the parent an input to linkage, so it rides the key by identity
+ * ([[VarkaLoaderShapeKey]]): with one executor-wide context loader nothing changes (one class
+ * per shape), and under session artifact isolation each session's loader gets its own entry
+ * rather than linking through another session's - possibly closed - chain. A closed session's
+ * entries are not released eagerly (nothing here observes session close); they age out of the
+ * LRU, so the retained loaders are bounded by the cache capacity like everything else.
  *
  * '''Naming and telemetry.''' The class is named by its shape
- * (`VarkaFusedProjection_<hash>`, 16 hex chars of SHA-256 over the key's canonical
- * rendering), `SourceFile` carries the same name, and the `VarkaDebugInfo` attribute's plan
- * fragment carries `shape <hash>` - the bytes describe the shape, which is exactly what is
- * shared (task 16's `LineNumberTable` is indexed by IR node, a shape property). The map is
- * keyed on the full structural key, so a hash collision cannot cause a wrong hit; it could
- * only give two distinct shapes one *name* (their loaders keep the runtime classes distinct).
- * The per-execution identity that used to be baked into the bytes - operator, stage, the
- * projection list - lives in a bounded side table keyed by the hash, recorded on every
- * lookup while the cache is enabled; [[executionsFor]] is the diagnostics join. Identities
- * are truncated to a fixed length before recording: the table is diagnostics with a JVM-wide
- * lifetime, and an unbounded projection string would make its entry bound meaningless.
+ * ([[VarkaShapeCache.classNameFor]]: `VarkaFusedProjection_<hash>`, 16 hex chars of SHA-256
+ * over the key's canonical rendering - `VarkaVectorIR.canonical`, hand-pinned so the hash
+ * never rides an unspecified `Record.toString` format), `SourceFile` carries the same name,
+ * and the `VarkaDebugInfo` attribute's plan fragment carries `shape <hash>` - the bytes
+ * describe the shape, which is exactly what is shared. The map is keyed on the full
+ * structural key, so a hash collision cannot cause a wrong hit; it could only give two
+ * distinct shapes one *name* (their loaders keep the runtime classes distinct). The
+ * per-execution identity that used to be baked into the bytes - operator, stage, the
+ * projection list - lives in a bounded side table keyed by the hash, recorded (truncated) on
+ * every lookup at every capacity, `maxEntries` = 0 included, so the diagnostics join
+ * [[executionsFor]] keeps working when sharing is off.
  *
- * '''Concurrency and failure.''' Lookups go through Guava's `get(key, callable)`, so tasks
- * racing on one shape emit once. `NonFateSharingCache` is not used - it exposes no removal
- * listener - and not needed: a failure out of the lookup lands in the evaluator's existing
- * catch and degrades to the ghost fallback, so a poisoned load can never fail a query. Guava
- * wraps what the callable throws (`ExecutionException`, `UncheckedExecutionException`,
- * `ExecutionError`); [[getOrEmit]] unwraps to the cause, because the wrapper would defeat the
- * evaluator's fatal-error discipline - an `OutOfMemoryError` inside emit must reach the task
- * as itself, not as a catchable-looking wrapper, and an interrupt must cancel the task.
- * Eviction while a task still runs the class is safe: `release()` only drops the loader's
- * registry, and the task's strong references keep the class alive until it completes (the
- * owner-side contract the engine's `VarkaClassLoader` documents).
+ * '''Concurrency and failure.''' Lookups go through [[NonFateSharingCache]] (SPARK-43300):
+ * tasks racing on one shape serialize on a per-key lock, the winner emits once, and a
+ * cancelled or failed emit fails only its own task - the co-waiters retry for themselves
+ * instead of inheriting the failure into their ghost fallbacks. Guava wraps what the callable
+ * throws (`ExecutionException`, `UncheckedExecutionException`, `ExecutionError`);
+ * [[getOrEmit]] unwraps to the cause, because the wrapper would defeat the evaluator's
+ * fatal-error discipline - an `OutOfMemoryError` inside emit must reach the task as itself,
+ * and an interrupt must cancel the task. Eviction while a task still runs the class is safe:
+ * `release()` only drops the loader's registry, and the task's strong references keep the
+ * class alive until it completes (the owner-side contract the engine's `VarkaClassLoader`
+ * documents).
  *
- * With `maxEntries` = 0 the same single path degenerates to the per-task lifecycle: Guava
- * evicts each entry immediately after loading it, the removal listener releases the loader,
- * and the task's strong references carry the class to task end - observably the pre-task-18
- * contract, with no second code path to keep in step. (Racing lookups of one shape may still
- * share the one in-flight load; that is fine - nothing is retained either way.)
- *
- * The parent of every loader is the context class loader at emit time
- * (`Utils.getContextOrSparkClassLoader`, as the per-task loaders used before the cache): the
- * emitted bytes call the engine's `VarkaVectorSupport`, and in the documented deployment the
- * engine jar arrives via `--jars`, visible only through the executor's context loader - the
- * loader of [[VarkaFusedKernel]] (catalyst, on the app classpath) cannot see it. The loader
- * still stays out of the key: on an executor the context loader is the JVM-wide mutable URL
- * loader, and the generated bytes reference only the JDK, `jdk.incubator.vector` and Varka
- * classes - never session-isolated user code.
+ * With `maxEntries` = 0 the same single path degenerates to the per-task class lifecycle:
+ * Guava evicts each entry immediately after loading it, the removal listener releases the
+ * loader, and the task's strong references carry the class to task end - the pre-task-18
+ * unload contract, with no second code path to keep in step. (Racing lookups of one shape
+ * may still share the one in-flight load; that is fine - nothing is retained either way.)
  */
 private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
 
@@ -148,23 +162,21 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
   // How many per-execution identities the side table keeps per shape, oldest evicted first.
   private val maxExecutionsPerShape = 8
 
-  // The longest execution identity the side table records; longer ones are cut mid-string.
-  // Operator, stage and the leading projection entries survive, which is what the join needs.
-  private val maxExecutionIdentityLength = 256
-
   private val hits = new LongAdder
   private val misses = new LongAdder
 
-  private val cache: Cache[VarkaShapeKey, VarkaShapeEntry] = CacheBuilder.newBuilder()
-    .maximumSize(maxEntries.toLong)
-    .removalListener(new RemovalListener[VarkaShapeKey, VarkaShapeEntry] {
-      // Guava swallows a throwing listener; release() cannot throw, and must not be more than
-      // "stop retaining": running tasks still hold the class until they complete.
-      override def onRemoval(n: RemovalNotification[VarkaShapeKey, VarkaShapeEntry]): Unit = {
-        n.getValue.loader.release()
-      }
-    })
-    .build[VarkaShapeKey, VarkaShapeEntry]()
+  private val cache: NonFateSharingCache[VarkaLoaderShapeKey, VarkaShapeEntry] =
+    NonFateSharingCache(CacheBuilder.newBuilder()
+      .maximumSize(maxEntries.toLong)
+      .removalListener(new RemovalListener[VarkaLoaderShapeKey, VarkaShapeEntry] {
+        // Guava swallows a throwing listener; release() cannot throw, and must not be more
+        // than "stop retaining": running tasks still hold the class until they complete.
+        override def onRemoval(
+            n: RemovalNotification[VarkaLoaderShapeKey, VarkaShapeEntry]): Unit = {
+          n.getValue.loader.release()
+        }
+      })
+      .build[VarkaLoaderShapeKey, VarkaShapeEntry]())
 
   // The side table: shape hash -> the most recent execution identities that used the shape.
   // Bounded three times over - entries here, identities per entry, characters per identity -
@@ -177,28 +189,37 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
       .build[String, java.util.LinkedHashSet[String]]()
 
   /**
-   * Returns the loaded class for the key's shape, emitting and defining it if no live entry
-   * holds it, and records `execution` (the caller's per-execution identity, truncated) in the
-   * side table. With `maxEntries` = 0 every lookup emits: the entry is evicted (and its
-   * loader released) as it is loaded, restoring the per-task lifecycle through this same path.
+   * Returns the loaded class for the shape under the current context class loader, emitting
+   * and defining it if no live entry holds it, and records `execution` (the caller's
+   * per-execution identity, truncated) in the side table either way. With `maxEntries` = 0
+   * every lookup emits: the entry is evicted (and its loader released) as it is loaded,
+   * restoring the per-task class lifecycle through this same path.
    */
   def getOrEmit(key: VarkaShapeKey, execution: String): VarkaShapeLookup = {
+    if (VarkaLoopEmitter.anyTestHookSet()) {
+      // Checked on every lookup, not only under emit: a hit would hand a hooked caller the
+      // plain bytes, as silently wrong as caching hooked bytes under the plain key.
+      throw new IllegalStateException("a VarkaLoopEmitter test hook is set: the shape cache " +
+        "serves and caches only plain bytes. Suites that set hooks call " +
+        "VarkaLoopEmitter.emit directly and bypass the cache.")
+    }
+    val loaderKey = VarkaLoaderShapeKey(Utils.getContextOrSparkClassLoader, key)
     var emitted = false
     val entry = try {
-      cache.get(key, new Callable[VarkaShapeEntry] {
+      cache.get(loaderKey, new Callable[VarkaShapeEntry] {
         override def call(): VarkaShapeEntry = {
           emitted = true
-          emit(key, VarkaShapeCache.shapeHash(key))
+          emit(loaderKey)
         }
       })
     } catch {
-      // Unwrap Guava's fate-sharing wrappers: the cause must reach the evaluator's
-      // isCatchable test as itself - a fatal error fails the task, an interrupt cancels it.
+      // Unwrap Guava's wrappers: the cause must reach the evaluator's isCatchable test as
+      // itself - a fatal error fails the task, an interrupt cancels it.
       case e: ExecutionError => throw e.getCause
       case e: UncheckedExecutionException => throw e.getCause
       case e: ExecutionException => throw e.getCause
     }
-    if (maxEntries > 0) recordExecution(entry.shapeHash, execution)
+    recordExecution(entry.shapeHash, execution)
     if (emitted) misses.increment() else hits.increment()
     VarkaShapeLookup(entry, hit = !emitted)
   }
@@ -221,25 +242,28 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
     executions.invalidateAll()
   }
 
-  private def emit(key: VarkaShapeKey, hash: String): VarkaShapeEntry = {
-    if (VarkaLoopEmitter.anyTestHookSet()) {
-      throw new IllegalStateException("a VarkaLoopEmitter test hook is set: the shape cache " +
-        "must not cache hook-affected bytes under the plain shape key. Suites that set hooks " +
-        "call VarkaLoopEmitter.emit directly and bypass the cache.")
-    }
-    val className = s"org.apache.spark.sql.varka.execution.VarkaFusedProjection_$hash"
-    val sourceFile = s"VarkaFusedProjection_$hash.java"
+  private def emit(loaderKey: VarkaLoaderShapeKey): VarkaShapeEntry = {
+    val key = loaderKey.shape
+    val hash = VarkaShapeCache.shapeHash(key)
+    val className = VarkaShapeCache.classNameFor(hash)
+    val sourceFile = VarkaShapeCache.sourceFileFor(hash)
     val bytes = VarkaLoopEmitter.emit(className, key.outputs.asJava, key.numInputs,
       key.numLiterals, sourceFile, s"shape $hash")
-    val loader = new VarkaGeneratedClassLoader(Utils.getContextOrSparkClassLoader)
+    if (VarkaLoopEmitter.anyTestHookSet()) {
+      // The entry check races a concurrently flipped hook; re-checking after the emit walk
+      // read the (volatile) hooks keeps a mid-emission flip from caching its bytes.
+      throw new IllegalStateException(
+        "a VarkaLoopEmitter test hook was set while emitting; refusing to cache the bytes")
+    }
+    val loader = new VarkaGeneratedClassLoader(loaderKey.parent)
     val klass = loader.defineGeneratedClass(className, bytes)
     logDebug(s"Emitted and defined $className for shape $hash")
     new VarkaShapeEntry(loader, klass, bytes, hash, className, sourceFile)
   }
 
   private def recordExecution(hash: String, execution: String): Unit = {
-    val identity = if (execution.length > maxExecutionIdentityLength) {
-      execution.substring(0, maxExecutionIdentityLength) + "..."
+    val identity = if (execution.length > VarkaShapeCache.maxExecutionIdentityLength) {
+      execution.substring(0, VarkaShapeCache.maxExecutionIdentityLength) + "..."
     } else {
       execution
     }
@@ -257,18 +281,30 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
         it.remove()
       }
     }
+    // Eviction between get() and the write above orphans the set and would silently drop the
+    // identity; reinstate it. (A put after a test's invalidateAll resurrects one set - benign.)
+    if (!(executions.getIfPresent(hash) eq set)) {
+      executions.put(hash, set)
+    }
   }
 }
 
 /**
  * The executor-wide instance (milestone 3 open question 1, settled as per-JVM: the key
- * carries no session state, so cross-session sharing is safe by construction, and Janino's
- * codegen cache is the precedent). Sized once, from `SparkConf` when a `SparkEnv` exists: the
- * conf is static, and the first touch of this object can happen inside a task whose
- * `SQLConf.get` view carries no SQL confs (a non-`SQLExecution` action), which would silently
- * freeze the default in. `SQLConf.get` remains the fallback for env-less unit-test JVMs.
+ * carries no session state the linkage does not, and Janino's codegen cache is the
+ * precedent). Sized once, from `SparkConf` when a `SparkEnv` exists: the conf is static, and
+ * the first touch of this object can happen inside a task whose `SQLConf.get` view carries no
+ * SQL confs (a non-`SQLExecution` action), which would silently freeze the default in.
+ * `SQLConf.get` remains the fallback for env-less unit-test JVMs.
  */
 private[sql] object VarkaShapeCache {
+
+  /**
+   * The longest execution identity the side table records; longer ones are cut mid-string.
+   * Operator, stage and the leading projection entries survive, which is what the diagnostics
+   * join needs - and callers building an identity string need not render more than this.
+   */
+  private[sql] val maxExecutionIdentityLength = 256
 
   private lazy val instance = new VarkaShapeCacheImpl(configuredMaxEntries())
 
@@ -281,19 +317,25 @@ private[sql] object VarkaShapeCache {
     }
   }
 
+  /** The one rendering of the shape-named class name; every caller derives it here. */
+  def classNameFor(shapeHash: String): String =
+    s"org.apache.spark.sql.varka.execution.VarkaFusedProjection_$shapeHash"
+
+  /** The one rendering of the shape-named `SourceFile`; every caller derives it here. */
+  def sourceFileFor(shapeHash: String): String = s"VarkaFusedProjection_$shapeHash.java"
+
   /**
    * The shape's stable name fragment: 16 hex characters of SHA-256 over the key's canonical
-   * rendering. A pure function of the key - equal keys hash equal on every JVM, so one shape
-   * carries one class name across executors, restarts and class dumps. Computed on the miss
-   * path only; a hit reads the entry's stored hash.
+   * rendering (`VarkaVectorIR.canonical`, hand-pinned - not `Record.toString`, whose format
+   * no JDK promises). A pure function of the key: equal keys hash equal on every JVM, so one
+   * shape carries one class name across executors, mixed-JDK clusters, restarts and class
+   * dumps. Computed on the miss path only; a hit reads the entry's stored hash.
    */
   def shapeHash(key: VarkaShapeKey): String = {
     val canonical = new StringBuilder
-    key.outputs.foreach(o => canonical.append(o.toString).append('\n'))
+    key.outputs.foreach(o => canonical.append(VarkaVectorIR.canonical(o)).append('\n'))
     canonical.append(key.numInputs).append('|').append(key.numLiterals)
-    val digest = MessageDigest.getInstance("SHA-256")
-      .digest(canonical.toString.getBytes(StandardCharsets.UTF_8))
-    HexFormat.of().formatHex(digest, 0, 8)
+    JavaUtils.sha256Hex(canonical.toString).substring(0, 16)
   }
 
   def getOrEmit(key: VarkaShapeKey, execution: String): VarkaShapeLookup =
