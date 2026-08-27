@@ -106,6 +106,7 @@ object StaticSQLConf {
         "released on eviction, bounding Metaspace by this size. When 0, every task emits and " +
         "unloads its own class, the pre-cache behavior.")
       .version("5.0.0")
+      .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
       .intConf
       .checkValue(maxEntries => maxEntries >= 0, "The maximum must not be negative")
       .createWithDefault(100)
