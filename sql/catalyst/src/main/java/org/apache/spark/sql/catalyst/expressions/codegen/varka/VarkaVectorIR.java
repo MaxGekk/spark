@@ -65,7 +65,7 @@ public sealed interface VarkaVectorIR
    * what makes {@code CASE WHEN}'s null condition fall through to ELSE. Never an output root.
    */
   sealed interface Cond extends VarkaVectorIR
-      permits Compare, And, Or, Not {}
+      permits Compare, And, Or, Not, IsNotNull {}
 
   /** The input column at {@code ordinal}, loaded once per lane group however often it is used. */
   record ColumnRef(int ordinal) implements VarkaVectorIR {}
@@ -110,6 +110,21 @@ public sealed interface VarkaVectorIR
 
   /** Three-valued NOT: swaps the known-true and known-false masks - why known-false exists. */
   record Not(Cond child) implements Cond {}
+
+  /**
+   * The validity predicate (task 20): true exactly where {@code child} is non-null. The first
+   * condition that reads an input's <i>validity</i> rather than comparing lane values - and the
+   * first <i>total</i> one: SQL's {@code IS [NOT] NULL} never returns unknown, so its
+   * known-true and known-false masks cover every lane ({@code kT = valid(child)},
+   * {@code kF = ~valid(child)}). {@link And}/{@link Or}'s pair rules combine only their
+   * children's pairs, so totality composes without change; what it retires is the reading that
+   * an unknown lane always means "some operand was null" - here no lane is ever unknown.
+   * {@code IS NULL} is {@link Not} over this node (a slot swap, no emitted code). The child is
+   * restricted to {@link ColumnRef} in milestone 3: a column's validity word is live at every
+   * lane group unconditionally, while a computed node's word materializes only during its
+   * value walk, which runs after condition emission.
+   */
+  record IsNotNull(VarkaVectorIR child) implements Cond {}
 
   /**
    * SQL's if/else over the {@code cond}'s <i>known-true</i> mask (task 11): a lane takes
@@ -161,6 +176,7 @@ public sealed interface VarkaVectorIR
       case And n -> "(and " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case Or n -> "(or " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case Not n -> "(not " + canonical(n.child()) + ")";
+      case IsNotNull n -> "(isNotNull " + canonical(n.child()) + ")";
       case IfElse n -> "(if " + canonical(n.cond()) + " " + canonical(n.thenNode()) + " "
           + canonical(n.elseNode()) + ")";
       case Greatest n -> "(greatest " + canonical(n.left()) + " " + canonical(n.right()) + ")";

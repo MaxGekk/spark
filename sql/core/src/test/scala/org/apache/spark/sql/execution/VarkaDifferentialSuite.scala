@@ -289,6 +289,114 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
+  test("task 20: IN over date literals fuses to the cap and declines above it") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    def literals(n: Int): String = (0 until n).map { k =>
+      s"DATE'${java.time.LocalDate.of(2023, 12, 25).plusDays(k * 3L)}'"
+    }.mkString(", ")
+    // 5 literals arrive as In, 16 as InSet (the optimizer's inSetConversionThreshold is 10);
+    // both lists hit and miss real rows, and the null row's unknown condition falls to ELSE.
+    checkDifferential(spark, varkaSpark,
+      s"SELECT CASE WHEN d IN (${literals(5)}) THEN date_add(d, 1) ELSE d END AS a " +
+        "FROM varka_dates ORDER BY a",
+      expectFused = true)
+    checkDifferential(spark, varkaSpark,
+      s"SELECT CASE WHEN d IN (${literals(16)}) THEN date_add(d, 1) ELSE d END AS a " +
+        "FROM varka_dates ORDER BY a",
+      expectFused = true)
+    // Duplicated literals collapse before the cap is counted, so a doubled list still fuses.
+    checkDifferential(spark, varkaSpark,
+      s"SELECT CASE WHEN d IN (${literals(5)}, ${literals(5)}) THEN d " +
+        "ELSE date_add(d, 2) END AS a FROM varka_dates ORDER BY a",
+      expectFused = true)
+    // Above the cap the entry declines with a recorded reason and stays on the row engine.
+    for (n <- Seq(17, 50)) {
+      checkDifferential(spark, varkaSpark,
+        s"SELECT CASE WHEN d IN (${literals(n)}) THEN date_add(d, 1) ELSE d END AS a " +
+          "FROM varka_dates ORDER BY a",
+        expectFused = false)
+    }
+  }
+
+  test("task 20: coalesce, nvl, ifnull and nvl2 fuse and match the row engine") {
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    for (q <- Seq(
+      "SELECT coalesce(d, d2) AS a FROM varka_date_pairs ORDER BY a",
+      "SELECT coalesce(d, d2, DATE'1999-09-09') AS a FROM varka_date_pairs ORDER BY a",
+      "SELECT nvl(d, date_add(d2, 1)) AS a FROM varka_date_pairs ORDER BY a",
+      "SELECT ifnull(d, d2) AS a FROM varka_date_pairs ORDER BY a",
+      "SELECT nvl2(d, date_add(d2, 3), date_sub(d2, 3)) AS a " +
+        "FROM varka_date_pairs ORDER BY a")) {
+      checkDifferential(spark, varkaSpark, q, expectFused = true)
+    }
+    // A computed operand before the last cannot be guarded (the validity condition reads a
+    // column's word) and declines - correct on the row engine.
+    checkDifferential(spark, varkaSpark,
+      "SELECT coalesce(date_add(d, 1), d2) AS a FROM varka_date_pairs ORDER BY a",
+      expectFused = false)
+  }
+
+  test("task 20: coalesce over all-null and null-free inputs") {
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    for (session <- Seq(spark, varkaSpark)) {
+      session.sql("SELECT d, d2 FROM varka_date_pairs WHERE d IS NOT NULL AND d2 IS NOT NULL")
+        .createOrReplaceTempView("varka_null_free")
+      session.catalog.cacheTable("varka_null_free")
+      session.sql(
+        "SELECT CAST(NULL AS DATE) AS d, CAST(NULL AS DATE) AS d2 FROM varka_date_pairs")
+        .createOrReplaceTempView("varka_all_null")
+      session.catalog.cacheTable("varka_all_null")
+    }
+    // All-null exercises the skipping contract: the all-null shortcut must not short-circuit
+    // an IfElse over the validity condition, and coalesce(all-null, all-null) is all-null.
+    checkDifferential(spark, varkaSpark,
+      "SELECT coalesce(d, d2) AS a FROM varka_null_free ORDER BY a", expectFused = true)
+    checkDifferential(spark, varkaSpark,
+      "SELECT coalesce(d, d2) AS a FROM varka_all_null ORDER BY a", expectFused = true)
+  }
+
+  test("task 20: IS NULL and IS NOT NULL fuse as conditions, connectives included") {
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT CASE WHEN d IS NULL THEN d2 ELSE d END AS a FROM varka_date_pairs ORDER BY a",
+      expectFused = true)
+    checkDifferential(spark, varkaSpark,
+      "SELECT CASE WHEN d IS NOT NULL AND d < d2 THEN date_add(d, 1) ELSE d2 END AS a " +
+        "FROM varka_date_pairs ORDER BY a",
+      expectFused = true)
+    checkDifferential(spark, varkaSpark,
+      "SELECT IF(d IS NULL OR d2 IS NULL, DATE'1970-01-01', greatest(d, d2)) AS a " +
+        "FROM varka_date_pairs ORDER BY a",
+      expectFused = true)
+  }
+
+  test("task 20: BETWEEN over a computed input fuses through the common-expression hoist") {
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    // A non-cheap BETWEEN input hoists into `_common_expr_0` in its own Project; the hoisted
+    // arithmetic and the IF over its ref fuse as stacked Varka nodes.
+    checkDifferential(spark, varkaSpark,
+      "SELECT IF(date_add(d, 7) BETWEEN d2 AND date_add(d2, 40), d, date_sub(d2, 1)) AS a " +
+        "FROM varka_date_pairs ORDER BY a",
+      expectFused = true)
+  }
+
+  test("task 20: cast-wrapped date expressions fuse, folded or unwrapped before the kernel") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    // The optimizer folds the literal cast and drops the identity cast (SimplifyCasts); the
+    // compiler's own unwrap covers hand-built trees. Either layer, the query fuses.
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(CAST(d AS DATE), 2) AS a, " +
+        "IF(d < CAST('2024-01-02' AS DATE), d, date_sub(d, 1)) AS b " +
+        "FROM varka_dates ORDER BY a",
+      expectFused = true)
+  }
+
   test("AND, OR and NOT conditions follow three-valued logic like the row engine") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)

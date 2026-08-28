@@ -18,11 +18,12 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, Least, LessThan, LessThanOrEqual, Literal, NamedExpression, Not, Or, WeekDay}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, NamedExpression, Not, Or, RuntimeReplaceable, WeekDay}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, Least => IRLeast, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
 import org.apache.spark.sql.types.{DataType, DateType}
 
 /**
@@ -117,7 +118,10 @@ private[sql] case class PartialVarkaProjection(
  * flat matcher demanded bare attributes - `datediff(date_add(d, 7), d2)` compiles where
  * milestone 1 saw nothing, and since task 11 so do `CASE WHEN`/`IF` (via interior comparisons
  * and the three-valued connectives), `greatest`/`least`, `dayofweek`/`weekday` and date
- * literals. Used by both `VarkaColumnarRule` (is the projection eligible?) and
+ * literals. Task 20 widened the conditions with `IN` over date literals (capped, see
+ * [[MaxInLiterals]]) and the validity predicates `IS [NOT] NULL` over bare columns, and the
+ * values with `coalesce`/`nvl`/`nvl2` (lowered onto the validity condition) and the identity
+ * date cast. Used by both `VarkaColumnarRule` (is the projection eligible?) and
  * `VarkaKernelEvaluator` (what does the emitted loop compute?), so eligibility cannot drift from
  * execution: there is one compiler and the rule's question is `compilePartial(...).isDefined`.
  *
@@ -139,6 +143,17 @@ private[sql] case class PartialVarkaProjection(
  * generations of codegen coexisted - retired with the dispatcher layer in task 17.
  */
 private[sql] object VarkaExpressionCompiler {
+
+  /**
+   * The most literals an `IN` list may hold and still fuse (task 20), counted after dedup.
+   * The basis, recorded in `PLAN_TASK_20.md`: 16 is the emitter's broadcast-hoist regime
+   * boundary (more literals switch every literal use to inline re-broadcast), is depth-safe
+   * under any fold shape (`MAX_CHAIN_DEPTH` = 16 while the balanced chain here is
+   * `ceil(log2 16) + 1` = 5 levels), and its 31 op nodes leave half the emitter's
+   * `MAX_FUSED_NODES` = 64 budget to the rest of the projection. Above the cap the entry
+   * declines with a reason instead of silently losing the whole kernel at emission.
+   */
+  private[codegen] val MaxInLiterals = 16
 
   /** The all-entries-fused special case of [[compilePartial]], kept for callers that need it. */
   def compile(
@@ -162,7 +177,7 @@ private[sql] object VarkaExpressionCompiler {
     // shape deterministic in the projection alone.
     val inputs = mutable.LinkedHashMap.empty[Int, Int]
     val literals = mutable.LinkedHashMap.empty[Int, Int]
-    val outputs = Seq.newBuilder[VarkaVectorIR]
+    val outputs = mutable.ArrayBuffer.empty[VarkaVectorIR]
     val outputTypes = Seq.newBuilder[DataType]
     val sink = new DeclineSink(childOutput)
     val declines = Map.newBuilder[Int, VarkaDecline]
@@ -189,15 +204,24 @@ private[sql] object VarkaExpressionCompiler {
           val inputsMark = inputs.size
           val literalsMark = literals.size
           compileNode(e, inputs, literals, sink) match {
-            case Some(ir) =>
+            // Task 20: an accepted entry must also fit the emitter's structural budgets
+            // together with the entries accepted before it. The emitter enforces the same
+            // limits, but at emission time, where a breach can only become a silent
+            // per-batch fallback - no decline reason, and EXPLAIN still claims fusion. So
+            // the compiler mirrors them and demotes the overflowing entry to residual.
+            case Some(ir) if VarkaLoopEmitter.fitsBudgets((outputs :+ ir).asJava) =>
               sink.take()
               outputs += ir
               outputTypes += e.dataType
               fusedCount += 1
               FusedOutput(fusedCount - 1)
-            case None =>
+            case compiled =>
               truncate(inputs, inputsMark)
               truncate(literals, literalsMark)
+              if (compiled.isDefined) {
+                sink.take() // an over-budget entry compiled clean; its reason is the budget
+                sink.note("exceeds the emitter's fused budget", e)
+              }
               // A declining entry always leaves a reason: every `None` below notes one.
               sink.take().foreach(decline => declines += position -> decline)
               ResidualOutput
@@ -206,7 +230,7 @@ private[sql] object VarkaExpressionCompiler {
     }
     if (fusedCount > 0 && inputs.nonEmpty) {
       Some(PartialVarkaProjection(specs, CompiledVarkaProjection(
-        outputs.result(), outputTypes.result(), inputs.keys.toSeq, literals.keys.toSeq),
+        outputs.toSeq, outputTypes.result(), inputs.keys.toSeq, literals.keys.toSeq),
         declines.result()))
     } else {
       None
@@ -240,6 +264,13 @@ private[sql] object VarkaExpressionCompiler {
     // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all.
     case Literal(days: Int, DateType) =>
       Some(new LiteralSlot(literals.getOrElseUpdate(days, literals.size)))
+    // The identity cast (task 20): the corpus wraps date expressions in `CAST(... AS DATE)`
+    // 85 times, and after optimization the wrapper is a no-op over an already-date child -
+    // unwrap it. A `cast(<string literal> AS DATE)` never reaches here (constant-folded to a
+    // date literal by the optimizer); a string *column* cast is a per-row parse with no
+    // string lane and stays declined below.
+    case c: Cast if c.dataType == DateType && c.child.dataType == DateType =>
+      compileNode(c.child, inputs, literals, sink)
     case DateAdd(child, days) =>
       for {
         offset <- foldOffset(days, sink)
@@ -286,6 +317,14 @@ private[sql] object VarkaExpressionCompiler {
           None
         }
       }
+    // Coalesce (task 20) right-folds onto the validity condition: `coalesce(a, b)` is
+    // `IfElse(IsNotNull(a), a, b)`, whose masked validity - (kT & valid(a)) | (~kT & valid(b))
+    // with kT = valid(a) - reduces to valid(a) | valid(b), exactly SQL's coalesce. Every
+    // operand before the last must be a bare date column (the IsNotNull child restriction);
+    // `nvl`/`ifnull` arrive here already rewritten to Coalesce by the optimizer, and `nvl2`
+    // arrives as `If(IsNotNull(...), ...)` and rides the same condition node.
+    case Coalesce(children) if children.nonEmpty =>
+      compileCoalesce(children, inputs, literals, sink)
     // Spark's greatest/least are n-ary; the null-skipping algebra is associative, so a left
     // fold into the binary IR nodes is exact.
     case Greatest(children) =>
@@ -301,9 +340,38 @@ private[sql] object VarkaExpressionCompiler {
     case br: BoundReference =>
       sink.note(s"non-date column of type ${br.dataType.simpleString}", br)
       None
+    // Defensive: a real query never carries an unreplaced RuntimeReplaceable this far (the
+    // optimizer's ReplaceExpressions runs long before physical planning), but hand-built
+    // expressions in tests and the plan-side fusion report can - compile what would run.
+    case r: RuntimeReplaceable =>
+      compileNode(r.replacement, inputs, literals, sink)
     case other =>
       sink.note("unsupported expression", other)
       None
+  }
+
+  /**
+   * The Coalesce right-fold (task 20). Every operand except the last compiles and must be a
+   * bare date column: `IsNotNull` reads the per-input validity word, which only a column has
+   * before value emission (the recorded milestone-3 restriction) - a computed operand
+   * declines with its own reason.
+   */
+  private def compileCoalesce(
+      children: Seq[Expression],
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = children match {
+    case Seq(last) => compileNode(last, inputs, literals, sink)
+    case head +: rest =>
+      compileNode(head, inputs, literals, sink) match {
+        case Some(ref: ColumnRef) =>
+          compileCoalesce(rest, inputs, literals, sink)
+            .map(restNode => new IfElse(new IRIsNotNull(ref), ref, restNode))
+        case Some(_) =>
+          sink.note("coalesce operand before the last is not a bare date column", head)
+          None
+        case None => None
+      }
   }
 
   /**
@@ -349,6 +417,17 @@ private[sql] object VarkaExpressionCompiler {
     case GreaterThan(l, r) => compare(CompareOp.GT, l, r, inputs, literals, sink)
     case GreaterThanOrEqual(l, r) => compare(CompareOp.GE, l, r, inputs, literals, sink)
     case EqualTo(l, r) => compare(CompareOp.EQ, l, r, inputs, literals, sink)
+    // IN over date literals (task 20): an EQ chain joined by OR, which the mask algebra
+    // makes exactly SQL's IN inside a condition - a null value leaves every comparison
+    // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
+    case in @ In(value, list) if value.dataType == DateType =>
+      compileInList(value, list.map(literalDays), in, inputs, literals, sink)
+    case inSet: InSet if inSet.child.dataType == DateType =>
+      // InSet's set is unordered; compileInList sorts, which is what keeps the literal
+      // slots and the shape hash deterministic across runs.
+      compileInList(inSet.child,
+        inSet.hset.toSeq.map { case days: Int => Some(days); case _ => None },
+        inSet, inputs, literals, sink)
     case And(l, r) =>
       for {
         left <- compileCond(l, inputs, literals, sink)
@@ -360,9 +439,94 @@ private[sql] object VarkaExpressionCompiler {
         right <- compileCond(r, inputs, literals, sink)
       } yield new IROr(left, right)
     case Not(child) => compileCond(child, inputs, literals, sink).map(new IRNot(_))
+    // The validity predicates (task 20): IS NOT NULL is the IR's first total condition
+    // (never unknown), and IS NULL is its NOT - a slot swap in the emitter, no code.
+    case IsNotNull(child) =>
+      compileValidity(child, expr, inputs, literals, sink)
+    case IsNull(child) =>
+      compileValidity(child, expr, inputs, literals, sink).map(new IRNot(_))
+    // Defensive, mirroring compileNode: hand-built Nvl/Nvl2 in tests and the fusion report
+    // arrive unreplaced; real queries never do.
+    case r: RuntimeReplaceable =>
+      compileCond(r.replacement, inputs, literals, sink)
     case other =>
       sink.note("unsupported predicate", other)
       None
+  }
+
+  /** The epoch-day value of a date literal, or `None` for anything else (null included). */
+  private def literalDays(e: Expression): Option[Int] = e match {
+    case Literal(days: Int, DateType) => Some(days)
+    case _ => None
+  }
+
+  /**
+   * Compiles an IN list (task 20): dedup and sort the literal days - Kleene OR is commutative
+   * and EQ is pure, so the order is free, and a canonical order keeps the literal slots and
+   * the shape hash deterministic (`InSet` hands the values over as an unordered set) - then a
+   * '''balanced''' pairwise fold of OR over the EQ leaves. The fold shape is part of the cap
+   * arithmetic: balanced, [[MaxInLiterals]] literals are `ceil(log2 n) + 1` levels and
+   * `2n - 1` op nodes; a right-nested fold would hit the emitter's depth cap at 15. Above the
+   * cap, or with any non-literal or null element, the entry declines with its reason.
+   */
+  private def compileInList(
+      value: Expression,
+      elements: Seq[Option[Int]],
+      whole: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[Cond] = {
+    if (elements.isEmpty || elements.exists(_.isEmpty)) {
+      sink.note("IN list has a null or non-literal date element", whole)
+      None
+    } else {
+      val days = elements.flatten.distinct.sorted
+      if (days.size > MaxInLiterals) {
+        sink.note(s"IN list longer than the fused cap of $MaxInLiterals", whole)
+        None
+      } else {
+        compileNode(value, inputs, literals, sink).map { compiledValue =>
+          val leaves: Seq[Cond] = days.map { d =>
+            new Compare(CompareOp.EQ, compiledValue,
+              new LiteralSlot(literals.getOrElseUpdate(d, literals.size)))
+          }
+          balancedOr(leaves)
+        }
+      }
+    }
+  }
+
+  /** Pairwise-reduces conditions into a balanced OR tree; the base of the cap arithmetic. */
+  @scala.annotation.tailrec
+  private def balancedOr(level: Seq[Cond]): Cond = {
+    if (level.size == 1) {
+      level.head
+    } else {
+      balancedOr(level.grouped(2).map {
+        case Seq(a, b) => new IROr(a, b)
+        case Seq(a) => a
+      }.toSeq)
+    }
+  }
+
+  /**
+   * Compiles the operand of a validity predicate, which must land on a bare date column: the
+   * emitter reads the column's per-lane-group validity word, and only a column's word is live
+   * before value emission (the recorded milestone-3 restriction).
+   */
+  private def compileValidity(
+      child: Expression,
+      whole: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[Cond] = {
+    compileNode(child, inputs, literals, sink) match {
+      case Some(ref: ColumnRef) => Some(new IRIsNotNull(ref))
+      case Some(_) =>
+        sink.note("validity predicate over a computed operand", whole)
+        None
+      case None => None
+    }
   }
 
   private def compare(

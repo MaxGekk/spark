@@ -53,6 +53,7 @@ the table too - this fork commits its losses:
 | Two outputs sharing a subchain (DAG-CSE) | 5.9x |
 | `CASE WHEN`, unpredictable condition | 7.0x |
 | `CASE WHEN`, predictable condition | 6.2x |
+| `CASE WHEN d IN (...)`, 5 / 16 literals | 3.5x / 4.0x (fused up to the 16-literal cap; longer lists decline with a reason) |
 | Chain of 8 date ops, columnar consumer | 7.0x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
 | Same chains through a row consumer | 0.8x - fusion still loses there (was 0.6-0.7x) |
 | `dayofweek` | 9.2x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
@@ -65,6 +66,7 @@ Regenerate with `SPARK_GENERATE_BENCHMARK_FILES=1`:
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaThroughputBenchmark"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaColdStartBenchmark"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaCodegenBenchmark"
+build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaInExpressionBenchmark"
 build/sbt "catalyst/test:runMain org.apache.spark.sql.VarkaEmitterParityBenchmark"
 ```
 
@@ -112,7 +114,10 @@ task, each with a recorded outcome:
   end-to-end number above), fuse date *filters* rather than only
   projections (where a corpus survey found 53-78% of real date references
   live), lower `IN` lists and `Coalesce` onto the mask algebra - Spark's own
-  benchmark puts `IN` over dates at 27.4 M rows/s, its slowest primitive, and
+  benchmark puts `IN` over dates at 31.2 M rows/s, its slowest primitive
+  (done - task 20 fuses `IN` in condition position at 3.5-4.0x up to a
+  16-literal cap, with `coalesce` and `IS [NOT] NULL` riding the new
+  validity condition), and
   `coalesce` is the corpus' third most common non-aggregate function - settle
   the row-consumer question above, and answer the whole-stage charter question
   in writing.

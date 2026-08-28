@@ -47,6 +47,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Dat
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not;
@@ -613,7 +614,51 @@ public final class VarkaLoopEmitter {
       case And n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Or n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Not n -> new VarkaVectorIR[] {n.child()};
+      case IsNotNull n -> new VarkaVectorIR[] {n.child()};
     };
+  }
+
+  /**
+   * Whether {@code outputs} fit this emitter's structural budgets ({@link #MAX_FUSED_NODES}
+   * distinct ops across all outputs, {@link #MAX_CHAIN_DEPTH} height per output), counted
+   * exactly as {@link Analysis} counts them. The compiler mirrors the budgets with this
+   * before accepting an entry: an over-budget shape that reaches {@link #emit} fails there
+   * with an {@code IllegalArgumentException} the evaluator can only turn into a silent
+   * per-batch fallback - no task-16 decline reason, and EXPLAIN still claims fusion. Checked
+   * here instead, the offending entry is demoted to residual with a recorded reason.
+   */
+  public static boolean fitsBudgets(java.util.List<VarkaVectorIR> outputs) {
+    java.util.HashMap<VarkaVectorIR, Integer> heights = new java.util.HashMap<>();
+    int[] opNodes = {0};
+    for (VarkaVectorIR root : outputs) {
+      if (budgetWalk(root, heights, opNodes) > MAX_CHAIN_DEPTH
+          || opNodes[0] > MAX_FUSED_NODES) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** The height of {@code node}, memoized per distinct node like {@code Analysis.height}. */
+  private static int budgetWalk(VarkaVectorIR node,
+      java.util.HashMap<VarkaVectorIR, Integer> heights, int[] opNodes) {
+    Integer memo = heights.get(node);
+    if (memo != null) {
+      return memo;
+    }
+    int height;
+    if (node instanceof ColumnRef || node instanceof LiteralSlot) {
+      height = 0;
+    } else {
+      opNodes[0]++;
+      int maxChild = 0;
+      for (VarkaVectorIR child : childrenOf(node)) {
+        maxChild = Math.max(maxChild, budgetWalk(child, heights, opNodes));
+      }
+      height = 1 + maxChild;
+    }
+    heights.put(node, height);
+    return height;
   }
 
   /**
@@ -765,6 +810,17 @@ public final class VarkaLoopEmitter {
         case And n -> analyzeOp(node, false, n.left(), n.right());
         case Or n -> analyzeOp(node, false, n.left(), n.right());
         case Not n -> analyzeOp(node, false, n.child());
+        case IsNotNull n -> {
+          // The compiler enforces this too; re-checked here because emitCond reads the
+          // child's per-input validity word, which only a column has before any value walk.
+          if (!(n.child() instanceof ColumnRef)) {
+            throw new IllegalArgumentException(
+                "IsNotNull child must be a ColumnRef, got " + n.child());
+          }
+          // skips = true states the semantics - known output from a null input - though a
+          // Cond only reaches a root through IfElse, which already marks skipping.
+          analyzeOp(node, true, n.child());
+        }
       }
       topoOrder.add(node);
       lineNumbers.put(node, topoOrder.size());
@@ -1756,6 +1812,29 @@ public final class VarkaLoopEmitter {
         }
         // Masked: kT/kF are the child's, swapped - pure slot aliasing, planned, no code.
       }
+      case IsNotNull n -> {
+        line(cb, analysis, node);
+        if (dense) {
+          // The dense body ran because every referenced input is null-free, so the
+          // predicate is constant true.
+          cb.aload(s.species);
+          cb.loadConstant(-1L);
+          cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+          cb.astore(s.condMask.get(node));
+        } else {
+          // kT = word(child); kF = ~word(child) - total: both masks cover every lane. The
+          // ~ also inverts a word's undefined bits above `lanes`; that is safe because
+          // every consumer truncates (`fromLong` reads species-length bits,
+          // `orValidityBitsAt` applies its lane mask) - the same invariant IfElse's ~kT
+          // already relies on.
+          loadWord(cb, s.wordRef.get(n.child()));
+          cb.lstore(s.kt.get(node));
+          loadWord(cb, s.wordRef.get(n.child()));
+          cb.loadConstant(-1L);
+          cb.lxor();
+          cb.lstore(s.kf.get(node));
+        }
+      }
     }
   }
 
@@ -1918,6 +1997,20 @@ public final class VarkaLoopEmitter {
           cb.iload(s.tailKf.get(n.child()));
           cb.istore(s.tailKt.get(node));
           cb.iload(s.tailKt.get(n.child()));
+          cb.istore(s.tailKf.get(node));
+        }
+      }
+      case IsNotNull n -> {
+        if (dense) {
+          // Dense rows are all-valid: constant true. No tailKf slot exists in dense mode.
+          cb.loadConstant(1);
+          cb.istore(s.tailKt.get(node));
+        } else {
+          tailValid(cb, n.child(), s);
+          cb.istore(s.tailKt.get(node));
+          cb.iload(s.tailKt.get(node));
+          cb.loadConstant(1);
+          cb.ixor();
           cb.istore(s.tailKf.get(node));
         }
       }

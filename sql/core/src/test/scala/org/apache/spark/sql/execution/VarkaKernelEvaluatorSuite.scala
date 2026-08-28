@@ -22,7 +22,7 @@ import java.nio.file.Files
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, DateAdd, LessThan, Literal, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, If, In, LessThan, Literal, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaShapeCache}
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.{DateType, IntegerType}
@@ -233,5 +233,20 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
       Alias(DateAdd(attrD, Literal(1)), "fused")())
     val elseLines = VarkaFusionReport.lines(noElse, childOutput)
     assert(elseLines(0).contains("CASE WHEN without an ELSE branch"), elseLines(0))
+  }
+
+  test("task 20: the IN cap and the validity-operand declines report their reasons") {
+    val overCap = Seq[NamedExpression](
+      Alias(If(In(attrD, (1 to 17).map(k => Literal(k, DateType))), attrD,
+        DateAdd(attrD, Literal(1))), "picked")(),
+      Alias(DateAdd(attrD, Literal(1)), "fused")())
+    val capLines = VarkaFusionReport.lines(overCap, childOutput)
+    assert(capLines(0).contains("IN list longer than the fused cap of 16"), capLines(0))
+    val computed = Seq[NamedExpression](
+      Alias(Coalesce(Seq(DateAdd(attrD, Literal(1)), attrD)), "co")(),
+      Alias(DateAdd(attrD, Literal(1)), "fused")())
+    val coalesceLines = VarkaFusionReport.lines(computed, childOutput)
+    assert(coalesceLines(0).contains(
+      "coalesce operand before the last is not a bare date column"), coalesceLines(0))
   }
 }

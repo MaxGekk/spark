@@ -248,20 +248,21 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   }
 
   test("every node type's canonical rendering is pinned, not only the chain ops") {
-    // One key that uses all 14 IR node types (and three CompareOps), so a rendering change
+    // One key that uses all 15 IR node types (and three CompareOps), so a rendering change
     // to any of them - operand order, a token - fails here even though the chain-based
-    // pinned hash above would still pass. Same update rule as above when intended.
+    // pinned hash above would still pass. Same update rule as above when intended. Task 20
+    // added IsNotNull and re-pinned the value (recorded in PLAN_TASK_20.md).
     import VarkaVectorIR._
     val cond = new And(
       new Or(
         new Compare(CompareOp.LT, columnRef, literal),
         new Not(new Compare(CompareOp.EQ, columnRef, literal))),
-      new Compare(CompareOp.GE, columnRef, literal))
+      new And(new Compare(CompareOp.GE, columnRef, literal), new IsNotNull(columnRef)))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(columnRef, literal), new SubDays(columnRef, literal)),
       new Least(new DateDiff(columnRef, new DayOfWeek(columnRef)), new WeekDay(columnRef)))
-    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "00437a3d4db2c50f")
+    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "612c94d132690dc2")
   }
 
   test("every *ForTesting hook field registers in anyTestHookSet") {
