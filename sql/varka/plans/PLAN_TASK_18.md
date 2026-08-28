@@ -371,3 +371,36 @@ fate-sharing stack was not re-flagged. What round three changed:
   lost-update window the plain reinstate had; and identities are bounded
   through the shared `SparkStringUtils.abbreviate` (marker inside the 256,
   not appended past it).
+
+## 10. Deferred: the fourth round's residue
+
+A fourth max-effort round on the fixed tree returned seven findings, none
+production-facing: three test-JVM-only items in the hook-guard machinery,
+one conf-determinism gap, three cleanups. The fixing stopped here by
+decision - the items below are deferred to the milestone-3 debt register
+(`PLAN_MILESTONE_3.md` section 10) rather than patched in this PR, because
+the right fix for the largest cluster is a refactor, not a fourth patch:
+
+* **Hooks as emit options.** The round's design finding, and the reason to
+  stop patching: the guard stack built across sections 7-9 (private
+  fields, write-generation counter, reflection-enforced registration, the
+  gate plus the snapshot) is a bolt-on, and two races remain inside it - a
+  hook set between the gate and the generation snapshot still caches its
+  bytes under the plain key, and the gate fails every concurrent lookup
+  JVM-wide instead of letting unrelated queries emit uncached. An explicit
+  emit-options record that rides the shape-cache key removes both, and the
+  enforcement suite with them, by construction.
+* **Deterministic executor-side sizing.** The lazy singleton freezes
+  whatever capacity the first-touching thread resolves, so two identically
+  configured JVMs can size differently, and a builder-set value never
+  reaches an executor at all. Needs one deterministic executor-side source
+  and a documented boundary for builder-set statics.
+* Cleanups: `recordExecution`'s retry loop is `asMap().compute` in one
+  atomic call; the entry should cache the resolved kernel constructor
+  (today a reflective `getConstructor()` per task) and derive
+  `className`/`sourceFile` from its stored hash instead of storing all
+  three.
+* From the reuse angle, adjacent: `renderLineMap` still renders IR nodes
+  via `Record.toString` into the `LineNumberTable` key baked into the now
+  shared bytes - the same unspecified-format concern `canonical` was
+  written to end.
