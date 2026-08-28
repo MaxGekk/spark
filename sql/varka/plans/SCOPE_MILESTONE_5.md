@@ -467,11 +467,14 @@ classes with committed results, and nearly every SQL one is
 never engages on any of them as written. `InMemoryColumnarBenchmark` is the only
 one that caches, and it measures cache deserialization rather than expressions.
 
-The terminal operator matters as much as the source. `.noop()` is a row
-consumer, so an Arrow-cached variant that keeps `.noop()` would measure the
-0.6-0.7x read-back band milestone 3's task 19 exists to settle, not the fused
-loop. A Varka variant needs a columnar source *and* a columnar terminal - an
-aggregate or a count.
+The terminal operator matters as much as the source. `.noop()` accepts
+columnar batches in this fork (the milestone-1 columnar-write work; it is
+what `VarkaThroughputBenchmark`'s columnar cases terminate in), so an
+Arrow-cached variant that keeps `.noop()` measures the fused loop with a
+columnar terminal. It is row terminals (`toRdd`) that measure the ~25 ns/row
+read-back floor task 19 settled. A Varka variant therefore needs a columnar
+source; `.noop()` already serves as the columnar terminal. (Corrected in
+task 19: this note originally called `.noop()` a row consumer.)
 
 With that fixed, three of Spark's benchmarks isolate the expression well enough
 to be worth extending, and four are traps:

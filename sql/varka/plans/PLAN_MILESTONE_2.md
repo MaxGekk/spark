@@ -420,14 +420,16 @@ these debts were incurred and where their outcomes belong.
   and measurement windows (`PLAN_TASK_14.md` 2.1), the full matrix was
   generated twice back to back with minimums agreeing on every claim quoted in
   the docs, and sub-1.3x claims were checked across both runs.
-* **Row-consumer fusion is unprofitable at every depth - measured in task 14,
-  decision deferred by design.** Through `toRdd` the fused chains measure 0.7x
-  Janino at depth 1 down to 0.5x at depth 8; the ~16 ns/row read-back is what
-  keeps them under 1.0x, while the decline with depth is the per-task JIT
-  warm-up (`PLAN_TASK_14.md` 7.5). Whether `VarkaColumnarRule` should decline
-  row-consumer fusions is a policy question tied to filters and the
-  Arrow-native writer, so it stays with milestone 3 rather than being swept
-  here.
+* **Row-consumer fusion was unprofitable at every measured depth - measured
+  in task 14, decided in task 19.** Through `toRdd` the fused chains measured
+  0.7x Janino at depth 1 down to 0.5x at depth 8 when this entry was written;
+  the read-back kept them under 1.0x while the decline with depth was the
+  per-task JIT warm-up (`PLAN_TASK_14.md` 7.5). Task 19 re-measured on top of
+  the class cache with heavy-op row cases added and recorded the decision: no
+  decline rule. Assemble-then-read has a flat ~25 ns/row floor (the ~16 here
+  was warm-up-contaminated), heavy shapes clear it (`dayofweek` 1.2x through
+  rows) while cheap chains do not (0.8x), and no plan-time number separates
+  the two (`PLAN_TASK_19.md` 6.2).
 * **`GROUP_BUDGET` tuning - closed in task 17, against the change.** Task 11
   left one candidate: raising 16 to ~24 so two outputs sharing a deep chain
   keep their cross-output CSE in one loop method, conditional on a
