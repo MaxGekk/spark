@@ -146,12 +146,14 @@ private[sql] object VarkaExpressionCompiler {
 
   /**
    * The most literals an `IN` list may hold and still fuse (task 20), counted after dedup.
-   * The basis, recorded in `PLAN_TASK_20.md`: 16 is the emitter's broadcast-hoist regime
-   * boundary (more literals switch every literal use to inline re-broadcast), is depth-safe
-   * under any fold shape (`MAX_CHAIN_DEPTH` = 16 while the balanced chain here is
-   * `ceil(log2 16) + 1` = 5 levels), and its 31 op nodes leave half the emitter's
-   * `MAX_FUSED_NODES` = 64 budget to the rest of the projection. Above the cap the entry
-   * declines with a reason instead of silently losing the whole kernel at emission.
+   * The basis, recorded in `PLAN_TASK_20.md`: 16 is depth-safe under any fold shape
+   * (`MAX_CHAIN_DEPTH` = 16 while the balanced chain here is `ceil(log2 16) + 1` = 5
+   * levels), and its 31 op nodes leave half the emitter's `MAX_FUSED_NODES` = 64 budget to
+   * the rest of the projection. (The emitter's broadcast hoist is NOT part of the basis:
+   * its gate counts the kernel's total literal slots, so a capped IN plus any other
+   * literal already re-broadcasts inline - the review pass corrected an earlier claim
+   * here.) Above the cap the entry declines with a reason instead of silently losing the
+   * whole kernel at emission.
    */
   private[codegen] val MaxInLiterals = 16
 
@@ -209,7 +211,7 @@ private[sql] object VarkaExpressionCompiler {
             // limits, but at emission time, where a breach can only become a silent
             // per-batch fallback - no decline reason, and EXPLAIN still claims fusion. So
             // the compiler mirrors them and demotes the overflowing entry to residual.
-            case Some(ir) if VarkaLoopEmitter.fitsBudgets((outputs :+ ir).asJava) =>
+            case Some(ir) if VarkaLoopEmitter.fitsBudgets((outputs :+ ir).asJava, inputs.size) =>
               sink.take()
               outputs += ir
               outputTypes += e.dataType
@@ -499,6 +501,7 @@ private[sql] object VarkaExpressionCompiler {
   /** Pairwise-reduces conditions into a balanced OR tree; the base of the cap arithmetic. */
   @scala.annotation.tailrec
   private def balancedOr(level: Seq[Cond]): Cond = {
+    require(level.nonEmpty, "balancedOr needs at least one condition")
     if (level.size == 1) {
       level.head
     } else {
@@ -523,7 +526,7 @@ private[sql] object VarkaExpressionCompiler {
     compileNode(child, inputs, literals, sink) match {
       case Some(ref: ColumnRef) => Some(new IRIsNotNull(ref))
       case Some(_) =>
-        sink.note("validity predicate over a computed operand", whole)
+        sink.note("validity predicate over a non-column operand", whole)
         None
       case None => None
     }

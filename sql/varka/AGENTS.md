@@ -75,7 +75,12 @@ the next person re-litigating a settled question.
   `build/sbt catalyst/doc` is the local gate that reproduces the CI failure.
 * Every hot loop method stays small by construction (`GROUP_BUDGET`): C2's compile
   time grows steeply with vector-op count, and a wide method is slower to compile
-  *and* slower to run. Sibling methods, not longer methods.
+  *and* slower to run. Sibling methods, not longer methods. One recorded exception:
+  the budget partitions *between* outputs and never splits inside one, so a single
+  output wider than the budget still forms one method - the capped `IN` chain
+  (task 20, up to 33 ops in the benchmarked shape) is the known case, its ~30 ms
+  one-time C2 compile per fresh shape accepted because the task-18 class cache
+  amortizes it and the measured win at the cap is 4.0x.
 * The ghost fallback is a correctness contract: a Varka failure degrades to the
   row engine and never fails a query. Anything that can return a *wrong* answer
   rather than fail - a cache key, for one - gets its own differential coverage,

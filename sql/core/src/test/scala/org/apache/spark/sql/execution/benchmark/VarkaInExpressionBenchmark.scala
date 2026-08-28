@@ -88,10 +88,10 @@ object VarkaInExpressionBenchmark extends SqlBasedBenchmark {
 
   private def cacheDates(session: SparkSession): Unit = {
     session.sql(
-      """select case when id % 31 = 0 then null
+      s"""select case when id % 31 = 0 then null
         |       else date_add(date'2020-01-01', cast(id as int) % 1460) end as d,
         |       cast(id as int) as i
-        |from range(0, 2000000)""".stripMargin)
+        |from range(0, $numRows)""".stripMargin)
       .createOrReplaceTempView("varka_dates")
     session.catalog.cacheTable("varka_dates")
     session.sql("select count(*) from varka_dates").collect()

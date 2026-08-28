@@ -215,7 +215,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val partial = VarkaExpressionCompiler.compilePartial(
       Seq(out(If(IsNotNull(DateAdd(d, Literal(1))), d, d2)), out(DateAdd(d, Literal(1)))),
       childOutput).get
-    assert(partial.declines(0).reason === "validity predicate over a computed operand")
+    assert(partial.declines(0).reason === "validity predicate over a non-column operand")
   }
 
   test("task 20: the identity date cast unwraps; a string-column cast still declines") {
@@ -247,6 +247,17 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(deep, out(DateAdd(d, Literal(1)))), childOutput).get
     assert(deepPartial.specs === Seq(ResidualOutput, FusedOutput(0)))
     assert(deepPartial.declines(0).reason === "exceeds the emitter's fused budget")
+    // The input-column budget is mirrored too: 33 shallow datediff entries over 66 distinct
+    // columns are only 33 ops at height 1, but 66 kernel inputs - the 33rd entry (the one
+    // that pushes past 64 columns) demotes instead of blowing up at emission.
+    val wide = (0 until 66).map(k => AttributeReference(s"w$k", DateType)())
+    val wideEntries = (0 until 33).map { k =>
+      out(DateDiff(wide(2 * k), wide(2 * k + 1)))
+    }
+    val widePartial = VarkaExpressionCompiler.compilePartial(wideEntries, wide).get
+    assert(widePartial.specs.count(_ == ResidualOutput) === 1)
+    assert(widePartial.specs.last === ResidualOutput)
+    assert(widePartial.declines(32).reason === "exceeds the emitter's fused budget")
   }
 
   test("compile is the all-entries-fused special case of compilePartial") {

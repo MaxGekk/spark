@@ -614,16 +614,21 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       (0 until depth).foldLeft[VarkaVectorIR](new ColumnRef(base)) { (n, _) =>
         new AddDays(n, new LiteralSlot(0))
       }
-    assert(VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](chain(0, 16))))
-    assert(!VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](chain(0, 17))))
+    assert(VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](chain(0, 16)), 1))
+    assert(!VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](chain(0, 17)), 1))
     // Five disjoint depth-13 chains are 65 distinct ops - the same shape the emitter's own
     // rejection test uses against MAX_FUSED_NODES.
     val five: Seq[VarkaVectorIR] = (0 until 5).map(k => chain(k, 13))
-    assert(!VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](five: _*)))
+    assert(!VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](five: _*), 5))
     // A shared subtree is one node, exactly as Analysis counts it.
     val shared = chain(0, 13)
     val sharedFive: Seq[VarkaVectorIR] = Seq.fill(5)(shared)
-    assert(VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](sharedFive: _*)))
+    assert(VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](sharedFive: _*), 1))
+    // The input-column cap is mirrored too (the review found it missing): the emitter's
+    // emit() rejects numInputs > 64, so the compiler must never accept such a projection.
+    val one = java.util.List.of[VarkaVectorIR](chain(0, 1))
+    assert(VarkaLoopEmitter.fitsBudgets(one, 64))
+    assert(!VarkaLoopEmitter.fitsBudgets(one, 65))
   }
 
   test("greatest and least skip nulls, nested to the n-ary fold shape") {

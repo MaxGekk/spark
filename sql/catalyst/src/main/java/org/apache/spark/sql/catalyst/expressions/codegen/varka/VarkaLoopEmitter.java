@@ -619,15 +619,20 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Whether {@code outputs} fit this emitter's structural budgets ({@link #MAX_FUSED_NODES}
-   * distinct ops across all outputs, {@link #MAX_CHAIN_DEPTH} height per output), counted
-   * exactly as {@link Analysis} counts them. The compiler mirrors the budgets with this
-   * before accepting an entry: an over-budget shape that reaches {@link #emit} fails there
-   * with an {@code IllegalArgumentException} the evaluator can only turn into a silent
-   * per-batch fallback - no task-16 decline reason, and EXPLAIN still claims fusion. Checked
-   * here instead, the offending entry is demoted to residual with a recorded reason.
+   * Whether {@code outputs} over {@code numInputs} kernel columns fit this emitter's
+   * structural budgets ({@link #MAX_FUSED_NODES} distinct ops across all outputs,
+   * {@link #MAX_CHAIN_DEPTH} height per output, {@link #MAX_INPUTS} columns), counted
+   * exactly as {@link Analysis} and {@link #emit} count them. The compiler mirrors the
+   * budgets with this before accepting an entry: an over-budget shape that reaches
+   * {@link #emit} fails there with an {@code IllegalArgumentException} the evaluator can
+   * only turn into a silent per-batch fallback - no task-16 decline reason, and EXPLAIN
+   * still claims fusion. Checked here instead, the offending entry is demoted to residual
+   * with a recorded reason.
    */
-  public static boolean fitsBudgets(java.util.List<VarkaVectorIR> outputs) {
+  public static boolean fitsBudgets(java.util.List<VarkaVectorIR> outputs, int numInputs) {
+    if (numInputs > MAX_INPUTS) {
+      return false;
+    }
     java.util.HashMap<VarkaVectorIR, Integer> heights = new java.util.HashMap<>();
     int[] opNodes = {0};
     for (VarkaVectorIR root : outputs) {

@@ -292,8 +292,11 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
   test("task 20: IN over date literals fuses to the cap and declines above it") {
     cacheDates(spark)
     cacheDates(varkaSpark)
+    // Base 2023-12-27 with step 3 intersects the table (2023-12-27 itself and 2024-01-02),
+    // so the fused EQ path is exercised on true lanes, not only on the all-miss ELSE side -
+    // the review caught the original base (2023-12-25) never matching any row.
     def literals(n: Int): String = (0 until n).map { k =>
-      s"DATE'${java.time.LocalDate.of(2023, 12, 25).plusDays(k * 3L)}'"
+      s"DATE'${java.time.LocalDate.of(2023, 12, 27).plusDays(k * 3L)}'"
     }.mkString(", ")
     // 5 literals arrive as In, 16 as InSet (the optimizer's inSetConversionThreshold is 10);
     // both lists hit and miss real rows, and the null row's unknown condition falls to ELSE.

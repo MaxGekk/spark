@@ -50,7 +50,7 @@ days since epoch) and foldable integer day offsets:
   with a recorded reason rather than risking the emitter's budgets.
 * `COALESCE` / `NVL` / `IFNULL` / `NVL2` and the `IS [NOT] NULL` predicates
   (task 20), lowered onto a validity-reading condition. Every guarded
-  operand must be a bare date column; a computed operand declines.
+  operand must be a bare date column; a non-column operand declines.
 * `GREATEST` / `LEAST` (null-skipping) and `DAYOFWEEK` / `WEEKDAY`.
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
@@ -442,11 +442,14 @@ The real current edges, stated with their numbers where they have one:
   kernel, and 16 literals per fused `IN` list. Since task 20 the compiler
   mirrors the depth and op budgets and demotes an overflowing entry to
   residual with a recorded reason, instead of the whole kernel silently
-  falling back per batch at emission. A capped `IN` still emits its 31-op
-  chain into one loop method - twice the per-method `GROUP_BUDGET` - so a
-  fresh IN shape's first execution pays a one-time C2 compile of roughly
-  1 ms per vector op; the class cache amortizes it across every later task
-  of that shape.
+  falling back per batch at emission. A capped `IN` still lands in one
+  loop method (the emitter never splits inside an output): 33 vector ops
+  in the benchmarked cap shape - 16 EQ + 15 OR + the blend + the branch
+  arithmetic, about twice the per-method `GROUP_BUDGET` - so a fresh IN
+  shape's first execution pays a one-time C2 compile of roughly 1 ms per
+  vector op; the class cache amortizes it across every later task of that
+  shape, and the exception is registered with the `GROUP_BUDGET` rule in
+  `sql/varka/AGENTS.md`.
 
 ## Building, testing and running benchmarks
 

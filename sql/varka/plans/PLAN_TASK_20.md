@@ -137,12 +137,45 @@ reference.
 * The all-node-types golden hash was re-pinned for the 15th record
   (`612c94d132690dc2`), per the suite's update rule.
 * Recorded from the post-commit review pass: a capped `IN` still emits a
-  32-op single-output loop method - twice `GROUP_BUDGET` - so a fresh IN
-  shape's first execution pays a ~30 ms one-time C2 compile, amortized by
-  the task-18 class cache thereafter (now stated in the docs' caps
-  bullet); and the compiler's budget probe re-walks the accepted outputs
-  once per entry, O(entries x nodes) at plan time - a known choice kept
-  for simplicity at the current caps, not an oversight.
+  single-output loop method at about twice `GROUP_BUDGET` (33 ops in the
+  benchmarked shape: 16 EQ + 15 OR + blend + branch arithmetic - an
+  earlier version of this bullet said 32, counting the chain and blend
+  only), so a fresh IN shape's first execution pays a ~30 ms one-time C2
+  compile, amortized by the task-18 class cache thereafter. The exception
+  to the sibling-methods rule is registered in `sql/varka/AGENTS.md`. And
+  the compiler's budget probe re-walks the accepted outputs once per
+  entry, O(entries x nodes) at plan time - a known choice kept for
+  simplicity at the current caps, not an oversight.
+
+### 5.3 Corrections from the independent review round
+
+A second, independent max review (run after the connection-troubled first
+attempt) returned eight findings; all fixed on the branch. The ones that
+correct this file's own record:
+
+* **The cap-basis claim about the broadcast hoist was wrong** (section 2's
+  first bullet, prediction 2's "the >16-literal broadcast regime does not
+  apply at exactly 16", and section 4's explanation of the 12-vs-15 ms
+  observation): the emitter's hoist gate counts the kernel's *total*
+  literal slots, so the benchmarked cap case (16 IN literals + the
+  `date_add` offset = 17 slots) is already in the inline re-broadcast
+  regime, while the 5-literal case is hoisted. The cap's surviving basis
+  is depth safety and node-budget headroom; the 12-vs-15 ms observation
+  stands but its recorded explanation was backwards - the faster
+  16-literal case is the *unhoisted* one, so nothing rests on it.
+* **The budget mirror was incomplete**: it checked depth and op count but
+  not the emitter's 64-input-column cap, so a 66-column projection could
+  still hit the silent per-batch fallback the mirror exists to prevent.
+  `fitsBudgets` now takes the input count; a compiler test pins a
+  33-entry, 66-column projection demoting its overflow entry.
+* **The IN differential's literals never matched a row** - the fused
+  EQ-true path was untested end to end and the test's own comment claimed
+  otherwise. The literal base moved to 2023-12-27 (hits two table dates).
+* Smaller: the benchmark's cached-table row count now interpolates
+  `numRows` instead of hardcoding it; `balancedOr` pins its non-empty
+  precondition with a `require`; and the validity-predicate decline reason
+  now reads "over a non-column operand" (a literal operand is not
+  "computed").
 
 ## 6. Explicitly out of task 20
 
