@@ -136,6 +136,13 @@ reference.
   whole kernel silently fell back per batch at emission.
 * The all-node-types golden hash was re-pinned for the 15th record
   (`612c94d132690dc2`), per the suite's update rule.
+* Recorded from the post-commit review pass: a capped `IN` still emits a
+  32-op single-output loop method - twice `GROUP_BUDGET` - so a fresh IN
+  shape's first execution pays a ~30 ms one-time C2 compile, amortized by
+  the task-18 class cache thereafter (now stated in the docs' caps
+  bullet); and the compiler's budget probe re-walks the accepted outputs
+  once per entry, O(entries x nodes) at plan time - a known choice kept
+  for simplicity at the current caps, not an oversight.
 
 ## 6. Explicitly out of task 20
 

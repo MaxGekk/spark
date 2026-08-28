@@ -317,6 +317,13 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
           "FROM varka_dates ORDER BY a",
         expectFused = false)
     }
+    // A non-literal element makes the whole list ineligible - correct on the row engine.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      s"SELECT CASE WHEN d IN (d2, ${literals(3)}) THEN d ELSE date_add(d, 4) END AS a " +
+        "FROM varka_date_pairs ORDER BY a",
+      expectFused = false)
   }
 
   test("task 20: coalesce, nvl, ifnull and nvl2 fuse and match the row engine") {

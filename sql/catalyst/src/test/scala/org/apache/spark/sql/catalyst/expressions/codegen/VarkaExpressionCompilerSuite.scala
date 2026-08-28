@@ -153,6 +153,13 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(out(If(InSet(d, Set[Any](20, 5, 11)), d, d2))), childOutput).get
     assert(viaInSet.outputs === compiled.outputs)
     assert(viaInSet.literals === compiled.literals)
+    // And at the cap size - the shape that actually arrives as InSet past the optimizer's
+    // threshold of 10 - the full sorted slot sequence is pinned: sixteen elements handed
+    // over in descending order must register ascending, or the shape hash drifts run to run.
+    val days16 = (1 to 16).map(_ * 7)
+    val atCap = VarkaExpressionCompiler.compile(
+      Seq(out(If(InSet(d, Set[Any](days16.reverse: _*)), d, d2))), childOutput).get
+    assert(atCap.literals === days16)
   }
 
   test("task 20: the IN cap - 16 literals fuse, 17 decline with the recorded reason") {

@@ -435,7 +435,11 @@ The real current edges, stated with their numbers where they have one:
   kernel, and 16 literals per fused `IN` list. Since task 20 the compiler
   mirrors the depth and op budgets and demotes an overflowing entry to
   residual with a recorded reason, instead of the whole kernel silently
-  falling back per batch at emission.
+  falling back per batch at emission. A capped `IN` still emits its 31-op
+  chain into one loop method - twice the per-method `GROUP_BUDGET` - so a
+  fresh IN shape's first execution pays a one-time C2 compile of roughly
+  1 ms per vector op; the class cache amortizes it across every later task
+  of that shape.
 
 ## Building, testing and running benchmarks
 
