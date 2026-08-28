@@ -194,6 +194,27 @@ attributes alone did not answer:
   ELSE branch", "non-date column of type ..." - in the query's own column
   names. The same account goes to the debug log once per task.
 
+Task 22 extends the account to the SQL UI and to JDK Flight Recorder:
+
+* **Fallback causes are SQL metrics.** Both Varka nodes carry, beside the
+  row/batch counts and the class-cache hits and misses, four cause-keyed
+  metrics: batches falling back because the input was not Arrow-backed,
+  batches the ghost fallback caught a kernel failure on, tasks that could
+  not emit or define their kernel class, and the projection's residual-entry
+  count (a static plan property, added once driver-side; the per-entry
+  reasons stay in verbose `EXPLAIN`). A fallen-back query is diagnosable
+  from the SQL UI alone: the cause class from the metrics, the exact reason
+  from `EXPLAIN` or the log.
+* **JFR events.** Three events under the `Varka` category fire while a JDK
+  Flight Recorder recording is active - no JVM flag or build change is
+  needed, `jdk.jfr` is a default module: `org.apache.spark.sql.varka.
+  KernelEmission` (timed over emit plus class define; shape hash, class
+  name, IR sizes, byte count), `...ShapeCacheLookup` (shape hash, hit,
+  the per-execution identity - the join a profile needs), and
+  `...Fallback` (cause, kernel identity, exception class). Record with a
+  programmatic `jdk.jfr.Recording`, `jcmd JFR.start`, or
+  `-XX:StartFlightRecording`.
+
 All of it is metadata or diagnostics: the emitted methods are byte-identical
 with and without the attributes, which the JVM ignores by specification.
 `VarkaDebugInfoReader` turns captured class bytes back into those strings.

@@ -24,7 +24,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, JoinedRow, NamedExpression, SortOrder, UnsafeProjection}
-import org.apache.spark.sql.catalyst.expressions.codegen.{ForwardedOutput, FusedOutput, ResidualOutput}
+import org.apache.spark.sql.catalyst.expressions.codegen.{ForwardedOutput, FusedOutput, ResidualOutput, VarkaExpressionCompiler}
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.CompletionIterator
@@ -87,7 +87,15 @@ case class VarkaColumnarToRowExec(
     "numVarkaCacheHits" -> SQLMetrics.createMetric(
       sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
     "numVarkaCacheMisses" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks that emitted and defined the Varka kernel class"))
+      sparkContext, "number of tasks that emitted and defined the Varka kernel class"),
+    "numFallbackBatchesNonArrow" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: input not Arrow-backed"),
+    "numFallbackBatchesKernel" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
+    "numEmissionFailures" -> SQLMetrics.createMetric(
+      sparkContext, "tasks that could not emit or define the kernel class"),
+    "numResidualEntries" -> SQLMetrics.createMetric(
+      sparkContext, "projection entries declined to the per-row residual (reasons in EXPLAIN)"))
 
   // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -102,6 +110,18 @@ case class VarkaColumnarToRowExec(
   }
 
   override def doExecute(): RDD[InternalRow] = {
+    // Task 22: the residual-entry count is a static plan property - added once, driver-side,
+    // so the UI total does not multiply by task count. The per-entry reasons are in EXPLAIN.
+    longMetric("numResidualEntries") +=
+      VarkaExpressionCompiler.compilePartial(projectList, child.output)
+        .map(_.declines.size.toLong).getOrElse(0L)
+    val varkaMetrics = VarkaExecMetrics(
+      varkaBatches = Some(longMetric("numVarkaBatches")),
+      cacheHits = Some(longMetric("numVarkaCacheHits")),
+      cacheMisses = Some(longMetric("numVarkaCacheMisses")),
+      fallbackBatchesNonArrow = Some(longMetric("numFallbackBatchesNonArrow")),
+      fallbackBatchesKernel = Some(longMetric("numFallbackBatchesKernel")),
+      emissionFailures = Some(longMetric("numEmissionFailures")))
     val evaluatorFactory = new VarkaColumnarToRowEvaluatorFactory(
       projectList,
       child.output,
@@ -109,9 +129,7 @@ case class VarkaColumnarToRowExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      longMetric("numVarkaBatches"),
-      longMetric("numVarkaCacheHits"),
-      longMetric("numVarkaCacheMisses"))
+      varkaMetrics)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -145,9 +163,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
-    numVarkaBatches: SQLMetric,
-    numVarkaCacheHits: SQLMetric,
-    numVarkaCacheMisses: SQLMetric)
+    varkaMetrics: VarkaExecMetrics)
     extends PartitionEvaluatorFactory[ColumnarBatch, InternalRow] with Logging {
 
   override def createEvaluator(): PartitionEvaluator[ColumnarBatch, InternalRow] = {
@@ -178,7 +194,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
 
     private val kernels = new VarkaKernelEvaluator(
       projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "ProjectToRow",
-      classDumpDirectory, Some(numVarkaCacheHits), Some(numVarkaCacheMisses))
+      classDumpDirectory, varkaMetrics)
 
     // Merge-at-row (task 12, 2.3): for a projection with forwarded or residual entries the
     // kernels produce only the fused columns, and this projection - over the input row joined
@@ -220,15 +236,25 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
       if (kernels.canRun(input)) {
         try {
           val rows = runKernels(input)
-          numVarkaBatches += 1
+          varkaMetrics.varkaBatches.foreach(_ += 1)
           rows
         } catch {
           case e if kernels.isCatchable(e) =>
             logWarning(s"The Varka SIMD kernels ${kernels.kernelIdentity} failed on this " +
               "batch; falling back to the per-row projection.", e)
+            varkaMetrics.fallbackBatchesKernel.foreach(_ += 1)
+            VarkaKernelEvaluator.emitFallbackEvent("kernel-failure", kernels.kernelIdentity,
+              e.getClass.getName)
             fallback(input)
         }
+      } else if (kernels.emissionFailed) {
+        // Already counted once per task (and evented) by the evaluator's emission catch;
+        // counting these batches as non-Arrow would mislabel the cause.
+        fallback(input)
       } else {
+        // A batch canRun refused: not Arrow-backed, or the vectors do not match the batch.
+        varkaMetrics.fallbackBatchesNonArrow.foreach(_ += 1)
+        VarkaKernelEvaluator.emitFallbackEvent("non-arrow-batch", kernels.kernelIdentity, "")
         fallback(input)
       }
     }
