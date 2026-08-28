@@ -18,10 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, DateAdd, DateDiff, DateSub, DayOfWeek, EqualNullSafe, EqualTo, GreaterThan, Greatest, If, LessThan, Literal, NamedExpression, Not, Or, WeekDay}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, NamedExpression, Not, Nvl, Nvl2, Or, WeekDay}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
-import org.apache.spark.sql.types.{DateType, IntegerType}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
+import org.apache.spark.sql.types.{DateType, IntegerType, StringType}
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -132,6 +132,132 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // A comparison as a projection output is a boolean column - out of scope, interior only.
     assert(VarkaExpressionCompiler.compile(
       Seq(out(LessThan(d, d2))), childOutput).isEmpty)
+  }
+
+  test("task 20: IN dedups and sorts date literals into a balanced OR of EQ") {
+    val expr = If(
+      In(d, Seq(Literal(20, DateType), Literal(5, DateType), Literal(20, DateType),
+        Literal(11, DateType))),
+      d, d2)
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(expr)), childOutput).get
+    val c0 = new ColumnRef(0)
+    def eq(slot: Int): Compare = new Compare(CompareOp.EQ, c0, new LiteralSlot(slot))
+    // Slots in sorted-day order (5, 11, 20), the duplicate collapsed; the fold is balanced
+    // pairwise, so three leaves become Or(Or(e0, e1), e2) - the shape the cap arithmetic
+    // and the shape hash both depend on.
+    assert(compiled.literals === Seq(5, 11, 20))
+    assert(compiled.outputs === Seq(new IfElse(
+      new IROr(new IROr(eq(0), eq(1)), eq(2)), c0, new ColumnRef(1))))
+    // InSet hands the same values over as an unordered set and must compile identically.
+    val viaInSet = VarkaExpressionCompiler.compile(
+      Seq(out(If(InSet(d, Set[Any](20, 5, 11)), d, d2))), childOutput).get
+    assert(viaInSet.outputs === compiled.outputs)
+    assert(viaInSet.literals === compiled.literals)
+    // And at the cap size - the shape that actually arrives as InSet past the optimizer's
+    // threshold of 10 - the full sorted slot sequence is pinned: sixteen elements handed
+    // over in descending order must register ascending, or the shape hash drifts run to run.
+    val days16 = (1 to 16).map(_ * 7)
+    val atCap = VarkaExpressionCompiler.compile(
+      Seq(out(If(InSet(d, Set[Any](days16.reverse: _*)), d, d2))), childOutput).get
+    assert(atCap.literals === days16)
+  }
+
+  test("task 20: the IN cap - 16 literals fuse, 17 decline with the recorded reason") {
+    def inIf(n: Int): NamedExpression =
+      out(If(In(d, (1 to n).map(k => Literal(k * 3, DateType))), d, d2))
+    assert(VarkaExpressionCompiler.compile(Seq(inIf(16)), childOutput).isDefined)
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(inIf(17), out(DateAdd(d, Literal(1)))), childOutput).get
+    assert(partial.specs === Seq(ResidualOutput, FusedOutput(0)))
+    assert(partial.declines(0).reason === "IN list longer than the fused cap of 16")
+    // A null element can never match by SQL's IN semantics but makes the no-match result
+    // unknown; it stays declined rather than modeled.
+    val withNull = out(If(In(d, Seq(Literal(1, DateType), Literal(null, DateType))), d, d2))
+    val p2 = VarkaExpressionCompiler.compilePartial(
+      Seq(withNull, out(DateAdd(d, Literal(1)))), childOutput).get
+    assert(p2.declines(0).reason === "IN list has a null or non-literal date element")
+  }
+
+  test("task 20: coalesce lowers onto the validity condition; guarded operands are columns") {
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(Coalesce(Seq(d, d2, Literal(7, DateType))))), childOutput).get
+    val c0 = new ColumnRef(0)
+    val c1 = new ColumnRef(1)
+    assert(compiled.outputs === Seq(new IfElse(new IRIsNotNull(c0), c0,
+      new IfElse(new IRIsNotNull(c1), c1, new LiteralSlot(0)))))
+    // A computed operand before the last cannot be guarded - its validity word is not live
+    // before value emission - and declines with its own reason.
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Coalesce(Seq(DateAdd(d, Literal(1)), d2))), out(DateAdd(d, Literal(1)))),
+      childOutput).get
+    assert(partial.declines(0).reason ===
+      "coalesce operand before the last is not a bare date column")
+  }
+
+  test("task 20: IS [NOT] NULL compile; nvl and nvl2 arrive through their replacements") {
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(If(IsNotNull(d), d, d2)), out(If(IsNull(d), d2, d))), childOutput).get
+    val c0 = new ColumnRef(0)
+    val c1 = new ColumnRef(1)
+    assert(compiled.outputs === Seq(
+      new IfElse(new IRIsNotNull(c0), c0, c1),
+      new IfElse(new IRNot(new IRIsNotNull(c0)), c1, c0)))
+    // Hand-built RuntimeReplaceables compile through their replacement - the same trees a
+    // real query hands over after the optimizer's ReplaceExpressions.
+    val viaNvl = VarkaExpressionCompiler.compile(Seq(out(new Nvl(d, d2))), childOutput).get
+    assert(viaNvl.outputs === Seq(new IfElse(new IRIsNotNull(c0), c0, c1)))
+    val viaNvl2 = VarkaExpressionCompiler.compile(
+      Seq(out(new Nvl2(d, d2, DateAdd(d2, Literal(1))))), childOutput).get
+    assert(viaNvl2.outputs === Seq(new IfElse(new IRIsNotNull(c0), c1,
+      new AddDays(c1, new LiteralSlot(0)))))
+    // A validity predicate over a computed operand declines: the emitter reads the child's
+    // per-input validity word, which only a column has before value emission.
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(If(IsNotNull(DateAdd(d, Literal(1))), d, d2)), out(DateAdd(d, Literal(1)))),
+      childOutput).get
+    assert(partial.declines(0).reason === "validity predicate over a non-column operand")
+  }
+
+  test("task 20: the identity date cast unwraps; a string-column cast still declines") {
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(Cast(DateAdd(d, Literal(3)), DateType))), childOutput).get
+    assert(compiled.outputs === Seq(new AddDays(new ColumnRef(0), new LiteralSlot(0))))
+    // A string column cast is a per-row parse with no string lane.
+    val s = AttributeReference("s", StringType)()
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Cast(s, DateType)), out(DateAdd(d, Literal(1)))), s +: childOutput).get
+    assert(partial.declines(0).reason === "unsupported expression")
+  }
+
+  test("task 20: the compiler mirrors the emitter budgets and demotes the overflow entry") {
+    def inIf(base: Int): NamedExpression =
+      out(If(In(d, (1 to 16).map(k => Literal(base + k, DateType))), d, d2))
+    // Two 16-literal INs are exactly 64 distinct ops (2 x (16 EQ + 15 OR + 1 IfElse)); a
+    // third entry's single op would be the 65th. Before task 20 this shape reached the
+    // emitter and lost the whole kernel to a silent per-batch fallback; now the overflow
+    // entry demotes to residual with a recorded reason.
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(inIf(0), inIf(1000), out(DateAdd(d, Literal(9999)))), childOutput).get
+    assert(partial.specs === Seq(FusedOutput(0), FusedOutput(1), ResidualOutput))
+    assert(partial.declines(2).reason === "exceeds the emitter's fused budget")
+    // The depth budget is mirrored the same way: a 17-deep chain compiled fine before task
+    // 20 and then failed at emission.
+    val deep = out((0 until 17).foldLeft[Expression](d)((e, k) => DateAdd(e, Literal(k + 1))))
+    val deepPartial = VarkaExpressionCompiler.compilePartial(
+      Seq(deep, out(DateAdd(d, Literal(1)))), childOutput).get
+    assert(deepPartial.specs === Seq(ResidualOutput, FusedOutput(0)))
+    assert(deepPartial.declines(0).reason === "exceeds the emitter's fused budget")
+    // The input-column budget is mirrored too: 33 shallow datediff entries over 66 distinct
+    // columns are only 33 ops at height 1, but 66 kernel inputs - the 33rd entry (the one
+    // that pushes past 64 columns) demotes instead of blowing up at emission.
+    val wide = (0 until 66).map(k => AttributeReference(s"w$k", DateType)())
+    val wideEntries = (0 until 33).map { k =>
+      out(DateDiff(wide(2 * k), wide(2 * k + 1)))
+    }
+    val widePartial = VarkaExpressionCompiler.compilePartial(wideEntries, wide).get
+    assert(widePartial.specs.count(_ == ResidualOutput) === 1)
+    assert(widePartial.specs.last === ResidualOutput)
+    assert(widePartial.declines(32).reason === "exceeds the emitter's fused budget")
   }
 
   test("compile is the all-entries-fused special case of compilePartial") {

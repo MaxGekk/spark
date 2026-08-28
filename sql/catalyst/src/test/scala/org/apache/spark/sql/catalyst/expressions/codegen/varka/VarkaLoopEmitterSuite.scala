@@ -222,6 +222,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         case _ => None
       }
     case n: Not => evalCond(n.child(), row, lits).map(!_)
+    // The first total condition (task 20): IS NOT NULL never returns unknown - a null
+    // operand is a definite false, not a missing answer.
+    case n: IsNotNull => Some(evalValue(n.child(), row, lits).isDefined)
   }
 
   private def defaultData(col: Int, i: Int): Int = (i * (col + 3)) % 23 - 11
@@ -565,6 +568,67 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       new And(new Compare(CompareOp.EQ, a, c), new Compare(CompareOp.LE, b, c)))
     val root = new IfElse(cond, new AddDays(a, new LiteralSlot(0)), b)
     checkMatrix(Seq(root), 3, Array(11), Seq(17, 64, 1000), combos(3), ctx = "kleene")
+  }
+
+  test("task 20: coalesce lowers to IfElse over IsNotNull and matches the reference") {
+    val a = new ColumnRef(0)
+    val b = new ColumnRef(1)
+    val c = new ColumnRef(2)
+    // coalesce(a, b) and coalesce(a, b, c) exactly as the compiler lowers them, plus a
+    // computed last operand - only the guarded operands are restricted to columns.
+    val roots = Seq[VarkaVectorIR](
+      new IfElse(new IsNotNull(a), a, b),
+      new IfElse(new IsNotNull(a), a, new IfElse(new IsNotNull(b), b, c)),
+      new IfElse(new IsNotNull(a), a, new AddDays(b, new LiteralSlot(0))))
+    checkMatrix(roots, 3, Array(9), Seq(1, 17, 64, 65, 1000), combos(3), ctx = "coalesce")
+  }
+
+  test("task 20: a validity predicate among the connectives keeps Kleene's rules") {
+    // IsNotNull is the first *total* condition - never unknown - and the pair algebra must
+    // absorb it unchanged: AND/OR against an unknown comparison, and IS NULL as NOT over it
+    // (a slot swap in the masked body).
+    val a = new ColumnRef(0)
+    val b = new ColumnRef(1)
+    val cond = new Or(
+      new And(new IsNotNull(a), new Compare(CompareOp.LT, a, b)),
+      new Not(new IsNotNull(b)))
+    val root = new IfElse(cond, new Greatest(a, b), new SubDays(b, new LiteralSlot(0)))
+    checkMatrix(Seq(root), 2, Array(5), Seq(1, 17, 64, 65, 1000), combos(2), ctx = "validity")
+    // Dense/masked agreement on null-free data, where the predicate is constant true.
+    val nullFree = Seq(Seq[Int => Boolean](_ => false, _ => false))
+    checkMatrix(Seq(root), 2, Array(5), Seq(17, 65), nullFree, forceMasked = true,
+      ctx = "validity-forced-masked")
+  }
+
+  test("task 20: IsNotNull over a computed operand is rejected at analysis") {
+    // The compiler already declines this shape; the emitter re-checks because its emission
+    // reads the child's per-input validity word, which only a column has before value walks.
+    val bad = new IfElse(new IsNotNull(new AddDays(new ColumnRef(0), new LiteralSlot(0))),
+      new ColumnRef(0), new ColumnRef(0))
+    val e = intercept[IllegalArgumentException](emitMulti(Seq(bad), 1, 1))
+    assert(e.getMessage.contains("IsNotNull child must be a ColumnRef"))
+  }
+
+  test("task 20: fitsBudgets mirrors the analysis caps, distinct ops across outputs") {
+    def chain(base: Int, depth: Int): VarkaVectorIR =
+      (0 until depth).foldLeft[VarkaVectorIR](new ColumnRef(base)) { (n, _) =>
+        new AddDays(n, new LiteralSlot(0))
+      }
+    assert(VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](chain(0, 16)), 1))
+    assert(!VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](chain(0, 17)), 1))
+    // Five disjoint depth-13 chains are 65 distinct ops - the same shape the emitter's own
+    // rejection test uses against MAX_FUSED_NODES.
+    val five: Seq[VarkaVectorIR] = (0 until 5).map(k => chain(k, 13))
+    assert(!VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](five: _*), 5))
+    // A shared subtree is one node, exactly as Analysis counts it.
+    val shared = chain(0, 13)
+    val sharedFive: Seq[VarkaVectorIR] = Seq.fill(5)(shared)
+    assert(VarkaLoopEmitter.fitsBudgets(java.util.List.of[VarkaVectorIR](sharedFive: _*), 1))
+    // The input-column cap is mirrored too (the review found it missing): the emitter's
+    // emit() rejects numInputs > 64, so the compiler must never accept such a projection.
+    val one = java.util.List.of[VarkaVectorIR](chain(0, 1))
+    assert(VarkaLoopEmitter.fitsBudgets(one, 64))
+    assert(!VarkaLoopEmitter.fitsBudgets(one, 65))
   }
 
   test("greatest and least skip nulls, nested to the n-ary fold shape") {

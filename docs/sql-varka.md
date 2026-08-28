@@ -43,7 +43,14 @@ days since epoch) and foldable integer day offsets:
   emitter's chain cap, including chains mixing them.
 * `CASE WHEN` and `IF` over date comparisons (`<`, `<=`, `>`, `>=`, `=`) and
   their `AND` / `OR` / `NOT` combinations - executed branch-free by mask
-  blend, with SQL's three-valued null semantics.
+  blend, with SQL's three-valued null semantics. `BETWEEN` arrives from the
+  optimizer as its paired comparisons and fuses the same way.
+* `IN` over date literals in condition position (task 20): an EQ chain
+  joined by OR, capped at 16 deduplicated literals - a longer list declines
+  with a recorded reason rather than risking the emitter's budgets.
+* `COALESCE` / `NVL` / `IFNULL` / `NVL2` and the `IS [NOT] NULL` predicates
+  (task 20), lowered onto a validity-reading condition. Every guarded
+  operand must be a bare date column; a non-column operand declines.
 * `GREATEST` / `LEAST` (null-skipping) and `DAYOFWEEK` / `WEEKDAY`.
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
@@ -432,7 +439,17 @@ The real current edges, stated with their numbers where they have one:
 * **No whole-stage codegen integration.** The Varka nodes are not
   `CodegenSupport`; whole-stage codegen splits at the boundary.
 * **Emitter caps**: chain depth 16, 64 distinct ops, 64 input columns per
-  kernel; beyond them the projection (or entry) falls back.
+  kernel, and 16 literals per fused `IN` list. Since task 20 the compiler
+  mirrors the depth and op budgets and demotes an overflowing entry to
+  residual with a recorded reason, instead of the whole kernel silently
+  falling back per batch at emission. A capped `IN` still lands in one
+  loop method (the emitter never splits inside an output): 33 vector ops
+  in the benchmarked cap shape - 16 EQ + 15 OR + the blend + the branch
+  arithmetic, about twice the per-method `GROUP_BUDGET` - so a fresh IN
+  shape's first execution pays a one-time C2 compile of roughly 1 ms per
+  vector op; the class cache amortizes it across every later task of that
+  shape, and the exception is registered with the `GROUP_BUDGET` rule in
+  `sql/varka/AGENTS.md`.
 
 ## Building, testing and running benchmarks
 
@@ -445,5 +462,6 @@ build/sbt "sql/testOnly org.apache.spark.sql.execution.VarkaDifferentialSuite"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaThroughputBenchmark"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaColdStartBenchmark"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaCodegenBenchmark"
+build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaInExpressionBenchmark"
 build/sbt "catalyst/test:runMain org.apache.spark.sql.VarkaEmitterParityBenchmark"
 ```
