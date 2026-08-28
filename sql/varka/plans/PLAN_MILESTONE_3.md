@@ -181,7 +181,7 @@ milestone 4 resumes it at 23.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
-| 18 | Cross-task class reuse | Shape-signature key derived structurally from the IR; a bounded LRU loader/class cache replacing per-task define; shape-hash class naming with the per-execution identity moved to a side table the diagnostics reader joins; cache hit/miss counters | The differential suites pass with the cache warm as well as cold; committed `dayofweek` and depth-8 columnar cases lose the per-task surcharge; a 10k-distinct-shape stress keeps Metaspace bounded, with eviction proven by weak reference |
+| 18 | **Cross-task class reuse** | Shape-signature key derived structurally from the IR; a bounded LRU loader/class cache replacing per-task define; shape-hash class naming with the per-execution identity moved to a side table the diagnostics reader joins; cache hit/miss counters. **DONE** (`PLAN_TASK_18.md`): every gate cleared with room - the depth curve is flat at 6.5-7.2x (was 2.2x eroding to 1.3x), `dayofweek` 9.2x (was 1.2x), the row-consumer matrix flat at 0.8x for task 19; the key excludes input ordinals and output types, which never affect the bytes; the PR's review residue is a debt-register entry (section 10) | The differential suites pass with the cache warm as well as cold; committed `dayofweek` and depth-8 columnar cases lose the per-task surcharge; a 10k-distinct-shape stress keeps Metaspace bounded, with eviction proven by weak reference |
 | 19 | Fuse profitability, decided | Re-measured row-consumer matrix on top of 18; either a rule that declines row-consumer fusions (with the plan test that proves it) or a recorded decision not to, with the docs' honest row regenerated | Committed numbers before and after; no regression on the columnar cases; the decision is a paragraph with a number in it |
 | 20 | The four gating shapes | `cast(string AS DATE)` folding, `BETWEEN` -> paired comparisons, `In`/`InSet` over the existing lane types -> a `Compare(EQ)` chain joined by `Or`, and `Coalesce` -> a `blend` chain over a new validity-reading condition node (with `IsNull`/`IsNotNull` riding it), all in `VarkaExpressionCompiler`; a literal-count cap for `In` with a recorded number | Differential over the survey's shapes, over `IN` lists at 5, 50, 200 and 500 literals including the cap boundary, and over `Coalesce` with every null pattern including all-null and no-null arguments; the three-valued rules still hold for `And`/`Or` with a validity predicate among their operands; the corpus' wrapped date expressions compile where they previously declined, with decline reasons (task 16) showing the change; a columnar-terminal variant of Spark's `InExpressionBenchmark` committed against its upstream baseline |
 | 21 | Filters and selection vectors | Mask as a first-class value leaving the loop; selection vector with the ~15% compaction rule; `VarkaColumnarRule` rewriting a filter, and the batch contract for a selected batch | Differential on filter-heavy shapes including all-selected and none-selected; committed throughput against Janino on the survey's `d_date BETWEEN` shape |
@@ -237,9 +237,11 @@ One gap is recorded rather than closed: four-lane coverage is local only, via
 
 ## 7. Open questions, to settle early
 
-1. **Cache scope.** Executor-wide (one cache per JVM) or per-session? Per-JVM
-   maximises hits and complicates isolation; the shape key makes cross-session
-   sharing safe in principle, and the answer decides where the cache lives.
+1. **Cache scope.** Executor-wide (one cache per JVM) or per-session?
+   **Settled in task 18: per-JVM.** The shape key carries no session state,
+   so cross-session sharing is safe by construction, and Janino's codegen
+   cache is the precedent; the capacity is the static conf
+   `spark.sql.codegen.varka.cache.maxEntries`.
 2. **Selected-batch contract.** Does a selection vector travel with the batch to
    the next operator, or does Varka always compact at its own boundary? The
    first is faster and the second is far smaller - task 21 decides with a
@@ -416,3 +418,28 @@ Adopted as task 22 (fallback-cause metrics, JFR events), folded into task 18
 The remaining entry, loop-method grouping recorded in `VarkaDebugInfo`, still
 waits for the same reason: it pays off only on wide multi-group kernels, which
 stay rare until milestone 4's ops widen real projections past `GROUP_BUDGET`.
+
+## 10. Debt register
+
+Opened after task 18, in the milestone-2 register's form
+(`PLAN_MILESTONE_2.md` section 8): one bullet per debt - what it is, why it
+is a debt, what closing it takes - and a swept entry is rewritten in the
+past tense by the task that sweeps it, not deleted.
+
+* **Task 18 review follow-up** (the fourth review round's residue, deferred
+  by decision; full record in `PLAN_TASK_18.md` section 10). What it is:
+  rework the emitter test hooks into an explicit emit-options input that
+  rides the shape-cache key, retiring the generation/gate guard stack and
+  the two test-JVM races still inside it; give the cache capacity one
+  deterministic executor-side source (the lazy singleton today freezes
+  whatever the first-touching thread resolves) and document the
+  builder-set-statics boundary; replace `recordExecution`'s hand-rolled
+  retry loop with `asMap().compute`; cache the resolved kernel constructor
+  in the entry; derive `className`/`sourceFile` from the stored hash; and
+  move `renderLineMap`'s `LineNumberTable` key off `Record.toString` onto
+  the canonical rendering. Why it is a debt: none of it is
+  production-facing, so it lost the argument for growing the task-18 PR a
+  fourth time - but the hook machinery is four cooperating mechanisms in
+  two files, which is complexity milestone 4 would build on. What closing
+  it takes: one focused task; the emit-options refactor should land before
+  milestone 4 widens the emitter's option surface.

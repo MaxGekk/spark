@@ -22,6 +22,7 @@ import scala.concurrent.duration._
 import org.apache.spark.benchmark.Benchmark
 import org.apache.spark.internal.config.UI.UI_ENABLED
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache
 import org.apache.spark.sql.execution.{VarkaColumnarRule, VarkaColumnarToRowExec}
 import org.apache.spark.sql.execution.columnar.ArrowCachedBatchSerializer
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
@@ -36,8 +37,12 @@ import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
  *
  *  - Every iteration projects a chain over a *different* column of a cached wide table, with
  *    iteration-distinct literals, so each iteration is a fresh source shape to Janino's global
- *    compile cache and a fresh emission for Varka. The two sides use disjoint column ranges
- *    because that Janino cache is process-wide, not per-session.
+ *    compile cache. The two sides use disjoint column ranges because that Janino cache is
+ *    process-wide, not per-session. Distinct columns and literals do *not* make a fresh shape
+ *    for Varka - the task-18 `VarkaShapeCache` keys on the IR structure alone, and every query
+ *    here is one structure - so the varka case invalidates that (process-wide) cache before
+ *    each timed iteration instead: every measurement is a genuine emission plus class define,
+ *    which is what a production-fresh shape pays.
  *  - There is *no warmup* (`warmupTime = 0`): warmup iterations would consume the fresh shapes
  *    and every timed iteration would measure a cache hit. `numIters` pins one execution per
  *    pre-built query.
@@ -171,6 +176,9 @@ object VarkaColdStartBenchmark extends SqlBasedBenchmark {
         benchmark.addTimerCase("varka (kernel emission)", numIters = shapesPerSide) { timer =>
           if (timer.iteration >= 0) {
             val qe = varkaQueries(timer.iteration).queryExecution
+            // All queries here are one shape to the class cache (see the class doc): drop it
+            // so this iteration emits and defines cold, as a genuinely fresh shape would.
+            VarkaShapeCache.invalidateAll()
             timer.startTiming()
             qe.toRdd.count()
             timer.stopTiming()

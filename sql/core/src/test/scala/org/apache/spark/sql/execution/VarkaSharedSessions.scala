@@ -109,7 +109,7 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   /**
    * Builds and caches a `varka_dates_big` temp view with `numRows` rows, one null every 17 rows
    * to exercise null handling, and `parts` partitions (via `repartition` when > 1) so the scan
-   * fans out over several tasks (one Varka loader per task).
+   * fans out over several tasks (which share one cached kernel class since task 18).
    */
   protected def cacheDatesBig(session: SparkSession, numRows: Int, parts: Int = 1): Unit = {
     val rows = (0 until numRows).map { i =>

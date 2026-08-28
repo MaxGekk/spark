@@ -20,6 +20,7 @@ package org.apache.spark.sql.execution
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.{QueryTest, SparkSession}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache
 import org.apache.spark.sql.internal.SQLConf
 
 /**
@@ -55,6 +56,10 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       assertFused(plan)
       checkAnswer(actual, expected)
       assertKernelsRan(plan)
+      // Task 18: execute the query a second time, so the kernel class is served from the warm
+      // cross-task cache - a wrong or stale hit would surface as a wrong answer right here,
+      // which the ghost fallback could never catch.
+      checkAnswer(actualSession.sql(query), expected)
     } else {
       assertNotFused(plan)
       checkAnswer(actual, expected)
@@ -461,7 +466,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("multi-task: per-task loaders produce correct results") {
+  test("multi-task: tasks sharing one cached kernel class produce correct results") {
     cacheDatesBig(spark, 1024, parts = 4)
     cacheDatesBig(varkaSpark, 1024, parts = 4)
     checkDifferential(spark, varkaSpark,
@@ -484,21 +489,48 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("many distinct Varka tasks keep Metaspace bounded (lenient integration check)") {
+  test("many distinct-literal Varka tasks are one cached shape, Metaspace bounded") {
     cacheDates(spark)
     cacheDates(varkaSpark)
     val before = metaspaceUsed()
+    val missesBefore = VarkaShapeCache.missCount
+    val hitsBefore = VarkaShapeCache.hitCount
     (0 until 100).foreach { i =>
       checkDifferential(spark, varkaSpark,
         s"SELECT date_add(d, $i) AS a FROM varka_dates ORDER BY a", expectFused = true)
     }
-    // The deterministic unloading guarantee lives in VarkaGeneratedClassLoaderSuite; here we only
-    // assert the class loader scope keeps the long-run Metaspace footprint bounded after a GC.
+    // Task 18 inverted what this test proves. The hundred queries differ only in their
+    // literal, which never enters the shape key - they are one shape, so at most one task
+    // emitted a class (zero if an earlier test already cached the shape) and the rest hit the
+    // JVM-wide cache. The deterministic eviction guarantee lives in VarkaShapeCacheSuite.
+    assert(VarkaShapeCache.missCount - missesBefore <= 1,
+      s"expected at most one emission for one shape, got ${VarkaShapeCache.missCount} misses")
+    assert(VarkaShapeCache.hitCount - hitsBefore >= 100,
+      "the repeated shape must be served from the cache")
     System.gc()
     System.runFinalization()
     System.gc()
     val delta = metaspaceUsed() - before
-    // Lenient: 100 generated kernel classes (a few KB each) must stay far below this bound.
+    // Lenient: one cached kernel class (a few KB) must stay far below this bound.
     assert(delta < 64L * 1024 * 1024, s"Metaspace grew by $delta bytes across 100 Varka tasks")
+  }
+
+  test("task 18: near-miss shapes back to back in the warm cache stay distinct") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    // Same operand structure, different op kind: date_add vs date_sub must not share a class.
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, 5) AS a FROM varka_dates ORDER BY a", expectFused = true)
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_sub(d, 5) AS a FROM varka_dates ORDER BY a", expectFused = true)
+    // Same shape, different constant: shares the class and must still answer with its own
+    // literal, which travels as a runtime argument rather than in the bytes.
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, 30) AS a FROM varka_dates ORDER BY a", expectFused = true)
+    // Same structure with one more literal slot (two distinct offsets): a different shape,
+    // because the slot count changes the emitted bytecode independently of the IR.
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, 5) AS a, date_add(d, 6) AS b FROM varka_dates ORDER BY a",
+      expectFused = true)
   }
 }

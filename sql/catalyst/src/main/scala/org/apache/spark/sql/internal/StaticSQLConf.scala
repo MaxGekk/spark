@@ -98,6 +98,19 @@ object StaticSQLConf {
       .checkValue(maxEntries => maxEntries >= 0, "The maximum must not be negative")
       .createWithDefault(100)
 
+  val VARKA_CACHE_MAX_ENTRIES = buildStaticConf("spark.sql.codegen.varka.cache.maxEntries")
+      .internal()
+      .doc("The capacity of the JVM-wide cache of loaded Varka fused-kernel classes, keyed on " +
+        "the kernel's structural shape so tasks (and sessions) computing the same shape share " +
+        "one class and skip its per-task JIT warm-up. The least recently used class is " +
+        "released on eviction, bounding Metaspace by this size. When 0, every task emits and " +
+        "unloads its own class, the pre-cache behavior.")
+      .version("5.0.0")
+      .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+      .intConf
+      .checkValue(maxEntries => maxEntries >= 0, "The maximum must not be negative")
+      .createWithDefault(100)
+
   val CODEGEN_COMMENTS = buildStaticConf("spark.sql.codegen.comments")
     .internal()
     .doc("When true, put comment in the generated code. Since computing huge comments " +

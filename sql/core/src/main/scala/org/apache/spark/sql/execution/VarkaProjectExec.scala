@@ -78,7 +78,11 @@ case class VarkaProjectExec(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
     "numInputBatches" -> SQLMetrics.createMetric(sparkContext, "number of input batches"),
     "numVarkaBatches" -> SQLMetrics.createMetric(
-      sparkContext, "number of input batches processed by the Varka SIMD kernels"))
+      sparkContext, "number of input batches processed by the Varka SIMD kernels"),
+    "numVarkaCacheHits" -> SQLMetrics.createMetric(
+      sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
+    "numVarkaCacheMisses" -> SQLMetrics.createMetric(
+      sparkContext, "number of tasks that emitted and defined the Varka kernel class"))
 
   // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -107,7 +111,9 @@ case class VarkaProjectExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      longMetric("numVarkaBatches"))
+      longMetric("numVarkaBatches"),
+      longMetric("numVarkaCacheHits"),
+      longMetric("numVarkaCacheMisses"))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -126,7 +132,9 @@ private[sql] class VarkaProjectEvaluatorFactory(
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
-    numVarkaBatches: SQLMetric)
+    numVarkaBatches: SQLMetric,
+    numVarkaCacheHits: SQLMetric,
+    numVarkaCacheMisses: SQLMetric)
     extends PartitionEvaluatorFactory[ColumnarBatch, ColumnarBatch] with Logging {
 
   override def createEvaluator(): PartitionEvaluator[ColumnarBatch, ColumnarBatch] = {
@@ -137,7 +145,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
 
     private val kernels = new VarkaKernelEvaluator(
       projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "Project",
-      classDumpDirectory)
+      classDumpDirectory, Some(numVarkaCacheHits), Some(numVarkaCacheMisses))
 
     // The per-row projection behind the fallback, and the schema its rows are written back into.
     // Lazy (task 15): a task the kernels serve end to end never compiles it, so the Janino

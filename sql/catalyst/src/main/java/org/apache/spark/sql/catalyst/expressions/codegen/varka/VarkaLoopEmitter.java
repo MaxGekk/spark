@@ -183,21 +183,21 @@ public final class VarkaLoopEmitter {
    * on first execution as a {@link NoSuchMethodError} naming {@code IntVector.add}. The suite
    * pins that, so a future descriptor regression is diagnosable from the error alone.
    */
-  static volatile boolean misdescribeAddForTesting = false;
+  private static volatile boolean misdescribeAddForTesting = false;
 
   /**
    * Test hook: when set, the node memo is disabled and shared subtrees are recomputed at every
    * use. Results must not change - CSE is an optimization, never a semantics change - and the
    * suite pins exactly that; the parity benchmark uses it to price CSE itself.
    */
-  static volatile boolean disableCseForTesting = false;
+  private static volatile boolean disableCseForTesting = false;
 
   /**
    * Test hook: when set, {@code dayofweek}/{@code weekday} lower their mod-7 through lanewise
    * {@code DIV} instead of the digit sum - the certainly-correct reference variant the parity
    * benchmark prices the shipped one against (plan 2.3).
    */
-  static volatile boolean divFloorModForTesting = false;
+  private static volatile boolean divFloorModForTesting = false;
 
   /**
    * Test hook: when set, {@code dayofweek}/{@code weekday} lower their mod-7 through the
@@ -205,7 +205,7 @@ public final class VarkaLoopEmitter {
    * (beside {@link #divFloorModForTesting}) that the parity benchmark and the differential
    * suite price and check the shipped two-fold magic-multiply lowering against.
    */
-  static volatile boolean digitSumFloorModForTesting = false;
+  private static volatile boolean digitSumFloorModForTesting = false;
 
   /**
    * Test hook: when positive, overrides {@link #GROUP_BUDGET} for one emission (task 17). The
@@ -214,7 +214,62 @@ public final class VarkaLoopEmitter {
    * settled by emitting the same shape at both widths and pricing them. This keeps that
    * comparison in the parity benchmark rather than in a patch someone has to reproduce.
    */
-  static volatile int groupBudgetForTesting = 0;
+  private static volatile int groupBudgetForTesting = 0;
+
+  /**
+   * Bumped on every hook write. The hooks are volatile fields the emit walk reads at its own
+   * sites, so "were any hooks set during this emission?" cannot be answered by sampling the
+   * fields before and after - a hook set and cleared inside the window restores the values.
+   * The generation cannot be restored: the shape cache snapshots it before emitting and
+   * refuses to cache when it moved (see {@code VarkaShapeCache}). Writes therefore go through
+   * the setters below - the fields are private so no caller can bypass the bump.
+   */
+  private static final java.util.concurrent.atomic.AtomicLong testHookGeneration =
+      new java.util.concurrent.atomic.AtomicLong();
+
+  static void setMisdescribeAddForTesting(boolean value) {
+    misdescribeAddForTesting = value;
+    testHookGeneration.incrementAndGet();
+  }
+
+  static void setDisableCseForTesting(boolean value) {
+    disableCseForTesting = value;
+    testHookGeneration.incrementAndGet();
+  }
+
+  static void setDivFloorModForTesting(boolean value) {
+    divFloorModForTesting = value;
+    testHookGeneration.incrementAndGet();
+  }
+
+  static void setDigitSumFloorModForTesting(boolean value) {
+    digitSumFloorModForTesting = value;
+    testHookGeneration.incrementAndGet();
+  }
+
+  static void setGroupBudgetForTesting(int value) {
+    groupBudgetForTesting = value;
+    testHookGeneration.incrementAndGet();
+  }
+
+  /** The current hook-write generation; see {@link #testHookGeneration}. */
+  static long currentTestHookGeneration() {
+    return testHookGeneration.get();
+  }
+
+  /**
+   * Whether any of the hooks above is set. They are emit inputs the shape key deliberately
+   * does not carry - production never sets them - so the shape cache refuses every lookup
+   * while one is set: a hook-affected class cached under the plain key would be served,
+   * wrong, after the hook is reset. Suites that set hooks call {@link #emit} directly
+   * instead. Completeness is enforced by reflection in {@code VarkaShapeCacheSuite}: every
+   * {@code *ForTesting} field must register here, so a future hook cannot silently bypass
+   * the cache's guard.
+   */
+  static boolean anyTestHookSet() {
+    return misdescribeAddForTesting || disableCseForTesting || divFloorModForTesting
+        || digitSumFloorModForTesting || groupBudgetForTesting != 0;
+  }
 
   private VarkaLoopEmitter() {
   }

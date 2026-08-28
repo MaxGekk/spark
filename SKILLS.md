@@ -220,7 +220,19 @@ apparent small wins turned out to be noise.
   cross-task cache: caching `byte[]` does not help - a re-defined class is a new
   class and re-pays the ladder; only reusing the *loaded class* preserves the C2
   code. And benchmark tasks must be long enough to amortise the ladder, or the
-  committed number prices JIT warm-up, not the kernel.
+  committed number prices JIT warm-up, not the kernel. Task 18 acted on the
+  corollary - `VarkaShapeCache` shares the loaded class across tasks, keyed on
+  the IR shape - and the committed depth curve flattened from 2.2x-eroding-to-1.3x
+  into 6.5-7.2x flat, confirming the ladder was the whole erosion.
+- Second corollary, caught by task 18's PR review after the results file was
+  committed: **a cache keyed on structure silently defeats a harness that
+  manufactures freshness through values.** `VarkaColdStartBenchmark` made each
+  iteration "fresh" via distinct columns and literals - exactly what the shape key
+  ignores by design - so after task 18 the guard query warmed the process-wide
+  cache and every timed "cold" iteration measured a hit while the harness's own
+  comments still promised a fresh emission. When a cache key changes, re-derive
+  every benchmark's freshness argument from the new key rather than trusting the
+  harness; the fix here invalidates the shape cache inside the timer loop.
 
 ## Vector API on HotSpot, Measured (JDK 25, x86-64)
 

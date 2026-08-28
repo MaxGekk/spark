@@ -215,7 +215,9 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        SQLMetrics.createMetric(sparkContext, "varka"))
+        SQLMetrics.createMetric(sparkContext, "varka"),
+        SQLMetrics.createMetric(sparkContext, "cacheHits"),
+        SQLMetrics.createMetric(sparkContext, "cacheMisses"))
       // Before task 15 this constructor compiled the fallback eagerly and threw.
       val evaluator = factory.createEvaluator()
       val column = new OnHeapColumnVector(1, IntegerType)
@@ -313,6 +315,11 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     assert(plan.metrics("numInputBatches").value === 2)
     // Only the Arrow batch reaches the kernels; the on-heap one takes the fallback.
     assert(plan.metrics("numVarkaBatches").value === 1)
+    // Task 18: each spec is its own partition, so two tasks looked the shape up - canRun
+    // forces the runner on the fallback task too, which before the cache emitted a class it
+    // never ran and now costs a hit. Hit or miss per task depends on what ran in this JVM.
+    assert(plan.metrics("numVarkaCacheHits").value +
+      plan.metrics("numVarkaCacheMisses").value === 2)
   }
 
   /** Drives the evaluator directly, so a test can control when the next batch is requested. */
@@ -324,7 +331,9 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       classDumpDirectory = None,
       SQLMetrics.createMetric(sparkContext, "rows"),
       SQLMetrics.createMetric(sparkContext, "batches"),
-      SQLMetrics.createMetric(sparkContext, "varkaBatches"))
+      SQLMetrics.createMetric(sparkContext, "varkaBatches"),
+        SQLMetrics.createMetric(sparkContext, "cacheHits"),
+        SQLMetrics.createMetric(sparkContext, "cacheMisses"))
     factory.createEvaluator().eval(0, inputs)
   }
 }

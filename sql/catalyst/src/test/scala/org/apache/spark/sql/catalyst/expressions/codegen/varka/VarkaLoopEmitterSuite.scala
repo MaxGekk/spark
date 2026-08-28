@@ -505,9 +505,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val shared = new AddDays(new ColumnRef(0), new LiteralSlot(0))
     val roots = Seq[VarkaVectorIR](shared, new DateDiff(shared, new ColumnRef(1)))
     val withCse = emitMulti(roots, 2, 1)
-    VarkaLoopEmitter.disableCseForTesting = true
+    VarkaLoopEmitter.setDisableCseForTesting(true)
     val withoutCse =
-      try emitMulti(roots, 2, 1) finally VarkaLoopEmitter.disableCseForTesting = false
+      try emitMulti(roots, 2, 1) finally VarkaLoopEmitter.setDisableCseForTesting(false)
     assert(!java.util.Arrays.equals(withCse._2, withoutCse._2),
       "disabling the memo left the bytecode unchanged - CSE was not exercised")
     val (kernelCse, loaderCse) = load(withCse)
@@ -613,12 +613,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val extremes = Array(Int.MinValue, Int.MaxValue, -1, 0, -7, 7)
     def days(c: Int, i: Int): Int =
       if (i < extremes.length) extremes(i) else i * 31 - 7000
-    VarkaLoopEmitter.divFloorModForTesting = true
+    VarkaLoopEmitter.setDivFloorModForTesting(true)
     try {
       checkMatrix(roots, 1, Array.empty[Int], Seq(64, 1000),
         nullPatterns.map(p => Seq(p._2)), data = days, ctx = "div-variant")
     } finally {
-      VarkaLoopEmitter.divFloorModForTesting = false
+      VarkaLoopEmitter.setDivFloorModForTesting(false)
     }
   }
 
@@ -631,12 +631,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       -1, 0, 1, -7, 7, -8, 8, 32767, 32768, -32768, -32769)
     def days(c: Int, i: Int): Int =
       if (i < extremes.length) extremes(i) else i * 997 - 300000
-    VarkaLoopEmitter.digitSumFloorModForTesting = true
+    VarkaLoopEmitter.setDigitSumFloorModForTesting(true)
     try {
       checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
         nullPatterns.map(p => Seq(p._2)), data = days, ctx = "digit-sum-variant")
     } finally {
-      VarkaLoopEmitter.digitSumFloorModForTesting = false
+      VarkaLoopEmitter.setDigitSumFloorModForTesting(false)
     }
   }
 
@@ -682,7 +682,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   }
 
   test("a wrong descriptor fails naming the call, not as an anonymous VerifyError") {
-    VarkaLoopEmitter.misdescribeAddForTesting = true
+    VarkaLoopEmitter.setMisdescribeAddForTesting(true)
     try {
       val named = emit(addDays(0), 1)
       // Member resolution is link-time work, so the class still verifies...
@@ -710,7 +710,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         loader.release()
       }
     } finally {
-      VarkaLoopEmitter.misdescribeAddForTesting = false
+      VarkaLoopEmitter.setMisdescribeAddForTesting(false)
     }
   }
 
@@ -771,7 +771,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // The misdescribe hook fails the AddDays call site at link time, inside the loop - the
     // shape a real kernel failure takes. The frame through the generated class must name the
     // SourceFile and a line, and the class's own key must decode that line to the node.
-    VarkaLoopEmitter.misdescribeAddForTesting = true
+    VarkaLoopEmitter.setMisdescribeAddForTesting(true)
     try {
       val named = emit(addDays(0), 1)
       val (className, bytes) = named
@@ -802,7 +802,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         loader.release()
       }
     } finally {
-      VarkaLoopEmitter.misdescribeAddForTesting = false
+      VarkaLoopEmitter.setMisdescribeAddForTesting(false)
     }
   }
 
