@@ -238,6 +238,41 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(cache.getOrEmit(key, "sessionC").hit)
   }
 
+  test("task 22: JFR events cover emission and lookups, joined by the shape hash") {
+    val recording = new jdk.jfr.Recording()
+    recording.enable("org.apache.spark.sql.varka.KernelEmission")
+      .withThreshold(java.time.Duration.ZERO)
+    recording.enable("org.apache.spark.sql.varka.ShapeCacheLookup")
+      .withThreshold(java.time.Duration.ZERO)
+    recording.start()
+    val cache = new VarkaShapeCacheImpl(8)
+    val key = keyOf(chain(bits = 11, depth = 4))
+    val hash = VarkaShapeCache.shapeHash(key)
+    try {
+      assert(!cache.getOrEmit(key, "jfr-exec-a").hit)
+      assert(cache.getOrEmit(key, "jfr-exec-b").hit)
+    } finally {
+      recording.stop()
+    }
+    withTempDir { dir =>
+      val dump = new java.io.File(dir, "varka.jfr").toPath
+      recording.dump(dump)
+      recording.close()
+      // The recording sees every cache in the JVM (suites share it): filter by this test's
+      // shape hash, never count globally.
+      val events = jdk.jfr.consumer.RecordingFile.readAllEvents(dump).asScala
+        .filter(e => e.hasField("shapeHash") && e.getString("shapeHash") == hash)
+      val emissions = events.filter(_.getEventType.getName.endsWith("KernelEmission"))
+      val lookups = events.filter(_.getEventType.getName.endsWith("ShapeCacheLookup"))
+      assert(emissions.size === 1, events.mkString("; "))
+      assert(emissions.head.getInt("byteCount") > 0)
+      assert(emissions.head.getString("className") === VarkaShapeCache.classNameFor(hash))
+      assert(lookups.size === 2)
+      assert(lookups.count(_.getBoolean("hit")) === 1)
+      assert(lookups.map(_.getString("execution")).toSet === Set("jfr-exec-a", "jfr-exec-b"))
+    }
+  }
+
   test("the canonical rendering pins the hash: the committed value never drifts") {
     // SHA-256 over VarkaVectorIR.canonical, not Record.toString - this exact value must
     // hold on every JVM and JDK release, or cluster-wide diagnostics joins break. If this

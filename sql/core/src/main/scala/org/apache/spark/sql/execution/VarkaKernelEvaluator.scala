@@ -31,7 +31,7 @@ import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFusedKernel, VarkaShapeCache, VarkaShapeKey}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaFusedKernel, VarkaShapeCache, VarkaShapeKey}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -92,9 +92,8 @@ import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, Column
  *
  * @param operatorName the exec node this evaluator serves, for the telemetry names above.
  * @param classDumpDirectory where to write each emitted class, or None to write none.
- * @param cacheHitMetric incremented once per task whose kernel class came from the cache,
- *                       when the exec node passes its metric down; None outside an exec node.
- * @param cacheMissMetric the same for a task that had to emit and define the class.
+ * @param metrics the exec node's Varka metric set (task 22); every field is optional, and
+ *                suites or diagnostics that construct the evaluator directly pass none.
  */
 private[sql] class VarkaKernelEvaluator(
     projectList: Seq[NamedExpression],
@@ -102,8 +101,7 @@ private[sql] class VarkaKernelEvaluator(
     offHeapColumnVectorEnabled: Boolean,
     operatorName: String,
     classDumpDirectory: Option[String] = None,
-    cacheHitMetric: Option[SQLMetric] = None,
-    cacheMissMetric: Option[SQLMetric] = None)
+    metrics: VarkaExecMetrics = VarkaExecMetrics())
     extends Logging {
 
   // The projection classified entry by entry and its fused sub-projection compiled to vector
@@ -157,6 +155,9 @@ private[sql] class VarkaKernelEvaluator(
         case e if isCatchable(e) =>
           logWarning(s"Failed to emit the Varka fused kernel $kernelIdentity; falling back " +
             "to the per-row projection.", e)
+          metrics.emissionFailures.foreach(_ += 1)
+          VarkaKernelEvaluator.emitFallbackEvent("emission-failure", kernelIdentity,
+            e.getClass.getName)
           None
       }
     }
@@ -164,6 +165,14 @@ private[sql] class VarkaKernelEvaluator(
 
   /** The classified projection, for the row node's merge-at-row read-back (see 2.3). */
   private[execution] def partialPlan: Option[PartialVarkaProjection] = compiled
+
+  /**
+   * Whether this task tried and failed to obtain its kernel class (task 22): the projection
+   * compiled but the runner could not be built. The exec nodes use it to keep the per-batch
+   * fallback cause honest - after an emission failure every batch fails `canRun`, which
+   * without this test would count as "input not Arrow-backed".
+   */
+  private[execution] def emissionFailed: Boolean = compiled.nonEmpty && fusedRunner.isEmpty
 
   /**
    * This execution's identity - the operator and this task's stage - which since task 18 goes
@@ -548,7 +557,7 @@ private[sql] class VarkaKernelEvaluator(
     // ran it.
     private val lookup = VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
     private val entry = lookup.entry
-    (if (lookup.hit) cacheHitMetric else cacheMissMetric).foreach(_ += 1)
+    (if (lookup.hit) metrics.cacheHits else metrics.cacheMisses).foreach(_ += 1)
 
     val sourceFile: String = entry.sourceFile
 
@@ -571,7 +580,40 @@ private[sql] class VarkaKernelEvaluator(
   }
 }
 
+/**
+ * The Varka-specific SQL metrics one exec node threads to its factory and evaluator (task 22),
+ * bundled so the parameter lists stop growing metric by metric (task 18 threaded two options;
+ * this task would have made it five). Every field is optional: suites and diagnostics
+ * construct evaluators with none.
+ */
+private[sql] case class VarkaExecMetrics(
+    varkaBatches: Option[SQLMetric] = None,
+    cacheHits: Option[SQLMetric] = None,
+    cacheMisses: Option[SQLMetric] = None,
+    fallbackBatchesNonArrow: Option[SQLMetric] = None,
+    fallbackBatchesKernel: Option[SQLMetric] = None,
+    emissionFailures: Option[SQLMetric] = None)
+
 private[execution] object VarkaKernelEvaluator {
+
+  /**
+   * Emits the task-22 fallback JFR event; shared by the evaluator's emission-failure path and
+   * the exec nodes' per-batch fallback branches. Populates only while a recording has the
+   * event enabled; `exceptionClass` is empty for the non-Arrow cause, a data property rather
+   * than an error.
+   */
+  private[execution] def emitFallbackEvent(
+      cause: String,
+      kernelIdentity: String,
+      exceptionClass: String): Unit = {
+    val event = new VarkaFallbackEvent
+    if (event.isEnabled()) {
+      event.cause = cause
+      event.kernelIdentity = kernelIdentity
+      event.exceptionClass = exceptionClass
+      event.commit()
+    }
+  }
   // The (directory, SourceFile) pairs this JVM has dumped, so a shape's class file is
   // written once per process rather than once per task - and exactly once per process,
   // because a file left by an older emitter under the same shape name must be refreshed.

@@ -22,6 +22,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -82,7 +83,15 @@ case class VarkaProjectExec(
     "numVarkaCacheHits" -> SQLMetrics.createMetric(
       sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
     "numVarkaCacheMisses" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks that emitted and defined the Varka kernel class"))
+      sparkContext, "number of tasks that emitted and defined the Varka kernel class"),
+    "numFallbackBatchesNonArrow" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: input not Arrow-backed"),
+    "numFallbackBatchesKernel" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
+    "numEmissionFailures" -> SQLMetrics.createMetric(
+      sparkContext, "tasks that could not emit or define the kernel class"),
+    "numResidualEntries" -> SQLMetrics.createMetric(
+      sparkContext, "projection entries declined to the per-row residual (reasons in EXPLAIN)"))
 
   // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -104,6 +113,18 @@ case class VarkaProjectExec(
   }
 
   override protected def doExecuteColumnar(): RDD[ColumnarBatch] = {
+    // Task 22: the residual-entry count is a static plan property - added once, driver-side,
+    // so the UI total does not multiply by task count. The per-entry reasons are in EXPLAIN.
+    longMetric("numResidualEntries") +=
+      VarkaExpressionCompiler.compilePartial(projectList, child.output)
+        .map(_.declines.size.toLong).getOrElse(0L)
+    val varkaMetrics = VarkaExecMetrics(
+      varkaBatches = Some(longMetric("numVarkaBatches")),
+      cacheHits = Some(longMetric("numVarkaCacheHits")),
+      cacheMisses = Some(longMetric("numVarkaCacheMisses")),
+      fallbackBatchesNonArrow = Some(longMetric("numFallbackBatchesNonArrow")),
+      fallbackBatchesKernel = Some(longMetric("numFallbackBatchesKernel")),
+      emissionFailures = Some(longMetric("numEmissionFailures")))
     val evaluatorFactory = new VarkaProjectEvaluatorFactory(
       projectList,
       child.output,
@@ -111,9 +132,7 @@ case class VarkaProjectExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      longMetric("numVarkaBatches"),
-      longMetric("numVarkaCacheHits"),
-      longMetric("numVarkaCacheMisses"))
+      varkaMetrics)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -132,9 +151,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
-    numVarkaBatches: SQLMetric,
-    numVarkaCacheHits: SQLMetric,
-    numVarkaCacheMisses: SQLMetric)
+    varkaMetrics: VarkaExecMetrics)
     extends PartitionEvaluatorFactory[ColumnarBatch, ColumnarBatch] with Logging {
 
   override def createEvaluator(): PartitionEvaluator[ColumnarBatch, ColumnarBatch] = {
@@ -145,7 +162,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
 
     private val kernels = new VarkaKernelEvaluator(
       projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "Project",
-      classDumpDirectory, Some(numVarkaCacheHits), Some(numVarkaCacheMisses))
+      classDumpDirectory, varkaMetrics)
 
     // The per-row projection behind the fallback, and the schema its rows are written back into.
     // Lazy (task 15): a task the kernels serve end to end never compiles it, so the Janino
@@ -198,15 +215,25 @@ private[sql] class VarkaProjectEvaluatorFactory(
       if (kernels.canRun(input)) {
         try {
           val batch = kernels.project(input)
-          numVarkaBatches += 1
+          varkaMetrics.varkaBatches.foreach(_ += 1)
           batch
         } catch {
           case e if kernels.isCatchable(e) =>
             logWarning(s"The Varka SIMD kernels ${kernels.kernelIdentity} failed on this " +
               "batch; falling back to the per-row projection.", e)
+            varkaMetrics.fallbackBatchesKernel.foreach(_ += 1)
+            VarkaKernelEvaluator.emitFallbackEvent("kernel-failure", kernels.kernelIdentity,
+              e.getClass.getName)
             fallback(input)
         }
+      } else if (kernels.emissionFailed) {
+        // Already counted once per task (and evented) by the evaluator's emission catch;
+        // counting these batches as non-Arrow would mislabel the cause.
+        fallback(input)
       } else {
+        // A batch canRun refused: not Arrow-backed, or the vectors do not match the batch.
+        varkaMetrics.fallbackBatchesNonArrow.foreach(_ += 1)
+        VarkaKernelEvaluator.emitFallbackEvent("non-arrow-batch", kernels.kernelIdentity, "")
         fallback(input)
       }
     }

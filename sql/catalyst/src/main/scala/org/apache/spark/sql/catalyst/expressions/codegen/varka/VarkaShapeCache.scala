@@ -226,6 +226,15 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
     }
     recordExecution(entry.shapeHash, execution)
     if (emitted) misses.increment() else hits.increment()
+    // Task 22: the counters' JFR twin - one event per task-level resolution, carrying the
+    // per-execution identity that must not ride the shared bytes.
+    val lookupEvent = new VarkaCacheLookupEvent
+    if (lookupEvent.isEnabled()) {
+      lookupEvent.shapeHash = entry.shapeHash
+      lookupEvent.hit = !emitted
+      lookupEvent.execution = execution
+      lookupEvent.commit()
+    }
     VarkaShapeLookup(entry, hit = !emitted)
   }
 
@@ -258,6 +267,10 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
     // be restored: if it moved at all during the emission, these bytes are not provably
     // plain and must not be cached.
     val hookGeneration = VarkaLoopEmitter.currentTestHookGeneration()
+    // Task 22: the emission event times the Class-File walk plus the define - the whole miss
+    // cost minus the lookup - identified by shape only (the class is shared).
+    val emissionEvent = new VarkaEmissionEvent
+    emissionEvent.begin()
     val bytes = VarkaLoopEmitter.emit(className, key.outputs.asJava, key.numInputs,
       key.numLiterals, sourceFile, s"shape $hash")
     if (VarkaLoopEmitter.currentTestHookGeneration() != hookGeneration) {
@@ -266,6 +279,16 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
     }
     val loader = new VarkaGeneratedClassLoader(loaderKey.parent)
     val klass = loader.defineGeneratedClass(className, bytes)
+    emissionEvent.end()
+    if (emissionEvent.shouldCommit()) {
+      emissionEvent.shapeHash = hash
+      emissionEvent.className = className
+      emissionEvent.numOutputs = key.outputs.size
+      emissionEvent.numInputs = key.numInputs
+      emissionEvent.numLiterals = key.numLiterals
+      emissionEvent.byteCount = bytes.length
+      emissionEvent.commit()
+    }
     logDebug(s"Emitted and defined $className for shape $hash")
     new VarkaShapeEntry(loader, klass, bytes, hash, className, sourceFile)
   }

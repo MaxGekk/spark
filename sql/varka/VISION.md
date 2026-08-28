@@ -6,7 +6,7 @@
 > next), `SCOPE_MILESTONE_4.md` (breadth - the scope catalogue after it) and
 > `SCOPE_MILESTONE_5.md` (coverage - what the benchmark corpora say is missing).
 > Sections 7 and 12 carry their own status notes; `docs/sql-varka.md` describes what is
-> actually built.
+> actually built. Section 13 answers the whole-stage charter question (task 22).
 
 ## 1. Core Mission
 
@@ -15,6 +15,13 @@ Eliminate runtime compilation overhead (string parsing, AST generation) and unlo
 ---
 
 ## 2. Architectural Principles (Non-Negotiable)
+
+> **Status (task 22).** Principle 2's "the generated class" and "within the same method"
+> describe the charter's end state, not the shipped engine: today Varka is the columnar
+> fast path *beside* whole-stage codegen (its nodes are not `CodegenSupport`, and
+> whole-stage generation splits at the boundary - `docs/sql-varka.md`). Section 13 states
+> the charter decision. Principle 3's per-task loader became the bounded shape cache in
+> task 18; the unload guarantee is per eviction, proven the same way.
 
 1. **Zero-Risk Fallback (The "Ghost" Janino):** The system never pre-generates Janino strings. If bytecode generation fails, it *lazily* generates the Janino string, compiles it, caches it, and retries. The user job never crashes.
 2. **Granular Degradation:** Failure of a single column or complex operation does NOT revert the entire `WholeStageCodegen`. The generated class will use SIMD for the supported columns and scalar loops for the unsupported ones within the same method.
@@ -112,6 +119,11 @@ We are currently implementing the **Date/Time MVP**.
 - **Validity Mask Handling:** For `DATEDIFF`, we must combine two validity masks using `VectorMask.and()` to ensure we don't read null values from either column.
 
 ### 8.2. ClassLoader (Package: `org.apache.spark.sql.varka.execution`)
+
+> **Status (task 22).** Superseded twice: the loader is Java (`VarkaClassLoader.java`),
+> and since task 18 its owner is an entry of the bounded `VarkaShapeCache` - released on
+> cache eviction, not task completion - so one loaded class serves every task of a shape.
+
 - **File:** `VarkaClassLoader.scala`
 - **Lifecycle:** Instanced per `WholeStageCodegen` task. Bound to `TaskContext`.
 - **Release:** Called in `TaskCompletionListener` to clear references and allow GC.
@@ -198,3 +210,29 @@ When proceeding to implementation:
 7. **Implement Ghost Fallback:** Lazy Janino generation in `doCompile`.
 
 *This document serves as the single source of truth for architectural decisions to maintain context during iterative development.*
+
+---
+
+## 13. The Whole-Stage Charter (task 22)
+
+Answered in task 22, by the project owner's decision: **whole-stage code generation
+stays in Varka's charter** as an eventual goal - the mission's "eliminate runtime
+compilation overhead" is not narrowed to projections. The honest present, so this
+section is never read as delivered:
+
+- Nothing built through milestone 2, and nothing planned through milestone 5, generates
+  the whole-stage class. Today's engine is the columnar fast path beside whole-stage
+  codegen, and the 64 KB method limit the original design cites is not yet addressed by
+  any shipped code (`PLAN_MILESTONE_2.md` records this explicitly).
+- The price of full ownership is measured, not guessed: the milestone-5 census
+  (`SCOPE_MILESTONE_5.md`) counts ~400 expression classes, ~17 whole-stage operators and
+  seven generators that exist to produce and compare `UnsafeRow` - which Varka does not
+  produce - between here and retiring Janino.
+- When the whole-stage generator is built, it starts from the vector IR and
+  `VarkaLoopEmitter`, not from a new representation (milestone 3's closed item 9), and
+  the 64 KB method limit enters scope at that point - the emitter's sibling-methods
+  discipline (`GROUP_BUDGET`) is already the shape of the answer.
+
+Until a milestone plans that work, the ghost fallback and the columnar fast path remain
+the engine's shipped identity, and `docs/sql-varka.md` remains the statement of what is
+actually built.
