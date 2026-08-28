@@ -48,14 +48,14 @@ the table too - this fork commits its losses:
 
 | Case | vs stock Spark (Janino) |
 | :--- | :--- |
-| `date_add` / `datediff`, columnar consumer | 3.8x / 5.2x |
+| `date_add` / `datediff`, columnar consumer | 3.8x / 5.6x |
 | Nested `datediff(date_add(d, 1), d2)` | 5.7x |
-| Two outputs sharing a subchain (DAG-CSE) | 5.9x |
-| `CASE WHEN`, unpredictable condition | 7.0x |
-| `CASE WHEN`, predictable condition | 6.2x |
-| Chain of 8 date ops, columnar consumer | 7.0x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
-| Same chains through a row consumer | 0.8x - fusion still loses there (was 0.6-0.7x) |
-| `dayofweek` | 9.2x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
+| Two outputs sharing a subchain (DAG-CSE) | 5.7x |
+| `CASE WHEN`, unpredictable condition | 7.1x |
+| `CASE WHEN`, predictable condition | 5.8x |
+| Chain of 8 date ops, columnar consumer | 7.5x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
+| Same chains through a row consumer | 0.8x - the ~25 ns/row read-back floor; heavy shapes clear it instead (`dayofweek` 1.2x, `CASE WHEN` 1.1x through rows), task 19's recorded decision |
+| `dayofweek` | 9.8x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
 | Cold start: first run of a fresh plan shape (100K rows) | 1.7x (a fresh shape misses the class cache by design) |
 | Emit+define+load+instantiate a fused kernel vs one Janino compile | 68x cheaper (~130 us vs ~9 ms) |
 
@@ -113,9 +113,11 @@ task, each with a recorded outcome:
   projections (where a corpus survey found 53-78% of real date references
   live), lower `IN` lists and `Coalesce` onto the mask algebra - Spark's own
   benchmark puts `IN` over dates at 27.4 M rows/s, its slowest primitive, and
-  `coalesce` is the corpus' third most common non-aggregate function - settle
-  the row-consumer question above, and answer the whole-stage charter question
-  in writing.
+  `coalesce` is the corpus' third most common non-aggregate function - and
+  answer the whole-stage charter question in writing. The row-consumer
+  question above is settled (task 19: the rule keeps fusing - heavy shapes
+  win through rows and no plan-time number separates them from the cheap
+  chains that do not).
 * **Milestone 4**: *breadth* - the scope catalogue is in
   [`sql/varka/plans/SCOPE_MILESTONE_4.md`](sql/varka/plans/SCOPE_MILESTONE_4.md):
   the types, expressions and operators the engine cannot say yet. `year` and

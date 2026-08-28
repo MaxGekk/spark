@@ -277,6 +277,19 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       runRowQueries(baseline, varka, "residual-heavy projection, row consumer",
         "SELECT date_add(d, 3) AS a, i + 1 AS r1, i + 2 AS r2, i + 3 AS r3, i + 4 AS r4 " +
           "FROM varka_dates")
+      // The heavy-op row twins (task 19): every row-consumer case above fuses only cheap
+      // adds, where the ~6 ns/row read-back is most likely to dominate - deciding the
+      // profitability rule on them alone would decide it on the worst case. These four reuse
+      // their columnar cases' SQL verbatim, so each pair differs only in the consumer.
+      runRowQueries(baseline, varka, "dayofweek, row consumer",
+        "SELECT dayofweek(d) AS dw FROM varka_dates")
+      runRowQueries(baseline, varka, "case when unpredictable, row consumer",
+        "SELECT CASE WHEN d < d2 THEN date_add(d, 7) ELSE date_sub(d2, 7) END AS c " +
+          "FROM varka_date_pairs_rand")
+      runRowQueries(baseline, varka, "datediff, row consumer",
+        "SELECT datediff(d2, d) AS diff FROM varka_date_pairs")
+      runRowQueries(baseline, varka, "nested projection, row consumer",
+        "SELECT datediff(date_add(d, 1), d2) AS n FROM varka_date_pairs")
     } finally {
       baseline.stop()
       varka.stop()

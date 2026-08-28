@@ -341,40 +341,46 @@ exist.
   since task 18 - that a 10k-distinct-shape stress stays at cache capacity
   with every evicted loader collected.
 
-Benchmark highlights from the task 18 committed runs - the first with the
-cross-task class cache, which moved every end-to-end number (AMD Ryzen AI 9
-HX PRO 370, JDK 25, Linux, machine otherwise idle; every number below is the
-best of at least five two-second-windowed iterations and lives in the
-committed results files, which are the source of truth as the code moves):
+Benchmark highlights from the committed runs - the throughput file from
+task 19's run, which extended the row-consumer matrix with heavy-op twins;
+cold start and class generation from task 18 (AMD Ryzen AI 9 HX PRO 370,
+JDK 25, Linux, machine otherwise idle; every number below is the best of at
+least five two-second-windowed iterations and lives in the committed results
+files, which are the source of truth as the code moves):
 
 * **End-to-end columnar throughput** over 2M Arrow-cached rows
-  (`VarkaThroughputBenchmark`): 3.8-5.9x Janino for single ops and small
-  trees (`date_add` 3.8x, `datediff` 5.2x, the nested
-  `datediff(date_add(d, 1), d2)` 5.7x, the two-output shared subchain 5.9x),
+  (`VarkaThroughputBenchmark`): 3.8-5.7x Janino for single ops and small
+  trees (`date_add` 3.8x, `datediff` 5.6x, the nested
+  `datediff(date_add(d, 1), d2)` 5.7x, the two-output shared subchain 5.7x),
   2.5x for a mixed projection where only one entry fuses. Before the class
   cache these read 1.7-2.3x: the per-task JIT warm-up was most of the gap
   between the buffer-level kernels and the end-to-end numbers.
-* **`CASE WHEN` by mask blend**: 7.0x on data where the condition flips
-  pseudo-randomly, 6.2x where it is perfectly predictable. The varka side
-  costs the same on both (branch-free execution is data-oblivious, 8 ms best
-  in both committed cases); the gap is Janino's branch misprediction on the
-  unpredictable data.
+* **`CASE WHEN` by mask blend**: 7.1x on data where the condition flips
+  pseudo-randomly, 5.8x where it is perfectly predictable. The varka side
+  costs the same on both within a millisecond (branch-free execution is
+  data-oblivious, 8-9 ms best in the committed cases); the gap is Janino's
+  branch misprediction on the unpredictable data.
 * **Chain depth** (alternating `date_add`/`date_sub`, columnar consumer):
-  6.5-7.2x, *flat* from depth 1 to depth 8. Task 14 committed this curve as
+  7.0-7.5x, *flat* from depth 1 to depth 8. Task 14 committed this curve as
   2.2x eroding to 1.3x and diagnosed the erosion as the fixed per-task JIT
   warm-up that grew with the loop method's op count (`PLAN_TASK_14.md` 7.5);
   task 18's cross-task class cache removed exactly that term - every task
   now runs the C2-compiled loop from its first row - and the end-to-end
   curve became what the buffer-level numbers always predicted (depth 8
   within 10% of depth 1).
-* **The row-consumer cost, stated plainly**: through `toRdd` the same chains
-  measure 0.8x at every depth - flat now that the warm-up is gone (task 14
-  committed 0.6-0.7x falling with depth), but still under 1.0x: the
-  ~16 ns/row read-back of the assembled batch is what fusion cannot buy back
-  on this shape. There is no break-even depth; task 19 decides the
-  profitability rule on these numbers.
-* **`dayofweek`**: 9.2x - 7 ms against Janino's 64 ms, the largest committed
-  win. This case shipped as the honest loss of the original task 14 run
+* **The row-consumer cost, stated plainly**: assemble-then-read costs a
+  flat ~25 ns/row on an all-fused single-output projection, whatever the
+  fused work - task 19's extended matrix pinned the floor (the ~16 ns/row
+  previously quoted was contaminated by the pre-cache JIT warm-up). Fusion
+  through rows wins exactly where Janino's own per-row cost exceeds that
+  floor: `dayofweek` 1.2x and unpredictable `CASE WHEN` 1.1x, against the
+  cheap chains at 0.8x (Janino ~20 ns/row) and residual-heavy at 0.6x.
+  There is no break-even depth, and no plan-time cost gate separates the
+  winners from the losers - an 8-op chain loses while the ~6-op `CASE WHEN`
+  wins, because the differencer is Janino's cost, not Varka's - so the rule
+  keeps fusing row consumers: task 19's recorded decision.
+* **`dayofweek`**: 9.8x - 7 ms against Janino's 65 ms, the largest committed
+  win, and the shape that pays even through a row consumer (1.2x there). This case shipped as the honest loss of the original task 14 run
   (0.9x, the magic-multiply lowering of 7.7 took it to 1.2x): its ~12-op
   loop method paid the heaviest per-task warm-up (~50 ms), so removing the
   ladder moved it furthest.
@@ -413,12 +419,13 @@ The real current edges, stated with their numbers where they have one:
   integer `Add` over a `datediff` result is not a date expression, and ANSI
   overflow cannot throw row-accurately from a SIMD lane, so such entries stay
   residual.
-* **The row-consumer read-back costs more than fusion saves**: 0.8x at
-  every measured chain depth (committed in
-  `VarkaThroughputBenchmark`; 0.6-0.7x before the class cache flattened the
-  curve). Varka currently pays off on columnar
-  consumers; whether the rule should decline row-consumer fusions is
-  milestone 3's profitability item, task 19.
+* **The row-consumer read-back can cost more than fusion saves**: cheap
+  chains commit at 0.8x and residual-heavy at 0.6x, while heavy shapes win
+  through rows (`dayofweek` 1.2x, `CASE WHEN` 1.1x) - the ~25 ns/row
+  assemble-then-read floor decides which (`VarkaThroughputBenchmark`).
+  Task 19 measured both sides and recorded the acceptance: no decline rule,
+  because no plan-time number separates the shapes and task 21's filters
+  keep more output columnar.
 * **Vectorized Parquet falls back**: `OnHeap`/`OffHeapColumnVector` batches
   are not Arrow. The Arrow cache serializer is the production source of
   eligible batches.
