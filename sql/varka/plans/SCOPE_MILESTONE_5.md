@@ -15,7 +15,7 @@ Section 1 is the survey milestone 4's section 5 asked for and could not assume.
 It changes milestone 4's ordering, and section 2 says how - honestly, because
 the project scores its predictions.
 
-Task numbering continues the single sequence. Milestone 4 resumes it at 23, so
+Task numbering continues the single sequence. Milestone 4 resumes it at 24, so
 this milestone's numbers are not assignable until milestone 4's task plan is
 written. No task numbers are assigned here.
 

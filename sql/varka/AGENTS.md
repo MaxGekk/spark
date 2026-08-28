@@ -73,6 +73,13 @@ the next person re-litigating a settled question.
   Java, with no class-file type in any signature and fully-qualified names inside
   method bodies; Scala reaches it through plain `byte[] -> String` shims.
   `build/sbt catalyst/doc` is the local gate that reproduces the CI failure.
+* **The project is migrating from Scala to modern Java (25+): prefer Java for new
+  Varka code wherever possible.** Records, sealed interfaces and pattern-matching
+  switches are already the house style in the IR and emitter; match it. Reach for
+  Scala only at surfaces that force it - `SparkPlan` subclasses, the Catalyst rule
+  and expression matching, ScalaTest suites. Existing Scala is not rewritten as a
+  side effect of another task; the migration is its own work (milestone 3,
+  task 23).
 * Every hot loop method stays small by construction (`GROUP_BUDGET`): C2's compile
   time grows steeply with vector-op count, and a wide method is slower to compile
   *and* slower to run. Sibling methods, not longer methods.

@@ -12,8 +12,8 @@ date chains. Milestone 3 makes that fast path reach real queries. Milestone 4 is
 **breadth**: the engine stops being a single-type demo and learns the types,
 expressions and operators a query actually contains.
 
-Task numbering continues the project's single sequence and resumes at 23, after
-milestone 3's 18-22. No task numbers are assigned here on purpose. This file
+Task numbering continues the project's single sequence and resumes at 24, after
+milestone 3's 18-23 (23, the Java-first migration, joined that plan late). No task numbers are assigned here on purpose. This file
 becomes a task plan when milestone 3's measurements - and the survey section 5
 asks for - can order it, exactly as milestone 3's own catalogue became one.
 
@@ -243,7 +243,7 @@ milestone 3. It goes first if task 21 lands clean.
 
 ### Item 6. Calendar field extraction, `year` first
 
-*Moved from milestone 3 (its task 23, catalogue item 5).*
+*Moved from milestone 3 (its catalogue item 5).*
 
 **Spark surface.** `year` first, then `month`, `dayofmonth`, `quarter`,
 `dayofyear`, `weekofyear`, and `date_trunc` at date-level units.
