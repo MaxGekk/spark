@@ -180,7 +180,9 @@ leaving it unstated in `VISION.md` is not. This task answers it in writing.
 
 Tasks 18-21 are the committed spine; task 22 follows once they land. Numbering
 continues the project's single sequence (milestone 1: 1-8, milestone 2: 9-17);
-milestone 4 resumes it at 23.
+milestone 4 resumes it at 24. Task 23 joined during the project owner's code
+review of the milestone, which set the Java-first direction recorded in
+`sql/varka/AGENTS.md`.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -189,6 +191,7 @@ milestone 4 resumes it at 23.
 | 20 | The four gating shapes | `cast(string AS DATE)` folding, `BETWEEN` -> paired comparisons, `In`/`InSet` over the existing lane types -> a `Compare(EQ)` chain joined by `Or`, and `Coalesce` -> a `blend` chain over a new validity-reading condition node (with `IsNull`/`IsNotNull` riding it), all in `VarkaExpressionCompiler`; a literal-count cap for `In` with a recorded number | Differential over the survey's shapes, over `IN` lists at 5, 50, 200 and 500 literals including the cap boundary, and over `Coalesce` with every null pattern including all-null and no-null arguments; the three-valued rules still hold for `And`/`Or` with a validity predicate among their operands; the corpus' wrapped date expressions compile where they previously declined, with decline reasons (task 16) showing the change; a columnar-terminal variant of Spark's `InExpressionBenchmark` committed against its upstream baseline |
 | 21 | Filters and selection vectors | Mask as a first-class value leaving the loop; selection vector with the ~15% compaction rule; `VarkaColumnarRule` rewriting a filter, and the batch contract for a selected batch | Differential on filter-heavy shapes including all-selected and none-selected; committed throughput against Janino on the survey's `d_date BETWEEN` shape |
 | 22 | Operational debuggability, and the charter answer | Fallback-cause metrics in the SQL UI speaking task 16's taxonomy; JFR events for emission, cache and fallback; item 10 answered in `VISION.md` | A fallen-back production query is diagnosable from metrics alone; the JFR event set covers emission and cache hit/miss; the whole-stage question has a written answer |
+| 23 | Java-first migration | The Java-over-Scala house rule in `sql/varka/AGENTS.md` (landed with this row); migration of the Varka Scala components that nothing forces to stay Scala - `VarkaShapeCache` first, as the natural vehicle for the debt register's emit-options rework (section 10), then an assessment of `VarkaExpressionCompiler` - and a recorded boundary naming what stays Scala and why (`SparkPlan` nodes, the columnar rule, ScalaTest suites) | Behavior-preserving: every Varka suite green at both vector widths with committed numbers unchanged; scalastyle and `dev/lint-java` clean; the boundary record names each surviving Scala file's reason |
 
 ## 4. Files
 
