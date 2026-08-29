@@ -6,8 +6,8 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 case-when IN, 5 literals, fused over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ----------------------------------------------------------------------------------------------------------------------------------------------
-baseline (Janino)                                                          53             58           4         37.9          26.4       1.0X
-varka (SIMD)                                                               15             18           3        134.0           7.5       3.5X
+baseline (Janino)                                                          53             60           6         37.7          26.6       1.0X
+varka (SIMD)                                                               15             17           2        134.9           7.4       3.6X
 
 
 ================================================================================================
@@ -18,8 +18,8 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 case-when IN, 16 literals, fused over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -----------------------------------------------------------------------------------------------------------------------------------------------
-baseline (Janino)                                                           49             53           5         40.7          24.6       1.0X
-varka (SIMD)                                                                12             15           3        164.7           6.1       4.0X
+baseline (Janino)                                                           53             58           4         37.7          26.5       1.0X
+varka (SIMD)                                                                13             16           2        158.0           6.3       4.2X
 
 
 ================================================================================================
@@ -30,20 +30,20 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 case-when IN, 50 literals, declined (over the cap) over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------
-baseline (Janino)                                                                             49             51           2         40.7          24.6       1.0X
-varka (SIMD)                                                                                  49             51           2         41.2          24.3       1.0X
+baseline (Janino)                                                                             52             56           3         38.7          25.8       1.0X
+varka (SIMD)                                                                                  51             56           4         39.4          25.4       1.0X
 
 
 ================================================================================================
-filter IN anchor, 5 literals (unfused on both)
+filter IN anchor, 5 literals (fused since task 21)
 ================================================================================================
 
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
-filter IN anchor, 5 literals (unfused on both) over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-baseline (Janino)                                                                         28             31           3         70.4          14.2       1.0X
-varka (SIMD)                                                                              28             31           3         71.6          14.0       1.0X
+filter IN anchor, 5 literals (fused since task 21) over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                             29             35           3         68.7          14.6       1.0X
+varka (SIMD)                                                                                  15             17           3        134.5           7.4       2.0X
 
 
 ================================================================================================
@@ -54,8 +54,8 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 filter IN anchor, 50 literals (unfused on both) over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 --------------------------------------------------------------------------------------------------------------------------------------------------------------
-baseline (Janino)                                                                          29             31           2         68.6          14.6       1.0X
-varka (SIMD)                                                                               28             31           2         70.4          14.2       1.0X
+baseline (Janino)                                                                          30             32           2         67.8          14.8       1.0X
+varka (SIMD)                                                                               29             33           3         67.9          14.7       1.0X
 
 
 ================================================================================================
@@ -66,8 +66,8 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 filter IN anchor, 200 literals (unfused on both) over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
-baseline (Janino)                                                                           32             35           4         62.4          16.0       1.0X
-varka (SIMD)                                                                                31             33           2         64.4          15.5       1.0X
+baseline (Janino)                                                                           31             35           3         63.6          15.7       1.0X
+varka (SIMD)                                                                                33             37           3         60.3          16.6       0.9X
 
 
 ================================================================================================
@@ -78,7 +78,7 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 filter IN anchor, 500 literals (unfused on both) over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
-baseline (Janino)                                                                           42             45           2         47.2          21.2       1.0X
-varka (SIMD)                                                                                42             44           1         47.2          21.2       1.0X
+baseline (Janino)                                                                           44             49           3         45.3          22.1       1.0X
+varka (SIMD)                                                                                45             50           3         44.0          22.7       1.0X
 
 

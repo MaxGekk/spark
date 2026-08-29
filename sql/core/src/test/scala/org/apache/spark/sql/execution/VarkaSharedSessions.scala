@@ -122,21 +122,30 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
     session.catalog.cacheTable("varka_dates_big")
   }
 
+  /** Whether a node is one of the four Varka exec nodes (projections since task 6, filters
+   * since task 21). The assertions below go through this so a suite written against one node
+   * kind keeps working as the rule learns new rewrites. */
+  protected def isVarkaNode(plan: SparkPlan): Boolean = plan match {
+    case _: VarkaColumnarToRowExec | _: VarkaProjectExec
+        | _: VarkaFilterExec | _: VarkaFilterColumnarToRowExec => true
+    case _ => false
+  }
+
   protected def assertKernelsRan(plan: SparkPlan): Unit = {
-    val node = collectFirst(plan) { case v: VarkaColumnarToRowExec => v }
-      .getOrElse(fail(s"expected a VarkaColumnarToRowExec in the plan:\n${plan.treeString}"))
+    val node = collectFirst(plan) { case v if isVarkaNode(v) => v }
+      .getOrElse(fail(s"expected a Varka node in the plan:\n${plan.treeString}"))
     val varkaBatches = node.metrics.get("numVarkaBatches").map(_.value).getOrElse(0L)
     assert(varkaBatches > 0L,
       s"expected the SIMD kernels to process the cached Arrow batches, got $varkaBatches")
   }
 
   protected def assertFused(plan: SparkPlan): Unit = {
-    assert(find(plan)(_.isInstanceOf[VarkaColumnarToRowExec]).isDefined,
-      s"expected a VarkaColumnarToRowExec in the plan:\n${plan.treeString}")
+    assert(find(plan)(isVarkaNode).isDefined,
+      s"expected a Varka node in the plan:\n${plan.treeString}")
   }
 
   protected def assertNotFused(plan: SparkPlan): Unit = {
-    assert(find(plan)(_.isInstanceOf[VarkaColumnarToRowExec]).isEmpty,
-      s"expected no VarkaColumnarToRowExec in the plan:\n${plan.treeString}")
+    assert(find(plan)(isVarkaNode).isEmpty,
+      s"expected no Varka node in the plan:\n${plan.treeString}")
   }
 }

@@ -101,6 +101,15 @@ Each step either pins the fault or narrows it.
   `executeColumnar()` on it throws. A fusion node that consumes a columnar child
   must absorb the transition (`case ColumnarToRowExec(inner) => inner`) instead of
   wrapping it.
+- The `ColumnarToRowTransition` tag is read by some machinery as "semantics-free
+  row conversion" - `CachedBatchSerializer.convertToColumnarPlanIfPossible` strips
+  a topmost transition and executes its *child* to get columnar cache input. A
+  fused node wearing the tag (every Varka `*ColumnarToRowExec`) carries real work
+  inside it, so every tag consumer that strips must instead convert the fused node
+  to its columnar sibling (identical kernels, columnar out) - the Arrow serializer
+  override does. Found in task 21 as a wrong-cached-view bug latent since task 6:
+  every direct query stays right, and only a *cached* view materializes the
+  dropped work. When adding a fused transition node, grep the tag's consumers.
 
 ## Metrics as the "did it really run" proof
 

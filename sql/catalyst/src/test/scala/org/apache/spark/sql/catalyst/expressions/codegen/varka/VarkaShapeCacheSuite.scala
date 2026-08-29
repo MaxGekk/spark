@@ -70,6 +70,20 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(cache.size === 1)
   }
 
+  test("task 21: a condition-root shape - the filter kernel - caches and hits like any other") {
+    val cache = new VarkaShapeCacheImpl(8)
+    val cond = new VarkaVectorIR.Compare(VarkaVectorIR.CompareOp.LT, columnRef, literal)
+    val first = cache.getOrEmit(keyOf(cond), "execFilterA")
+    val second = cache.getOrEmit(keyOf(cond), "execFilterB")
+    assert(!first.hit && second.hit)
+    assert(first.entry eq second.entry, "equal mask shapes must share one entry")
+    // The mask root and the same condition inside a value root are different shapes: the
+    // canonical rendering of the root differs, so a filter kernel can never be served a
+    // projection's class or vice versa.
+    val asValue = keyOf(new VarkaVectorIR.IfElse(cond, columnRef, columnRef))
+    assert(VarkaShapeCache.shapeHash(asValue) !== VarkaShapeCache.shapeHash(keyOf(cond)))
+  }
+
   test("every byte-affecting difference gets its own class") {
     val cache = new VarkaShapeCacheImpl(16)
     val keys = Seq(

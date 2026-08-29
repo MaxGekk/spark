@@ -259,20 +259,35 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           val validityAddrs = cols.zip(nullCounts).map { case (col, nc) =>
             if (nc == 0 || nc == length) col.validityAddress(length) else col.validity.address()
           }
+          // A Cond root is a selection output (task 21): its data address is 0L per the
+          // kernel contract - exactly what the filter evaluator passes - so a regression
+          // that touches it faults instead of writing somewhere silently.
+          val dstData = roots.zip(outs).map { case (root, out) =>
+            if (root.isInstanceOf[Cond]) 0L else out._1.address()
+          }
           kernel.run(cols.map(_.data.address()).toArray, validityAddrs.toArray,
-            nullCounts.toArray, outs.map(_._1.address()).toArray,
+            nullCounts.toArray, dstData.toArray,
             outs.map(_._2.address()).toArray, lits, length)
           for (i <- 0 until length) {
             val row = (0 until numInputs).map { c =>
               if (combo(c)(i)) None else Some(data(c, i))
             }
             for ((root, o) <- roots.zipWithIndex) {
-              val expected = evalValue(root, row, lits)
               val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
               val where = s"$ctx len=$length combo=$comboId out=$o row=$i"
-              assert(bit === expected.isDefined, s"$where: validity differs (want $expected)")
-              expected.foreach { v =>
-                assert(outs(o)._1.get(ValueLayout.JAVA_INT, i * 4L) === v, s"$where: value")
+              root match {
+                case c: Cond =>
+                  // The selection rule: a bit is set exactly where the condition is known
+                  // true - unknown reads as false (the mask-root null rule).
+                  val expected = evalCond(c, row, lits).contains(true)
+                  assert(bit === expected, s"$where: selection differs (want $expected)")
+                case _ =>
+                  val expected = evalValue(root, row, lits)
+                  assert(bit === expected.isDefined,
+                    s"$where: validity differs (want $expected)")
+                  expected.foreach { v =>
+                    assert(outs(o)._1.get(ValueLayout.JAVA_INT, i * 4L) === v, s"$where: value")
+                  }
               }
             }
           }
@@ -704,6 +719,78 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("task 21: a comparison root emits the selection bitmap with null-as-false") {
+    // The simplest filter kernel: one Compare root, its bitmap checked against the Kleene
+    // reference with unknown collapsed to false at the root - across lengths (tail rows
+    // included) and every pair of null patterns, all-null included (the all-null shortcut
+    // must leave a correct all-clear bitmap for a null-intolerant root).
+    val root = new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1))
+    checkMatrix(Seq(root), 2, Array.emptyIntArray, Seq(0, 5, 16, 17, 65, 1000), combos(2),
+      ctx = "cmp-root")
+  }
+
+  test("task 21: BETWEEN- and IN-shaped roots match the reference") {
+    // The survey's two dominant filter shapes: BETWEEN as And over paired comparisons
+    // against literals, and IN as the balanced OR chain of EQ leaves (task 20's lowering,
+    // now at a root). Data cycles a small range so both selects and rejects occur.
+    val d = new ColumnRef(0)
+    val between = new And(
+      new Compare(CompareOp.GE, d, new LiteralSlot(0)),
+      new Compare(CompareOp.LE, d, new LiteralSlot(1)))
+    val inChain = new Or(
+      new Or(new Compare(CompareOp.EQ, d, new LiteralSlot(0)),
+        new Compare(CompareOp.EQ, d, new LiteralSlot(1))),
+      new Compare(CompareOp.EQ, d, new LiteralSlot(2)))
+    checkMatrix(Seq(between), 1, Array(-3, 4), Seq(5, 64, 65, 1000),
+      nullPatterns.map(p => Seq(p._2)), ctx = "between-root")
+    checkMatrix(Seq(inChain), 1, Array(-4, 0, 5), Seq(5, 64, 65, 1000),
+      nullPatterns.map(p => Seq(p._2)), ctx = "in-root")
+  }
+
+  test("task 21: an Or root over one all-null column still selects on the live column") {
+    // The all-null-shortcut counterexample, pinned: Or(unknown, known-true) is known true,
+    // so with column 0 all-null and column 1 live the rows where column 1 matches must
+    // still select. A shortcut that fired on "some referenced column is all-null" would
+    // zero this bitmap - which is why Cond roots are excluded from it.
+    val root = new Or(
+      new Compare(CompareOp.EQ, new ColumnRef(0), new LiteralSlot(0)),
+      new Compare(CompareOp.EQ, new ColumnRef(1), new LiteralSlot(0)))
+    val allNullFirst = Seq(Seq[Int => Boolean](_ => true, _ => false))
+    checkMatrix(Seq(root), 2, Array(4), Seq(5, 64, 65, 1000), allNullFirst,
+      ctx = "or-allnull")
+    // And the full matrix for completeness: every pair of patterns.
+    checkMatrix(Seq(root), 2, Array(4), Seq(65), combos(2), ctx = "or-matrix")
+  }
+
+  test("task 21: validity-predicate roots - IS NOT NULL, and IS NULL as its NOT") {
+    val isNotNull = new IsNotNull(new ColumnRef(0))
+    checkMatrix(Seq(isNotNull), 1, Array.emptyIntArray, Seq(5, 64, 65, 1000),
+      nullPatterns.map(p => Seq(p._2)), ctx = "isnotnull-root")
+    checkMatrix(Seq[VarkaVectorIR](new Not(isNotNull)), 1, Array.emptyIntArray,
+      Seq(5, 64, 65, 1000), nullPatterns.map(p => Seq(p._2)), ctx = "isnull-root")
+  }
+
+  test("task 21: a mask root beside a value root shares the kernel and its subtrees") {
+    // The emitter serves mixed outputs even though milestone 3's filter kernels are
+    // single-root: the mask and the value share one CSE'd subtree, and each output keeps
+    // its own contract (bitmap with no data store; value with data plus validity).
+    val add = new AddDays(new ColumnRef(0), new LiteralSlot(0))
+    val roots = Seq[VarkaVectorIR](
+      new Compare(CompareOp.GT, add, new ColumnRef(1)),
+      add)
+    checkMatrix(roots, 2, Array(7), Seq(5, 64, 65, 1000), combos(2), ctx = "mixed-roots")
+  }
+
+  test("task 21: the masked body agrees with the dense body on a null-free mask root") {
+    val root = new And(
+      new Compare(CompareOp.GE, new ColumnRef(0), new LiteralSlot(0)),
+      new Compare(CompareOp.LE, new ColumnRef(0), new LiteralSlot(1)))
+    val nullFree = Seq(Seq[Int => Boolean](_ => false))
+    checkMatrix(Seq(root), 1, Array(-3, 4), Seq(64, 65, 1000), nullFree, ctx = "mask-dense")
+    checkMatrix(Seq(root), 1, Array(-3, 4), Seq(64, 65, 1000), nullFree,
+      forceMasked = true, ctx = "mask-forced")
+  }
+
   test("a shared subchain feeds a condition and both branches across outputs") {
     // CSE across the value/condition boundary: `add = date_add(d, 7)` is compared against,
     // blended over, and emitted as its own output - one computation per lane group.
@@ -738,9 +825,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val (_, sharedOk) = emitMulti(
       disjointChains.take(4) ++ disjointChains.take(4), 1, 52)
     assert(sharedOk.nonEmpty)
-    // Task 11: conditions are interior only, and never values.
+    // Task 11: conditions are never values. (A condition as an output ROOT became legal in
+    // task 21 - it emits a selection bitmap - so only the value positions reject now.)
     val cmp = new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(0))
-    rejects(emitMulti(Seq(cmp), 1, 0), "value position")
     rejects(emitMulti(Seq(new AddDays(cmp, new LiteralSlot(0))), 1, 1), "value position")
     rejects(emitMulti(Seq(new Greatest(new ColumnRef(0), cmp)), 1, 0), "value position")
   }

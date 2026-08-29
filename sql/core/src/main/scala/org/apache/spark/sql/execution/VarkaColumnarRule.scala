@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.execution
 
-import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{And, Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.internal.SQLConf
@@ -30,6 +30,13 @@ import org.apache.spark.sql.internal.SQLConf
  * Since task 12 eligibility is partial: a projection is eligible when at least one entry
  * compiles to the vector IR, with bare columns forwarded zero-copy and the remaining entries
  * evaluated per row alongside the kernels (see `VarkaKernelEvaluator`).
+ *
+ * Task 21 extends the same two-stage rewrite to filters, the engine's first plan-shape change:
+ * an eligible predicate becomes a [[VarkaFilterExec]] (columnar out, compacting the selected
+ * rows) or, fused with its to-row transition, a [[VarkaFilterColumnarToRowExec]] (which
+ * consumes the selection bitmap at the row boundary, no compaction). Predicate eligibility is
+ * per conjunct: the compilable conjuncts of the `AND` spine fuse into the mask kernel and the
+ * rest stay in a row `FilterExec` above the Varka node - see [[rewriteFilter]].
  *
  * The rewrite happens in two stages, on either side of the transition insertion that
  * [[ApplyColumnarRulesAndInsertTransitions]] does between them, because which of the two Varka
@@ -60,6 +67,8 @@ object VarkaColumnarRule extends ColumnarRule {
           } else {
             project
           }
+        case filter @ FilterExec(condition, child) if child.supportsColumnar =>
+          rewriteFilter(condition, child, VarkaFilterExec(_, _)).getOrElse(filter)
       }
     } else {
       plan
@@ -71,6 +80,8 @@ object VarkaColumnarRule extends ColumnarRule {
       plan.transformUp {
         case ColumnarToRowExec(varka: VarkaProjectExec) =>
           VarkaColumnarToRowExec(varka.projectList, varka.child)
+        case ColumnarToRowExec(varka: VarkaFilterExec) =>
+          VarkaFilterColumnarToRowExec(varka.condition, varka.child)
         case project @ ProjectExec(projectList, child)
             if isVarkaEligible(projectList, child.output) =>
           val columnarChild = child match {
@@ -81,6 +92,21 @@ object VarkaColumnarRule extends ColumnarRule {
             VarkaColumnarToRowExec(projectList, columnarChild)
           } else {
             project
+          }
+        case filter @ FilterExec(condition, child) =>
+          // A filter the pre stage did not see, sitting over a to-row transition it should
+          // absorb, never wrap (the columnar-transition wiring lesson). This also revisits
+          // the residual filter the pre stage itself left above a Varka filter - harmlessly:
+          // its child is by then the row-out Varka node, which is not columnar.
+          val columnarChild = child match {
+            case ColumnarToRowExec(inner) => inner
+            case other => other
+          }
+          if (columnarChild.supportsColumnar) {
+            rewriteFilter(condition, columnarChild, VarkaFilterColumnarToRowExec(_, _))
+              .getOrElse(filter)
+          } else {
+            filter
           }
       }
     } else {
@@ -94,5 +120,24 @@ object VarkaColumnarRule extends ColumnarRule {
   private def isVarkaEligible(
       projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Boolean = {
     VarkaExpressionCompiler.compilePartial(projectList, childOutput).isDefined
+  }
+
+  /**
+   * The filter rewrite under the task-21 conjunct split, or None when no conjunct fuses: the
+   * Varka node (built by `mkVarka`) carries exactly the fused conjuncts, and the residual
+   * conjuncts - the ones the compiler declined, reasons in the debug log and the Varka node's
+   * EXPLAIN - stay in a row [[FilterExec]] above it, which sees only the rows the mask kernel
+   * let through. Both folds keep query order.
+   */
+  private def rewriteFilter(
+      condition: Expression,
+      child: SparkPlan,
+      mkVarka: (Expression, SparkPlan) => SparkPlan): Option[SparkPlan] = {
+    VarkaExpressionCompiler.compilePredicate(condition, child.output).map { predicate =>
+      val varka = mkVarka(predicate.fusedConjuncts.reduceLeft(And(_, _)), child)
+      predicate.residualConjuncts.reduceLeftOption(And(_, _))
+        .map(residual => FilterExec(residual, varka))
+        .getOrElse(varka)
+    }
   }
 }

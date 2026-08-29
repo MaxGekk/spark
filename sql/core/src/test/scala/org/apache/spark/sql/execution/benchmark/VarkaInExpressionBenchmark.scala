@@ -22,7 +22,7 @@ import scala.concurrent.duration._
 import org.apache.spark.benchmark.Benchmark
 import org.apache.spark.internal.config.UI.UI_ENABLED
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.execution.{VarkaColumnarRule, VarkaColumnarToRowExec, VarkaProjectExec}
+import org.apache.spark.sql.execution.{VarkaColumnarRule, VarkaColumnarToRowExec, VarkaFilterColumnarToRowExec, VarkaFilterExec, VarkaProjectExec}
 import org.apache.spark.sql.execution.columnar.ArrowCachedBatchSerializer
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 
@@ -48,8 +48,10 @@ import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
  *  - Above the cap: n = 50, guarded by [[requireDeclined]] and still measured - the
  *    no-regression proof that an over-cap list keeps stock performance on the varka session.
  *  - Anchor: the stock-shaped `SELECT COUNT(*) WHERE d IN (<n>)` filter at 5/50/200/500 on
- *    both sessions - unfused on both (Varka rewrites projections only until task 21), tying
- *    this file's list shapes to the upstream benchmark's.
+ *    both sessions, tying this file's list shapes to the upstream benchmark's. Until task 21
+ *    all four anchors were unfused by design (Varka rewrote projections only); the in-cap
+ *    anchor now runs the mask kernel and is guarded fused, while 50/200/500 stay declined
+ *    over the literal cap.
  *
  * Sessions, tables and methodology follow `VarkaThroughputBenchmark` (Arrow cache serializer,
  * session hygiene around `getOrCreate`, 2M rows with a null every 31, five iterations over
@@ -116,6 +118,8 @@ object VarkaInExpressionBenchmark extends SqlBasedBenchmark {
     val node = plan.collectFirst {
       case v: VarkaProjectExec => v.metrics("numVarkaBatches")
       case v: VarkaColumnarToRowExec => v.metrics("numVarkaBatches")
+      case v: VarkaFilterExec => v.metrics("numVarkaBatches")
+      case v: VarkaFilterColumnarToRowExec => v.metrics("numVarkaBatches")
     }.getOrElse(throw new IllegalStateException(
       s"case '$name' did not fuse on the varka session:\n${plan.treeString}"))
     require(node.value > 0,
@@ -128,6 +132,8 @@ object VarkaInExpressionBenchmark extends SqlBasedBenchmark {
     val fused = plan.collectFirst {
       case v: VarkaProjectExec => v
       case v: VarkaColumnarToRowExec => v
+      case v: VarkaFilterExec => v
+      case v: VarkaFilterColumnarToRowExec => v
     }
     require(fused.isEmpty,
       s"case '$name' was expected to decline but fused:\n${plan.treeString}")
@@ -174,7 +180,11 @@ object VarkaInExpressionBenchmark extends SqlBasedBenchmark {
       requireDeclined(varka, "case-when IN, 50 literals", fusedQuery(50))
       runPair(baseline, varka, "case-when IN, 50 literals, declined (over the cap)",
         fusedQuery(50))
-      for (n <- Seq(5, 50, 200, 500)) {
+      // Task 21 flipped the in-cap anchor: the filter itself now runs the mask kernel.
+      requireFused(varka, "filter IN anchor, 5 literals", anchorQuery(5))
+      runPair(baseline, varka, "filter IN anchor, 5 literals (fused since task 21)",
+        anchorQuery(5))
+      for (n <- Seq(50, 200, 500)) {
         requireDeclined(varka, s"filter IN anchor, $n literals", anchorQuery(n))
         runPair(baseline, varka, s"filter IN anchor, $n literals (unfused on both)",
           anchorQuery(n))

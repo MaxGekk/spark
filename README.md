@@ -9,8 +9,10 @@ anything the engine cannot serve. A Varka failure never fails a query.
 
 The current scope is date arithmetic (`date_add`, `date_sub`, `datediff`,
 `CASE WHEN`/`IF` over date comparisons, `greatest`/`least`,
-`dayofweek`/`weekday`) over Arrow-cached data - deep enough to exercise real
-fusion, small enough to measure honestly.
+`dayofweek`/`weekday`) and, since task 21, date filters (`BETWEEN`, `IN`,
+`IS [NOT] NULL` and their `AND`/`OR` combinations as mask kernels) over
+Arrow-cached data - deep enough to exercise real fusion, small enough to
+measure honestly.
 
 ## Main ideas
 
@@ -30,6 +32,9 @@ and the architecture in [`sql/varka/VISION.md`](sql/varka/VISION.md):
   cost the same as predictable ones.
 * **Partial eligibility**: fusable entries fuse, untouched columns are
   forwarded zero-copy, the rest runs the stock row path and merges.
+* **Filters as mask kernels**: a predicate's fusable conjuncts compile to one
+  loop whose output is a selection bitmap (null-as-false by construction);
+  the batch is compacted by it, or its rows skipped at the row boundary.
 * **Ghost fallback**: the Janino projection is compiled lazily, only if a
   batch actually needs it; any Varka failure degrades to stock Spark.
 * **Per-task class loading**: emitted classes unload with the task - proven
@@ -54,6 +59,10 @@ the table too - this fork commits its losses:
 | `CASE WHEN`, unpredictable condition | 7.1x |
 | `CASE WHEN`, predictable condition | 5.8x |
 | `CASE WHEN d IN (...)`, 5 / 16 literals | 3.5x / 4.0x (fused up to the 16-literal cap; longer lists decline with a reason) |
+| `WHERE d < DATE` filter to batches (mask kernel + compaction) | 2.3x-2.7x flat across the whole 0-100% selectivity ladder |
+| Same filter to rows (mask skip, no compaction) | 2.3x at low selectivity, decaying to 1.1x at all-selected |
+| `WHERE d IN (5 literals)` filter | 2.0x (was parity by design before task 21) |
+| `COUNT(*)` over an 85%-selective filter | 0.8x - nearly every row crosses the read-back floor into the aggregate (1.8x at 15%) |
 | Chain of 8 date ops, columnar consumer | 7.5x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
 | Same chains through a row consumer | 0.8x - the ~25 ns/row read-back floor; heavy shapes clear it instead (`dayofweek` 1.2x, `CASE WHEN` 1.1x through rows), task 19's recorded decision |
 | `dayofweek` | 9.8x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |

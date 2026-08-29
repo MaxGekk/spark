@@ -100,6 +100,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wee
  * is negative ({@code 2^32 = 4 mod 7}), one compare-subtract fixup, then the constant offset
  * applied after the mod so it cannot overflow.
  *
+ * <p><b>Selection outputs</b> (task 21): a {@link Cond} may itself be an output root, and such
+ * an output is a <i>selection bitmap</i> rather than a column - the root's known-true word
+ * OR-ed into {@code dstValidity} exactly where a value root ORs its validity word, with the
+ * {@code dstData} slot unused (callers pass {@code 0L}; the body never materializes it). The
+ * bitmap's semantics are SQL's {@code WHERE}: a set bit means known true, so an unknown lane
+ * (a null below the comparison) reads as false - free by construction, because {@code kT} is
+ * a subset of the operands' validity. This is the filter kernel: one Cond root per predicate,
+ * no value outputs beside it in milestone 3.
+ *
  * <p>The scalar tail is a per-row topological pass over the same DAG: each distinct node's
  * value (and, in the masked body, its validity bit and a condition's kT/kF bits) lands in an
  * int local computed once per row, mirroring the vector algebra rule for rule. Shared subtrees
@@ -110,10 +119,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wee
  * {@code max} all take the <i>erased</i> {@code Vector}), and a wrong descriptor must be found
  * by pointing at one line, not by disassembling the output.
  *
- * <p>Out-of-shape IR - unknown lane types, a condition as an output root or in a value
- * position, out-of-range ordinals or slots, non-literal day offsets, trees past
- * {@link #MAX_CHAIN_DEPTH} or {@link #MAX_FUSED_NODES} - is rejected with
- * {@link IllegalArgumentException}, which the evaluator wiring treats as "fall back".
+ * <p>Out-of-shape IR - unknown lane types, a condition in a value position, out-of-range
+ * ordinals or slots, non-literal day offsets, trees past {@link #MAX_CHAIN_DEPTH} or
+ * {@link #MAX_FUSED_NODES} - is rejected with {@link IllegalArgumentException}, which the
+ * evaluator wiring treats as "fall back".
  *
  * <p><b>Telemetry</b> (task 13): every emitted class carries a {@code SourceFile} attribute -
  * the caller-supplied name, meant to identify the operator and stage
@@ -750,7 +759,9 @@ public final class VarkaLoopEmitter {
     }
 
     void analyzeRoot(VarkaVectorIR root) {
-      requireValue(root, "output root");
+      // A Cond root is legal since task 21: it emits this output's selection bitmap into
+      // dstValidity, with the dstData slot unused (see the class doc). Value positions
+      // below a root still reject conditions via requireValue.
       analyze(root);
       if (height.get(root) > MAX_CHAIN_DEPTH) {
         throw new IllegalArgumentException(
@@ -1119,9 +1130,14 @@ public final class VarkaLoopEmitter {
 
     // (3) Per output: segments, and - in the driver only - zero(dstValidity) before any
     // return below, the emitter invariant: an output nothing writes must still read as
-    // all-null. The loop and tail methods run after bits were written and must not.
+    // all-null. The loop and tail methods run after bits were written and must not. A Cond
+    // root's data address is 0L by the interface contract and must not be materialized
+    // (the same rule as an all-null input's validity address); zeroing its bitmap doubles
+    // as the selection invariant - an unwritten row reads as unselected.
     for (int o = 0; o < numOutputs; o++) {
-      loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
+      if (!(outputs.get(o) instanceof Cond)) {
+        loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
+      }
       loadSegment(cb, P_DST_VALIDITY, o, s.validityBytes, s.dstValSeg[o]);
       if (mode == BodyMode.DRIVER) {
         cb.aload(s.dstValSeg[o]);
@@ -1185,10 +1201,15 @@ public final class VarkaLoopEmitter {
     // Sound only for null-intolerant outputs - a null-skipping subtree (greatest, IfElse) can
     // be valid over an all-null column - and emitted in the masked driver only (the dense
     // body has nothing null; the loop and tail methods are never called when it fires), and
-    // only when every output references a column.
+    // only when every output references a column. A Cond root (task 21) is excluded outright
+    // rather than reasoned about: Or(unknown, known-true) is known true, so an OR over one
+    // all-null column and one live one still selects rows, which the zeroed bitmap the
+    // shortcut leaves behind would deny. The loop needs no shortcut to be correct there -
+    // an all-null input's word is 0L, so its side contributes no known-true bits.
     boolean shortcutApplies = !dense && mode == BodyMode.DRIVER;
     for (VarkaVectorIR root : outputs) {
-      shortcutApplies &= analysis.columns.get(root) != 0L && !analysis.skipping.get(root);
+      shortcutApplies &= analysis.columns.get(root) != 0L && !analysis.skipping.get(root)
+          && !(root instanceof Cond);
     }
     if (shortcutApplies) {
       Label live = cb.newLabel();
@@ -1317,9 +1338,28 @@ public final class VarkaLoopEmitter {
     // Each output of this group: the DAG post-order with intermediates on the operand stack
     // (or in a shared node's local), one unmasked store, and this lane group's validity bits -
     // the root's word (all-true when dense), which orValidityBitsAt truncates itself.
+    // A Cond root (task 21) writes no data at all: its output is the selection bitmap - the
+    // known-true word, which is unknown-as-false by construction (kT is a subset of valid) -
+    // OR-ed into dstValidity exactly where a value root ORs its validity word; the dstData
+    // slot stays untouched, per the interface contract.
     Set<VarkaVectorIR> computed = new HashSet<>();
     for (int o : outputIdx) {
       VarkaVectorIR root = outputs.get(o);
+      if (root instanceof Cond cond) {
+        emitCond(cb, cond, dense, analysis, s, computed);
+        cb.aload(s.dstValSeg[o]);
+        cb.iload(s.iVar);
+        cb.i2l();
+        if (dense) {
+          cb.aload(s.condMask.get(cond));
+          cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
+        } else {
+          cb.lload(s.kt.get(cond));
+        }
+        cb.iload(s.lanes);
+        cb.invokestatic(SUPPORT, "orValidityBitsAt", OR_VALIDITY_BITS_AT);
+        continue;
+      }
       emitValue(cb, root, dense, analysis, s, computed);
       cb.aload(s.dstSeg[o]);
       cb.lload(s.byteOffset);
@@ -1370,6 +1410,17 @@ public final class VarkaLoopEmitter {
     for (int o = 0; o < numOutputs; o++) {
       VarkaVectorIR root = outputs.get(o);
       Label rowDone = cb.newLabel();
+      if (root instanceof Cond) {
+        // A Cond root (task 21): set this row's selection bit iff known true - the tail's
+        // form of the loop's kT write. No data store, matching the vector loop.
+        cb.iload(s.tailKt.get(root));
+        cb.ifeq(rowDone);
+        cb.aload(s.dstValSeg[o]);
+        cb.iload(s.iVar);
+        cb.invokestatic(SUPPORT, "setBit", SET_BIT);
+        cb.labelBinding(rowDone);
+        continue;
+      }
       if (!dense) {
         cb.iload(s.tailValid.get(root));
         cb.ifeq(rowDone);

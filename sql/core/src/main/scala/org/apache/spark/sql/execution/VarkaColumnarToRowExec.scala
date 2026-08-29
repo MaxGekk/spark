@@ -52,6 +52,15 @@ import org.apache.spark.util.CompletionIterator
  * The node is not `CodegenSupport`; whole-stage codegen splits at this boundary (correctness
  * first, codegen support is a follow-up).
  *
+ * '''The transition tag carries a caveat.''' This node extends [[ColumnarToRowTransition]] so
+ * the transition-insertion pass (and its AQE re-runs) treats it as the to-row boundary it is -
+ * but unlike the stock transition it is NOT semantics-free: it carries the whole fused
+ * projection. Machinery that strips a topmost transition to reach the columnar plan
+ * underneath must convert this node to its columnar sibling ([[VarkaProjectExec]], identical
+ * kernels) instead of dropping it - `ArrowCachedBatchSerializer.convertToColumnarPlanIfPossible`
+ * does exactly that, after task 21 found the default strip silently discarding the fused work
+ * on the cache-population path.
+ *
  * The engine module (`varka-engine`) is deliberately kept off the main compile classpath: only
  * its kernel descriptors (strings) and Arrow classes are referenced here. The engine jar is a
  * test-scoped dependency; at runtime it is deployed externally (`--jars`) and its absence only
