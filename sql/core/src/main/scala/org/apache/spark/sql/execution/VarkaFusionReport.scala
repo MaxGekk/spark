@@ -55,12 +55,22 @@ private[sql] object VarkaFusionReport {
     }
   }
 
-  /** The same, compiling the projection first - the plan-side entry point. */
-  def lines(projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Seq[String] = {
-    VarkaExpressionCompiler.compilePartial(projectList, childOutput) match {
-      case Some(partial) => lines(partial, projectList, childOutput)
+  /** The same over a memoized classification - the exec nodes' entry point (task-21 review:
+   * one compilation serves EXPLAIN and the driver-side residual count). */
+  def lines(
+      partial: Option[PartialVarkaProjection],
+      projectList: Seq[NamedExpression],
+      childOutput: Seq[Attribute]): Seq[String] = {
+    partial match {
+      case Some(classified) => lines(classified, projectList, childOutput)
       case None => Seq("no entry is Varka-eligible")
     }
+  }
+
+  /** The same, compiling the projection first - the plan-side entry point. */
+  def lines(projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Seq[String] = {
+    lines(VarkaExpressionCompiler.compilePartial(projectList, childOutput),
+      projectList, childOutput)
   }
 
   /**

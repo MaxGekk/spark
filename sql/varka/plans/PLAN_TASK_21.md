@@ -214,7 +214,63 @@ node runs, so the rung uses an interval containing no whole day - selecting
 nothing while staying unprunable (the differential suite's none-selected
 case does the same, for the same reason).
 
-## 6. Explicitly out of task 21
+## 6. The max review round
+
+A maximum-effort review ran against the merged task-22 commit while this
+task's branch was still local, and its fifteen findings were fixed here -
+they overlap this task's files, and the shared evaluator base this task
+introduced is where the deduplicated fixes belong. The four correctness
+findings, all in the task-22 diagnostics themselves:
+
+1. **The residual-entry count never reached the SQL UI.** The driver-side
+   metric add was never posted through `SQLMetrics.postDriverMetricUpdates`,
+   so the listener - the surface the SQL tab renders - always read zero
+   while the driver-local accumulator the suites read carried the count:
+   task 22's own "diagnosable from the SQL UI alone" gate was unmet as
+   shipped. Both projection nodes now post it, pinned by a status-store
+   test that goes through a real tracked execution.
+2. **Empty batches were counted as "input not Arrow-backed".** `canRun`
+   also refuses 0-row batches and the defensive no-plan case; the shared
+   `recordRefusedBatch` now counts only a non-empty batch that actually
+   fails the Arrow check, and the metrics test pins an empty Arrow batch
+   at zero cause counts.
+3. **Non-kernel failures were metered as kernel failures.** The per-batch
+   catch also caught the lazy residual/merge projection's compile or
+   evaluation errors - re-counted per batch, since a throwing lazy re-runs
+   its initializer. `invokeFused` now marks genuine kernel throws with a
+   wrapper the nodes match on; everything else catchable events and logs
+   under the new `row-path-failure` cause with no metric (the cause set
+   stays bounded; the event and warning carry it).
+4. **The cache-lookup JFR event carried the raw, unbounded execution
+   identity**, diverging from its own javadoc and from the side table's
+   abbreviated copy - the advertised join between the event stream and
+   `executionsFor` never matched past the bound. The identity is bounded
+   once, for both consumers, pinned by an over-long identity in the JFR
+   test.
+
+Plus one efficiency regression - `kernelIdentity` (a SHA-256 over the
+canonical IR) was recomputed eagerly per fallback batch even with JFR off,
+on exactly the misconfigured-serializer path the task-22 plan called
+untouched; it is a lazy val now and the event helper takes it by name -
+and ten cleanups: the per-batch fallback accounting and the metric-map and
+bundle definitions deduplicated into the evaluator base and the
+`VarkaExecMetrics` companion (the four nodes had byte-identical copies);
+one memoized compilation per node serving EXPLAIN and the residual count;
+the JFR cause vocabulary as constants on `VarkaFallbackEvent`; a shared
+`withJfrRecording` test helper that closes the recording on every path and
+filters by event class rather than re-typed name strings; throwaway
+metric registrations dropped from six suite sites; the default-restating
+`@Enabled`/`@Threshold` annotations removed; the `VarkaExecMetrics`
+sectioning fixed; the docs' only full event-name spelling un-split from a
+line break; and the decision that `VarkaExecMetrics` stays Scala recorded
+in its doc (named arguments over six same-typed optional fields, where a
+Java record's positional constructor would be a silent-swap hazard).
+
+The review also refuted two suspected defects, worth keeping: re-executing
+a plan does not double-add driver metrics (`SparkPlan` memoizes `doExecute`
+via `LazyTry`), and JFR's threshold semantics need no annotation defense.
+
+## 7. Explicitly out of task 21
 
 Boolean output columns (milestone 4 item 5 - this task owes them only the
 mask-as-value machinery); `compress(mask)` SIMD compaction (milestone 4 item

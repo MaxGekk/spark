@@ -18,11 +18,9 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import jdk.jfr.Category;
-import jdk.jfr.Enabled;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
 import jdk.jfr.Name;
-import jdk.jfr.Threshold;
 
 /**
  * JFR event (task 22) for one shape-cache lookup: the per-task resolution of a kernel class,
@@ -34,8 +32,6 @@ import jdk.jfr.Threshold;
 @Name("org.apache.spark.sql.varka.ShapeCacheLookup")
 @Label("Varka Shape-Cache Lookup")
 @Category("Varka")
-@Enabled(true)
-@Threshold("0 ms")
 public final class VarkaCacheLookupEvent extends Event {
 
   @Label("Shape Hash")

@@ -224,7 +224,13 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
       case e: UncheckedExecutionException => throw e.getCause
       case e: ExecutionException => throw e.getCause
     }
-    recordExecution(entry.shapeHash, execution)
+    // Bounded once, for both consumers: the side-table entry and the JFR event must carry
+    // the same string or the advertised join between them fails on anything abbreviated -
+    // and the event payload must not be unbounded (the evaluator's identity builder checks
+    // the bound only before appending, so a single long entry can overshoot it by a lot).
+    val boundedExecution =
+      SparkStringUtils.abbreviate(execution, VarkaShapeCache.maxExecutionIdentityLength)
+    recordExecution(entry.shapeHash, boundedExecution)
     if (emitted) misses.increment() else hits.increment()
     // Task 22: the counters' JFR twin - one event per task-level resolution, carrying the
     // per-execution identity that must not ride the shared bytes.
@@ -232,7 +238,7 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
     if (lookupEvent.isEnabled()) {
       lookupEvent.shapeHash = entry.shapeHash
       lookupEvent.hit = !emitted
-      lookupEvent.execution = execution
+      lookupEvent.execution = boundedExecution
       lookupEvent.commit()
     }
     VarkaShapeLookup(entry, hit = !emitted)
@@ -293,11 +299,9 @@ private[sql] class VarkaShapeCacheImpl(val maxEntries: Int) extends Logging {
     new VarkaShapeEntry(loader, klass, bytes, hash, className, sourceFile)
   }
 
-  private def recordExecution(hash: String, execution: String): Unit = {
-    // The shared helper keeps the marker inside the bound, so the stored identity never
-    // exceeds maxExecutionIdentityLength.
-    val identity =
-      SparkStringUtils.abbreviate(execution, VarkaShapeCache.maxExecutionIdentityLength)
+  /** Records one already-bounded identity (the caller abbreviates once, for this table and
+   * the lookup event alike) against the shape hash. */
+  private def recordExecution(hash: String, identity: String): Unit = {
     var recorded = false
     while (!recorded) {
       val set = executions.get(hash, new Callable[java.util.LinkedHashSet[String]] {

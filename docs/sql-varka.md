@@ -203,23 +203,27 @@ Task 22 extends the account to the SQL UI and to JDK Flight Recorder:
 
 * **Fallback causes are SQL metrics.** Every Varka node carries, beside the
   row/batch counts and the class-cache hits and misses, cause-keyed
-  metrics: batches falling back because the input was not Arrow-backed,
-  batches the ghost fallback caught a kernel failure on, tasks that could
-  not emit or define their kernel class, and - on the projection nodes -
-  the residual-entry count (a static plan property, added once driver-side;
-  the per-entry reasons stay in verbose `EXPLAIN`; a filter's residual is a
-  visible row `FilterExec` above it rather than a number, and its
-  `numOutputRows` counts selected rows). A fallen-back query is diagnosable
-  from the SQL UI alone: the cause class from the metrics, the exact reason
-  from `EXPLAIN` or the log.
+  metrics: batches falling back because the input was not Arrow-backed
+  (empty batches are served trivially and carry no cause), batches the
+  ghost fallback caught a kernel failure on (a failure in the per-row
+  machinery beside the kernel is evented and logged under its own
+  `row-path-failure` cause instead), tasks that could not emit or define
+  their kernel class, and - on the projection nodes - the residual-entry
+  count (a static plan property, added once driver-side and posted to the
+  SQL listener; the per-entry reasons stay in verbose `EXPLAIN`; a
+  filter's residual is a visible row `FilterExec` above it rather than a
+  number, and its `numOutputRows` counts selected rows). A fallen-back
+  query is diagnosable from the SQL UI alone: the cause class from the
+  metrics, the exact reason from `EXPLAIN` or the log.
 * **JFR events.** Three events under the `Varka` category fire while a JDK
   Flight Recorder recording is active - no JVM flag or build change is
-  needed, `jdk.jfr` is a default module: `org.apache.spark.sql.varka.
-  KernelEmission` (timed over emit plus class define; shape hash, class
-  name, IR sizes, byte count), `...ShapeCacheLookup` (shape hash, hit,
-  the per-execution identity - the join a profile needs), and
-  `...Fallback` (cause, kernel identity, exception class). Record with a
-  programmatic `jdk.jfr.Recording`, `jcmd JFR.start`, or
+  needed, `jdk.jfr` is a default module. Under the shared prefix
+  `org.apache.spark.sql.varka`: `KernelEmission` (timed over emit plus
+  class define; shape hash, class name, IR sizes, byte count),
+  `ShapeCacheLookup` (shape hash, hit, the per-execution identity - the
+  join a profile needs), and `Fallback` (cause, kernel identity, exception
+  class; the cause vocabulary is the constants on `VarkaFallbackEvent`).
+  Record with a programmatic `jdk.jfr.Recording`, `jcmd JFR.start`, or
   `-XX:StartFlightRecording`.
 
 All of it is metadata or diagnostics: the emitted methods are byte-identical

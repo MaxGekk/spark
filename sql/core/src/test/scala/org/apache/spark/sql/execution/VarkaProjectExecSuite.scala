@@ -17,12 +17,10 @@
 
 package org.apache.spark.sql.execution
 
-import scala.jdk.CollectionConverters._
-
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, DateAdd, DateDiff, DateSub, Literal, NamedExpression}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestSupport
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitterTestSupport, VarkaFallbackEvent, VarkaJfrTestSupport}
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
@@ -224,10 +222,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        VarkaExecMetrics(
-          varkaBatches = Some(SQLMetrics.createMetric(sparkContext, "varka")),
-          cacheHits = Some(SQLMetrics.createMetric(sparkContext, "cacheHits")),
-          cacheMisses = Some(SQLMetrics.createMetric(sparkContext, "cacheMisses"))))
+        VarkaExecMetrics())
       // Before task 15 this constructor compiled the fallback eagerly and threw.
       val evaluator = factory.createEvaluator()
       val column = new OnHeapColumnVector(1, IntegerType)
@@ -318,57 +313,54 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       project(Alias(DateAdd(attrD, Literal(3)), "add")()),
       Seq(
         BatchSpec("arrow", Seq(Seq(Int.box(1), Int.box(2)))),
-        BatchSpec("onheap", Seq(Seq(Int.box(3))))),
+        BatchSpec("onheap", Seq(Seq(Int.box(3)))),
+        BatchSpec("arrow", Seq(Seq.empty))),
       Seq(attrD))
     plan.executeColumnar().foreach(_ => ())
     assert(plan.metrics("numOutputRows").value === 3)
-    assert(plan.metrics("numInputBatches").value === 2)
-    // Only the Arrow batch reaches the kernels; the on-heap one takes the fallback.
+    assert(plan.metrics("numInputBatches").value === 3)
+    // Only the non-empty Arrow batch reaches the kernels; the on-heap one takes the fallback.
     assert(plan.metrics("numVarkaBatches").value === 1)
-    // Task 18: each spec is its own partition, so two tasks looked the shape up - canRun
-    // forces the runner on the fallback task too, which before the cache emitted a class it
+    // Task 18: each spec is its own partition, so three tasks looked the shape up - canRun
+    // forces the runner on the fallback tasks too, which before the cache emitted a class it
     // never ran and now costs a hit. Hit or miss per task depends on what ran in this JVM.
     assert(plan.metrics("numVarkaCacheHits").value +
-      plan.metrics("numVarkaCacheMisses").value === 2)
-    // Task 22: the fallback batch is counted under its cause; nothing else fired.
+      plan.metrics("numVarkaCacheMisses").value === 3)
+    // Task 22: the on-heap fallback batch is counted under its cause; nothing else fired -
+    // in particular the EMPTY Arrow batch, which canRun also refuses, is served trivially
+    // and must not read as "input not Arrow-backed" (the task-21 review's cause fix).
     assert(plan.metrics("numFallbackBatchesNonArrow").value === 1)
     assert(plan.metrics("numFallbackBatchesKernel").value === 0)
     assert(plan.metrics("numEmissionFailures").value === 0)
     assert(plan.metrics("numResidualEntries").value === 0)
   }
 
+
   test("task 22: an emission failure counts once per task, evented, not mislabeled") {
     // A set emitter hook makes the shape cache refuse the lookup, so the runner cannot be
     // built: the evaluator counts one emission failure and emits the JFR fallback event, and
     // the per-batch fallbacks are NOT counted as non-Arrow (the carve-out under test).
-    val recording = new jdk.jfr.Recording()
-    recording.enable("org.apache.spark.sql.varka.Fallback")
-    recording.start()
-    VarkaEmitterTestSupport.setDisableCse(true)
-    try {
-      val plan = node(
-        project(Alias(DateAdd(attrD, Literal(3)), "add")()),
-        Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), null, Int.box(5))))),
-        Seq(attrD))
-      assert(values(plan) === Seq(4, null, 8))
-      assert(plan.metrics("numVarkaBatches").value === 0)
-      assert(plan.metrics("numEmissionFailures").value === 1)
-      assert(plan.metrics("numFallbackBatchesNonArrow").value === 0)
-      assert(plan.metrics("numFallbackBatchesKernel").value === 0)
-    } finally {
-      VarkaEmitterTestSupport.setDisableCse(false)
-      recording.stop()
+    val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
+      VarkaEmitterTestSupport.setDisableCse(true)
+      try {
+        val plan = node(
+          project(Alias(DateAdd(attrD, Literal(3)), "add")()),
+          Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), null, Int.box(5))))),
+          Seq(attrD))
+        assert(values(plan) === Seq(4, null, 8))
+        assert(plan.metrics("numVarkaBatches").value === 0)
+        assert(plan.metrics("numEmissionFailures").value === 1)
+        assert(plan.metrics("numFallbackBatchesNonArrow").value === 0)
+        assert(plan.metrics("numFallbackBatchesKernel").value === 0)
+      } finally {
+        VarkaEmitterTestSupport.setDisableCse(false)
+      }
     }
-    withTempDir { dir =>
-      val dump = new java.io.File(dir, "varka-fallback.jfr").toPath
-      recording.dump(dump)
-      recording.close()
-      val causes = jdk.jfr.consumer.RecordingFile.readAllEvents(dump).asScala
-        .filter(_.getEventType.getName == "org.apache.spark.sql.varka.Fallback")
-        .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
-        .map(_.getString("cause"))
-      assert(causes.contains("emission-failure"), causes.mkString("; "))
-    }
+    val causes = recorded
+      .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
+      .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
+      .map(_.getString("cause"))
+    assert(causes.contains(VarkaFallbackEvent.EMISSION_FAILURE), causes.mkString("; "))
   }
 
   /** Drives the evaluator directly, so a test can control when the next batch is requested. */
@@ -380,10 +372,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       classDumpDirectory = None,
       SQLMetrics.createMetric(sparkContext, "rows"),
       SQLMetrics.createMetric(sparkContext, "batches"),
-      VarkaExecMetrics(
-        varkaBatches = Some(SQLMetrics.createMetric(sparkContext, "varkaBatches")),
-        cacheHits = Some(SQLMetrics.createMetric(sparkContext, "cacheHits")),
-        cacheMisses = Some(SQLMetrics.createMetric(sparkContext, "cacheMisses"))))
+      VarkaExecMetrics())
     factory.createEvaluator().eval(0, inputs)
   }
 }

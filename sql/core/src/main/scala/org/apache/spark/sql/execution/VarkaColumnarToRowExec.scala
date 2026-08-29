@@ -88,23 +88,13 @@ case class VarkaColumnarToRowExec(
     copy(child = newChild)
   }
 
-  override lazy val metrics: Map[String, SQLMetric] = Map(
-    "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
-    "numInputBatches" -> SQLMetrics.createMetric(sparkContext, "number of input batches"),
-    "numVarkaBatches" -> SQLMetrics.createMetric(
-      sparkContext, "number of input batches processed by the Varka SIMD kernels"),
-    "numVarkaCacheHits" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
-    "numVarkaCacheMisses" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks that emitted and defined the Varka kernel class"),
-    "numFallbackBatchesNonArrow" -> SQLMetrics.createMetric(
-      sparkContext, "batches falling back: input not Arrow-backed"),
-    "numFallbackBatchesKernel" -> SQLMetrics.createMetric(
-      sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
-    "numEmissionFailures" -> SQLMetrics.createMetric(
-      sparkContext, "tasks that could not emit or define the kernel class"),
-    "numResidualEntries" -> SQLMetrics.createMetric(
-      sparkContext, "projection entries declined to the per-row residual (reasons in EXPLAIN)"))
+  override lazy val metrics: Map[String, SQLMetric] =
+    VarkaExecMetrics.projectionMetrics(sparkContext)
+
+  // One driver-side compilation serves both EXPLAIN and the residual-entry count below
+  // (task-21 review: the node used to re-run the same pure compile per consumer).
+  @transient private lazy val classification =
+    VarkaExpressionCompiler.compilePartial(projectList, child.output)
 
   // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -114,23 +104,21 @@ case class VarkaColumnarToRowExec(
        |${ExplainUtils.generateFieldString("Output", projectList)}
        |${ExplainUtils.generateFieldString("Input", child.output)}
        |${ExplainUtils.generateFieldString("Varka",
-            VarkaFusionReport.lines(projectList, child.output))}
+            VarkaFusionReport.lines(classification, projectList, child.output))}
        |""".stripMargin
   }
 
   override def doExecute(): RDD[InternalRow] = {
     // Task 22: the residual-entry count is a static plan property - added once, driver-side,
     // so the UI total does not multiply by task count. The per-entry reasons are in EXPLAIN.
-    longMetric("numResidualEntries") +=
-      VarkaExpressionCompiler.compilePartial(projectList, child.output)
-        .map(_.declines.size.toLong).getOrElse(0L)
-    val varkaMetrics = VarkaExecMetrics(
-      varkaBatches = Some(longMetric("numVarkaBatches")),
-      cacheHits = Some(longMetric("numVarkaCacheHits")),
-      cacheMisses = Some(longMetric("numVarkaCacheMisses")),
-      fallbackBatchesNonArrow = Some(longMetric("numFallbackBatchesNonArrow")),
-      fallbackBatchesKernel = Some(longMetric("numFallbackBatchesKernel")),
-      emissionFailures = Some(longMetric("numEmissionFailures")))
+    // Posted explicitly (task-21 review): the SQL listener aggregates task-end updates and
+    // posted driver updates only, so without the post the UI would always read 0 while the
+    // driver-local accumulator - the one tests read - carried the count.
+    val residualMetric = longMetric("numResidualEntries")
+    residualMetric += classification.map(_.declines.size.toLong).getOrElse(0L)
+    SQLMetrics.postDriverMetricUpdates(sparkContext,
+      sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY), Seq(residualMetric))
+    val varkaMetrics = VarkaExecMetrics.fromNode(longMetric)
     val evaluatorFactory = new VarkaColumnarToRowEvaluatorFactory(
       projectList,
       child.output,
@@ -248,22 +236,19 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
           varkaMetrics.varkaBatches.foreach(_ += 1)
           rows
         } catch {
+          // The evaluator's shared accounting (task-21 review) counts, events and logs each
+          // cause; a genuine kernel error is told apart from a failure in the per-row
+          // machinery sharing this try (the lazy merge projection) by the marker invokeFused
+          // wraps it in.
+          case e: VarkaKernelFailure =>
+            kernels.recordKernelFailure(e.getCause)
+            fallback(input)
           case e if kernels.isCatchable(e) =>
-            logWarning(s"The Varka SIMD kernels ${kernels.kernelIdentity} failed on this " +
-              "batch; falling back to the per-row projection.", e)
-            varkaMetrics.fallbackBatchesKernel.foreach(_ += 1)
-            VarkaKernelEvaluator.emitFallbackEvent("kernel-failure", kernels.kernelIdentity,
-              e.getClass.getName)
+            kernels.recordRowPathFailure(e)
             fallback(input)
         }
-      } else if (kernels.emissionFailed) {
-        // Already counted once per task (and evented) by the evaluator's emission catch;
-        // counting these batches as non-Arrow would mislabel the cause.
-        fallback(input)
       } else {
-        // A batch canRun refused: not Arrow-backed, or the vectors do not match the batch.
-        varkaMetrics.fallbackBatchesNonArrow.foreach(_ += 1)
-        VarkaKernelEvaluator.emitFallbackEvent("non-arrow-batch", kernels.kernelIdentity, "")
+        kernels.recordRefusedBatch(input)
         fallback(input)
       }
     }

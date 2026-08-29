@@ -640,6 +640,30 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       s"expected the residual conjunct's row filter in the plan:\n${plan.treeString}")
   }
 
+  test("task 21 review: the driver-side residual count reaches the SQL UI store") {
+    // The listener aggregates task-end updates and posted driver updates only: a driver-side
+    // `+=` that is not posted is visible to plan.metrics (what the exec suites read) but
+    // never to the UI. This goes through a real tracked execution on the Arrow-backed varka
+    // session - the default cache serializer has no columnar output for DateType at all, so
+    // only this harness can plan the Varka node - and asserts on the status store, the same
+    // surface the SQL tab renders.
+    cacheDates(varkaSpark)
+    // One fused entry keeps the projection eligible; the int arithmetic is residual.
+    varkaSpark.sql("SELECT date_add(d, 1) AS a, i + 1 AS b FROM varka_dates").collect()
+    varkaSpark.sparkContext.listenerBus.waitUntilEmpty()
+    val statusStore = varkaSpark.sharedState.statusStore
+    val executionId = statusStore.executionsList().reverse
+      .find(_.physicalPlanDescription.contains("VarkaColumnarToRow"))
+      .map(_.executionId)
+      .getOrElse(fail("no tracked execution with a Varka node found"))
+    val metricId = statusStore.execution(executionId).get.metrics
+      .find(_.name.contains("residual")).map(_.accumulatorId)
+      .getOrElse(fail("the residual metric is not registered on the execution"))
+    val posted = statusStore.executionMetrics(executionId)
+    assert(posted.get(metricId).exists(_.contains("1")),
+      s"expected the posted residual count in the store, got: $posted")
+  }
+
   test("task 21: caching a view over fused Varka work keeps the work") {
     // The cache builder strips a topmost columnar-to-row transition to reach the columnar plan
     // underneath - sound for the stock transition, silently wrong for the fused Varka nodes,

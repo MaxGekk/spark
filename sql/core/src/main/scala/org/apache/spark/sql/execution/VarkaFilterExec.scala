@@ -17,14 +17,14 @@
 
 package org.apache.spark.sql.execution
 
-import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkContext, SparkException}
+import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkException}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
-import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
+import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -72,37 +72,6 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   }
 }
 
-private[sql] object VarkaFilterExecBase {
-
-  /** The filter nodes' shared metric set: the projection nodes' vocabulary minus the
-   * residual-entry count, which for a filter is a visible row `FilterExec` above rather than
-   * a number - and `numOutputRows` counts selected rows, not input rows. */
-  def filterMetrics(sparkContext: SparkContext): Map[String, SQLMetric] = Map(
-    "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
-    "numInputBatches" -> SQLMetrics.createMetric(sparkContext, "number of input batches"),
-    "numVarkaBatches" -> SQLMetrics.createMetric(
-      sparkContext, "number of input batches processed by the Varka SIMD kernels"),
-    "numVarkaCacheHits" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
-    "numVarkaCacheMisses" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks that emitted and defined the Varka kernel class"),
-    "numFallbackBatchesNonArrow" -> SQLMetrics.createMetric(
-      sparkContext, "batches falling back: input not Arrow-backed"),
-    "numFallbackBatchesKernel" -> SQLMetrics.createMetric(
-      sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
-    "numEmissionFailures" -> SQLMetrics.createMetric(
-      sparkContext, "tasks that could not emit or define the kernel class"))
-
-  /** The exec nodes' shared bundle-building, from a node's metric map. */
-  def varkaMetrics(metric: String => SQLMetric): VarkaExecMetrics = VarkaExecMetrics(
-    varkaBatches = Some(metric("numVarkaBatches")),
-    cacheHits = Some(metric("numVarkaCacheHits")),
-    cacheMisses = Some(metric("numVarkaCacheMisses")),
-    fallbackBatchesNonArrow = Some(metric("numFallbackBatchesNonArrow")),
-    fallbackBatchesKernel = Some(metric("numFallbackBatchesKernel")),
-    emissionFailures = Some(metric("numEmissionFailures")))
-}
-
 /**
  * The Varka filter with columnar output (task 21): per batch it runs the mask kernel - one
  * fused loop whose single output is the predicate's selection bitmap - and compacts the
@@ -129,8 +98,10 @@ case class VarkaFilterExec(condition: Expression, child: SparkPlan)
     copy(child = newChild)
   }
 
+  // The shared node vocabulary; no residual-entry metric - a filter's residual is a visible
+  // row FilterExec above it - and numOutputRows counts selected rows.
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaFilterExecBase.filterMetrics(sparkContext)
+    VarkaExecMetrics.nodeMetrics(sparkContext)
 
   // `supportsRowBased` is false because this node is columnar, so the transition rule never
   // asks it for rows: it inserts a to-row transition above instead, which the columnar rule
@@ -147,7 +118,7 @@ case class VarkaFilterExec(condition: Expression, child: SparkPlan)
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      VarkaFilterExecBase.varkaMetrics(longMetric))
+      VarkaExecMetrics.fromNode(longMetric))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -237,22 +208,19 @@ private[sql] class VarkaFilterEvaluatorFactory(
           varkaMetrics.varkaBatches.foreach(_ += 1)
           batch
         } catch {
+          // The evaluator's shared accounting (task-21 review) counts, events and logs each
+          // cause; a genuine kernel error is told apart from a failure in the per-row
+          // machinery sharing this try (the generic compaction pass) by the marker
+          // invokeFused wraps it in.
+          case e: VarkaKernelFailure =>
+            kernels.recordKernelFailure(e.getCause)
+            fallback(input)
           case e if kernels.isCatchable(e) =>
-            logWarning(s"The Varka SIMD kernels ${kernels.kernelIdentity} failed on this " +
-              "batch; falling back to the per-row filter.", e)
-            varkaMetrics.fallbackBatchesKernel.foreach(_ += 1)
-            VarkaKernelEvaluator.emitFallbackEvent("kernel-failure", kernels.kernelIdentity,
-              e.getClass.getName)
+            kernels.recordRowPathFailure(e)
             fallback(input)
         }
-      } else if (kernels.emissionFailed) {
-        // Already counted once per task (and evented) by the evaluator's emission catch;
-        // counting these batches as non-Arrow would mislabel the cause.
-        fallback(input)
       } else {
-        // A batch canRun refused: not Arrow-backed, or the vectors do not match the batch.
-        varkaMetrics.fallbackBatchesNonArrow.foreach(_ += 1)
-        VarkaKernelEvaluator.emitFallbackEvent("non-arrow-batch", kernels.kernelIdentity, "")
+        kernels.recordRefusedBatch(input)
         fallback(input)
       }
     }
@@ -316,8 +284,10 @@ case class VarkaFilterColumnarToRowExec(condition: Expression, child: SparkPlan)
     copy(child = newChild)
   }
 
+  // The shared node vocabulary; no residual-entry metric - a filter's residual is a visible
+  // row FilterExec above it - and numOutputRows counts selected rows.
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaFilterExecBase.filterMetrics(sparkContext)
+    VarkaExecMetrics.nodeMetrics(sparkContext)
 
   override def doExecute(): RDD[InternalRow] = {
     val evaluatorFactory = new VarkaFilterToRowEvaluatorFactory(
@@ -326,7 +296,7 @@ case class VarkaFilterColumnarToRowExec(condition: Expression, child: SparkPlan)
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      VarkaFilterExecBase.varkaMetrics(longMetric))
+      VarkaExecMetrics.fromNode(longMetric))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -390,22 +360,18 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
           numOutputRows += selection.count
           selectedRows(input, selection)
         } catch {
+          // The evaluator's shared accounting (task-21 review); the mask run has no per-row
+          // machinery inside the try, so only the kernel marker is expected here, but the
+          // catchable arm keeps the labeling exhaustive.
+          case e: VarkaKernelFailure =>
+            kernels.recordKernelFailure(e.getCause)
+            fallback(input)
           case e if kernels.isCatchable(e) =>
-            logWarning(s"The Varka SIMD kernels ${kernels.kernelIdentity} failed on this " +
-              "batch; falling back to the per-row filter.", e)
-            varkaMetrics.fallbackBatchesKernel.foreach(_ += 1)
-            VarkaKernelEvaluator.emitFallbackEvent("kernel-failure", kernels.kernelIdentity,
-              e.getClass.getName)
+            kernels.recordRowPathFailure(e)
             fallback(input)
         }
-      } else if (kernels.emissionFailed) {
-        // Already counted once per task (and evented) by the evaluator's emission catch;
-        // counting these batches as non-Arrow would mislabel the cause.
-        fallback(input)
       } else {
-        // A batch canRun refused: not Arrow-backed, or the vectors do not match the batch.
-        varkaMetrics.fallbackBatchesNonArrow.foreach(_ += 1)
-        VarkaKernelEvaluator.emitFallbackEvent("non-arrow-batch", kernels.kernelIdentity, "")
+        kernels.recordRefusedBatch(input)
         fallback(input)
       }
     }

@@ -17,12 +17,10 @@
 
 package org.apache.spark.sql.execution
 
-import scala.jdk.CollectionConverters._
-
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, DateAdd, GreaterThan, IsNotNull, LessThan, Literal}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestSupport
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitterTestSupport, VarkaFallbackEvent, VarkaJfrTestSupport}
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
@@ -180,32 +178,25 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
   }
 
   test("an emission failure counts once per task, evented, not mislabeled") {
-    val recording = new jdk.jfr.Recording()
-    recording.enable("org.apache.spark.sql.varka.Fallback")
-    recording.start()
-    VarkaEmitterTestSupport.setDisableCse(true)
-    try {
-      val plan = columnarNode(dLess10,
-        Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), null, Int.box(42))))), Seq(attrD))
-      assert(batchRows(plan) === Seq(Seq(1)))
-      assert(plan.metrics("numVarkaBatches").value === 0)
-      assert(plan.metrics("numEmissionFailures").value === 1)
-      assert(plan.metrics("numFallbackBatchesNonArrow").value === 0)
-      assert(plan.metrics("numFallbackBatchesKernel").value === 0)
-    } finally {
-      VarkaEmitterTestSupport.setDisableCse(false)
-      recording.stop()
+    val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
+      VarkaEmitterTestSupport.setDisableCse(true)
+      try {
+        val plan = columnarNode(dLess10,
+          Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), null, Int.box(42))))), Seq(attrD))
+        assert(batchRows(plan) === Seq(Seq(1)))
+        assert(plan.metrics("numVarkaBatches").value === 0)
+        assert(plan.metrics("numEmissionFailures").value === 1)
+        assert(plan.metrics("numFallbackBatchesNonArrow").value === 0)
+        assert(plan.metrics("numFallbackBatchesKernel").value === 0)
+      } finally {
+        VarkaEmitterTestSupport.setDisableCse(false)
+      }
     }
-    withTempDir { dir =>
-      val dump = new java.io.File(dir, "varka-filter-fallback.jfr").toPath
-      recording.dump(dump)
-      recording.close()
-      val causes = jdk.jfr.consumer.RecordingFile.readAllEvents(dump).asScala
-        .filter(_.getEventType.getName == "org.apache.spark.sql.varka.Fallback")
-        .filter(_.getString("kernelIdentity").contains("Varka_Filter_"))
-        .map(_.getString("cause"))
-      assert(causes.contains("emission-failure"), causes.mkString("; "))
-    }
+    val causes = recorded
+      .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
+      .filter(_.getString("kernelIdentity").contains("Varka_Filter_"))
+      .map(_.getString("cause"))
+    assert(causes.contains(VarkaFallbackEvent.EMISSION_FAILURE), causes.mkString("; "))
   }
 
   test("each compacted batch is released when the next one is requested") {

@@ -27,17 +27,82 @@ import scala.util.control.NonFatal
 import org.apache.arrow.memory.{ArrowBuf, BufferAllocator}
 import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntVector, ValueVector}
 
-import org.apache.spark.TaskContext
+import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaFusedKernel, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
-import org.apache.spark.sql.execution.metric.SQLMetric
+import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.{DateType, IntegerType, StructType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
+
+/**
+ * The Varka-specific SQL metrics one exec node threads to its factory and evaluator (task 22),
+ * bundled so the parameter lists stop growing metric by metric (task 18 threaded two options;
+ * this task would have made it five). Every field is optional: suites and diagnostics
+ * construct evaluators with none. Deliberately Scala rather than a Java record (the task-21
+ * review's call, recorded): every construction site is forced-Scala code leaning on named
+ * arguments and defaults over six same-typed fields, where a record's positional constructor
+ * would be a silent-swap hazard.
+ */
+private[sql] case class VarkaExecMetrics(
+    varkaBatches: Option[SQLMetric] = None,
+    cacheHits: Option[SQLMetric] = None,
+    cacheMisses: Option[SQLMetric] = None,
+    fallbackBatchesNonArrow: Option[SQLMetric] = None,
+    fallbackBatchesKernel: Option[SQLMetric] = None,
+    emissionFailures: Option[SQLMetric] = None)
+
+private[sql] object VarkaExecMetrics {
+
+  /**
+   * The metric set every Varka node registers, defined once (task-21 review: the four nodes
+   * carried byte-identical copies, where a changed key or description would compile clean and
+   * fork the UI vocabularies). `numOutputRows` semantics stay per node: a projection counts
+   * input rows, a filter counts selected rows.
+   */
+  def nodeMetrics(sparkContext: SparkContext): Map[String, SQLMetric] = Map(
+    "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
+    "numInputBatches" -> SQLMetrics.createMetric(sparkContext, "number of input batches"),
+    "numVarkaBatches" -> SQLMetrics.createMetric(
+      sparkContext, "number of input batches processed by the Varka SIMD kernels"),
+    "numVarkaCacheHits" -> SQLMetrics.createMetric(
+      sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
+    "numVarkaCacheMisses" -> SQLMetrics.createMetric(
+      sparkContext, "number of tasks that emitted and defined the Varka kernel class"),
+    "numFallbackBatchesNonArrow" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: input not Arrow-backed"),
+    "numFallbackBatchesKernel" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
+    "numEmissionFailures" -> SQLMetrics.createMetric(
+      sparkContext, "tasks that could not emit or define the kernel class"))
+
+  /** [[nodeMetrics]] plus the projection nodes' static residual-entry count; a filter's
+   * residual is a visible row `FilterExec` above it rather than a number. */
+  def projectionMetrics(sparkContext: SparkContext): Map[String, SQLMetric] =
+    nodeMetrics(sparkContext) + ("numResidualEntries" -> SQLMetrics.createMetric(
+      sparkContext, "projection entries declined to the per-row residual (reasons in EXPLAIN)"))
+
+  /** The evaluator-facing bundle built from a node's registered metrics. */
+  def fromNode(metric: String => SQLMetric): VarkaExecMetrics = VarkaExecMetrics(
+    varkaBatches = Some(metric("numVarkaBatches")),
+    cacheHits = Some(metric("numVarkaCacheHits")),
+    cacheMisses = Some(metric("numVarkaCacheMisses")),
+    fallbackBatchesNonArrow = Some(metric("numFallbackBatchesNonArrow")),
+    fallbackBatchesKernel = Some(metric("numFallbackBatchesKernel")),
+    emissionFailures = Some(metric("numEmissionFailures")))
+}
+
+/**
+ * Marks a throwable as coming from the emitted kernel invocation itself (task-21 review): the
+ * exec nodes label their per-batch catch by it, so a catchable failure in the per-row
+ * machinery running beside the kernel - a residual or merge projection's compile or
+ * evaluation - is not metered as a kernel failure.
+ */
+private[execution] class VarkaKernelFailure(cause: Throwable) extends Exception(cause)
 
 /**
  * The task-lifetime machinery shared by every Varka evaluator (split out of
@@ -96,8 +161,8 @@ private[sql] abstract class VarkaEvaluatorBase(
           logWarning(s"Failed to emit the Varka fused kernel $kernelIdentity; falling back " +
             "to the per-row path.", e)
           metrics.emissionFailures.foreach(_ += 1)
-          VarkaKernelEvaluator.emitFallbackEvent("emission-failure", kernelIdentity,
-            e.getClass.getName)
+          VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.EMISSION_FAILURE,
+            kernelIdentity, e.getClass.getName)
           None
       }
     }
@@ -148,8 +213,10 @@ private[sql] abstract class VarkaEvaluatorBase(
    * stage. Every fallback warning - here and in the exec nodes - says which kernel it gave up
    * on, so a log line identifies both the class and the plan node without correlation.
    * Reading it forces no emission: the shape hash is computed from the IR, not the bytes.
+   * A lazy val (task-21 review): the rendering hashes the canonical IR, and it is constant
+   * per evaluator, so per-batch fallback paths must not recompute it.
    */
-  private[execution] def kernelIdentity: String = {
+  private[execution] lazy val kernelIdentity: String = {
     fusedPlan match {
       case Some(plan) =>
         val ir = plan.outputs.mkString(", ")
@@ -177,6 +244,53 @@ private[sql] abstract class VarkaEvaluatorBase(
     (fusedPlan, fusedRunner) match {
       case (Some(plan), Some(_)) => input.numRows() > 0 && isArrowBacked(plan, input)
       case _ => false
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Per-batch fallback accounting, shared by all four exec nodes (task-21 review: the nodes
+  // carried byte-identical copies of these blocks, which had already begun to drift). Each
+  // method counts and events one batch under its actual cause; the caller then takes its
+  // own fallback path.
+  // ---------------------------------------------------------------------------------------
+
+  /** The ghost fallback's bookkeeping: an error from the emitted kernel itself. */
+  private[execution] def recordKernelFailure(e: Throwable): Unit = {
+    logWarning(s"The Varka SIMD kernels $kernelIdentity failed on this batch; falling back " +
+      "to the per-row path.", e)
+    metrics.fallbackBatchesKernel.foreach(_ += 1)
+    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.KERNEL_FAILURE, kernelIdentity,
+      e.getClass.getName)
+  }
+
+  /**
+   * A catchable failure from the per-row machinery running beside the kernel - the residual
+   * or merge projection's compile or evaluation - which the task-21 review split out of the
+   * kernel metric: it is not the kernel's failure, and a throwing lazy re-runs its
+   * initializer, so counting it there would inflate the ghost-fallback metric on every
+   * batch. Evented and logged under its own cause; no dedicated SQLMetric - the cause set
+   * stays bounded, and the event and warning carry it.
+   */
+  private[execution] def recordRowPathFailure(e: Throwable): Unit = {
+    logWarning(s"The per-row machinery beside the Varka kernel $kernelIdentity failed on " +
+      "this batch; falling back to the per-row path.", e)
+    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.ROW_PATH_FAILURE, kernelIdentity,
+      e.getClass.getName)
+  }
+
+  /**
+   * A batch [[canRun]] refused, counted under its actual cause (task-21 review: the nodes
+   * used to label every refusal "input not Arrow-backed"): an emission failure was already
+   * counted once per task by the emission catch; an empty batch is served trivially and is
+   * no fallback at all; an ineligible plan (defensive - the rule should not have fused it)
+   * is not a data-format property. Only a non-empty batch whose referenced columns fail the
+   * Arrow check is the non-Arrow cause the metric names.
+   */
+  private[execution] def recordRefusedBatch(input: ColumnarBatch): Unit = {
+    if (!emissionFailed && fusedPlan.nonEmpty && input.numRows() > 0) {
+      metrics.fallbackBatchesNonArrow.foreach(_ += 1)
+      VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.NON_ARROW_BATCH,
+        kernelIdentity, "")
     }
   }
 
@@ -318,14 +432,23 @@ private[sql] abstract class VarkaEvaluatorBase(
     }
   }
 
+  /**
+   * Invokes the emitted loop, marking any catchable throw as [[VarkaKernelFailure]] so the
+   * exec nodes' catch can tell a genuine kernel error from a failure in the per-row
+   * machinery that shares the same try (task-21 review). A fatal error passes unmarked.
+   */
   protected def invokeFused(runner: FusedRunner, len: Int): Unit = {
-    if (VarkaColumnarToRowExec.isFailKernelForTesting) {
-      // scalastyle:off throwerror
-      throw new NoClassDefFoundError("injected Varka kernel failure")
-      // scalastyle:on throwerror
+    try {
+      if (VarkaColumnarToRowExec.isFailKernelForTesting) {
+        // scalastyle:off throwerror
+        throw new NoClassDefFoundError("injected Varka kernel failure")
+        // scalastyle:on throwerror
+      }
+      runner.kernel.run(runner.srcData, runner.srcValidity, runner.srcNullCount,
+        runner.dstData, runner.dstValidity, runner.scalarArgs, len)
+    } catch {
+      case e if isCatchable(e) => throw new VarkaKernelFailure(e)
     }
-    runner.kernel.run(runner.srcData, runner.srcValidity, runner.srcNullCount,
-      runner.dstData, runner.dstValidity, runner.scalarArgs, len)
   }
 
   /**
@@ -851,31 +974,18 @@ private[sql] class VarkaFilterEvaluator(
   }
 }
 
-/**
- * The Varka-specific SQL metrics one exec node threads to its factory and evaluator (task 22),
- * bundled so the parameter lists stop growing metric by metric (task 18 threaded two options;
- * this task would have made it five). Every field is optional: suites and diagnostics
- * construct evaluators with none.
- */
-private[sql] case class VarkaExecMetrics(
-    varkaBatches: Option[SQLMetric] = None,
-    cacheHits: Option[SQLMetric] = None,
-    cacheMisses: Option[SQLMetric] = None,
-    fallbackBatchesNonArrow: Option[SQLMetric] = None,
-    fallbackBatchesKernel: Option[SQLMetric] = None,
-    emissionFailures: Option[SQLMetric] = None)
-
 private[execution] object VarkaKernelEvaluator {
 
   /**
    * Emits the task-22 fallback JFR event; shared by the evaluator's emission-failure path and
-   * the exec nodes' per-batch fallback branches. Populates only while a recording has the
-   * event enabled; `exceptionClass` is empty for the non-Arrow cause, a data property rather
-   * than an error.
+   * the per-batch fallback accounting. Populates only while a recording has the event
+   * enabled - the identity is by-name because rendering it computes the shape hash, which the
+   * metered-but-uneventful path must not pay (task-21 review); `exceptionClass` is empty for
+   * the non-Arrow cause, a data property rather than an error.
    */
   private[execution] def emitFallbackEvent(
       cause: String,
-      kernelIdentity: String,
+      kernelIdentity: => String,
       exceptionClass: String): Unit = {
     val event = new VarkaFallbackEvent
     if (event.isEnabled()) {
@@ -885,6 +995,7 @@ private[execution] object VarkaKernelEvaluator {
       event.commit()
     }
   }
+
   // The (directory, SourceFile) pairs this JVM has dumped, so a shape's class file is
   // written once per process rather than once per task - and exactly once per process,
   // because a file left by an older emitter under the same shape name must be refreshed.
