@@ -914,6 +914,15 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }.toMap
   }
 
+  test("emit rejects null options the way it rejects its other arguments") {
+    // The other two argument checks throw IllegalArgumentException with a message; options
+    // would otherwise have failed as a bare NPE partway through the analysis walk.
+    val e = intercept[IllegalArgumentException] {
+      VarkaLoopEmitter.emit("X", Seq[VarkaVectorIR](addDays(0)).asJava, 1, 1, null, null, null)
+    }
+    assert(e.getMessage.contains("options"), e.getMessage)
+  }
+
   test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to

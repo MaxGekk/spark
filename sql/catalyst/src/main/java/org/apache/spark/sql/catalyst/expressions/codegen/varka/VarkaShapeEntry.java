@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
 
@@ -64,11 +65,18 @@ public record VarkaShapeEntry(
    *
    * <p>A reflective failure here is rethrown as itself rather than wrapped, for the same reason
    * the cache unwraps Guava's wrappers: the evaluator's {@code isCatchable} test has to see the
-   * original, or a fatal error would be counted as an ordinary kernel failure.
+   * original, or a fatal error would be counted as an ordinary kernel failure. That takes an
+   * explicit unwrap, because {@link Constructor#newInstance} wraps whatever the constructor body
+   * throws in an {@link InvocationTargetException} - which is itself {@code NonFatal}, so
+   * rethrowing the wrapper would make every constructor failure look catchable, including the
+   * ones that are not. The remaining {@link ReflectiveOperationException}s describe the class
+   * rather than its execution and are rethrown as they are.
    */
   public VarkaFusedKernel newKernel() {
     try {
       return (VarkaFusedKernel) constructor.newInstance();
+    } catch (InvocationTargetException e) {
+      throw VarkaShapeCacheImpl.sneakyThrow(e.getCause());
     } catch (ReflectiveOperationException e) {
       throw VarkaShapeCacheImpl.sneakyThrow(e);
     }

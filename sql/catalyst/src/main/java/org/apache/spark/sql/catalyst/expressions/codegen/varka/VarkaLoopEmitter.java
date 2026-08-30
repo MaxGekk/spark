@@ -370,6 +370,11 @@ public final class VarkaLoopEmitter {
       throw new IllegalArgumentException(
           "numInputs " + numInputs + " outside [1, " + MAX_INPUTS + "]");
     }
+    if (options == null) {
+      // Checked beside the others rather than left to fail as a bare NPE deep in the walk;
+      // VarkaShapeKey rejects a null the same way, so this closes the other door in.
+      throw new IllegalArgumentException("emit options must not be null");
+    }
     Analysis analysis = new Analysis(numInputs, numLiterals, options);
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);

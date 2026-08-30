@@ -177,11 +177,12 @@ public sealed interface VarkaVectorIR
    * hash and is caught by the pinned-hash tests in {@code VarkaShapeCacheSuite} - one over a
    * plain chain, one over a key that uses every node type, so no rendering is unguarded.
    *
-   * <p>Public since task 23, which pointed the evaluator's kernel identity at it: a fallback
-   * warning names the shape the same way the class's own {@link VarkaDebugInfo} does, so a log
-   * line and the bytes it names agree, and neither rides {@link Record#toString}.
+   * <p>Task 23 pointed the evaluator's kernel identity at it as well - already reachable, since
+   * an interface member is public - so a fallback warning names the shape the same way the
+   * class's own {@link VarkaDebugInfo} does: a log line and the bytes it names agree, and
+   * neither rides {@link Record#toString}.
    */
-  public static String canonical(VarkaVectorIR node) {
+  static String canonical(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef n -> "col:" + n.ordinal();
       case LiteralSlot n -> "lit:" + n.index();

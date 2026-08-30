@@ -24,6 +24,7 @@ import java.util.concurrent.{CountDownLatch, Executors, TimeUnit}
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.util.Utils
 
 /**
@@ -254,6 +255,20 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
   }
 
+  test("newKernel unwraps the reflective wrapper, so a fatal constructor error stays fatal") {
+    // Constructor.newInstance wraps whatever the constructor body throws in an
+    // InvocationTargetException, which is itself NonFatal - so rethrowing the wrapper would
+    // make the evaluator's isCatchable test say "ordinary kernel failure" about an error that
+    // must fail the task. The entry unwraps for exactly this case.
+    def entryFor(klass: Class[_]): VarkaShapeEntry =
+      new VarkaShapeEntry(new VarkaGeneratedClassLoader(getClass.getClassLoader), klass,
+        Array.emptyByteArray, "0123456789abcdef", klass.getConstructor())
+    val fatal = intercept[OutOfMemoryError](entryFor(classOf[FatalKernel]).newKernel())
+    assert(fatal.getMessage === "injected")
+    val ordinary = intercept[IllegalStateException](entryFor(classOf[FailingKernel]).newKernel())
+    assert(ordinary.getMessage === "injected")
+  }
+
   test("the parent class loader is part of the key: another loader gets its own entry") {
     val cache = new VarkaShapeCacheImpl(8)
     val key = keyOf(chain(bits = 5, depth = 3))
@@ -408,4 +423,22 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     }
     collected
   }
+}
+
+/** A kernel whose constructor raises a fatal error; see the unwrap test above. */
+private class FatalKernel extends VarkaFusedKernel {
+  // scalastyle:off throwerror
+  throw new OutOfMemoryError("injected")
+  // scalastyle:on throwerror
+  override def run(srcData: Array[Long], srcValidity: Array[Long], srcNullCount: Array[Int],
+      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Unit =
+    ()
+}
+
+/** A kernel whose constructor raises an ordinary, catchable failure. */
+private class FailingKernel extends VarkaFusedKernel {
+  throw new IllegalStateException("injected")
+  override def run(srcData: Array[Long], srcValidity: Array[Long], srcNullCount: Array[Int],
+      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Unit =
+    ()
 }
