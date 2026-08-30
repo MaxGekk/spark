@@ -23,6 +23,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
+import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -56,9 +57,19 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
 
   override def output: Seq[Attribute] = outputWithNullability(child.output, notNullAttributes)
 
-  // A filter neither reorders nor renames: partitioning passes through (the UnaryExecNode
-  // default) and so does the child's ordering.
+  // A filter neither reorders, renames nor repartitions: ordering AND partitioning forward
+  // verbatim, exactly as FilterExec and ColumnarToRowExec forward them. (Neither is a
+  // default: SparkPlan falls back to UnknownPartitioning - the task-21 review's second pass
+  // corrected a comment here that claimed a pass-through default - and losing the child's
+  // partitioning would reintroduce shuffles above a cached filtered relation.)
   override def outputOrdering: Seq[SortOrder] = child.outputOrdering
+
+  override def outputPartitioning: Partitioning = child.outputPartitioning
+
+  // One driver-side compilation serves every EXPLAIN render (task-21 review, second pass:
+  // parity with the projection nodes' memoized classification).
+  @transient private lazy val fusionLines =
+    VarkaFusionReport.predicateLines(condition, child.output)
 
   // Task 16's question for a filter is "why didn't my predicate fuse?", answered per conjunct.
   override def verboseStringWithOperatorId(): String = {
@@ -66,8 +77,7 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
        |$formattedNodeName
        |${ExplainUtils.generateFieldString("Input", child.output)}
        |${ExplainUtils.generateFieldString("Condition", condition)}
-       |${ExplainUtils.generateFieldString("Varka",
-            VarkaFusionReport.predicateLines(condition, child.output))}
+       |${ExplainUtils.generateFieldString("Varka", fusionLines)}
        |""".stripMargin
   }
 }
@@ -201,26 +211,14 @@ private[sql] class VarkaFilterEvaluatorFactory(
       }
     }
 
+    // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
+    // (task-21 review, both passes) and routes every degradation to the fallback.
     private def filterBatch(input: ColumnarBatch): ColumnarBatch = {
-      if (kernels.canRun(input)) {
-        try {
-          val batch = kernels.filterCompact(input)
-          varkaMetrics.varkaBatches.foreach(_ += 1)
-          batch
-        } catch {
-          // The evaluator's shared accounting (task-21 review) counts, events and logs each
-          // cause; a genuine kernel error is told apart from a failure in the per-row
-          // machinery sharing this try (the generic compaction pass) by the marker
-          // invokeFused wraps it in.
-          case e: VarkaKernelFailure =>
-            kernels.recordKernelFailure(e.getCause)
-            fallback(input)
-          case e if kernels.isCatchable(e) =>
-            kernels.recordRowPathFailure(e)
-            fallback(input)
-        }
-      } else {
-        kernels.recordRefusedBatch(input)
+      kernels.serveBatch(input) {
+        val batch = kernels.filterCompact(input)
+        varkaMetrics.varkaBatches.foreach(_ += 1)
+        batch
+      } {
         fallback(input)
       }
     }
@@ -277,8 +275,10 @@ private[sql] class VarkaFilterEvaluatorFactory(
  */
 case class VarkaFilterColumnarToRowExec(condition: Expression, child: SparkPlan)
     extends VarkaFilterExecBase
-    with ColumnarToRowTransition
+    with VarkaFusedTransition
     with SafeForKWayMerge {
+
+  override def columnarSibling: SparkPlan = VarkaFilterExec(condition, child)
 
   override protected def withNewChildInternal(newChild: SparkPlan): VarkaFilterColumnarToRowExec = {
     copy(child = newChild)
@@ -352,26 +352,14 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
       }
     }
 
+    // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
+    // (task-21 review, both passes) and routes every degradation to the fallback.
     private def process(input: ColumnarBatch): Iterator[InternalRow] = {
-      if (kernels.canRun(input)) {
-        try {
-          val selection = kernels.filterMask(input)
-          varkaMetrics.varkaBatches.foreach(_ += 1)
-          numOutputRows += selection.count
-          selectedRows(input, selection)
-        } catch {
-          // The evaluator's shared accounting (task-21 review); the mask run has no per-row
-          // machinery inside the try, so only the kernel marker is expected here, but the
-          // catchable arm keeps the labeling exhaustive.
-          case e: VarkaKernelFailure =>
-            kernels.recordKernelFailure(e.getCause)
-            fallback(input)
-          case e if kernels.isCatchable(e) =>
-            kernels.recordRowPathFailure(e)
-            fallback(input)
-        }
-      } else {
-        kernels.recordRefusedBatch(input)
+      kernels.serveBatch(input) {
+        val selection = kernels.filterMask(input)
+        varkaMetrics.varkaBatches.foreach(_ += 1)
+        selectedRows(input, selection)
+      } {
         fallback(input)
       }
     }
@@ -405,7 +393,14 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
         override def hasNext: Boolean = pending != null
 
         override def next(): InternalRow = {
+          if (pending == null) {
+            throw new NoSuchElementException("next on an exhausted selection iterator")
+          }
           val result = toUnsafe(pending)
+          // Counted as emitted, not per batch (task-21 review, second pass): pre-charging
+          // the batch's whole selected count overcounts under early termination and
+          // double-counts when a later throw routes the batch to the fallback.
+          numOutputRows += 1
           advance()
           result
         }

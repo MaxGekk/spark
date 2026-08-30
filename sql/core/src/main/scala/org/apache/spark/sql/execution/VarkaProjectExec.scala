@@ -199,25 +199,14 @@ private[sql] class VarkaProjectEvaluatorFactory(
       }
     }
 
+    // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
+    // (task-21 review, both passes) and routes every degradation to the fallback.
     private def project(input: ColumnarBatch): ColumnarBatch = {
-      if (kernels.canRun(input)) {
-        try {
-          val batch = kernels.project(input)
-          varkaMetrics.varkaBatches.foreach(_ += 1)
-          batch
-        } catch {
-          // The evaluator's shared accounting (task-21 review) counts, events and logs each
-          // cause; a genuine kernel error is told apart from a failure in the per-row
-          // machinery sharing this try by the marker invokeFused wraps it in.
-          case e: VarkaKernelFailure =>
-            kernels.recordKernelFailure(e.getCause)
-            fallback(input)
-          case e if kernels.isCatchable(e) =>
-            kernels.recordRowPathFailure(e)
-            fallback(input)
-        }
-      } else {
-        kernels.recordRefusedBatch(input)
+      kernels.serveBatch(input) {
+        val batch = kernels.project(input)
+        varkaMetrics.varkaBatches.foreach(_ += 1)
+        batch
+      } {
         fallback(input)
       }
     }

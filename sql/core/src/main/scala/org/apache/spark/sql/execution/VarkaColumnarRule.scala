@@ -21,6 +21,7 @@ import org.apache.spark.sql.catalyst.expressions.{And, Attribute, Expression, Na
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.vectorized.ArrowColumnVector
 
 /**
  * Varka plan-level fusion (Task 6). When `spark.sql.codegen.varka.enabled` is set, a
@@ -67,7 +68,8 @@ object VarkaColumnarRule extends ColumnarRule {
           } else {
             project
           }
-        case filter @ FilterExec(condition, child) if child.supportsColumnar =>
+        case filter @ FilterExec(condition, child)
+            if child.supportsColumnar && arrowFriendly(child) =>
           rewriteFilter(condition, child, VarkaFilterExec(_, _)).getOrElse(filter)
       }
     } else {
@@ -102,7 +104,7 @@ object VarkaColumnarRule extends ColumnarRule {
             case ColumnarToRowExec(inner) => inner
             case other => other
           }
-          if (columnarChild.supportsColumnar) {
+          if (columnarChild.supportsColumnar && arrowFriendly(columnarChild)) {
             rewriteFilter(condition, columnarChild, VarkaFilterColumnarToRowExec(_, _))
               .getOrElse(filter)
           } else {
@@ -120,6 +122,26 @@ object VarkaColumnarRule extends ColumnarRule {
   private def isVarkaEligible(
       projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Boolean = {
     VarkaExpressionCompiler.compilePartial(projectList, childOutput).isDefined
+  }
+
+  /**
+   * Whether the child can actually feed the mask kernel Arrow batches, as far as the plan can
+   * say (task-21 review, second pass): `supportsColumnar` alone is satisfied by Parquet/ORC
+   * vectorized scans whose OnHeap/OffHeap batches fail `canRun` on every batch - rewriting a
+   * filter there pays per-row fallback at WHERE-clause frequency and splits whole-stage
+   * codegen for nothing, strictly slower than the FilterExec it replaced. `vectorTypes` is
+   * the plan-time signal: a child declaring only Arrow vectors (or a Varka node, whose fused
+   * columns are Arrow) qualifies; a child declaring non-Arrow vectors does not; a child
+   * declaring nothing keeps the optimistic task-6 default and the per-batch guard decides at
+   * run time. The projection rewrites keep the optimistic proxy on purpose: their fallback is
+   * the same per-row projection the stock plan runs, where a filter's columnar fallback
+   * re-materialises every column.
+   */
+  private def arrowFriendly(child: SparkPlan): Boolean = child match {
+    case _: VarkaProjectExec | _: VarkaFilterExec => true
+    case _ => child.vectorTypes.forall(_.forall { t =>
+      t == classOf[ArrowColumnVector].getName || t == classOf[VarkaOwnedArrowColumnVector].getName
+    })
   }
 
   /**

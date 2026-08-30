@@ -58,7 +58,7 @@ the table too - this fork commits its losses:
 | Two outputs sharing a subchain (DAG-CSE) | 5.7x |
 | `CASE WHEN`, unpredictable condition | 7.1x |
 | `CASE WHEN`, predictable condition | 5.8x |
-| `CASE WHEN d IN (...)`, 5 / 16 literals | 3.5x / 4.0x (fused up to the 16-literal cap; longer lists decline with a reason) |
+| `CASE WHEN d IN (...)`, 5 / 16 literals | 3.6x / 4.2x (fused up to the 16-literal cap; longer lists decline with a reason; requoted from the task-21 run) |
 | `WHERE d < DATE` filter to batches (mask kernel + compaction) | 2.3x-2.7x flat across the whole 0-100% selectivity ladder |
 | Same filter to rows (mask skip, no compaction) | 2.3x at low selectivity, decaying to 1.1x at all-selected |
 | `WHERE d IN (5 literals)` filter | 2.0x (was parity by design before task 21) |
@@ -124,7 +124,7 @@ task, each with a recorded outcome:
   projections (where a corpus survey found 53-78% of real date references
   live), lower `IN` lists and `Coalesce` onto the mask algebra - Spark's own
   benchmark puts `IN` over dates at 31.2 M rows/s, its slowest primitive
-  (done - task 20 fuses `IN` in condition position at 3.5-4.0x up to a
+  (done - task 20 fuses `IN` in condition position at 3.6-4.2x up to a
   16-literal cap, with `coalesce` and `IS [NOT] NULL` riding the new
   validity condition), and
   `coalesce` is the corpus' third most common non-aggregate function - and

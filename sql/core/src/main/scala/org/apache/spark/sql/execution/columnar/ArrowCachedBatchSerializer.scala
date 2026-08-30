@@ -40,7 +40,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.UnsafeRowWriter
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.columnar.{CachedBatch, SimpleMetricsCachedBatchSerializer}
 import org.apache.spark.sql.errors.ExecutionErrors
-import org.apache.spark.sql.execution.{SparkPlan, VarkaColumnarToRowExec, VarkaFilterColumnarToRowExec, VarkaFilterExec, VarkaProjectExec}
+import org.apache.spark.sql.execution.{SparkPlan, VarkaFusedTransition}
 import org.apache.spark.sql.execution.arrow.ArrowWriter
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -90,10 +90,11 @@ class ArrowCachedBatchSerializer extends SimpleMetricsCachedBatchSerializer {
   // the unfiltered table). Those nodes exist in row/columnar pairs running identical kernels,
   // so instead of refusing the conversion this swaps the fused row node for its columnar
   // sibling: the cache still gets columnar input, and the work the transition had fused away
-  // is kept.
+  // is kept. Handled through the VarkaFusedTransition trait, not a node list (the review's
+  // second pass): a future fused transition node is forced by the compiler to declare its
+  // sibling and is handled here automatically, instead of silently reviving the strip bug.
   override def convertToColumnarPlanIfPossible(plan: SparkPlan): SparkPlan = plan match {
-    case varka: VarkaColumnarToRowExec => VarkaProjectExec(varka.projectList, varka.child)
-    case varka: VarkaFilterColumnarToRowExec => VarkaFilterExec(varka.condition, varka.child)
+    case varka: VarkaFusedTransition => varka.columnarSibling
     case other => super.convertToColumnarPlanIfPossible(other)
   }
 

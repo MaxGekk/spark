@@ -270,6 +270,54 @@ The review also refuted two suspected defects, worth keeping: re-executing
 a plan does not double-add driver metrics (`SparkPlan` memoizes `doExecute`
 via `LazyTry`), and JFR's threshold semantics need no annotation defense.
 
+### 6.1 The second round, on this branch
+
+A second maximum-effort review ran against the branch itself (both commits)
+and returned fifteen more findings, all fixed here. The three correctness
+items were in the new filter work:
+
+1. **The conjunct split reordered evaluation across nondeterministic
+   conjuncts** - hoisting the fused date predicate below a `rand()` residual
+   changes which rows the seeded stream sees, exactly the move Spark's own
+   pushdown refuses (`span(_.deterministic)`). One nondeterministic conjunct
+   now declines the whole predicate, pinned in the compiler suite and by a
+   differential whose `rand(42) < 2.0` conjunct keeps the answers
+   deterministic while the plan stays unfused.
+2. **A failed selection-buffer grow left a dangling `ArrowBuf`** - the old
+   buffer was closed before its replacement was allocated, so an allocator
+   throw would have a later smaller batch write its bitmap into freed
+   memory and the task listener double-close it. The field is nulled across
+   the close-and-replace.
+3. **The filter nodes dropped `outputPartitioning`** (the comment claiming a
+   pass-through default was wrong - SparkPlan defaults to
+   UnknownPartitioning), reintroducing shuffles above cached filtered
+   relations. Both forward the child's partitioning now, as `FilterExec`
+   does.
+
+The rest: the filter rewrite now gates on a plan-time `vectorTypes` check
+(`supportsColumnar` alone is satisfied by Parquet/ORC vectorized scans whose
+every batch would fail `canRun` - a permanently falling-back Varka filter is
+strictly slower than the `FilterExec` it replaces; the projection rewrites
+keep the optimistic task-6 proxy deliberately, their fallback being the same
+per-row projection the stock plan runs); `row-path-failure` gained the
+bounded cause metric the first round withheld (without one those batches
+vanished from the SQL UI entirely); the row node counts `numOutputRows` as
+rows are emitted rather than pre-charging the batch's selected count
+(overcounts under LIMIT, double-counts on a throw-after-add); a throwing
+`onTaskCleanup` hook no longer skips the allocator close; the filter nodes
+memoize their EXPLAIN classification like the projection nodes; the filter
+evaluator logs the once-per-task fusion account the docs promise; the
+selection iterator throws `NoSuchElementException` past exhaustion; two
+suite tests moved `markTaskCompleted` into the finally; the cache-strip fix
+became a `VarkaFusedTransition` trait with a `columnarSibling` the compiler
+forces on every future fused transition node (the serializer handles the
+trait, not a node list); the four-copy canRun/catch/refuse skeleton
+collapsed into one `serveBatch` template on the evaluator base; the typed
+compaction's per-type switch became a single `BaseFixedWidthVector` arm
+over Arrow's `copyFromSafe`, so future lane types compact to Arrow instead
+of silently degrading through the generic pass; and the README's IN-case
+quotes were requoted to the regenerated file's 3.6x / 4.2x.
+
 ## 7. Explicitly out of task 21
 
 Boolean output columns (milestone 4 item 5 - this task owes them only the

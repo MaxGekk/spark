@@ -144,8 +144,11 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
       kernels.release(out)
       arrowBatch.close()
       onheap.close()
-      context.markTaskCompleted(None)
     } finally {
+      // In the finally (task-21 review, second pass): a failed assertion above must not
+      // skip the evaluator's task cleanup, or the allocator close below reports leaked
+      // buffers instead of the real failure. markTaskCompleted is idempotent.
+      context.markTaskCompleted(None)
       TaskContext.unset()
       allocator.close()
     }
@@ -248,8 +251,37 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
       assert(ArrowUtils.rootAllocator.getAllocatedMemory === initial,
         "the task-completion listener did not release the Varka state")
     } finally {
+      // Idempotent re-completion (task-21 review, second pass): an assertion failing before
+      // the in-try markTaskCompleted must still run the evaluator's cleanup, or the
+      // allocator close below masks the real failure with leaked-buffer errors.
+      context.markTaskCompleted(None)
       TaskContext.unset()
       allocator.close()
+    }
+  }
+
+  test("task 21 review: the row node counts rows as they are emitted, not per batch") {
+    // Pre-charging the batch's whole selected count overcounts under early termination
+    // (a LIMIT) and double-counts when a later throw routes the batch to the fallback.
+    val dates = Seq(Int.box(1), Int.box(2), Int.box(3), Int.box(4))
+    val plan = VarkaFilterColumnarToRowExec(
+      dLess10, TestColumnarBatchPlan(Seq(BatchSpec("arrow", Seq(dates))), Seq(attrD)))
+    // Consume one row and stop, like a LIMIT would.
+    plan.execute().mapPartitions(rows => Iterator.single(rows.next())).count()
+    assert(plan.metrics("numOutputRows").value === 1)
+  }
+
+  test("task 21 review: a columnar child declaring non-Arrow vectors is not rewritten") {
+    // supportsColumnar alone is satisfied by Parquet/ORC vectorized scans whose batches
+    // fail canRun every time; the plan-time vectorTypes gate keeps such filters on the
+    // stock plan instead of a permanently falling-back Varka node.
+    val onheapChild = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr),
+      declaredVectorTypes = Some(Seq(
+        classOf[OnHeapColumnVector].getName, classOf[OnHeapColumnVector].getName)))
+    val filter = FilterExec(dLess10, onheapChild)
+    withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
+      assert(VarkaColumnarRule.preColumnarTransitions(filter) === filter)
+      assert(VarkaColumnarRule.postColumnarTransitions(filter) === filter)
     }
   }
 

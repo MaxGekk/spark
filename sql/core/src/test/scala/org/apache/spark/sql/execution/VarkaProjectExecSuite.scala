@@ -336,6 +336,48 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
   }
 
 
+  test("task 21 review: a residual-machinery failure is counted under its own cause") {
+    // Under CODEGEN_ONLY the residual projection's Janino compile throws inside the kernel
+    // try; the VarkaKernelFailure marker keeps it out of the kernel-failure metric and it
+    // lands under row-path-failure - once - before the fallback re-throws the same failure.
+    withSQLConf(SQLConf.CODEGEN_FACTORY_MODE.key -> "CODEGEN_ONLY") {
+      val rowPath = SQLMetrics.createMetric(sparkContext, "rowPath")
+      val kernelFailures = SQLMetrics.createMetric(sparkContext, "kernel")
+      val factory = new VarkaProjectEvaluatorFactory(
+        project(
+          Alias(DateAdd(attrD, Literal(3)), "a")(),
+          Alias(ExplodingCodegenExpression(), "boom")()),
+        Seq(attrD),
+        offHeapColumnVectorEnabled = false,
+        classDumpDirectory = None,
+        SQLMetrics.createMetric(sparkContext, "rows"),
+        SQLMetrics.createMetric(sparkContext, "batches"),
+        VarkaExecMetrics(
+          fallbackBatchesKernel = Some(kernelFailures),
+          fallbackBatchesRowPath = Some(rowPath)))
+      val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-test", 0, Long.MaxValue)
+      val context = TaskContext.empty()
+      TaskContext.setTaskContext(context)
+      try {
+        val batch = VarkaColumnarToRowExecSuite.buildBatch(
+          BatchSpec("arrow", Seq(Seq(Int.box(1)))), Seq(attrD), allocator)
+        try {
+          intercept[Throwable] {
+            factory.createEvaluator().eval(0, Iterator(batch)).next()
+          }
+          assert(rowPath.value === 1)
+          assert(kernelFailures.value === 0)
+        } finally {
+          batch.close()
+        }
+      } finally {
+        context.markTaskCompleted(None)
+        TaskContext.unset()
+        allocator.close()
+      }
+    }
+  }
+
   test("task 22: an emission failure counts once per task, evented, not mislabeled") {
     // A set emitter hook makes the shape cache refuse the lookup, so the runner cannot be
     // built: the evaluator counts one emission failure and emits the JFR fallback event, and

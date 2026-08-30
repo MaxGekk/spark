@@ -405,6 +405,16 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(predicate.specs.forall(_.fused))
   }
 
+  test("task 21 review: a nondeterministic conjunct declines the whole predicate") {
+    // The split hoists fused conjuncts below residual ones, reordering evaluation; a seeded
+    // rand must see every row (Spark's own pushdown stops at the first nondeterministic
+    // conjunct), so one nondeterministic conjunct declines the whole predicate.
+    val condition = org.apache.spark.sql.catalyst.expressions.And(
+      LessThan(d, Literal(10, DateType)),
+      LessThan(org.apache.spark.sql.catalyst.expressions.Rand(Literal(42L)), Literal(0.5)))
+    assert(VarkaExpressionCompiler.compilePredicate(condition, childOutput).isEmpty)
+  }
+
   test("task 21: the budget mirror demotes conjuncts past MAX_FUSED_NODES to residual") {
     // Each conjunct is one Compare op and the fold adds one And per accepted conjunct, so k
     // accepted conjuncts cost 2k - 1 distinct ops: 32 fit the 64-op budget, the 33rd would

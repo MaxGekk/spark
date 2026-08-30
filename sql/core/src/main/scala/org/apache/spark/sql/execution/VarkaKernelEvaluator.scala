@@ -45,7 +45,7 @@ import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, Column
  * this task would have made it five). Every field is optional: suites and diagnostics
  * construct evaluators with none. Deliberately Scala rather than a Java record (the task-21
  * review's call, recorded): every construction site is forced-Scala code leaning on named
- * arguments and defaults over six same-typed fields, where a record's positional constructor
+ * arguments and defaults over seven same-typed fields, where a record's positional constructor
  * would be a silent-swap hazard.
  */
 private[sql] case class VarkaExecMetrics(
@@ -54,6 +54,7 @@ private[sql] case class VarkaExecMetrics(
     cacheMisses: Option[SQLMetric] = None,
     fallbackBatchesNonArrow: Option[SQLMetric] = None,
     fallbackBatchesKernel: Option[SQLMetric] = None,
+    fallbackBatchesRowPath: Option[SQLMetric] = None,
     emissionFailures: Option[SQLMetric] = None)
 
 private[sql] object VarkaExecMetrics {
@@ -77,6 +78,8 @@ private[sql] object VarkaExecMetrics {
       sparkContext, "batches falling back: input not Arrow-backed"),
     "numFallbackBatchesKernel" -> SQLMetrics.createMetric(
       sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
+    "numFallbackBatchesRowPath" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: per-row machinery failure beside the kernel"),
     "numEmissionFailures" -> SQLMetrics.createMetric(
       sparkContext, "tasks that could not emit or define the kernel class"))
 
@@ -93,6 +96,7 @@ private[sql] object VarkaExecMetrics {
     cacheMisses = Some(metric("numVarkaCacheMisses")),
     fallbackBatchesNonArrow = Some(metric("numFallbackBatchesNonArrow")),
     fallbackBatchesKernel = Some(metric("numFallbackBatchesKernel")),
+    fallbackBatchesRowPath = Some(metric("numFallbackBatchesRowPath")),
     emissionFailures = Some(metric("numEmissionFailures")))
 }
 
@@ -254,8 +258,35 @@ private[sql] abstract class VarkaEvaluatorBase(
   // own fallback path.
   // ---------------------------------------------------------------------------------------
 
+  /**
+   * The per-batch dispatch every exec node runs (task-21 review, second pass: the
+   * canRun/catch/refuse skeleton had grown into four identical copies - the very drift
+   * surface whose accounting half the first pass deduplicated): the kernel path under the
+   * shared cause accounting, with every degradation routed to the caller's fallback.
+   */
+  private[execution] def serveBatch[T](input: ColumnarBatch)(kernelPath: => T)(
+      fallbackPath: => T): T = {
+    if (canRun(input)) {
+      try {
+        kernelPath
+      } catch {
+        // A genuine kernel error is told apart from a failure in the per-row machinery
+        // sharing the try by the marker invokeFused wraps it in.
+        case e: VarkaKernelFailure =>
+          recordKernelFailure(e.getCause)
+          fallbackPath
+        case e if isCatchable(e) =>
+          recordRowPathFailure(e)
+          fallbackPath
+      }
+    } else {
+      recordRefusedBatch(input)
+      fallbackPath
+    }
+  }
+
   /** The ghost fallback's bookkeeping: an error from the emitted kernel itself. */
-  private[execution] def recordKernelFailure(e: Throwable): Unit = {
+  private def recordKernelFailure(e: Throwable): Unit = {
     logWarning(s"The Varka SIMD kernels $kernelIdentity failed on this batch; falling back " +
       "to the per-row path.", e)
     metrics.fallbackBatchesKernel.foreach(_ += 1)
@@ -268,12 +299,13 @@ private[sql] abstract class VarkaEvaluatorBase(
    * or merge projection's compile or evaluation - which the task-21 review split out of the
    * kernel metric: it is not the kernel's failure, and a throwing lazy re-runs its
    * initializer, so counting it there would inflate the ghost-fallback metric on every
-   * batch. Evented and logged under its own cause; no dedicated SQLMetric - the cause set
-   * stays bounded, and the event and warning carry it.
+   * batch. Counted under its own bounded cause metric (the review's second pass: with no
+   * metric these batches vanished from the SQL UI entirely), evented and logged.
    */
-  private[execution] def recordRowPathFailure(e: Throwable): Unit = {
+  private def recordRowPathFailure(e: Throwable): Unit = {
     logWarning(s"The per-row machinery beside the Varka kernel $kernelIdentity failed on " +
       "this batch; falling back to the per-row path.", e)
+    metrics.fallbackBatchesRowPath.foreach(_ += 1)
     VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.ROW_PATH_FAILURE, kernelIdentity,
       e.getClass.getName)
   }
@@ -286,7 +318,7 @@ private[sql] abstract class VarkaEvaluatorBase(
    * is not a data-format property. Only a non-empty batch whose referenced columns fail the
    * Arrow check is the non-Arrow cause the metric names.
    */
-  private[execution] def recordRefusedBatch(input: ColumnarBatch): Unit = {
+  private def recordRefusedBatch(input: ColumnarBatch): Unit = {
     if (!emissionFailed && fusedPlan.nonEmpty && input.numRows() > 0) {
       metrics.fallbackBatchesNonArrow.foreach(_ += 1)
       VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.NON_ARROW_BATCH,
@@ -365,7 +397,14 @@ private[sql] abstract class VarkaEvaluatorBase(
       TaskContext.get().addTaskCompletionListener[Unit] { _ =>
         openBatches.foreach { case (_, owned) => owned.foreach(_.close()) }
         openBatches.clear()
-        onTaskCleanup()
+        try {
+          onTaskCleanup()
+        } catch {
+          // A throwing hook must not skip the allocator close below: that would leak the
+          // child allocator's accounting against the shared root for the JVM's lifetime
+          // and mask the task's real error (task-21 review, second pass).
+          case NonFatal(e) => logWarning("Varka task-cleanup hook failed.", e)
+        }
         if (kernelAllocator != null) {
           kernelAllocator.close()
           kernelAllocator = null
@@ -797,9 +836,18 @@ private[sql] class VarkaFilterEvaluator(
     metrics: VarkaExecMetrics = VarkaExecMetrics())
     extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics) {
 
-  private lazy val compiled =
-    VarkaExpressionCompiler.compilePredicate(condition, childOutput)
+  private lazy val compiled = {
+    val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput)
       .filter(_.residualConjuncts.isEmpty)
+    // Task 16's account for a filter, once per task at debug level - the projection
+    // evaluator's counterpart, which the base-class split had dropped (task-21 review,
+    // second pass) although the docs promise it.
+    predicate.foreach { _ =>
+      logDebug(s"Varka $operatorName fusion: " +
+        VarkaFusionReport.predicateLines(condition, childOutput).mkString("; "))
+    }
+    predicate
+  }
 
   override protected def fusedPlan: Option[CompiledVarkaProjection] = compiled.map(_.fused)
 
@@ -823,7 +871,12 @@ private[sql] class VarkaFilterEvaluator(
     if (maskBuf == null || maskBuf.capacity() < needed) {
       val alloc = taskAllocator()
       if (maskBuf != null) {
-        maskBuf.close()
+        // Null the field before the close-and-replace: if the grow allocation below throws,
+        // a dangling reference would serve a later smaller batch from freed memory and be
+        // double-closed by the task listener (task-21 review, second pass).
+        val old = maskBuf
+        maskBuf = null
+        old.close()
       }
       maskBuf = alloc.buffer(needed)
     }
@@ -898,15 +951,16 @@ private[sql] class VarkaFilterEvaluator(
         input.column(j) match {
           case acv: ArrowColumnVector =>
             acv.getValueVector() match {
-              case src: DateDayVector if src.getValueCount() == len =>
-                val dst = new DateDayVector(s"varka$j", taskAllocator())
+              // One arm serves every fixed-width Arrow type (task-21 review, second pass:
+              // a DateDay/Int-only switch would silently route a future lane type through
+              // the generic pass and hand a stacked Varka node non-Arrow columns):
+              // getTransferPair conjures an empty vector of the source's own type, and
+              // copyFromSafe copies value and validity together.
+              case src: BaseFixedWidthVector if src.getValueCount() == len =>
+                val dst = src.getTransferPair(s"varka$j", taskAllocator()).getTo
+                  .asInstanceOf[BaseFixedWidthVector]
                 columns(j) = compactFixed(dst, selection, len, count, owned) { (pos, i) =>
-                  if (src.isNull(i)) dst.setNull(pos) else dst.set(pos, src.get(i))
-                }
-              case src: IntVector if src.getValueCount() == len =>
-                val dst = new IntVector(s"varka$j", taskAllocator())
-                columns(j) = compactFixed(dst, selection, len, count, owned) { (pos, i) =>
-                  if (src.isNull(i)) dst.setNull(pos) else dst.set(pos, src.get(i))
+                  dst.copyFromSafe(i, pos, src)
                 }
               case _ => generic += j
             }

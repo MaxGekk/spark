@@ -206,7 +206,7 @@ Task 22 extends the account to the SQL UI and to JDK Flight Recorder:
   metrics: batches falling back because the input was not Arrow-backed
   (empty batches are served trivially and carry no cause), batches the
   ghost fallback caught a kernel failure on (a failure in the per-row
-  machinery beside the kernel is evented and logged under its own
+  machinery beside the kernel is counted, evented and logged under its own
   `row-path-failure` cause instead), tasks that could not emit or define
   their kernel class, and - on the projection nodes - the residual-entry
   count (a static plan property, added once driver-side and posted to the

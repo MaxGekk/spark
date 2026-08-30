@@ -687,6 +687,20 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 21 review: a nondeterministic conjunct keeps the whole filter unfused") {
+    // The conjunct split would hoist the date predicate below rand(), changing which rows
+    // the seeded stream sees; the compiler declines the whole predicate instead. Plan-shape
+    // assertion only: an always-true rand comparison gets optimized away entirely (leaving a
+    // deterministic filter that legitimately fuses - the first version of this test learned
+    // that), and a live rand makes answers uncomparable; the reorder semantics themselves
+    // are pinned in the compiler suite.
+    cacheDatesBig(varkaSpark, 256)
+    val plan = varkaSpark.sql(
+      "SELECT i FROM varka_dates_big WHERE rand(42) < 0.5 AND d IS NOT NULL ORDER BY i")
+      .queryExecution.executedPlan
+    assertNotFused(plan)
+  }
+
   test("task 21: filters over multiple batches and tasks share one mask kernel class") {
     val batchSize = "32"
     try {

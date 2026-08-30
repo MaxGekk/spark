@@ -30,6 +30,21 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.CompletionIterator
 
 /**
+ * A Varka node wearing the [[ColumnarToRowTransition]] tag while carrying fused work inside it
+ * (task-21 review, second pass): every consumer that strips the tag to reach a columnar plan -
+ * the cache builder's `convertToColumnarPlanIfPossible` is the one in-tree - must convert such
+ * a node to [[columnarSibling]], the columnar-out node running identical kernels, instead of
+ * dropping the work. The serializer handles this trait, not a hardcoded node list, so the next
+ * fused transition node is kept out of the task-6 cached-view bug by the compiler: extending
+ * the trait forces the sibling.
+ */
+private[sql] trait VarkaFusedTransition extends ColumnarToRowTransition {
+
+  /** The columnar-out node computing exactly what this fused transition computes. */
+  def columnarSibling: SparkPlan
+}
+
+/**
  * The Varka columnar-to-row transition (Task 6). It projects an Arrow-backed `ColumnarBatch`
  * with the Varka SIMD kernels instead of per-row codegen, and hands the result on as rows: it is
  * what [[VarkaColumnarRule]] leaves in the plan when the consumer above the projection wants
@@ -69,12 +84,14 @@ import org.apache.spark.util.CompletionIterator
 case class VarkaColumnarToRowExec(
     projectList: Seq[NamedExpression],
     child: SparkPlan)
-    extends ColumnarToRowTransition
+    extends VarkaFusedTransition
     with SafeForKWayMerge
     with PartitioningPreservingUnaryExecNode
     with OrderPreservingUnaryExecNode {
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
+
+  override def columnarSibling: SparkPlan = VarkaProjectExec(projectList, child)
 
   // This node is a projection: it renames and drops columns, so it cannot report the child's
   // partitioning and ordering verbatim the way `ColumnarToRowExec` does. The two alias-aware
@@ -229,26 +246,14 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
       }
     }
 
+    // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
+    // (task-21 review, both passes) and routes every degradation to the fallback.
     private def process(input: ColumnarBatch): Iterator[InternalRow] = {
-      if (kernels.canRun(input)) {
-        try {
-          val rows = runKernels(input)
-          varkaMetrics.varkaBatches.foreach(_ += 1)
-          rows
-        } catch {
-          // The evaluator's shared accounting (task-21 review) counts, events and logs each
-          // cause; a genuine kernel error is told apart from a failure in the per-row
-          // machinery sharing this try (the lazy merge projection) by the marker invokeFused
-          // wraps it in.
-          case e: VarkaKernelFailure =>
-            kernels.recordKernelFailure(e.getCause)
-            fallback(input)
-          case e if kernels.isCatchable(e) =>
-            kernels.recordRowPathFailure(e)
-            fallback(input)
-        }
-      } else {
-        kernels.recordRefusedBatch(input)
+      kernels.serveBatch(input) {
+        val rows = runKernels(input)
+        varkaMetrics.varkaBatches.foreach(_ += 1)
+        rows
+      } {
         fallback(input)
       }
     }

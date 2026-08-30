@@ -299,6 +299,13 @@ private[sql] object VarkaExpressionCompiler {
   def compilePredicate(
       condition: Expression,
       childOutput: Seq[Attribute]): Option[CompiledVarkaPredicate] = {
+    // The split hoists fused conjuncts below the residual ones, which reorders evaluation.
+    // That is sound only when every conjunct is deterministic - Spark's own predicate
+    // pushdown stops at the first nondeterministic conjunct (span(_.deterministic)) for the
+    // same reason: a seeded rand() must see every row, not the survivors of a hoisted
+    // predicate. One nondeterministic conjunct therefore declines the whole predicate
+    // (task-21 review); the rewrite must never change what the query computes.
+    if (!condition.deterministic) return None
     val inputs = mutable.LinkedHashMap.empty[Int, Int]
     val literals = mutable.LinkedHashMap.empty[Int, Int]
     val sink = new DeclineSink(childOutput)

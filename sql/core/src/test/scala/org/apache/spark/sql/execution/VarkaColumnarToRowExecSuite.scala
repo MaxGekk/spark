@@ -503,9 +503,11 @@ private[sql] case class TestColumnarBatchPlan(
     specs: Seq[BatchSpec],
     output: Seq[Attribute],
     override val outputPartitioning: Partitioning = UnknownPartitioning(0),
-    override val outputOrdering: Seq[SortOrder] = Nil)
+    override val outputOrdering: Seq[SortOrder] = Nil,
+    declaredVectorTypes: Option[Seq[String]] = None)
     extends SparkPlan {
   override def supportsColumnar: Boolean = true
+  override def vectorTypes: Option[Seq[String]] = declaredVectorTypes
   override def children: Seq[SparkPlan] = Seq.empty
   override protected def withNewChildrenInternal(
       newChildren: IndexedSeq[SparkPlan]): SparkPlan = this
