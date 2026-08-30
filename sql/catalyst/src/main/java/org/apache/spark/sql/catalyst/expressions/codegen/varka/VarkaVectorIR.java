@@ -37,11 +37,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * (task 10).
  *
  * <p>Task 11 splits the IR into values and <i>conditions</i>: a {@link Cond} node is
- * mask-valued - per lane a known-true and a known-false bit, SQL's three-valued logic - and is
- * interior only. {@link IfElse#cond} is typed {@code Cond}, so a value cannot appear where a
- * condition belongs; the reverse direction (a condition in a value position, or as an output
- * root) is rejected by the emitter's analysis, since {@code Cond} must extend
- * {@code VarkaVectorIR} for the shared memo machinery to see condition nodes at all.
+ * mask-valued - per lane a known-true and a known-false bit, SQL's three-valued logic.
+ * {@link IfElse#cond} is typed {@code Cond}, so a value cannot appear where a condition
+ * belongs; the reverse direction (a condition in a value position) is rejected by the
+ * emitter's analysis, since {@code Cond} must extend {@code VarkaVectorIR} for the shared
+ * memo machinery to see condition nodes at all. A condition <i>as an output root</i> is legal
+ * since task 21 and means a selection bitmap - see {@link Cond} for the null rule there.
  */
 public sealed interface VarkaVectorIR
     permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
@@ -60,9 +61,19 @@ public sealed interface VarkaVectorIR
   enum CompareOp { LT, LE, GT, GE, EQ }
 
   /**
-   * A mask-valued interior node (task 11): per lane group it evaluates to a known-true and a
+   * A mask-valued node (task 11): per lane group it evaluates to a known-true and a
    * known-false mask, and an unknown lane (a null input somewhere below) is neither - which is
-   * what makes {@code CASE WHEN}'s null condition fall through to ELSE. Never an output root.
+   * what makes {@code CASE WHEN}'s null condition fall through to ELSE.
+   *
+   * <p>Interior until task 21; as an output root a condition is a <i>selection bitmap</i>,
+   * and the rule at the root is written down once, here: <b>unknown is false</b>. A row is
+   * selected exactly where the condition is known true - SQL's {@code WHERE} semantics, where
+   * a NULL predicate drops the row - and the emitter gets it for free, because the known-true
+   * mask is a subset of the operands' validity by construction. Interior semantics are
+   * unchanged: {@code IfElse} still distinguishes unknown from known false (both take ELSE
+   * today, but validity follows the branch), and the known-false mask keeps {@link Not} a
+   * zero-cost slot swap. In the emitter's dense body every input is valid, so no lane is
+   * unknown and the degenerate single-mask form gives the same answer.
    */
   sealed interface Cond extends VarkaVectorIR
       permits Compare, And, Or, Not, IsNotNull {}

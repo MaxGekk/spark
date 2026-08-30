@@ -34,7 +34,10 @@ parsing) and unlocks SIMD by operating on whole columnar batches at once.
 Since milestone 2 it does not dispatch to per-op kernels: an eligible
 projection is compiled to a vector IR and *fused* - however many expressions
 and however deep their nesting, the emitted class runs one loop with one load
-per input column and one store per output.
+per input column and one store per output. Since task 21 the same machinery
+serves filters: an eligible predicate becomes a mask kernel whose single
+output is the selection bitmap, and the batch is compacted - or its rows
+skipped at the row boundary - by that mask.
 
 The supported expression surface, over `DateType` columns (stored as `INT`
 days since epoch) and foldable integer day offsets:
@@ -187,32 +190,40 @@ attributes alone did not answer:
   writes each emitted class under its `SourceFile` name, so `javap -c -p`
   disassembles a generated loop with no debugger attached. Diagnostics only:
   a failed write is logged and never fails the query.
-* **`EXPLAIN` says why an entry did not fuse.** Verbose `EXPLAIN` on either
-  Varka node lists every projection entry as fused, forwarded (naming the
+* **`EXPLAIN` says why an entry did not fuse.** Verbose `EXPLAIN` on a Varka
+  projection node lists every projection entry as fused, forwarded (naming the
   child column) or residual with the compiler's decline reason - "unsupported
   expression", "day offset is not a foldable literal", "CASE WHEN without an
   ELSE branch", "non-date column of type ..." - in the query's own column
-  names. The same account goes to the debug log once per task.
+  names; a Varka filter node (task 21) reports its predicate the same way,
+  one line per conjunct. The same account goes to the debug log once per
+  task.
 
 Task 22 extends the account to the SQL UI and to JDK Flight Recorder:
 
-* **Fallback causes are SQL metrics.** Both Varka nodes carry, beside the
-  row/batch counts and the class-cache hits and misses, four cause-keyed
-  metrics: batches falling back because the input was not Arrow-backed,
-  batches the ghost fallback caught a kernel failure on, tasks that could
-  not emit or define their kernel class, and the projection's residual-entry
-  count (a static plan property, added once driver-side; the per-entry
-  reasons stay in verbose `EXPLAIN`). A fallen-back query is diagnosable
-  from the SQL UI alone: the cause class from the metrics, the exact reason
-  from `EXPLAIN` or the log.
+* **Fallback causes are SQL metrics.** Every Varka node carries, beside the
+  row/batch counts and the class-cache hits and misses, cause-keyed
+  metrics: batches falling back because the input was not Arrow-backed
+  (empty batches are served trivially and carry no cause), batches the
+  ghost fallback caught a kernel failure on (a failure in the per-row
+  machinery beside the kernel is counted, evented and logged under its own
+  `row-path-failure` cause instead), tasks that could not emit or define
+  their kernel class, and - on the projection nodes - the residual-entry
+  count (a static plan property, added once driver-side and posted to the
+  SQL listener; the per-entry reasons stay in verbose `EXPLAIN`; a
+  filter's residual is a visible row `FilterExec` above it rather than a
+  number, and its `numOutputRows` counts selected rows). A fallen-back
+  query is diagnosable from the SQL UI alone: the cause class from the
+  metrics, the exact reason from `EXPLAIN` or the log.
 * **JFR events.** Three events under the `Varka` category fire while a JDK
   Flight Recorder recording is active - no JVM flag or build change is
-  needed, `jdk.jfr` is a default module: `org.apache.spark.sql.varka.
-  KernelEmission` (timed over emit plus class define; shape hash, class
-  name, IR sizes, byte count), `...ShapeCacheLookup` (shape hash, hit,
-  the per-execution identity - the join a profile needs), and
-  `...Fallback` (cause, kernel identity, exception class). Record with a
-  programmatic `jdk.jfr.Recording`, `jcmd JFR.start`, or
+  needed, `jdk.jfr` is a default module. Under the shared prefix
+  `org.apache.spark.sql.varka`: `KernelEmission` (timed over emit plus
+  class define; shape hash, class name, IR sizes, byte count),
+  `ShapeCacheLookup` (shape hash, hit, the per-execution identity - the
+  join a profile needs), and `Fallback` (cause, kernel identity, exception
+  class; the cause vocabulary is the constants on `VarkaFallbackEvent`).
+  Record with a programmatic `jdk.jfr.Recording`, `jcmd JFR.start`, or
   `-XX:StartFlightRecording`.
 
 All of it is metadata or diagnostics: the emitted methods are byte-identical
@@ -240,6 +251,34 @@ A consumer that takes batches - a DSv2 write whose connector declares
 Arrow batches with no transition at all, while a row consumer gets the single
 fused node. The rule is registered on every `SparkSession` but is inert while
 the config is off.
+
+Since task 21 the same two-stage rewrite serves filters - the engine's first
+plan-shape change. An eligible predicate's compilable conjuncts fuse into a
+mask kernel (one fused loop whose single output root is the condition; the
+selection bitmap lands in the output-validity slot, a set bit meaning known
+true - SQL's null-as-false `WHERE` rule by construction), and the remaining
+conjuncts stay in a row `FilterExec` above the Varka node, which then sees
+only the surviving rows:
+
+    // preColumnarTransitions
+    FilterExec(condition, columnarChild)
+      -> [FilterExec(residualConjuncts,)] VarkaFilterExec(fusedConjuncts, columnarChild)
+
+    // postColumnarTransitions
+    ColumnarToRowExec(VarkaFilterExec(condition, child))
+      -> VarkaFilterColumnarToRowExec(condition, child)
+
+The two filter nodes implement the v1 selected-batch contract (the milestone's
+open question 2): `VarkaFilterExec` compacts the selected rows into a fresh
+dense batch - an ordinary `ColumnarBatch`, so every consumer's invariants hold
+and a Varka projection stacks directly on top - while
+`VarkaFilterColumnarToRowExec` consumes the selection bitmap at the row
+boundary, emitting only the selected rows during row conversion with no
+compaction at all. Compaction copies date/int columns Arrow-to-Arrow (keeping
+them kernel-servable) and everything else through the standard row-to-column
+converter; a selection vector never travels to a non-Varka consumer, because
+no Spark operator understands one. Output nullability follows `FilterExec`'s
+tightening rule exactly.
 
 Both nodes run the same kernels through `VarkaKernelEvaluator`, and differ only
 in what they do with its output batch and in how they fall back:
@@ -358,7 +397,7 @@ exist.
 * **Catalyst tests** check bytecode shape by disassembly, the loader
   define/release lifecycle, and ghost-fallback injection.
 * **sql/core tests** (`VarkaColumnarToRowExecSuite`, `VarkaProjectExecSuite`,
-  `VarkaColumnarWriteSuite`, `VarkaEndToEndSuite`,
+  `VarkaFilterExecSuite`, `VarkaColumnarWriteSuite`, `VarkaEndToEndSuite`,
   `VarkaDifferentialSuite`, `VarkaAutoRegistrationSuite`) prove plan fusion,
   `checkAnswer` equality over a query matrix - re-run warm so a cache hit is
   differentially checked too - `numVarkaBatches > 0` on fused plans,
@@ -412,6 +451,16 @@ files, which are the source of truth as the code moves):
   (0.9x, the magic-multiply lowering of 7.7 took it to 1.2x): its ~12-op
   loop method paid the heaviest per-task warm-up (~50 ms), so removing the
   ladder moved it furthest.
+* **Filters** (`VarkaFilterBenchmark`, task 21, `d < DATE` over 2M rows at a
+  0-100% selectivity ladder): the compacting `VarkaFilterExec` wins
+  2.3x-2.7x at every rung - the typed scalar compaction costs only
+  ~1-3 ns/row over the mask itself, which is why no compaction threshold
+  exists - and the mask-skip row node wins 2.3x at low selectivity, decaying
+  to 1.1x at all-selected as the task-19 read-back floor takes over. The
+  stacked filter-then-fused-projection shape holds 2.4x-2.6x, and the
+  previously-parity `WHERE d IN (5 literals)` anchor now runs 2.0x. The
+  honest loss: `COUNT(*)` over an 85%-selective filter is 0.8x (1.8x at
+  15%) - nearly every row crosses the row boundary into the aggregate.
 * **Cold start** (`VarkaColdStartBenchmark`, first execution of a fresh plan
   shape over 100K rows): 1.7x - 19 ms vs 31 ms best, 25 ms vs 38 ms average.
   A fresh shape misses the class cache, and the benchmark enforces that by
@@ -484,5 +533,6 @@ build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaThroug
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaColdStartBenchmark"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaCodegenBenchmark"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaInExpressionBenchmark"
+build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaFilterBenchmark"
 build/sbt "catalyst/test:runMain org.apache.spark.sql.VarkaEmitterParityBenchmark"
 ```

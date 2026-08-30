@@ -32,6 +32,13 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * them first and only ORs bits in, so rows it does not write come out null. Data values of null
  * output rows are undefined.
  *
+ * <p>Selection outputs (task 21): an output whose IR root is a condition writes no data at all -
+ * its {@code dstData} slot is never dereferenced and callers pass {@code 0L} there - and its
+ * {@code dstValidity} is the selection bitmap: a set bit means the predicate is known true for
+ * that row, an unset bit means false or null (SQL's {@code WHERE} rule). The zero-then-OR
+ * discipline above doubles as the selection invariant: a row the loop never writes reads as
+ * unselected.
+ *
  * @see VarkaVectorIR
  */
 public interface VarkaFusedKernel {

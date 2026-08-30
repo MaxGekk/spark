@@ -220,10 +220,7 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        VarkaExecMetrics(
-          varkaBatches = Some(varkaBatches),
-          cacheHits = Some(SQLMetrics.createMetric(sparkContext, "cacheHits")),
-          cacheMisses = Some(SQLMetrics.createMetric(sparkContext, "cacheMisses"))))
+        VarkaExecMetrics(varkaBatches = Some(varkaBatches)))
       val rows = factory.createEvaluator().eval(0, inputs.iterator)
 
       val kernelRow = rows.next()
@@ -281,10 +278,7 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        VarkaExecMetrics(
-          varkaBatches = Some(SQLMetrics.createMetric(sparkContext, "varka")),
-          cacheHits = Some(SQLMetrics.createMetric(sparkContext, "cacheHits")),
-          cacheMisses = Some(SQLMetrics.createMetric(sparkContext, "cacheMisses"))))
+        VarkaExecMetrics())
       // Before task 15 this constructor compiled the fallback eagerly and threw.
       val evaluator = factory.createEvaluator()
       val column = new OnHeapColumnVector(1, IntegerType)
@@ -323,10 +317,7 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        VarkaExecMetrics(
-          varkaBatches = Some(SQLMetrics.createMetric(sparkContext, "varkaBatches")),
-          cacheHits = Some(SQLMetrics.createMetric(sparkContext, "cacheHits")),
-          cacheMisses = Some(SQLMetrics.createMetric(sparkContext, "cacheMisses"))))
+        VarkaExecMetrics())
       val rows = factory.createEvaluator().eval(0, inputs.iterator)
 
       var count = 0
@@ -375,10 +366,7 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        VarkaExecMetrics(
-          varkaBatches = Some(SQLMetrics.createMetric(sparkContext, "varkaBatches")),
-          cacheHits = Some(SQLMetrics.createMetric(sparkContext, "cacheHits")),
-          cacheMisses = Some(SQLMetrics.createMetric(sparkContext, "cacheMisses"))))
+        VarkaExecMetrics())
       // Stop after the first row, like a LIMIT would: the batch stays open.
       val rows = factory.createEvaluator().eval(0, inputs.iterator)
       assert(rows.next().getInt(0) === 3)
@@ -515,9 +503,11 @@ private[sql] case class TestColumnarBatchPlan(
     specs: Seq[BatchSpec],
     output: Seq[Attribute],
     override val outputPartitioning: Partitioning = UnknownPartitioning(0),
-    override val outputOrdering: Seq[SortOrder] = Nil)
+    override val outputOrdering: Seq[SortOrder] = Nil,
+    declaredVectorTypes: Option[Seq[String]] = None)
     extends SparkPlan {
   override def supportsColumnar: Boolean = true
+  override def vectorTypes: Option[Seq[String]] = declaredVectorTypes
   override def children: Seq[SparkPlan] = Seq.empty
   override protected def withNewChildrenInternal(
       newChildren: IndexedSeq[SparkPlan]): SparkPlan = this

@@ -18,11 +18,9 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import jdk.jfr.Category;
-import jdk.jfr.Enabled;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
 import jdk.jfr.Name;
-import jdk.jfr.Threshold;
 
 /**
  * JFR event (task 22) timing one fused-kernel emission: the Class-File walk plus the class
@@ -35,8 +33,6 @@ import jdk.jfr.Threshold;
 @Name("org.apache.spark.sql.varka.KernelEmission")
 @Label("Varka Kernel Emission")
 @Category("Varka")
-@Enabled(true)
-@Threshold("0 ms")
 public final class VarkaEmissionEvent extends Event {
 
   @Label("Shape Hash")

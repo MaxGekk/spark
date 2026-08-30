@@ -24,7 +24,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindRef
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
-import org.apache.spark.sql.types.{DataType, DateType}
+import org.apache.spark.sql.types.{BooleanType, DataType, DateType}
 
 /**
  * A whole projection compiled to the Varka vector IR (milestone 2, task 10): the trees
@@ -114,6 +114,36 @@ private[sql] case class PartialVarkaProjection(
     declines: Map[Int, VarkaDecline] = Map.empty)
 
 /**
+ * One conjunct of a filter predicate under the task-21 split: the original (unbound)
+ * expression, whether it joined the mask kernel, and - for a residual conjunct - why not.
+ * The predicate counterpart of [[VarkaOutputSpec]] plus its decline entry.
+ */
+private[sql] case class VarkaConjunctSpec(
+    conjunct: Expression,
+    fused: Boolean,
+    decline: Option[VarkaDecline])
+
+/**
+ * A filter predicate compiled conjunct by conjunct (task 21): `specs` classifies every
+ * conjunct of the condition's `AND` spine in query order, and `fused` describes the mask
+ * kernel - its single output is the fused conjuncts recombined into one condition root, and
+ * its `outputTypes` entry is `BooleanType` as a description only, since a selection bitmap
+ * never allocates an output vector. The split mirrors [[PartialVarkaProjection]]'s per-entry
+ * eligibility: a mixed `WHERE` fuses what it can, and the rule keeps the residual conjuncts
+ * in a row `FilterExec` above the Varka node.
+ */
+private[sql] case class CompiledVarkaPredicate(
+    specs: Seq[VarkaConjunctSpec],
+    fused: CompiledVarkaProjection) {
+
+  /** The conjuncts the mask kernel serves, in query order, unbound. */
+  def fusedConjuncts: Seq[Expression] = specs.filter(_.fused).map(_.conjunct)
+
+  /** The conjuncts left to a row filter above, in query order, unbound. */
+  def residualConjuncts: Seq[Expression] = specs.filterNot(_.fused).map(_.conjunct)
+}
+
+/**
  * Compiles a bound projection list to the Varka vector IR, recursing where the MVP's
  * flat matcher demanded bare attributes - `datediff(date_add(d, 7), d2)` compiles where
  * milestone 1 saw nothing, and since task 11 so do `CASE WHEN`/`IF` (via interior comparisons
@@ -130,6 +160,10 @@ private[sql] case class PartialVarkaProjection(
  * and the projection is eligible when at least one entry fuses - a projection of forwards and
  * residuals alone gains nothing from Varka and stays on Janino untouched. [[compile]] remains
  * as the all-entries-fused special case for callers that need exactly that.
+ *
+ * Task 21 adds the third entry point, [[compilePredicate]]: a filter condition compiled to a
+ * single condition root - the selection mask the emitter writes as a bitmap - with the same
+ * per-part eligibility, split on the predicate's `AND` spine instead of projection entries.
  *
  * Literal day offsets fold through [[DateVarkaSupport.foldDaysOffset]] - the same rule the MVP
  * matched on - into slots of the runtime argument table, assigned per distinct '''value''': two
@@ -245,6 +279,81 @@ private[sql] object VarkaExpressionCompiler {
       table.keys.drop(mark).toSeq.foreach(table.remove)
     }
   }
+
+  /**
+   * Compiles a filter predicate conjunct by conjunct (task 21). The condition splits on its
+   * `AND` spine - Kleene AND is associative, so the split changes nothing - and each conjunct
+   * either joins the fused mask kernel or stays behind as a residual, mirroring
+   * [[compilePartial]]'s per-entry eligibility including the table rollback: a declining
+   * conjunct must not widen the kernel's input set or `canRun`'s Arrow check. An accepted
+   * conjunct must also keep the '''recombined''' root within the emitter's budgets - the
+   * AND fold adds a node per accepted conjunct, so the budgets are mirrored against the fold,
+   * not the conjunct alone. `Some` exactly when at least one conjunct fused and the fused
+   * tree reads at least one column; the caller keeps `residualConjuncts` in a row filter
+   * above.
+   *
+   * The null rule needs no glue here: at the mask root unknown is false (see the IR's `Cond`
+   * doc), and AND-splitting preserves it - a row where any conjunct is null or false has the
+   * whole conjunction null or false, and both read as unselected.
+   */
+  def compilePredicate(
+      condition: Expression,
+      childOutput: Seq[Attribute]): Option[CompiledVarkaPredicate] = {
+    // The split hoists fused conjuncts below the residual ones, which reorders evaluation.
+    // That is sound only when every conjunct is deterministic - Spark's own predicate
+    // pushdown stops at the first nondeterministic conjunct (span(_.deterministic)) for the
+    // same reason: a seeded rand() must see every row, not the survivors of a hoisted
+    // predicate. One nondeterministic conjunct therefore declines the whole predicate
+    // (task-21 review); the rewrite must never change what the query computes.
+    if (!condition.deterministic) return None
+    val inputs = mutable.LinkedHashMap.empty[Int, Int]
+    val literals = mutable.LinkedHashMap.empty[Int, Int]
+    val sink = new DeclineSink(childOutput)
+    val fusedConds = mutable.ArrayBuffer.empty[Cond]
+    val specs = splitConjuncts(condition).map { conjunct =>
+      val bound = BindReferences.bindReference[Expression](conjunct, childOutput)
+      val inputsMark = inputs.size
+      val literalsMark = literals.size
+      compileCond(bound, inputs, literals, sink) match {
+        case Some(cond) if VarkaLoopEmitter.fitsBudgets(
+            java.util.List.of(andFold(fusedConds.toSeq :+ cond)), inputs.size) =>
+          sink.take()
+          fusedConds += cond
+          VarkaConjunctSpec(conjunct, fused = true, decline = None)
+        case compiled =>
+          truncate(inputs, inputsMark)
+          truncate(literals, literalsMark)
+          if (compiled.isDefined) {
+            sink.take()
+            sink.note("exceeds the emitter's fused budget", bound)
+          }
+          // A declining conjunct always leaves a reason: every `None` in compileCond notes one.
+          VarkaConjunctSpec(conjunct, fused = false, decline = sink.take())
+      }
+    }
+    if (fusedConds.nonEmpty && inputs.nonEmpty) {
+      Some(CompiledVarkaPredicate(specs,
+        CompiledVarkaProjection(Seq(andFold(fusedConds.toSeq)), Seq(BooleanType),
+          inputs.keys.toSeq, literals.keys.toSeq)))
+    } else {
+      None
+    }
+  }
+
+  /** The `AND` spine of a condition, in query order - the split [[compilePredicate]] works. */
+  private def splitConjuncts(condition: Expression): Seq[Expression] = condition match {
+    case And(left, right) => splitConjuncts(left) ++ splitConjuncts(right)
+    case other => Seq(other)
+  }
+
+  /**
+   * Folds the fused conjuncts back into one root, '''balanced''' like [[balancedOr]] and for
+   * the same reason: Kleene AND is associative, so the shape is a canonicalization, and a
+   * left fold would grow the chain depth by one per conjunct - a WHERE of 16 fusible
+   * conjuncts would trip `MAX_CHAIN_DEPTH` for no semantic reason, where the balanced fold
+   * stays logarithmic.
+   */
+  private def andFold(conds: Seq[Cond]): Cond = balancedFold(conds, new IRAnd(_, _))
 
   /**
    * The recursive node compiler. `None` anywhere fails the enclosing entry, whose caller rolls
@@ -499,16 +608,20 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /** Pairwise-reduces conditions into a balanced OR tree; the base of the cap arithmetic. */
+  private def balancedOr(level: Seq[Cond]): Cond = balancedFold(level, new IROr(_, _))
+
+  /** Pairwise-reduces conditions into a balanced tree of `combine` - the shared shape behind
+   * [[balancedOr]] and the predicate's [[andFold]]. */
   @scala.annotation.tailrec
-  private def balancedOr(level: Seq[Cond]): Cond = {
-    require(level.nonEmpty, "balancedOr needs at least one condition")
+  private def balancedFold(level: Seq[Cond], combine: (Cond, Cond) => Cond): Cond = {
+    require(level.nonEmpty, "balancedFold needs at least one condition")
     if (level.size == 1) {
       level.head
     } else {
-      balancedOr(level.grouped(2).map {
-        case Seq(a, b) => new IROr(a, b)
+      balancedFold(level.grouped(2).map {
+        case Seq(a, b) => combine(a, b)
         case Seq(a) => a
-      }.toSeq)
+      }.toSeq, combine)
     }
   }
 

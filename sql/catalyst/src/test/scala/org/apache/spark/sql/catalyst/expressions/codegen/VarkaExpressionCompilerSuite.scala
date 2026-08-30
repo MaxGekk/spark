@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, NamedExpression, Not, Nvl, Nvl2, Or, WeekDay}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
 import org.apache.spark.sql.types.{DateType, IntegerType, StringType}
@@ -333,5 +334,98 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(partial.fused.literals === Seq(1),
       "the declined entry's literal registration must be rolled back")
     assert(partial.fused.outputs === Seq(new AddDays(new ColumnRef(0), new LiteralSlot(0))))
+  }
+
+  test("task 21: a fully fusible predicate compiles to one condition root") {
+    // The survey's BETWEEN shape, post-optimizer: paired comparisons on the AND spine.
+    val condition = org.apache.spark.sql.catalyst.expressions.And(
+      GreaterThan(d, Literal(10, DateType)), LessThan(d, Literal(20, DateType)))
+    val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput).get
+    assert(predicate.specs.forall(_.fused))
+    assert(predicate.residualConjuncts.isEmpty)
+    assert(predicate.fused.outputs === Seq(new VarkaVectorIR.And(
+      new Compare(CompareOp.GT, new ColumnRef(0), new LiteralSlot(0)),
+      new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(1)))))
+    assert(predicate.fused.outputTypes === Seq(org.apache.spark.sql.types.BooleanType))
+    assert(predicate.fused.inputOrdinals === Seq(0))
+    assert(predicate.fused.literals === Seq(10, 20))
+  }
+
+  test("task 21: a mixed predicate splits - fusible conjuncts in, the rest residual") {
+    // The corpus norm: a date predicate AND a non-date one AND a validity guard. The int
+    // comparison declines (no int lanes at a comparison), the date ones fuse, and the
+    // residual keeps its reason for the report.
+    val condition = org.apache.spark.sql.catalyst.expressions.And(
+      org.apache.spark.sql.catalyst.expressions.And(
+        LessThan(d, d2), GreaterThan(i, Literal(5))),
+      IsNotNull(d))
+    val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput).get
+    assert(predicate.specs.map(_.fused) === Seq(true, false, true))
+    assert(predicate.fusedConjuncts === Seq(LessThan(d, d2), IsNotNull(d)))
+    assert(predicate.residualConjuncts === Seq(GreaterThan(i, Literal(5))))
+    val decline = predicate.specs(1).decline.get
+    assert(decline.reason === "non-date column of type int")
+    // The fused root is the balanced AND of the two fused conjuncts, in query order.
+    assert(predicate.fused.outputs === Seq(new VarkaVectorIR.And(
+      new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1)),
+      new IRIsNotNull(new ColumnRef(0)))))
+  }
+
+  test("task 21: a declining conjunct rolls the shared tables back") {
+    // The first conjunct registers d2 and the literal 9 before its int operand declines it;
+    // the second fuses. The kernel must read only what the fused conjunct references.
+    val condition = org.apache.spark.sql.catalyst.expressions.And(
+      LessThan(DateDiff(DateAdd(d2, Literal(9)), i), Literal(3)),
+      GreaterThan(d, Literal(11, DateType)))
+    val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput).get
+    assert(predicate.specs.map(_.fused) === Seq(false, true))
+    assert(predicate.fused.inputOrdinals === Seq(0),
+      "the declined conjunct's column registration must be rolled back")
+    assert(predicate.fused.literals === Seq(11),
+      "the declined conjunct's literal registration must be rolled back")
+  }
+
+  test("task 21: predicates with nothing to fuse, or no columns, are not eligible") {
+    // No conjunct compiles.
+    assert(VarkaExpressionCompiler.compilePredicate(
+      GreaterThan(i, Literal(5)), childOutput).isEmpty)
+    // A conjunct compiles but references no column: nothing to vectorize over.
+    assert(VarkaExpressionCompiler.compilePredicate(
+      LessThan(Literal(1, DateType), Literal(2, DateType)), childOutput).isEmpty)
+  }
+
+  test("task 21: the balanced AND fold keeps many conjuncts inside the depth budget") {
+    // 20 distinct comparisons: a left fold would be 21 deep and trip MAX_CHAIN_DEPTH = 16;
+    // the balanced fold is ceil(log2 20) + 2 deep and every conjunct fuses.
+    val condition = (1 to 20)
+      .map(k => GreaterThan(d, Literal(k, DateType)): Expression)
+      .reduceLeft(org.apache.spark.sql.catalyst.expressions.And(_, _))
+    val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput).get
+    assert(predicate.specs.size === 20)
+    assert(predicate.specs.forall(_.fused))
+  }
+
+  test("task 21 review: a nondeterministic conjunct declines the whole predicate") {
+    // The split hoists fused conjuncts below residual ones, reordering evaluation; a seeded
+    // rand must see every row (Spark's own pushdown stops at the first nondeterministic
+    // conjunct), so one nondeterministic conjunct declines the whole predicate.
+    val condition = org.apache.spark.sql.catalyst.expressions.And(
+      LessThan(d, Literal(10, DateType)),
+      LessThan(org.apache.spark.sql.catalyst.expressions.Rand(Literal(42L)), Literal(0.5)))
+    assert(VarkaExpressionCompiler.compilePredicate(condition, childOutput).isEmpty)
+  }
+
+  test("task 21: the budget mirror demotes conjuncts past MAX_FUSED_NODES to residual") {
+    // Each conjunct is one Compare op and the fold adds one And per accepted conjunct, so k
+    // accepted conjuncts cost 2k - 1 distinct ops: 32 fit the 64-op budget, the 33rd would
+    // make 65. The overflow conjuncts demote with the recorded budget reason.
+    val condition = (1 to 40)
+      .map(k => GreaterThan(d, Literal(k, DateType)): Expression)
+      .reduceLeft(org.apache.spark.sql.catalyst.expressions.And(_, _))
+    val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput).get
+    assert(predicate.fusedConjuncts.size === 32)
+    assert(predicate.residualConjuncts.size === 8)
+    val decline = predicate.specs.reverse.head.decline.get
+    assert(decline.reason === "exceeds the emitter's fused budget")
   }
 }

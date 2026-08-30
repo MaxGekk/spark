@@ -2925,9 +2925,12 @@ object SQLConf {
 
   val VARKA_ENABLED = buildConf("spark.sql.codegen.varka.enabled")
     .internal()
-    .doc("When true, a projection that is fully Varka-eligible (date arithmetic over Arrow" +
-      " DateDayVector columns) is fused with the columnar-to-row transition into a" +
-      " VarkaColumnarToRowExec that runs the SIMD kernels instead of per-row codegen." +
+    .doc("When true, Varka-eligible projections and filters (date expressions over Arrow" +
+      " DateDayVector columns) run the SIMD kernels instead of per-row codegen: a projection" +
+      " with at least one fusible entry becomes a VarkaProjectExec or, fused with its" +
+      " columnar-to-row transition, a VarkaColumnarToRowExec; a filter with at least one" +
+      " fusible conjunct becomes the corresponding Varka filter node with any remaining" +
+      " conjuncts kept in a row filter above it." +
       " Batches that are not Arrow-backed fall back to the standard per-row path.")
     .version("5.0.0")
     // The Varka rule runs in postColumnarTransitions, long after analysis, and only swaps one

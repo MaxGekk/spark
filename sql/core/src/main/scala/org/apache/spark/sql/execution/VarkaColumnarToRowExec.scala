@@ -30,6 +30,21 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.CompletionIterator
 
 /**
+ * A Varka node wearing the [[ColumnarToRowTransition]] tag while carrying fused work inside it
+ * (task-21 review, second pass): every consumer that strips the tag to reach a columnar plan -
+ * the cache builder's `convertToColumnarPlanIfPossible` is the one in-tree - must convert such
+ * a node to [[columnarSibling]], the columnar-out node running identical kernels, instead of
+ * dropping the work. The serializer handles this trait, not a hardcoded node list, so the next
+ * fused transition node is kept out of the task-6 cached-view bug by the compiler: extending
+ * the trait forces the sibling.
+ */
+private[sql] trait VarkaFusedTransition extends ColumnarToRowTransition {
+
+  /** The columnar-out node computing exactly what this fused transition computes. */
+  def columnarSibling: SparkPlan
+}
+
+/**
  * The Varka columnar-to-row transition (Task 6). It projects an Arrow-backed `ColumnarBatch`
  * with the Varka SIMD kernels instead of per-row codegen, and hands the result on as rows: it is
  * what [[VarkaColumnarRule]] leaves in the plan when the consumer above the projection wants
@@ -52,6 +67,15 @@ import org.apache.spark.util.CompletionIterator
  * The node is not `CodegenSupport`; whole-stage codegen splits at this boundary (correctness
  * first, codegen support is a follow-up).
  *
+ * '''The transition tag carries a caveat.''' This node extends [[ColumnarToRowTransition]] so
+ * the transition-insertion pass (and its AQE re-runs) treats it as the to-row boundary it is -
+ * but unlike the stock transition it is NOT semantics-free: it carries the whole fused
+ * projection. Machinery that strips a topmost transition to reach the columnar plan
+ * underneath must convert this node to its columnar sibling ([[VarkaProjectExec]], identical
+ * kernels) instead of dropping it - `ArrowCachedBatchSerializer.convertToColumnarPlanIfPossible`
+ * does exactly that, after task 21 found the default strip silently discarding the fused work
+ * on the cache-population path.
+ *
  * The engine module (`varka-engine`) is deliberately kept off the main compile classpath: only
  * its kernel descriptors (strings) and Arrow classes are referenced here. The engine jar is a
  * test-scoped dependency; at runtime it is deployed externally (`--jars`) and its absence only
@@ -60,12 +84,14 @@ import org.apache.spark.util.CompletionIterator
 case class VarkaColumnarToRowExec(
     projectList: Seq[NamedExpression],
     child: SparkPlan)
-    extends ColumnarToRowTransition
+    extends VarkaFusedTransition
     with SafeForKWayMerge
     with PartitioningPreservingUnaryExecNode
     with OrderPreservingUnaryExecNode {
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
+
+  override def columnarSibling: SparkPlan = VarkaProjectExec(projectList, child)
 
   // This node is a projection: it renames and drops columns, so it cannot report the child's
   // partitioning and ordering verbatim the way `ColumnarToRowExec` does. The two alias-aware
@@ -79,23 +105,13 @@ case class VarkaColumnarToRowExec(
     copy(child = newChild)
   }
 
-  override lazy val metrics: Map[String, SQLMetric] = Map(
-    "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
-    "numInputBatches" -> SQLMetrics.createMetric(sparkContext, "number of input batches"),
-    "numVarkaBatches" -> SQLMetrics.createMetric(
-      sparkContext, "number of input batches processed by the Varka SIMD kernels"),
-    "numVarkaCacheHits" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks served a kernel class by the Varka shape cache"),
-    "numVarkaCacheMisses" -> SQLMetrics.createMetric(
-      sparkContext, "number of tasks that emitted and defined the Varka kernel class"),
-    "numFallbackBatchesNonArrow" -> SQLMetrics.createMetric(
-      sparkContext, "batches falling back: input not Arrow-backed"),
-    "numFallbackBatchesKernel" -> SQLMetrics.createMetric(
-      sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
-    "numEmissionFailures" -> SQLMetrics.createMetric(
-      sparkContext, "tasks that could not emit or define the kernel class"),
-    "numResidualEntries" -> SQLMetrics.createMetric(
-      sparkContext, "projection entries declined to the per-row residual (reasons in EXPLAIN)"))
+  override lazy val metrics: Map[String, SQLMetric] =
+    VarkaExecMetrics.projectionMetrics(sparkContext)
+
+  // One driver-side compilation serves both EXPLAIN and the residual-entry count below
+  // (task-21 review: the node used to re-run the same pure compile per consumer).
+  @transient private lazy val classification =
+    VarkaExpressionCompiler.compilePartial(projectList, child.output)
 
   // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -105,23 +121,21 @@ case class VarkaColumnarToRowExec(
        |${ExplainUtils.generateFieldString("Output", projectList)}
        |${ExplainUtils.generateFieldString("Input", child.output)}
        |${ExplainUtils.generateFieldString("Varka",
-            VarkaFusionReport.lines(projectList, child.output))}
+            VarkaFusionReport.lines(classification, projectList, child.output))}
        |""".stripMargin
   }
 
   override def doExecute(): RDD[InternalRow] = {
     // Task 22: the residual-entry count is a static plan property - added once, driver-side,
     // so the UI total does not multiply by task count. The per-entry reasons are in EXPLAIN.
-    longMetric("numResidualEntries") +=
-      VarkaExpressionCompiler.compilePartial(projectList, child.output)
-        .map(_.declines.size.toLong).getOrElse(0L)
-    val varkaMetrics = VarkaExecMetrics(
-      varkaBatches = Some(longMetric("numVarkaBatches")),
-      cacheHits = Some(longMetric("numVarkaCacheHits")),
-      cacheMisses = Some(longMetric("numVarkaCacheMisses")),
-      fallbackBatchesNonArrow = Some(longMetric("numFallbackBatchesNonArrow")),
-      fallbackBatchesKernel = Some(longMetric("numFallbackBatchesKernel")),
-      emissionFailures = Some(longMetric("numEmissionFailures")))
+    // Posted explicitly (task-21 review): the SQL listener aggregates task-end updates and
+    // posted driver updates only, so without the post the UI would always read 0 while the
+    // driver-local accumulator - the one tests read - carried the count.
+    val residualMetric = longMetric("numResidualEntries")
+    residualMetric += classification.map(_.declines.size.toLong).getOrElse(0L)
+    SQLMetrics.postDriverMetricUpdates(sparkContext,
+      sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY), Seq(residualMetric))
+    val varkaMetrics = VarkaExecMetrics.fromNode(longMetric)
     val evaluatorFactory = new VarkaColumnarToRowEvaluatorFactory(
       projectList,
       child.output,
@@ -232,29 +246,14 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
       }
     }
 
+    // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
+    // (task-21 review, both passes) and routes every degradation to the fallback.
     private def process(input: ColumnarBatch): Iterator[InternalRow] = {
-      if (kernels.canRun(input)) {
-        try {
-          val rows = runKernels(input)
-          varkaMetrics.varkaBatches.foreach(_ += 1)
-          rows
-        } catch {
-          case e if kernels.isCatchable(e) =>
-            logWarning(s"The Varka SIMD kernels ${kernels.kernelIdentity} failed on this " +
-              "batch; falling back to the per-row projection.", e)
-            varkaMetrics.fallbackBatchesKernel.foreach(_ += 1)
-            VarkaKernelEvaluator.emitFallbackEvent("kernel-failure", kernels.kernelIdentity,
-              e.getClass.getName)
-            fallback(input)
-        }
-      } else if (kernels.emissionFailed) {
-        // Already counted once per task (and evented) by the evaluator's emission catch;
-        // counting these batches as non-Arrow would mislabel the cause.
-        fallback(input)
-      } else {
-        // A batch canRun refused: not Arrow-backed, or the vectors do not match the batch.
-        varkaMetrics.fallbackBatchesNonArrow.foreach(_ += 1)
-        VarkaKernelEvaluator.emitFallbackEvent("non-arrow-batch", kernels.kernelIdentity, "")
+      kernels.serveBatch(input) {
+        val rows = runKernels(input)
+        varkaMetrics.varkaBatches.foreach(_ += 1)
+        rows
+      } {
         fallback(input)
       }
     }

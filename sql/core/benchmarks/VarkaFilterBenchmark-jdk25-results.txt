@@ -1,0 +1,192 @@
+================================================================================================
+filter to batches (compacting), 0% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to batches (compacting), 0% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                      36             41           5         55.6          18.0       1.0X
+varka (SIMD)                                                                           15             19           3        129.5           7.7       2.3X
+
+
+================================================================================================
+filter to rows (mask skip), 0% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to rows (mask skip), 0% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                  29             32           3         68.4          14.6       1.0X
+varka (SIMD)                                                                       13             16           2        155.8           6.4       2.3X
+
+
+================================================================================================
+filter to batches (compacting), 1% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to batches (compacting), 1% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                      29             32           3         69.1          14.5       1.0X
+varka (SIMD)                                                                           11             14           2        176.6           5.7       2.6X
+
+
+================================================================================================
+filter to rows (mask skip), 1% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to rows (mask skip), 1% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                  26             28           2         77.6          12.9       1.0X
+varka (SIMD)                                                                       11             13           2        179.3           5.6       2.3X
+
+
+================================================================================================
+filter to batches (compacting), 15% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to batches (compacting), 15% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                       29             33           4         68.0          14.7       1.0X
+varka (SIMD)                                                                            11             13           2        182.6           5.5       2.7X
+
+
+================================================================================================
+filter to rows (mask skip), 15% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to rows (mask skip), 15% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                   28             31           2         72.6          13.8       1.0X
+varka (SIMD)                                                                        14             16           2        144.0           6.9       2.0X
+
+
+================================================================================================
+filter to batches (compacting), 50% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to batches (compacting), 50% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                       36             38           2         56.3          17.8       1.0X
+varka (SIMD)                                                                            15             17           2        135.9           7.4       2.4X
+
+
+================================================================================================
+filter to rows (mask skip), 50% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to rows (mask skip), 50% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                   33             36           2         60.8          16.5       1.0X
+varka (SIMD)                                                                        22             26           2         89.2          11.2       1.5X
+
+
+================================================================================================
+filter to batches (compacting), 85% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to batches (compacting), 85% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                       42             44           2         47.8          20.9       1.0X
+varka (SIMD)                                                                            16             19           2        125.7           8.0       2.6X
+
+
+================================================================================================
+filter to rows (mask skip), 85% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to rows (mask skip), 85% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                   37             42           2         53.8          18.6       1.0X
+varka (SIMD)                                                                        32             35           2         63.0          15.9       1.2X
+
+
+================================================================================================
+filter to batches (compacting), 100% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to batches (compacting), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                        45             48           3         44.8          22.3       1.0X
+varka (SIMD)                                                                             17             19           2        119.7           8.4       2.7X
+
+
+================================================================================================
+filter to rows (mask skip), 100% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter to rows (mask skip), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                    39             41           2         51.4          19.5       1.0X
+varka (SIMD)                                                                         35             39           4         57.4          17.4       1.1X
+
+
+================================================================================================
+filter then fused projection, 15% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter then fused projection, 15% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                     28             31           2         71.8          13.9       1.0X
+varka (SIMD)                                                                          11             13           2        188.0           5.3       2.6X
+
+
+================================================================================================
+COUNT(*) over the filter, 15% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) over the filter, 15% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                 27             30           2         74.2          13.5       1.0X
+varka (SIMD)                                                                      15             17           2        137.3           7.3       1.8X
+
+
+================================================================================================
+filter then fused projection, 85% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter then fused projection, 85% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                     43             46           4         47.0          21.3       1.0X
+varka (SIMD)                                                                          18             22           3        112.2           8.9       2.4X
+
+
+================================================================================================
+COUNT(*) over the filter, 85% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) over the filter, 85% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                 27             32           3         74.8          13.4       1.0X
+varka (SIMD)                                                                      32             37           3         62.2          16.1       0.8X
+
+

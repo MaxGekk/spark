@@ -40,6 +40,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.UnsafeRowWriter
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.columnar.{CachedBatch, SimpleMetricsCachedBatchSerializer}
 import org.apache.spark.sql.errors.ExecutionErrors
+import org.apache.spark.sql.execution.{SparkPlan, VarkaFusedTransition}
 import org.apache.spark.sql.execution.arrow.ArrowWriter
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -81,6 +82,21 @@ class ArrowCachedBatchSerializer extends SimpleMetricsCachedBatchSerializer {
   // only real precondition for columnar input is that the plan can produce columnar output, which
   // InMemoryRelation already checks via cachedPlan.supportsColumnar before calling this.
   override def supportsColumnarInput(schema: Seq[Attribute]): Boolean = true
+
+  // The default implementation strips a topmost ColumnarToRowTransition to expose the columnar
+  // plan underneath - sound for a pure transition, whose only work is the row conversion, and
+  // silently WRONG for the fused Varka nodes, which carry a whole projection or filter inside
+  // the transition (task 21 found this: caching a view whose top was the fused filter cached
+  // the unfiltered table). Those nodes exist in row/columnar pairs running identical kernels,
+  // so instead of refusing the conversion this swaps the fused row node for its columnar
+  // sibling: the cache still gets columnar input, and the work the transition had fused away
+  // is kept. Handled through the VarkaFusedTransition trait, not a node list (the review's
+  // second pass): a future fused transition node is forced by the compiler to declare its
+  // sibling and is handled here automatically, instead of silently reviving the strip bug.
+  override def convertToColumnarPlanIfPossible(plan: SparkPlan): SparkPlan = plan match {
+    case varka: VarkaFusedTransition => varka.columnarSibling
+    case other => super.convertToColumnarPlanIfPossible(other)
+  }
 
   override def convertInternalRowToCachedBatch(
       input: RDD[InternalRow],

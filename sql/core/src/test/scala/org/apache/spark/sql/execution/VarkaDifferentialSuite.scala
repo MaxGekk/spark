@@ -554,15 +554,170 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
   test("filters and aggregation match the row engine") {
     cacheDatesBig(spark, 1024)
     cacheDatesBig(varkaSpark, 1024)
+    // Until task 21 the WHERE below pinned expectFused = false - a filter blocked fusion
+    // outright. It now fuses: the filter runs the mask kernel and the projection stacks on
+    // the compacted batches.
     checkDifferential(spark, varkaSpark,
       "SELECT date_add(d, 7) AS a FROM varka_dates_big WHERE d IS NOT NULL ORDER BY a",
-      expectFused = false)
+      expectFused = true)
     checkDifferential(spark, varkaSpark,
       "SELECT max(date_add(d, 1)) AS m, count(*) AS c FROM varka_dates_big",
       expectFused = false)
     checkDifferential(spark, varkaSpark,
       "SELECT d, count(*) AS c FROM varka_dates_big GROUP BY d ORDER BY d",
       expectFused = false)
+  }
+
+  test("task 21: the survey's filter shapes match the row engine, warm cache included") {
+    cacheDatesBig(spark, 2048)
+    cacheDatesBig(varkaSpark, 2048)
+    // BETWEEN - the survey's dominant date predicate; the optimizer hands it over as paired
+    // comparisons on the AND spine. A bare-column output keeps the plan on the row-boundary
+    // filter node (no compaction).
+    checkDifferential(spark, varkaSpark,
+      "SELECT d FROM varka_dates_big " +
+        "WHERE d BETWEEN DATE'2020-02-01' AND DATE'2020-06-01' ORDER BY d",
+      expectFused = true)
+    // The dominant end-to-end shape: WHERE plus an aggregate.
+    checkDifferential(spark, varkaSpark,
+      "SELECT count(*) AS c FROM varka_dates_big " +
+        "WHERE d BETWEEN DATE'2020-02-01' AND DATE'2020-06-01'",
+      expectFused = true)
+    // IN - the task-20 lowering, now at a filter root (the benchmark's anchor shape).
+    checkDifferential(spark, varkaSpark,
+      "SELECT count(*) AS c FROM varka_dates_big " +
+        "WHERE d IN (DATE'2020-01-02', DATE'2020-03-04', DATE'2020-11-30')",
+      expectFused = true)
+    // A projection stacked on the filter: the compacted batch must keep the Arrow
+    // invariant, so the projection's kernels run over it rather than falling back.
+    val stacked = checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, 7) AS a FROM varka_dates_big " +
+        "WHERE d < DATE'2020-06-01' ORDER BY a",
+      expectFused = true)
+    val filterNode = stacked.collectFirst { case f: VarkaFilterExec => f }
+    assert(filterNode.isDefined, s"expected a compacting filter node:\n${stacked.treeString}")
+    assert(filterNode.get.metrics("numVarkaBatches").value > 0L)
+    assert(filterNode.get.metrics("numFallbackBatchesNonArrow").value === 0L)
+  }
+
+  test("task 21: null-as-false, and the boundary selectivities") {
+    cacheDatesBig(spark, 1024)
+    cacheDatesBig(varkaSpark, 1024)
+    // The null rows (one in 17) must be dropped by every compilable predicate - SQL's WHERE
+    // treats a null predicate as false, and the mask root's rule is exactly that.
+    checkDifferential(spark, varkaSpark,
+      "SELECT d FROM varka_dates_big WHERE d >= DATE'1900-01-01' ORDER BY d",
+      expectFused = true)
+    // None selected - through the kernel. The predicate's interval contains no whole day, so
+    // every row fails it, but each conjunct is satisfiable against the cache's min/max stats:
+    // a range predicate entirely outside the data (d < 1900) would have the in-memory scan's
+    // stat pruning drop every batch before the filter node ever saw one, and there would be
+    // nothing to assert kernels ran on.
+    checkDifferential(spark, varkaSpark,
+      "SELECT d FROM varka_dates_big " +
+        "WHERE d > DATE'2020-01-05' AND d < DATE'2020-01-06' ORDER BY d",
+      expectFused = true)
+    // All selected, null rows included: IS NULL OR IS NOT NULL is total and known
+    // everywhere, so every row of the batch survives.
+    checkDifferential(spark, varkaSpark,
+      "SELECT i FROM varka_dates_big WHERE d IS NULL OR d IS NOT NULL ORDER BY i",
+      expectFused = true)
+    // IS NULL selects exactly the null rows - the known-false mask read through NOT.
+    checkDifferential(spark, varkaSpark,
+      "SELECT i FROM varka_dates_big WHERE d IS NULL ORDER BY i",
+      expectFused = true)
+  }
+
+  test("task 21: a mixed predicate splits - the residual conjunct stays above, correct") {
+    cacheDatesBig(spark, 1024)
+    cacheDatesBig(varkaSpark, 1024)
+    val plan = checkDifferential(spark, varkaSpark,
+      "SELECT i FROM varka_dates_big WHERE d < DATE'2020-06-01' AND i % 3 = 0 ORDER BY i",
+      expectFused = true)
+    // The int conjunct cannot fuse: it must survive as a row FilterExec above the Varka
+    // node, seeing only the rows the mask kernel let through.
+    assert(collectFirst(plan) { case f: FilterExec => f }.isDefined,
+      s"expected the residual conjunct's row filter in the plan:\n${plan.treeString}")
+  }
+
+  test("task 21 review: the driver-side residual count reaches the SQL UI store") {
+    // The listener aggregates task-end updates and posted driver updates only: a driver-side
+    // `+=` that is not posted is visible to plan.metrics (what the exec suites read) but
+    // never to the UI. This goes through a real tracked execution on the Arrow-backed varka
+    // session - the default cache serializer has no columnar output for DateType at all, so
+    // only this harness can plan the Varka node - and asserts on the status store, the same
+    // surface the SQL tab renders.
+    cacheDates(varkaSpark)
+    // One fused entry keeps the projection eligible; the int arithmetic is residual.
+    varkaSpark.sql("SELECT date_add(d, 1) AS a, i + 1 AS b FROM varka_dates").collect()
+    varkaSpark.sparkContext.listenerBus.waitUntilEmpty()
+    val statusStore = varkaSpark.sharedState.statusStore
+    val executionId = statusStore.executionsList().reverse
+      .find(_.physicalPlanDescription.contains("VarkaColumnarToRow"))
+      .map(_.executionId)
+      .getOrElse(fail("no tracked execution with a Varka node found"))
+    val metricId = statusStore.execution(executionId).get.metrics
+      .find(_.name.contains("residual")).map(_.accumulatorId)
+      .getOrElse(fail("the residual metric is not registered on the execution"))
+    val posted = statusStore.executionMetrics(executionId)
+    assert(posted.get(metricId).exists(_.contains("1")),
+      s"expected the posted residual count in the store, got: $posted")
+  }
+
+  test("task 21: caching a view over fused Varka work keeps the work") {
+    // The cache builder strips a topmost columnar-to-row transition to reach the columnar plan
+    // underneath - sound for the stock transition, silently wrong for the fused Varka nodes,
+    // which carry a projection or filter inside it. The Arrow serializer converts them to
+    // their columnar siblings instead; this pins it, because the failure mode is vicious:
+    // every direct query is right and only a CACHED view materializes the dropped work.
+    cacheDatesBig(spark, 256)
+    cacheDatesBig(varkaSpark, 256)
+    for (session <- Seq(spark, varkaSpark)) {
+      session.sql("SELECT date_add(d, 5) AS a FROM varka_dates_big WHERE d IS NOT NULL")
+        .createOrReplaceTempView("varka_cached_fused")
+      session.catalog.cacheTable("varka_cached_fused")
+    }
+    // The query over the cache has no Varka work of its own; what it checks is the cache's
+    // content - built through the converted VarkaProjectExec-over-VarkaFilterExec plan on
+    // the varka session, and through the row engine on the baseline.
+    checkDifferential(spark, varkaSpark,
+      "SELECT a FROM varka_cached_fused ORDER BY a", expectFused = false)
+    for (session <- Seq(spark, varkaSpark)) {
+      session.catalog.uncacheTable("varka_cached_fused")
+    }
+  }
+
+  test("task 21 review: a nondeterministic conjunct keeps the whole filter unfused") {
+    // The conjunct split would hoist the date predicate below rand(), changing which rows
+    // the seeded stream sees; the compiler declines the whole predicate instead. Plan-shape
+    // assertion only: an always-true rand comparison gets optimized away entirely (leaving a
+    // deterministic filter that legitimately fuses - the first version of this test learned
+    // that), and a live rand makes answers uncomparable; the reorder semantics themselves
+    // are pinned in the compiler suite.
+    cacheDatesBig(varkaSpark, 256)
+    val plan = varkaSpark.sql(
+      "SELECT i FROM varka_dates_big WHERE rand(42) < 0.5 AND d IS NOT NULL ORDER BY i")
+      .queryExecution.executedPlan
+    assertNotFused(plan)
+  }
+
+  test("task 21: filters over multiple batches and tasks share one mask kernel class") {
+    val batchSize = "32"
+    try {
+      spark.conf.set(SQLConf.COLUMN_BATCH_SIZE.key, batchSize)
+      varkaSpark.conf.set(SQLConf.COLUMN_BATCH_SIZE.key, batchSize)
+      cacheDatesBig(spark, 1024, parts = 4)
+      cacheDatesBig(varkaSpark, 1024, parts = 4)
+      val plan = checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c FROM varka_dates_big WHERE d < DATE'2020-06-01'",
+        expectFused = true)
+      val batches = plan.collectFirst { case v if isVarkaNode(v) => v }
+        .flatMap(_.metrics.get("numVarkaBatches")).map(_.value).getOrElse(0L)
+      assert(batches > 1L, s"expected more than one kernel batch, got $batches")
+    } finally {
+      spark.conf.unset(SQLConf.COLUMN_BATCH_SIZE.key)
+      varkaSpark.conf.unset(SQLConf.COLUMN_BATCH_SIZE.key)
+    }
   }
 
   test("multi-batch: every cached Arrow batch is processed by the kernels") {
@@ -651,4 +806,5 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       "SELECT date_add(d, 5) AS a, date_add(d, 6) AS b FROM varka_dates ORDER BY a",
       expectFused = true)
   }
+
 }

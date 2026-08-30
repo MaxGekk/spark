@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.execution
 
-import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.{ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
 
 /**
@@ -55,11 +55,49 @@ private[sql] object VarkaFusionReport {
     }
   }
 
-  /** The same, compiling the projection first - the plan-side entry point. */
-  def lines(projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Seq[String] = {
-    VarkaExpressionCompiler.compilePartial(projectList, childOutput) match {
-      case Some(partial) => lines(partial, projectList, childOutput)
+  /** The same over a memoized classification - the exec nodes' entry point (task-21 review:
+   * one compilation serves EXPLAIN and the driver-side residual count). */
+  def lines(
+      partial: Option[PartialVarkaProjection],
+      projectList: Seq[NamedExpression],
+      childOutput: Seq[Attribute]): Seq[String] = {
+    partial match {
+      case Some(classified) => lines(classified, projectList, childOutput)
       case None => Seq("no entry is Varka-eligible")
     }
+  }
+
+  /** The same, compiling the projection first - the plan-side entry point. */
+  def lines(projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Seq[String] = {
+    lines(VarkaExpressionCompiler.compilePartial(projectList, childOutput),
+      projectList, childOutput)
+  }
+
+  /**
+   * The filter counterpart (task 21): one line per conjunct of the predicate's `AND` spine -
+   * fused into the mask kernel, or residual with the compiler's reason. On a Varka filter
+   * node every line reads "fused" by construction (the rule keeps residual conjuncts in a row
+   * `FilterExec` above); the mixed rendering exists for logs and for reporting the original,
+   * unsplit condition.
+   */
+  def predicateLines(condition: Expression, childOutput: Seq[Attribute]): Seq[String] = {
+    VarkaExpressionCompiler.compilePredicate(condition, childOutput) match {
+      case Some(predicate) =>
+        predicate.specs.map { spec =>
+          if (spec.fused) {
+            s"${render(spec.conjunct)}: fused"
+          } else {
+            val why = spec.decline.map(_.toString).getOrElse("no reason recorded")
+            s"${render(spec.conjunct)}: residual ($why)"
+          }
+        }
+      case None => Seq("no conjunct is Varka-eligible")
+    }
+  }
+
+  /** A conjunct in the query's own words, capped like `DeclineSink`'s renderings. */
+  private def render(conjunct: Expression): String = {
+    val text = conjunct.sql
+    if (text.length > 80) text.take(77) + "..." else text
   }
 }
