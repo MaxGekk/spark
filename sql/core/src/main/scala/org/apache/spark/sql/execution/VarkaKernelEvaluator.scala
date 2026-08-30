@@ -22,6 +22,7 @@ import java.lang.foreign.MemorySegment
 import java.nio.file.Files
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.arrow.memory.{ArrowBuf, BufferAllocator}
@@ -209,7 +210,7 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /** The cache key of the fused sub-plan: exactly the emitter inputs the bytes follow. */
   protected def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
-    VarkaShapeKey(plan.outputs, plan.inputOrdinals.size, plan.literals.size)
+    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.literals.size)
 
   /**
    * The kernel named the way its telemetry names it (task 16, shape-based since task 18): the
