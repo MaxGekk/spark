@@ -23,7 +23,7 @@ import scala.concurrent.duration._
 
 import org.apache.spark.benchmark.{Benchmark, BenchmarkBase}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitterTestSupport, VarkaFusedKernel, VarkaLoopEmitter, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaFusedKernel, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.varka.vector.DateVectorOps
 
@@ -70,12 +70,13 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
   }
 
   private def emit(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
-      loader: VarkaGeneratedClassLoader, n: Int): VarkaFusedKernel = {
+      loader: VarkaGeneratedClassLoader, n: Int,
+      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): VarkaFusedKernel = {
     val name = s"org.apache.spark.sql.varka.execution.VarkaFusedBench$n"
     val javaRoots = new java.util.ArrayList[VarkaVectorIR]()
     roots.foreach(javaRoots.add)
     loader.defineGeneratedClass(name,
-      VarkaLoopEmitter.emit(name, javaRoots, numInputs, numLiterals))
+      VarkaLoopEmitter.emit(name, javaRoots, numInputs, numLiterals, null, null, options))
     loader.loadClass(name).getConstructor().newInstance().asInstanceOf[VarkaFusedKernel]
   }
 
@@ -214,10 +215,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val roots = Seq[VarkaVectorIR](shared, new DateDiff(shared, new ColumnRef(1)))
         val offsets = (0 until 8).map(level => level * 13 + 1).toArray
         val fused = emit(roots, 2, 8, loader, 200)
-        VarkaEmitterTestSupport.setDisableCse(true)
         val fusedNoCse =
-          try emit(roots, 2, 8, loader, 201)
-          finally VarkaEmitterTestSupport.setDisableCse(false)
+          emit(roots, 2, 8, loader, 201, VarkaEmitOptions.DEFAULTS.withCse(false))
         def runFused(kernel: VarkaFusedKernel): Unit = {
           kernel.run(Array(mxData.address(), mx2Data.address()),
             Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
@@ -282,14 +281,10 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val benchmark = new Benchmark(s"dayofweek over $numRows rows", numRows,
           minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
         val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 500)
-        VarkaEmitterTestSupport.setDivFloorMod(true)
-        val dowDiv =
-          try emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 501)
-          finally VarkaEmitterTestSupport.setDivFloorMod(false)
-        VarkaEmitterTestSupport.setDigitSumFloorMod(true)
-        val dowDigitSum =
-          try emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 502)
-          finally VarkaEmitterTestSupport.setDigitSumFloorMod(false)
+        val dowDiv = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 501,
+          VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIV))
+        val dowDigitSum = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 502,
+          VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM))
         benchmark.addCase("magic multiply (shipped), null-free") { _ =>
           dow.run(Array(nfData.address()), Array(0L), Array(0),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
@@ -344,14 +339,10 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val roots = Seq[VarkaVectorIR](
           chainOver(shared, 6, 8), chainOver(shared, 6, 14))
         val offsets = (0 until 20).map(level => level * 13 + 1).toArray
-        VarkaEmitterTestSupport.setGroupBudget(16)
-        val split =
-          try emit(roots, 2, 20, loader, 600)
-          finally VarkaEmitterTestSupport.setGroupBudget(0)
-        VarkaEmitterTestSupport.setGroupBudget(24)
-        val together =
-          try emit(roots, 2, 20, loader, 601)
-          finally VarkaEmitterTestSupport.setGroupBudget(0)
+        val split = emit(roots, 2, 20, loader, 600,
+          VarkaEmitOptions.DEFAULTS.withGroupBudget(16))
+        val together = emit(roots, 2, 20, loader, 601,
+          VarkaEmitOptions.DEFAULTS.withGroupBudget(24))
         def run(kernel: VarkaFusedKernel): Unit = {
           kernel.run(Array(mxData.address(), mx2Data.address()),
             Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),

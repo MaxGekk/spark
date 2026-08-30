@@ -77,14 +77,24 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   }
 
   /** Emits the chain into a uniquely named class; returns the name with the bytes. */
-  private def emit(root: VarkaVectorIR, numLiterals: Int): (String, Array[Byte]) =
-    emitMulti(Seq(root), 1, numLiterals)
+  private def emit(
+      root: VarkaVectorIR,
+      numLiterals: Int,
+      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): (String, Array[Byte]) =
+    emitMulti(Seq(root), 1, numLiterals, options)
 
-  /** The multi-output, multi-input version of [[emit]] (task 10). */
+  /**
+   * The multi-output, multi-input version of [[emit]] (task 10). Since task 23 the emitter's
+   * non-shape inputs travel as a [[VarkaEmitOptions]] value on the call rather than as static
+   * hooks a test had to set and reset, so a variant is just a different argument here.
+   */
   private def emitMulti(
-      roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int): (String, Array[Byte]) = {
+      roots: Seq[VarkaVectorIR],
+      numInputs: Int,
+      numLiterals: Int,
+      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): (String, Array[Byte]) = {
     val name = s"org.apache.spark.sql.varka.execution.VarkaFusedTest${classCounter.addAndGet(1)}"
-    (name, VarkaLoopEmitter.emit(name, roots.asJava, numInputs, numLiterals))
+    (name, VarkaLoopEmitter.emit(name, roots.asJava, numInputs, numLiterals, null, null, options))
   }
 
   /** Loads an emitted class through the per-task loader and instantiates it. */
@@ -243,8 +253,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       patternCombos: Seq[Seq[Int => Boolean]],
       data: (Int, Int) => Int = defaultData,
       forceMasked: Boolean = false,
-      ctx: String = ""): Unit = {
-    val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length))
+      ctx: String = "",
+      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): Unit = {
+    val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
     try {
       for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
         val arena = Arena.ofConfined()
@@ -523,9 +534,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val shared = new AddDays(new ColumnRef(0), new LiteralSlot(0))
     val roots = Seq[VarkaVectorIR](shared, new DateDiff(shared, new ColumnRef(1)))
     val withCse = emitMulti(roots, 2, 1)
-    VarkaLoopEmitter.setDisableCseForTesting(true)
-    val withoutCse =
-      try emitMulti(roots, 2, 1) finally VarkaLoopEmitter.setDisableCseForTesting(false)
+    val withoutCse = emitMulti(roots, 2, 1, VarkaEmitOptions.DEFAULTS.withCse(false))
     assert(!java.util.Arrays.equals(withCse._2, withoutCse._2),
       "disabling the memo left the bytecode unchanged - CSE was not exercised")
     val (kernelCse, loaderCse) = load(withCse)
@@ -692,13 +701,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val extremes = Array(Int.MinValue, Int.MaxValue, -1, 0, -7, 7)
     def days(c: Int, i: Int): Int =
       if (i < extremes.length) extremes(i) else i * 31 - 7000
-    VarkaLoopEmitter.setDivFloorModForTesting(true)
-    try {
-      checkMatrix(roots, 1, Array.empty[Int], Seq(64, 1000),
-        nullPatterns.map(p => Seq(p._2)), data = days, ctx = "div-variant")
-    } finally {
-      VarkaLoopEmitter.setDivFloorModForTesting(false)
-    }
+    checkMatrix(roots, 1, Array.empty[Int], Seq(64, 1000),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "div-variant",
+      options = VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIV))
   }
 
   test("the digit-sum floorMod reference variant agrees with the shipped magic multiply") {
@@ -710,13 +715,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       -1, 0, 1, -7, 7, -8, 8, 32767, 32768, -32768, -32769)
     def days(c: Int, i: Int): Int =
       if (i < extremes.length) extremes(i) else i * 997 - 300000
-    VarkaLoopEmitter.setDigitSumFloorModForTesting(true)
-    try {
-      checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-        nullPatterns.map(p => Seq(p._2)), data = days, ctx = "digit-sum-variant")
-    } finally {
-      VarkaLoopEmitter.setDigitSumFloorModForTesting(false)
-    }
+    checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "digit-sum-variant",
+      options = VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM))
   }
 
   test("task 21: a comparison root emits the selection bitmap with null-as-false") {
@@ -833,35 +834,30 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   }
 
   test("a wrong descriptor fails naming the call, not as an anonymous VerifyError") {
-    VarkaLoopEmitter.setMisdescribeAddForTesting(true)
+    val named = emit(addDays(0), 1, VarkaEmitOptions.DEFAULTS.withMisdescribeAdd(true))
+    // Member resolution is link-time work, so the class still verifies...
+    assert(VarkaEmitterTestSupport.verify(named._2).isEmpty)
+    val (kernel, loader) = load(named)
     try {
-      val named = emit(addDays(0), 1)
-      // Member resolution is link-time work, so the class still verifies...
-      assert(VarkaEmitterTestSupport.verify(named._2).isEmpty)
-      val (kernel, loader) = load(named)
+      val arena = Arena.ofConfined()
       try {
-        val arena = Arena.ofConfined()
-        try {
-          // Long enough that the vector loop (where the wrong call sits) runs at any width.
-          val length = 64
-          val input = makeInput(arena, length, _ => false)
-          val out = makeOutput(arena, length)
-          val e = intercept[LinkageError] {
-            kernel.run(
-              Array(input.data.address()), Array(0L), Array(0),
-              Array(out._1.address()), Array(out._2.address()), Array(1), length)
-          }
-          // ...and the first execution names the exact call the descriptor table got wrong.
-          assert(e.isInstanceOf[NoSuchMethodError], s"got ${e.getClass}: ${e.getMessage}")
-          assert(e.getMessage.contains("IntVector.add"), s"message was: ${e.getMessage}")
-        } finally {
-          arena.close()
+        // Long enough that the vector loop (where the wrong call sits) runs at any width.
+        val length = 64
+        val input = makeInput(arena, length, _ => false)
+        val out = makeOutput(arena, length)
+        val e = intercept[LinkageError] {
+          kernel.run(
+            Array(input.data.address()), Array(0L), Array(0),
+            Array(out._1.address()), Array(out._2.address()), Array(1), length)
         }
+        // ...and the first execution names the exact call the descriptor table got wrong.
+        assert(e.isInstanceOf[NoSuchMethodError], s"got ${e.getClass}: ${e.getMessage}")
+        assert(e.getMessage.contains("IntVector.add"), s"message was: ${e.getMessage}")
       } finally {
-        loader.release()
+        arena.close()
       }
     } finally {
-      VarkaLoopEmitter.setMisdescribeAddForTesting(false)
+      loader.release()
     }
   }
 
@@ -919,41 +915,36 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   }
 
   test("a kernel failure's stack frame resolves to the IR node that threw") {
-    // The misdescribe hook fails the AddDays call site at link time, inside the loop - the
+    // The misdescribe option fails the AddDays call site at link time, inside the loop - the
     // shape a real kernel failure takes. The frame through the generated class must name the
     // SourceFile and a line, and the class's own key must decode that line to the node.
-    VarkaLoopEmitter.setMisdescribeAddForTesting(true)
+    val named = emit(addDays(0), 1, VarkaEmitOptions.DEFAULTS.withMisdescribeAdd(true))
+    val (className, bytes) = named
+    val (kernel, loader) = load(named)
     try {
-      val named = emit(addDays(0), 1)
-      val (className, bytes) = named
-      val (kernel, loader) = load(named)
+      val arena = Arena.ofConfined()
       try {
-        val arena = Arena.ofConfined()
-        try {
-          val length = 64
-          val input = makeInput(arena, length, _ => false)
-          val out = makeOutput(arena, length)
-          val e = intercept[LinkageError] {
-            kernel.run(
-              Array(input.data.address()), Array(0L), Array(0),
-              Array(out._1.address()), Array(out._2.address()), Array(1), length)
-          }
-          val frame = e.getStackTrace.find(_.getClassName == className).getOrElse(
-            fail(s"no frame in the generated class:\n${e.getStackTrace.mkString("\n")}"))
-          val simpleName = className.substring(className.lastIndexOf('.') + 1)
-          assert(frame.getFileName === s"$simpleName.java")
-          assert(frame.getLineNumber > 0, "the frame carries no line number")
-          val node = lineKey(bytes).getOrElse(frame.getLineNumber,
-            fail(s"line ${frame.getLineNumber} is not in the recorded key"))
-          assert(node.startsWith("AddDays"), s"the failing line decoded to $node")
-        } finally {
-          arena.close()
+        val length = 64
+        val input = makeInput(arena, length, _ => false)
+        val out = makeOutput(arena, length)
+        val e = intercept[LinkageError] {
+          kernel.run(
+            Array(input.data.address()), Array(0L), Array(0),
+            Array(out._1.address()), Array(out._2.address()), Array(1), length)
         }
+        val frame = e.getStackTrace.find(_.getClassName == className).getOrElse(
+          fail(s"no frame in the generated class:\n${e.getStackTrace.mkString("\n")}"))
+        val simpleName = className.substring(className.lastIndexOf('.') + 1)
+        assert(frame.getFileName === s"$simpleName.java")
+        assert(frame.getLineNumber > 0, "the frame carries no line number")
+        val node = lineKey(bytes).getOrElse(frame.getLineNumber,
+          fail(s"line ${frame.getLineNumber} is not in the recorded key"))
+        assert(node.startsWith("AddDays"), s"the failing line decoded to $node")
       } finally {
-        loader.release()
+        arena.close()
       }
     } finally {
-      VarkaLoopEmitter.setMisdescribeAddForTesting(false)
+      loader.release()
     }
   }
 

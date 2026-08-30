@@ -36,19 +36,36 @@ import java.util.List;
  * <p>Deliberately absent, recorded in {@code PLAN_TASK_18.md}: the child plan ordinals
  * ({@code ColumnRef} carries the dense kernel input index; the evaluator binds actual columns per
  * task) and the output Spark types (they size the evaluator's output vectors and never reach the
- * emitter). Neither affects the bytes, and leaving them out raises the hit rate. The emitter's
- * static test hooks are byte-affecting emit inputs the key also does not carry; the cache refuses
- * every lookup - hit or miss - while one is set (see {@link VarkaShapeCacheImpl}), so a hooked
- * caller can neither cache poisoned bytes nor be served plain ones.
+ * emitter). Neither affects the bytes, and leaving them out raises the hit rate. The class name,
+ * the {@code SourceFile} and the plan fragment are absent for the opposite reason: the cache
+ * derives all three from this key's own hash.
+ *
+ * <p>{@link VarkaEmitOptions} is present, and that is what task 23 changed. The emitter's other
+ * byte-affecting inputs used to be static test hooks the key could not see, guarded by a JVM-wide
+ * refusal in the cache; they are a key component now, so a variant simply gets its own entry and
+ * its own class. {@link #VarkaShapeKey(List, int, int)} supplies the defaults, which is every
+ * production caller.
  *
  * <p>A wrong hit returns wrong results and the ghost fallback cannot catch it, so the compact
  * constructor takes an immutable copy of {@code outputs}: a caller holding the list it passed in
  * must not be able to mutate a key that is already sitting in the map (task 23, which ported this
  * record from a Scala case class over an immutable {@code Seq} - where the copy was free).
  */
-public record VarkaShapeKey(List<VarkaVectorIR> outputs, int numInputs, int numLiterals) {
+public record VarkaShapeKey(
+    List<VarkaVectorIR> outputs,
+    int numInputs,
+    int numLiterals,
+    VarkaEmitOptions options) {
 
   public VarkaShapeKey {
     outputs = List.copyOf(outputs);
+    if (options == null) {
+      throw new IllegalArgumentException("options must not be null");
+    }
+  }
+
+  /** The production shape: {@link VarkaEmitOptions#DEFAULTS}. */
+  public VarkaShapeKey(List<VarkaVectorIR> outputs, int numInputs, int numLiterals) {
+    this(outputs, numInputs, numLiterals, VarkaEmitOptions.DEFAULTS);
   }
 }

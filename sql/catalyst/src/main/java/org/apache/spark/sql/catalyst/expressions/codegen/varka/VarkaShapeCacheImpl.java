@@ -49,12 +49,10 @@ import org.apache.spark.util.SparkStringUtils$;
  * <p><b>Correctness before performance.</b> A wrong hit returns wrong results and the ghost
  * fallback cannot catch it - it catches failures, not silently different answers. The key is
  * therefore {@link VarkaShapeKey}, derived structurally from the same records the emitter walks,
- * never assembled by hand at a call site; the differential suites run warm as well as cold. The
- * one emit input outside the shape - the emitter's static test hooks - is guarded instead:
- * {@link #getOrEmit} refuses every lookup while a hook is set (a hit would serve plain bytes to a
- * hooked caller), and {@link #emit} snapshots the emitter's hook-write generation around the
- * emission - a hook set and cleared mid-emission restores the values but not the generation, so
- * its bytes are never cached.
+ * never assembled by hand at a call site; the differential suites run warm as well as cold. Since
+ * task 23 the key covers <i>every</i> byte-affecting emit input, {@link VarkaEmitOptions}
+ * included, so there is no longer a class of emission this cache has to refuse to serve - the
+ * guard stack that used to do the refusing is gone, and with it the three races inside it.
  *
  * <p><b>The loader is part of the key.</b> Each entry's generated loader parents the class loader
  * its caller passed in - in production the context class loader of the task that emitted it, which
@@ -181,13 +179,6 @@ public final class VarkaShapeCacheImpl {
    * lifecycle through this same path.
    */
   public VarkaShapeLookup getOrEmit(ClassLoader parent, VarkaShapeKey key, String execution) {
-    if (VarkaLoopEmitter.anyTestHookSet()) {
-      // Checked on every lookup, not only under emit: a hit would hand a hooked caller the
-      // plain bytes, as silently wrong as caching hooked bytes under the plain key.
-      throw new IllegalStateException("a VarkaLoopEmitter test hook is set: the shape cache "
-          + "serves and caches only plain bytes. Suites that set hooks call "
-          + "VarkaLoopEmitter.emit directly and bypass the cache.");
-    }
     LoaderShapeKey loaderKey = new LoaderShapeKey(parent, key);
     // A one-element array, not a local: the loading callable has to report back whether it ran,
     // and a lambda can only capture something effectively final.
@@ -280,6 +271,13 @@ public final class VarkaShapeCacheImpl {
    * format no JDK promises). A pure function of the key: equal keys hash equal on every JVM, so
    * one shape carries one class name across executors, mixed-JDK clusters, restarts and class
    * dumps. Computed on the miss path only; a hit reads the entry's stored hash.
+   *
+   * <p>{@link VarkaEmitOptions#canonical()} is empty for the defaults, so a production hash is
+   * byte-identical to what it was before options entered the key (task 23) - which is what makes
+   * the two committed hashes in {@code VarkaShapeCacheSuite} a valid oracle for that migration.
+   * A non-default variant renders, and so gets its own name: the execution side table is keyed on
+   * the hash alone while the map is keyed on the full key, so options that reached one but not
+   * the other would merge two variants' execution identities.
    */
   public static String shapeHash(VarkaShapeKey key) {
     StringBuilder canonical = new StringBuilder();
@@ -287,6 +285,7 @@ public final class VarkaShapeCacheImpl {
       canonical.append(VarkaVectorIR.canonical(output)).append('\n');
     }
     canonical.append(key.numInputs()).append('|').append(key.numLiterals());
+    canonical.append(key.options().canonical());
     return JavaUtils.sha256Hex(canonical.toString()).substring(0, 16);
   }
 
@@ -295,22 +294,12 @@ public final class VarkaShapeCacheImpl {
     String hash = shapeHash(key);
     String className = classNameFor(hash);
     String sourceFile = sourceFileFor(hash);
-    // The getOrEmit gate races a concurrently flipped hook, and the emit walk reads the
-    // (volatile) hooks at its own sites - a hook set and cleared inside the window would
-    // restore the values, so sampling them again is not enough. The write generation cannot
-    // be restored: if it moved at all during the emission, these bytes are not provably
-    // plain and must not be cached.
-    long hookGeneration = VarkaLoopEmitter.currentTestHookGeneration();
     // Task 22: the emission event times the Class-File walk plus the define - the whole miss
     // cost minus the lookup - identified by shape only (the class is shared).
     VarkaEmissionEvent emissionEvent = new VarkaEmissionEvent();
     emissionEvent.begin();
     byte[] bytes = VarkaLoopEmitter.emit(className, key.outputs(), key.numInputs(),
-        key.numLiterals(), sourceFile, "shape " + hash);
-    if (VarkaLoopEmitter.currentTestHookGeneration() != hookGeneration) {
-      throw new IllegalStateException(
-          "a VarkaLoopEmitter test hook was written while emitting; refusing to cache the bytes");
-    }
+        key.numLiterals(), sourceFile, "shape " + hash, key.options());
     VarkaGeneratedClassLoader loader = new VarkaGeneratedClassLoader(loaderKey.parent());
     Class<?> klass = loader.defineGeneratedClass(className, bytes);
     emissionEvent.end();

@@ -527,7 +527,12 @@ private[sql] abstract class VarkaEvaluatorBase(
     // The lookup records this execution (operator, stage, the evaluator's leading entries)
     // in the cache's side table, so the shape-named class joins back to the plan nodes that
     // ran it.
-    private val lookup = VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
+    private val lookup = {
+      if (VarkaColumnarToRowExec.isFailEmissionForTesting) {
+        throw new IllegalStateException("injected Varka emission failure")
+      }
+      VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
+    }
     private val entry = lookup.entry
     (if (lookup.hit) metrics.cacheHits else metrics.cacheMisses).foreach(_ += 1)
 

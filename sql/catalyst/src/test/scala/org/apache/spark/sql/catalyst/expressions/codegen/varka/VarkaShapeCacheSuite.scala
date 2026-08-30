@@ -222,24 +222,36 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(executionsOf(cache, first.entry.shapeHash) === Seq("exec"))
   }
 
-  test("an emitter test hook refuses every cache lookup, hit and miss alike") {
+  test("emit options are part of the key: a variant gets its own entry and its own name") {
     val cache = new VarkaShapeCacheImpl(4)
-    val key = keyOf(chain(bits = 3, depth = 2))
-    assert(!cache.getOrEmit(parent, key, "exec").hit) // cached plain, before any hook
-    VarkaLoopEmitter.setDisableCseForTesting(true)
-    try {
-      // Both directions are wrong and both are refused: a hit would serve plain bytes to a
-      // hooked caller, a miss would cache hooked bytes under the plain key.
-      intercept[IllegalStateException](cache.getOrEmit(parent, key, "exec"))
-      intercept[IllegalStateException](
-        cache.getOrEmit(parent, keyOf(chain(bits = 9, depth = 2)), "e"))
-    } finally {
-      VarkaLoopEmitter.setDisableCseForTesting(false)
-    }
-    assert(cache.size === 1, "a refused lookup must cache nothing")
-    // With the hook reset, the pre-hook entry serves again and new shapes emit normally.
-    assert(cache.getOrEmit(parent, key, "exec").hit)
-    assert(!cache.getOrEmit(parent, keyOf(chain(bits = 9, depth = 2)), "exec").hit)
+    val shape = chain(bits = 3, depth = 2)
+    val plain = keyOf(shape)
+    val noCse =
+      new VarkaShapeKey(java.util.List.of(shape), 1, 1, VarkaEmitOptions.DEFAULTS.withCse(false))
+    // Before task 23 this pair could not coexist. The emitter's non-shape inputs were static
+    // hooks the key could not see, so the cache refused every lookup - hit and miss alike -
+    // while any of them was set. They are a key component now, so the variant simply misses.
+    val first = cache.getOrEmit(parent, plain, "exec")
+    val variant = cache.getOrEmit(parent, noCse, "exec")
+    assert(!first.hit && !variant.hit)
+    assert(!(first.entry eq variant.entry))
+    assert(first.entry.shapeHash !== variant.entry.shapeHash,
+      "a variant must get its own name, or the two merge in the execution side table")
+    assert(cache.size === 2)
+    // And both keep serving: neither poisons the other, which is what the gate was for.
+    assert(cache.getOrEmit(parent, plain, "exec").hit)
+    assert(cache.getOrEmit(parent, noCse, "exec").hit)
+  }
+
+  test("the default options are the ones the three-argument key supplies, and render to none") {
+    val shape = chain(bits = 3, depth = 2)
+    val explicit = new VarkaShapeKey(java.util.List.of(shape), 1, 1, VarkaEmitOptions.DEFAULTS)
+    // The convenience constructor every production caller uses must mean exactly DEFAULTS, and
+    // DEFAULTS must contribute nothing to the hash - that is what keeps the two committed
+    // hashes below a valid oracle for the task-23 migration.
+    assert(keyOf(shape) === explicit)
+    assert(VarkaEmitOptions.DEFAULTS.canonical() === "")
+    assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
   }
 
   test("the parent class loader is part of the key: another loader gets its own entry") {
@@ -319,32 +331,6 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
       new Greatest(new AddDays(columnRef, literal), new SubDays(columnRef, literal)),
       new Least(new DateDiff(columnRef, new DayOfWeek(columnRef)), new WeekDay(columnRef)))
     assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "612c94d132690dc2")
-  }
-
-  test("every *ForTesting hook field registers in anyTestHookSet") {
-    // The guard hand-enumerates the hook fields; this closes the enumeration by reflection,
-    // so a future byte-affecting hook cannot silently bypass the cache's refusal. Hooks are
-    // written via reflection here on purpose - the setters are what production-path code
-    // uses, while this test checks the fields behind them.
-    val hookFields = classOf[VarkaLoopEmitter].getDeclaredFields.toSeq
-      .filter(_.getName.endsWith("ForTesting"))
-    assert(hookFields.nonEmpty, "the hook fields moved; update this test's discovery rule")
-    hookFields.foreach { field =>
-      field.setAccessible(true)
-      assert(!VarkaLoopEmitter.anyTestHookSet(), s"a hook was left set before ${field.getName}")
-      val original = field.get(null)
-      try {
-        field.set(null, field.getType match {
-          case java.lang.Boolean.TYPE => java.lang.Boolean.TRUE
-          case java.lang.Integer.TYPE => Int.box(1)
-          case other => fail(s"unhandled hook field type $other for ${field.getName}")
-        })
-        assert(VarkaLoopEmitter.anyTestHookSet(),
-          s"${field.getName} is a *ForTesting hook that anyTestHookSet() does not check")
-      } finally {
-        field.set(null, original)
-      }
-    }
   }
 
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {

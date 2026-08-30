@@ -186,101 +186,6 @@ public final class VarkaLoopEmitter {
    */
   public static final int MAX_INPUTS = 64;
 
-  /**
-   * Test hook: when set, {@link AddDays} is emitted against a deliberately wrong descriptor
-   * (unerased {@code IntVector} parameter instead of {@code Vector}). The class still passes
-   * bytecode verification - member resolution happens at link time - so the failure surfaces
-   * on first execution as a {@link NoSuchMethodError} naming {@code IntVector.add}. The suite
-   * pins that, so a future descriptor regression is diagnosable from the error alone.
-   */
-  private static volatile boolean misdescribeAddForTesting = false;
-
-  /**
-   * Test hook: when set, the node memo is disabled and shared subtrees are recomputed at every
-   * use. Results must not change - CSE is an optimization, never a semantics change - and the
-   * suite pins exactly that; the parity benchmark uses it to price CSE itself.
-   */
-  private static volatile boolean disableCseForTesting = false;
-
-  /**
-   * Test hook: when set, {@code dayofweek}/{@code weekday} lower their mod-7 through lanewise
-   * {@code DIV} instead of the digit sum - the certainly-correct reference variant the parity
-   * benchmark prices the shipped one against (plan 2.3).
-   */
-  private static volatile boolean divFloorModForTesting = false;
-
-  /**
-   * Test hook: when set, {@code dayofweek}/{@code weekday} lower their mod-7 through the
-   * full base-8 digit sum that shipped with task 11 - kept as the second reference variant
-   * (beside {@link #divFloorModForTesting}) that the parity benchmark and the differential
-   * suite price and check the shipped two-fold magic-multiply lowering against.
-   */
-  private static volatile boolean digitSumFloorModForTesting = false;
-
-  /**
-   * Test hook: when positive, overrides {@link #GROUP_BUDGET} for one emission (task 17). The
-   * budget is a measured constant, and the register's open candidate - raising it so two
-   * outputs sharing a deep chain keep their cross-output CSE in one loop method - can only be
-   * settled by emitting the same shape at both widths and pricing them. This keeps that
-   * comparison in the parity benchmark rather than in a patch someone has to reproduce.
-   */
-  private static volatile int groupBudgetForTesting = 0;
-
-  /**
-   * Bumped on every hook write. The hooks are volatile fields the emit walk reads at its own
-   * sites, so "were any hooks set during this emission?" cannot be answered by sampling the
-   * fields before and after - a hook set and cleared inside the window restores the values.
-   * The generation cannot be restored: the shape cache snapshots it before emitting and
-   * refuses to cache when it moved (see {@code VarkaShapeCache}). Writes therefore go through
-   * the setters below - the fields are private so no caller can bypass the bump.
-   */
-  private static final java.util.concurrent.atomic.AtomicLong testHookGeneration =
-      new java.util.concurrent.atomic.AtomicLong();
-
-  static void setMisdescribeAddForTesting(boolean value) {
-    misdescribeAddForTesting = value;
-    testHookGeneration.incrementAndGet();
-  }
-
-  static void setDisableCseForTesting(boolean value) {
-    disableCseForTesting = value;
-    testHookGeneration.incrementAndGet();
-  }
-
-  static void setDivFloorModForTesting(boolean value) {
-    divFloorModForTesting = value;
-    testHookGeneration.incrementAndGet();
-  }
-
-  static void setDigitSumFloorModForTesting(boolean value) {
-    digitSumFloorModForTesting = value;
-    testHookGeneration.incrementAndGet();
-  }
-
-  static void setGroupBudgetForTesting(int value) {
-    groupBudgetForTesting = value;
-    testHookGeneration.incrementAndGet();
-  }
-
-  /** The current hook-write generation; see {@link #testHookGeneration}. */
-  static long currentTestHookGeneration() {
-    return testHookGeneration.get();
-  }
-
-  /**
-   * Whether any of the hooks above is set. They are emit inputs the shape key deliberately
-   * does not carry - production never sets them - so the shape cache refuses every lookup
-   * while one is set: a hook-affected class cached under the plain key would be served,
-   * wrong, after the hook is reset. Suites that set hooks call {@link #emit} directly
-   * instead. Completeness is enforced by reflection in {@code VarkaShapeCacheSuite}: every
-   * {@code *ForTesting} field must register here, so a future hook cannot silently bypass
-   * the cache's guard.
-   */
-  static boolean anyTestHookSet() {
-    return misdescribeAddForTesting || disableCseForTesting || divFloorModForTesting
-        || digitSumFloorModForTesting || groupBudgetForTesting != 0;
-  }
-
   private VarkaLoopEmitter() {
   }
 
@@ -364,7 +269,7 @@ public final class VarkaLoopEmitter {
    */
   private static final MethodTypeDesc LANEWISE_VV =
       MethodTypeDesc.of(INT_VECTOR, VECTOR);
-  /** The deliberately wrong shape behind {@link #misdescribeAddForTesting}. */
+  /** The deliberately wrong shape behind {@link VarkaEmitOptions#misdescribeAdd()}. */
   private static final MethodTypeDesc LANEWISE_VV_WRONG =
       MethodTypeDesc.of(INT_VECTOR, INT_VECTOR);
   /** {@code IntVector IntVector.add/sub/and/mul/div(int)} - broadcast-scalar convenience. */
@@ -414,13 +319,24 @@ public final class VarkaLoopEmitter {
   private static final int WORD_ALL_TRUE = -1;
 
   /**
-   * The telemetry-defaulted form of {@link #emit(String, List, int, int, String, String)}: the
-   * {@code SourceFile} name falls back to the class's own simple name and the plan fragment to
-   * empty. For callers that hold no plan - tests and benchmarks building IR by hand.
+   * The telemetry-defaulted form of
+   * {@link #emit(String, List, int, int, String, String, VarkaEmitOptions)}: the
+   * {@code SourceFile} name falls back to the class's own simple name, the plan fragment to
+   * empty, and the options to {@link VarkaEmitOptions#DEFAULTS}. For callers that hold no plan -
+   * tests and benchmarks building IR by hand.
    */
   public static byte[] emit(
       String className, List<VarkaVectorIR> outputs, int numInputs, int numLiterals) {
-    return emit(className, outputs, numInputs, numLiterals, null, null);
+    return emit(className, outputs, numInputs, numLiterals, null, null,
+        VarkaEmitOptions.DEFAULTS);
+  }
+
+  /** As above, with telemetry strings and default options. */
+  public static byte[] emit(
+      String className, List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
+      String sourceFile, String planFragment) {
+    return emit(className, outputs, numInputs, numLiterals, sourceFile, planFragment,
+        VarkaEmitOptions.DEFAULTS);
   }
 
   /**
@@ -432,7 +348,13 @@ public final class VarkaLoopEmitter {
    * <p>{@code sourceFile} becomes the class's {@code SourceFile} attribute - callers name the
    * operator and stage there so stack traces name the plan node - and {@code planFragment} is
    * carried verbatim in the {@link VarkaDebugInfo} attribute beside the IR (the telemetry note
-   * in the class doc). Either may be null; see the four-argument form for the defaults.
+   * in the class doc). Either may be null; see the four-argument form for the defaults. Neither
+   * belongs in the shape key: each is already a function of the shape hash the cache computes.
+   *
+   * <p>{@code options} carries every other byte-affecting input - the group budget, CSE, the
+   * mod-7 lowering, the descriptor fault injector. Unlike the two strings it <i>does</i> ride the
+   * cache key, because it changes the loop rather than the labels on it; see
+   * {@link VarkaEmitOptions}.
    *
    * @throws IllegalArgumentException if the IR is outside what this emitter serves - the
    *         caller is expected to fall back to the per-row projection, exactly as a kernel
@@ -440,7 +362,7 @@ public final class VarkaLoopEmitter {
    */
   public static byte[] emit(
       String className, List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
-      String sourceFile, String planFragment) {
+      String sourceFile, String planFragment, VarkaEmitOptions options) {
     if (outputs.isEmpty()) {
       throw new IllegalArgumentException("no output chains to emit");
     }
@@ -448,7 +370,7 @@ public final class VarkaLoopEmitter {
       throw new IllegalArgumentException(
           "numInputs " + numInputs + " outside [1, " + MAX_INPUTS + "]");
     }
-    Analysis analysis = new Analysis(numInputs, numLiterals);
+    Analysis analysis = new Analysis(numInputs, numLiterals, options);
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
@@ -462,7 +384,7 @@ public final class VarkaLoopEmitter {
     // intrinsics (task 10 measured 3x to 4x on exactly that).
     ClassDesc classDesc = ClassDesc.of(className);
     boolean anyColumns = analysis.referencedColumns != 0;
-    List<List<Integer>> groups = groupOutputs(outputs);
+    List<List<Integer>> groups = groupOutputs(outputs, options.groupBudget());
     String source = sourceFile != null
         ? sourceFile : className.substring(className.lastIndexOf('.') + 1) + ".java";
     VarkaDebugInfo debugInfo = new VarkaDebugInfo(
@@ -565,14 +487,13 @@ public final class VarkaLoopEmitter {
   private enum BodyMode { DRIVER, LOOP, TAIL }
 
   /**
-   * Partitions the outputs into loop-method groups of at most {@link #GROUP_BUDGET} ops,
-   * greedily in output order, counting only ops new to the group so shared subtrees keep
-   * their outputs together (and their cross-output CSE). An output wider than the budget on
-   * its own still forms a group: splitting inside one output would forfeit the register
-   * residency that is the point.
+   * Partitions the outputs into loop-method groups of at most {@code budget} ops (normally
+   * {@link #GROUP_BUDGET}), greedily in output order, counting only ops new to the group so
+   * shared subtrees keep their outputs together (and their cross-output CSE). An output wider
+   * than the budget on its own still forms a group: splitting inside one output would forfeit
+   * the register residency that is the point.
    */
-  private static List<List<Integer>> groupOutputs(List<VarkaVectorIR> outputs) {
-    int budget = groupBudgetForTesting > 0 ? groupBudgetForTesting : GROUP_BUDGET;
+  private static List<List<Integer>> groupOutputs(List<VarkaVectorIR> outputs, int budget) {
     List<List<Integer>> groups = new ArrayList<>();
     List<Integer> current = new ArrayList<>();
     Set<VarkaVectorIR> seen = new HashSet<>();
@@ -732,6 +653,8 @@ public final class VarkaLoopEmitter {
   private static final class Analysis {
     final int numInputs;
     final int numLiterals;
+    /** The emission's options, carried here because Analysis already reaches every body. */
+    final VarkaEmitOptions options;
     /** Distinct nodes in first-visit order, with how often each is used. */
     final Map<VarkaVectorIR, Integer> useCount = new LinkedHashMap<>();
     /** Per distinct node, the bitset of input ordinals its subtree references. */
@@ -753,9 +676,10 @@ public final class VarkaLoopEmitter {
     long referencedColumns = 0L;
     private int opNodes = 0;
 
-    Analysis(int numInputs, int numLiterals) {
+    Analysis(int numInputs, int numLiterals, VarkaEmitOptions options) {
       this.numInputs = numInputs;
       this.numLiterals = numLiterals;
+      this.options = options;
     }
 
     void analyzeRoot(VarkaVectorIR root) {
@@ -1001,7 +925,7 @@ public final class VarkaLoopEmitter {
     slot += 2;
     s.maskTmp = slot++;
 
-    boolean cse = !disableCseForTesting;
+    boolean cse = analysis.options.cse();
     for (VarkaVectorIR node : analysis.topoOrder) {
       if (mode == BodyMode.LOOP) {
         // Vector-walk slots. Children precede parents in the topo order, so a word reference
@@ -1533,7 +1457,8 @@ public final class VarkaLoopEmitter {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         emitValue(cb, n.offset(), dense, analysis, s, computed);
         // The misdescribe hook: whichever body executes first must fail naming the call.
-        MethodTypeDesc desc = misdescribeAddForTesting ? LANEWISE_VV_WRONG : LANEWISE_VV;
+        MethodTypeDesc desc =
+            analysis.options.misdescribeAdd() ? LANEWISE_VV_WRONG : LANEWISE_VV;
         line(cb, analysis, node);
         cb.invokevirtual(INT_VECTOR, "add", desc);
       }
@@ -1556,7 +1481,7 @@ public final class VarkaLoopEmitter {
       case DayOfWeek n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
-        emitFloorMod7(cb, node, s);
+        emitFloorMod7(cb, node, analysis, s);
         emitModOffset(cb, s, 4);
         cb.loadConstant(1);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
@@ -1564,7 +1489,7 @@ public final class VarkaLoopEmitter {
       case WeekDay n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
-        emitFloorMod7(cb, node, s);
+        emitFloorMod7(cb, node, analysis, s);
         emitModOffset(cb, s, 3);
       }
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
@@ -1674,16 +1599,18 @@ public final class VarkaLoopEmitter {
    * the classic trick wants is not expressible in the Vector API; pre-folding makes the
    * low half sufficient. Measured 1.6-1.8x the task 11 digit sum at buffer level and a
    * ~10-op-smaller loop method, which also shortens the per-task JIT warm-up
-   * (PLAN_TASK_14.md 7.5). The full digit sum behind {@link #digitSumFloorModForTesting}
-   * and the lanewise DIV behind {@link #divFloorModForTesting} are the reference variants
-   * the parity benchmark prices this one against.
+   * (PLAN_TASK_14.md 7.5). The full digit sum behind
+   * {@link VarkaEmitOptions.FloorMod7#DIGIT_SUM} and the lanewise DIV behind
+   * {@link VarkaEmitOptions.FloorMod7#DIV} are the reference variants the parity benchmark
+   * prices this one against.
    */
-  private static void emitFloorMod7(CodeBuilder cb, VarkaVectorIR node, Slots s) {
+  private static void emitFloorMod7(
+      CodeBuilder cb, VarkaVectorIR node, Analysis analysis, Slots s) {
     int[] tmp = s.dowTmp.get(node);
     int orig = tmp[0];
     int fold = tmp[1];
     cb.astore(orig);
-    if (divFloorModForTesting) {
+    if (analysis.options.floorMod7() == VarkaEmitOptions.FloorMod7.DIV) {
       // r = v - (v / 7) * 7; r += 7 where r < 0.
       cb.aload(orig);
       cb.aload(orig);
@@ -1702,7 +1629,7 @@ public final class VarkaLoopEmitter {
       cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
       return;
     }
-    if (digitSumFloorModForTesting) {
+    if (analysis.options.floorMod7() == VarkaEmitOptions.FloorMod7.DIGIT_SUM) {
       // The task 11 shipped variant: folds of two 15-bit halves, one 6-bit, three 3-bit.
       emitFold(cb, orig, fold, 0x7FFF, 15);
       emitFold(cb, fold, fold, 0x7FFF, 15);
