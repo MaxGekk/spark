@@ -21,6 +21,8 @@ import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -33,7 +35,6 @@ import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.network.util.JavaUtils;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
-import org.apache.spark.util.NonFateSharingCache;
 import org.apache.spark.util.SparkStringUtils$;
 
 /**
@@ -79,10 +80,20 @@ import org.apache.spark.util.SparkStringUtils$;
  * {@code maxEntries} = 0 included, so the diagnostics join {@link #executionsFor} keeps working
  * when sharing is off.
  *
- * <p><b>Concurrency and failure.</b> Lookups go through {@link NonFateSharingCache} (SPARK-43300):
- * tasks racing on one shape serialize on a per-key lock, the winner emits once, and a cancelled or
- * failed emit fails only its own task - the co-waiters retry for themselves instead of inheriting
- * the failure into their ghost fallbacks. Guava wraps what the callable throws
+ * <p><b>Concurrency and failure.</b> Tasks racing on one shape are serialized by the
+ * single-flight gate below ({@link #loadOnce}): the winner emits once, and a cancelled or failed
+ * emit fails only its own task - the co-waiters retry for themselves instead of inheriting the
+ * failure into their ghost fallbacks. That is the SPARK-43300 discipline this class used to get
+ * from {@code NonFateSharingCache}, reimplemented here for a reason that is a constraint on the
+ * whole Java migration rather than a preference: Maven shades {@code core}, relocating
+ * {@code com.google.common} to {@code org.sparkproject.guava}, so that class's constructor
+ * arrives as {@code NonFateSharingCache(org.sparkproject.guava.cache.Cache)}. Scala never sees
+ * it - scalac reads the unrelocated Scala pickle - but javac reads the relocated descriptor and
+ * cannot pass it a catalyst-side {@code com.google.common} cache. Guava types must therefore not
+ * cross the core boundary from Java at all; SPARK-44064 records the same trap upstream, and
+ * {@code CodeGenerator} and {@code ProtobufUtils} both avoid it by using Guava-free overloads.
+ * Neither of those overloads admits a removal listener, which this cache needs to release evicted
+ * loaders, so the gate is Varka's own. Guava wraps what the callable throws
  * ({@link ExecutionException}, {@link UncheckedExecutionException}, {@link ExecutionError});
  * {@link #getOrEmit} unwraps to the cause, because the wrapper would defeat the evaluator's
  * fatal-error discipline - an {@code OutOfMemoryError} inside emit must reach the task as itself,
@@ -137,7 +148,13 @@ public final class VarkaShapeCacheImpl {
   private final LongAdder hits = new LongAdder();
   private final LongAdder misses = new LongAdder();
 
-  private final NonFateSharingCache<LoaderShapeKey, VarkaShapeEntry> cache;
+  private final Cache<LoaderShapeKey, VarkaShapeEntry> cache;
+
+  // The single-flight gate: one in-flight load per key, so only one task emits a given shape and
+  // a failed emit is not shared. Entries live only for the duration of a load, so the map is
+  // empty whenever nothing is being emitted - there is no per-key lock object to reclaim.
+  private final ConcurrentHashMap<LoaderShapeKey, CompletableFuture<VarkaShapeEntry>> inFlight =
+      new ConcurrentHashMap<>();
 
   // The side table: shape hash -> the most recent execution identities that used the shape.
   // Bounded three times over - entries here, identities per entry, characters per identity -
@@ -161,7 +178,7 @@ public final class VarkaShapeCacheImpl {
         // than "stop retaining": running tasks still hold the class until they complete.
         .<LoaderShapeKey, VarkaShapeEntry>removalListener(n -> n.getValue().loader().release())
         .build();
-    this.cache = new NonFateSharingCache<>(classes);
+    this.cache = classes;
     this.executions = CacheBuilder.newBuilder()
         .maximumSize(Math.max((long) maxEntries * 4, 64))
         .build();
@@ -183,24 +200,7 @@ public final class VarkaShapeCacheImpl {
     // A one-element array, not a local: the loading callable has to report back whether it ran,
     // and a lambda can only capture something effectively final.
     boolean[] emitted = {false};
-    VarkaShapeEntry entry;
-    try {
-      entry = cache.get(loaderKey, () -> {
-        emitted[0] = true;
-        return emit(loaderKey);
-      });
-    } catch (ExecutionError | UncheckedExecutionException e) {
-      // Unwrap Guava's wrappers: the cause must reach the evaluator's isCatchable test as
-      // itself - a fatal error fails the task, an interrupt cancels it. Rethrown unwrapped
-      // rather than re-wrapped, which is why it goes through sneakyThrow.
-      throw sneakyThrow(e.getCause());
-    } catch (Exception e) {
-      // Guava's third wrapper, ExecutionException, is checked - and NonFateSharingCache is
-      // Scala, so its `get` declares no checked exceptions at all and the compiler will not
-      // let one be named in a catch clause here. Catching Exception and testing is the way to
-      // reach it; precise rethrow keeps this method free of a `throws` clause.
-      throw sneakyThrow(e instanceof ExecutionException ? e.getCause() : e);
-    }
+    VarkaShapeEntry entry = loadOnce(loaderKey, emitted);
     // Bounded once, for both consumers: the side-table entry and the JFR event must carry
     // the same string or the advertised join between them fails on anything abbreviated -
     // and the event payload must not be unbounded (the evaluator's identity builder checks
@@ -223,6 +223,74 @@ public final class VarkaShapeCacheImpl {
       lookupEvent.commit();
     }
     return new VarkaShapeLookup(entry, !emitted[0]);
+  }
+
+  /**
+   * Returns the entry for {@code key}, emitting it at most once across racing callers.
+   *
+   * <p>The gate is a future per in-flight key rather than a lock per key: the winner is whoever
+   * installs its future with {@code putIfAbsent}, and losers wait on that future instead of on a
+   * monitor. Failure is where the discipline lives - a loser whose winner failed does <i>not</i>
+   * inherit the failure (that is the fate sharing SPARK-43300 is about, and it would turn one
+   * task's cancellation into unrelated tasks' ghost fallbacks); it loops and emits for itself, so
+   * every caller fails only for its own reason, as if the callers had arrived one at a time.
+   *
+   * <p>The wait is {@link CompletableFuture#get()} rather than {@code join()} on purpose:
+   * {@code join} is uninterruptible, and this class's contract is that an interrupt cancels the
+   * task promptly. Waiting is bounded by one emission (~80 us) in any case.
+   *
+   * <p>The winner completes its future before removing it, so a caller arriving in that window
+   * finds the value already in the cache and emits nothing. {@code remove(key, mine)} is
+   * value-conditional: a retrying loser must never remove a successor's future.
+   */
+  private VarkaShapeEntry loadOnce(LoaderShapeKey key, boolean[] emitted) {
+    while (true) {
+      CompletableFuture<VarkaShapeEntry> mine = new CompletableFuture<>();
+      CompletableFuture<VarkaShapeEntry> winner = inFlight.putIfAbsent(key, mine);
+      if (winner == null) {
+        VarkaShapeEntry entry;
+        try {
+          entry = cache.get(key, () -> {
+            emitted[0] = true;
+            return emit(key);
+          });
+        } catch (Throwable t) {
+          // Publish the failure to whoever is already waiting - they will retry for themselves -
+          // then hand this caller its own cause, unwrapped.
+          Throwable cause = unwrapGuava(t);
+          mine.completeExceptionally(cause);
+          inFlight.remove(key, mine);
+          throw sneakyThrow(cause);
+        }
+        mine.complete(entry);
+        inFlight.remove(key, mine);
+        return entry;
+      }
+      try {
+        return winner.get();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw sneakyThrow(e);
+      } catch (ExecutionException e) {
+        // The winner failed. Do not inherit its fate: emit for ourselves on the next pass.
+        emitted[0] = false;
+      }
+    }
+  }
+
+  /**
+   * The cause behind Guava's loading wrappers. It must reach the evaluator's {@code isCatchable}
+   * test as itself - an {@code OutOfMemoryError} inside emit has to fail the task rather than be
+   * counted as a kernel failure, and an interrupt has to cancel it - so this unwraps rather than
+   * re-wraps. {@link ExecutionException} is the checked one of the three.
+   */
+  private static Throwable unwrapGuava(Throwable t) {
+    if (t instanceof ExecutionError || t instanceof UncheckedExecutionException
+        || t instanceof ExecutionException) {
+      Throwable cause = t.getCause();
+      return cause != null ? cause : t;
+    }
+    return t;
   }
 
   /** The recorded execution identities for a shape hash, most recent last; empty if unknown. */

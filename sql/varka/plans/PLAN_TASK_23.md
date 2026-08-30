@@ -413,6 +413,51 @@ will not let it be named in a `catch` clause; it is reached by catching
 `Exception` and testing, with precise rethrow keeping the method free of a
 `throws`.
 
+`NonFateSharingCache` then turned out not to be usable from Java at all, and
+finding out cost a CI round trip: the PR's first push failed only the "Java 25
+build with Maven" job, on `cannot infer type arguments for
+NonFateSharingCache<>`. Maven shades `core` and relocates `com.google.common`
+to `org.sparkproject.guava`, so the constructor arrives at javac as
+`NonFateSharingCache(org.sparkproject.guava.cache.Cache)` while the argument is
+a catalyst-side `com.google.common` cache. Scala never saw this - scalac
+resolves the symbol from the Scala pickle, which the shade plugin does not
+rewrite - and SBT does not shade, so every local gate this task ran was
+structurally blind to it. The finding is bigger than the fix, and is worth
+stating plainly: **the Scala original was not correct either.** Its call site
+compiled against a method the shaded artifact does not contain, so it was a
+latent runtime failure rather than a working alternative, unnoticed because the
+Maven job builds without running tests. Upstream records the same trap
+(SPARK-44064 added a Guava-free `apply` overload "to avoid non-core modules
+Maven test failures caused by using shaded core module"), and the only two
+other non-core callers, `CodeGenerator` and `ProtobufUtils`, both use
+Guava-free overloads. Varka's was the sole exception in the tree; the port did
+not create the hazard, it made it visible.
+
+Neither Guava-free overload admits a removal listener, which this cache needs
+to release evicted loaders, so the fix is Varka's own single-flight gate: a
+`ConcurrentHashMap` of in-flight `CompletableFuture`s, where the winner is
+whoever wins `putIfAbsent` and a loser whose winner failed retries rather than
+inheriting the failure - the SPARK-43300 property, expressed directly instead
+of emulated with a per-key monitor. It waits with `get()` rather than `join()`
+because `join` is uninterruptible and this class's contract is that an
+interrupt cancels the task. `VarkaShapeCacheSuite` gained the assertion that
+names the property: racing callers of a failing shape must each receive their
+own `Throwable` instance, never a co-waiter's. The owner considered and
+rejected two alternatives - reusing Spark's `KeyLock` (verified to work across
+the shaded boundary, but a `private[spark]` dependency carrying the same
+`wait`/`notify` design) and a Scala shim in catalyst (smallest diff, but it
+would have restored the compile while leaving the latent runtime hazard in
+place). `VarHandle` was considered and declined on the project's own rule: the
+gate is contended once per task around an ~80 us emit, `ConcurrentHashMap`
+already does the atomics, and there is no measurement arguing for hand-rolled
+fences. JDK 25's `StableValue` (JEP 502) would fit the lazy singleton exactly
+and is preview-gated, so it is unavailable until it goes final.
+
+The lesson is recorded in `SKILLS.md` and as a house rule in
+`sql/varka/AGENTS.md`, because it constrains the whole migration rather than
+this one file: Java in a non-core module must not pass a Guava type to a `core`
+API, and only the Maven job can tell you that you did.
+
 **3. Emit options.** `VarkaEmitOptions(groupBudget, cse, floorMod7,
 misdescribeAdd)` replaced five static hook fields, an `AtomicLong` generation,
 five setters, two queries, four re-export methods, a reflection suite, and the

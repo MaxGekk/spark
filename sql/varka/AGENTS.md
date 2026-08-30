@@ -67,6 +67,16 @@ the next person re-litigating a settled question.
 
 ## House rules that bite here specifically
 
+* Java in a non-core module cannot pass a Guava type to a `core` API. Maven shades
+  `core`, relocating `com.google.common` to `org.sparkproject.guava`, so a signature
+  like `NonFateSharingCache(Cache)` arrives at javac with the relocated parameter
+  type. Scala is unaffected - scalac reads the Scala pickle, which shading does not
+  rewrite - and SBT does not shade at all, so only the Maven CI job catches it. Keep
+  Guava inside the module that owns it and reimplement the few lines locally when a
+  `core` utility cannot be reached without one; `SKILLS.md` records the mechanism and
+  the seconds-long local check. The same applies in reverse to Scala: a Scala call
+  site passing a Guava type compiles but names a method the shaded artifact does not
+  have.
 * Scala cannot see `java.lang.classfile` types: Scala 2.13's typechecker reports
   "illegal cyclic reference" when completing them, and the Maven build's scaladoc
   pass fails on it. Emitter-adjacent code that touches the Class-File API stays in

@@ -154,6 +154,42 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(cache.getOrEmit(parent, key, "exec").hit)
   }
 
+  test("a failed emit is not shared: every racing caller fails for its own reason") {
+    val cache = new VarkaShapeCacheImpl(8)
+    val threads = 6
+    val start = new CountDownLatch(1)
+    val pool = Executors.newFixedThreadPool(threads)
+    val thrown =
+      try {
+        val futures = (0 until threads).map { _ =>
+          pool.submit(new java.util.concurrent.Callable[Throwable] {
+            override def call(): Throwable = {
+              start.await()
+              // numInputs = 0 is outside what the emitter serves, so emitting this shape always
+              // throws - a deterministic failure that needs no hook in the production path.
+              val failing = new VarkaShapeKey(java.util.List.of(chain(bits = 1, depth = 2)), 0, 1)
+              intercept[IllegalArgumentException] {
+                cache.getOrEmit(parent, failing, "exec")
+              }
+            }
+          })
+        }
+        start.countDown()
+        futures.map(_.get(30, TimeUnit.SECONDS))
+      } finally {
+        pool.shutdownNow()
+      }
+    // SPARK-43300's property, asserted directly: `Throwable` does not override `equals`, so
+    // distinct elements are distinct instances. A caller that inherited the winner's failure
+    // would hold the winner's very Throwable - which is what would turn one task's cancelled
+    // emit into unrelated tasks' ghost fallbacks.
+    assert(thrown.distinct.size === threads,
+      "each caller must fail with its own exception, never a co-waiter's")
+    assert(thrown.forall(_.getMessage.contains("numInputs")))
+    // A failure caches nothing and counts as neither a hit nor a miss.
+    assert(cache.hitCount === 0 && cache.missCount === 0)
+  }
+
   test("eviction releases the evicted loader, and the class unloads once unreferenced") {
     val cache = new VarkaShapeCacheImpl(2)
     val queue = new ReferenceQueue[ClassLoader]()

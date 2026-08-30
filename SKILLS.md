@@ -150,6 +150,25 @@ Each step either pins the fault or narrows it.
   character") and rejects `throw new XxxError` via the `throwerror` rule. For a
   deliberate `NoClassDefFoundError` test hook, wrap the throw in
   `// scalastyle:off throwerror` / `// scalastyle:on throwerror`.
+- **Java in a non-core module must not pass a Guava type to a `core` API - and only
+  Maven can tell you.** `core/pom.xml` relocates `com.google.common` to
+  `org.sparkproject.guava` when it shades, so in the shaded jar the signature reads
+  `NonFateSharingCache(org.sparkproject.guava.cache.Cache)`. Scala never notices,
+  because scalac resolves the symbol from the Scala pickle, which the shade plugin
+  does not rewrite; javac reads the relocated descriptor and fails with
+  `cannot infer type arguments`. So the same call compiles from Scala and not from
+  Java, and SBT - which does not shade - hides it from both: the only gate that sees
+  it is the "Java 25 build with Maven" CI job. Upstream hit this too (SPARK-44064
+  added a Guava-free `NonFateSharingCache.apply` overload precisely "to avoid non-core
+  modules Maven test failures caused by using shaded core module"), and the two other
+  non-core users, `CodeGenerator` and `ProtobufUtils`, both take Guava-free overloads.
+  Note what this means for the Scala side as well: a Scala call site that passes a
+  Guava type compiles against a method that does not exist in the shaded artifact, so
+  it is a latent runtime failure rather than a safe alternative. Keep Guava types
+  inside the module that owns them; when a `core` utility cannot be reached without
+  one, reimplement the few lines locally (task 23 did this for the shape cache's
+  single-flight gate). Verifiable in seconds without a Maven run: `javac` the file
+  against `~/.m2/.../spark-core_2.13-*.jar` and see it fail.
 
 ## Build Performance (measured, Aug 2026)
 
