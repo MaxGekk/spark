@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -239,9 +240,15 @@ public final class VarkaShapeCacheImpl {
    * {@code join} is uninterruptible, and this class's contract is that an interrupt cancels the
    * task promptly. Waiting is bounded by one emission (~80 us) in any case.
    *
-   * <p>The winner completes its future before removing it, so a caller arriving in that window
-   * finds the value already in the cache and emits nothing. {@code remove(key, mine)} is
-   * value-conditional: a retrying loser must never remove a successor's future.
+   * <p>The two exit orderings differ, and the difference matters. On success the winner
+   * completes its future before unregistering it, so a caller arriving in that window is handed
+   * the value instead of emitting again. On failure it unregisters <i>first</i> and completes
+   * second: a loser is woken by the completion and retries at once, and if the dead future were
+   * still registered its {@code putIfAbsent} would hand that same failure straight back - a spin,
+   * allocating a future and filling a stack trace per pass, until the winner was rescheduled to
+   * run its next statement. Unregistering first means the woken loser either installs its own
+   * future or joins a live successor's. {@code remove(key, mine)} is value-conditional either
+   * way: a retrying loser must never remove a successor's future.
    */
   private VarkaShapeEntry loadOnce(LoaderShapeKey key, boolean[] emitted) {
     while (true) {
@@ -255,11 +262,12 @@ public final class VarkaShapeCacheImpl {
             return emit(key);
           });
         } catch (Throwable t) {
-          // Publish the failure to whoever is already waiting - they will retry for themselves -
-          // then hand this caller its own cause, unwrapped.
+          // Unregister before completing, so a loser woken by the failure retries into an empty
+          // slot rather than back into this dead future (see the ordering note above), then hand
+          // this caller its own cause, unwrapped.
           Throwable cause = unwrapGuava(t);
-          mine.completeExceptionally(cause);
           inFlight.remove(key, mine);
+          mine.completeExceptionally(cause);
           throw sneakyThrow(cause);
         }
         mine.complete(entry);
@@ -298,11 +306,21 @@ public final class VarkaShapeCacheImpl {
     List<String> snapshot = new ArrayList<>();
     // Inside compute, so the copy is taken under the same per-bin lock recordExecution mutates
     // the set under. The set itself is not thread-safe and is never published outside these two.
+    // Returning the same instance takes Guava's "no change in weight" path, which calls
+    // recordWrite - so this read bumps the entry's recency in the bounded side table. Accepted:
+    // reordering eviction in a diagnostics table (no removal listener, no correctness role) is
+    // the price of an atomic copy, and the alternative - getIfPresent plus an unsynchronized
+    // walk of a non-thread-safe set - is the race the task-18 debt sweep removed.
     executions.asMap().computeIfPresent(shapeHash, (h, set) -> {
       snapshot.addAll(set);
       return set;
     });
-    return List.copyOf(snapshot);
+    // Not List.copyOf: it rejects nulls, and a null identity is storable (SparkStringUtils
+    // .abbreviate passes null through). No production caller passes one - the evaluator's
+    // identity is always a StringBuilder result - but the Scala this replaced tolerated it, and
+    // getOrEmit is public now, so the guard the port dropped stays dropped rather than becoming
+    // an NPE in a diagnostics read.
+    return Collections.unmodifiableList(snapshot);
   }
 
   public long hitCount() {
