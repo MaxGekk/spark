@@ -40,9 +40,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * deduplicated: neither module can depend on the other. This module is standalone, outside the
  * Spark reactor, a test-scope dependency of catalyst and deployed externally at runtime, so
  * catalyst cannot compile against it; and it cannot depend on catalyst either. The two are kept
- * deliberately identical in behaviour, and a change to one belongs in the other. This copy is
- * what {@code VarkaClassLoaderTest} pins - including the Metaspace-unload proof - and what
- * {@code DateVectorOpsEmissionTest} loads its probe class through.
+ * deliberately identical in behaviour, and a change to one belongs in the other. Since task 23
+ * ported the catalyst copy from Scala to Java, that identity is literal: the two bodies differ
+ * only in class name and package. This copy is what {@code VarkaClassLoaderTest} pins -
+ * including the Metaspace-unload proof - and what {@code DateVectorOpsEmissionTest} loads its
+ * probe class through.
  */
 public final class VarkaClassLoader extends ClassLoader {
 

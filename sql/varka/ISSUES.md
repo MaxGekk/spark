@@ -535,7 +535,8 @@ interfaces, so a drifted one would silently mis-dispatch.
   would also cost real coverage: `VarkaClassLoaderTest` pins the define/release semantics
   and the Metaspace-unload proof against it, and `DateVectorOpsEmissionTest` loads its
   probe class through it. Both javadocs now say the duplication is deliberate and that a
-  change to one belongs in the other.
+  change to one belongs in the other. Task 23 ported the catalyst copy from Scala to Java,
+  so the two bodies now differ only in class name and package.
 * ~~**Non-local return in a closure**: `buildOutputPlan`
   (`VarkaColumnarToRowExec.scala:382`) uses `return None` inside a `map`. It works on
   2.13 via an exception and is deprecated in 3; `collectFirst` / `traverse` reads
