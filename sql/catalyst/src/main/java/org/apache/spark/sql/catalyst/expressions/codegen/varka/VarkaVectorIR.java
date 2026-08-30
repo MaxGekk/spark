@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.util.function.ToIntFunction;
+
 /**
  * The vector IR a fused Varka loop is emitted from (milestone 2, task 9). A node is a value over
  * int32 lanes; {@link VarkaLoopEmitter} walks a tree of them post-order, leaving intermediates on
@@ -174,8 +176,12 @@ public sealed interface VarkaVectorIR
    * compile until it renders here; changing an existing rendering changes every committed
    * hash and is caught by the pinned-hash tests in {@code VarkaShapeCacheSuite} - one over a
    * plain chain, one over a key that uses every node type, so no rendering is unguarded.
+   *
+   * <p>Public since task 23, which pointed the evaluator's kernel identity at it: a fallback
+   * warning names the shape the same way the class's own {@link VarkaDebugInfo} does, so a log
+   * line and the bytes it names agree, and neither rides {@link Record#toString}.
    */
-  static String canonical(VarkaVectorIR node) {
+  public static String canonical(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef n -> "col:" + n.ordinal();
       case LiteralSlot n -> "lit:" + n.index();
@@ -194,6 +200,57 @@ public sealed interface VarkaVectorIR
       case Least n -> "(least " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + canonical(n.days()) + ")";
       case WeekDay n -> "(weekDay " + canonical(n.days()) + ")";
+    };
+  }
+
+  /**
+   * The same vocabulary as {@link #canonical}, rendering one node only: children appear as the
+   * numbers {@code lineOf} gives them rather than inlined. Added by task 23 for the
+   * {@code LineNumberTable} decoding key {@link VarkaDebugInfo} carries, which rendered its nodes
+   * through {@link Record#toString} until then - the very format {@link #canonical} exists to
+   * avoid depending on, and which no JDK promises.
+   *
+   * <p>{@link #canonical} is not a drop-in there, because it recurses: every line of the key
+   * would carry a whole subtree, repeating each shared node once per parent. Shallow rendering
+   * plus the child's line number says the same thing once, and reconstructs the DAG rather than
+   * a tree - a shared subexpression is one line that several lines point at, which is exactly
+   * what {@code topoOrder} means. A leaf renders identically in both, since it has no children.
+   *
+   * <p>Pinned the same way and for the same reason as {@link #canonical}: the rendering travels
+   * inside the class bytes and is read back by tooling that has no live session, so
+   * {@code VarkaLoopEmitterSuite} holds a committed line map over every node type. The switch is
+   * exhaustive over the sealed interface, so a new node type refuses to compile until it renders
+   * here too.
+   *
+   * @param node the node to render.
+   * @param lineOf the line number already assigned to a child node.
+   */
+  static String canonicalShallow(VarkaVectorIR node, ToIntFunction<VarkaVectorIR> lineOf) {
+    return switch (node) {
+      case ColumnRef n -> "col:" + n.ordinal();
+      case LiteralSlot n -> "lit:" + n.index();
+      case AddDays n -> "(addDays " + lineOf.applyAsInt(n.days()) + " "
+          + lineOf.applyAsInt(n.offset()) + ")";
+      case SubDays n -> "(subDays " + lineOf.applyAsInt(n.days()) + " "
+          + lineOf.applyAsInt(n.offset()) + ")";
+      case DateDiff n -> "(dateDiff " + lineOf.applyAsInt(n.end()) + " "
+          + lineOf.applyAsInt(n.start()) + ")";
+      case Compare n -> "(cmp:" + n.op().name() + " " + lineOf.applyAsInt(n.left()) + " "
+          + lineOf.applyAsInt(n.right()) + ")";
+      case And n -> "(and " + lineOf.applyAsInt(n.left()) + " "
+          + lineOf.applyAsInt(n.right()) + ")";
+      case Or n -> "(or " + lineOf.applyAsInt(n.left()) + " "
+          + lineOf.applyAsInt(n.right()) + ")";
+      case Not n -> "(not " + lineOf.applyAsInt(n.child()) + ")";
+      case IsNotNull n -> "(isNotNull " + lineOf.applyAsInt(n.child()) + ")";
+      case IfElse n -> "(if " + lineOf.applyAsInt(n.cond()) + " "
+          + lineOf.applyAsInt(n.thenNode()) + " " + lineOf.applyAsInt(n.elseNode()) + ")";
+      case Greatest n -> "(greatest " + lineOf.applyAsInt(n.left()) + " "
+          + lineOf.applyAsInt(n.right()) + ")";
+      case Least n -> "(least " + lineOf.applyAsInt(n.left()) + " "
+          + lineOf.applyAsInt(n.right()) + ")";
+      case DayOfWeek n -> "(dayOfWeek " + lineOf.applyAsInt(n.days()) + ")";
+      case WeekDay n -> "(weekDay " + lineOf.applyAsInt(n.days()) + ")";
     };
   }
 }

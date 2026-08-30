@@ -189,7 +189,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
         .getOrElse(fail("no fallback warning was logged"))
       // The kernel's own telemetry name, plus the IR it computes.
       assert(warning.contains("Varka_Project_Stage"), warning)
-      assert(warning.contains("AddDays"), warning)
+      assert(warning.contains("(addDays "), warning)
     } finally {
       VarkaColumnarToRowExec.setFailKernelForTesting(false)
     }

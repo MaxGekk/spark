@@ -388,7 +388,8 @@ public final class VarkaLoopEmitter {
     String source = sourceFile != null
         ? sourceFile : className.substring(className.lastIndexOf('.') + 1) + ".java";
     VarkaDebugInfo debugInfo = new VarkaDebugInfo(
-        "outputs=" + outputs + ", numInputs=" + numInputs + ", numLiterals=" + numLiterals,
+        "outputs=" + renderOutputs(outputs) + ", numInputs=" + numInputs
+            + ", numLiterals=" + numLiterals,
         planFragment != null ? planFragment : "",
         renderLineMap(analysis));
     return ClassFile.of().build(classDesc, (ClassBuilder b) -> {
@@ -1383,6 +1384,13 @@ public final class VarkaLoopEmitter {
    * The {@code LineNumberTable}'s decoding key: one {@code <line>=<node>} entry per distinct
    * IR node, newline separated, in the topological order the line numbers index (task 16).
    * Recorded in {@link VarkaDebugInfo} so the mapping travels inside the class bytes.
+   *
+   * <p>Nodes render through {@link VarkaVectorIR#canonicalShallow}, which task 23 added for
+   * this: the key used to be built from {@link Record#toString}, whose format no JDK promises,
+   * and which inlined each node's whole subtree - so a shared subexpression was repeated once
+   * per parent and the key grew quadratically in the sharing the emitter is built to exploit.
+   * Children are their own line numbers here, so the key reconstructs the DAG and each node is
+   * written once.
    */
   private static String renderLineMap(Analysis analysis) {
     StringBuilder key = new StringBuilder();
@@ -1390,9 +1398,27 @@ public final class VarkaLoopEmitter {
       if (i > 0) {
         key.append('\n');
       }
-      key.append(i + 1).append('=').append(analysis.topoOrder.get(i));
+      VarkaVectorIR node = analysis.topoOrder.get(i);
+      key.append(i + 1).append('=')
+          .append(VarkaVectorIR.canonicalShallow(node, analysis.lineNumbers::get));
     }
     return key.toString();
+  }
+
+  /**
+   * The whole IR as one line for {@link VarkaDebugInfo}'s summary field - the full recursive
+   * {@link VarkaVectorIR#canonical} rendering per output, for the same reason the line map uses
+   * the shallow one: {@code Record.toString} is not a format anything may depend on.
+   */
+  private static String renderOutputs(List<VarkaVectorIR> outputs) {
+    StringBuilder rendered = new StringBuilder("[");
+    for (int i = 0; i < outputs.size(); i++) {
+      if (i > 0) {
+        rendered.append(", ");
+      }
+      rendered.append(VarkaVectorIR.canonical(outputs.get(i)));
+    }
+    return rendered.append(']').toString();
   }
 
   /**

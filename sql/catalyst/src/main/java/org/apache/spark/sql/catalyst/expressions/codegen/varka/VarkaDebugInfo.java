@@ -99,6 +99,13 @@ public final class VarkaDebugInfo {
    * {@code VarkaFusedProjection_<hash>.java:7} resolves to the node the emitter attributed
    * that line to. Empty for a class emitted with
    * no nodes to map.
+   *
+   * <p>A node renders through {@code VarkaVectorIR.canonicalShallow} (task 23): its own kind and
+   * scalar fields, with each child given as that child's line number - so {@code 5=(addDays 3 4)}
+   * reads "line 5 adds line 3 to line 4". Children always carry lower numbers than their parents,
+   * which is what makes a line number a schedule position. The rendering is pinned by hand for
+   * the same reason the shape hash's is: it travels inside the class bytes and is read back by
+   * tooling with no live session, so it may not ride {@link Record#toString}.
    */
   public String lineMap() {
     return lineMap;

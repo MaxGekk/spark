@@ -883,6 +883,27 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(ref.get() == null)
   }
 
+  /** The committed line map of the every-node-type key; see the test that pins it. */
+  private val pinnedLineMap = Seq(
+    "1=col:0",
+    "2=lit:0",
+    "3=(cmp:LT 1 2)",
+    "4=(cmp:EQ 1 2)",
+    "5=(not 4)",
+    "6=(or 3 5)",
+    "7=(cmp:GE 1 2)",
+    "8=(isNotNull 1)",
+    "9=(and 7 8)",
+    "10=(and 6 9)",
+    "11=(addDays 1 2)",
+    "12=(subDays 1 2)",
+    "13=(greatest 11 12)",
+    "14=(dayOfWeek 1)",
+    "15=(dateDiff 1 14)",
+    "16=(weekDay 1)",
+    "17=(least 15 16)",
+    "18=(if 10 13 17)").mkString("\n")
+
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
     val recorded = VarkaDebugInfoReader.lineMap(bytes)
@@ -891,6 +912,33 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       val parts = entry.split("=", 2)
       parts(0).toInt -> parts(1)
     }.toMap
+  }
+
+  test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
+    // The line map travels inside the class bytes and is read back by tooling with no live
+    // session, so its rendering is a contract, not an implementation detail - and it used to
+    // ride Record.toString, whose format no JDK promises. One key using all 15 node types (and
+    // three CompareOps), so a change to any rendering, to the operand order, or to the
+    // topological schedule fails here. If it does: make sure the change is intended, then
+    // update the literal and say so in the task plan - the same rule as the pinned shape
+    // hashes in VarkaShapeCacheSuite.
+    val col = new ColumnRef(0)
+    val lit = new LiteralSlot(0)
+    val cond = new And(
+      new Or(
+        new Compare(CompareOp.LT, col, lit),
+        new Not(new Compare(CompareOp.EQ, col, lit))),
+      new And(new Compare(CompareOp.GE, col, lit), new IsNotNull(col)))
+    val everyNode = new IfElse(
+      cond,
+      new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
+      new Least(new DateDiff(col, new DayOfWeek(col)), new WeekDay(col)))
+    val (_, bytes) = emitMulti(Seq(everyNode), 1, 1)
+    assert(VarkaDebugInfoReader.lineMap(bytes) === pinnedLineMap)
+    // The DAG, not a tree: col:0 is written once as line 1 and pointed at eleven times. The
+    // Record.toString rendering this replaced inlined every subtree, so line 18 alone carried
+    // the whole IR and the key grew quadratically in exactly the sharing the emitter exploits.
+    assert(pinnedLineMap.linesIterator.count(_.contains("col:0")) === 1)
   }
 
   test("telemetry: the emitted lines index the IR nodes the debug attribute records") {
@@ -903,9 +951,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(key.keys.toSeq.sorted === (1 to key.size).toSeq,
       "the key must number the nodes 1..N with no gaps")
     // Children strictly before parents, which is what makes a line number a schedule position.
-    assert(key(key.size).startsWith("DateDiff"), s"the root should be last: ${key(key.size)}")
-    assert(key.values.exists(_.startsWith("ColumnRef")))
-    assert(key.values.count(_.startsWith("AddDays")) === 1)
+    assert(key(key.size).startsWith("(dateDiff"), s"the root should be last: ${key(key.size)}")
+    assert(key.values.exists(_.startsWith("col:")))
+    assert(key.values.count(_.startsWith("(addDays")) === 1)
     for (method <- Seq("loopMasked0", "tailMasked", "loopDense0", "tailDense")) {
       val lines = VarkaEmitterTestSupport.lineNumbers(bytes, method)
       assert(lines.asScala.nonEmpty, s"$method carries no LineNumberTable")
@@ -939,7 +987,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         assert(frame.getLineNumber > 0, "the frame carries no line number")
         val node = lineKey(bytes).getOrElse(frame.getLineNumber,
           fail(s"line ${frame.getLineNumber} is not in the recorded key"))
-        assert(node.startsWith("AddDays"), s"the failing line decoded to $node")
+        assert(node.startsWith("(addDays"), s"the failing line decoded to $node")
       } finally {
         arena.close()
       }
@@ -960,7 +1008,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(VarkaEmitterTestSupport.hasAttributeNamed(bytes, "VarkaDebugInfo"))
     assert(VarkaDebugInfoReader.sourceFile(bytes) === "Varka_Project_Stage3.java")
     val ir = VarkaDebugInfoReader.ir(bytes)
-    assert(ir.contains("AddDays[days=ColumnRef[ordinal=0], offset=LiteralSlot[index=0]]"))
+    assert(ir.contains("outputs=[(addDays col:0 lit:0)]"))
     assert(ir.contains("numInputs=1"))
     assert(VarkaDebugInfoReader.planFragment(bytes) === "date_add(d#1, 3) AS a#2")
     // Task 16: the same attribute carries the LineNumberTable's decoding key.
@@ -971,7 +1019,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val (className, bytes) = emit(addDays(0), 1)
     val simpleName = className.substring(className.lastIndexOf('.') + 1)
     assert(VarkaDebugInfoReader.sourceFile(bytes) === s"$simpleName.java")
-    assert(VarkaDebugInfoReader.ir(bytes).contains("AddDays"))
+    assert(VarkaDebugInfoReader.ir(bytes).contains("(addDays col:0 lit:0)"))
     assert(VarkaDebugInfoReader.planFragment(bytes) === "")
   }
 }
