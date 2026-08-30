@@ -278,8 +278,9 @@ apparent small wins turned out to be noise.
   rescue a chain built on lanewise `DIV`, which scalarizes: interleaving two scalarized
   chains is still scalar, so any such constant needs its range-narrowed magic first.
   None of this predicts that unrolling loses - it says the experiment has three known
-  confounders. Registered as `SCOPE_MILESTONE_4.md` item 13; unmeasured as of this
-  entry, and this bullet gets rewritten with the numbers when it is.
+  confounders. Registered as `PLAN_MILESTONE_4.md` task 25 (catalogue item 13);
+  unmeasured as of this entry, and this bullet gets rewritten with the numbers when it
+  is.
 - Apply constant offsets *after* a mod, not before: `floorMod(days + 4, 7)` overflows
   int for days near `Int.MaxValue`, while `(floorMod(days, 7) + 4) mod 7` cannot.
   Negative inputs are where every strength-reduced mod goes wrong silently - a test
