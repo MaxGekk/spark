@@ -317,6 +317,17 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     assert(columnar.output(1).nullable)
   }
 
+  test("task 21 review: formatted EXPLAIN renders both filter nodes without throwing") {
+    // Caught while writing the PR description: ExplainUtils.generateFieldString rejects a
+    // bare expression, so formatted EXPLAIN of any Varka filter node threw. The condition
+    // renders as a plain line, exactly as FilterExec renders its own.
+    val child = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr))
+    val rendered = VarkaFilterExec(dLess10, child).verboseStringWithOperatorId() +
+      VarkaFilterColumnarToRowExec(dLess10, child).verboseStringWithOperatorId()
+    assert(rendered.contains("Condition : "), rendered)
+    assert(rendered.contains(": fused"), rendered)
+  }
+
   test("EXPLAIN reports the predicate's conjuncts through the fusion report") {
     val fused = VarkaFusionReport.predicateLines(And(dLess10, IsNotNull(attrD)),
       Seq(attrD, intAttr))

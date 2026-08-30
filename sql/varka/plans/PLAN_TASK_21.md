@@ -318,6 +318,16 @@ over Arrow's `copyFromSafe`, so future lane types compact to Arrow instead
 of silently degrading through the generic pass; and the README's IN-case
 quotes were requoted to the regenerated file's 3.6x / 4.2x.
 
+### 6.2 One more, caught producing the PR artifact
+
+Rendering a real `EXPLAIN FORMATTED` for the PR description crashed:
+`ExplainUtils.generateFieldString` does not accept a bare expression, so the
+formatted mode threw on every Varka filter node's `Condition` field (verbose
+mode and the suites' `predicateLines` assertions never exercised the node's
+own renderer). The condition now renders as a plain line, exactly as
+`FilterExec` renders its own, pinned by a test that renders both nodes the
+way formatted EXPLAIN does.
+
 ## 7. Explicitly out of task 21
 
 Boolean output columns (milestone 4 item 5 - this task owes them only the

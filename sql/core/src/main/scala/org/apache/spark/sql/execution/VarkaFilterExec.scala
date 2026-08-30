@@ -72,11 +72,14 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
     VarkaFusionReport.predicateLines(condition, child.output)
 
   // Task 16's question for a filter is "why didn't my predicate fuse?", answered per conjunct.
+  // The condition renders as FilterExec renders its own - a plain line, because
+  // ExplainUtils.generateFieldString does not accept a bare expression (formatted EXPLAIN of
+  // any Varka filter node used to throw on exactly that; caught writing the PR description).
   override def verboseStringWithOperatorId(): String = {
     s"""
        |$formattedNodeName
        |${ExplainUtils.generateFieldString("Input", child.output)}
-       |${ExplainUtils.generateFieldString("Condition", condition)}
+       |Condition : $condition
        |${ExplainUtils.generateFieldString("Varka", fusionLines)}
        |""".stripMargin
   }
