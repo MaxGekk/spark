@@ -31,11 +31,33 @@ should keep the line rather than blur it.
 |---|---|---|
 | `VarkaGeneratedClassLoader.scala` | 70 | **Migrate, first.** Imports only `ConcurrentHashMap`, extends `ClassLoader`, no Scala surface. A Java twin already exists - `sql/varka/engine/.../execution/VarkaClassLoader.java` - and this file's own doc calls itself a deliberate duplicate whose changes "belong in the other". Porting turns a behavioural duplicate into a literal one. |
 | `VarkaShapeCache.scala` | 404 | **Migrate the core, keep a thin Scala facade** (section 3). Its Spark dependencies are configuration and logging, not logic. |
-| `VarkaExpressionCompiler.scala` | 660 | **Stays Scala.** 35 `case` arms pattern-matching Catalyst case classes across 12 `match` blocks, 95 uses of `Seq`/`Option`/`mutable`, 10 `private[sql]` declarations. In Java every arm becomes an `instanceof` cascade over Scala case classes with `CollectionConverters` at each boundary, and `private[sql]` has no Java equivalent. The charter asks for an assessment here, not a migration; this is it. |
+| `VarkaExpressionCompiler.scala` | 660 | **Stays Scala.** 35 `case` arms pattern-matching Catalyst case classes across 12 `match` blocks, 95 uses of `Seq`/`Option`/`mutable`, 10 `private[sql]` declarations. In Java every arm becomes an `instanceof` cascade over Scala case classes with `CollectionConverters` at each boundary. The charter asks for an assessment here, not a migration; this is it. (An earlier revision also cited the 10 `private[sql]` declarations; that argument is withdrawn - see the visibility note below - and the 35 arms carry the verdict on their own.) |
 | `VarkaFusionReport.scala` | 103 | **Assessed and declined** - the one genuine judgement call. Plain string rendering, so it looks migratable, but every signature takes `Seq[NamedExpression]` / `Seq[Attribute]` / `Expression` and it pattern-matches `VarkaOutputSpec`. A veneer over forced-Scala types; Java buys nothing and adds a conversion layer. |
 | `VarkaKernelEvaluator.scala` | 1062 | **Stays Scala**, and the file already argues why at `:42-49`: the task-21 review recorded a deliberate decision that `VarkaExecMetrics` stay a case class rather than a Java record, because every construction site is forced-Scala code leaning on named arguments and defaults over seven same-typed fields, where a record's positional constructor is a silent-swap hazard. That precedent is cited, not re-derived. |
 | `VarkaColumnarRule`, `VarkaProjectExec`, `VarkaColumnarToRowExec`, `VarkaFilterExec` | 1118 | **Stay Scala.** `ColumnarRule` and `SparkPlan` subclasses - the rule's named exceptions. |
 | Every `*Suite.scala` | 5619 | **Stays Scala.** ScalaTest. |
+
+**A note on visibility, which this record originally got wrong.** Java cannot
+express `private[sql]`, so every migrated type - `VarkaGeneratedClassLoader`,
+`VarkaShapeKey`, `VarkaShapeEntry`, `VarkaShapeLookup`, `VarkaShapeCacheImpl`,
+and `VarkaEmitOptions` - is a plain public class. Three things make
+that acceptable, and none of them is "it does not matter":
+
+* Nothing changes binary-compatibility-wise. `private[sql]` is a
+  scalac-enforced restriction that compiles to `public` in bytecode, so these
+  classes were already public to anything reading the jar.
+* MiMa cannot object. `catalyst` is in `SparkBuild.mimaProjects`, but the
+  baseline artifact is `spark-catalyst_2.13` 4.0.0, which contains no Varka
+  class at all - MiMa reports removals and incompatible changes against a
+  baseline, never additions.
+* What is genuinely lost is a compile-time fence, and these are the files that
+  can afford to lose it: leaf infrastructure whose every caller is Varka's own
+  code or Varka's own suites.
+
+The reason `VarkaExpressionCompiler` stays Scala is therefore the 35 `case`
+arms over Catalyst case classes, not its `private[sql]` declarations. The same
+visibility argument would have to disqualify the shape cache, which has seven
+of them, so it cannot be doing the work the table first gave it.
 
 ## 2. Decisions, and who made them
 
@@ -138,9 +160,10 @@ compiling unchanged as long as the component names hold.
 Five `private static volatile` hook fields in `VarkaLoopEmitter.java` -
 `misdescribeAddForTesting` (196), `disableCseForTesting` (203),
 `divFloorModForTesting` (210), `digitSumFloorModForTesting` (218),
-`groupBudgetForTesting` (227) - each with a package-private setter that bumps
-an `AtomicLong testHookGeneration` (237-268); two package-private queries,
-`currentTestHookGeneration` (266) and `anyTestHookSet` (279); a public
+`groupBudgetForTesting` (227) - each with a package-private setter (240-263)
+that bumps an `AtomicLong testHookGeneration` (declared at 237); two
+package-private queries, `currentTestHookGeneration` (266) and
+`anyTestHookSet` (279); a public
 re-export shim `VarkaEmitterTestSupport` in the catalyst test jar so `sql/core`
 suites can reach the setters; and a reflection-based completeness test at
 `VarkaShapeCacheSuite:314`.
@@ -349,3 +372,180 @@ entry. No new expression, type, lane width or IR node beyond the shallow
 rendering section 4 names. No benchmark run and no performance claim: the task
 moves no numbers, and section 6's committed hashes are how that is proven
 rather than asserted.
+
+## 10. Outcome
+
+The four commits section 7 planned, plus one for the review's corrections and
+one for the records. A fifth kind of change - a Java configuration surface -
+was built during the task and then scoped out of it by the owner; what it
+taught is recorded under "Deferred to a dedicated task" below.
+
+**1. `VarkaGeneratedClassLoader` to Java** (70 lines). Behaviour identical, the
+`IllegalStateException` message included. The one declaration that could not
+carry over is `private[sql]`, which Java cannot express, so the class is plain
+public - which widens nothing, since `private[sql]` is already public in
+bytecode and the only callers are the shape cache and Varka's own suites. The
+duplication with the engine's `VarkaClassLoader` is now literal rather than
+behavioural: the two bodies differ only in class name and package, and both
+javadocs say so.
+
+**2. The shape-cache split.** 404 Scala lines became ~370 Java lines in four
+files (`VarkaShapeKey`, `VarkaShapeEntry`, `VarkaShapeLookup`,
+`VarkaShapeCacheImpl`) plus a 95-line Scala facade. The split line is "what
+reads Spark's configuration or environment", and exactly two things cross it:
+the capacity and the parent class loader. Section 3 said "capacity and identity
+as plain values"; in the event, the identity turned out to be the parent
+loader, which the core takes as an argument to `getOrEmit`. That is why
+`VarkaShapeCacheSuite`'s loader test now names two loaders directly instead of
+swapping the thread's context loader - it tests the same thing more plainly,
+and the facade is where `Utils.getContextOrSparkClassLoader` lives.
+
+The sizing fix landed as: read the JVM's own `SparkConf` when a `SparkEnv`
+exists, the entry's default otherwise. That is one source per JVM, identical
+for every thread and fixed for the JVM's lifetime, which is what makes the lazy
+singleton deterministic rather than a race with whichever thread touched it
+first. The three non-mechanical points of section 3 were all three of them:
+`List.copyOf` in the compact constructor, a sneaky-throw for the Guava unwrap,
+and a `boolean[]` for the loading callable's flag. The unwrap was slightly
+worse than expected - `ExecutionException` is checked, and `NonFateSharingCache`
+is Scala and so declares no checked exceptions at all, which means the compiler
+will not let it be named in a `catch` clause; it is reached by catching
+`Exception` and testing, with precise rethrow keeping the method free of a
+`throws`.
+
+**3. Emit options.** `VarkaEmitOptions(groupBudget, cse, floorMod7,
+misdescribeAdd)` replaced five static hook fields, an `AtomicLong` generation,
+five setters, two queries, four re-export methods, a reflection suite, and the
+cache's gate, snapshot and re-check. `Analysis` carries the record, since it
+already reaches every body method. The hashing rule of section 4 held exactly:
+options render into `shapeHash` only when non-default, so both committed hashes
+are unchanged and only a variant gets its own name.
+
+Two things came out differently from section 4. `fitsBudgets` needed no change
+at all: the group budget is not an eligibility limit - `MAX_FUSED_NODES`,
+`MAX_CHAIN_DEPTH` and `MAX_INPUTS` are - so there was no asymmetry to close,
+and the plan was wrong to predict one. And the `emit` overloads did not collapse
+to one: the four-argument telemetry-defaulted form has too many callers in
+tests and benchmarks to be worth removing, so there are three, each delegating
+to the seven-argument form.
+
+The open question of section 4 is settled the way it recommended.
+`VarkaColumnarToRowExec.setFailEmissionForTesting` injects at the evaluator's
+class lookup - the seam that actually produces an emission failure - beside the
+`failKernel` injector that file already owns. No new config entry, so nothing
+is added to the production configuration surface.
+
+**4. `canonicalShallow`.** The register's framing was that `renderLineMap` rode
+an unspecified format. That is true, but the sharper problem is the one section
+4 predicted: rendering a node inlines its whole subtree, so a shared node was
+repeated once per parent and the key grew quadratically in exactly the sharing
+the emitter exists to exploit. With children written as their line numbers the
+key reconstructs the DAG and each node appears once. Over the every-node-type
+IR that is 18 lines with `col:0` written once and pointed at eleven times; the
+whole map is a committed literal in `VarkaLoopEmitterSuite`, with the same
+update rule as the pinned hashes.
+
+Two more `Record.toString` renderings went with it: `VarkaDebugInfo`'s `ir`
+summary field, and `VarkaKernelEvaluator.kernelIdentity`, which the register did
+not name and which every fallback warning and the JFR fallback event quote. It
+renders the canonical form now, so a log line and the bytes it names describe
+the shape identically.
+
+### Deferred to a dedicated task, by the owner
+
+A Java configuration surface for Varka was built during this task, on the
+standing direction that the long-term goal is a Java Catalyst and that
+duplicating a facility in the fork beats reaching into Spark's Scala machinery
+from Java. The owner then scoped it out of this task and out of its PR, so it
+is not in this branch. What it taught is recorded here rather than lost with
+the conversation, because the next task should start from it rather than
+rediscover it.
+
+**The design.** A SQL configuration has two surfaces - the user-facing string
+key and value, which is what `--conf`, `spark-defaults.conf` and `SET` need,
+and the code-facing typed value an internal component reads - and binding one
+to the other is a separate action rather than something every read redoes.
+Spark's `ConfigEntry` is both surfaces and the binding in one object, and
+re-runs the binding on every read: a string hash lookup, a regex substitution
+pass, an alternatives fold and a conversion.
+
+That framing is worth more than the speed it buys, because the binding's
+*moment* is a correctness property. The deterministic-sizing debt this task
+swept was exactly an unnamed binding moment - a lazy singleton that froze
+whatever configuration the first thread to touch it happened to see.
+
+**Two things the discarded attempt already proved**, and the next task should
+keep both:
+
+* Spark's converters are not the obvious ones. `ConfigHelpers.toBoolean` is
+  `s.trim.toBoolean`, `toNumber` is `converter(s.trim)`, and `stringConf` is
+  the bare identity that does *not* trim - so a Java parser must trim for
+  numbers and booleans and must not for strings. `Boolean.parseBoolean` is also
+  wrong twice over: it does not trim and it reads anything that is not `"true"`
+  as `false`, so a misspelled value would silently disable the engine where
+  Spark throws.
+* `SparkConf.get(entry)` resolves `${...}` references through `ConfigReader`
+  before converting, and `getOption` does not. Any hand-rolled read must go
+  through `getWithSubstitution` or a substituted value silently stops working.
+
+Both were found by a parity test that reads the same raw value through both
+paths, and both were found *late* - the first two versions of that test missed
+them, because it compared `valueConverter` against the Java parser while the
+differences lived a layer up (substitution) and inside the converter's own
+first statement (the trim). The lesson for the next task is that the parity
+sample set is the guard, and it has to include padded, substituted and
+malformed values, not just well-formed ones.
+
+**Three increments, in the order they should be taken:**
+
+1. The typed surface as a record of resolved fields, so a caller on a hot path
+   holds values rather than a lookup. Nothing reads a Varka config per batch or
+   per row today, so this is preparation, not a fix.
+2. Declaration discovery by reflection over the Java class's own static entry
+   fields, rather than a hand-maintained list.
+3. Generate the `SQLConf` / `StaticSQLConf` declarations from the Java ones
+   through a thin Scala registration shim. That turns a deliberate duplication
+   into generation with one source of truth, at which point a drift test has
+   nothing left to guard and can go.
+
+### What the boundary looks like now
+
+The 474 unforced Scala lines section 1 measured are gone, and the facade that
+replaced part of them is 95 lines whose whole job is Spark interop. Everything
+still Scala is Scala for a reason recorded in section 1:
+`VarkaExpressionCompiler` (35 `case` arms over Catalyst case classes),
+`VarkaKernelEvaluator` (the task-21 `VarkaExecMetrics` decision, Arrow and
+`SQLMetric`), `VarkaFusionReport` (assessed and declined), the four exec nodes
+and the columnar rule (`SparkPlan`, `ColumnarRule`), and the suites
+(ScalaTest). The one lever that would move `VarkaExpressionCompiler` is an
+adapter pass that converts Catalyst expressions into a Varka-owned Java model
+once, so the compiler can be written against that instead of against Catalyst's
+case classes - a design, not a port, and its own task.
+
+### Verification
+
+Everything section 6 asked for, all green:
+
+* 81 catalyst Varka tests and 122 sql/core Varka tests, at the host's preferred
+  vector width and again under `-XX:MaxVectorSize=16`.
+* The two committed hashes, `586434f9b9739c40` and `612c94d132690dc2`,
+  unchanged - which is the whole behaviour-preservation proof, and why no
+  benchmark was run and no performance claim is made.
+* `build/sbt catalyst/doc` clean, so no Class-File type reached a signature
+  scaladoc has to complete.
+* `dev/lint-java` clean. It caught one thing worth recording: an interface
+  member is implicitly public, so `public static String canonical` is a
+  `RedundantModifier` error - `canonical` had been reachable from `sql/core`
+  all along.
+* scalastyle clean over catalyst and sql/core, main and test.
+* `./build/mvn -f sql/varka/engine/pom.xml install` green, both executions.
+
+### The documentation sweeps
+
+Section 5.1's four-lane record was split rather than struck, at all four sites
+it lives at (`PLAN_MILESTONE_3.md` section 5, `ISSUES.md` finding 1's caveat
+and the suggested-order list, and the engine `pom.xml`'s surefire comment): the
+aarch64 job runs the engine module alone, so the hand-written kernels are
+covered on real ARM and the emitted loops are not. Section 5.2's debt-register
+entry is rewritten in the past tense with what the sweep found, per
+`AGENTS.md`, rather than deleted.

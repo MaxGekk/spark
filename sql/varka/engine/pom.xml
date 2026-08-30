@@ -156,10 +156,12 @@
         The suite runs twice. The default execution uses whatever vector width the host
         prefers; `narrow-vector` re-runs it with the widest vector capped at 16 bytes, which
         makes IntVector.SPECIES_PREFERRED four lanes - the shape of a 128-bit NEON machine,
-        and the narrow-species case the kernels were once wrong on. Every CI runner is x86_64
-        with 8 or 16 int lanes, so without this the four-lane path of the kernels themselves
-        is never executed. `IgnoreUnrecognizedVMOptions` keeps the second run harmless on a
-        JVM with no MaxVectorSize: it just repeats the first at the host's own width.
+        and the narrow-species case the kernels were once wrong on. This job's matrix now
+        includes an aarch64 runner, so the narrow species is exercised on real NEON as well
+        as on a capped x86_64 host - but the cap is still what makes four lanes reachable
+        on the x86_64 leg, where every runner has 8 or 16 int lanes.
+        `IgnoreUnrecognizedVMOptions` keeps the second run harmless on a JVM with no
+        MaxVectorSize: it just repeats the first at the host's own width.
       -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
