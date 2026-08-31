@@ -25,7 +25,7 @@ type, so full-range Granlund-Montgomery division is inexpressible on int lanes;
 only a range-narrowed magic works, where the value is shrunk until both
 `v * e < 2^k` and `v * M < 2^31` hold in the low 32 bits `mul` returns. The
 technique is task 14's follow-up (`PLAN_TASK_14.md` 7.7 and the `SKILLS.md`
-entry it added) - `PLAN_MILESTONE_4.md` attributes it to task 17 in two places,
+entry it added) - `PLAN_MILESTONE_4.md` section 2.4 attributes it to task 17,
 which is wrong, and this task corrects it there.
 
 **The first finding is a bound, not a constant.** Worst-case `e ~ d` forces
@@ -47,14 +47,16 @@ brackets):
 | `w / 146097` [< 2^24] | 24 | 114 | round-down, 1 correction |
 | `days / 146097` [full int32] | 15 | 14699 on `days >> 16` | round-down, 2 corrections |
 | `doe / 36524` [146096] | 28 | 7349 | round-down, 1 correction |
-| `doc / 365` [36523] | 24 | 45966 | exact |
+| `doc / 365` [36524] | 24 | 45966 | exact |
 | `(5*doy + 2) / 153` [1827] | 27 | 877241 | exact |
 | `(153*mp + 2) / 5` [1685] | 22 | 838861 | exact |
 | `(month + 2) / 3` [14] | 28 | 89478486 | exact |
 
-The century-then-year split also retires 1461, the fourth constant the
-milestone listed: dividing by 365 inside a century has a dividend of 36523,
-which is under the bound, so that division is exact.
+The century-then-year split also retires 1461, the third of the milestone's
+four constants: dividing by 365 inside a century has a dividend of at most
+36524 - the era's spilling last day, one past a plain century's 36523 - and
+the magic at `M = 45966, k = 24` is exact to 44859, so that division needs no
+correction.
 
 **Verified, not asserted.** The int32-faithful model of the narrowed lowering
 was checked against an arbitrary-precision reference over all 16777216 days of
@@ -202,8 +204,10 @@ healthy at 59 ops.
 The consequence is stated up front rather than discovered: `SELECT year(d),
 month(d)` computes the decomposition twice, once per method. That is the trade
 task 17 measured and chose - recomputing ops in registers beat a wider method's
-register pressure, 4.1 against 3.0 G rows/s - and the corpus asks for one field
-at a time. It opens a debt register entry in `PLAN_MILESTONE_4.md` naming what
+register pressure, 4587.1 against 3196.2 M rows/s (`PLAN_TASK_17.md` section 5;
+the `GROUP_BUDGET` javadoc's "4.1 G against 3.0 G" rounding of the same run is
+a misquote, corrected alongside the attribution in commit 5) - and the corpus
+asks for one field at a time. It opens a debt register entry in `PLAN_MILESTONE_4.md` naming what
 closing it would take, which is multi-value IR nodes.
 
 ## 6. Verification
@@ -213,8 +217,10 @@ The standing gates, at both vector widths.
 ```
 build/sbt catalyst/Test/compile sql/Test/compile
 build/sbt 'catalyst/testOnly *Varka*' 'sql/testOnly *Varka*'
-JAVA_OPTS="-XX:MaxVectorSize=16" build/sbt 'catalyst/testOnly *Varka*'
-JAVA_OPTS="-XX:MaxVectorSize=16" build/sbt 'sql/testOnly *Varka*'
+build/sbt "project catalyst" \
+  'set Test/javaOptions += "-XX:MaxVectorSize=16"' 'testOnly *Varka*'
+build/sbt "project sql" \
+  'set Test/javaOptions += "-XX:MaxVectorSize=16"' 'testOnly *Varka*'
 build/sbt catalyst/doc
 ./build/mvn -f sql/varka/engine/pom.xml install
 dev/lint-java && dev/scalastyle
@@ -222,10 +228,12 @@ dev/lint-java && dev/scalastyle
 
 Beyond "the suites are green":
 
-* **The exhaustive sweeps**, committed as opt-in tests behind a system property
-  the way the reference-variant tests are, with their results quoted in this
-  file: `NARROWED` against the JDK calendar over all 16777216 days of its
-  range, and `TOTAL` against a long-arithmetic reference over all 2^32 days -
+* **The exhaustive sweeps**, committed as opt-in tests behind a system
+  property (say `varka.sweep`; the nearest precedent is the engine module's
+  `varka.jmh` JUnit gate - no catalyst Varka test is property-gated today),
+  with their results quoted in this file: `NARROWED` against the JDK calendar
+  over all 16777216 days of its range, and `TOTAL` against a long-arithmetic
+  reference over all 2^32 days -
   a vector kernel at 16 lanes makes that seconds rather than hours - with that
   reference itself checked against the JDK calendar over the SQL range.
 * **The curated boundary set**, which the default suite runs every time: era
@@ -256,24 +264,31 @@ measures a degraded JIT state and cannot be trusted for an A/B today.
 
 ## 7. The measurement that decides the default
 
-A `year` section in `VarkaEmitterParityBenchmark`, shaped like the four-way
-`dayofweek` section that already exists there: `TOTAL`, `NARROWED`, a scalar
-JDK-calendar loop and the Janino row path, over 4096-row batches, at both
-vector widths, plus the four-field projection so section 5's grouping change is
-measured rather than assumed. The committed file is what the owner reads before
-choosing the default, and the choice is recorded here with the numbers behind
-it.
+A `year` section in `VarkaEmitterParityBenchmark`: a case list patterned on
+the existing four-way `dayofweek` section - `TOTAL`, `NARROWED`, a scalar
+JDK-calendar loop - but driven through the task-24 chunked regime (4096-row
+chunks, the batch size a real kernel sees) rather than that section's single
+million-row call, at both vector widths, plus the four-field projection so
+section 5's grouping change is measured rather than assumed. A Janino row-path
+arm is added too, and is named as new machinery: the harness has no Janino
+baseline today, its fourth arm being the per-row calendar loop. The committed
+file is what the owner reads before choosing the default, and the choice is
+recorded here with the numbers behind it.
 
 ## 8. Predictions, registered before the measurements
 
-1. `year` lands at 40 to 45 emitted vector ops, about 3.5x `dayofweek`'s magic
-   lowering.
+1. `year` lands at 40 to 45 emitted vector ops, about twice `dayofweek`'s
+   20-op vector body (the committed same-basis count,
+   `VarkaEmitterParityBenchmark.scala:465`; the ~12-op figure quoted elsewhere
+   counts only the mod-7 fold).
 2. `TOTAL` costs 5 to 12% against `NARROWED` on in-range data - five ops on
    forty. That is inside the 1.3x rule, so it needs the interleaved A/B rerun
    compared by minimums before it is written down.
-3. On `SELECT year(d)` the emitted kernel beats the Janino row path by 3 to 5x
-   (`dayofweek` is 8.8x at a third the ops) and the scalar calendar loop by 15
-   to 30x.
+3. On `SELECT year(d)` the emitted kernel beats the new in-harness Janino arm
+   by 3 to 5x and the scalar calendar loop by 15 to 30x. (`dayofweek`'s 8.8x is
+   the end-to-end columnar number from `VarkaThroughputBenchmark`, a different
+   instrument, and does not calibrate this; the in-harness anchor is its ~57x
+   over the per-row calendar loop, at half of `year`'s op count.)
 4. Splitting the calendar nodes into their own loop methods leaves single-field
    projections unchanged and keeps the four-field projection off the compile
    cliff; no committed number for an existing shape moves.
@@ -297,7 +312,8 @@ Five commits, each green on its own:
 5. **The default and the docs**: the owner's choice recorded here,
    `docs/sql-varka.md` and `README.md` requoted from that one run, the
    milestone's task-26 row marked done, its debt register entry opened, and its
-   task-17 attribution corrected.
+   task-17 attribution corrected, along with the `GROUP_BUDGET` javadoc's
+   4.1/3.0 G misquote of the task-17 run.
 
 ## 10. Risks, ranked
 
