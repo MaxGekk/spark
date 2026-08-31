@@ -175,7 +175,7 @@ public sealed interface VarkaVectorIR
    *
    * <p>The four calendar nodes below are unlike every other node here in one way worth naming:
    * each expands to roughly forty lane ops rather than one or two, because there is no vector
-   * divide and a civil-from-days decomposition is mostly division. {@link VarkaCalendar} holds
+   * divide and a civil-from-days decomposition is mostly division. {@link VarkaChrono} holds
    * the arithmetic and the constants; {@link VarkaLoopEmitter} weighs these nodes accordingly
    * when it partitions outputs into loop methods, so four of them cannot land in one method.
    *

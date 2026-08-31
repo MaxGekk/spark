@@ -30,6 +30,8 @@ import jdk.jfr.Name;
  * caught an error from the emitted kernel itself, per batch), {@link #ROW_PATH_FAILURE} (the
  * task-21 review split: an error from the per-row machinery beside the kernel - the residual or
  * merge projection - which is not the kernel's failure and must not inflate its metric) or
+ * {@link #RANGE_DECLINED} (a partial lowering met a value outside its range and declined the
+ * batch rather than answering wrongly, per batch), and
  * {@link #EMISSION_FAILURE} (the task could not emit or define its kernel class, once per
  * task). The kernel identity is the shape-named class plus the operator/stage, the same string
  * the fallback warnings log; {@code exceptionClass} is empty for the non-Arrow cause, which is
@@ -48,6 +50,9 @@ public final class VarkaFallbackEvent extends Event {
   public static final String KERNEL_FAILURE = "kernel-failure";
   public static final String ROW_PATH_FAILURE = "row-path-failure";
   public static final String EMISSION_FAILURE = "emission-failure";
+
+  /** A lowering declined the batch: some lane fell outside the range it is defined over. */
+  public static final String RANGE_DECLINED = "range-declined";
 
   @Label("Cause")
   public String cause;

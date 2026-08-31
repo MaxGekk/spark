@@ -378,13 +378,13 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
         new Compare(CompareOp.LT, columnRef, literal),
         new Not(new Compare(CompareOp.EQ, columnRef, literal))),
       new And(new Compare(CompareOp.GE, columnRef, literal), new IsNotNull(columnRef)))
-    val calendar = new Least(
+    val chrono = new Least(
       new Greatest(new Year(columnRef), new Month(columnRef)),
       new Greatest(new DayOfMonth(columnRef), new Quarter(columnRef)))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(columnRef, literal), new SubDays(columnRef, literal)),
-      new Least(new DateDiff(calendar, new DayOfWeek(columnRef)), new WeekDay(columnRef)))
+      new Least(new DateDiff(chrono, new DayOfWeek(columnRef)), new WeekDay(columnRef)))
     assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "041e35db20d62e91")
   }
 
@@ -471,14 +471,14 @@ private class FatalKernel extends VarkaFusedKernel {
   throw new OutOfMemoryError("injected")
   // scalastyle:on throwerror
   override def run(srcData: Array[Long], srcValidity: Array[Long], srcNullCount: Array[Int],
-      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Unit =
-    ()
+      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Int =
+    0
 }
 
 /** A kernel whose constructor raises an ordinary, catchable failure. */
 private class FailingKernel extends VarkaFusedKernel {
   throw new IllegalStateException("injected")
   override def run(srcData: Array[Long], srcValidity: Array[Long], srcNullCount: Array[Int],
-      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Unit =
-    ()
+      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Int =
+    0
 }

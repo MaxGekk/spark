@@ -58,9 +58,9 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * index alone. {@link #fromEra} converts back to January-based years at the end, which is the
  * {@code mp >= 10} adjustment.
  */
-public final class VarkaCalendar {
+public final class VarkaChrono {
 
-  private VarkaCalendar() {}
+  private VarkaChrono() {}
 
   /** Days in a 400-year Gregorian era: 400 * 365 + 97 leap days. */
   public static final int ERA_DAYS = 146097;

@@ -169,6 +169,18 @@ private[sql] object VarkaColumnarToRowExec {
 
   private[sql] def isFailKernelForTesting: Boolean = failKernelForTesting
 
+  // Test-only hook that makes every kernel invocation decline its batch (task 26), as a kernel
+  // whose lowering met an out-of-range value does. The shipped lowering is total, so nothing
+  // else can exercise the declined-batch path end to end - and what that path has to prove is
+  // that the fallback's answers match the row engine's. Same discipline as the hook above.
+  @volatile private var declineKernelForTesting = false
+
+  private[sql] def setDeclineKernelForTesting(decline: Boolean): Unit = {
+    declineKernelForTesting = decline
+  }
+
+  private[sql] def isDeclineKernelForTesting: Boolean = declineKernelForTesting
+
   // Test-only hook that fails the kernel-class lookup, simulating an emission failure, so every
   // batch takes the fallback path with `numEmissionFailures` counted once. Same discipline as
   // the one above - static because Spark runs tasks on other threads, reset in a finally block.

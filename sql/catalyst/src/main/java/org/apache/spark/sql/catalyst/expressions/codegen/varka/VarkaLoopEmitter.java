@@ -204,11 +204,11 @@ public final class VarkaLoopEmitter {
 
   /**
    * What a calendar node weighs against {@link #GROUP_BUDGET} - the vector ops
-   * {@link #emitCalendar} emits for one, rounded to the nearest ten. It only has to exceed the
+   * {@link #emitChrono} emits for one, rounded to the nearest ten. It only has to exceed the
    * budget for each calendar output to get its own loop method; the real figure is used rather
    * than a flag so that a future node of intermediate width sorts sensibly beside it.
    */
-  private static final int CALENDAR_WEIGHT = 40;
+  private static final int CHRONO_WEIGHT = 40;
 
   private VarkaLoopEmitter() {
   }
@@ -238,8 +238,12 @@ public final class VarkaLoopEmitter {
   private static final ClassDesc LONG_ARRAY = ConstantDescs.CD_long.arrayType();
   private static final ClassDesc INT_ARRAY = ConstantDescs.CD_int.arrayType();
 
-  /** {@code void run(long[], long[], int[], long[], long[], int[], int)}. */
-  private static final MethodTypeDesc RUN = MethodTypeDesc.of(ConstantDescs.CD_void,
+  /**
+   * {@code int run(long[], long[], int[], long[], long[], int[], int)} - every body method
+   * shares it, so slots line up everywhere and the driver can forward a callee's status
+   * without repacking. The int is the batch status; see {@link VarkaFusedKernel#run}.
+   */
+  private static final MethodTypeDesc RUN = MethodTypeDesc.of(ConstantDescs.CD_int,
       LONG_ARRAY, LONG_ARRAY, INT_ARRAY, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
       ConstantDescs.CD_int);
   private static final MethodTypeDesc INIT = MethodTypeDesc.of(ConstantDescs.CD_void);
@@ -318,6 +322,7 @@ public final class VarkaLoopEmitter {
       MethodTypeDesc.of(INT_VECTOR, VECTOR, VECTOR_MASK);
   /** {@code VectorMask VectorMask.and/or(VectorMask)} and {@code VectorMask.not()}. */
   private static final MethodTypeDesc MASK_BINARY = MethodTypeDesc.of(VECTOR_MASK, VECTOR_MASK);
+  private static final MethodTypeDesc ANY_TRUE = MethodTypeDesc.of(ConstantDescs.CD_boolean);
   private static final MethodTypeDesc MASK_UNARY = MethodTypeDesc.of(VECTOR_MASK);
   /** {@code void IntVector.intoMemorySegment(MemorySegment, long, ByteOrder)} - unmasked. */
   private static final MethodTypeDesc INTO_MEMORY_SEGMENT_DENSE = MethodTypeDesc.of(
@@ -573,11 +578,25 @@ public final class VarkaLoopEmitter {
     if (node instanceof ColumnRef || node instanceof LiteralSlot) {
       return 0;
     }
-    return isCalendar(node) ? CALENDAR_WEIGHT : 1;
+    return isChrono(node) ? CHRONO_WEIGHT : 1;
+  }
+
+  /** Whether {@code node}'s subtree contains a calendar extraction, which is what decides
+   * whether a body needs a guard accumulator at all. */
+  private static boolean hasChrono(VarkaVectorIR node) {
+    if (isChrono(node)) {
+      return true;
+    }
+    for (VarkaVectorIR child : childrenOf(node)) {
+      if (hasChrono(child)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Whether {@code node} is one of task 26's four civil-from-days extractions. */
-  private static boolean isCalendar(VarkaVectorIR node) {
+  private static boolean isChrono(VarkaVectorIR node) {
     return node instanceof Year || node instanceof Month || node instanceof DayOfMonth
         || node instanceof Quarter;
   }
@@ -691,10 +710,10 @@ public final class VarkaLoopEmitter {
     cb.invokespecial(classDesc, name, RUN);
   }
 
-  /** {@link #invokeCall} followed by {@code return}. */
+  /** {@link #invokeCall} whose status becomes this method's own - a tail call in effect. */
   private static void invokeBody(CodeBuilder cb, ClassDesc classDesc, String name) {
     invokeCall(cb, classDesc, name);
-    cb.return_();
+    cb.ireturn();
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -919,13 +938,21 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, int[]> dowTmp = new HashMap<>();
     /** Per calendar node: the civil-from-days temporaries (task 26), six vectors and two
      * masks - the decomposition is too long to keep on the operand stack. */
-    final Map<VarkaVectorIR, int[]> calTmp = new HashMap<>();
+    final Map<VarkaVectorIR, int[]> chronoTmp = new HashMap<>();
     /**
      * The epilogue's bounds mask (task 24), or null in every other body role. Non-null is
      * exactly the signal that loads and stores take their masked overloads: the value is a
      * {@code VectorMask} local, live for the whole single pass.
      */
     Integer epilogueMask;
+    /** The driver's status accumulator (an int slot), where its callees' returns are ORed. */
+    int status;
+    /**
+     * The guard's accumulated out-of-range mask (task 26), or null when this body has no
+     * guarded node - which is every body under the total lowering. Non-null is exactly the
+     * signal that the method returns something other than a constant zero.
+     */
+    Integer guardAcc;
 
     Slots(int numInputs, int numOutputs) {
       srcSeg = new int[numInputs];
@@ -993,6 +1020,15 @@ public final class VarkaLoopEmitter {
     s.cmpTmp = slot;
     slot += 2;
     s.maskTmp = slot++;
+    s.status = slot++;
+    // The guard exists only where a lowering is partial - today, the narrowed calendar one.
+    // Allocated for the whole body rather than per node: one accumulator carries every guarded
+    // node's verdict, since the caller acts on the batch, not on the lane.
+    boolean guarded = analysis.options.civilFromDays() == VarkaEmitOptions.CivilFromDays.NARROWED
+        && mode != BodyMode.DRIVER && outputs.stream().anyMatch(VarkaLoopEmitter::hasChrono);
+    if (guarded) {
+      s.guardAcc = slot++;
+    }
 
     if (mode == BodyMode.EPILOGUE) {
       s.epilogueMask = slot++;
@@ -1025,9 +1061,9 @@ public final class VarkaLoopEmitter {
           if (node instanceof DayOfWeek || node instanceof WeekDay) {
             s.dowTmp.put(node, new int[] {slot++, slot++});
           }
-          if (isCalendar(node)) {
-            // Six int-vector temporaries and two masks; see emitCalendar for what stays live.
-            s.calTmp.put(node, new int[] {
+          if (isChrono(node)) {
+            // Six int-vector temporaries and two masks; see emitChrono for what stays live.
+            s.chronoTmp.put(node, new int[] {
                 slot++, slot++, slot++, slot++, slot++, slot++, slot++, slot++});
           }
         } else if (dense) {
@@ -1103,11 +1139,12 @@ public final class VarkaLoopEmitter {
     int numOutputs = outputs.size();
     Slots s = planSlots(dense, mode, outputs, analysis, numLiterals);
 
-    // (1) if (length <= 0) return;
+    // (1) if (length <= 0) return 0 - nothing ran, so there is nothing to report.
     Label nonEmpty = cb.newLabel();
     cb.iload(P_LENGTH);
     cb.ifgt(nonEmpty);
-    cb.return_();
+    cb.loadConstant(0);
+    cb.ireturn();
     cb.labelBinding(nonEmpty);
 
     // (2) Nominal sizes: dataBytes = (long) length * 4; validityBytes = (length + 7) / 8L.
@@ -1228,7 +1265,8 @@ public final class VarkaLoopEmitter {
         firstOutput = false;
       }
       cb.ifeq(live);
-      cb.return_();
+      cb.loadConstant(0);
+      cb.ireturn();
       cb.labelBinding(live);
     }
 
@@ -1256,17 +1294,35 @@ public final class VarkaLoopEmitter {
       }
     }
 
+    if (s.guardAcc != null) {
+      // An empty mask: no lane has been found out of range yet.
+      cb.aload(s.species);
+      cb.loadConstant(0L);
+      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+      cb.astore(s.guardAcc);
+    }
+
     switch (mode) {
       case DRIVER -> {
+        // Every callee returns a status; the batch's is their union, so one out-of-range lane
+        // anywhere condemns the whole batch - which is what the caller acts on.
+        cb.loadConstant(0);
+        cb.istore(s.status);
         for (int g = 0; g < groups.size(); g++) {
+          cb.iload(s.status);
           invokeCall(cb, classDesc, (dense ? "loopDense" : "loopMasked") + g);
+          cb.ior();
+          cb.istore(s.status);
         }
         // The rows past loopBound belong to the sibling epilogue method.
-        invokeBody(cb, classDesc, dense ? "epilogueDense" : "epilogueMasked");
+        cb.iload(s.status);
+        invokeCall(cb, classDesc, dense ? "epilogueDense" : "epilogueMasked");
+        cb.ior();
+        cb.ireturn();
       }
       case LOOP -> {
         emitVectorLoop(cb, dense, outputs, groups.get(group), analysis, s);
-        cb.return_();
+        emitStatusReturn(cb, s);
       }
       case EPILOGUE -> {
         // One method for every output, not one per group: the epilogue runs a single pass per
@@ -1277,9 +1333,32 @@ public final class VarkaLoopEmitter {
           all.add(o);
         }
         emitEpilogue(cb, dense, outputs, all, analysis, s);
-        cb.return_();
+        emitStatusReturn(cb, s);
       }
     }
+  }
+
+  /**
+   * Ends a loop or epilogue method with its status: a constant zero where nothing is guarded,
+   * and otherwise whether any lane the body saw fell outside the lowering's range. The
+   * reduction is once per method, not once per lane group - the accumulator is a mask OR in
+   * the loop, which is one op.
+   */
+  private static void emitStatusReturn(CodeBuilder cb, Slots s) {
+    if (s.guardAcc == null) {
+      cb.loadConstant(0);
+      cb.ireturn();
+      return;
+    }
+    Label clean = cb.newLabel();
+    cb.aload(s.guardAcc);
+    cb.invokevirtual(VECTOR_MASK, "anyTrue", ANY_TRUE);
+    cb.ifeq(clean);
+    cb.loadConstant(VarkaFusedKernel.STATUS_CHRONO_RANGE);
+    cb.ireturn();
+    cb.labelBinding(clean);
+    cb.loadConstant(0);
+    cb.ireturn();
   }
 
   private static void emitVectorLoop(CodeBuilder cb, boolean dense,
@@ -1332,7 +1411,8 @@ public final class VarkaLoopEmitter {
     cb.iload(s.loopBound);
     cb.iload(P_LENGTH);
     cb.if_icmplt(remainder);
-    cb.return_();
+    cb.loadConstant(0);
+    cb.ireturn();
     cb.labelBinding(remainder);
 
     cb.iload(s.loopBound);
@@ -1629,22 +1709,22 @@ public final class VarkaLoopEmitter {
       case Year n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
-        emitCalendar(cb, node, s);
+        emitChrono(cb, node, dense, analysis, s);
       }
       case Month n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
-        emitCalendar(cb, node, s);
+        emitChrono(cb, node, dense, analysis, s);
       }
       case DayOfMonth n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
-        emitCalendar(cb, node, s);
+        emitChrono(cb, node, dense, analysis, s);
       }
       case Quarter n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
-        emitCalendar(cb, node, s);
+        emitChrono(cb, node, dense, analysis, s);
       }
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
@@ -1861,7 +1941,7 @@ public final class VarkaLoopEmitter {
 
   /**
    * Consumes the child's {@code IntVector} of epoch days and leaves one of the four calendar
-   * fields (task 26). {@link VarkaCalendar} is the scalar twin of everything below - it holds
+   * fields (task 26). {@link VarkaChrono} is the scalar twin of everything below - it holds
    * every constant this method loads, and its own javadoc carries the derivation - so the two
    * cannot drift and a disagreement between them is an emission bug rather than an arithmetic
    * one.
@@ -1871,14 +1951,15 @@ public final class VarkaLoopEmitter {
    * division is a magic multiply: the three small ones are exact, and the two large ones
    * ({@code / 146097} and {@code / 36524}) use a round-down magic that never overestimates,
    * followed by carries that are one compare and two masked adjustments each. That is the
-   * whole reason this node weighs {@link #CALENDAR_WEIGHT} rather than 1.
+   * whole reason this node weighs {@link #CHRONO_WEIGHT} rather than 1.
    *
    * <p>The temporaries are locals rather than operand-stack juggling because six values stay
    * live across the tail - era, century, year of century, day of year, the March month, and
    * two masks - which is past what the stack can hold legibly.
    */
-  private static void emitCalendar(CodeBuilder cb, VarkaVectorIR node, Slots s) {
-    int[] t = s.calTmp.get(node);
+  private static void emitChrono(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s) {
+    int[] t = s.chronoTmp.get(node);
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -1890,55 +1971,24 @@ public final class VarkaLoopEmitter {
 
     cb.astore(days);
 
-    // era = ((h * M) >>> K) - OFF for h = (days >> 16) + 2^15. Splitting the dividend is what
-    // keeps this in the low 32 bits the Vector API's multiply returns; dropping the low half
-    // can only make the quotient too small, which is why the carries below are one-sided.
-    cb.aload(days);
-    emitShift(cb, "ASHR", VarkaCalendar.TOTAL_SPLIT_SHIFT);
-    cb.loadConstant(VarkaCalendar.TOTAL_HI_BIAS);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    emitMagic(cb, VarkaCalendar.TOTAL_ERA_M, VarkaCalendar.TOTAL_ERA_K);
-    cb.loadConstant(VarkaCalendar.TOTAL_ERA_OFFSET);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
-    cb.astore(era);
-
-    // rem = days - era * 146097. This multiply overflows int for the largest quotients, on
-    // purpose: the true difference lies in [0, 3 * 146097), so the low 32 bits carry it
-    // exactly. Widening it to "fix" the overflow would break the top of the day range.
-    cb.aload(days);
-    cb.aload(era);
-    cb.loadConstant(VarkaCalendar.ERA_DAYS);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(rem);
-    for (int i = 0; i < VarkaCalendar.TOTAL_CORRECTIONS; i++) {
-      emitCarry(cb, era, rem, VarkaCalendar.ERA_DAYS, mask);
+    if (analysis.options.civilFromDays() == VarkaEmitOptions.CivilFromDays.NARROWED) {
+      emitNarrowedEra(cb, node, dense, analysis, s, days, era, rem, mask);
+    } else {
+      emitTotalEra(cb, days, era, rem, mask);
     }
-
-    // The March-epoch shift, folded past the division rather than added to the days, where it
-    // would overflow near Integer.MAX_VALUE: rem += 135080, era += 4, and carry once more.
-    cb.aload(rem);
-    cb.loadConstant(VarkaCalendar.EPOCH_ERA_REMAINDER);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.astore(rem);
-    cb.aload(era);
-    cb.loadConstant(VarkaCalendar.EPOCH_ERA_QUOTIENT);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.astore(era);
-    emitCarry(cb, era, rem, VarkaCalendar.ERA_DAYS, mask);
 
     // rem is now the day of era, in [0, 146096]. Everything below works on that.
     // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
     cb.aload(rem);
-    emitMagic(cb, VarkaCalendar.CENTURY_M, VarkaCalendar.CENTURY_K);
+    emitMagic(cb, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K);
     cb.astore(century);
     cb.aload(rem);
     cb.aload(century);
-    cb.loadConstant(VarkaCalendar.CENTURY_DAYS);
+    cb.loadConstant(VarkaChrono.CENTURY_DAYS);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
     cb.astore(rem);
-    emitCarry(cb, century, rem, VarkaCalendar.CENTURY_DAYS, mask);
+    emitCarry(cb, century, rem, VarkaChrono.CENTURY_DAYS, mask);
 
     // An era's fourth century holds one extra day - its leap day - so the quotient can land on
     // 4 for exactly one day of each era. Fold that back into century 3.
@@ -1953,7 +2003,7 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
     cb.astore(century);
     cb.aload(rem);
-    cb.loadConstant(VarkaCalendar.CENTURY_DAYS);
+    cb.loadConstant(VarkaChrono.CENTURY_DAYS);
     cb.aload(mask);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
     cb.astore(rem);
@@ -1961,7 +2011,7 @@ public final class VarkaLoopEmitter {
     // yoc = doc / 365 - exact here, because the split into centuries left a dividend under
     // 44859. It ignores leap days, so it can name the following year; the fix is below.
     cb.aload(rem);
-    emitMagic(cb, VarkaCalendar.YEAR_M, VarkaCalendar.YEAR_K);
+    emitMagic(cb, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K);
     cb.astore(yearOfCentury);
 
     // doy = doc - (365 * yoc + yoc / 4). Negative exactly where yoc overshot.
@@ -2011,7 +2061,7 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.loadConstant(2);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    emitMagic(cb, VarkaCalendar.MONTH_M, VarkaCalendar.MONTH_K);
+    emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
     cb.astore(marchMonth);
 
     switch (node) {
@@ -2030,7 +2080,7 @@ public final class VarkaLoopEmitter {
         emitJanuaryMask(cb, marchMonth);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
       }
-      case Month n -> emitCalendarMonth(cb, marchMonth);
+      case Month n -> emitChronoMonth(cb, marchMonth);
       case DayOfMonth n -> {
         // doy - (153 * mp + 2) / 5 + 1, the inverse of the month's own linear form.
         cb.aload(rem);
@@ -2039,22 +2089,121 @@ public final class VarkaLoopEmitter {
         cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
         cb.loadConstant(2);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaCalendar.DAY_M, VarkaCalendar.DAY_K);
+        emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
         cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
         cb.loadConstant(1);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
       }
       case Quarter n -> {
-        emitCalendarMonth(cb, marchMonth);
+        emitChronoMonth(cb, marchMonth);
         cb.loadConstant(2);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaCalendar.QUARTER_M, VarkaCalendar.QUARTER_K);
+        emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
       }
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
   }
 
-  /** {@code [v] -> [(v * m) >>> k]}, the shape every division in {@link #emitCalendar} takes. */
+  /**
+   * The total lowering's day-of-era step: a two-step division that is correct for every
+   * {@code int} day. Leaves the era in {@code era} and the day of era in {@code rem}.
+   */
+  private static void emitTotalEra(CodeBuilder cb, int days, int era, int rem, int mask) {
+    // era = ((h * M) >>> K) - OFF for h = (days >> 16) + 2^15. Splitting the dividend is what
+    // keeps this in the low 32 bits the Vector API's multiply returns; dropping the low half
+    // can only make the quotient too small, which is why the carries below are one-sided.
+    cb.aload(days);
+    emitShift(cb, "ASHR", VarkaChrono.TOTAL_SPLIT_SHIFT);
+    cb.loadConstant(VarkaChrono.TOTAL_HI_BIAS);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    emitMagic(cb, VarkaChrono.TOTAL_ERA_M, VarkaChrono.TOTAL_ERA_K);
+    cb.loadConstant(VarkaChrono.TOTAL_ERA_OFFSET);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+    cb.astore(era);
+
+    // rem = days - era * 146097. This multiply overflows int for the largest quotients, on
+    // purpose: the true difference lies in [0, 3 * 146097), so the low 32 bits carry it
+    // exactly. Widening it to "fix" the overflow would break the top of the day range.
+    cb.aload(days);
+    cb.aload(era);
+    cb.loadConstant(VarkaChrono.ERA_DAYS);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(rem);
+    for (int i = 0; i < VarkaChrono.TOTAL_CORRECTIONS; i++) {
+      emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
+    }
+
+    // The March-epoch shift, folded past the division rather than added to the days, where it
+    // would overflow near Integer.MAX_VALUE: rem += 135080, era += 4, and carry once more.
+    cb.aload(rem);
+    cb.loadConstant(VarkaChrono.EPOCH_ERA_REMAINDER);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(rem);
+    cb.aload(era);
+    cb.loadConstant(VarkaChrono.EPOCH_ERA_QUOTIENT);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(era);
+    emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
+  }
+
+  /**
+   * The narrowed lowering's day-of-era step: one division and one carry, five ops cheaper than
+   * {@link #emitTotalEra} but defined only over the bounded day range - so it also emits the
+   * guard, which is what makes the cheaper arithmetic safe to publish.
+   *
+   * <p>The guard is two compares ORed together, ANDed with the row's validity where that is
+   * available (a null row's data bytes are undefined and must not condemn a batch), and ORed
+   * into the body's accumulator. Validity is taken only from a column child, whose word is
+   * computed at the top of every lane group and so is certainly live here; for a computed
+   * child the guard is left unmasked, which can only cost a needless fallback, never a wrong
+   * answer.
+   */
+  private static void emitNarrowedEra(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s, int days, int era, int rem, int mask) {
+    cb.aload(days);
+    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.NARROW_MIN_DAYS);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.aload(days);
+    cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.NARROW_MAX_DAYS);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    VarkaVectorIR child = childrenOf(node)[0];
+    if (!dense && child instanceof ColumnRef c && referenced(analysis, c.ordinal())) {
+      cb.aload(s.species);
+      cb.lload(s.word[c.ordinal()]);
+      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+    }
+    cb.aload(s.guardAcc);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.astore(s.guardAcc);
+
+    // w = days + BIAS, non-negative throughout the range, so one round-down magic and one
+    // carry give the era - and the bias's whole eras come back off in the year assembly.
+    cb.aload(days);
+    cb.loadConstant(VarkaChrono.NARROW_BIAS);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(rem);
+    cb.aload(rem);
+    emitMagic(cb, VarkaChrono.NARROW_ERA_M, VarkaChrono.NARROW_ERA_K);
+    cb.astore(era);
+    cb.aload(rem);
+    cb.aload(era);
+    cb.loadConstant(VarkaChrono.ERA_DAYS);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(rem);
+    emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
+    cb.aload(era);
+    cb.loadConstant(VarkaChrono.NARROW_ERA_BIAS);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+    cb.astore(era);
+  }
+
+  /** {@code [v] -> [(v * m) >>> k]}, the shape every division in {@link #emitChrono} takes. */
   private static void emitMagic(CodeBuilder cb, int m, int k) {
     cb.loadConstant(m);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
@@ -2096,12 +2245,12 @@ public final class VarkaLoopEmitter {
   private static void emitJanuaryMask(CodeBuilder cb, int marchMonth) {
     cb.aload(marchMonth);
     cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
-    cb.loadConstant(VarkaCalendar.MARCH_YEAR_JANUARY);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
   }
 
   /** Leaves the January-based month: {@code mp + 3}, less 12 once the year has turned. */
-  private static void emitCalendarMonth(CodeBuilder cb, int marchMonth) {
+  private static void emitChronoMonth(CodeBuilder cb, int marchMonth) {
     cb.aload(marchMonth);
     cb.loadConstant(3);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);

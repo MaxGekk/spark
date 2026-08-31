@@ -61,6 +61,9 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *            is an optimization, never a semantics change - and the emitter suite pins exactly
  *            that; the parity benchmark uses it to price CSE itself.
  * @param floorMod7 which lowering {@code dayofweek}/{@code weekday} use for their mod-7.
+ * @param civilFromDays which lowering the four calendar extractions use for their day-of-era
+ *                      step. Both are shipped and differentially tested against each other;
+ *                      see the enum for the trade between them.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
  *                       passes bytecode verification - member resolution happens at link time - so
@@ -72,6 +75,7 @@ public record VarkaEmitOptions(
     int groupBudget,
     boolean cse,
     FloorMod7 floorMod7,
+    CivilFromDays civilFromDays,
     boolean misdescribeAdd) {
 
   /**
@@ -83,9 +87,24 @@ public record VarkaEmitOptions(
    */
   public enum FloorMod7 { MAGIC, DIV, DIGIT_SUM }
 
+  /**
+   * The two civil-from-days lowerings (task 26), differing only in how they reach the day of
+   * era. {@link #TOTAL} splits the dividend so the arithmetic is correct for every {@code int}
+   * day and needs no runtime check. {@link #NARROWED} divides once, which is about five vector
+   * ops cheaper, but is defined only over {@link VarkaChrono#NARROW_MIN_DAYS}..
+   * {@link VarkaChrono#NARROW_MAX_DAYS} - years -12800 to 33134, which contains every date
+   * SQL can write but is reachable past by {@code date_add} - so it also emits a per-lane guard
+   * and reports {@link VarkaFusedKernel#STATUS_CHRONO_RANGE} for a batch it cannot compute,
+   * which the caller then recomputes on the row engine.
+   *
+   * <p>Both ship: whichever is not the default stays a live reference variant the differential
+   * suite checks the other against, the way {@link FloorMod7} keeps its two.
+   */
+  public enum CivilFromDays { TOTAL, NARROWED }
+
   /** What production always emits with; see the hashing note in the class doc. */
-  public static final VarkaEmitOptions DEFAULTS =
-      new VarkaEmitOptions(VarkaLoopEmitter.GROUP_BUDGET, true, FloorMod7.MAGIC, false);
+  public static final VarkaEmitOptions DEFAULTS = new VarkaEmitOptions(
+      VarkaLoopEmitter.GROUP_BUDGET, true, FloorMod7.MAGIC, CivilFromDays.TOTAL, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -94,23 +113,30 @@ public record VarkaEmitOptions(
     if (floorMod7 == null) {
       throw new IllegalArgumentException("floorMod7 must not be null");
     }
+    if (civilFromDays == null) {
+      throw new IllegalArgumentException("civilFromDays must not be null");
+    }
   }
 
   /** {@link #DEFAULTS} with one field changed, for the suites and benchmarks that vary one. */
   public VarkaEmitOptions withGroupBudget(int budget) {
-    return new VarkaEmitOptions(budget, cse, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(budget, cse, floorMod7, civilFromDays, misdescribeAdd);
   }
 
   public VarkaEmitOptions withCse(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, enabled, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, enabled, floorMod7, civilFromDays, misdescribeAdd);
   }
 
   public VarkaEmitOptions withFloorMod7(FloorMod7 lowering) {
-    return new VarkaEmitOptions(groupBudget, cse, lowering, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, cse, lowering, civilFromDays, misdescribeAdd);
+  }
+
+  public VarkaEmitOptions withCivilFromDays(CivilFromDays lowering) {
+    return new VarkaEmitOptions(groupBudget, cse, floorMod7, lowering, misdescribeAdd);
   }
 
   public VarkaEmitOptions withMisdescribeAdd(boolean misdescribe) {
-    return new VarkaEmitOptions(groupBudget, cse, floorMod7, misdescribe);
+    return new VarkaEmitOptions(groupBudget, cse, floorMod7, civilFromDays, misdescribe);
   }
 
   public boolean isDefault() {
@@ -127,6 +153,7 @@ public record VarkaEmitOptions(
     if (isDefault()) {
       return "";
     }
-    return "opts(" + groupBudget + '|' + cse + '|' + floorMod7 + '|' + misdescribeAdd + ')';
+    return "opts(" + groupBudget + '|' + cse + '|' + floorMod7 + '|' + civilFromDays + '|'
+        + misdescribeAdd + ')';
   }
 }

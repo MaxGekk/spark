@@ -108,6 +108,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     (kernel, loader)
   }
 
+  /** Runs one kernel over one input column, returning the batch status it reports. */
+  private def runKernel(
+      kernel: VarkaFusedKernel,
+      input: Col,
+      out: (MemorySegment, MemorySegment),
+      length: Int): Int =
+    kernel.run(
+      Array(input.data.address()), Array(input.validity.address()), Array(input.nullCount),
+      Array(out._1.address()), Array(out._2.address()), Array.empty[Int], length)
+
   /** The declared method names of an emitted class - how the method layout is asserted. */
   private def methodNames(named: (String, Array[Byte])): Seq[String] = {
     val (className, bytes) = named
@@ -199,7 +209,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     case n: WeekDay =>
       evalValue(n.days(), row, lits).map(v => (Math.floorMod(v, 7) + 3) % 7)
     // The calendar oracle is java.time, which is what DateTimeUtils.getYear and its three
-    // siblings call - not VarkaCalendar, so the emitted bytes are checked against the
+    // siblings call - not VarkaChrono, so the emitted bytes are checked against the
     // definition rather than against the model they were derived from.
     case n: Year =>
       evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getYear)
@@ -725,7 +735,68 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     def days(c: Int, i: Int): Int =
       if (i < extremes.length) extremes(i) else i * 99991 - 500000
     checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "calendar")
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "chrono")
+  }
+
+  test("the narrowed lowering agrees with the total one, and reports nothing, in range") {
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+    val inRange = Array(
+      VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
+      VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1,
+      -1, 0, 1, -719468, -719162,
+      LocalDate.of(1600, 2, 29).toEpochDay.toInt, LocalDate.of(1900, 3, 1).toEpochDay.toInt,
+      LocalDate.of(2000, 2, 29).toEpochDay.toInt, LocalDate.of(1, 1, 1).toEpochDay.toInt,
+      LocalDate.of(9999, 12, 31).toEpochDay.toInt)
+    def days(c: Int, i: Int): Int =
+      if (i < inRange.length) inRange(i) else i * 9973 - 400000
+    checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed",
+      options = VarkaEmitOptions.DEFAULTS
+        .withCivilFromDays(VarkaEmitOptions.CivilFromDays.NARROWED))
+  }
+
+  test("the narrowed lowering declines a batch holding a day outside its range") {
+    val root = new Year(new ColumnRef(0))
+    val narrowed = VarkaEmitOptions.DEFAULTS
+      .withCivilFromDays(VarkaEmitOptions.CivilFromDays.NARROWED)
+    val (kernel, loader) = load(emitMulti(Seq(root), 1, 0, narrowed))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val length = 64
+        // In range: the kernel answers, and says so.
+        val good = makeInputData(arena, length, _ => false, i => i * 97)
+        val out = makeOutput(arena, length)
+        assert(runKernel(kernel, good, out, length) === 0)
+        // One day past the range, in a lane the vector loop covers: declined.
+        val bad = makeInputData(arena, length, _ => false,
+          i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1 else i * 97)
+        assert(runKernel(kernel, bad, out, length) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        // And in a lane only the epilogue covers, whatever the host's lane count.
+        val tail = makeInputData(arena, 17, _ => false,
+          i => if (i == 16) VarkaChrono.NARROW_MIN_DAYS - 1 else i * 97)
+        val tailOut = makeOutput(arena, 17)
+        assert(runKernel(kernel, tail, tailOut, 17) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        // A null row's data is undefined, so an out-of-range value under one must not condemn
+        // the batch: the guard is ANDed with validity.
+        val nulled = makeInputData(arena, length, i => i == 3,
+          i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1 else i * 97)
+        assert(runKernel(kernel, nulled, out, length) === 0)
+        // The total lowering never declines, whatever it is given.
+        val (total, totalLoader) = load(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS))
+        try {
+          assert(runKernel(total, bad, out, length) === 0)
+        } finally {
+          totalLoader.release()
+        }
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
   }
 
   test("each calendar output gets its own loop method, whatever GROUP_BUDGET would say") {
@@ -1007,13 +1078,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         new Compare(CompareOp.LT, col, lit),
         new Not(new Compare(CompareOp.EQ, col, lit))),
       new And(new Compare(CompareOp.GE, col, lit), new IsNotNull(col)))
-    val calendar = new Least(
+    val chrono = new Least(
       new Greatest(new Year(col), new Month(col)),
       new Greatest(new DayOfMonth(col), new Quarter(col)))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
-      new Least(new DateDiff(calendar, new DayOfWeek(col)), new WeekDay(col)))
+      new Least(new DateDiff(chrono, new DayOfWeek(col)), new WeekDay(col)))
     val (_, bytes) = emitMulti(Seq(everyNode), 1, 1)
     assert(VarkaDebugInfoReader.lineMap(bytes) === pinnedLineMap)
     // The DAG, not a tree: col:0 is written once as line 1 and pointed at fifteen times. The

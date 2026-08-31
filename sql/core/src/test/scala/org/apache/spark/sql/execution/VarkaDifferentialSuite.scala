@@ -530,6 +530,33 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("a declined batch falls back with the row engine's answers, counted as its own cause") {
+    // Task 26: a partial lowering (the narrowed civil-from-days one) reports a batch it cannot
+    // compute, and the evaluator recomputes it row by row. The shipped lowering is total, so
+    // the hook stands in for the out-of-range value; what this proves is the routing - that a
+    // declined batch answers correctly, and lands under its own metric rather than the ghost
+    // fallback's, which is a defect count and must stay clean.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    VarkaColumnarToRowExec.setDeclineKernelForTesting(true)
+    try {
+      val q = "SELECT year(d) AS a, date_add(d, 3) AS b FROM varka_dates ORDER BY a, b"
+      val expected = spark.sql(q)
+      val actual = varkaSpark.sql(q)
+      val plan = actual.queryExecution.executedPlan
+      assertFused(plan)
+      checkAnswer(actual, expected)
+      def metric(name: String): Long = plan.collectFirst { case v: VarkaColumnarToRowExec => v }
+        .flatMap(_.metrics.get(name)).map(_.value).getOrElse(0L)
+      assert(metric("numVarkaBatches") === 0L, "no batch should have been served by the kernel")
+      assert(metric("numFallbackBatchesDeclined") > 0L, "the declined metric should have fired")
+      assert(metric("numFallbackBatchesKernel") === 0L,
+        "a declined batch is not a kernel failure and must not be counted as one")
+    } finally {
+      VarkaColumnarToRowExec.setDeclineKernelForTesting(false)
+    }
+  }
+
   test("a kernel failure on a mixed projection falls back whole-batch with correct results") {
     cacheDates(spark)
     cacheDates(varkaSpark)
