@@ -323,6 +323,88 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.run()
       }
 
+      runBenchmark("year: total vs narrowed civil-from-days, against LocalDate (task 26)") {
+        // The measurement task 26 opens its default choice on. Two lowerings of the same
+        // decomposition, differing only in how they reach the day of era: TOTAL splits the
+        // dividend and is correct for every int day; NARROWED divides once but is defined
+        // only over years -12800..33134, so it also carries a per-lane range guard and reports
+        // a batch it cannot compute. The question is what totality costs.
+        //
+        // Driven in 4096-row chunks - Spark's COLUMN_BATCH_SIZE, and the working set a real
+        // kernel sees - rather than one million-row call, so the per-call prologue is paid at
+        // the rate production pays it. The four-field case is here because task 26 gave
+        // calendar nodes a GROUP_BUDGET weight so they cannot share a loop method; this is
+        // where that is measured rather than assumed.
+        val repeats = 20
+        val chunk = 4096
+        val benchmark = new Benchmark(s"${numRows.toLong * repeats} rows in 4096-row chunks",
+          numRows.toLong * repeats,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        def nullsIn(n: Int): Int = (n + 6) / 7
+        // Four outputs need four destinations; one shared buffer would have the kernels
+        // overwrite each other and alias four stores onto one cache line.
+        val extraDst = Array.fill(3)(arena.allocate(numRows * 4L, 8))
+        val extraDstValidity = Array.fill(3)(arena.allocate((numRows + 7) / 8L, 8))
+        val dstData4 = (dst +: extraDst.toSeq).map(_.address()).toArray
+        val dstValidity4 = (dstValidity +: extraDstValidity.toSeq).map(_.address()).toArray
+        def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1): Unit = {
+          val dstData = if (outputs == 1) Array(dst.address()) else dstData4
+          val dstValid = if (outputs == 1) Array(dstValidity.address()) else dstValidity4
+          var pass = 0
+          while (pass < repeats) {
+            var done = 0
+            while (done < numRows) {
+              val n = math.min(chunk, numRows - done)
+              if (mixed) {
+                kernel.run(Array(mxData.address()), Array(mxValidity.address()),
+                  Array(nullsIn(n)), dstData, dstValid, Array.empty[Int], n)
+              } else {
+                kernel.run(Array(nfData.address()), Array(0L), Array(0),
+                  dstData, dstValid, Array.empty[Int], n)
+              }
+              done += n
+            }
+            pass += 1
+          }
+        }
+        val narrowed = VarkaEmitOptions.DEFAULTS
+          .withCivilFromDays(VarkaEmitOptions.CivilFromDays.NARROWED)
+        val yearTotal = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 800)
+        val yearNarrow = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 801, narrowed)
+        val fourFields = Seq[VarkaVectorIR](new Year(new ColumnRef(0)),
+          new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
+          new Quarter(new ColumnRef(0)))
+        val fourTotal = emit(fourFields, 1, 0, loader, 802)
+        val fourNarrow = emit(fourFields, 1, 0, loader, 803, narrowed)
+        val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804)
+        benchmark.addCase("year, total (shipped), null-free") { _ => chunked(yearTotal, false) }
+        benchmark.addCase("year, total (shipped), mixed nulls") { _ => chunked(yearTotal, true) }
+        benchmark.addCase("year, narrowed + guard, null-free") { _ => chunked(yearNarrow, false) }
+        benchmark.addCase("year, narrowed + guard, mixed nulls") { _ => chunked(yearNarrow, true) }
+        benchmark.addCase("year+month+day+quarter, total, null-free") { _ =>
+          chunked(fourTotal, false, outputs = 4)
+        }
+        benchmark.addCase("year+month+day+quarter, narrowed, null-free") { _ =>
+          chunked(fourNarrow, false, outputs = 4)
+        }
+        // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector
+        // body against year's ~45), and the per-row LocalDate loop is what Spark runs today.
+        benchmark.addCase("dayofweek, for scale, null-free") { _ => chunked(dow, false) }
+        benchmark.addCase("per-row LocalDate year (the path Spark uses today)") { _ =>
+          var pass = 0
+          while (pass < repeats) {
+            var i = 0
+            while (i < numRows) {
+              val days = nfData.get(ValueLayout.JAVA_INT, i * 4L)
+              dst.set(ValueLayout.JAVA_INT, i * 4L, java.time.LocalDate.ofEpochDay(days).getYear)
+              i += 1
+            }
+            pass += 1
+          }
+        }
+        benchmark.run()
+      }
+
       runBenchmark("GROUP_BUDGET: two outputs over one shared chain, split vs kept together") {
         // The register's open retuning candidate (task 17). A shared depth-8 chain with six
         // more ops on each of two outputs is 20 distinct ops, straddling the shipped budget of
