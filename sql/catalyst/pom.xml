@@ -213,6 +213,19 @@
             <javacArg>--add-modules</javacArg>
             <javacArg>jdk.incubator.vector</javacArg>
           </javacArgs>
+          <!--
+            The same flag on the compiler's own JVM, and it is not redundant. javac compiles
+            the class happily with the javacArgs above; zinc then extracts its API by calling
+            Class.getDeclaredFields() on the freshly written class file, which loads the field
+            types reflectively - so an unresolved incubator module fails the build *after* a
+            successful compile, as NoClassDefFoundError: jdk/incubator/vector/VectorSpecies.
+            sbt never reaches this because its own launcher already runs with the module
+            resolved; only the Maven build exercises it.
+          -->
+          <jvmArgs combine.children="append">
+            <jvmArg>--add-modules</jvmArg>
+            <jvmArg>jdk.incubator.vector</jvmArg>
+          </jvmArgs>
         </configuration>
       </plugin>
     </plugins>

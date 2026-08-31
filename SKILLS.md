@@ -169,6 +169,22 @@ Each step either pins the fault or narrows it.
   one, reimplement the few lines locally (task 23 did this for the shape cache's
   single-flight gate). Verifiable in seconds without a Maven run: `javac` the file
   against `~/.m2/.../spark-core_2.13-*.jar` and see it fail.
+- **A Java class with an incubator-module type in a field needs `--add-modules` twice
+  under Maven, and again only Maven can tell you.** Task 24 put `SelectionVectorOps` -
+  a `jdk.incubator.vector` kernel - in catalyst's main sources. Adding
+  `--add-modules jdk.incubator.vector` to `scala-maven-plugin`'s `javacArgs` compiles
+  it, and the build then fails *after* a successful compile with
+  `NoClassDefFoundError: jdk/incubator/vector/VectorSpecies`. The reason is zinc's
+  API extraction: `sbt.internal.inc.ClassToAPI.structure` calls
+  `Class.getDeclaredFields()` on the class file it just wrote, which loads the field
+  types **reflectively, in the compiler's own JVM**. So the flag has to go in that
+  plugin's `jvmArgs` as well - two blocks, both with `combine.children="append"` so
+  the parent pom's own arguments survive. SBT never reaches this because the sbt
+  launcher already runs with `--add-modules=jdk.incubator.vector`, which is exactly
+  the shape of the Guava trap above: an SBT-green, Maven-red failure on the Varka Java
+  surface. Reproducible in seconds without a Maven run - `java -cp
+  sql/catalyst/target/scala-2.13/classes` a one-liner that calls
+  `getDeclaredFields()` on the class, with and without the flag.
 
 ## Build Performance (measured, Aug 2026)
 

@@ -460,6 +460,40 @@ the instructions rather than the ratio, scheduled before task 25 because it is
 task 25's instrument; and the milestone's **debt register**, opened with the JMH
 harness that cannot currently answer the questions task 25 is about to ask.
 
+## 11. The Maven-only failure the build change caused, and why SBT could not see it
+
+PR #56's first CI run was green everywhere except **Java 25 build with Maven**,
+which failed compiling catalyst with
+`NoClassDefFoundError: jdk/incubator/vector/VectorSpecies`. Every local gate had
+passed, including `dev/lint-java`, and so had the aarch64 and x86_64 engine jobs.
+
+The cause is not javac. Section 7.1's `javacArgs` block compiles
+`SelectionVectorOps` correctly; the failure happens *after* a successful compile,
+in zinc's API extraction. `sbt.internal.inc.ClassToAPI.structure` calls
+`Class.getDeclaredFields()` on the class file it has just written, which resolves
+the field types **reflectively, in the compiler's own JVM** - and that JVM had no
+`--add-modules jdk.incubator.vector`. So the flag is needed twice: in
+`scala-maven-plugin`'s `javacArgs`, which compiles the source, and in the same
+plugin's `jvmArgs`, which is what the compiler itself runs with.
+
+**SBT cannot see this, structurally.** The sbt launcher already runs with
+`--add-modules=jdk.incubator.vector` (Spark's own `javaOptions`, for
+`dev.ludovic.netlib.blas`), so zinc-under-sbt resolves the module and the same
+code compiles and analyses cleanly. This is the second time in two tasks that the
+Varka Java surface has produced an SBT-green, Maven-red failure - task 23's was
+Guava relocation under shading - and both times the only gate that saw it was the
+Maven CI job. Recorded in `SKILLS.md` beside the shading entry and in
+`sql/varka/AGENTS.md`'s house rules, with the seconds-long local check that
+reproduces it: call `getDeclaredFields()` on the compiled class from a plain
+`java -cp`, once with the flag and once without.
+
+The lesson worth carrying past this instance: **a local build being green is not
+evidence about Maven when the difference between them is a JVM flag one of them
+sets for its own reasons.** Task 23's entry said the same thing about a shading
+rewrite. Anything that puts a new *kind* of type into a Varka Java signature -
+incubator, class-file API, shaded - should be checked against Maven before the
+push, not after.
+
 ## 11. Explicitly out of task 24
 
 * **Width-8 compaction** - `LongVector.compress` waits for task 29's lane type;
