@@ -304,6 +304,31 @@ apparent small wins turned out to be noise.
   int for days near `Int.MaxValue`, while `(floorMod(days, 7) + 4) mod 7` cannot.
   Negative inputs are where every strength-reduced mod goes wrong silently - a test
   range that never crosses zero proves nothing.
+- A fixed-width species literal (`IntVector.SPECIES_256`) is not a safe way to get "the
+  int species with half `LongVector.SPECIES_PREFERRED`'s lane count": under
+  `-XX:MaxVectorSize=16` (this project's narrow-vector CI shape, 128-bit), no 256-bit
+  registers exist, and the mismatch surfaces as a `VectorIntrinsics` bounds exception
+  at a `fromMemorySegment` call site far from the real cause. Derive the matching
+  species instead: `VectorSpecies.of(int.class,
+  VectorShape.forBitSize(longSpecies.vectorBitSize() / 2))` tracks whatever
+  "preferred" resolves to at the JVM's actual configured width, including the narrow
+  shape. Any code pairing two lane types by a literal `SPECIES_*` constant needs the
+  same check.
+- Buffer alignment is not a null hypothesis once the buffer fits in cache: a 64-byte
+  (AVX-512 register width) misaligned start costs 1.6-1.7x throughput at a 4096-row
+  (one Spark batch, L1/L2-resident) working set, and 1.2x at 128-bit - reproducible
+  across repeated runs at both widths (`VarkaMilestone4MeasurementsBenchmark`,
+  `PLAN_MILESTONE_4.md` section 8). The same misalignment costs under 2% on a
+  multi-megabyte streaming buffer, where DRAM bandwidth dominates and hides it -
+  measure at the working-set size the real kernel runs at, not whichever size is
+  convenient to allocate once. A 2-way unrolled kernel loses the same 50-60% as the
+  non-unrolled one: unrolling does not hide a cache-line-split load.
+- A materialization strategy's ranking can flip across the two vector widths this
+  project already tests at. Packing a comparison mask straight to its output bitmap
+  (skipping an intermediate int 0/1 column) wins by 1.16-1.18x at AVX-512 but *loses*
+  by 1.40-1.51x at 128-bit (`VarkaMilestone4MeasurementsBenchmark`). A single
+  same-JVM run at the development machine's native width is not enough evidence for
+  a strategy that has to also hold at the narrow-vector CI shape.
 
 ## Generated Code Can Carry Its Own Debug Info (Class-File API)
 

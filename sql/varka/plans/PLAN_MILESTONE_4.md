@@ -99,7 +99,12 @@ C2 compile. The candidates are the shapes that are compute-bound and already
 carry a committed number to beat: `dayofweek` (a 20-op fold), `CASE WHEN` on
 an unpredictable condition, and the depth-8 chain. Row-consumer shapes are
 bounded by the ~25 ns/row read-back floor and the filter path by compaction;
-no kernel-side ILP moves either, so neither is a candidate.
+no kernel-side ILP moves either, so neither is a candidate. One negative
+result worth carrying in: a 2-way unrolled add kernel over a misaligned
+buffer still lost 50-60% to the aligned case (section 8's buffer-alignment
+entry) - unrolling does not incidentally hide the alignment penalty, so this
+task's outcome and that entry's are independent questions, not one deferring
+to the other.
 
 If a factor above 1 pays, the deliverable is the planner version: the emitter
 already knows the DAG's live-temporary count per lane group, so K is chosen
@@ -144,12 +149,30 @@ because the corpus asks for it.
 
 The cheapest item and the only pure continuation of milestone 3: comparisons
 and `And`/`Or`/`Not` as projection *results*, built on task 21's mask-as-value
-machinery. `VectorMask.toVector` against a `blend` of one and zero is a
-measurement, not a debate. The two real questions are format and nulls:
-Spark's bit-packed boolean vector against Arrow's validity-style bitmap at the
-output boundary, and the three-valued rules holding there exactly as they hold
-in the interior - a null input produces a null output, never a false one. The
-differential runs every null pattern for exactly that reason.
+machinery. `VectorMask.toVector` against a `blend` of one and zero was
+pre-registered as a measurement, not a debate, and it is now measured
+(`VarkaMilestone4MeasurementsBenchmark`, committed run in
+`sql/varka/engine/benchmarks/VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt`):
+the two are statistically tied at both vector widths, on two separate runs -
+neither wins the way the pre-registration expected. The real, width-dependent
+finding is a different question the pre-registration did not ask: whether to
+materialize an int column at all. Skipping it - packing `VectorMask.toLong()`
+straight into the output bitmap - wins by 1.16-1.18x at AVX-512 but *loses* by
+1.40-1.51x at 128-bit, reproduced on both runs. A compound predicate,
+`(a > b) AND (c < d)` kept in mask space the whole way through versus
+materialized as an int column at every node, shows the same width split:
+tied at AVX-512, but mask-space wins by 1.24-1.37x at 128-bit - never worse,
+sometimes decisively better. Two consequences for the task: walk boolean
+sub-expressions in mask space and materialize only once at the output
+boundary (never worse, and the compound case argues for it directly), and the
+single-comparison bits-only shortcut needs a width check rather than a single
+committed choice, since its sign flips between the two vector widths this
+project already tests at. The two real questions the pre-registration also
+named are format and nulls: Spark's bit-packed boolean vector against
+Arrow's validity-style bitmap at the output boundary, and the three-valued
+rules holding there exactly as they hold in the interior - a null input
+produces a null output, never a false one. The differential runs every null
+pattern for exactly that reason.
 
 ### 2.5 Lane-width conversion (task 28, item 1)
 
@@ -158,11 +181,19 @@ conversion, it is the lane count: at one shape an int32 species holds twice
 the lanes of an int64 species, so a mixed-width kernel either drives the loop
 at the narrowest lane count and leaves wide lanes half empty, or emits a part
 loop per conversion and carries two trip counts. That is the one decision in
-this item that is expensive to reverse, so the task opens with the scope's
-open question 2 as a measurement: both shapes on a `cast(int AS long) + long`
-chain, numbers committed, then the emitter integration follows the winner. The
-recorded fallback if part loops measure badly: items 2 and the multiply half
-of 4 can be built width-locked and retrofitted.
+this item that is expensive to reverse, so the scope's open question 2 was
+pre-registered as a measurement before the task opens: both shapes on a
+`cast(int AS long) + long` chain. Measured
+(`VarkaMilestone4MeasurementsBenchmark`, same committed results file as 2.4):
+narrowest-drive and part-loop are statistically tied at both vector widths,
+on two separate runs, narrowest-drive very slightly ahead each time (within
+1.01x-1.05x, inside this file's own noise band). Part-loop's extra
+bookkeeping - two trip counts, two stores per int chunk - buys nothing
+measured, so task 28 opens already knowing the winner: narrowest-drive, for
+the simpler build (one trip count) at the same throughput. The recorded
+fallback if a wider mixed-type shape measures differently once task 28 is
+under way: items 2 and the multiply half of 4 can be built width-locked and
+retrofitted.
 
 ### 2.6 int64 lanes: `TimestampNTZ` and `bigint` (task 29, item 2)
 
@@ -207,6 +238,20 @@ keeps appearing in date work. The order inside the task is the risk order:
 `date_add` stays exempt: it wraps by spec. The validation is a kind of
 assertion the suites have never made: an error-*identity* differential - the
 same `SparkException` as the row engine, attributed to the same row.
+
+Any division this task (or a later one) adds inherits a mechanism question
+task 24 already flagged and did not answer: the emitter's masked epilogue
+leaves inactive lanes reading 0, and integer division traps on a zero
+divisor - the first trapping op the walk admits. Two fixes exist: blend a
+safe divisor (1) into inactive lanes before an unmasked `DIV`, or the masked
+lanewise `DIV` form, which never evaluates inactive lanes. Pre-measured
+(`VarkaMilestone4MeasurementsBenchmark`, same committed results file as 2.4):
+blend-then-`DIV` beats masked `DIV` at both vector widths, on two separate
+runs - 1.08-1.12x at AVX-512, 1.18-1.19x at 128-bit by minimum. The smallest
+margin of the five measurements in that file, but the only one where all four
+data points (two widths times two runs) agree in both direction and rough
+magnitude, which is the interleaved comparison the under-1.3x rule asks for.
+Blend a safe divisor; do not reach for the masked lanewise form.
 
 ## 3. Task breakdown
 
@@ -329,9 +374,21 @@ The scope's section 8, each question now owned by a task or settled here:
   partitioning, a milestone of its own after item 7.
 * **The Arrow-native Parquet reader and writer** - the project owner's work.
   Coordinate, do not duplicate.
-* **Buffer alignment enforcement** - still waiting on a measurement that
-  shows it matters; item 13 added a second reason (false sharing at
-  allocation edges under concurrent tasks), not the missing measurement.
+* **Buffer alignment enforcement** - the missing measurement is no longer
+  missing (`VarkaMilestone4MeasurementsBenchmark`, section 2.4's committed
+  results file, `addAligned`/`addMisaligned`): a buffer start offset by 4
+  bytes (still 4-byte int-aligned, but every AVX-512 load then spans two
+  64-byte cache lines) costs 1.56-1.68x throughput at the default width and
+  1.22-1.25x at 128-bit, reproduced on two separate runs, over the L1/L2-
+  resident 4096-row working set every real Varka kernel actually runs at.
+  Section 2.2's ILP item does not absorb this for free either: a 2-way
+  unrolled version of the same misaligned kernel (not committed - a scratch
+  check, not this file's methodology) still lost 50-60%, so unrolling and
+  alignment are independent levers, not substitutes. The measurement item 13
+  was waiting on is done; what stays out of milestone 4's committed spine is
+  the enforcement itself - an allocator-level change - which is now a design
+  question with real numbers behind it rather than a deferred unknown, to be
+  argued in with its own task the way item 13 or the string items would be.
 * **Whole-stage code generation** - in the charter (`VISION.md` section 13),
   not in this milestone.
 

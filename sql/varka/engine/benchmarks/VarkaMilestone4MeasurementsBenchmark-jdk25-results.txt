@@ -1,0 +1,66 @@
+================================================================================================
+Milestone 4 pre-registration measurements (JMH)
+================================================================================================
+
+Five candidate-lowering comparisons for tasks 27, 28 and 30 (not yet started), each over one
+N=4096 row buffer (one Spark COLUMN_BATCH_SIZE, L1/L2-resident). See
+VarkaMilestone4MeasurementsBenchmark.java for what each pair measures and why. Run twice; the
+"Reading these numbers" section below cites both runs where they disagree by more than noise.
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M, machine otherwise idle
+JMH 1.37, throughput mode, forks=0 (in-process, on the surefire JVM), 1 thread,
+3 x 2 s warmup, 5 x 2 s measurement. Higher is better.
+Run: ./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true
+
+--- Default vector width (AVX-512, 16 int lanes / 8 long lanes) ---
+
+Benchmark                                                      Mode  Cnt     Score     Error   Units
+VarkaMilestone4MeasurementsBenchmark.addAligned                thrpt   5  8226.982 ± 124.077  ops/ms
+VarkaMilestone4MeasurementsBenchmark.addMisaligned              thrpt   5  4910.240 ± 179.792  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolBitsOnly               thrpt   5  9057.395 ±  28.399  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolBlend                  thrpt   5  7551.505 ± 356.976  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolToVectorAnd            thrpt   5  7827.009 ± 131.143  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolTreeMaskSpace          thrpt   5  3519.886 ±  38.172  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolTreeMaterializedInt    thrpt   5  3418.375 ±  15.332  ops/ms
+VarkaMilestone4MeasurementsBenchmark.divBlendThenDiv            thrpt   5   155.420 ±  10.160  ops/ms
+VarkaMilestone4MeasurementsBenchmark.divMaskedDiv               thrpt   5   143.939 ±  14.992  ops/ms
+VarkaMilestone4MeasurementsBenchmark.laneWidthNarrowestDrive    thrpt   5  2744.852 ±  39.854  ops/ms
+VarkaMilestone4MeasurementsBenchmark.laneWidthPartLoop          thrpt   5  2757.348 ±   5.114  ops/ms
+
+--- Narrow vector width (-XX:MaxVectorSize=16, 128-bit: 4 int lanes / 2 long lanes) ---
+
+Benchmark                                                      Mode  Cnt     Score     Error   Units
+VarkaMilestone4MeasurementsBenchmark.addAligned                thrpt   5  4345.362 ±  33.598  ops/ms
+VarkaMilestone4MeasurementsBenchmark.addMisaligned              thrpt   5  3557.113 ±  42.690  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolBitsOnly               thrpt   5  2561.249 ±  57.868  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolBlend                  thrpt   5  3794.901 ± 368.258  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolToVectorAnd            thrpt   5  3632.558 ± 178.053  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolTreeMaskSpace          thrpt   5  1334.326 ±  58.431  ops/ms
+VarkaMilestone4MeasurementsBenchmark.boolTreeMaterializedInt    thrpt   5  1060.132 ±   6.905  ops/ms
+VarkaMilestone4MeasurementsBenchmark.divBlendThenDiv            thrpt   5    83.947 ±   0.237  ops/ms
+VarkaMilestone4MeasurementsBenchmark.divMaskedDiv               thrpt   5    71.783 ±   3.030  ops/ms
+VarkaMilestone4MeasurementsBenchmark.laneWidthNarrowestDrive    thrpt   5  2004.070 ± 199.325  ops/ms
+VarkaMilestone4MeasurementsBenchmark.laneWidthPartLoop          thrpt   5  1924.909 ±  60.965  ops/ms
+
+--- Reading these numbers (ratios by minimum-of-5, per PLAN_TASK_14.md 2.1's under-1.3x rule) ---
+
+* Alignment: aligned beats misaligned at both widths, both runs - 1.68x by min at AVX-512
+  (1.56x on the first run), 1.22x at 128-bit (1.25x on the first run). Real and reproducible,
+  and scales with width: bigger where a load spans more of a cache line.
+* Boolean materialization (a single comparison): toVector+and and blend are statistically tied at
+  both widths across both runs - which one leads flips between runs (1.06x either way), always
+  within this file's own noise band. Whether to skip materializing an int column at all is the
+  real, width-dependent finding, reproduced on both runs: not materializing (bits-only straight
+  to the packed bitmap) wins by 1.16-1.18x at AVX-512 but *loses* by 1.40-1.51x at 128-bit - the
+  strategy should not be picked once and assumed to generalize across widths.
+* Lane-width conversion: narrowest-drive and part-loop are tied at both widths on both runs
+  (within 1.01x-1.05x either way) - narrowest-drive is the simpler build (one trip count) for the
+  same throughput.
+* Boolean trees ((a > b) AND (c < d)): mask-space and materialized-int are tied at AVX-512 on both
+  runs (within 1.03x) but mask-space wins reproducibly at 128-bit - 1.24-1.37x across the two
+  runs - never worse, sometimes decisively better.
+* Division safety: blend-then-div beats masked-div at both widths on both runs - 1.08-1.12x at
+  AVX-512, 1.18-1.19x at 128-bit by min. The one measurement whose margin stayed under 1.3x on
+  every run; still consistent in direction and magnitude across all four data points (two widths
+  times two runs), which is the interleaved-comparison the under-1.3x rule asks for.
