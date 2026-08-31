@@ -207,10 +207,6 @@ public final class VarkaLoopEmitter {
 
   private static final ClassDesc MEMORY_SEGMENT =
       ClassDesc.of("java.lang.foreign.MemorySegment");
-  private static final ClassDesc VALUE_LAYOUT =
-      ClassDesc.of("java.lang.foreign.ValueLayout");
-  private static final ClassDesc VALUE_LAYOUT_OF_INT =
-      ClassDesc.ofDescriptor("Ljava/lang/foreign/ValueLayout$OfInt;");
   private static final ClassDesc BYTE_ORDER = ClassDesc.of("java.nio.ByteOrder");
   private static final ClassDesc INT_VECTOR = ClassDesc.of("jdk.incubator.vector.IntVector");
   private static final ClassDesc VECTOR = ClassDesc.of("jdk.incubator.vector.Vector");
@@ -223,7 +219,6 @@ public final class VarkaLoopEmitter {
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Comparison;");
   private static final ClassDesc VO_BINARY =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Binary;");
-  private static final ClassDesc MATH = ClassDesc.of("java.lang.Math");
   private static final ClassDesc SUPPORT =
       ClassDesc.of("org.apache.spark.sql.varka.vector.VarkaVectorSupport");
   private static final ClassDesc FUSED_KERNEL = ClassDesc.of(VarkaFusedKernel.class.getName());
@@ -318,15 +313,6 @@ public final class VarkaLoopEmitter {
   /** {@code void IntVector.intoMemorySegment(MemorySegment, long, ByteOrder, VectorMask)}. */
   private static final MethodTypeDesc INTO_MEMORY_SEGMENT_MASKED = MethodTypeDesc.of(
       ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, BYTE_ORDER, VECTOR_MASK);
-  /** {@code int MemorySegment.get(ValueLayout.OfInt, long)}. */
-  private static final MethodTypeDesc SEGMENT_GET_INT = MethodTypeDesc.of(
-      ConstantDescs.CD_int, VALUE_LAYOUT_OF_INT, ConstantDescs.CD_long);
-  /** {@code void MemorySegment.set(ValueLayout.OfInt, long, int)}. */
-  private static final MethodTypeDesc SEGMENT_SET_INT = MethodTypeDesc.of(ConstantDescs.CD_void,
-      VALUE_LAYOUT_OF_INT, ConstantDescs.CD_long, ConstantDescs.CD_int);
-  /** {@code int Math.floorMod(int, int)} / {@code int Math.max/min(int, int)} (static). */
-  private static final MethodTypeDesc MATH_II_I = MethodTypeDesc.of(
-      ConstantDescs.CD_int, ConstantDescs.CD_int, ConstantDescs.CD_int);
 
   // Parameter slots of `run` (instance method: `this` is slot 0, finding 11's lesson).
   private static final int P_SRC_DATA = 1;
@@ -675,8 +661,9 @@ public final class VarkaLoopEmitter {
    * One walk over the output trees, before any bytecode exists: validates every node, counts
    * uses on structural equality (the DAG view of trees the caller may have built
    * independently), computes per node the referenced-column bitset and its height, collects a
-   * post-order (children-first) topological order for the scalar tail, and marks the
-   * null-skipping subtrees the all-null shortcut must not reason about.
+   * post-order (children-first) topological order - the line map's numbering, and the
+   * schedule planSlots' validity aliasing depends on - and marks the null-skipping subtrees
+   * the all-null shortcut must not reason about.
    */
   private static final class Analysis {
     final int numInputs;
@@ -687,7 +674,9 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, Integer> useCount = new LinkedHashMap<>();
     /** Per distinct node, the bitset of input ordinals its subtree references. */
     final Map<VarkaVectorIR, Long> columns = new HashMap<>();
-    /** Distinct nodes, children strictly before parents - the scalar tail's schedule. */
+    /** Distinct nodes, children strictly before parents - the line map's numbering and
+     * planSlots' schedule: a word reference planned here always sees concrete child
+     * references, which the validity aliasing depends on. */
     final List<VarkaVectorIR> topoOrder = new ArrayList<>();
     /**
      * Each distinct node's 1-based position in {@link #topoOrder}, which is the line number
@@ -1044,8 +1033,8 @@ public final class VarkaLoopEmitter {
    * so they emit no all-null shortcut and no validity words; the masked variants are the
    * general ones, and the pairs must agree wherever both could run. Every method re-derives
    * the prologue state from the same seven parameters; only the driver zeroes the destination
-   * validity (the loop and tail methods run after bits were written and must not), and the
-   * tail starts its row loop at {@code loopBound}.
+   * validity (the loop and epilogue methods run after bits were written and must not), and
+   * the epilogue starts its single pass at {@code loopBound}.
    */
   private static void emitBody(CodeBuilder cb, boolean dense, BodyMode mode, int group,
       ClassDesc classDesc, List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals,
@@ -1077,8 +1066,8 @@ public final class VarkaLoopEmitter {
 
     // (3) Per output: segments, and - in the driver only - zero(dstValidity) before any
     // return below, the emitter invariant: an output nothing writes must still read as
-    // all-null. The loop and tail methods run after bits were written and must not. A Cond
-    // root's data address is 0L by the interface contract and must not be materialized
+    // all-null. The loop and epilogue methods run after bits were written and must not. A
+    // Cond root's data address is 0L by the interface contract and must not be materialized
     // (the same rule as an all-null input's validity address); zeroing its bitmap doubles
     // as the selection invariant - an unwritten row reads as unselected.
     for (int o = 0; o < numOutputs; o++) {
@@ -1147,7 +1136,7 @@ public final class VarkaLoopEmitter {
     // (5) All-null shortcut: return iff every output reads at least one all-null column.
     // Sound only for null-intolerant outputs - a null-skipping subtree (greatest, IfElse) can
     // be valid over an all-null column - and emitted in the masked driver only (the dense
-    // body has nothing null; the loop and tail methods are never called when it fires), and
+    // body has nothing null; the loop and epilogue methods never run when it fires), and
     // only when every output references a column. A Cond root (task 21) is excluded outright
     // rather than reasoned about: Or(unknown, known-true) is known true, so an OR over one
     // all-null column and one live one still selects rows, which the zeroed bitmap the

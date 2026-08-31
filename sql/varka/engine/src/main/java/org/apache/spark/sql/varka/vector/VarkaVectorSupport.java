@@ -24,8 +24,9 @@ import jdk.incubator.vector.VectorMask;
 
 /**
  * The building blocks a Varka kernel is made of: address wrapping, bit-packed validity access
- * per whole lane group and per the emitter epilogue's partial one, and the single-row
- * counterparts the hand-written kernels' scalar tails use. Promoted from
+ * per whole lane group and per an epilogue's partial one, and the single-row counterparts
+ * that scalar reference code and the tests use (no production loop reads a row at a time
+ * since task 24 gave both the emitted loops and the kernels masked epilogues). Promoted from
  * {@link DateVectorOps} (Task 9) so that generated fused loops can call them by name, exactly as
  * generated dispatchers call the kernels; the hand-written kernels keep using them and remain the
  * reference for how they compose.

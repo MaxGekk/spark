@@ -268,6 +268,17 @@ keeps appearing in date work. The order inside the task is the risk order:
 assertion the suites have never made: an error-*identity* differential - the
 same `SparkException` as the row engine, attributed to the same row.
 
+One obligation task 24 left at this task's door, sharpened by its review: the
+masked epilogue's invariant that **no operation in the walk may trap on `0`**
+(inactive lanes read `0` from a masked load) currently lives only in the
+emitter's class doc, and division is the first node that will violate it. This
+task must not just remember the paragraph - it should make the invariant
+structural when the first trapping node lands: an explicit zero-safety member on
+the sealed `VarkaVectorIR` (no default), so a node that can trap does not
+compile until the epilogue emitter blends a safe divisor or takes the masked
+lanewise form. A prose invariant fails only on unaligned batch lengths, which
+task 24 measured as the lengths no committed harness ever runs.
+
 ## 3. Task breakdown
 
 Tasks 24-31 are the committed spine, in dependency order: 24 halves the
@@ -429,7 +440,7 @@ which is what makes them worth carrying forward.
 
 ### Item 1. Lane-width conversion, and mixed-type expression trees
 
-Adopted as task 28 (see 2.5). The design input carried over whole: the hard
+Adopted as task 28 (see 2.6). The design input carried over whole: the hard
 part is the lane count, not the conversion; `convertShape(I2L, longSpecies,
 part)` yields one long vector per part with `partLimit` parts; the
 narrowest-drive-versus-part-loop choice is measured before either is built in;
@@ -438,7 +449,7 @@ item 4.
 
 ### Item 2. int64 lanes: `TimestampNTZ`, `bigint`, and the second lane width
 
-Adopted as task 29 (see 2.6). Kept for the zoned day when it comes: pack the
+Adopted as task 29 (see 2.7). Kept for the zoned day when it comes: pack the
 IANA tzdata transitions into flat `long[]` interval arrays and resolve a
 vector of timestamps against them with a SIMD binary search, rather than
 per-row `ZoneRules` lookups.
@@ -473,18 +484,18 @@ with `SQRT`, `EXP`, `LOG`, `LOG10`, `CBRT`, `SIN` through `TANH`, `EXPM1`,
 
 ### Item 4. ANSI-correct integer arithmetic, priced rather than assumed
 
-Adopted as task 30 (see 2.7). The pricing argument carried over whole:
+Adopted as task 30 (see 2.8). The pricing argument carried over whole:
 wrap-versus-saturate difference lanes are exactly the overflowed lanes, one
 vector op and one well-predicted branch on the common path, `try_*` as the
 branchless easy case worth shipping alone.
 
 ### Item 5. Boolean outputs
 
-Adopted as task 27 (see 2.4).
+Adopted as task 27 (see 2.5).
 
 ### Item 6. Calendar field extraction, `year` first
 
-Adopted as task 26 (see 2.3). The corpus calibration kept on the record:
+Adopted as task 26 (see 2.4). The corpus calibration kept on the record:
 TPC-DS pre-materialises calendar parts (`d_year`, `d_moy`, `d_dom`, `d_qoy`,
 `d_dow`), so extraction appears zero times there; TPC-H q7, q8 and q9 use
 `year(date)` and nothing else. Intuition overweights this item; the corpus
@@ -614,7 +625,7 @@ Recorded so they are not re-proposed:
 
 ### Item 13. Instruction-level parallelism: the unroll factor
 
-Adopted as task 25 (see 2.2). The full three-constraint pricing - the 7x
+Adopted as task 25 (see 2.3). The full three-constraint pricing - the 7x
 pinned-broadcast collapse, the ~1 ms-per-vector-op compile cliff against
 `GROUP_BUDGET`, and `DIV` scalarization that unrolling cannot rescue - lives
 in `SKILLS.md`'s "Vector API on HotSpot, Measured", whose unrolling bullet

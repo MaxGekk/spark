@@ -93,15 +93,25 @@ public final class SelectionVectorOps {
    * @param selection the selection bitmap, bit set = row selected, at least
    *        {@code (len + 7) / 8} bytes.
    * @param len number of source rows.
+   * @param count the number of selected rows, as counted from this same {@code selection}
+   *        bitmap. Not advisory: the unmasked stores are bounded by
+   *        {@code (count + intLanes()) * 4 <= dstDataBytes}, checked on entry - the class
+   *        doc's slack rule as a precondition rather than a cross-file convention - and a
+   *        {@code count} that did not come from this bitmap fails the closing consistency
+   *        check instead of silently producing a wrong batch shape.
    * @param dstData address of the destination int32 values.
-   * @param dstDataBytes the destination data buffer's whole capacity, which must be at least
-   *        {@code (selected + intLanes()) * 4} - see the class doc's unmasked-store note.
+   * @param dstDataBytes the destination data buffer's whole capacity.
    * @param dstValidity address of the destination bit-packed validity.
    * @param dstValidityBytes the destination validity buffer's whole capacity.
    */
   public static void compactInts(
       long srcData, long srcValidity, boolean hasNulls, MemorySegment selection, int len,
-      long dstData, long dstDataBytes, long dstValidity, long dstValidityBytes) {
+      int count, long dstData, long dstDataBytes, long dstValidity, long dstValidityBytes) {
+    if (dstDataBytes < ((long) count + SPECIES.length()) * 4) {
+      throw new IllegalArgumentException("destination data buffer holds " + dstDataBytes
+          + " bytes; the unmasked stores need (count + lanes) * 4 = "
+          + (((long) count + SPECIES.length()) * 4) + " - see the class doc's slack rule");
+    }
     MemorySegment dstVal = segment(dstValidity, dstValidityBytes);
     // The per-group validity writes below OR into this, so it starts clean rather than
     // trusting the allocator to have zeroed it.
@@ -118,7 +128,8 @@ public final class SelectionVectorOps {
     int pos = 0;
     int i = 0;
     for (; i < loopBound; i += lanes) {
-      long sel = bitsAt(selection, i, lanes) & lowBits(lanes);
+      // bitsAt bounds its result to its row count itself, here as in the epilogue.
+      long sel = bitsAt(selection, i, lanes);
       if (sel == 0) {
         continue;
       }
@@ -129,27 +140,34 @@ public final class SelectionVectorOps {
           .compress(m).intoMemorySegment(dst, (long) pos * 4, ORDER);
       int selected = Long.bitCount(sel);
       long bits = hasNulls
-          ? Long.compress(bitsAt(srcVal, i, lanes) & lowBits(lanes), sel)
+          ? Long.compress(bitsAt(srcVal, i, lanes), sel)
           : lowBits(selected);
       orBitsAt(dstVal, pos, bits, selected);
       pos += selected;
     }
-    // The final partial group, in its own method: it is the only place a masked load and the
-    // partial bitmap read appear, and DateVectorOps records what leaving that shape inline in
-    // a loop-bearing method costs.
+    // The final partial group, in its own method: it is the only place a masked load appears,
+    // and DateVectorOps records what leaving that shape inline in a loop-bearing method costs.
     if (i < len) {
-      compactEpilogue(src, dst, srcVal, hasNulls, selection, dstVal, i, len, pos);
+      pos += compactEpilogue(src, dst, srcVal, hasNulls, selection, dstVal, i, len, pos);
+    }
+    if (pos != count) {
+      throw new IllegalStateException("selection bitmap holds " + pos
+          + " selected rows but the caller counted " + count
+          + "; the count must come from this same bitmap");
     }
   }
 
-  /** The fewer than {@code lanes} rows no whole group covered; see {@link #compactInts}. */
-  private static void compactEpilogue(MemorySegment src, MemorySegment dst,
+  /**
+   * The fewer than {@code lanes} rows no whole group covered; see {@link #compactInts}.
+   * Returns how many rows it selected, for the caller's closing consistency check.
+   */
+  private static int compactEpilogue(MemorySegment src, MemorySegment dst,
       MemorySegment srcVal, boolean hasNulls, MemorySegment selection, MemorySegment dstVal,
       int i, int len, int pos) {
     int rows = len - i;
     long sel = bitsAt(selection, i, rows);
     if (sel == 0) {
-      return;
+      return 0;
     }
     VectorMask<Integer> m = VectorMask.fromLong(SPECIES, sel);
     IntVector.fromMemorySegment(SPECIES, src, (long) i * 4, ORDER, SPECIES.indexInRange(i, len))
@@ -159,6 +177,7 @@ public final class SelectionVectorOps {
         ? Long.compress(bitsAt(srcVal, i, rows), sel)
         : lowBits(selected);
     orBitsAt(dstVal, pos, bits, selected);
+    return selected;
   }
 
   // ---------------------------------------------------------------------------------------------

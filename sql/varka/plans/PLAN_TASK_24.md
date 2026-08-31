@@ -494,12 +494,19 @@ rewrite. Anything that puts a new *kind* of type into a Varka Java signature -
 incubator, class-file API, shaded - should be checked against Maven before the
 push, not after.
 
-## 11. Explicitly out of task 24
+## 12. Explicitly out of task 24
 
 * **Width-8 compaction** - `LongVector.compress` waits for task 29's lane type;
   the width-4 check routes everything else to the per-row typed copy unchanged.
 * **A null-free rung on the filter ladder**, which is what it would take to
   measure the `count == len` forwarding path (section 7.4).
+* **Two `compactInts` micro-optimizations the review named, both
+  measurement-gated**: reading a whole aligned group's selection bits in one
+  access instead of `bitsAt`'s byte walk, and replacing the null-free path's
+  per-group validity read-modify-write with one bulk fill of the first `count`
+  bits after the loop. The committed numbers are flat at 3.8-4.2 ns/row already,
+  so neither enters without an A/B showing it pays - the same bar everything
+  else in this task cleared or fell to.
 * **The per-lane-group fast paths** - declined above, with the two conditions
   that would reopen them.
 * **Fixing the engine's JMH harness** - the debt register entry, not this task:

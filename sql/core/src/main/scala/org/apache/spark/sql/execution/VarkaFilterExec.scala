@@ -186,8 +186,13 @@ private[sql] class VarkaFilterEvaluatorFactory(
       val batches = inputs.head
       new Iterator[ColumnarBatch] {
         // Same one-batch-at-a-time discipline as VarkaProjectExec: released before the next
-        // input batch is requested. Nothing here is forwarded, but the selection buffer is
-        // task state, so the previous batch must be done before the mask is overwritten.
+        // input batch is requested. Two things now depend on that ordering, not one. The
+        // selection buffer is task state, so the previous batch must be done before the mask
+        // is overwritten - and since task 24 an all-selected batch *forwards* the child's
+        // vectors rather than copying them, so an output batch can alias input memory that a
+        // buffer-reusing child recycles on its next(). Release-before-next is what makes both
+        // sound; reordering it (prefetching input, holding two batches) is a use-after-free
+        // on exactly the all-selected batches.
         private var current: ColumnarBatch = null
 
         override def hasNext: Boolean = {

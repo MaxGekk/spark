@@ -380,6 +380,24 @@ apparent small wins turned out to be noise.
   intuition loses often enough that the plan should record the expectation, the A/B,
   and ship whichever wins - the written-down prediction is what makes the reversal
   visible and the numbers re-checkable.
+- **Check what a benchmark never executes before believing what it says about a
+  change there** (task 24). Every committed harness in this repo happened to be
+  lane-aligned - this file's parity benchmark ran one call over 1,000,000 rows, the
+  engine JMH's sizes are 32 / 10000 / 1000000, and Spark's default
+  `COLUMN_BATCH_SIZE` is 4096, all multiples of 4, 8 and 16 - so `loopBound ==
+  length` everywhere and the emitter's scalar remainder path had never executed a
+  row under measurement. Any remainder-handling change was invisible to every
+  committed number. When the code under test has an aligned fast path and a
+  remainder path, the size ladder needs sizes like 4095 and 63 on it deliberately;
+  a pair one row apart isolates the remainder (equal call counts), and a magnified
+  pair (64/63) makes a per-row cost measurable that a 4096-row batch hides in
+  noise. Two more measurement lessons from the same task: a cost quoted at one
+  rung of a ladder is not a bound on the whole ladder (task 21's "~1-3 ns/row"
+  copy cost, read as a ceiling, under-predicted the compress win threefold - the
+  scalar copy grew with selectivity and the ceiling was one point on that curve);
+  and an in-run control (cases the change cannot affect, measured in the same
+  process) is what turns "the numbers moved" into "the noise floor is 15% and the
+  effect is inside it".
 - Debugging corollary from the same stretch: before concluding files changed or
   vanished, verify the working directory. A shell whose cwd resets between commands
   plus relative paths fabricates convincing evidence of disaster; absolute paths in

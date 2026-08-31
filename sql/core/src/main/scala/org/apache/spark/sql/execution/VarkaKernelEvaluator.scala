@@ -937,9 +937,15 @@ private[sql] class VarkaFilterEvaluator(
   /**
    * Runs the mask kernel and compacts the selected rows into a fresh output batch - the
    * columnar filter's whole batch path, and the v1 selected-batch contract (milestone open
-   * question 2): the batch that leaves a Varka filter is an ordinary dense batch, so every
-   * consumer's invariants hold unchanged - `canRun`'s valueCount-equals-numRows check
-   * included, which is what lets a Varka projection stack right on top.
+   * question 2): the batch that leaves the *compacting* path is an ordinary dense batch, so
+   * every consumer's invariants hold unchanged - `canRun`'s valueCount-equals-numRows check
+   * included, which is what lets a Varka projection stack right on top. The `count == len`
+   * forwarding path below makes a narrower promise: the child's columns pass through exactly
+   * as they arrived, normalized only as much as the child normalized them - `canRun` vets the
+   * plan-referenced columns per batch, so an unreferenced column could in principle arrive
+   * non-Arrow or short and leave the same way. Sound today because a stacked Varka node runs
+   * its own per-batch `canRun` and falls back on what it cannot serve; it just means the
+   * forwarding path relies on the downstream gate rather than on this method's output shape.
    *
    * Columns whose input is an Arrow `DateDayVector` or `IntVector` compact by a typed scalar
    * copy into a fresh Arrow vector of the same type (keeping them kernel-servable upstream of
@@ -1064,6 +1070,7 @@ private[sql] class VarkaFilterEvaluator(
         hasNulls,
         selection.mask,
         len,
+        count,
         dst.getDataBuffer().memoryAddress(),
         dst.getDataBuffer().capacity(),
         dst.getValidityBuffer().memoryAddress(),

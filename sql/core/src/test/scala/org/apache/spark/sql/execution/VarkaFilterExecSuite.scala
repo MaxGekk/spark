@@ -205,8 +205,15 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
   test("each compacted batch is released when the next one is requested") {
     val numBatches = 8
     val rowsPerBatch = 512
+    // Every fourth row is null, so the always-true predicate below selects 384 of 512 rows
+    // and the batch takes the *compacting* path. This used to be all-selected, which was fine
+    // until task 24 taught that case to forward the child's columns instead - after which an
+    // all-selected run of this test would cover forwarding (which has its own test) and leave
+    // the compaction's allocation and release, the thing this test exists for, unexercised.
+    val selectedPerBatch = (0 until rowsPerBatch).count(_ % 4 != 3)
     val specs = (0 until numBatches).map { b =>
-      BatchSpec("arrow", Seq((0 until rowsPerBatch).map(i => Int.box(b * rowsPerBatch + i))))
+      BatchSpec("arrow", Seq((0 until rowsPerBatch).map(i =>
+        if (i % 4 == 3) null else Int.box(b * rowsPerBatch + i))))
     }
     val initial = ArrowUtils.rootAllocator.getAllocatedMemory
     val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-test", 0, Long.MaxValue)
@@ -215,8 +222,8 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     try {
       val inputs = specs.map(VarkaColumnarToRowExecSuite.buildBatch(_, Seq(attrD), allocator))
       val baseline = ArrowUtils.rootAllocator.getAllocatedMemory
-      // Everything selects, so each compacted batch is as large as its input - the worst
-      // case for a leak to show.
+      // Three quarters of every batch selects, so each compacted batch is nearly as large as
+      // its input - close to the worst case for a leak to show, while still compacting.
       val factory = new VarkaFilterEvaluatorFactory(
         GreaterThan(attrD, Literal(-1, DateType)),
         Seq(attrD),
@@ -231,7 +238,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
       var seen = 0
       var peak = 0L
       batches.foreach { batch =>
-        assert(batch.numRows() === rowsPerBatch)
+        assert(batch.numRows() === selectedPerBatch)
         assert(batch.column(0).getInt(0) === seen * rowsPerBatch)
         seen += 1
         peak = math.max(peak, ArrowUtils.rootAllocator.getAllocatedMemory - baseline)
