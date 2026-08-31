@@ -551,9 +551,49 @@ fly. The gap between what it assumed and what 28 and 29 actually build is the
 most useful thing its outcome section can record - and it is a cheap trial of
 whether a recipe can usefully be written ahead of its dependencies at all.
 
+### 2.14 days-from-civil, and month arithmetic (task 40)
+
+The headline of this task is not an expression. It is **days-from-civil** - the
+inverse of task 26's decomposition - which `make_date`, `months_between`,
+`date_trunc('QUARTER')` and interval month arithmetic all want, and none of
+which has it. `date + INTERVAL n MONTH / YEAR` is what makes it concrete and
+testable, and it comes with `add_months(d, n)` and `d - INTERVAL n MONTH` for
+free: all three are the same node, and the subtraction arrives as a
+`RuntimeReplaceable` the compiler already unwraps.
+
+Notably this needs **none** of tasks 28, 29 or 30: a year-month interval is
+physically a month count, so the whole thing is int32 and is available as soon
+as 26 lands.
+
+The investigation behind it turned up two things worth recording here rather
+than only in the recipe.
+
+**The inverse is cheaper than the forward direction.** Its divisions are by
+400, 4, 100 and 5, all on small operands, so every one admits an *exact* magic
+multiply with no correction step, where task 26's forward direction needed two
+round-down magics with carries. Checked: the round trip is the identity over
+all 3,652,059 days from year 1 to year 9999.
+
+**The natural formulation of the month arithmetic does not work.** Folding the
+year into a total month count and dividing by 12 puts the dividend near
+400,000, far past the ~46341 bound an exact magic needs and past the ~160,000
+that round-down plus one correction reaches. Keeping the dividend small - the
+month index plus the offset, divided by 12, with the quotient added to the year
+- makes it exact at `M = 43691, k = 19`, and bounds the literal the compiler
+will accept at about two thousand years. The planning pass wrote the wrong one
+first; `plans/verify_days_from_civil.py` is committed beside the recipe so the
+right one can be re-run rather than trusted.
+
+There is no vectorization-specific algorithm here to find, and the recipe says
+so: Hinnant's `days_from_civil` and Neri-Schneider's optimized form are plain
+branch-free integer arithmetic, which is exactly what makes them vectorize.
+What is not avoidable is the decompose-adjust-recompose round trip, because the
+clamp - 31 January plus one month is 28 or 29 February - needs the day of
+month. About 90 ops, roughly twice `year`.
+
 ## 3. Task breakdown
 
-Tasks 24-39 are the committed spine, in dependency order: 24 halves the
+Tasks 24-40 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
@@ -570,8 +610,8 @@ which is worth watching rather than ignoring.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now tasks 32-39, sections 2.9 to 2.13), so
-milestone 5 resumes at 40.
+(task 31, section 2.2, and now tasks 32-40, sections 2.9 to 2.14), so
+milestone 5 resumes at 41.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -590,6 +630,7 @@ milestone 5 resumes at 40.
 | 37 | `weekofyear` | The node, the ISO-8601 rule including both year-boundary corrections, and the weeks-in-year helper called for two years | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list |
 | 38 | A day offset that is a column | The four guards moved, the `andRef` validity fix, `IntegerType` leaves and Arrow `IntVector` inputs accepted, short and byte offsets declining | A null offset producing a null row, at both widths; short and byte columns declining; **no pinned value and no committed number moves**, since no node type is added and the literal path is untouched |
 | 39 | `date - date` | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
+| 40 | days-from-civil, and month arithmetic | `emitDaysFromCivil` as a helper three later expressions can call; the node behind `date +- INTERVAL n MONTH/YEAR` and `add_months`; the small-dividend month arithmetic and the literal bound it implies | The round trip tested on its own, not only through the expression; the clamp cases in both directions; a non-foldable or over-large month count declining; green at both widths |
 | 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
