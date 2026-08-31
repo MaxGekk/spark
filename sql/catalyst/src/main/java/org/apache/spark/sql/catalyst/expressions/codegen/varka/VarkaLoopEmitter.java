@@ -950,8 +950,8 @@ public final class VarkaLoopEmitter {
     int status;
     /**
      * The guard's accumulated out-of-range mask (task 26), or null when this body has no
-     * guarded node - which is every body under the total lowering. Non-null is exactly the
-     * signal that the method returns something other than a constant zero.
+     * chrono node at all. Non-null is exactly the signal that the method returns something
+     * other than a constant zero.
      */
     Integer guardAcc;
 
@@ -1025,8 +1025,8 @@ public final class VarkaLoopEmitter {
     // The guard exists only where a lowering is partial - today, the narrowed calendar one.
     // Allocated for the whole body rather than per node: one accumulator carries every guarded
     // node's verdict, since the caller acts on the batch, not on the lane.
-    boolean guarded = analysis.options.civilFromDays() == VarkaEmitOptions.CivilFromDays.NARROWED
-        && mode != BodyMode.DRIVER && outputs.stream().anyMatch(VarkaLoopEmitter::hasChrono);
+    boolean guarded = mode != BodyMode.DRIVER
+        && outputs.stream().anyMatch(VarkaLoopEmitter::hasChrono);
     if (guarded) {
       s.guardAcc = slot++;
     }
@@ -1972,11 +1972,7 @@ public final class VarkaLoopEmitter {
 
     cb.astore(days);
 
-    if (analysis.options.civilFromDays() == VarkaEmitOptions.CivilFromDays.NARROWED) {
-      emitNarrowedEra(cb, node, dense, analysis, s, days, era, rem, mask);
-    } else {
-      emitTotalEra(cb, days, era, rem, mask);
-    }
+    emitEra(cb, node, dense, analysis, s, days, era, rem, mask);
 
     // rem is now the day of era, in [0, 146096]. Everything below works on that.
     // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
@@ -2106,52 +2102,14 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * The total lowering's day-of-era step: a two-step division that is correct for every
-   * {@code int} day. Leaves the era in {@code era} and the day of era in {@code rem}.
-   */
-  private static void emitTotalEra(CodeBuilder cb, int days, int era, int rem, int mask) {
-    // era = ((h * M) >>> K) - OFF for h = (days >> 16) + 2^15. Splitting the dividend is what
-    // keeps this in the low 32 bits the Vector API's multiply returns; dropping the low half
-    // can only make the quotient too small, which is why the carries below are one-sided.
-    cb.aload(days);
-    emitShift(cb, "ASHR", VarkaChrono.TOTAL_SPLIT_SHIFT);
-    cb.loadConstant(VarkaChrono.TOTAL_HI_BIAS);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    emitMagic(cb, VarkaChrono.TOTAL_ERA_M, VarkaChrono.TOTAL_ERA_K);
-    cb.loadConstant(VarkaChrono.TOTAL_ERA_OFFSET);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
-    cb.astore(era);
-
-    // rem = days - era * 146097. This multiply overflows int for the largest quotients, on
-    // purpose: the true difference lies in [0, 3 * 146097), so the low 32 bits carry it
-    // exactly. Widening it to "fix" the overflow would break the top of the day range.
-    cb.aload(days);
-    cb.aload(era);
-    cb.loadConstant(VarkaChrono.ERA_DAYS);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(rem);
-    for (int i = 0; i < VarkaChrono.TOTAL_CORRECTIONS; i++) {
-      emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
-    }
-
-    // The March-epoch shift, folded past the division rather than added to the days, where it
-    // would overflow near Integer.MAX_VALUE: rem += 135080, era += 4, and carry once more.
-    cb.aload(rem);
-    cb.loadConstant(VarkaChrono.EPOCH_ERA_REMAINDER);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.astore(rem);
-    cb.aload(era);
-    cb.loadConstant(VarkaChrono.EPOCH_ERA_QUOTIENT);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.astore(era);
-    emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
-  }
-
-  /**
-   * The narrowed lowering's day-of-era step: one division and one carry, five ops cheaper than
-   * {@link #emitTotalEra} but defined only over the bounded day range - so it also emits the
-   * guard, which is what makes the cheaper arithmetic safe to publish.
+   * The day-of-era step: one round-down division and one carry over a biased day, which is
+   * defined only over {@link VarkaChrono#NARROW_MIN_DAYS}..{@link VarkaChrono#NARROW_MAX_DAYS} -
+   * so it also emits the guard, which is what makes the cheaper arithmetic safe to publish.
+   *
+   * <p>A variant that split the dividend instead, and so needed no guard at all over the whole
+   * int range, was built and measured against this one before being dropped: it cost 14 to 24%
+   * depending on width and null pattern, to buy a range no SQL date literal can reach. The
+   * numbers are in {@code PLAN_TASK_26.md} section 11.2.
    *
    * <p>The guard is two compares ORed together, ANDed with the row's validity where that is
    * available (a null row's data bytes are undefined and must not condemn a batch), and ORed
@@ -2160,7 +2118,7 @@ public final class VarkaLoopEmitter {
    * child the guard is left unmasked, which can only cost a needless fallback, never a wrong
    * answer.
    */
-  private static void emitNarrowedEra(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+  private static void emitEra(CodeBuilder cb, VarkaVectorIR node, boolean dense,
       Analysis analysis, Slots s, int days, int era, int rem, int mask) {
     cb.aload(days);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);

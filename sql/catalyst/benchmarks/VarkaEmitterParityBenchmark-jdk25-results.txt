@@ -6,10 +6,10 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 date_add over 1000000 rows:               Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-hand-written kernel, null-free                        0              0           0       5596.8           0.2       1.0X
-emitted loop, null-free                               0              0           0      17830.1           0.1       3.2X
-hand-written kernel, mixed nulls                      0              0           0       4695.7           0.2       0.8X
-emitted loop, mixed nulls                             0              0           0      13765.4           0.1       2.5X
+hand-written kernel, null-free                        0              0           0       5477.6           0.2       1.0X
+emitted loop, null-free                               0              0           0      16713.7           0.1       3.1X
+hand-written kernel, mixed nulls                      0              0           0       4503.4           0.2       0.8X
+emitted loop, mixed nulls                             0              0           0      12656.9           0.1       2.3X
 
 
 ================================================================================================
@@ -20,10 +20,10 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 datediff over 1000000 rows:               Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-hand-written kernel, null-free                        0              0           0       3949.9           0.3       1.0X
-emitted loop, null-free                               0              0           0       7293.6           0.1       1.8X
-hand-written kernel, mixed nulls                      0              0           0       2700.7           0.4       0.7X
-emitted loop, mixed nulls                             0              0           0       8718.9           0.1       2.2X
+hand-written kernel, null-free                        0              0           0       3593.9           0.3       1.0X
+emitted loop, null-free                               0              0           0       6607.5           0.2       1.8X
+hand-written kernel, mixed nulls                      0              0           0       2641.9           0.4       0.7X
+emitted loop, mixed nulls                             0              0           0       8018.4           0.1       2.2X
 
 
 ================================================================================================
@@ -34,16 +34,16 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 chain over 1000000 rows, mixed nulls:     Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-fused, depth 1                                        0              0           0      15173.8           0.1       1.0X
-sequential kernels, depth 1                           0              0           0       4658.5           0.2       0.3X
-fused, depth 2                                        0              0           0      14246.6           0.1       0.9X
-sequential kernels, depth 2                           0              0           0       2372.6           0.4       0.2X
-fused, depth 4                                        0              0           0      14960.0           0.1       1.0X
-sequential kernels, depth 4                           1              2           0        678.8           1.5       0.0X
-fused, depth 8                                        0              0           0      13304.8           0.1       0.9X
-sequential kernels, depth 8                           4              4           0        248.5           4.0       0.0X
-fused, depth 16                                       0              0           0       7690.9           0.1       0.5X
-sequential kernels, depth 16                          8              8           0        121.4           8.2       0.0X
+fused, depth 1                                        0              0           0      12354.5           0.1       1.0X
+sequential kernels, depth 1                           0              0           0       4414.6           0.2       0.4X
+fused, depth 2                                        0              0           0      12525.2           0.1       1.0X
+sequential kernels, depth 2                           0              1           0       2130.0           0.5       0.2X
+fused, depth 4                                        0              0           0      12239.5           0.1       1.0X
+sequential kernels, depth 4                           1              2           0        671.6           1.5       0.1X
+fused, depth 8                                        0              0           0      11451.6           0.1       0.9X
+sequential kernels, depth 8                           4              5           0        245.2           4.1       0.0X
+fused, depth 16                                       0              0           0       6931.9           0.1       0.6X
+sequential kernels, depth 16                          8              9           1        118.1           8.5       0.0X
 
 
 ================================================================================================
@@ -54,9 +54,9 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 two outputs over 1000000 rows, mixed nulls:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 --------------------------------------------------------------------------------------------------------------------------
-fused, CSE                                              0              0           0       3204.3           0.3       1.0X
-fused, memo disabled                                    0              0           0       2714.3           0.4       0.8X
-sequential kernels (9 passes)                           5              5           0        204.3           4.9       0.1X
+fused, CSE                                              0              0           0       3061.8           0.3       1.0X
+fused, memo disabled                                    0              0           0       2550.5           0.4       0.8X
+sequential kernels (9 passes)                           5              5           0        198.8           5.0       0.1X
 
 
 ================================================================================================
@@ -67,10 +67,10 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 depth-4 arms over 1000000 rows:           Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-arithmetic depth 4, null-free                         0              0           0      11816.3           0.1       1.0X
-CASE WHEN, depth-4 arms, null-free                    0              0           0      11175.9           0.1       0.9X
-arithmetic depth 4, mixed nulls                       0              0           0      13602.3           0.1       1.2X
-CASE WHEN, depth-4 arms, mixed nulls                  0              0           0       6908.9           0.1       0.6X
+arithmetic depth 4, null-free                         0              0           0      10855.2           0.1       1.0X
+CASE WHEN, depth-4 arms, null-free                    0              0           0      10204.8           0.1       0.9X
+arithmetic depth 4, mixed nulls                       0              0           0      12405.3           0.1       1.1X
+CASE WHEN, depth-4 arms, mixed nulls                  0              0           0       6719.2           0.1       0.6X
 
 
 ================================================================================================
@@ -81,30 +81,27 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 dayofweek over 1000000 rows:                   Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -----------------------------------------------------------------------------------------------------------------------------
-magic multiply (shipped), null-free                        0              0           0       5024.8           0.2       1.0X
-magic multiply (shipped), mixed nulls                      0              0           0       8140.0           0.1       1.6X
-digit sum (task 11 reference), null-free                   0              0           0       3454.8           0.3       0.7X
-digit sum (task 11 reference), mixed nulls                 0              0           0       3232.2           0.3       0.6X
-lanewise DIV, null-free                                    2              2           0        644.1           1.6       0.1X
-per-row LocalDate (the path Spark uses today)             10             10           1        100.5          10.0       0.0X
+magic multiply (shipped), null-free                        0              0           0       5677.6           0.2       1.0X
+magic multiply (shipped), mixed nulls                      0              0           0       7591.5           0.1       1.3X
+digit sum (task 11 reference), null-free                   0              0           0       3521.4           0.3       0.6X
+digit sum (task 11 reference), mixed nulls                 0              0           0       3048.3           0.3       0.5X
+lanewise DIV, null-free                                    2              2           0        643.2           1.6       0.1X
+per-row LocalDate (the path Spark uses today)             10             10           0        100.3          10.0       0.0X
 
 
 ================================================================================================
-year: total vs narrowed civil-from-days, against LocalDate (task 26)
+year: the calendar extractions against LocalDate (task 26)
 ================================================================================================
 
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 20000000 rows in 4096-row chunks:                   Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ----------------------------------------------------------------------------------------------------------------------------------
-year, total (reference), null-free                             14             14           0       1452.1           0.7       1.0X
-year, total (reference), mixed nulls                           15             15           0       1372.9           0.7       0.9X
-year, narrowed + guard (shipped), null-free                    11             11           0       1814.8           0.6       1.2X
-year, narrowed + guard (shipped), mixed nulls                  12             12           1       1695.3           0.6       1.2X
-year+month+day+quarter, total, null-free                       50             50           0        400.2           2.5       0.3X
-year+month+day+quarter, narrowed, null-free                    42             42           0        474.4           2.1       0.3X
-dayofweek, for scale, null-free                                 2              3           0       8025.1           0.1       5.5X
-per-row LocalDate year (the path Spark uses today)             42             43           3        481.1           2.1       0.3X
+year, null-free                                                11             11           0       1834.4           0.5       1.0X
+year, mixed nulls                                              12             13           0       1602.2           0.6       0.9X
+year+month+day+quarter, null-free                              42             42           1        479.8           2.1       0.3X
+dayofweek, for scale, null-free                                 2              3           0       8058.8           0.1       4.4X
+per-row LocalDate year (the path Spark uses today)             42             42           1        481.1           2.1       0.3X
 
 
 ================================================================================================
@@ -115,8 +112,8 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 two outputs over a shared chain, 1000000 rows, mixed nulls:     Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ----------------------------------------------------------------------------------------------------------------------------------------------
-budget 16 (shipped): two loop methods, shared chain recomputed              0              0           0       4185.0           0.2       1.0X
-budget 24: one loop method, cross-output CSE kept                           0              0           0       2985.3           0.3       0.7X
+budget 16 (shipped): two loop methods, shared chain recomputed              0              0           0       4095.9           0.2       1.0X
+budget 24: one loop method, cross-output CSE kept                           0              0           0       2959.7           0.3       0.7X
 
 
 ================================================================================================
@@ -127,8 +124,8 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 4 outputs x depth 16 over 1000000 rows:   Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-fused, 64 ops                                         1              1           0        909.2           1.1       1.0X
-sequential kernels, 64 passes                        36             37           1         27.8          36.0       0.0X
+fused, 64 ops                                         1              1           0        951.3           1.1       1.0X
+sequential kernels, 64 passes                        34             34           1         29.6          33.8       0.0X
 
 
 ================================================================================================
@@ -139,17 +136,17 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 20000000 rows in chunks:                                    Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------------------------
-depth-4 chain, chunk 4096 (aligned), null-free                          1              1           0      20776.6           0.0       1.0X
-depth-4 chain, chunk 4096 (aligned), mixed nulls                        1              1           0      14911.1           0.1       0.7X
-depth-4 chain, chunk 4095 (lanes-1 tail rows), null-free                1              1           0      19453.1           0.1       0.9X
-depth-4 chain, chunk 4095 (lanes-1 tail rows), mixed nulls              1              1           0      15037.3           0.1       0.7X
-depth-4 chain, chunk 64 (aligned), null-free                            5              5           0       4241.1           0.2       0.2X
-depth-4 chain, chunk 64 (aligned), mixed nulls                          6              7           0       3174.7           0.3       0.2X
-depth-4 chain, chunk 63 (lanes-1 tail rows), null-free                  6              6           0       3250.6           0.3       0.2X
-depth-4 chain, chunk 63 (lanes-1 tail rows), mixed nulls                8              8           0       2552.8           0.4       0.1X
-dayofweek, chunk 64 (aligned), null-free                                5              5           0       4020.2           0.2       0.2X
-dayofweek, chunk 64 (aligned), mixed nulls                              6              7           0       3116.2           0.3       0.1X
-dayofweek, chunk 63 (lanes-1 tail rows), null-free                      7              7           0       2777.9           0.4       0.1X
-dayofweek, chunk 63 (lanes-1 tail rows), mixed nulls                    9             10           0       2116.8           0.5       0.1X
+depth-4 chain, chunk 4096 (aligned), null-free                          1              1           0      20805.6           0.0       1.0X
+depth-4 chain, chunk 4096 (aligned), mixed nulls                        2              2           0      12133.1           0.1       0.6X
+depth-4 chain, chunk 4095 (lanes-1 tail rows), null-free                1              1           0      19647.8           0.1       0.9X
+depth-4 chain, chunk 4095 (lanes-1 tail rows), mixed nulls              2              2           0      11776.3           0.1       0.6X
+depth-4 chain, chunk 64 (aligned), null-free                            5              5           0       4191.6           0.2       0.2X
+depth-4 chain, chunk 64 (aligned), mixed nulls                          7              7           0       3073.5           0.3       0.1X
+depth-4 chain, chunk 63 (lanes-1 tail rows), null-free                  6              7           0       3086.4           0.3       0.1X
+depth-4 chain, chunk 63 (lanes-1 tail rows), mixed nulls                8              8           0       2527.1           0.4       0.1X
+dayofweek, chunk 64 (aligned), null-free                                5              5           1       4104.8           0.2       0.2X
+dayofweek, chunk 64 (aligned), mixed nulls                              7              8           0       2759.5           0.4       0.1X
+dayofweek, chunk 63 (lanes-1 tail rows), null-free                      7              7           0       2989.8           0.3       0.1X
+dayofweek, chunk 63 (lanes-1 tail rows), mixed nulls                   10             11           1       1958.0           0.5       0.1X
 
 

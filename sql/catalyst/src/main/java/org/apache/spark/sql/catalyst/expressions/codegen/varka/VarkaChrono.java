@@ -47,11 +47,14 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * quotient - followed by a bounded number of correction steps, each one compare and two
  * adjustments on a remainder the decomposition wants anyway.
  *
- * <p><b>Two variants, one tail.</b> {@link #narrowed} reaches the day-of-era with one division
- * and one correction but is valid only over {@link #NARROW_MIN_DAYS}..{@link #NARROW_MAX_DAYS};
- * {@link #total} is correct for every {@code int} day and pays a two-step division for it.
- * Everything from the day of era onward is shared - {@link #fromEra} - and is where the
- * exhaustive verification concentrates, since its input domain is only 146097 wide.
+ * <p><b>The range, and why it is bounded.</b> {@link #narrowed} reaches the day of era with one
+ * division and one correction, and is valid only over
+ * {@link #NARROW_MIN_DAYS}..{@link #NARROW_MAX_DAYS} - years -12800 to 33134, which contains
+ * every date SQL can write but is reachable past by {@code date_add}. The emitted form therefore
+ * carries a guard and declines a batch it cannot compute. A variant that split the dividend and
+ * so covered the whole {@code int} range without a guard was built and measured against this one
+ * before being dropped: it cost 14 to 24%, and the numbers are in {@code PLAN_TASK_26.md}
+ * section 11.2.
  *
  * <p><b>The calendar this decomposes into.</b> All of it works in a March-based year, where the
  * leap day is the last day rather than an interior one, so a year's length is a function of its
@@ -71,7 +74,7 @@ public final class VarkaChrono {
   /** Days from 0000-03-01 to 1970-01-01, the shift into March-based years. */
   public static final int MARCH_EPOCH_SHIFT = 719468;
 
-  // --- The narrowed variant: one division, one correction, a bounded input range -------------
+  // --- The day-of-era step: one division, one correction, a bounded input range -------------
 
   /** How many eras {@link #NARROW_BIAS} adds; subtracted again when the year is assembled. */
   public static final int NARROW_ERA_BIAS = 32;
@@ -102,44 +105,7 @@ public final class VarkaChrono {
    * calendar terms, 15 August 33134. */
   public static final int NARROW_MAX_DAYS = (1 << NARROW_ERA_K) - 1 - NARROW_BIAS;
 
-  // --- The total variant: a two-step division, correct for every int day --------------------
-
-  /**
-   * Where the dividend is split. The high half drives a magic multiply and the low half is
-   * dropped, which can only make the quotient too small - never too large - so the corrections
-   * stay one-sided.
-   */
-  public static final int TOTAL_SPLIT_SHIFT = 16;
-
-  /** Added to the arithmetic-shifted high half to make it non-negative. */
-  public static final int TOTAL_HI_BIAS = 1 << (31 - TOTAL_SPLIT_SHIFT);
-
-  /**
-   * The magic for {@code h * 2^16 / 146097}, and {@link #TOTAL_ERA_OFFSET} the quotient of
-   * {@link #TOTAL_HI_BIAS} eras that the bias introduced. Chosen by exhaustive search over all
-   * 65536 high halves at both low-half endpoints - a proof rather than a sample, because the
-   * error is monotone in the low half - to satisfy {@code 0 <= q - q0 <= 2}, i.e. never an
-   * overestimate and at most two corrections.
-   */
-  public static final int TOTAL_ERA_M = 14699;
-
-  /** The shift paired with {@link #TOTAL_ERA_M}. */
-  public static final int TOTAL_ERA_K = 15;
-
-  /** Subtracted after the magic, to undo {@link #TOTAL_HI_BIAS}. */
-  public static final int TOTAL_ERA_OFFSET = 14700;
-
-  /** How many correction steps {@link #TOTAL_ERA_M}'s bound requires. */
-  public static final int TOTAL_CORRECTIONS = 2;
-
-  /** {@code MARCH_EPOCH_SHIFT / ERA_DAYS}: the epoch shift, folded past the division. */
-  public static final int EPOCH_ERA_QUOTIENT = MARCH_EPOCH_SHIFT / ERA_DAYS;
-
-  /** {@code MARCH_EPOCH_SHIFT % ERA_DAYS}: what is left to add to the remainder, where it costs
-   * one compare instead of an addition that would overflow near {@code Integer.MAX_VALUE}. */
-  public static final int EPOCH_ERA_REMAINDER = MARCH_EPOCH_SHIFT % ERA_DAYS;
-
-  // --- The shared tail: day of era to the four fields ---------------------------------------
+  // --- Day of era to the four fields ---------------------------------------
 
   /** {@code floor(2^28 / 36524)}, round-down; one correction, dividend at most 146096. */
   public static final int CENTURY_M = 7349;
@@ -214,35 +180,8 @@ public final class VarkaChrono {
   }
 
   /**
-   * The total decomposition, correct for every {@code int} day. It never forms
-   * {@code days + MARCH_EPOCH_SHIFT}, which overflows in the top {@link #MARCH_EPOCH_SHIFT}
-   * days; the shift is folded past the division instead, where it is one compare.
-   */
-  public static Fields total(int days) {
-    int h = (days >> TOTAL_SPLIT_SHIFT) + TOTAL_HI_BIAS;
-    int quotient = ((h * TOTAL_ERA_M) >>> TOTAL_ERA_K) - TOTAL_ERA_OFFSET;
-    // The product below overflows int for the largest quotients, deliberately: the true
-    // difference lies in [0, 3 * ERA_DAYS), so the low 32 bits carry it exactly. Do not
-    // "fix" this by widening - the whole point of the split is to stay in 32-bit lanes.
-    int rem = days - quotient * ERA_DAYS;
-    for (int i = 0; i < TOTAL_CORRECTIONS; i++) {
-      if (rem >= ERA_DAYS) {
-        quotient++;
-        rem -= ERA_DAYS;
-      }
-    }
-    int shifted = rem + EPOCH_ERA_REMAINDER;
-    int era = quotient + EPOCH_ERA_QUOTIENT;
-    if (shifted >= ERA_DAYS) {
-      era++;
-      shifted -= ERA_DAYS;
-    }
-    return fromEra(era, shifted);
-  }
-
-  /**
-   * Day of era to the four fields - the half both variants share, and the half whose input
-   * domain ({@code [0, 146096]}) is small enough to verify exhaustively on its own.
+   * Day of era to the four fields - the half whose input domain ({@code [0, 146096]}) is small
+   * enough to verify exhaustively on its own.
    *
    * <p>Two overshoot fixes earn their place here. The century magic can land on century 4,
    * which exists for exactly one day of each era (the fourth century holds the era's extra leap

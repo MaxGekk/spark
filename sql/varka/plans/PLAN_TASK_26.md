@@ -377,11 +377,16 @@ as this file's own section 6 said it would be.
 
 **The owner chose `NARROWED`**, on the finding that totality costs 14 to 24%
 depending on width and null pattern while the range it gives up - years outside
--12800 to 33134 - is one no SQL date literal can reach. `TOTAL` stays as the
-reference variant, and the guard it does without is what makes the choice safe:
-a batch holding a day past the range is declined and recomputed on the row
-path, which the differential asserts with `date_add` pushing twenty million
-days past 9999-12-31.
+-12800 to 33134 - is one no SQL date literal can reach. **`TOTAL` was then
+removed**, on a second decision: it had been planned as a live reference variant
+the way `FloorMod7` keeps two, but a variant nothing selects is a second lowering
+to keep correct for as long as it lives, and the measurement it existed to
+produce is above. What makes dropping it safe is the guard: a batch holding a day
+past the range is declined and recomputed on the row path, which the differential
+asserts with `date_add` pushing twenty million days past 9999-12-31.
+
+Section 2's decision 2 said both would ship. That is the one place this file's
+plan and its outcome disagree, and the outcome is what happened.
 
 ### 11.3 Two results worth naming separately
 
@@ -444,10 +449,10 @@ all.
 * **`dayofyear`, date-level `date_trunc`, `last_day`, `next_day`.** The algebra
   yields them and the corpus does not ask; they enter with their own argument
   the way `IN` and `Coalesce` entered milestone 3.
-* **A `DIV` reference variant** of the decomposition, the way `FloorMod7` keeps
-  one. Two independently derived variants already check each other, and the
-  exhaustive sweep against the JDK calendar is a stronger oracle than a third
-  lowering would be.
+* **Any reference variant of the decomposition**, the way `FloorMod7` keeps two.
+  The `TOTAL` variant was built as one and then removed (section 11.2); a `DIV`
+  one was never built. The exhaustive sweep against the JDK calendar is a
+  stronger oracle than either would be, and it costs nothing to keep correct.
 * **Multi-value IR nodes** so several calendar fields share one decomposition -
   the debt register entry from section 5, not this task's change.
 * **`year(timestamp)`.** The analyzer inserts `Cast(TimestampType, DateType)`,

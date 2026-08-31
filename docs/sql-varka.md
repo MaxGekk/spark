@@ -59,7 +59,7 @@ days since epoch) and foldable integer day offsets:
   desugar to them (task 26). One civil-from-days decomposition per extraction,
   lowered entirely to magic multiplies because no vector divide exists; two
   fields of the same date are computed twice, in sibling loop methods, rather
-  than shared. The shipped lowering is defined over years -12800 to 33134 -
+  than shared. The lowering is defined over years -12800 to 33134 -
   every date SQL can write, and then some - and a batch holding a day past that
   (reachable only through `DATE_ADD` arithmetic) is declined by the kernel and
   recomputed on the row path, counted as `numFallbackBatchesDeclined`.

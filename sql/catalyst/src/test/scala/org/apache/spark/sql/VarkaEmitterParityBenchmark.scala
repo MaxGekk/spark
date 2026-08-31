@@ -323,12 +323,11 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.run()
       }
 
-      runBenchmark("year: total vs narrowed civil-from-days, against LocalDate (task 26)") {
-        // The measurement task 26 opens its default choice on. Two lowerings of the same
-        // decomposition, differing only in how they reach the day of era: TOTAL splits the
-        // dividend and is correct for every int day; NARROWED divides once but is defined
-        // only over years -12800..33134, so it also carries a per-lane range guard and reports
-        // a batch it cannot compute. The question is what totality costs.
+      runBenchmark("year: the calendar extractions against LocalDate (task 26)") {
+        // The emitted civil-from-days decomposition against the scalar path Spark runs today.
+        // A second lowering, which split the dividend to cover the whole int day range without
+        // a guard, was measured here before being dropped for costing 14-24%; see
+        // PLAN_TASK_26.md section 11.2 for that comparison.
         //
         // Driven in 4096-row chunks - Spark's COLUMN_BATCH_SIZE, and the working set a real
         // kernel sees - rather than one million-row call, so the per-call prologue is paid at
@@ -367,29 +366,16 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             pass += 1
           }
         }
-        val total = VarkaEmitOptions.DEFAULTS
-          .withCivilFromDays(VarkaEmitOptions.CivilFromDays.TOTAL)
-        val yearTotal = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 800, total)
-        val yearNarrow = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 801)
+        val year = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 801)
         val fourFields = Seq[VarkaVectorIR](new Year(new ColumnRef(0)),
           new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
           new Quarter(new ColumnRef(0)))
-        val fourTotal = emit(fourFields, 1, 0, loader, 802, total)
-        val fourNarrow = emit(fourFields, 1, 0, loader, 803)
+        val four = emit(fourFields, 1, 0, loader, 803)
         val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804)
-        benchmark.addCase("year, total (reference), null-free") { _ => chunked(yearTotal, false) }
-        benchmark.addCase("year, total (reference), mixed nulls") { _ => chunked(yearTotal, true) }
-        benchmark.addCase("year, narrowed + guard (shipped), null-free") { _ =>
-          chunked(yearNarrow, false)
-        }
-        benchmark.addCase("year, narrowed + guard (shipped), mixed nulls") { _ =>
-          chunked(yearNarrow, true)
-        }
-        benchmark.addCase("year+month+day+quarter, total, null-free") { _ =>
-          chunked(fourTotal, false, outputs = 4)
-        }
-        benchmark.addCase("year+month+day+quarter, narrowed, null-free") { _ =>
-          chunked(fourNarrow, false, outputs = 4)
+        benchmark.addCase("year, null-free") { _ => chunked(year, false) }
+        benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
+        benchmark.addCase("year+month+day+quarter, null-free") { _ =>
+          chunked(four, false, outputs = 4)
         }
         // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector
         // body against year's ~45), and the per-row LocalDate loop is what Spark runs today.
