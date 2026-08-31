@@ -407,22 +407,61 @@ If it clears, three mechanisms, in the order they should be considered:
 Whatever the outcome, the deliverable includes sweeping the debt register entry
 in the past tense with what the measurement found, per `sql/varka/AGENTS.md`.
 
+### 2.10 `next_day`, as a handover experiment (task 33)
+
+The smallest piece of vocabulary the survey after task 26 turned up, taken for
+a reason that is not about vocabulary at all: it is the first task written to
+be executed by a cheap agent rather than by whoever planned it, and it is
+chosen because it is the one candidate where nothing has to be decided.
+
+`next_day(d, <literal weekday>)` is `d + 1 + floorMod(k - d, 7)` for a
+compile-time `k`, and every piece of that already exists - the mod-7 magic
+multiply from task 14's follow-up, the unary null-intolerant node shape, the
+literal-in-a-slot convention from `date_add`. About seventeen vector ops,
+twelve of them already measured as `dayofweek`. There is no measurement to
+take, no range to guard, no lowering to choose between.
+
+The one trap is a trap in the opposite direction from the one `SKILLS.md`
+records. `k - d` does overflow near `Integer.MIN_VALUE` - but Spark's own
+`getNextDateForDayOfWeek` computes it in plain `int` arithmetic and wraps, so
+byte-exactness requires reproducing the overflow rather than avoiding it. The
+planning pass wrote the careful version first and checked it: reducing before
+subtracting disagrees with the row engine on the bottom handful of int days for
+every weekday, 28 cases in the boundary set. `dayofweek` is the reverse case,
+because its oracle is `LocalDate`, which never wraps. Whose arithmetic the
+oracle is decides which way the rule points, and that distinction is now in the
+recipe because it is exactly what a cheap agent would get wrong.
+
+`PLAN_TASK_33.md` is written as a step-by-step recipe - exact files,
+exact switches, the oracle to write the test against, the two-step form of the
+narrow-vector run that `JAVA_OPTS` silently gets wrong - and its outcome
+section asks the executing agent to record which steps turned out to be
+misleading. That record is the point of the experiment: whether a task of this
+shape can be handed over, and what a recipe has to contain before it can be.
+
+The corpus does not ask for `next_day` any more than it asked for `month`.
+This task is not claiming otherwise; it is buying a measurement of the handover
+itself, and picking the cheapest possible payload to buy it with.
+
 ## 3. Task breakdown
 
-Tasks 24-32 are the committed spine, in dependency order: 24 halves the
+Tasks 24-33 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
 24's harness and changes how every later kernel is emitted; 26 and 27 spend
 milestone 2's machinery before 28 complicates it; 28 enables 29 and 30's
-widening. 32 is the one task here that no scope document predicted: it exists
+widening. 32 and 33 are the two tasks here that no scope document predicted. 32 exists
 because 26 measured what its own design cost and the number was worth a task
-(see 2.9), which is the milestone's own rule about debts working as intended.
+(see 2.9), which is the milestone's own rule about debts working as intended;
+33 exists to measure something else entirely - whether a task can be handed to
+a cheap agent as a recipe (see 2.10) - and picks the smallest payload it can
+to do it.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now task 32, section 2.9), so milestone 5 resumes
-at 33.
+(task 31, section 2.2, and now tasks 32 and 33, sections 2.9 and 2.10), so
+milestone 5 resumes at 34.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -434,6 +473,7 @@ at 33.
 | 28 | Lane-width conversion | The mixed-width loop-shape measurement (open question 2: narrowest-drive against part loops) on `cast(int AS long) + long`, committed before integration; `convert`/`convertShape` emission following the winner; numeric `Cast` and Catalyst's implicit promotions over the supported types | Differential on mixed int32/int64 trees at both widths; the loop-shape decision recorded with its numbers; no regression on single-width shapes |
 | 29 | int64 lanes: `TimestampNTZ`, `bigint` | The second `LaneType`; `TimestampNTZ` comparisons, differences, literal arithmetic; `TimestampType` and `LongType` comparisons and diffs; range-narrowed magic constants for 1000000 and 86400 or a recorded decline; the field differential mode from task 22 | Every parity gate re-run at the long species and both vector widths; the halved-headroom number committed rather than discovered; zoned operations demonstrably declined, not wrong |
 | 30 | ANSI integer arithmetic | `try_add`/`try_subtract`/`try_multiply` via the difference-mask-as-validity path; the ANSI throw path via saturating detection and scalar re-walk, priced with a registered prediction; `Multiply` overflow through 28's widening if it is cheap, declined with a reason if not | The error-identity differential: same `SparkException`, same row, as the row engine under ANSI; `try_*` differential over overflow-dense and overflow-free data; committed number on the no-overflow path against Janino |
+| 33 | `next_day`, as a handover experiment | The node, the compiler arm declining every non-literal weekday, and the emitter arm over the existing mod-7 lowering; `PLAN_TASK_33.md` written as an executable recipe and scored in its own outcome section on which steps misled the agent that ran it | Every Varka suite green at both widths; the two pinned fixtures re-pinned under their update rule; no committed benchmark number moves, since the task adds a node type and changes no existing shape |
 | 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
