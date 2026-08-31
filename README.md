@@ -53,21 +53,21 @@ the table too - this fork commits its losses:
 
 | Case | vs stock Spark (Janino) |
 | :--- | :--- |
-| `date_add` / `datediff`, columnar consumer | 3.8x / 5.6x |
-| Nested `datediff(date_add(d, 1), d2)` | 5.7x |
-| Two outputs sharing a subchain (DAG-CSE) | 5.7x |
-| `CASE WHEN`, unpredictable condition | 7.1x |
+| `date_add` / `datediff`, columnar consumer | 3.6x / 4.8x |
+| Nested `datediff(date_add(d, 1), d2)` | 5.6x |
+| Two outputs sharing a subchain (DAG-CSE) | 6.0x |
+| `CASE WHEN`, unpredictable condition | 7.0x |
 | `CASE WHEN`, predictable condition | 5.8x |
-| `CASE WHEN d IN (...)`, 5 / 16 literals | 3.6x / 4.2x (fused up to the 16-literal cap; longer lists decline with a reason; requoted from the task-21 run) |
-| `WHERE d < DATE` filter to batches (mask kernel + compaction) | 2.3x-2.7x flat across the whole 0-100% selectivity ladder |
+| `CASE WHEN d IN (...)`, 5 / 16 literals | 3.5x / 3.9x (fused up to the 16-literal cap; longer lists decline with a reason) |
+| `WHERE d < DATE` filter to batches (mask kernel + `compress` compaction) | 2.5x at 0% selected rising to 5.4x at 100% - since task 24 the compaction is one instruction per lane group, so its cost no longer grows with the selected rows |
 | Same filter to rows (mask skip, no compaction) | 2.3x at low selectivity, decaying to 1.1x at all-selected |
 | `WHERE d IN (5 literals)` filter | 2.0x (was parity by design before task 21) |
 | `COUNT(*)` over an 85%-selective filter | 0.8x - nearly every row crosses the read-back floor into the aggregate (1.8x at 15%) |
-| Chain of 8 date ops, columnar consumer | 7.5x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
+| Chain of 8 date ops, columnar consumer | 6.9x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
 | Same chains through a row consumer | 0.8x - the ~25 ns/row read-back floor; heavy shapes clear it instead (`dayofweek` 1.2x, `CASE WHEN` 1.1x through rows), task 19's recorded decision |
-| `dayofweek` | 9.8x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
-| Cold start: first run of a fresh plan shape (100K rows) | 1.7x (a fresh shape misses the class cache by design) |
-| Emit+define+load+instantiate a fused kernel vs one Janino compile | 68x cheaper (~130 us vs ~9 ms) |
+| `dayofweek` | 8.8x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
+| Cold start: first run of a fresh plan shape (100K rows) | 1.8x (a fresh shape misses the class cache by design) |
+| Emit+define+load+instantiate a fused kernel vs one Janino compile | 66x cheaper (~99 us vs ~6.5 ms) |
 
 Regenerate with `SPARK_GENERATE_BENCHMARK_FILES=1`:
 
@@ -124,7 +124,7 @@ task, each with a recorded outcome:
   projections (where a corpus survey found 53-78% of real date references
   live), lower `IN` lists and `Coalesce` onto the mask algebra - Spark's own
   benchmark puts `IN` over dates at 31.2 M rows/s, its slowest primitive
-  (done - task 20 fuses `IN` in condition position at 3.6-4.2x up to a
+  (done - task 20 fuses `IN` in condition position at 3.5-3.9x up to a
   16-literal cap, with `coalesce` and `IS [NOT] NULL` riding the new
   validity condition), and
   `coalesce` is the corpus' third most common non-aggregate function - and
@@ -134,14 +134,17 @@ task, each with a recorded outcome:
   chains that do not).
 * **Milestone 4**: *breadth* - the task plan is in
   [`sql/varka/plans/PLAN_MILESTONE_4.md`](sql/varka/plans/PLAN_MILESTONE_4.md)
-  (tasks 24-30): the types, expressions and loop schedules the engine cannot
-  say yet. The scalar tail replaced by a masked epilogue, `year` and the
-  extraction family, boolean outputs, lane-width conversion, int64 lanes for
-  `TimestampNTZ`, and ANSI-correct integer arithmetic - plus one task that
-  adds no vocabulary at all and asks instead how many independent chains the
-  emitted loop should carry, since a superscalar core has vector ports that a
-  single dependency chain leaves idle. Float lanes wait for the taxi target,
-  and aggregation leads the follow-on ladder.
+  (tasks 24-31): the types, expressions and loop schedules the engine cannot
+  say yet. The scalar tail is gone already - task 24 replaced it with a masked
+  epilogue and took the filter's compaction to `compress(mask)` with it -
+  leaving `year` and the extraction family, boolean outputs, lane-width
+  conversion, int64 lanes for `TimestampNTZ`, and ANSI-correct integer
+  arithmetic, plus two tasks that add no vocabulary at all: one asking how
+  many independent chains the emitted loop should carry, since a superscalar
+  core has vector ports that a single dependency chain leaves idle, and one
+  asserting the *instructions* the kernels compile to rather than inferring
+  vectorization from a throughput ratio. Float lanes wait for the taxi
+  target, and aggregation leads the follow-on ladder.
 * **Milestone 5**: *coverage* - the scope catalogue is in
   [`sql/varka/plans/SCOPE_MILESTONE_5.md`](sql/varka/plans/SCOPE_MILESTONE_5.md),
   driven by a census of TPC-DS, TPC-H and the New York taxi benchmark. What that

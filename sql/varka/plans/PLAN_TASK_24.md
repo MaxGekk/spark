@@ -205,3 +205,199 @@ either had moved, that would have been a bug, not a regeneration.
 
 The milestone file is corrected in place, per the rule that a plan is a record:
 the sentence is rewritten with what was actually found, not deleted.
+
+
+## 6. The hand-written kernels, and a harness that could not be trusted
+
+The owner chose during planning to convert `DateVectorOps` too, so that later
+lane types are copied from a kernel that shows the idiom. Getting to an answer
+took four measurement rounds and produced a finding larger than the conversion.
+
+**Round 1-3, in the engine's JMH harness.** Three shapes were written, each
+A/B'd against the unconverted kernels in fresh JVMs with interleaved rounds:
+
+1. **One mask helper shared by the loop and the epilogue** - 24-50% off the
+   mixed-null throughput of all three kernels. The helper contains
+   `partialValidityBitsAt`, which contains a byte loop, and the hot loop has to
+   inline it.
+2. **The epilogue inline in the kernel method** - 8-40%, in proportion to how
+   often the epilogue calls the mask helper: `vectorAddDays` calls it once and
+   lost 12%, `vectorDateDiff` calls it twice and lost 39%.
+3. **The epilogue in its own sibling method** - the house rule's shape, and the
+   emitter's. Best of the three and apparently still a loss: 4-8% at 1,000,000
+   rows and 20-31% at 32.
+
+On that evidence the conversion was reverted.
+
+**Then the owner asked whether forced inlining had been tried**, and the answer
+changed the conclusion rather than the code. Under
+`-XX:+UnlockDiagnosticVMOptions -XX:CompileCommand=inline,jdk/incubator/vector/*.*`
+the *unconverted* kernels ran 50-190% faster in the JMH harness
+(`vectorDateDiff` NULL_FREE at 10000 rows: 435 to 1276 ops/ms). The same flag
+applied to the catalyst parity benchmark changed nothing at all - hand-written
+`date_add` 5563 to 5542, emitted 18211 to 18001, all within 1%.
+
+A flag that is worth 190% in one harness and 0% in another is not a speedup; it
+is a measurement fault. The engine's JMH runs `forks = 0`, in the surefire JVM,
+*after* the JUnit suites, so the kernels are compiled against profiles those
+suites polluted - which also explains why that harness has a case
+(`scalarSubDays.MIXED_NULL`, code this task never touched) that swings 3x
+between runs. **Every number in rounds 1-3 was measured in a degraded JIT
+state.**
+
+**Round 4, in the clean harness, with a control.** The parity benchmark
+exercises `DateVectorOps` directly as its hand-written cases, in a fresh JVM,
+and in the same runs it measures the *emitted* loops, which this change cannot
+touch. Two interleaved rounds per arm, best times:
+
+| case | unconverted | converted | delta |
+|---|---|---|---|
+| `date_add` kernel, null-free | 6034.3 | 5707.8 | -5.4% |
+| `date_add` kernel, mixed nulls | 4722.4 | 4603.5 | -2.5% |
+| `datediff` kernel, null-free | 4157.3 | 3925.5 | -5.6% |
+| `datediff` kernel, mixed nulls | 3012.3 | 2653.0 | -11.9% |
+| *control:* `date_add` emitted, null-free | 18382.0 | 15544.8 | *-15.4%* |
+| *control:* `date_add` emitted, mixed nulls | 14216.5 | 13451.9 | *-5.4%* |
+| *control:* `datediff` emitted, null-free | 7175.6 | 7190.6 | *+0.2%* |
+| *control:* `datediff` emitted, mixed nulls | 9531.4 | 8955.0 | *-6.0%* |
+
+The control moved by as much as the treatment - identical bytecode, -15.4% to
++0.2% - so this harness's noise floor is around 15% and the conversion's effect
+is not distinguishable from it. **The conversion is restored**, in shape 3, on
+"no measurable effect", not on a win. Shapes 1 and 2 stay rejected: those losses
+were large enough to clear even the degraded harness's noise, and the reasons
+are structural rather than statistical, which is why both are written into
+`DateVectorOps`'s class doc where the next person will meet them.
+
+**The debt this leaves.** `DateVectorOpsBenchmark`'s numbers are measured in a
+JVM the JUnit suites have already warmed and polluted. Every committed figure in
+`DateVectorOpsBenchmark-jdk25-results.txt` inherits that, and milestone 4's
+task 25 is about to ask this harness questions it cannot answer. Recorded in
+`PLAN_MILESTONE_4.md`'s debt register rather than fixed here: the fix (a forked
+JMH JVM, or separating the JMH phase from the test phase) moves every committed
+number in that file, which is its own task's worth of work.
+
+## 7. Compaction: `compress(mask)` and the two batch-level fast paths
+
+### 7.1 Where the kernel had to live, and what that cost
+
+`varka-engine` is a **test**-scope dependency of both catalyst and `sql/core`.
+That is deliberate and load-bearing: production code never links the engine, and
+emitted bytecode reaches `VarkaVectorSupport` by name through the context class
+loader. A compaction kernel is different from every other Varka vector loop -
+Scala calls it directly on the batch path - so it has to be on the compile
+classpath, and neither module had one.
+
+Settled with the owner: **enable the incubating Vector API on catalyst's own
+main compile path** and put `SelectionVectorOps` beside `VarkaSelectionBitmap`.
+Two details were not visible when the choice was made and are recorded here
+because they shape the diff:
+
+* Catalyst's Java is compiled by `scala-maven-plugin`, not
+  `maven-compiler-plugin` - the root pom sets `skipMain` and `skip` on the
+  latter - so the flag goes in that plugin's `javacArgs` with
+  `combine.children="append"` to keep the parent's release flag. sbt takes a
+  module's dependencies from its pom but not its compiler arguments, so
+  `SparkBuild.scala` repeats it (`VarkaCatalystVector`), exactly as
+  `VarkaEngine` already does for the engine module.
+* The kernel cannot call the engine's bitmap helpers, so it carries private
+  copies of that arithmetic - about 35 lines. `VarkaSelectionBitmap` in the same
+  package already keeps a read-side copy for the same reason, and the layout is
+  Arrow's and fixed, so the duplication is bounded and documented rather than
+  open-ended.
+
+### 7.2 The kernel
+
+One lane group at a time: `IntVector.compress(mask)` moves the selected lanes to
+the low end, `Long.compress` does the same for the validity bits. Two decisions
+carry it:
+
+* **Every data store is unmasked.** A masked store costs 2.3x-2.9x and this
+  would pay one per lane group. The caller allocates the destination with one
+  whole lane group of slack past the selected count, so a store at the running
+  output position can always write a full vector; `setValueCount(count)` makes
+  the slack invisible.
+* **A group that selects nothing costs one bitmap read and a branch**, which is
+  what keeps low selectivity cheap.
+
+Applied at `getTypeWidth() == 4` - a width check, not a type check, so a future
+Arrow type of the right width is served by a bit-for-bit lane move. Width 8
+waits for task 29; everything else keeps the per-row typed copy.
+
+### 7.3 What it is worth
+
+Isolated by an in-session A/B - the same JVM session, `compress` on and off,
+with the two batch-level fast paths present in both arms, after the day's
+lesson that cross-run comparison on this machine is worth nothing:
+
+| rung | scalar copy | `compress` | gain | ladder |
+|---|---|---|---|---|
+| 0% selected | 6.9 ns/row | 7.6 | -9% | 2.5x -> 2.2x |
+| 1% selected | 5.8 | 5.4 | +7% | 2.2x -> 2.5x |
+| 15% selected | 5.4 | 4.1 | +32% | 2.5x -> 3.4x |
+| 50% selected | 7.2 | 4.0 | +80% | 2.4x -> 4.2x |
+| 85% selected | 8.4 | 4.0 | +110% | 2.4x -> 5.0x |
+| 100% selected | 8.6 | 3.8 | +126% | 2.4x -> 5.5x |
+
+The 0% rung's -9% is the noise floor showing itself: at zero selected rows the
+compaction is skipped entirely in both arms, so that row is measuring nothing
+and usefully calibrates the rest.
+
+The shape of the win is the interesting part. The scalar copy's cost grew with
+the number of selected rows - 5.4 ns/row at 15% to 8.6 at 100% - because it is
+one Arrow call per selected row. `compress` is flat at 3.8-4.1 across the whole
+ladder, because it is one instruction per lane group whatever the group holds.
+**Compaction has stopped being a function of selectivity.**
+
+### 7.4 The two batch-level fast paths
+
+`count == 0` skips the per-row scans, which were O(len) whatever they found.
+`count == len` forwards the child's columns instead of copying them - the
+earlier rule that a compacting filter owns every output column holds only where
+the compaction is real.
+
+**The forwarding path is unmeasured, and the reason is worth writing down.**
+`VarkaFilterBenchmark`'s data carries nulls, and a null `d` makes `d < DATE`
+unknown rather than true, so *no rung of the ladder selects literally every
+row* - the "100% selected" rung selects every non-null row and still compacts.
+That is confirmed rather than assumed: if forwarding had fired there, the two
+A/B arms above would have been identical at that rung, and they differ by 126%.
+So the path ships on construction (it removes a copy) plus a test that asserts
+the output column is the *same object* as the input's and that releasing the
+output leaves it readable - the ownership hazard being the only way this can be
+wrong. Measuring it needs a null-free rung on the ladder, which is a small,
+well-defined follow-up rather than something to improvise here.
+
+## 8. The predictions, scored
+
+Registered in section 3 before any measurement. The project keeps count, so
+these are scored as they came out, not as they read best.
+
+1. **"The tail's runtime share is ~0 at aligned batch sizes and under ~2-4% at
+   unaligned ones; the case is emitter surface, not speed."** *Met on the claim
+   that mattered, wrong on the number.* Aligned: exactly zero, as predicted.
+   Unaligned: ~11% of a 4096-row batch's **kernel** time, not 2-4% - the guess
+   used the wrong denominator - but 0.02-0.1% of end-to-end query time, which is
+   the denominator the claim rested on. The case was made on emitter surface and
+   that is what it should have been made on.
+2. **"Emitted class size within +-20%, no shape past +50%."** *Met with room
+   to spare:* -2.2% to +2.2% over seven shapes.
+3. **"`compress` recovers 1-2 ns/row; the compacting rung moves from 2.7x to at
+   most ~3.2x."** *Wrong, and badly pessimistic.* It recovers up to 4.8 ns/row
+   and the rung reaches 5.5x. The error was inherited rather than invented:
+   task 21 priced the typed scalar copy at "~1-3 ns/row" from the 100% rung
+   alone, and that figure was read here as a ceiling on what any faster copy
+   could recover. It was not a ceiling - the scalar copy's cost *grows with
+   selected rows* (5.4 ns/row at 15%, 8.6 at 100%) while `compress` is flat, so
+   the recoverable amount is larger than the single-rung reading suggested.
+   **The lesson, and it generalises past this task: a cost quoted at one point
+   of a ladder is not a bound on the whole ladder.**
+4. **"The `count == len` forwarding path is worth more than `compress`."**
+   *Unscored, and on the available evidence wrong.* The ladder cannot reach the
+   forwarding path at all (section 7.4), and `compress` alone doubles the
+   compacting path at high selectivity.
+5. **"No engine JMH number moves."** *Unscoreable, which is itself the finding.*
+   The numbers moved a great deal, and then turned out to be measured in a
+   degraded JIT state (section 6). The clean harness finds no effect. The
+   prediction's premise - that this harness answers questions like this - was
+   the thing that failed.

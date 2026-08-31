@@ -260,6 +260,46 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
+  test("task 24: an all-selected batch forwards the child's columns instead of copying") {
+    // The one case where compaction has nothing to shorten, and the only place a Varka filter
+    // hands back a vector it does not own. Two things are asserted, and the second is the
+    // hazard: the output column must be the *same object* as the input's, and releasing the
+    // output must not close it - a batch that owns nothing must leave its vectors to the input
+    // batch, or the next read of that input is a use-after-free.
+    val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-forward", 0, Long.MaxValue)
+    val context = TaskContext.empty()
+    TaskContext.setTaskContext(context)
+    try {
+      val spec = BatchSpec("arrow", Seq((0 until 64).map(Int.box)))
+      val input = VarkaColumnarToRowExecSuite.buildBatch(spec, Seq(attrD), allocator)
+      val factory = new VarkaFilterEvaluatorFactory(
+        GreaterThan(attrD, Literal(-1, DateType)),
+        Seq(attrD),
+        offHeapColumnVectorEnabled = false,
+        classDumpDirectory = None,
+        numOutputRows = org.apache.spark.sql.execution.metric.SQLMetrics
+          .createMetric(sparkContext, "rows"),
+        numInputBatches = org.apache.spark.sql.execution.metric.SQLMetrics
+          .createMetric(sparkContext, "batches"),
+        varkaMetrics = VarkaExecMetrics())
+      val batches = factory.createEvaluator().eval(0, Iterator(input))
+      val out = batches.next()
+      assert(out.numRows() === 64)
+      assert(out.column(0) eq input.column(0),
+        "an all-selected batch must forward the child's column, not copy it")
+      // Draining releases the output batch, which is where a wrongly-owned vector is closed.
+      assert(!batches.hasNext)
+      // The forwarded vector is still the input's to read afterwards.
+      assert(input.column(0).getInt(63) === 63)
+      input.close()
+      context.markTaskCompleted(None)
+    } finally {
+      context.markTaskCompleted(None)
+      TaskContext.unset()
+      allocator.close()
+    }
+  }
+
   test("task 21 review: the row node counts rows as they are emitted, not per batch") {
     // Pre-charging the batch's whole selected count overcounts under early termination
     // (a LIMIT) and double-counts when a later throw routes the batch to the fallback.

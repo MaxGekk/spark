@@ -16,7 +16,7 @@ It changes milestone 4's ordering, and section 2 says how - honestly, because
 the project scores its predictions.
 
 Task numbering continues the single sequence. Milestone 4's task plan assigns
-24-30, so this milestone resumes at 31 - unless that plan grows the way
+24-31, so this milestone resumes at 32 - unless that plan grows further the way
 milestone 3's did. No task numbers are assigned here.
 
 ## 1. The survey

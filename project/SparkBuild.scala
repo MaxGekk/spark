@@ -467,6 +467,7 @@ object SparkBuild extends PomBuild {
    * whose poms declare it */
   enable(VarkaEngine.settings)(varkaEngine)
   Seq(catalyst, sql).foreach(enable(VarkaEngineDependency.settings))
+  enable(VarkaCatalystVector.settings)(catalyst)
 
   /* Hive console settings */
   enable(Hive.settings)(hive)
@@ -1530,6 +1531,19 @@ object VarkaEngineDependency {
   lazy val settings = Seq(
     (Test / unmanagedJars) +=
       Attributed.blank((LocalProject("engine") / Compile / packageBin).value)
+  )
+}
+
+/**
+ * The incubating Vector API on catalyst's *main* compile path, for `SelectionVectorOps` - the
+ * columnar filter's compaction kernel, which lives in catalyst because the engine module is a
+ * test-scope dependency and a kernel the batch path calls from Scala has to be linkable. As
+ * with [[VarkaEngine]], sbt takes a module's dependencies from its pom but not its compiler
+ * arguments, so this repeats what `sql/catalyst/pom.xml` declares.
+ */
+object VarkaCatalystVector {
+  lazy val settings = Seq(
+    javacOptions ++= Seq("--add-modules", "jdk.incubator.vector")
   )
 }
 

@@ -192,6 +192,29 @@
           <argLine>-ea -Xmx4g -Xss4m -XX:ReservedCodeCacheSize=${CodeCacheSize} ${extraJavaTestArgs}</argLine>
         </configuration>
       </plugin>
+      <!--
+        The incubating Vector API on catalyst's own compile path (Varka task 24).
+        SelectionVectorOps - the columnar filter's compaction kernel - lives in this module
+        rather than beside the engine's kernels because `varka-engine` is a *test*-scope
+        dependency here and in sql/core: production code never links it, and generated
+        bytecode reaches it by name through the context class loader. A kernel the batch path
+        calls from Scala has to be on the compile classpath instead.
+
+        The flag goes in scala-maven-plugin's javacArgs, not maven-compiler-plugin's: the root
+        pom sets skipMain/skip on that one, so this module's Java is compiled jointly with its
+        Scala. `combine.children="append"` keeps the parent's release flag, which coexists with
+        an incubator module only because the target release is the running JDK's own.
+      -->
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+        <configuration>
+          <javacArgs combine.children="append">
+            <javacArg>--add-modules</javacArg>
+            <javacArg>jdk.incubator.vector</javacArg>
+          </javacArgs>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 </project>

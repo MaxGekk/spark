@@ -95,8 +95,10 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
  * entirely by consuming the bitmap at the row boundary.
  *
  * Batch ownership follows [[VarkaProjectExec]]'s convention, with one difference the class doc
- * of the compaction records: a compacting filter owns '''every''' output column - forwarding
- * ends here, because a forwarded vector cannot be shortened.
+ * of the compaction records: a compacting filter owns every output column it actually
+ * compacts, because a forwarded vector cannot be shortened. The exception is the one case
+ * where nothing needs shortening - every row selected - where task 24 forwards the child's
+ * columns untouched and the batch owns nothing.
  *
  * A batch the kernel cannot serve falls back to the per-row predicate into a fresh writable
  * batch, mirroring [[VarkaProjectExec]]'s fallback.
