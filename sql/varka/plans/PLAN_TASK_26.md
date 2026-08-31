@@ -336,7 +336,110 @@ Five commits, each green on its own:
 6. **Numbers moving under the task's own feet.** Commits 2 to 4 all touch
    emitted bytes; regenerate once, in commit 4.
 
-## 11. Explicitly out of task 26
+## 11. Outcome
+
+Built in six commits, in the sequence section 9 registered, with one addition
+the owner asked for mid-flight (the Java 17 baseline, section 11.4).
+
+### 11.1 What the admission check turned out to be
+
+Section 1's bound held and decided the algorithm: no exact magic multiply
+exists on int lanes for a dividend past roughly 46341, so 146097 and 36524 have
+none at any useful range. Round-down magic plus a fixed number of carries does,
+and the century-then-year split retires 1461 by replacing it with a `/365`
+whose dividend is at most 36524 - under the bound, and so exact.
+
+Verified rather than argued, as committed opt-in tests (`-Dvarka.sweep=true`,
+41.9 s in total):
+
+| sweep | result |
+|---|---|
+| narrowed model against `LocalDate`, all 16777216 days of its range | 0 mismatches |
+| total model against a long-arithmetic reference, all 2^32 days | 0 mismatches |
+| that reference against `LocalDate` over the narrowed range | 0 mismatches |
+
+### 11.2 The measurement, and the owner's choice
+
+`VarkaEmitterParityBenchmark`'s year section, 20M rows in 4096-row chunks,
+best-time rates. The default-width table is committed; the 128-bit one is here,
+as this file's own section 6 said it would be.
+
+| case | AVX-512 | 128-bit |
+|---|---|---|
+| `year`, narrowed + guard (shipped) | 1815 M/s | 619 M/s |
+| `year`, total (reference) | 1452 M/s | 532 M/s |
+| `year`, narrowed, mixed nulls | 1695 M/s | 577 M/s |
+| `year`, total, mixed nulls | 1373 M/s | 525 M/s |
+| four fields, narrowed | 474 M/s | 156 M/s |
+| four fields, total | 400 M/s | 140 M/s |
+| `dayofweek`, for scale | 8025 M/s | 2668 M/s |
+| per-row `LocalDate` | 481 M/s | 481 M/s |
+
+**The owner chose `NARROWED`**, on the finding that totality costs 14 to 24%
+depending on width and null pattern while the range it gives up - years outside
+-12800 to 33134 - is one no SQL date literal can reach. `TOTAL` stays as the
+reference variant, and the guard it does without is what makes the choice safe:
+a batch holding a day past the range is declined and recomputed on the row
+path, which the differential asserts with `date_add` pushing twenty million
+days past 9999-12-31.
+
+### 11.3 Two results worth naming separately
+
+**At 128-bit the item barely pays.** 619 M/s against the row path's 481 is
+1.3x, where AVX-512 gives 3.8x. This is the vocabulary item's weakest width and
+the number is on the record rather than inferred; a future decision to decline
+the extraction family below some vector width would start here.
+
+**The four-field projection costs 3.8x one field, not 4x-with-sharing.** Each
+extraction carries its own decomposition, which is the trade task 17 trained
+the emitter on and which section 5 predicted. It opens the milestone's debt
+register entry rather than being fixed here.
+
+### 11.4 The scalar denominator, on both JDKs
+
+Asked for after the measurement: what the baseline is on Java 17, which is what
+Apache Spark still builds with by default. The fork cannot answer from inside
+its own build - it targets Java 25, because the emitter needs
+`java.lang.classfile` - so the loop the ratio is against became a committed
+program outside the build (`sql/varka/baselines/`). The same scalar loop is
+**2.0x faster on Java 25 than on Java 17** (479 against 236 M rows/s), which is
+not Varka but what the JVM did to `java.time` between the releases. So the
+shipped kernel is 3.8x the Java 25 row path and 7.7x the Java 17 one; the
+results file says to quote the 3.8x, because Varka cannot run on Java 17 at
+all.
+
+### 11.5 The predictions, scored
+
+1. **Op count: right.** ~51 emitted vector ops for `year` against the 40-45
+   predicted, and about 2.5x `dayofweek`'s 20-op body against the predicted 2x.
+2. **What totality costs: wrong, and by more than noise.** Predicted 5 to 12%;
+   measured 14 to 24%. The prediction reasoned from op count alone (five ops on
+   forty) and missed that the carries the total variant adds are *masked* ops,
+   which this project has measured at 2.3-2.9x an unmasked one. Both ratios are
+   under the 1.3x rule and were reproduced across three runs of the table.
+3. **The speedups: one right, one badly wrong.** 3.0x over the Janino row path
+   was predicted 3 to 5x, and the in-harness Janino arm was never built - the
+   comparison landed against the scalar `LocalDate` loop instead. The 15 to 30x
+   over that loop was wrong by an order of magnitude: it is 3.8x, because
+   escape analysis scalarizes the `LocalDate` allocation in a tight loop, which
+   the prediction anchored on task 11's 62 M rows/s figure without checking
+   whether that figure was measured the same way.
+4. **The grouping change: right.** Single-field projections are unchanged, the
+   four-field one stays off the compile cliff, and no committed number for an
+   existing shape moved.
+5. **The pinned literals: right.** Both moved, and nothing else did.
+
+### 11.6 What it cost
+
+| | |
+|---|---|
+| Vector ops emitted for `year` | ~51 (~45 shared with the other three fields) |
+| New IR node types | 4 |
+| Shape hash | `612c94d132690dc2` to `041e35db20d62e91` |
+| Pinned line map | 18 lines to 25 |
+| New tests | 6 emitter, 2 compiler, 3 differential, 6 model |
+
+## 12. Explicitly out of task 26
 
 * **`dayofyear`, date-level `date_trunc`, `last_day`, `next_day`.** The algebra
   yields them and the corpus does not ask; they enter with their own argument

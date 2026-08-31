@@ -188,9 +188,10 @@ public final class VarkaLoopEmitter {
    * <p>Task 17 priced the one candidate the debt register left open - raising the budget so
    * two outputs sharing a deep chain keep their cross-output CSE in one method - and closed
    * it against the change: on 20 distinct ops split across two outputs, the shipped 16 runs
-   * 4.1 G rows/s (two loop methods, the shared chain recomputed per lane group) against
-   * 3.0 G at 24 (one method, CSE kept). Recomputing eight ops in registers is cheaper than
-   * the wider method's register pressure, which is the same effect that made sibling methods
+   * 4587.1 M rows/s (two loop methods, the shared chain recomputed per lane group) against
+   * 3196.2 M at 24 (one method, CSE kept) - this javadoc rounded those to 4.1 and 3.0 until
+   * task 26 checked them against the committed file. Recomputing eight ops in registers is
+   * cheaper than the wider method's register pressure, the same effect that made sibling methods
    * the rule in the first place. The parity benchmark keeps both cases so a future retune is
    * measured rather than argued.
    */
