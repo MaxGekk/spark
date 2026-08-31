@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 import java.lang.ref.{ReferenceQueue, WeakReference}
+import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicInteger
 
 import scala.jdk.CollectionConverters._
@@ -107,6 +108,14 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     (kernel, loader)
   }
 
+  /** The declared method names of an emitted class - how the method layout is asserted. */
+  private def methodNames(named: (String, Array[Byte])): Seq[String] = {
+    val (className, bytes) = named
+    val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
+    loader.defineGeneratedClass(className, bytes)
+    loader.loadClass(className).getDeclaredMethods.map(_.getName).toSeq
+  }
+
   /** One column's worth of buffers: data, validity bitmap and its null count. */
   private case class Col(data: MemorySegment, validity: MemorySegment, nullCount: Int) {
     // Per the kernel contract a null-free or all-null column may pass 0L for its validity.
@@ -189,6 +198,18 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       evalValue(n.days(), row, lits).map(v => (Math.floorMod(v, 7) + 4) % 7 + 1)
     case n: WeekDay =>
       evalValue(n.days(), row, lits).map(v => (Math.floorMod(v, 7) + 3) % 7)
+    // The calendar oracle is java.time, which is what DateTimeUtils.getYear and its three
+    // siblings call - not VarkaCalendar, so the emitted bytes are checked against the
+    // definition rather than against the model they were derived from.
+    case n: Year =>
+      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getYear)
+    case n: Month =>
+      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getMonthValue)
+    case n: DayOfMonth =>
+      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getDayOfMonth)
+    case n: Quarter =>
+      evalValue(n.days(), row, lits)
+        .map(v => (LocalDate.ofEpochDay(v.toLong).getMonthValue + 2) / 3)
     case n: Greatest =>
       pick(evalValue(n.left(), row, lits), evalValue(n.right(), row, lits), math.max)
     case n: Least =>
@@ -684,6 +705,46 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("the calendar extractions match LocalDate across the Gregorian range") {
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+    // Every edge the decomposition could trip on: the int extremes (where the total lowering's
+    // deliberate wrap lives), era and century boundaries, the March-based year's own turn, and
+    // the leap-day rules of 1600 / 1700 / 1900 / 2000.
+    val extremes = Array(
+      Int.MinValue, Int.MinValue + 1, Int.MaxValue, Int.MaxValue - 1,
+      Int.MaxValue - 719468, Int.MaxValue - 719467,
+      -1, 0, 1, -719468, -719469, -719162,
+      LocalDate.of(1600, 2, 28).toEpochDay.toInt, LocalDate.of(1600, 2, 29).toEpochDay.toInt,
+      LocalDate.of(1600, 3, 1).toEpochDay.toInt, LocalDate.of(1700, 2, 28).toEpochDay.toInt,
+      LocalDate.of(1700, 3, 1).toEpochDay.toInt, LocalDate.of(1900, 3, 1).toEpochDay.toInt,
+      LocalDate.of(2000, 2, 29).toEpochDay.toInt, LocalDate.of(2000, 3, 1).toEpochDay.toInt,
+      LocalDate.of(1, 1, 1).toEpochDay.toInt, LocalDate.of(9999, 12, 31).toEpochDay.toInt,
+      LocalDate.of(1969, 12, 31).toEpochDay.toInt, LocalDate.of(1970, 1, 1).toEpochDay.toInt)
+    def days(c: Int, i: Int): Int =
+      if (i < extremes.length) extremes(i) else i * 99991 - 500000
+    checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "calendar")
+  }
+
+  test("each calendar output gets its own loop method, whatever GROUP_BUDGET would say") {
+    // Four calendar outputs weigh far more than GROUP_BUDGET, so they must not share a loop
+    // method: one method of ~180 vector ops is the C2 compile cliff the budget exists for.
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+    val names = methodNames(emitMulti(roots, 1, 0, VarkaEmitOptions.DEFAULTS))
+    assert(names.count(_.startsWith("loopDense")) === 4,
+      s"expected one dense loop method per calendar output, got ${names.mkString(", ")}")
+    // A plain chain is unaffected: the weight applies to calendar nodes only.
+    val plain = Seq[VarkaVectorIR](
+      new AddDays(new ColumnRef(0), new LiteralSlot(0)),
+      new SubDays(new ColumnRef(0), new LiteralSlot(0)))
+    assert(methodNames(emitMulti(plain, 1, 1, VarkaEmitOptions.DEFAULTS))
+      .count(_.startsWith("loopDense")) === 1)
+  }
+
   test("the masked body agrees with the dense body on null-free data") {
     // forceMasked reports one null over a full-set bitmap, which the dispatcher sends down
     // runMasked; the reference expectations are identical to the dense run's.
@@ -898,11 +959,18 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "11=(addDays 1 2)",
     "12=(subDays 1 2)",
     "13=(greatest 11 12)",
-    "14=(dayOfWeek 1)",
-    "15=(dateDiff 1 14)",
-    "16=(weekDay 1)",
-    "17=(least 15 16)",
-    "18=(if 10 13 17)").mkString("\n")
+    "14=(year 1)",
+    "15=(month 1)",
+    "16=(greatest 14 15)",
+    "17=(dayOfMonth 1)",
+    "18=(quarter 1)",
+    "19=(greatest 17 18)",
+    "20=(least 16 19)",
+    "21=(dayOfWeek 1)",
+    "22=(dateDiff 20 21)",
+    "23=(weekDay 1)",
+    "24=(least 22 23)",
+    "25=(if 10 13 24)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -926,11 +994,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to
-    // ride Record.toString, whose format no JDK promises. One key using all 15 node types (and
+    // ride Record.toString, whose format no JDK promises. One key using all 19 node types (and
     // three CompareOps), so a change to any rendering, to the operand order, or to the
     // topological schedule fails here. If it does: make sure the change is intended, then
     // update the literal and say so in the task plan - the same rule as the pinned shape
-    // hashes in VarkaShapeCacheSuite.
+    // hashes in VarkaShapeCacheSuite. Task 26 added the four calendar extractions and
+    // re-pinned it (PLAN_TASK_26.md).
     val col = new ColumnRef(0)
     val lit = new LiteralSlot(0)
     val cond = new And(
@@ -938,14 +1007,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         new Compare(CompareOp.LT, col, lit),
         new Not(new Compare(CompareOp.EQ, col, lit))),
       new And(new Compare(CompareOp.GE, col, lit), new IsNotNull(col)))
+    val calendar = new Least(
+      new Greatest(new Year(col), new Month(col)),
+      new Greatest(new DayOfMonth(col), new Quarter(col)))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
-      new Least(new DateDiff(col, new DayOfWeek(col)), new WeekDay(col)))
+      new Least(new DateDiff(calendar, new DayOfWeek(col)), new WeekDay(col)))
     val (_, bytes) = emitMulti(Seq(everyNode), 1, 1)
     assert(VarkaDebugInfoReader.lineMap(bytes) === pinnedLineMap)
-    // The DAG, not a tree: col:0 is written once as line 1 and pointed at eleven times. The
-    // Record.toString rendering this replaced inlined every subtree, so line 18 alone carried
+    // The DAG, not a tree: col:0 is written once as line 1 and pointed at fifteen times. The
+    // Record.toString rendering this replaced inlined every subtree, so line 25 alone carried
     // the whole IR and the key grew quadratically in exactly the sharing the emitter exploits.
     assert(pinnedLineMap.linesIterator.count(_.contains("col:0")) === 1)
   }

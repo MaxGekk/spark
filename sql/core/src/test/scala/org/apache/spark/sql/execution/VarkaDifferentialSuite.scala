@@ -433,6 +433,43 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
+  test("the calendar extractions match the row engine across the Gregorian range") {
+    // Every shape the decomposition could get wrong end to end: leap days of a 400-divisible
+    // year (2000) and a 100-divisible one (1900), the century boundary itself, the era
+    // boundary at 1600, month-length edges, the first and last dates SQL can write, and a
+    // null. The March-based year the lowering works in turns at 1 March, so both sides of
+    // that are here too.
+    val rows = Seq("2024-01-01", "2024-02-29", "2024-03-01", "2024-12-31", "1969-12-31",
+      "1970-01-01", "1900-02-28", "1900-03-01", "2000-02-29", "2000-03-01", "1600-02-29",
+      "1600-03-01", "0001-01-01", "9999-12-31", "2025-07-04", null)
+    Seq(spark, varkaSpark).foreach { session =>
+      import scala.jdk.CollectionConverters._
+      val schema = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("d", org.apache.spark.sql.types.DateType, true)))
+      val data = rows.map(v =>
+        org.apache.spark.sql.Row(if (v == null) null else java.sql.Date.valueOf(v)))
+      session.createDataFrame(data.asJava, schema).createOrReplaceTempView("varka_cal")
+      session.catalog.cacheTable("varka_cal")
+    }
+    try {
+      checkDifferential(spark, varkaSpark,
+        "SELECT year(d) AS a, month(d) AS b, dayofmonth(d) AS c, quarter(d) AS e, " +
+          "year(date_add(d, 1)) AS f FROM varka_cal ORDER BY a, b, c, e, f",
+        expectFused = true)
+      // EXTRACT desugars to the same nodes, so it must fuse the same way.
+      checkDifferential(spark, varkaSpark,
+        "SELECT EXTRACT(YEAR FROM d) AS a, EXTRACT(QUARTER FROM d) AS b " +
+          "FROM varka_cal ORDER BY a, b",
+        expectFused = true)
+      // The TPC-H q7/q8/q9 shape: year(date) beside a filter on the same column.
+      checkDifferential(spark, varkaSpark,
+        "SELECT year(d) AS a FROM varka_cal WHERE d >= DATE '1900-01-01' ORDER BY a",
+        expectFused = true)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_cal"))
+    }
+  }
+
   test("dayofweek and weekday match the row engine across 1970 and nulls") {
     val rows = Seq("2024-01-01", "1969-12-31", "1969-01-05", "1900-02-28", "2100-07-04", null)
     Seq(spark, varkaSpark).foreach { session =>
