@@ -15,9 +15,9 @@ Section 1 is the survey milestone 4's section 5 asked for and could not assume.
 It changes milestone 4's ordering, and section 2 says how - honestly, because
 the project scores its predictions.
 
-Task numbering continues the single sequence. Milestone 4 resumes it at 24, so
-this milestone's numbers are not assignable until milestone 4's task plan is
-written. No task numbers are assigned here.
+Task numbering continues the single sequence. Milestone 4's task plan assigns
+24-30, so this milestone resumes at 31 - unless that plan grows the way
+milestone 3's did. No task numbers are assigned here.
 
 ## 1. The survey
 
@@ -209,7 +209,7 @@ Recorded as corrections, not quietly folded in:
   be re-argued as "the taxi benchmark's item", which raises it if taxi is the
   first target and lowers it otherwise.
 * **Milestone 4 set decimals aside, and decimals are the answer.**
-  `SCOPE_MILESTONE_4.md` item 11 puts `DecimalType` out of scope: "not a lane
+  `PLAN_MILESTONE_4.md` item 12 puts `DecimalType` out of scope: "not a lane
   type ... needs its own design pass rather than an item". The survey says it is
   the single most-aggregated type in both benchmarks. The judgement was right -
   it does need its own design pass - and section 3 below is that pass starting.

@@ -20,9 +20,9 @@ was deferred and what has to be true before it starts:
   is, why it is a debt, and what closing it would take. A debt with a measurement
   attached is worth ten with an adjective.
 * **Work for later milestones** goes in the furthest-out scope document -
-  currently `plans/SCOPE_MILESTONE_5.md`, with `SCOPE_MILESTONE_4.md` behind
-  it - each of which keeps a scope catalogue for exactly this. A milestone's
-  catalogue moves forward when its own plan becomes a task plan.
+  currently `plans/SCOPE_MILESTONE_5.md` - which keeps a scope catalogue for
+  exactly this. A milestone's catalogue moves forward when its own plan
+  becomes a task plan.
 
 When a debt is swept, the register entry is not deleted - it is rewritten in the
 past tense with the task that swept it and what the sweep found. The register is

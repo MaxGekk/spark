@@ -3,7 +3,7 @@
 > written before implementation started, are historical - the live roadmap is
 > `sql/varka/plans/`: `PLAN_MILESTONE_1.md` (the date MVP, done), `PLAN_MILESTONE_2.md`
 > (the fused vector loop, done), `PLAN_MILESTONE_3.md` (reach - the task plan for what comes
-> next), `SCOPE_MILESTONE_4.md` (breadth - the scope catalogue after it) and
+> next), `PLAN_MILESTONE_4.md` (breadth - the task plan after it, tasks 24-30) and
 > `SCOPE_MILESTONE_5.md` (coverage - what the benchmark corpora say is missing).
 > Sections 7 and 12 carry their own status notes; `docs/sql-varka.md` describes what is
 > actually built. Section 13 answers the whole-stage charter question (task 22).
@@ -197,7 +197,7 @@ spark-submit \
 > **Status:** this list is done or superseded (step 6's `JavaClassFileEngine` was built,
 > never routed, and deliberately deleted in milestone 2 - `PLAN_TASK_9.md` section 5.4).
 > The next step is milestone 3, whose task plan is `sql/varka/plans/PLAN_MILESTONE_3.md`;
-> milestone 4's scope catalogue (`SCOPE_MILESTONE_4.md`) follows it, and
+> milestone 4's task plan (`PLAN_MILESTONE_4.md`) follows it, and
 > `SCOPE_MILESTONE_5.md` scopes benchmark coverage after that.
 
 When proceeding to implementation:

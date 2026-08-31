@@ -132,15 +132,16 @@ task, each with a recorded outcome:
   question above is settled (task 19: the rule keeps fusing - heavy shapes
   win through rows and no plan-time number separates them from the cheap
   chains that do not).
-* **Milestone 4**: *breadth* - the scope catalogue is in
-  [`sql/varka/plans/SCOPE_MILESTONE_4.md`](sql/varka/plans/SCOPE_MILESTONE_4.md):
-  the types, expressions and operators the engine cannot say yet. `year` and
-  the extraction family, int64 lanes for `TimestampNTZ`, boolean outputs,
-  ANSI-correct integer arithmetic, float lanes, and the first horizontal
-  reduction. It is organised around what the unused half of the Vector API
-  makes possible - plus one item that adds no vocabulary at all and asks
-  instead how many independent chains the emitted loop should carry, since a
-  superscalar core has vector ports that a single dependency chain leaves idle.
+* **Milestone 4**: *breadth* - the task plan is in
+  [`sql/varka/plans/PLAN_MILESTONE_4.md`](sql/varka/plans/PLAN_MILESTONE_4.md)
+  (tasks 24-30): the types, expressions and loop schedules the engine cannot
+  say yet. The scalar tail replaced by a masked epilogue, `year` and the
+  extraction family, boolean outputs, lane-width conversion, int64 lanes for
+  `TimestampNTZ`, and ANSI-correct integer arithmetic - plus one task that
+  adds no vocabulary at all and asks instead how many independent chains the
+  emitted loop should carry, since a superscalar core has vector ports that a
+  single dependency chain leaves idle. Float lanes wait for the taxi target,
+  and aggregation leads the follow-on ladder.
 * **Milestone 5**: *coverage* - the scope catalogue is in
   [`sql/varka/plans/SCOPE_MILESTONE_5.md`](sql/varka/plans/SCOPE_MILESTONE_5.md),
   driven by a census of TPC-DS, TPC-H and the New York taxi benchmark. What that
