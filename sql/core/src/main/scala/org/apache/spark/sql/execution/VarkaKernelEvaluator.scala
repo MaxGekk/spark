@@ -32,7 +32,7 @@ import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaFusedKernel, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps, VarkaFallbackEvent, VarkaFusedKernel, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -937,22 +937,43 @@ private[sql] class VarkaFilterEvaluator(
   /**
    * Runs the mask kernel and compacts the selected rows into a fresh output batch - the
    * columnar filter's whole batch path, and the v1 selected-batch contract (milestone open
-   * question 2): the batch that leaves a Varka filter is an ordinary dense batch, so every
-   * consumer's invariants hold unchanged - `canRun`'s valueCount-equals-numRows check
-   * included, which is what lets a Varka projection stack right on top.
+   * question 2): the batch that leaves the *compacting* path is an ordinary dense batch, so
+   * every consumer's invariants hold unchanged - `canRun`'s valueCount-equals-numRows check
+   * included, which is what lets a Varka projection stack right on top. The `count == len`
+   * forwarding path below makes a narrower promise: the child's columns pass through exactly
+   * as they arrived, normalized only as much as the child normalized them - `canRun` vets the
+   * plan-referenced columns per batch, so an unreferenced column could in principle arrive
+   * non-Arrow or short and leave the same way. Sound today because a stacked Varka node runs
+   * its own per-batch `canRun` and falls back on what it cannot serve; it just means the
+   * forwarding path relies on the downstream gate rather than on this method's output shape.
    *
    * Columns whose input is an Arrow `DateDayVector` or `IntVector` compact by a typed scalar
    * copy into a fresh Arrow vector of the same type (keeping them kernel-servable upstream of
    * the next Varka node); every other column goes through one per-row pass with the standard
-   * row-to-column converter, the same machinery as the projection residuals. Both loops are
-   * the scalar compaction milestone 4 item 11 is expected to replace with `compress(mask)` -
-   * measured first here. Every output column is owned: forwarding ends at a compacting
-   * filter, because a forwarded vector cannot be shortened.
+   * row-to-column converter, the same machinery as the projection residuals.
+   *
+   * Two selectivity extremes skip that work entirely (task 24). At `count == len` nothing has
+   * to be shortened, and a vector that does not have to be shortened does not have to be
+   * copied, so the child's columns are forwarded: the earlier rule that a compacting filter
+   * owns every output column holds only where the compaction is real. At `count == 0` the
+   * per-row scans are skipped - they are O(len) either way today, which is why the 0%-selected
+   * rung is the weakest of the committed ladder.
    */
   def filterCompact(input: ColumnarBatch): ColumnarBatch = {
     val selection = filterMask(input)
     val len = input.numRows()
     val count = selection.count
+    if (count == len) {
+      // Every row survives: forward the child's columns rather than copy them. The ownership
+      // contract carries this by itself - trackOwned is told the batch owns nothing, so
+      // release() leaves each vector to the input batch it came from, exactly as the
+      // projection node's forwarding does. Sound under the one-batch-at-a-time discipline both
+      // filter nodes run: the output batch is released before the next input is requested.
+      val batch = new ColumnarBatch(Array.tabulate(childOutput.length)(input.column))
+      batch.setNumRows(count)
+      trackOwned(batch, Seq.empty)
+      return batch
+    }
     val owned = mutable.ArrayBuffer.empty[ColumnVector]
     try {
       val columns = new Array[ColumnVector](childOutput.length)
@@ -970,8 +991,12 @@ private[sql] class VarkaFilterEvaluator(
               case src: BaseFixedWidthVector if src.getValueCount() == len =>
                 val dst = src.getTransferPair(s"varka$j", taskAllocator()).getTo
                   .asInstanceOf[BaseFixedWidthVector]
-                columns(j) = compactFixed(dst, selection, len, count, owned) { (pos, i) =>
-                  dst.copyFromSafe(i, pos, src)
+                columns(j) = if (src.getTypeWidth() == 4) {
+                  compactInt32(dst, src, selection, len, count, owned)
+                } else {
+                  compactFixed(dst, selection, len, count, owned) { (pos, i) =>
+                    dst.copyFromSafe(i, pos, src)
+                  }
                 }
               case _ => generic += j
             }
@@ -989,14 +1014,16 @@ private[sql] class VarkaFilterEvaluator(
             .toArray[WritableColumnVector]
         }
         owned ++= vectors
-        val rows = input.rowIterator()
-        var i = 0
-        while (rows.hasNext) {
-          val row = rows.next()
-          if (VarkaSelectionBitmap.isSet(selection.mask, i)) {
-            genericConverter.convert(genericProjection(row), vectors)
+        if (count > 0) {
+          val rows = input.rowIterator()
+          var i = 0
+          while (rows.hasNext) {
+            val row = rows.next()
+            if (VarkaSelectionBitmap.isSet(selection.mask, i)) {
+              genericConverter.convert(genericProjection(row), vectors)
+            }
+            i += 1
           }
-          i += 1
         }
         generic.zipWithIndex.foreach { case (position, k) => columns(position) = vectors(k) }
       }
@@ -1009,6 +1036,48 @@ private[sql] class VarkaFilterEvaluator(
         owned.foreach(_.close())
         throw e
     }
+  }
+
+  /**
+   * The `compress(mask)` compaction (task 24, milestone 4 item 11) for 4-byte fixed-width
+   * Arrow vectors - date32 and int32, every width Varka produces today. Width 8 arrives with
+   * task 29's lane type and everything else keeps the per-row typed copy below. It is a width
+   * check rather than a type check on purpose: a future Arrow type of the right width is
+   * served correctly by a bit-for-bit lane move.
+   *
+   * The destination is allocated with one whole lane group of slack past `count` so that
+   * [[SelectionVectorOps.compactInts]] can store unmasked - a masked store costs 2.3x-2.9x and
+   * this would otherwise pay one per lane group - and `setValueCount(count)` afterwards is
+   * what makes the slack invisible to every consumer.
+   */
+  private def compactInt32(dst: BaseFixedWidthVector, src: BaseFixedWidthVector,
+      selection: VarkaSelection, len: Int, count: Int,
+      owned: mutable.ArrayBuffer[ColumnVector]): ColumnVector = {
+    try {
+      dst.allocateNew(count + SelectionVectorOps.intLanes())
+    } catch {
+      case e: Throwable =>
+        dst.close()
+        throw e
+    }
+    val wrapped = new VarkaOwnedArrowColumnVector(dst)
+    owned += wrapped
+    if (count > 0) {
+      val hasNulls = src.getNullCount() > 0
+      SelectionVectorOps.compactInts(
+        src.getDataBuffer().memoryAddress(),
+        if (hasNulls) src.getValidityBuffer().memoryAddress() else 0L,
+        hasNulls,
+        selection.mask,
+        len,
+        count,
+        dst.getDataBuffer().memoryAddress(),
+        dst.getDataBuffer().capacity(),
+        dst.getValidityBuffer().memoryAddress(),
+        dst.getValidityBuffer().capacity())
+    }
+    dst.setValueCount(count)
+    wrapped
   }
 
   /** Allocates `dst` for `count` rows, copies the selected rows via `copyRow(pos, i)`, and
@@ -1025,14 +1094,18 @@ private[sql] class VarkaFilterEvaluator(
     }
     val wrapped = new VarkaOwnedArrowColumnVector(dst)
     owned += wrapped
-    var i = 0
-    var pos = 0
-    while (i < len) {
-      if (VarkaSelectionBitmap.isSet(selection.mask, i)) {
-        copyRow(pos, i)
-        pos += 1
+    // Nothing selected means nothing to scan for: the bitmap walk below is O(len) whatever it
+    // finds, and at 0% selectivity that walk was the whole cost of the column (task 24).
+    if (count > 0) {
+      var i = 0
+      var pos = 0
+      while (i < len) {
+        if (VarkaSelectionBitmap.isSet(selection.mask, i)) {
+          copyRow(pos, i)
+          pos += 1
+        }
+        i += 1
       }
-      i += 1
     }
     dst.setValueCount(count)
     wrapped

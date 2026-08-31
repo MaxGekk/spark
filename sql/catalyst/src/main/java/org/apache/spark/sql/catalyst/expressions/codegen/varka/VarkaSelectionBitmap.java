@@ -25,8 +25,8 @@ import java.lang.foreign.ValueLayout;
  * into its {@code dstValidity} slot, one bit per row, set exactly where the predicate is known
  * true (see {@link VarkaFusedKernel}'s selection-output contract). The layout is Arrow's
  * validity layout - LSB of byte 0 is row 0 - because the kernel writes it with the same
- * {@code orValidityBitsAt}/{@code setBit} helpers that write output validity, so the two
- * bitmaps cannot drift apart in format.
+ * {@code orValidityBitsAt} helpers that write output validity, so the two bitmaps cannot
+ * drift apart in format.
  *
  * <p>These helpers read byte-wise so they hold for any segment of at least
  * {@code (length + 7) / 8} bytes, the size the kernel zeroes; bits at and above {@code length}

@@ -95,8 +95,10 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
  * entirely by consuming the bitmap at the row boundary.
  *
  * Batch ownership follows [[VarkaProjectExec]]'s convention, with one difference the class doc
- * of the compaction records: a compacting filter owns '''every''' output column - forwarding
- * ends here, because a forwarded vector cannot be shortened.
+ * of the compaction records: a compacting filter owns every output column it actually
+ * compacts, because a forwarded vector cannot be shortened. The exception is the one case
+ * where nothing needs shortening - every row selected - where task 24 forwards the child's
+ * columns untouched and the batch owns nothing.
  *
  * A batch the kernel cannot serve falls back to the per-row predicate into a fresh writable
  * batch, mirroring [[VarkaProjectExec]]'s fallback.
@@ -184,8 +186,13 @@ private[sql] class VarkaFilterEvaluatorFactory(
       val batches = inputs.head
       new Iterator[ColumnarBatch] {
         // Same one-batch-at-a-time discipline as VarkaProjectExec: released before the next
-        // input batch is requested. Nothing here is forwarded, but the selection buffer is
-        // task state, so the previous batch must be done before the mask is overwritten.
+        // input batch is requested. Two things now depend on that ordering, not one. The
+        // selection buffer is task state, so the previous batch must be done before the mask
+        // is overwritten - and since task 24 an all-selected batch *forwards* the child's
+        // vectors rather than copying them, so an output batch can alias input memory that a
+        // buffer-reusing child recycles on its next(). Release-before-next is what makes both
+        // sound; reordering it (prefetching input, holding two batches) is a use-after-free
+        // on exactly the all-selected batches.
         private var current: ColumnarBatch = null
 
         override def hasNext: Boolean = {

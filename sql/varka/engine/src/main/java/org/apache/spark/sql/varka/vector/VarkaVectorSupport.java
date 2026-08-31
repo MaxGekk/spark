@@ -24,7 +24,9 @@ import jdk.incubator.vector.VectorMask;
 
 /**
  * The building blocks a Varka kernel is made of: address wrapping, bit-packed validity access
- * per lane group, and the scalar tail's single-row counterparts. Promoted from
+ * per whole lane group and per an epilogue's partial one, and the single-row counterparts
+ * that scalar reference code and the tests use (no production loop reads a row at a time
+ * since task 24 gave both the emitted loops and the kernels masked epilogues). Promoted from
  * {@link DateVectorOps} (Task 9) so that generated fused loops can call them by name, exactly as
  * generated dispatchers call the kernels; the hand-written kernels keep using them and remain the
  * reference for how they compose.
@@ -114,7 +116,53 @@ public final class VarkaVectorSupport {
   }
 
   /**
-   * Whether row {@code i} is valid. The scalar tail's counterpart to {@link #validityBitsAt}:
+   * {@link #validityBitsAt} for the last, <i>partial</i> lane group: {@code rows} rows starting
+   * at {@code row}, where {@code rows} is anything from 1 to {@code lanes - 1} and therefore
+   * not a width the byte-span switch above can serve. That switch exists because a whole group
+   * spans exactly {@code groupBytes(lanes)} bytes and can be read in one access; a partial
+   * group spans {@code (row % 8 + rows + 7) / 8} bytes, which is 1, 2 or 3 and is not a layout
+   * size. So this walks those bytes instead - once per batch, on the cold path, where a byte
+   * loop costs nothing that matters.
+   *
+   * <p>Passing {@code rows} to {@link #validityBitsAt} instead is the bug this method exists to
+   * prevent, and it is silent: {@code groupBytes(9)} is 1, so a nine-row group would read one
+   * byte and report its ninth row null (task 24 hit exactly that).
+   */
+  public static long partialValidityBitsAt(MemorySegment validity, long row, int rows) {
+    long byteOffset = row / 8;
+    int shift = (int) (row % 8);
+    int spanned = (shift + rows + 7) / 8;
+    long bits = 0L;
+    for (int b = 0; b < spanned; b++) {
+      bits |= (validity.get(ValueLayout.JAVA_BYTE, byteOffset + b) & 0xFFL) << (b * 8);
+    }
+    return (bits >>> shift) & laneMask(rows);
+  }
+
+  /**
+   * {@link #orValidityBitsAt} for the last, partial lane group; the inverse of
+   * {@link #partialValidityBitsAt} and bounded the same way. Only the {@code rows} lowest bits
+   * of {@code laneBits} are used and only the bytes those rows occupy are touched, so a
+   * partial group at the end of a nominally sized bitmap cannot write past it - which a
+   * whole-group write at the same row would do (row 16 of a 17-row bitmap is three bytes long,
+   * and a 16-lane group there would store a short across bytes 2 and 3).
+   */
+  public static void orPartialValidityBitsAt(
+      MemorySegment validity, long row, long laneBits, int rows) {
+    long byteOffset = row / 8;
+    int shift = (int) (row % 8);
+    long bits = (laneBits & laneMask(rows)) << shift;
+    int spanned = (shift + rows + 7) / 8;
+    for (int b = 0; b < spanned; b++) {
+      long off = byteOffset + b;
+      byte add = (byte) (bits >>> (b * 8));
+      validity.set(ValueLayout.JAVA_BYTE, off,
+          (byte) (validity.get(ValueLayout.JAVA_BYTE, off) | add));
+    }
+  }
+
+  /**
+   * Whether row {@code i} is valid. The single-row counterpart to {@link #validityBitsAt}:
    * one row, so one byte, and no lane-width arithmetic to get right.
    */
   public static boolean isBitSet(MemorySegment validity, int i) {

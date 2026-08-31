@@ -169,6 +169,22 @@ Each step either pins the fault or narrows it.
   one, reimplement the few lines locally (task 23 did this for the shape cache's
   single-flight gate). Verifiable in seconds without a Maven run: `javac` the file
   against `~/.m2/.../spark-core_2.13-*.jar` and see it fail.
+- **A Java class with an incubator-module type in a field needs `--add-modules` twice
+  under Maven, and again only Maven can tell you.** Task 24 put `SelectionVectorOps` -
+  a `jdk.incubator.vector` kernel - in catalyst's main sources. Adding
+  `--add-modules jdk.incubator.vector` to `scala-maven-plugin`'s `javacArgs` compiles
+  it, and the build then fails *after* a successful compile with
+  `NoClassDefFoundError: jdk/incubator/vector/VectorSpecies`. The reason is zinc's
+  API extraction: `sbt.internal.inc.ClassToAPI.structure` calls
+  `Class.getDeclaredFields()` on the class file it just wrote, which loads the field
+  types **reflectively, in the compiler's own JVM**. So the flag has to go in that
+  plugin's `jvmArgs` as well - two blocks, both with `combine.children="append"` so
+  the parent pom's own arguments survive. SBT never reaches this because the sbt
+  launcher already runs with `--add-modules=jdk.incubator.vector`, which is exactly
+  the shape of the Guava trap above: an SBT-green, Maven-red failure on the Varka Java
+  surface. Reproducible in seconds without a Maven run - `java -cp
+  sql/catalyst/target/scala-2.13/classes` a one-liner that calls
+  `getDeclaredFields()` on the class, with and without the flag.
 
 ## Build Performance (measured, Aug 2026)
 
@@ -364,6 +380,24 @@ apparent small wins turned out to be noise.
   intuition loses often enough that the plan should record the expectation, the A/B,
   and ship whichever wins - the written-down prediction is what makes the reversal
   visible and the numbers re-checkable.
+- **Check what a benchmark never executes before believing what it says about a
+  change there** (task 24). Every committed harness in this repo happened to be
+  lane-aligned - this file's parity benchmark ran one call over 1,000,000 rows, the
+  engine JMH's sizes are 32 / 10000 / 1000000, and Spark's default
+  `COLUMN_BATCH_SIZE` is 4096, all multiples of 4, 8 and 16 - so `loopBound ==
+  length` everywhere and the emitter's scalar remainder path had never executed a
+  row under measurement. Any remainder-handling change was invisible to every
+  committed number. When the code under test has an aligned fast path and a
+  remainder path, the size ladder needs sizes like 4095 and 63 on it deliberately;
+  a pair one row apart isolates the remainder (equal call counts), and a magnified
+  pair (64/63) makes a per-row cost measurable that a 4096-row batch hides in
+  noise. Two more measurement lessons from the same task: a cost quoted at one
+  rung of a ladder is not a bound on the whole ladder (task 21's "~1-3 ns/row"
+  copy cost, read as a ceiling, under-predicted the compress win threefold - the
+  scalar copy grew with selectivity and the ceiling was one point on that curve);
+  and an in-run control (cases the change cannot affect, measured in the same
+  process) is what turns "the numbers moved" into "the noise floor is 15% and the
+  effect is inside it".
 - Debugging corollary from the same stretch: before concluding files changed or
   vanished, verify the working directory. A shell whose cwd resets between commands
   plus relative paths fabricates convincing evidence of disaster; absolute paths in

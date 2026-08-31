@@ -77,6 +77,15 @@ the next person re-litigating a settled question.
   the seconds-long local check. The same applies in reverse to Scala: a Scala call
   site passing a Guava type compiles but names a method the shaded artifact does not
   have.
+* A Java class holding an incubator-module type (`jdk.incubator.vector`) in a field
+  needs `--add-modules` in **two** places under Maven: `scala-maven-plugin`'s
+  `javacArgs`, which compiles it, and that plugin's `jvmArgs`, because zinc extracts
+  the class's API afterwards by calling `Class.getDeclaredFields()` reflectively in the
+  compiler's own JVM. Missing the second gives `NoClassDefFoundError` *after* a
+  successful compile, and only the Maven CI job sees it - the sbt launcher already runs
+  with the module resolved. `SKILLS.md` records the mechanism and a seconds-long local
+  check. The engine module needs neither block because it has no parent pom and uses
+  `maven-compiler-plugin` directly.
 * Scala cannot see `java.lang.classfile` types: Scala 2.13's typechecker reports
   "illegal cyclic reference" when completing them, and the Maven build's scaladoc
   pass fails on it. Emitter-adjacent code that touches the Class-File API stays in
