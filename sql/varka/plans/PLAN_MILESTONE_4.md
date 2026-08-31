@@ -481,9 +481,44 @@ argued around: what these buy is a second, wider trial of the handover - four
 tasks, four agents, one of them (37) deliberately harder than the rest, and
 four outcome sections recording where the recipes misled whoever ran them.
 
+### 2.12 A day offset that is a column (task 38)
+
+Not a new expression: `date_add(d, n)` and `d + n` already reach the compiler
+as `DateAdd`, and the emitter's arm for it is already vector-vector lane math.
+What declines them when `n` is a column rather than a literal is four guards,
+three of which exist to enforce milestone 1's scope - "foldable integer day
+offsets" - rather than to protect against anything the engine cannot do.
+
+The finding that makes this worth a task is that foldability is the visible
+guard and not the real one: **Varka cannot read a non-date column at all.** The
+compiler's only leaf is a `DateType` `BoundReference`, and `isArrowBacked`
+requires every referenced column to be an Arrow `DateDayVector`. So this task
+is really the input boundary opening by one type, and the day offset is what
+makes that concrete and testable.
+
+Two things in it can produce wrong answers rather than declines, which is why
+it is written as a recipe rather than left as a one-line note. `planWordRef`
+aliases `AddDays`'s validity to the date child alone - correct while the offset
+is always a literal, wrong the moment it can be a nullable column, and the fix
+is `andRef` over both children, which is provably a no-op for a literal because
+`andRef(a, WORD_ALL_TRUE)` returns `a`. And `DateAdd.inputTypes` accepts
+`ShortType` and `ByteType` **without a cast**, so a short column would be read
+by an int32 lane load as garbage; those must decline by naming `IntegerType`
+exactly rather than by accepting any integral type.
+
+Because no node type is added and the literal path is untouched, this is the
+one task in the milestone whose acceptance includes **neither pinned value
+moving and no committed number moving** - which also makes it the easiest to
+review.
+
+The corpus does not ask for this either. What argues for it is that the door it
+opens is on the way to everywhere else: an `IntegerType` column is the first
+non-date input the engine has ever read, and items 2, 3 and 4 all need that
+boundary open before they can start.
+
 ## 3. Task breakdown
 
-Tasks 24-37 are the committed spine, in dependency order: 24 halves the
+Tasks 24-38 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
@@ -500,8 +535,8 @@ which is worth watching rather than ignoring.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now tasks 32-37, sections 2.9 to 2.11), so
-milestone 5 resumes at 38.
+(task 31, section 2.2, and now tasks 32-38, sections 2.9 to 2.12), so
+milestone 5 resumes at 39.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -518,6 +553,7 @@ milestone 5 resumes at 38.
 | 35 | `trunc(date, YEAR/MONTH/QUARTER)` | One node carrying the level as a shape-bearing field, three lowerings, and the decline path for every level and format this task does not cover | As 34, plus a `DateType` output proved to feed further date arithmetic in the same chain |
 | 36 | `last_day` | The node and the month-length tail, with February's leap case as its own branch | As 34, with every month length exercised in both a leap and a common year |
 | 37 | `weekofyear` | The node, the ISO-8601 rule including both year-boundary corrections, and the weeks-in-year helper called for two years | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list |
+| 38 | A day offset that is a column | The four guards moved, the `andRef` validity fix, `IntegerType` leaves and Arrow `IntVector` inputs accepted, short and byte offsets declining | A null offset producing a null row, at both widths; short and byte columns declining; **no pinned value and no committed number moves**, since no node type is added and the literal path is untouched |
 | 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
