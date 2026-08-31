@@ -1,0 +1,77 @@
+================================================================================================
+Milestone 4 open question 4 (task 25): does an unroll factor above 1 pay?
+================================================================================================
+
+Two chain depths (8, the named short candidate; 20, the dayofweek-shaped long candidate) times
+three outer-loop unroll factors (K = 1, 2, 4), each over one N=4096 row buffer (one Spark
+COLUMN_BATCH_SIZE). Every K variant is fully straight-line unrolled source (no runtime loop over
+the op index) so K=1 and K>1 differ only in how many independent lane groups are interleaved per
+outer-loop body, not in loop-control shape. See VarkaUnrollFactorBenchmark.java. Run twice; both
+runs agree in direction and rough magnitude on every case.
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M, machine otherwise idle
+JMH 1.37, throughput mode, forks=0 (in-process, on the surefire JVM), 1 thread,
+3 x 2 s warmup, 5 x 2 s measurement. Higher is better.
+Run: ./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true
+
+--- Default vector width (AVX-512, 16 int lanes), run 1 of 2 ---
+
+Benchmark                               Mode  Cnt     Score     Error   Units
+VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  4785.665 ± 241.982  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  4739.745 ±   4.144  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  4706.142 ± 210.603  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5  1634.822 ±  69.121  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5  1720.770 ± 107.399  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5  1732.223 ±   4.560  ops/ms
+
+--- Default vector width (AVX-512, 16 int lanes), run 2 of 2 ---
+
+Benchmark                               Mode  Cnt     Score     Error   Units
+VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  4847.609 ±   6.269  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  4752.335 ±  40.801  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  4767.609 ±   3.675  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5  1627.856 ±  75.863  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5  1715.995 ± 116.247  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5  1722.246 ±  51.633  ops/ms
+
+--- Narrow vector width (-XX:MaxVectorSize=16, 128-bit: 4 int lanes), run 1 of 2 ---
+
+Benchmark                               Mode  Cnt     Score     Error   Units
+VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  2239.723 ± 102.668  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  2235.873 ±   0.815  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  2244.444 ±  16.788  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5   715.166 ±   8.030  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5   739.384 ±  34.576  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5   745.569 ±   3.837  ops/ms
+
+--- Narrow vector width (-XX:MaxVectorSize=16, 128-bit: 4 int lanes), run 2 of 2 ---
+
+Benchmark                               Mode  Cnt     Score     Error   Units
+VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  2250.912 ±   8.396  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  2202.972 ± 125.508  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  2225.156 ± 138.245  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5   712.442 ±  33.251  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5   746.426 ±   8.213  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5   737.880 ±  67.377  ops/ms
+
+--- Reading these numbers ---
+
+* Depth 8 (short chain): flat across K = 1, 2, 4 at both widths, on both runs - within 2% either
+  way, no consistent direction. The honest null hypothesis in PLAN_MILESTONE_4.md section 2.2
+  holds here: C2 plus the out-of-order engine already collect the available overlap on a body
+  this short, so unrolling buys nothing (and is not measured to cost anything either, at least at
+  K=2 or K=4 on this shape).
+* Depth 20 (dayofweek-shaped long chain): unrolling by K=2 wins reproducibly at both widths and
+  on both runs - +5.3% to +6.0% at AVX-512, +3.4% to +4.8% at 128-bit. K=4 adds essentially
+  nothing further over K=2 on either width or run (within 1%, both directions appear) - the
+  benefit saturates at K=2, which is also the cheaper choice against GROUP_BUDGET.
+* Net for task 25: "K pays only on the long chains" is confirmed, not just predicted, and the
+  planner version the task's design calls for should have a ceiling - K=2 for a chain this long,
+  not an unbounded search - since K=4 was measured to add nothing on the one shape where
+  unrolling helped at all.
+* Methodology note: an earlier version of this benchmark measured K=2/K=4 through a small
+  constant-bound runtime for-loop over the op index, rather than the fully unrolled straight-line
+  source above. That version showed K=4 losing 30-60% at some shapes - an artifact of comparing a
+  loop-shaped baseline against a straight-line K=1, not a real unrolling cost. Discarded before
+  being trusted; see the `SKILLS.md` entry this measurement added.

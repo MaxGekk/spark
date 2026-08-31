@@ -329,6 +329,18 @@ apparent small wins turned out to be noise.
   by 1.40-1.51x at 128-bit (`VarkaMilestone4MeasurementsBenchmark`). A single
   same-JVM run at the development machine's native width is not enough evidence for
   a strategy that has to also hold at the narrow-vector CI shape.
+- When a benchmark's K=1 case is fully unrolled straight-line source (the shape a real
+  emitted kernel carries), the K>1 cases must be too - a small constant-bound runtime
+  `for` loop over the op index is not a safe stand-in for hand-unrolled code, even
+  though C2 usually fully unrolls tiny fixed-trip-count loops itself. Measuring
+  `VarkaUnrollFactorBenchmark`'s K=2/K=4 cases through such a loop first showed K=4
+  losing 30-60% on some shapes; rewriting them as straight-line interleaved code (same
+  shape as K=1, just K independent lane groups instead of one) turned that into a
+  reproducible +4-6% win on the shape where unrolling should help at all. The first
+  number was an artifact of comparing a loop-shaped baseline against a straight-line
+  one, not a real unrolling cost - a benchmark comparing "K=1" against "K>1" has to
+  keep every other structural choice, including loop-vs-straight-line shape, identical
+  between the arms.
 
 ## Generated Code Can Carry Its Own Debug Info (Class-File API)
 

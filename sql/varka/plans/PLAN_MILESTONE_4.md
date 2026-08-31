@@ -106,6 +106,28 @@ entry) - unrolling does not incidentally hide the alignment penalty, so this
 task's outcome and that entry's are independent questions, not one deferring
 to the other.
 
+Open question 4 is answered, ahead of the task and with the broadcast
+confounder held fixed at "emitted per use" so it does not contaminate the
+result (`VarkaUnrollFactorBenchmark`, committed results file in
+`sql/varka/engine/benchmarks/`): on an 8-op chain, K = 1, 2 and 4 are flat at
+both vector widths, on two separate runs - within 2% either way, no
+consistent winner. The honest null hypothesis holds exactly on a body this
+short. On a 20-op chain (the `dayofweek`-length candidate), K = 2 wins
+reproducibly at both widths and on both runs - +5.3% to +6.0% at AVX-512,
++3.4% to +4.8% at 128-bit - and K = 4 adds nothing further over K = 2 on
+either width or run, within 1% and without a consistent sign. So "K pays only
+on the long chains" is confirmed rather than merely predicted, and the
+planner version below should cap K at 2 rather than search further: 4 was
+measured to buy nothing on the one shape where unrolling helped at all, while
+still paying `GROUP_BUDGET`'s doubled cost over K = 2. This measurement is
+also where a real methodology trap surfaced and was caught: comparing K = 1
+(straight-line unrolled source, the shape a real emission carries) against an
+earlier K = 2/4 written as a small constant-bound runtime loop over the op
+index produced a spurious 30-60% *loss* at K = 4 - an artifact of the loop
+shape, not of unrolling. Rewriting K > 1 as straight-line interleaved code,
+matching K = 1's shape exactly, is what produced the numbers above (`SKILLS.md`
+carries the general lesson).
+
 If a factor above 1 pays, the deliverable is the planner version: the emitter
 already knows the DAG's live-temporary count per lane group, so K is chosen
 per shape, and a shape whose live set fills the register file declines to
