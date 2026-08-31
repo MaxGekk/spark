@@ -303,7 +303,7 @@ apparent small wins turned out to be noise.
   task may have a denominator two-fold different from today's. The same trap in the
   other direction: escape analysis scalarizes the `LocalDate` allocation in a tight
   loop, so a scalar calendar loop measured in a microbenchmark is far faster than
-  the same code inside a query - task 26 predicted 15-30x over it and measured 3.8x.
+  the same code inside a query - task 26 predicted 15-30x over it and measured 3.7x.
 
 - `VectorOperators` has no multiply-high on any lane type, so full-range
   Granlund-Montgomery magic division is not expressible on int lanes - but a

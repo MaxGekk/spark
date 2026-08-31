@@ -530,6 +530,52 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("a calendar node inside a fused predicate is computed and guarded like any other") {
+    // compileCond's compare() puts no type gate on its operands, so a calendar node reaches a
+    // filter's mask kernel as readily as a projection's - and that path has its own guard
+    // accumulation and its own decline route, neither of which was exercised until this test.
+    //
+    // The shape has to be calendar-against-calendar. `year(d) = 2020` does NOT fuse: the
+    // literal is an IntegerType one and the compiler's literal arm accepts DateType only, so
+    // the whole predicate stays on the row path. Comparing two calendar nodes needs no
+    // literal, and that is what reaches the mask kernel.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    try {
+      val fused = checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c FROM varka_date_pairs WHERE year(d) = year(d2)",
+        expectFused = true)
+      // The predicate is in the kernel, not left above it as a row-level Filter.
+      assert(!fused.toString.contains("Filter (year("),
+        s"the calendar predicate should be fused, not residual:\n$fused")
+      // Two calendar nodes per side, so the mask kernel carries roughly two hundred ops.
+      checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c FROM varka_date_pairs " +
+          "WHERE year(d) = year(d2) AND month(d) >= month(d2)",
+        expectFused = true)
+      // A calendar predicate under a calendar projection over the same columns, which is
+      // where the filter's compaction and the projection's kernels meet.
+      checkDifferential(spark, varkaSpark,
+        "SELECT year(d) AS y FROM varka_date_pairs WHERE month(d) = month(d2) ORDER BY y",
+        expectFused = true)
+      // And the guard on the filter side: a day past the covered range must decline the batch
+      // rather than select on an undefined value.
+      val q = "SELECT count(*) AS c FROM varka_date_pairs " +
+        "WHERE year(date_add(d, 20000000)) = year(d2)"
+      val actual = varkaSpark.sql(q)
+      checkAnswer(actual, spark.sql(q))
+      // Either filter node may serve the plan: VarkaFilterExec keeps the batch columnar,
+      // VarkaFilterColumnarToRowExec is the row-boundary form the optimizer picks here.
+      val declined = actual.queryExecution.executedPlan.collect {
+        case f: VarkaFilterExec => f.metrics
+        case f: VarkaFilterColumnarToRowExec => f.metrics
+      }.flatMap(_.get("numFallbackBatchesDeclined")).map(_.value).sum
+      assert(declined > 0L, "an out-of-range date under a filter should decline the batch")
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
+    }
+  }
+
   test("a date past the shipped lowering's range falls back rather than answering wrongly") {
     // The guard, end to end and without a hook: date_add pushes the dates past the range the
     // narrowed civil-from-days lowering is defined over (years -12800..33134), so the kernel
@@ -565,9 +611,13 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       val inRange = varkaSpark.sql("SELECT year(d) AS a FROM varka_far ORDER BY a")
       checkAnswer(inRange, spark.sql("SELECT year(d) AS a FROM varka_far ORDER BY a"))
       val inRangePlan = inRange.queryExecution.executedPlan
-      val declined = inRangePlan.collectFirst { case v: VarkaColumnarToRowExec => v }
-        .flatMap(_.metrics.get("numFallbackBatchesDeclined")).map(_.value).getOrElse(0L)
-      assert(declined === 0L, "in-range dates must not decline")
+      // Both halves matter: getOrElse(0L) would pass vacuously if the query stopped fusing or
+      // the metric were renamed, which is exactly the regression this is here to catch.
+      assertFused(inRangePlan)
+      val inRangeMetric = inRangePlan.collectFirst { case v: VarkaColumnarToRowExec => v }
+        .flatMap(_.metrics.get("numFallbackBatchesDeclined"))
+      assert(inRangeMetric.isDefined, "the declined metric should exist on the fused plan")
+      assert(inRangeMetric.get.value === 0L, "in-range dates must not decline")
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_far"))
     }
@@ -575,10 +625,12 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
 
   test("a declined batch falls back with the row engine's answers, counted as its own cause") {
     // Task 26: a partial lowering (the narrowed civil-from-days one) reports a batch it cannot
-    // compute, and the evaluator recomputes it row by row. The shipped lowering is total, so
-    // the hook stands in for the out-of-range value; what this proves is the routing - that a
-    // declined batch answers correctly, and lands under its own metric rather than the ghost
-    // fallback's, which is a defect count and must stay clean.
+    // compute, and the evaluator recomputes it row by row. The sibling tests above reach that
+    // path with real out-of-range dates and no hook; this one uses the hook to make a
+    // whole-query fallback cheap to assert without depending on any expression's range. What
+    // it proves is the routing - that a declined batch answers correctly, and lands under its
+    // own metric rather than the ghost fallback's, which is a defect count and must stay
+    // clean.
     cacheDates(spark)
     cacheDates(varkaSpark)
     VarkaColumnarToRowExec.setDeclineKernelForTesting(true)

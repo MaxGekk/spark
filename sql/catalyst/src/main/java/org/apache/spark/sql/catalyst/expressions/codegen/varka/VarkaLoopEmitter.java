@@ -40,6 +40,7 @@ import java.util.Set;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Chrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
@@ -188,8 +189,9 @@ public final class VarkaLoopEmitter {
    * <p>Task 17 priced the one candidate the debt register left open - raising the budget so
    * two outputs sharing a deep chain keep their cross-output CSE in one method - and closed
    * it against the change: on 20 distinct ops split across two outputs, the shipped 16 runs
-   * 4.1 G rows/s (two loop methods, the shared chain recomputed per lane group) against
-   * 3.0 G at 24 (one method, CSE kept). Recomputing eight ops in registers is
+   * 4471.9 M rows/s (two loop methods, the shared chain recomputed per lane group) against
+   * 3110.5 M at 24 (one method, CSE kept) - the committed parity file, requoted whenever it
+   * is regenerated, which task 26 had to learn twice. Recomputing eight ops in registers is
    * cheaper than the wider method's register pressure, the same effect that made sibling methods
    * the rule in the first place. The parity benchmark keeps both cases so a future retune is
    * measured rather than argued.
@@ -534,7 +536,12 @@ public final class VarkaLoopEmitter {
     for (int o = 0; o < outputs.size(); o++) {
       Set<VarkaVectorIR> withNext = new HashSet<>(seen);
       int marginal = addOps(outputs.get(o), withNext);
-      if (!current.isEmpty() && ops + marginal > budget) {
+      // marginal == 0 means this output adds no node the group does not already have - it
+      // is structurally the same tree - so splitting it off cannot reduce the method's op
+      // count and only costs it the CSE. That matters once a node can outweigh the budget on
+      // its own: after one calendar output `ops` already exceeds it, so without this test
+      // `SELECT year(d) AS a, year(d) AS b` would emit the decomposition twice.
+      if (!current.isEmpty() && marginal > 0 && ops + marginal > budget) {
         groups.add(current);
         current = new ArrayList<>();
         withNext = new HashSet<>();
@@ -597,10 +604,11 @@ public final class VarkaLoopEmitter {
     return false;
   }
 
-  /** Whether {@code node} is one of task 26's four civil-from-days extractions. */
+  /** Whether {@code node} is one of the civil-from-days extractions. The IR's sealed
+   * {@link Chrono} interface is what makes this total: a new extraction joins the family and
+   * is weighed and guarded without touching this method. */
   private static boolean isChrono(VarkaVectorIR node) {
-    return node instanceof Year || node instanceof Month || node instanceof DayOfMonth
-        || node instanceof Quarter;
+    return node instanceof Chrono;
   }
 
   private static VarkaVectorIR[] childrenOf(VarkaVectorIR node) {

@@ -352,10 +352,10 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // buffer rather than re-reading a cache-warm prefix 245 times. That matters here and
         // not in the task-24 ladder below: this section's scalar anchor walks all one million
         // rows, so a cache-resident kernel measured against a streaming scalar loop would put
-        // the two sides of the headline ratio in different regimes. The same dayofweek
-        // kernel
-        // reads 5677.6 M rows/s over the whole buffer and 8058.8 over a warm prefix, which is
-        // the size of the distortion being avoided.
+        // the two sides of the headline ratio in different regimes. Measured: the same
+        // dayofweek kernel reads 7746.1 M rows/s over the whole buffer against 8058.8 over a
+        // warm prefix, so the regime is worth about 4% here - small, but it is the difference
+        // between a measured ratio and a nearly-measured one.
         def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1): Unit = {
           var pass = 0
           while (pass < repeats) {
@@ -368,7 +368,11 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
                 else dstData4.map(_ + dataOff)
               val dstValid = if (outputs == 1) Array(dstValidity.address() + validityOff)
                 else dstValidity4.map(_ + validityOff)
-              if (mixed) {
+              // A declined batch does the same vector work and reports the same time, so a
+              // discarded status would let this file commit a rate production never sees -
+              // it pays the kernel and then the whole row path. Same reason checkMatrix
+              // asserts it.
+              val status = if (mixed) {
                 kernel.run(Array(mxData.address() + dataOff),
                   Array(mxValidity.address() + validityOff),
                   Array(nullsIn(n)), dstData, dstValid, Array.empty[Int], n)
@@ -376,6 +380,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
                 kernel.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
                   dstData, dstValid, Array.empty[Int], n)
               }
+              require(status == 0, s"the kernel declined a batch: status $status")
               done += n
             }
             pass += 1

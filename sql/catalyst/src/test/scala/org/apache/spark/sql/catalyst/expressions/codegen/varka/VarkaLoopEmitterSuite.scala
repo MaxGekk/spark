@@ -755,6 +755,65 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       nullPatterns.map(p => Seq(p._2)), data = days, ctx = "epilogue-guard")
   }
 
+  test("the emitted calendar kernel matches LocalDate over its whole range " +
+      "(opt-in: -Dvarka.sweep=true)") {
+    // VarkaChrono's own suite sweeps the scalar model over all 16,777,216 days, and the
+    // emitter loads the same constants - but it re-expresses the algorithm as bytecode, with
+    // its own op order, carry steps and mask polarity. Only this sweep holds the *emitted*
+    // form to the same standard; without it the class doc's "cannot drift" covers the
+    // constants and not the code, and a transposed slot would survive every other test.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to sweep the emitted kernel")
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+    val (kernel, loader) = load(emitMulti(roots, 1, 0))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val chunk = 1 << 16
+        val data = alloc(arena, chunk * 4L)
+        val validity = alloc(arena, (chunk + 7) / 8L)
+        validity.fill(0xFF.toByte)
+        val outs = roots.map(_ => makeOutput(arena, chunk))
+        var day = VarkaChrono.NARROW_MIN_DAYS
+        var mismatches = 0
+        while (day <= VarkaChrono.NARROW_MAX_DAYS) {
+          val n = math.min(chunk, VarkaChrono.NARROW_MAX_DAYS - day + 1)
+          var i = 0
+          while (i < n) {
+            data.set(ValueLayout.JAVA_INT, i * 4L, day + i)
+            i += 1
+          }
+          val status = kernel.run(Array(data.address()), Array(validity.address()), Array(0),
+            outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
+            Array.empty[Int], n)
+          assert(status === 0, s"the kernel declined an in-range batch at day $day")
+          i = 0
+          while (i < n) {
+            val date = LocalDate.ofEpochDay((day + i).toLong)
+            val got = outs.map(_._1.get(ValueLayout.JAVA_INT, i * 4L))
+            val want = Seq(date.getYear, date.getMonthValue, date.getDayOfMonth,
+              date.get(IsoFields.QUARTER_OF_YEAR))
+            if (got != want) {
+              mismatches += 1
+              if (mismatches < 4) {
+                fail(s"day ${day + i} ($date): emitted $got, LocalDate $want")
+              }
+            }
+            i += 1
+          }
+          day += n
+        }
+        assert(mismatches === 0, s"the emitted kernel disagreed on $mismatches days")
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
   test("a batch holding a day outside the covered range is declined, not answered") {
     val root = new Year(new ColumnRef(0))
     val (kernel, loader) = load(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS))

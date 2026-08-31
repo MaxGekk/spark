@@ -204,13 +204,16 @@ healthy at 59 ops.
 The consequence is stated up front rather than discovered: `SELECT year(d),
 month(d)` computes the decomposition twice, once per method. That is the trade
 task 17 measured and chose - recomputing ops in registers beat a wider method's
-register pressure, 4095.9 against 2959.7 M rows/s in the committed parity file,
-which is what the `GROUP_BUDGET` javadoc's "4.1 G against 3.0 G" rounds. (This
-task first "corrected" that javadoc to 4587.1/3196.2, the figures
-`PLAN_TASK_17.md` section 5 carries in prose. The review of the pull request
-caught it: those two numbers appear in no committed results file, and the
-javadoc had been right. Reverted, and recorded here because the edit claimed to
-be enforcing the measurements-not-adjectives rule while breaking it.) The
+register pressure - 4471.9 against 3110.5 M rows/s in the parity file this task
+regenerates. (That figure moved twice before it settled, and both wrong turns
+belong on the record. The task first "corrected" the `GROUP_BUDGET` javadoc from
+"4.1 G against 3.0 G" to 4587.1/3196.2, which is `PLAN_TASK_17.md`'s prose and
+appears in no results file; the first review caught it and the revert restored
+figures that rounded the *pre-task* run. The second review caught that too: this
+task regenerates the parity file, so the javadoc had to be requoted from the new
+run, not from the old one. Twice the same mistake - prose written before the
+numbers were regenerated - which is what `sql/varka/AGENTS.md` means by
+requoting from one run.) The
 corpus asks for one field at a time, so this opens a debt register entry in
 `PLAN_MILESTONE_4.md` naming what closing it would take, which is multi-value
 IR nodes.
@@ -410,7 +413,7 @@ plan and its outcome disagree, and the outcome is what happened.
 
 ### 11.3 Two results worth naming separately
 
-**At 128-bit the item barely pays.** 619 M/s against the row path's 481 is
+**At 128-bit the item barely pays.** 599 M/s against the row path's 480 is
 1.25x, where AVX-512 gives 3.7x. This is the vocabulary item's weakest width
 and the number is on the record rather than inferred; a future decision to
 decline the extraction family below some vector width would start here.
@@ -433,6 +436,24 @@ shipped kernel is 3.7x the Java 25 row path and 7.5x the Java 17 one; the
 results file says to quote the 3.7x, because Varka cannot run on Java 17 at
 all.
 
+### 11.4b One finding left unfixed, deliberately
+
+The second review found that `emitChrono` emits five Year-only steps - the era
+carry's masked add, `era -= NARROW_ERA_BIAS`, the century fold's masked
+subtract, the century carry's masked add and `yearOfCentury -= 1` - into the
+`Month`, `DayOfMonth` and `Quarter` methods, which never read them. Four of the
+five are masked ops, which this project prices at 2.3-2.9x an unmasked one, so
+it is roughly 10% of those three methods. The finding is correct.
+
+It is not fixed here, for a reason worth stating rather than leaving as a
+silence: the saving falls entirely on the three fields the corpus never calls -
+`year` is the only extraction TPC-H uses and the only one those steps are live
+for - while the fix threads a "which field is this" flag through `emitEra` and
+`emitCarry`, the shared arithmetic all four fields depend on. Trading risk in
+the field that is used for speed in the three that are not is the wrong way
+round. It belongs in task 32, which is already about restructuring these tails,
+and where a multi-value node would make the question moot.
+
 ### 11.5 The predictions, scored
 
 1. **Op count: right.** ~51 emitted vector ops for `year` against the 40-45
@@ -446,7 +467,8 @@ all.
    predicted 3 to 5x against the Janino row path, and the in-harness Janino arm
    was never built - the comparison landed against the scalar `LocalDate` loop
    instead. The 15 to 30x
-   over that loop was wrong by an order of magnitude: it is 3.7x, because
+   over that loop was wrong by an order of magnitude: it is 3.7x (1778.0 against
+   478.6 M rows/s, both from the committed run), because
    escape analysis scalarizes the `LocalDate` allocation in a tight loop, which
    the prediction anchored on task 11's 62 M rows/s figure without checking
    whether that figure was measured the same way.
@@ -463,7 +485,7 @@ all.
 | New IR node types | 4 |
 | Shape hash | `612c94d132690dc2` to `041e35db20d62e91` |
 | Pinned line map | 18 lines to 25 |
-| New tests | 6 emitter, 2 compiler, 3 differential, 6 model |
+| New tests | 6 emitter, 2 compiler, 5 differential, 3 model |
 
 ## 12. Explicitly out of task 26
 

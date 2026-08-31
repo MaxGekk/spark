@@ -51,8 +51,7 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
             VarkaVectorIR.IfElse, VarkaVectorIR.Greatest, VarkaVectorIR.Least,
             VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay,
-            VarkaVectorIR.Year, VarkaVectorIR.Month, VarkaVectorIR.DayOfMonth,
-            VarkaVectorIR.Quarter, VarkaVectorIR.Cond {
+            VarkaVectorIR.Chrono, VarkaVectorIR.Cond {
 
   /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
   enum LaneType { INT }
@@ -170,6 +169,18 @@ public sealed interface VarkaVectorIR
   record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {}
 
   /**
+   * The civil-from-days extractions, as a sealed family rather than a set the emitter has to
+   * recognise by hand. Two of the emitter's decisions key off "is this a calendar node" - the
+   * {@code GROUP_BUDGET} weight, and whether a body needs a range-guard accumulator - and
+   * before this interface existed both asked an {@code instanceof} chain, which a fifth
+   * extraction would have silently answered "no": weight 1 instead of the real one, and no
+   * guard at all, publishing wrong dates instead of declining them. Adding a member here
+   * makes every exhaustive switch in {@link VarkaLoopEmitter} a compile error until it is
+   * handled, which is the same protection {@link Cond} gives the condition nodes.
+   */
+  sealed interface Chrono extends VarkaVectorIR permits Year, Month, DayOfMonth, Quarter {}
+
+  /**
    * Spark's {@code year} (task 26): the proleptic Gregorian year of a date, as
    * {@code LocalDate#getYear} gives it. An {@code IntegerType} output at the Spark level.
    *
@@ -183,16 +194,16 @@ public sealed interface VarkaVectorIR
    * the same date compute it twice, in two sibling methods, which is the trade task 17 measured
    * and chose. Sharing it would need a multi-value node, which the IR has no shape for.
    */
-  record Year(VarkaVectorIR days) implements VarkaVectorIR {}
+  record Year(VarkaVectorIR days) implements Chrono {}
 
   /** Spark's {@code month}, 1-12; see {@link Year} for what the node costs and why. */
-  record Month(VarkaVectorIR days) implements VarkaVectorIR {}
+  record Month(VarkaVectorIR days) implements Chrono {}
 
   /** Spark's {@code dayofmonth}, 1-31; see {@link Year}. */
-  record DayOfMonth(VarkaVectorIR days) implements VarkaVectorIR {}
+  record DayOfMonth(VarkaVectorIR days) implements Chrono {}
 
   /** Spark's {@code quarter}, 1-4 - the month's own division by three; see {@link Year}. */
-  record Quarter(VarkaVectorIR days) implements VarkaVectorIR {}
+  record Quarter(VarkaVectorIR days) implements Chrono {}
 
   /**
    * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is
