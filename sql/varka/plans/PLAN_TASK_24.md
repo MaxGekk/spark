@@ -401,3 +401,75 @@ these are scored as they came out, not as they read best.
    degraded JIT state (section 6). The clean harness finds no effect. The
    prediction's premise - that this harness answers questions like this - was
    the thing that failed.
+
+## 9. Declined: the per-lane-group `anyTrue`/`allTrue` fast paths
+
+The milestone's third deliverable for this task was "per-lane-group all-null and
+all-valid fast paths, where the prologue today has them only per batch". The
+owner scoped it during planning as measure-then-ship-or-decline, with the
+batch-level pair (section 7.4) taking priority. **It is declined, with the
+task-16 kind of reason: the evidence against it was produced twice by this task
+while it was doing something else.**
+
+The change would put a branch on each referenced input's validity word inside
+the lane-group body, to skip a handful of long-word operations when a group is
+entirely valid or entirely null. Two independent measurements this task already
+made say that adding anything to that body is expensive out of proportion to
+what it removes:
+
+* Sharing a mask helper between `DateVectorOps`'s loop and its epilogue cost
+  24-50%, because the helper carried a byte loop into what the hot loop had to
+  inline.
+* Leaving the epilogue inline in the kernel method cost 8-40%, *in proportion to
+  how many Vector API calls it added*, on a branch that ran at most once per
+  batch and in the benchmarked sizes never ran at all.
+
+The proposed fast path is the same trade with a worse ratio: a branch per lane
+group - taken thousands of times per batch, not once - to save a few `land`/`lor`
+instructions on a long word that is already in a register. The per-batch dense
+and masked dispatch the driver already does is where this idea pays, and it is
+already there.
+
+Two conditions would reopen it, and both are real. If task 29's int64 lanes
+halve the group size, the per-group validity work doubles relative to the
+compute. And if task 31's instruction-level assertions show the masked body's
+word arithmetic is not folding the way it is assumed to, the premise changes.
+Neither is a reason to guess now.
+
+## 10. Outcome
+
+Status: **DONE.** Four commits, each green on its own:
+
+1. The measurement (section 2), before any emitter change.
+2. The masked epilogue: `VarkaLoopEmitter` from 2110 lines to 1914, one of its
+   five per-node switches over the sealed IR hierarchy gone, both pinned shape
+   hashes and the pinned line map unchanged - the behaviour-preservation proof
+   the milestone plan expected to have to regenerate instead.
+3. The hand-written kernels, on "no measurable effect" and a harness finding.
+4. `compress(mask)` compaction and the two batch-level fast paths: the
+   compacting filter ladder from 2.4-2.5x to 2.5x-5.4x, and compaction's cost no
+   longer a function of selectivity.
+
+All six Varka benchmark files regenerated in one run on an idle machine and the
+docs requoted from it. Green at both vector widths: catalyst 82/82, sql/core
+123/123, the engine module at both widths, `catalyst/doc`, `dev/lint-java` and
+scalastyle.
+
+What this task added to the milestone beyond its own row: **task 31**, asserting
+the instructions rather than the ratio, scheduled before task 25 because it is
+task 25's instrument; and the milestone's **debt register**, opened with the JMH
+harness that cannot currently answer the questions task 25 is about to ask.
+
+## 11. Explicitly out of task 24
+
+* **Width-8 compaction** - `LongVector.compress` waits for task 29's lane type;
+  the width-4 check routes everything else to the per-row typed copy unchanged.
+* **A null-free rung on the filter ladder**, which is what it would take to
+  measure the `count == len` forwarding path (section 7.4).
+* **The per-lane-group fast paths** - declined above, with the two conditions
+  that would reopen them.
+* **Fixing the engine's JMH harness** - the debt register entry, not this task:
+  the fix moves every number in that results file.
+* **Unrolling** (task 25), which shares this task's alignment harness but none
+  of its commits, and **anything that adds an IR node, expression, type or lane
+  width** - the pinned hashes holding is how that boundary was checked.
