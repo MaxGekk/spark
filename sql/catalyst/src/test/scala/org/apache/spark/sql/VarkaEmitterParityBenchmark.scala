@@ -44,6 +44,12 @@ import org.apache.spark.sql.varka.vector.DateVectorOps
  * lowering is the two-fold magic multiply since the task 14 follow-up, priced against the
  * task 11 digit sum, the lanewise-DIV reference and the per-row `LocalDate` path.
  *
+ * Task 24 adds the batch-length alignment ladder, which is the only case here that exercises
+ * the loop's remainder handling at all: every other case runs one call over the whole
+ * lane-aligned buffer, so `loopBound == length` and the tail has never processed a row under
+ * measurement. It drives the same total row count through aligned and unaligned chunks, at two
+ * chunk sizes, so the tail's marginal cost and the per-call prologue can be read separately.
+ *
  * To run this benchmark:
  * {{{
  *   1. build/sbt "catalyst/Test/runMain org.apache.spark.sql.VarkaEmitterParityBenchmark"
@@ -377,6 +383,94 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             sequentialChain(16, offsets.slice(k * 16, k * 16 + 16),
               mxData.address(), mxValidity.address(), mxNulls,
               wideDst(k).address(), wideDstValidity(k).address())
+          }
+        }
+        benchmark.run()
+      }
+
+      runBenchmark("batch-length alignment: what the scalar tail actually costs (task 24)") {
+        // Milestone 4 open question 3, answered before the masked epilogue replaces the tail.
+        // Every committed harness in this project happens to be lane-aligned - this file runs
+        // one call over 1,000,000 rows, DateVectorOpsBenchmark's sizes are 32 / 10000 /
+        // 1000000, and Spark's default COLUMN_BATCH_SIZE is 4096, every one a multiple of 4, 8
+        // and 16 - so loopBound == length throughout and the scalar tail has never executed a
+        // single row under measurement. Two chunk ladders, because the production shape and
+        // the marginal cost are different questions. 4096 against 4095 is the shape a query
+        // actually runs: the unaligned arm leaves lanes-1 rows to the tail, which is 0.4% of a
+        // batch at 16 lanes and may well sit inside this harness's noise - that being itself
+        // the finding. 64 against 63 leaves the same lanes-1 rows in a batch a sixty-fourth
+        // the size, magnifying them to a quarter of the work so the marginal cost of a scalar
+        // row is measured rather than inferred.
+        //
+        // Two comparisons, read differently. Within a pair the call counts match to within
+        // one, so the difference is the tail and nothing else. Between the pairs the call
+        // count rises 64-fold, so the difference prices the per-call prologue - which matters
+        // here because emitBody emits that prologue in every mode, so today's tail method
+        // re-wraps every segment, re-reads the species and recomputes loopBound before
+        // discovering it has no rows to process.
+        //
+        // Every case processes the same row count, so the columns compare directly across
+        // chunk sizes. Each call re-reads the same cache-warm prefix rather than walking the
+        // buffer, which holds memory traffic constant and leaves the loop shape as the only
+        // variable - the same cache-resident regime the rest of this file runs in, so the
+        // rates here are comparable to the chain section above.
+        //
+        // Read the result as an absolute cost, not a percentage: divide a pair's per-call
+        // difference by lanes-1 to get the price of one scalar tail row. The percentage
+        // depends entirely on the denominator, and this file's denominator is a bare kernel
+        // call. An end-to-end query's is ten to twenty times larger - VarkaFilterBenchmark
+        // and VarkaThroughputBenchmark measure 5-25 ns/row once Arrow access and the row
+        // boundary are in it - so the same absolute cost is a far smaller share there.
+        val repeats = 20
+        val benchmark = new Benchmark(s"${numRows.toLong * repeats} rows in chunks",
+          numRows.toLong * repeats,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        // fill() nulls every seventh row, so a chunk of n rows read from offset 0 holds
+        // exactly this many. Passing the whole buffer's count instead would hand the kernel a
+        // null count for a batch it is not running, and its dead-column test reads that.
+        def nullsIn(n: Int): Int = (n + 6) / 7
+        def chunked(kernel: VarkaFusedKernel, chunk: Int, offsets: Array[Int],
+            mixed: Boolean): Unit = {
+          var pass = 0
+          while (pass < repeats) {
+            var done = 0
+            while (done < numRows) {
+              val n = math.min(chunk, numRows - done)
+              if (mixed) {
+                kernel.run(Array(mxData.address()), Array(mxValidity.address()),
+                  Array(nullsIn(n)), Array(dst.address()), Array(dstValidity.address()),
+                  offsets, n)
+              } else {
+                kernel.run(Array(nfData.address()), Array(0L), Array(0),
+                  Array(dst.address()), Array(dstValidity.address()), offsets, n)
+              }
+              done += n
+            }
+            pass += 1
+          }
+        }
+        val chainOffsets = (0 until 4).map(level => level * 13 + 1).toArray
+        val chain4 = emit(Seq(chain(4)), 1, 4, loader, 700)
+        val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 701)
+        val ladder = Seq(4096 -> "aligned", 4095 -> "lanes-1 tail rows",
+          64 -> "aligned", 63 -> "lanes-1 tail rows")
+        for ((chunk, note) <- ladder) {
+          benchmark.addCase(s"depth-4 chain, chunk $chunk ($note), null-free") { _ =>
+            chunked(chain4, chunk, chainOffsets, mixed = false)
+          }
+          benchmark.addCase(s"depth-4 chain, chunk $chunk ($note), mixed nulls") { _ =>
+            chunked(chain4, chunk, chainOffsets, mixed = true)
+          }
+        }
+        // dayofweek as the second shape: its vector body is 20 ops but its scalar tail is one
+        // Math.floorMod and two fixups per row, so the tail's share of the work is larger here
+        // than on the chain - the shape most likely to make the tail visible at all.
+        for ((chunk, note) <- ladder.drop(2)) {
+          benchmark.addCase(s"dayofweek, chunk $chunk ($note), null-free") { _ =>
+            chunked(dow, chunk, Array.empty[Int], mixed = false)
+          }
+          benchmark.addCase(s"dayofweek, chunk $chunk ($note), mixed nulls") { _ =>
+            chunked(dow, chunk, Array.empty[Int], mixed = true)
           }
         }
         benchmark.run()
