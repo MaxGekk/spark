@@ -169,14 +169,16 @@ to the other.
 Open question 4 is answered, ahead of the task and with the broadcast
 confounder held fixed at "emitted per use" so it does not contaminate the
 result (`VarkaUnrollFactorBenchmark`, committed results file in
-`sql/varka/engine/benchmarks/`): on an 8-op chain, K = 1, 2 and 4 are flat at
-both vector widths, on two separate runs - within 2% either way, no
-consistent winner. The honest null hypothesis holds exactly on a body this
-short. On a 20-op chain (the `dayofweek`-length candidate), K = 2 wins
-reproducibly at both widths and on both runs - +5.3% to +6.0% at AVX-512,
-+3.4% to +4.8% at 128-bit - and K = 4 adds nothing further over K = 2 on
-either width or run, within 1% and without a consistent sign. So "K pays only
-on the long chains" is confirmed rather than merely predicted, and the
+`sql/varka/engine/benchmarks/`, four runs total including two taken after
+merging task 24's PR and enabling the machine's performance mode, neither of
+which changed a conclusion): on an 8-op chain, K = 1, 2 and 4 are flat at
+both vector widths, on every run - within 4% either way, no consistent
+winner. The honest null hypothesis holds exactly on a body this short. On a
+20-op chain (the `dayofweek`-length candidate), K = 2 wins reproducibly at
+both widths and on every run - +2.6% to +9.2% at AVX-512, +1.2% to +6.2% at
+128-bit - and K = 4 adds no further, consistent benefit over K = 2 on either
+width (the sign varies run to run, always within a few percent). So "K pays
+only on the long chains" is confirmed rather than merely predicted, and the
 planner version below should cap K at 2 rather than search further: 4 was
 measured to buy nothing on the one shape where unrolling helped at all, while
 still paying `GROUP_BUDGET`'s doubled cost over K = 2. This measurement is
@@ -234,18 +236,20 @@ and `And`/`Or`/`Not` as projection *results*, built on task 21's mask-as-value
 machinery. `VectorMask.toVector` against a `blend` of one and zero was
 pre-registered as a measurement, not a debate, and it is now measured
 (`VarkaMilestone4MeasurementsBenchmark`, committed run in
-`sql/varka/engine/benchmarks/VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt`):
-the two are statistically tied at both vector widths, on two separate runs -
-neither wins the way the pre-registration expected. The real, width-dependent
-finding is a different question the pre-registration did not ask: whether to
-materialize an int column at all. Skipping it - packing `VectorMask.toLong()`
-straight into the output bitmap - wins by 1.16-1.18x at AVX-512 but *loses* by
-1.40-1.51x at 128-bit, reproduced on both runs. A compound predicate,
-`(a > b) AND (c < d)` kept in mask space the whole way through versus
-materialized as an int column at every node, shows the same width split:
-tied at AVX-512, but mask-space wins by 1.24-1.37x at 128-bit - never worse,
-sometimes decisively better. Two consequences for the task: walk boolean
-sub-expressions in mask space and materialize only once at the output
+`sql/varka/engine/benchmarks/VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt`,
+four runs total, including two after merging task 24's PR with the machine's
+performance mode on): the two are statistically tied at both vector widths,
+on every run - neither wins the way the pre-registration expected. The real,
+width-dependent finding is a different question the pre-registration did not
+ask: whether to materialize an int column at all. Skipping it - packing
+`VectorMask.toLong()` straight into the output bitmap - wins by 1.10-1.18x at
+AVX-512 but *loses* by 1.40-1.60x at 128-bit, reproduced on every run. A
+compound predicate, `(a > b) AND (c < d)` kept in mask space the whole way
+through versus materialized as an int column at every node, shows a related
+split: the winner flips at AVX-512 (by up to 1.07x either way), but
+mask-space wins reproducibly at 128-bit on every run, by 1.24x-1.37x - never
+worse, sometimes decisively better. Two consequences for the task: walk
+boolean sub-expressions in mask space and materialize only once at the output
 boundary (never worse, and the compound case argues for it directly), and the
 single-comparison bits-only shortcut needs a width check rather than a single
 committed choice, since its sign flips between the two vector widths this
@@ -268,8 +272,8 @@ pre-registered as a measurement before the task opens: both shapes on a
 `cast(int AS long) + long` chain. Measured
 (`VarkaMilestone4MeasurementsBenchmark`, same committed results file as 2.5):
 narrowest-drive and part-loop are statistically tied at both vector widths,
-on two separate runs, narrowest-drive very slightly ahead each time (within
-1.01x-1.05x, inside this file's own noise band). Part-loop's extra
+on every run - four total - narrowest-drive slightly ahead most of the time
+(within 1.01x-1.07x, inside this file's own noise band). Part-loop's extra
 bookkeeping - two trip counts, two stores per int chunk - buys nothing
 measured, so task 28 opens already knowing the winner: narrowest-drive, for
 the simpler build (one trip count) at the same throughput. The recorded
@@ -335,10 +339,10 @@ task 24 measured as the lengths no committed harness ever runs.
 Which of those two mechanisms the enforcement should reach for is
 pre-measured (`VarkaMilestone4MeasurementsBenchmark`, same committed results
 file as 2.5): blend-then-`DIV` beats masked `DIV` at both vector widths, on
-two separate runs - 1.08-1.12x at AVX-512, 1.18-1.19x at 128-bit by minimum.
-The smallest margin of the five measurements in that file, but the only one
-where all four data points (two widths times two runs) agree in both
-direction and rough magnitude, which is the interleaved comparison the
+every run - four total - 1.08x-1.10x at AVX-512, 1.18x-1.19x at 128-bit by
+minimum. The smallest margin of the five measurements in that file, but the
+only one where all eight data points (two widths times four runs) agree in
+both direction and rough magnitude, which is the interleaved comparison the
 under-1.3x rule asks for. Blend a safe divisor into inactive lanes; the
 structural check exists to make sure some such mechanism runs before an
 unmasked `DIV`, not to leave the choice open each time.
@@ -471,9 +475,11 @@ The scope's section 8, each question now owned by a task or settled here:
   missing (`VarkaMilestone4MeasurementsBenchmark`, section 2.5's committed
   results file, `addAligned`/`addMisaligned`): a buffer start offset by 4
   bytes (still 4-byte int-aligned, but every AVX-512 load then spans two
-  64-byte cache lines) costs 1.56-1.68x throughput at the default width and
-  1.22-1.25x at 128-bit, reproduced on two separate runs, over the L1/L2-
-  resident 4096-row working set every real Varka kernel actually runs at.
+  64-byte cache lines) costs 1.56-1.79x throughput at the default width and
+  1.22-1.25x at 128-bit, reproduced on all four runs (including two taken
+  after merging task 24's PR with the machine's performance mode on, which
+  changed nothing), over the L1/L2-resident 4096-row working set every real
+  Varka kernel actually runs at.
   Section 2.3's ILP item does not absorb this for free either: a 2-way
   unrolled version of the same misaligned kernel (not committed - a scratch
   check, not this file's methodology) still lost 50-60%, so unrolling and
