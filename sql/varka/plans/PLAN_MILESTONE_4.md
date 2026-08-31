@@ -591,9 +591,44 @@ What is not avoidable is the decompose-adjust-recompose round trip, because the
 clamp - 31 January plus one month is 28 or 29 February - needs the day of
 month. About 90 ops, roughly twice `year`.
 
+### 2.15 The two ends of the date-integer boundary (tasks 41, 42)
+
+Both come out of the same sweep as tasks 34-40, and both are about the boundary
+between a date and the integers it is made of rather than about calendar
+arithmetic.
+
+**Task 41, `unix_date` and `date_from_unix_date`**, is the smallest task in the
+milestone and the only one that adds no IR node, no emitter code and no lane
+arithmetic. Spark's implementation of each is `input.asInstanceOf[Int]` in
+full: a date *is* a day count and these two only relabel the type. So the
+lowering is two compiler arms that unwrap to the child, and the entry's output
+type comes from the Catalyst expression as it already does. Neither pinned
+value moves and no emitted bytes change.
+
+The argument for it is not the functions, which nobody calls. It is that one
+unsupported expression demotes a whole projection entry to the row path, so a
+free relabel sitting in the middle of an otherwise fusible chain currently
+blocks everything around it. The task's real test is a projection with one
+ordinary entry and one relabelled one, which must fuse both.
+
+**Task 42, `make_date`**, is the other direction and much the larger: three
+integer columns in, a date out. It is the first expression to read three
+integer columns - so it waits on task 38 - and the first whose result can be
+**null for a non-null input**, which is what makes it worth a recipe.
+
+Its three-way distinction is the thing an implementer will get wrong. A null
+input is ordinary validity. An **invalid** date - month 13, 30 February - is a
+*semantic* result: null in non-ANSI, an exception in ANSI. A year beyond what
+the lowering's magic multiplies cover is an *engine limitation*, which declines
+the batch in both modes and lets the row engine answer. Confusing the last two
+gives wrong answers in one direction and spurious errors in the other. In ANSI
+mode the invalid case also declines, because a lane cannot throw - the same
+trick task 39 uses, and the reason this task needs no error machinery of its
+own.
+
 ## 3. Task breakdown
 
-Tasks 24-40 are the committed spine, in dependency order: 24 halves the
+Tasks 24-42 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
@@ -610,8 +645,8 @@ which is worth watching rather than ignoring.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now tasks 32-40, sections 2.9 to 2.14), so
-milestone 5 resumes at 41.
+(task 31, section 2.2, and now tasks 32-42, sections 2.9 to 2.15), so
+milestone 5 resumes at 43.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -631,6 +666,8 @@ milestone 5 resumes at 41.
 | 38 | A day offset that is a column | The four guards moved, the `andRef` validity fix, `IntegerType` leaves and Arrow `IntVector` inputs accepted, short and byte offsets declining | A null offset producing a null row, at both widths; short and byte columns declining; **no pinned value and no committed number moves**, since no node type is added and the literal path is untouched |
 | 39 | `date - date` | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
 | 40 | days-from-civil, and month arithmetic | `emitDaysFromCivil` as a helper three later expressions can call; the node behind `date +- INTERVAL n MONTH/YEAR` and `add_months`; the small-dividend month arithmetic and the literal bound it implies | The round trip tested on its own, not only through the expression; the clamp cases in both directions; a non-foldable or over-large month count declining; green at both widths |
+| 41 | `unix_date` / `date_from_unix_date` | Two compiler arms that unwrap to the child, no IR node and no emitted code; the bare-`ColumnRef` output shape tested | A projection mixing a relabelled entry with an ordinary one fuses both; no pinned value moves, no committed number moves, no emitted bytes change for any existing shape |
+| 42 | `make_date` | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
 | 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
