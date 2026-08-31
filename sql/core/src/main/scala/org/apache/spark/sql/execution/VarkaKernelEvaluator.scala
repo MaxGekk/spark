@@ -344,8 +344,10 @@ private[sql] abstract class VarkaEvaluatorBase(
     logDebug(s"The Varka SIMD kernels $kernelIdentity declined this batch (status $status); " +
       "falling back to the per-row path.")
     metrics.fallbackBatchesDeclined.foreach(_ += 1)
-    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernelIdentity,
-      status.toString)
+    // The third field is the event's exceptionClass, and a declined batch has no exception:
+    // passing the status there would put "1" in a JFR column a dashboard groups by class
+    // name. The status is in the log line above, where it belongs.
+    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernelIdentity, "")
   }
 
   /**

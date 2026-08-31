@@ -188,9 +188,8 @@ public final class VarkaLoopEmitter {
    * <p>Task 17 priced the one candidate the debt register left open - raising the budget so
    * two outputs sharing a deep chain keep their cross-output CSE in one method - and closed
    * it against the change: on 20 distinct ops split across two outputs, the shipped 16 runs
-   * 4587.1 M rows/s (two loop methods, the shared chain recomputed per lane group) against
-   * 3196.2 M at 24 (one method, CSE kept) - this javadoc rounded those to 4.1 and 3.0 until
-   * task 26 checked them against the committed file. Recomputing eight ops in registers is
+   * 4.1 G rows/s (two loop methods, the shared chain recomputed per lane group) against
+   * 3.0 G at 24 (one method, CSE kept). Recomputing eight ops in registers is
    * cheaper than the wider method's register pressure, the same effect that made sibling methods
    * the rule in the first place. The parity benchmark keeps both cases so a future retune is
    * measured rather than argued.
@@ -204,12 +203,14 @@ public final class VarkaLoopEmitter {
   public static final int MAX_INPUTS = 64;
 
   /**
-   * What a calendar node weighs against {@link #GROUP_BUDGET} - the vector ops
-   * {@link #emitChrono} emits for one, rounded to the nearest ten. It only has to exceed the
-   * budget for each calendar output to get its own loop method; the real figure is used rather
-   * than a flag so that a future node of intermediate width sorts sensibly beside it.
+   * What a calendar node weighs against {@link #GROUP_BUDGET}: the vector ops
+   * {@link #emitChrono} emits for one, counted and rounded to the nearest ten. It only has to
+   * exceed the budget for each calendar output to get its own loop method; the real figure is
+   * used rather than a flag so that a future node of intermediate width sorts sensibly beside
+   * it, which is the only reason the exact value matters - re-count it if the lowering
+   * changes shape rather than leaving it to drift.
    */
-  private static final int CHRONO_WEIGHT = 40;
+  private static final int CHRONO_WEIGHT = 50;
 
   private VarkaLoopEmitter() {
   }
@@ -2111,12 +2112,23 @@ public final class VarkaLoopEmitter {
    * depending on width and null pattern, to buy a range no SQL date literal can reach. The
    * numbers are in {@code PLAN_TASK_26.md} section 11.2.
    *
-   * <p>The guard is two compares ORed together, ANDed with the row's validity where that is
-   * available (a null row's data bytes are undefined and must not condemn a batch), and ORed
-   * into the body's accumulator. Validity is taken only from a column child, whose word is
-   * computed at the top of every lane group and so is certainly live here; for a computed
-   * child the guard is left unmasked, which can only cost a needless fallback, never a wrong
-   * answer.
+   * <p>The guard is two compares ORed together, then narrowed twice before it is ORed into
+   * the body's accumulator, and both narrowings are load-bearing:
+   *
+   * <ul>
+   *   <li><b>The row's validity</b>, taken from the node's own word reference. A null row's
+   *       data bytes are undefined, so an out-of-range value under one must not condemn the
+   *       batch. {@code planWordRef} aliases a chrono node's word to its child's, and the
+   *       child's word is live by the time this runs, so this covers a computed child as
+   *       well as a bare column - which an earlier version did not, and which is the shape
+   *       {@code year(date_add(d, n))} takes.</li>
+   *   <li><b>The epilogue's bounds mask</b>, where there is one. A masked load fills the
+   *       lanes past {@code length} with 0, and 0 is in range - but the guard runs on this
+   *       node's <i>input</i>, and a computed child maps 0 wherever it likes. Without this,
+   *       {@code year(date_sub(d, 5400000))} declines every batch whose length is not a lane
+   *       multiple while every real row is in range: correct answers, silent total loss of
+   *       fusion, and nothing above debug logging to say so.</li>
+   * </ul>
    */
   private static void emitEra(CodeBuilder cb, VarkaVectorIR node, boolean dense,
       Analysis analysis, Slots s, int days, int era, int rem, int mask) {
@@ -2129,11 +2141,19 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(VarkaChrono.NARROW_MAX_DAYS);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    VarkaVectorIR child = childrenOf(node)[0];
-    if (!dense && child instanceof ColumnRef c && referenced(analysis, c.ordinal())) {
-      cb.aload(s.species);
-      cb.lload(s.word[c.ordinal()]);
-      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+    if (!dense) {
+      // The node's own word, which planWordRef has aliased to its child's - so this is the
+      // child's validity whatever shape the child has.
+      Integer word = s.wordRef.get(node);
+      if (word != null && word != WORD_ALL_TRUE) {
+        cb.aload(s.species);
+        loadWord(cb, word);
+        cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+        cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+      }
+    }
+    if (s.epilogueMask != null) {
+      cb.aload(s.epilogueMask);
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
     cb.aload(s.guardAcc);

@@ -170,9 +170,11 @@ private[sql] object VarkaColumnarToRowExec {
   private[sql] def isFailKernelForTesting: Boolean = failKernelForTesting
 
   // Test-only hook that makes every kernel invocation decline its batch (task 26), as a kernel
-  // whose lowering met an out-of-range value does. The shipped lowering is total, so nothing
-  // else can exercise the declined-batch path end to end - and what that path has to prove is
-  // that the fallback's answers match the row engine's. Same discipline as the hook above.
+  // whose lowering met an out-of-range value does. The shipped calendar lowering is the
+  // narrowed one, so a real out-of-range date reaches this path too and the differential
+  // drives it that way; the hook exists to reach it without depending on any one expression's
+  // range, and to make a whole-query fallback cheap to assert. Same discipline as the hook
+  // above - static, because Spark runs tasks on other threads, and reset in a finally block.
   @volatile private var declineKernelForTesting = false
 
   private[sql] def setDeclineKernelForTesting(decline: Boolean): Unit = {

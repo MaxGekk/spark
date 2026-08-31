@@ -19,6 +19,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.time.LocalDate
+import java.time.temporal.IsoFields
 
 import scala.util.Random
 
@@ -48,7 +49,11 @@ class VarkaChronoSuite extends SparkFunSuite {
    * siblings return for the same day. */
   private def reference(days: Int): Fields = {
     val date = LocalDate.ofEpochDay(days.toLong)
-    new Fields(date.getYear, date.getMonthValue, date.getDayOfMonth, (date.getMonthValue + 2) / 3)
+    // IsoFields.QUARTER_OF_YEAR, not (month + 2) / 3: the second is what the emitter computes,
+    // and an oracle that restates the implementation checks nothing. DateTimeUtils.getQuarter
+    // is the first form, so it is the definition this must be held to.
+    new Fields(date.getYear, date.getMonthValue, date.getDayOfMonth,
+      date.get(IsoFields.QUARTER_OF_YEAR))
   }
 
   /**

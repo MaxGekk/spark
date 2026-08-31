@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 import java.lang.ref.{ReferenceQueue, WeakReference}
 import java.time.LocalDate
+import java.time.temporal.IsoFields
 import java.util.concurrent.atomic.AtomicInteger
 
 import scala.jdk.CollectionConverters._
@@ -218,8 +219,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     case n: DayOfMonth =>
       evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getDayOfMonth)
     case n: Quarter =>
+      // IsoFields.QUARTER_OF_YEAR, which is what DateTimeUtils.getQuarter calls - not
+      // (month + 2) / 3, which is what the emitter computes. An oracle that restates the
+      // implementation is not an oracle.
       evalValue(n.days(), row, lits)
-        .map(v => (LocalDate.ofEpochDay(v.toLong).getMonthValue + 2) / 3)
+        .map(v => LocalDate.ofEpochDay(v.toLong).get(IsoFields.QUARTER_OF_YEAR))
     case n: Greatest =>
       pick(evalValue(n.left(), row, lits), evalValue(n.right(), row, lits), math.max)
     case n: Least =>
@@ -307,9 +311,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           val dstData = roots.zip(outs).map { case (root, out) =>
             if (root.isInstanceOf[Cond]) 0L else out._1.address()
           }
-          kernel.run(cols.map(_.data.address()).toArray, validityAddrs.toArray,
+          // The status is asserted, not discarded: a guard that declines every batch
+          // leaves the destination values correct - the arithmetic does not depend on it -
+          // so without this the matrix stays green while the kernel computes nothing in
+          // production. Every shape this harness drives is one the kernel must answer.
+          val status = kernel.run(cols.map(_.data.address()).toArray, validityAddrs.toArray,
             nullCounts.toArray, dstData.toArray,
             outs.map(_._2.address()).toArray, lits, length)
+          assert(status === 0,
+            s"$ctx: the kernel declined a batch it should have computed " +
+              s"(length $length, combo $comboId, status $status)")
           for (i <- 0 until length) {
             val row = (0 until numInputs).map { c =>
               if (combo(c)(i)) None else Some(data(c, i))
@@ -730,6 +741,18 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       if (i < inRange.length) inRange(i) else i * 9973 - 400000
     checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
       nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed")
+  }
+
+  test("the epilogue's inactive lanes do not decline a batch whose real rows are in range") {
+    // A masked load fills the lanes past `length` with 0, and 0 is in range - but the guard
+    // runs on the node's *input*, which here is a computed value: 0 - 5400000 is outside the
+    // range while every real row, near 2022, is comfortably inside it. Without the epilogue
+    // mask on the guard, every batch whose length is not a lane multiple declines, the query
+    // pays the vector kernel and the row path both, and nothing says so above debug logging.
+    val root = new Year(new SubDays(new ColumnRef(0), new LiteralSlot(0)))
+    def days(c: Int, i: Int): Int = 19000 + i
+    checkMatrix(Seq(root), 1, Array(5400000), Seq(16, 17, 31, 64, 1000, 4095, 4096),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "epilogue-guard")
   }
 
   test("a batch holding a day outside the covered range is declined, not answered") {

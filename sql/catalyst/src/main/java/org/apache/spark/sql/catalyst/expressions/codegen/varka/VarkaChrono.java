@@ -114,11 +114,19 @@ public final class VarkaChrono {
   public static final int CENTURY_K = 28;
 
   /**
-   * {@code ceil(2^24 / 365) = 45966}, with {@code e = 374}, so the identity holds exactly for
-   * every dividend under {@code 2^24 / 374 = 44859}. The dividend here is the day of century,
-   * at most 36524 - the era's spilling last day, one past a plain century's 36523 - so this
-   * division needs no correction at all. It is the split into centuries that buys this: on the
-   * day of era, 146096 wide, no exact magic for 365 exists.
+   * The magic for {@code / 365}, one above the round-up form: {@code ceil(2^24 / 365)} is
+   * 45965 (with {@code e = 9}), and this is 45966 (with {@code e = 374}). Both are exact over
+   * the dividend this sees; 45965 would be exact far further, to 1864135 against 45966's
+   * 44858, and either would do. The number is what it is because that is what was derived,
+   * swept and committed - do not "fix" it to the tighter ceil without re-running the sweep,
+   * and do not copy 45966 as though it were {@code ceil}, because for another divisor the
+   * extra one may put {@code e} past the bound.
+   *
+   * <p>What matters is the bound: {@code v * e < 2^k} is strict, so this is exact for every
+   * dividend up to 44858. The dividend here is the day of century, at most 36524 - the era's
+   * spilling last day, one past a plain century's 36523 - so this division needs no correction
+   * at all. It is the split into centuries that buys that: on the day of era, 146096 wide, no
+   * exact magic for 365 exists at any k.
    */
   public static final int YEAR_M = 45966;
 

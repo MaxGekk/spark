@@ -61,8 +61,10 @@ days since epoch) and foldable integer day offsets:
   fields of the same date are computed twice, in sibling loop methods, rather
   than shared. The lowering is defined over years -12800 to 33134 -
   every date SQL can write, and then some - and a batch holding a day past that
-  (reachable only through `DATE_ADD` arithmetic) is declined by the kernel and
-  recomputed on the row path, counted as `numFallbackBatchesDeclined`.
+  is declined by the kernel and recomputed on the row path, counted as
+  `numFallbackBatchesDeclined`. Such a day does not have to be written by hand:
+  `DATE_ADD` arithmetic reaches one, and so does a stored column, since a
+  Parquet `INT32` date carries any day value the writer put there.
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
 
@@ -224,8 +226,12 @@ Task 22 extends the account to the SQL UI and to JDK Flight Recorder:
   (empty batches are served trivially and carry no cause), batches the
   ghost fallback caught a kernel failure on (a failure in the per-row
   machinery beside the kernel is counted, evented and logged under its own
-  `row-path-failure` cause instead), tasks that could not emit or define
-  their kernel class, and - on the projection nodes - the residual-entry
+  `row-path-failure` cause instead), batches a kernel declined because a
+  value fell outside the range one of its lowerings is defined over (the
+  `range-declined` cause - a designed outcome rather than a defect, which is
+  why it is not counted as a kernel failure and is logged at debug), tasks
+  that could not emit or define their kernel class, and - on the projection
+  nodes - the residual-entry
   count (a static plan property, added once driver-side and posted to the
   SQL listener; the per-entry reasons stay in verbose `EXPLAIN`; a
   filter's residual is a visible row `FilterExec` above it rather than a

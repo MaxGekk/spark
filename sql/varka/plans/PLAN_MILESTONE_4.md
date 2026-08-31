@@ -501,8 +501,8 @@ rewritten in the past tense with what the sweep found, never deleted.
 
 * **A calendar field is computed once per output, not once per date.** Task 26's four
   extractions each carry the whole civil-from-days decomposition, so `SELECT year(d),
-  month(d)` computes it twice, in two sibling loop methods - measured at 400 M rows/s for
-  four fields against 1815 for one. That is the trade task 17 trained the emitter on
+  month(d)` computes it twice, in two sibling loop methods - measured at 441 M rows/s for
+  four fields against 1778 for one. That is the trade task 17 trained the emitter on
   (recomputing in registers beats a wider method's register pressure), and the corpus asks
   for one field at a time, so it is a debt rather than a defect. Closing it needs a
   multi-value IR node: the IR's every node is one value on the operand stack, and a shared

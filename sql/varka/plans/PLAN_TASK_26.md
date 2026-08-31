@@ -204,11 +204,16 @@ healthy at 59 ops.
 The consequence is stated up front rather than discovered: `SELECT year(d),
 month(d)` computes the decomposition twice, once per method. That is the trade
 task 17 measured and chose - recomputing ops in registers beat a wider method's
-register pressure, 4587.1 against 3196.2 M rows/s (`PLAN_TASK_17.md` section 5;
-the `GROUP_BUDGET` javadoc's "4.1 G against 3.0 G" rounding of the same run is
-a misquote, corrected alongside the attribution in commit 5) - and the corpus
-asks for one field at a time. It opens a debt register entry in `PLAN_MILESTONE_4.md` naming what
-closing it would take, which is multi-value IR nodes.
+register pressure, 4095.9 against 2959.7 M rows/s in the committed parity file,
+which is what the `GROUP_BUDGET` javadoc's "4.1 G against 3.0 G" rounds. (This
+task first "corrected" that javadoc to 4587.1/3196.2, the figures
+`PLAN_TASK_17.md` section 5 carries in prose. The review of the pull request
+caught it: those two numbers appear in no committed results file, and the
+javadoc had been right. Reverted, and recorded here because the edit claimed to
+be enforcing the measurements-not-adjectives rule while breaking it.) The
+corpus asks for one field at a time, so this opens a debt register entry in
+`PLAN_MILESTONE_4.md` naming what closing it would take, which is multi-value
+IR nodes.
 
 ## 6. Verification
 
@@ -312,8 +317,7 @@ Five commits, each green on its own:
 5. **The default and the docs**: the owner's choice recorded here,
    `docs/sql-varka.md` and `README.md` requoted from that one run, the
    milestone's task-26 row marked done, its debt register entry opened, and its
-   task-17 attribution corrected, along with the `GROUP_BUDGET` javadoc's
-   4.1/3.0 G misquote of the task-17 run.
+   task-17 attribution corrected.
 
 ## 10. Risks, ranked
 
@@ -354,9 +358,11 @@ Verified rather than argued, as committed opt-in tests (`-Dvarka.sweep=true`,
 
 | sweep | result |
 |---|---|
-| narrowed model against `LocalDate`, all 16777216 days of its range | 0 mismatches |
-| total model against a long-arithmetic reference, all 2^32 days | 0 mismatches |
-| that reference against `LocalDate` over the narrowed range | 0 mismatches |
+| the model against `LocalDate`, all 16777216 days of its range | 0 mismatches |
+
+Two further sweeps ran while the total variant existed - it against a
+long-arithmetic reference over all 2^32 days, and that reference against
+`LocalDate` - both with zero mismatches. They went when the variant did.
 
 ### 11.2 The measurement, and the owner's choice
 
@@ -366,14 +372,28 @@ as this file's own section 6 said it would be.
 
 | case | AVX-512 | 128-bit |
 |---|---|---|
-| `year`, narrowed + guard (shipped) | 1815 M/s | 619 M/s |
-| `year`, total (reference) | 1452 M/s | 532 M/s |
-| `year`, narrowed, mixed nulls | 1695 M/s | 577 M/s |
-| `year`, total, mixed nulls | 1373 M/s | 525 M/s |
-| four fields, narrowed | 474 M/s | 156 M/s |
-| four fields, total | 400 M/s | 140 M/s |
-| `dayofweek`, for scale | 8025 M/s | 2668 M/s |
-| per-row `LocalDate` | 481 M/s | 481 M/s |
+| `year` | 1778 M/s | 599 M/s |
+| `year`, mixed nulls | 1694 M/s | 566 M/s |
+| four fields | 441 M/s | 157 M/s |
+| `dayofweek`, for scale | 7746 M/s | 2640 M/s |
+| per-row `LocalDate` | 479 M/s | 480 M/s |
+
+**These are not the numbers this section first carried, and the correction is
+worth recording.** The review of the pull request found that the year section's
+chunk loop advanced its row counter but never offset its addresses, so every
+call re-read the same 16 KB while the scalar anchor in the same table walked
+all one million rows - an L1-resident numerator against a streaming
+denominator. Fixed, and the whole table regenerated in the corrected regime.
+The distortion turned out smaller than feared (`year` 1834 to 1778, `dayofweek`
+8059 to 7746, about 3-4%) because a 4096-row chunk of a 4 MB buffer is largely
+L2-resident either way, but the comparison the section rests on is now measured
+rather than nearly measured.
+
+One consequence cannot be repaired: the `TOTAL`-against-`NARROWED` figures
+below were taken in the old regime and `TOTAL` has since been deleted, so they
+cannot be re-run. They are left as they were measured, with this note, because
+the correction factor on every comparable case was 3-4% and the gap they
+decided was 14-24%.
 
 **The owner chose `NARROWED`**, on the finding that totality costs 14 to 24%
 depending on width and null pattern while the range it gives up - years outside
@@ -391,11 +411,11 @@ plan and its outcome disagree, and the outcome is what happened.
 ### 11.3 Two results worth naming separately
 
 **At 128-bit the item barely pays.** 619 M/s against the row path's 481 is
-1.3x, where AVX-512 gives 3.8x. This is the vocabulary item's weakest width and
-the number is on the record rather than inferred; a future decision to decline
-the extraction family below some vector width would start here.
+1.25x, where AVX-512 gives 3.7x. This is the vocabulary item's weakest width
+and the number is on the record rather than inferred; a future decision to
+decline the extraction family below some vector width would start here.
 
-**The four-field projection costs 3.8x one field, not 4x-with-sharing.** Each
+**The four-field projection costs 4.0x one field, not 4x-with-sharing.** Each
 extraction carries its own decomposition, which is the trade task 17 trained
 the emitter on and which section 5 predicted. It opens the milestone's debt
 register entry rather than being fixed here.
@@ -409,8 +429,8 @@ its own build - it targets Java 25, because the emitter needs
 program outside the build (`sql/varka/baselines/`). The same scalar loop is
 **2.0x faster on Java 25 than on Java 17** (479 against 236 M rows/s), which is
 not Varka but what the JVM did to `java.time` between the releases. So the
-shipped kernel is 3.8x the Java 25 row path and 7.7x the Java 17 one; the
-results file says to quote the 3.8x, because Varka cannot run on Java 17 at
+shipped kernel is 3.7x the Java 25 row path and 7.5x the Java 17 one; the
+results file says to quote the 3.7x, because Varka cannot run on Java 17 at
 all.
 
 ### 11.5 The predictions, scored
@@ -422,10 +442,11 @@ all.
    forty) and missed that the carries the total variant adds are *masked* ops,
    which this project has measured at 2.3-2.9x an unmasked one. Both ratios are
    under the 1.3x rule and were reproduced across three runs of the table.
-3. **The speedups: one right, one badly wrong.** 3.0x over the Janino row path
-   was predicted 3 to 5x, and the in-harness Janino arm was never built - the
-   comparison landed against the scalar `LocalDate` loop instead. The 15 to 30x
-   over that loop was wrong by an order of magnitude: it is 3.8x, because
+3. **The speedups: one right, one badly wrong.** 3.7x over the scalar loop was
+   predicted 3 to 5x against the Janino row path, and the in-harness Janino arm
+   was never built - the comparison landed against the scalar `LocalDate` loop
+   instead. The 15 to 30x
+   over that loop was wrong by an order of magnitude: it is 3.7x, because
    escape analysis scalarizes the `LocalDate` allocation in a tight loop, which
    the prediction anchored on task 11's 62 M rows/s figure without checking
    whether that figure was measured the same way.
