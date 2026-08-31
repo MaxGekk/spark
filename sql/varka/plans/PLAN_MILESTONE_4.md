@@ -349,18 +349,80 @@ under-1.3x rule asks for. Blend a safe divisor into inactive lanes; the
 structural check exists to make sure some such mechanism runs before an
 unmasked `DIV`, not to leave the choice open each time.
 
+### 2.9 One decomposition, several fields (task 32, from the debt register)
+
+Added after task 26 measured what its own design cost, which is the only
+reason it is here: `SELECT year(d)` runs at 1834 M rows/s and
+`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 480 - 3.8x for four
+fields, which is near enough to 4x that nothing is being shared but the column
+load and the loop control.
+
+The cause is structural rather than accidental. All four fields fall out of one
+civil-from-days decomposition, and ~45 of a field's ~51 vector ops are that
+shared work; only the last handful differ. But `Year(col0)`, `Month(col0)`,
+`DayOfMonth(col0)` and `Quarter(col0)` are four distinct IR nodes, each
+emitting the whole decomposition before its own tail. The emitter's DAG-CSE
+cannot help: it memoizes on structural equality between *nodes*, and the values
+worth sharing here - era, century, year of century, day of year, the
+March-based month - are not nodes at all. They are locals inside one node's
+emitted bytecode, invisible to the walk that would share them.
+
+**The task opens with the ceiling, not the mechanism.** A hand-written kernel
+computing all four fields from one decomposition, against the 480 M rows/s the
+four separate nodes reach, at both widths. That gate exists because task 17
+already measured the opposite of the obvious answer: raising `GROUP_BUDGET` so
+two outputs could keep their cross-output CSE in one method *lost*, 4587
+against 3196 M rows/s, because the wider method's register pressure cost more
+than recomputing the shared ops. Here the shared work is ~45 ops rather than
+eight, but five values would have to stay live across four output tails, so the
+same effect is in play and the direction is not predictable from op counts. If
+the ceiling is close to 480, the task is declined with a task-16 reason before
+any IR changes - which is a real possible outcome, not a formality.
+
+If it clears, three mechanisms, in the order they should be considered:
+
+1. **A multi-value node and its selectors.** `ChronoFields(days)` computes the
+   decomposition into slots and leaves nothing on the operand stack;
+   `Year(fields)`, `Month(fields)` and the rest read one slot each. This is the
+   general answer: any future primitive with several results - `divmod`, a
+   string operation returning an offset and a length, date-level `date_trunc`
+   beside `year` - takes the same shape. It is also the expensive one, because
+   the IR's whole contract is that a node evaluates to exactly one value:
+   `emitValue`, slot planning, the CSE memo, `canonicalShallow` and the line
+   map, the shape hash, and a rule keeping a multi-value node out of value
+   positions the way `Cond` is kept out of them today.
+2. **Emitter-side fusion, with no IR change.** When one group holds two or more
+   calendar nodes over the same child, emit the decomposition once and branch to
+   the tails. Local and cheap, but it argues with task 26's own node weight,
+   which deliberately puts each calendar output in its own loop method; the
+   grouping would need the opposite rule for exactly this case, and the fused
+   method lands near 60 ops across four outputs - the multi-output shape task 11
+   measured the C2 compile cliff on.
+3. **Decomposing into primitive IR nodes** so ordinary DAG-CSE shares them.
+   **Declined in advance, with the reason on the record**: one `year` is ~51
+   ops, so a four-field projection would be ~60 distinct nodes against
+   `MAX_FUSED_NODES = 64` and a `GROUP_BUDGET` of 16, and the IR would acquire a
+   general arithmetic vocabulary to serve one family.
+
+Whatever the outcome, the deliverable includes sweeping the debt register entry
+in the past tense with what the measurement found, per `sql/varka/AGENTS.md`.
+
 ## 3. Task breakdown
 
-Tasks 24-31 are the committed spine, in dependency order: 24 halves the
+Tasks 24-32 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
 24's harness and changes how every later kernel is emitted; 26 and 27 spend
 milestone 2's machinery before 28 complicates it; 28 enables 29 and 30's
-widening. Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
+widening. 32 is the one task here that no scope document predicted: it exists
+because 26 measured what its own design cost and the number was worth a task
+(see 2.9), which is the milestone's own rule about debts working as intended.
+Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
-the single sequence; this plan has already grown once the way milestone 3's did
-(task 31, section 2.2), so milestone 5 resumes at 32.
+the single sequence; this plan has already grown twice the way milestone 3's did
+(task 31, section 2.2, and now task 32, section 2.9), so milestone 5 resumes
+at 33.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -372,6 +434,7 @@ the single sequence; this plan has already grown once the way milestone 3's did
 | 28 | Lane-width conversion | The mixed-width loop-shape measurement (open question 2: narrowest-drive against part loops) on `cast(int AS long) + long`, committed before integration; `convert`/`convertShape` emission following the winner; numeric `Cast` and Catalyst's implicit promotions over the supported types | Differential on mixed int32/int64 trees at both widths; the loop-shape decision recorded with its numbers; no regression on single-width shapes |
 | 29 | int64 lanes: `TimestampNTZ`, `bigint` | The second `LaneType`; `TimestampNTZ` comparisons, differences, literal arithmetic; `TimestampType` and `LongType` comparisons and diffs; range-narrowed magic constants for 1000000 and 86400 or a recorded decline; the field differential mode from task 22 | Every parity gate re-run at the long species and both vector widths; the halved-headroom number committed rather than discovered; zoned operations demonstrably declined, not wrong |
 | 30 | ANSI integer arithmetic | `try_add`/`try_subtract`/`try_multiply` via the difference-mask-as-validity path; the ANSI throw path via saturating detection and scalar re-walk, priced with a registered prediction; `Multiply` overflow through 28's widening if it is cheap, declined with a reason if not | The error-identity differential: same `SparkException`, same row, as the row engine under ANSI; `try_*` differential over overflow-dense and overflow-free data; committed number on the no-overflow path against Janino |
+| 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
 
@@ -499,16 +562,18 @@ One bullet per debt: what it is, why it is a debt, and what closing it would
 take. Opened during task 24, per `sql/varka/AGENTS.md` - a swept entry is
 rewritten in the past tense with what the sweep found, never deleted.
 
-* **A calendar field is computed once per output, not once per date.** Task 26's four
-  extractions each carry the whole civil-from-days decomposition, so `SELECT year(d),
-  month(d)` computes it twice, in two sibling loop methods - measured at 441 M rows/s for
-  four fields against 1778 for one. That is the trade task 17 trained the emitter on
-  (recomputing in registers beats a wider method's register pressure), and the corpus asks
-  for one field at a time, so it is a debt rather than a defect. Closing it needs a
-  multi-value IR node: the IR's every node is one value on the operand stack, and a shared
-  decomposition would have to leave four. It matters if a later item wants `date_trunc`
-  or `dayofyear` beside `year` in one projection, which is when the recomputation stops
-  being hypothetical.
+* **A calendar field is computed once per output, not once per date.** **Adopted as task
+  32 (see 2.9)**, which is what a debt register is for: this entry is where the cost was
+  first written down, and the task is where it gets measured and paid or declined. Task
+  26's four extractions each carry the whole civil-from-days decomposition, so
+  `SELECT year(d), month(d)` computes it twice, in two sibling loop methods - measured at
+  441 M rows/s for four fields against 1778 for one. That is the trade task 17 trained the
+  emitter on (recomputing in registers beats a wider method's register pressure), and the
+  corpus asks for one field at a time, so it is a debt rather than a defect. Closing it
+  needs a multi-value IR node: every node in the IR is one value on the operand stack, and
+  a shared decomposition would have to leave several. It matters if a later item wants
+  `date_trunc` or `dayofyear` beside `year` in one projection, which is when the
+  recomputation stops being hypothetical.
 
 * **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
