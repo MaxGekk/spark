@@ -320,6 +320,43 @@ apparent small wins turned out to be noise.
   int for days near `Int.MaxValue`, while `(floorMod(days, 7) + 4) mod 7` cannot.
   Negative inputs are where every strength-reduced mod goes wrong silently - a test
   range that never crosses zero proves nothing.
+- A fixed-width species literal (`IntVector.SPECIES_256`) is not a safe way to get "the
+  int species with half `LongVector.SPECIES_PREFERRED`'s lane count": under
+  `-XX:MaxVectorSize=16` (this project's narrow-vector CI shape, 128-bit), no 256-bit
+  registers exist, and the mismatch surfaces as a `VectorIntrinsics` bounds exception
+  at a `fromMemorySegment` call site far from the real cause. Derive the matching
+  species instead: `VectorSpecies.of(int.class,
+  VectorShape.forBitSize(longSpecies.vectorBitSize() / 2))` tracks whatever
+  "preferred" resolves to at the JVM's actual configured width, including the narrow
+  shape. Any code pairing two lane types by a literal `SPECIES_*` constant needs the
+  same check.
+- Buffer alignment is not a null hypothesis once the buffer fits in cache: a 64-byte
+  (AVX-512 register width) misaligned start costs 1.6-1.7x throughput at a 4096-row
+  (one Spark batch, L1/L2-resident) working set, and 1.2x at 128-bit - reproducible
+  across repeated runs at both widths (`VarkaMilestone4MeasurementsBenchmark`,
+  `PLAN_MILESTONE_4.md` section 8). The same misalignment costs under 2% on a
+  multi-megabyte streaming buffer, where DRAM bandwidth dominates and hides it -
+  measure at the working-set size the real kernel runs at, not whichever size is
+  convenient to allocate once. A 2-way unrolled kernel loses the same 50-60% as the
+  non-unrolled one: unrolling does not hide a cache-line-split load.
+- A materialization strategy's ranking can flip across the two vector widths this
+  project already tests at. Packing a comparison mask straight to its output bitmap
+  (skipping an intermediate int 0/1 column) wins by 1.16-1.18x at AVX-512 but *loses*
+  by 1.40-1.51x at 128-bit (`VarkaMilestone4MeasurementsBenchmark`). A single
+  same-JVM run at the development machine's native width is not enough evidence for
+  a strategy that has to also hold at the narrow-vector CI shape.
+- When a benchmark's K=1 case is fully unrolled straight-line source (the shape a real
+  emitted kernel carries), the K>1 cases must be too - a small constant-bound runtime
+  `for` loop over the op index is not a safe stand-in for hand-unrolled code, even
+  though C2 usually fully unrolls tiny fixed-trip-count loops itself. Measuring
+  `VarkaUnrollFactorBenchmark`'s K=2/K=4 cases through such a loop first showed K=4
+  losing 30-60% on some shapes; rewriting them as straight-line interleaved code (same
+  shape as K=1, just K independent lane groups instead of one) turned that into a
+  reproducible +4-6% win on the shape where unrolling should help at all. The first
+  number was an artifact of comparing a loop-shaped baseline against a straight-line
+  one, not a real unrolling cost - a benchmark comparing "K=1" against "K>1" has to
+  keep every other structural choice, including loop-vs-straight-line shape, identical
+  between the arms.
 
 ## Generated Code Can Carry Its Own Debug Info (Class-File API)
 
