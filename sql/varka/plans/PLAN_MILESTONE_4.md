@@ -82,9 +82,15 @@ verdict is written either way. Third: `anyTrue`/`allTrue` per-lane-group
 all-null and all-valid fast paths, where the prologue today has them only per
 batch.
 
-This task changes emitted bytes, so the two pinned shape hashes and the
-pinned line-map literal move, and are regenerated under their own update
-rule - the one task in the spine where that is expected rather than alarming.
+This task changes emitted bytes, and the expectation written here before it
+ran was that the two pinned shape hashes and the pinned line-map literal
+would move with them. **They did not, and task 24 records why**
+(`PLAN_TASK_24.md` section 5): the hashes are taken over the IR, the input
+counts and the emit options, and the line map over the IR's topological
+schedule - none of which a change to the emitted method structure touches.
+So the pinned oracles were this task's behaviour-preservation proof rather
+than its collateral. The spine's first task that legitimately moves them is
+26, which adds IR nodes.
 
 ### 2.2 Instruction-level parallelism (task 25, item 13)
 
@@ -221,7 +227,7 @@ way milestone 3's did.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
-| 24 | The scalar tail, interrogation, compaction | The tail-cost measurement (open question 3) recorded first; the unmasked-body-plus-masked-epilogue loop via `indexInRange`, deleting the emitter's second scalar IR walk; `compress(mask)` compaction in `VarkaFilterExec` against the committed ~1-3 ns/row ceiling, with the non-AVX-512 verdict; per-lane-group `anyTrue`/`allTrue` fast paths | Differential green at both vector widths, all null patterns, all-selected and none-selected; pinned hashes regenerated under their update rule; filter ladder re-run and committed; emitter per-node surface reduction stated as a number |
+| 24 | The scalar tail, interrogation, compaction | The tail-cost measurement (open question 3) recorded first; the unmasked-body-plus-masked-epilogue loop via `indexInRange`, deleting the emitter's second scalar IR walk; `compress(mask)` compaction in `VarkaFilterExec` against the committed ~1-3 ns/row ceiling, with the non-AVX-512 verdict; per-lane-group `anyTrue`/`allTrue` fast paths | Differential green at both vector widths, all null patterns, all-selected and none-selected; the pinned hashes and line map unchanged, which is the proof the refactor preserved behaviour (they were expected to move; see `PLAN_TASK_24.md` section 5); filter ladder re-run and committed; emitter per-node surface reduction stated as a number |
 | 25 | ILP: the unroll factor as a plan decision | The registered prediction, then the three-confounder matrix (K x broadcast strategy x `GROUP_BUDGET`) on `dayofweek`, unpredictable `CASE WHEN`, and the depth-8 chain; if K > 1 pays, per-shape K chosen from the live-temporary count the emitter already computes; the `SKILLS.md` bullet rewritten with the numbers; the batch-size knee sweep (question 6) on a wide fused shape | A committed number per candidate shape against its existing baseline; prediction scored honestly; no committed number regresses on shapes where K stays 1 |
 | 26 | Calendar extraction, `year` first | The four-constant range-narrowing admission check, recorded before emitter work; `year`, `month` and `dayofmonth` committed - one civil-from-days decomposition yields all three - with `quarter` riding `month` and `dayofyear`/date-level `date_trunc` as the algebra yields them; fields whose constants will not narrow declined with a task-16 reason | Differential across the Gregorian range including pre-1970, leap years, month-length boundaries and the 400-year cycle edges, at both widths; parity numbers committed; `year` demonstrably compiling on the TPC-H q7/q8/q9 shape |
 | 27 | Boolean outputs | Mask-to-column materialisation (`toVector` against `blend`, measured); the bit-packed format decision at the Spark/Arrow boundary; three-valued rules holding at the output boundary | Differential over every null pattern - a null input never becomes false; `SELECT d > DATE '2000-01-01' AS flag` and filter-leftover boolean columns compile; committed number on one boolean-output shape |

@@ -110,3 +110,98 @@ section 6.
 4. The `count == len` forwarding path is worth more at that rung than
    `compress` is, because it removes the copy entirely.
 5. No engine JMH number moves, every committed size being lane-aligned.
+
+## 4. The masked epilogue
+
+The insight that kept this small: the epilogue is the existing vector body with
+three substitutions, not new code.
+
+| | loop method | epilogue method |
+|---|---|---|
+| `i` | `for (i = 0; i < loopBound; i += lanes)` | `i = loopBound`, one pass, guarded by `loopBound < length` |
+| lane count | `species.length()` | `length - loopBound` |
+| loads and stores | unmasked | masked with `species.indexInRange(loopBound, length)` |
+
+So `emitVectorLoop`'s body was lifted into `emitLaneGroup`, which the loop
+calls per iteration and the epilogue calls once. Everything between a load and
+a store stays unmasked, exactly as in the loop, and the masked overloads are
+selected by one nullable slot (`Slots.epilogueMask`) rather than by a flag
+threaded through the walk.
+
+The masked load is required, not preferred: the data segment is sized to
+`length * 4`, so an unmasked load of the last partial group would leave the
+segment. Its consequence is now an invariant in the emitter's class doc -
+**inactive lanes read `0`, so no operation in the walk may trap on `0`**. It
+holds for free today (the mod-7 lowerings divide by the constant 7; add, sub,
+compare, blend, max, min and the shifts are total) and task 30's ANSI division
+is the first thing that will break it.
+
+### The bug the design missed, and what it cost
+
+Planned as "`lanes` becomes the remainder". That is wrong, and wrong silently.
+`VarkaVectorSupport.validityBitsAt` and `orValidityBitsAt` take a lane
+*width*, not a row count: the width decides how many bytes the access spans,
+through `groupBytes(lanes) = max(1, lanes / 8)` and a switch over 1, 2, 4 and 8
+bytes. A nine-row group asks for `groupBytes(9) == 1`, so the helper reads one
+byte and reports the ninth row null. `VarkaLoopEmitterSuite` caught it
+immediately at `length=9` - the boundary-straddling `lengths` list doing
+exactly the job it exists for.
+
+The write side is worse than a wrong answer. A whole-group write at the last
+group can run off the bitmap: at `length = 17` the bitmap is three bytes and a
+16-lane group at row 16 stores a short across bytes 2 and 3.
+
+So the task added the partial-group pair -
+`VarkaVectorSupport.partialValidityBitsAt` and `orPartialValidityBitsAt` -
+which walk the `(row % 8 + rows + 7) / 8` bytes the group actually spans, and
+the emitter picks between the pairs on `epilogueMask != null`. Keeping them
+separate rather than generalizing the originals is deliberate: the whole-group
+form is called once per lane group in the hot loop, and a byte loop there would
+be paid for a cold path's convenience.
+
+### What it bought
+
+* `VarkaLoopEmitter.java`: **2110 lines to 1914** (+170, -366). One of the five
+  per-node switches over the sealed IR hierarchy is gone, which is the number
+  that matters for tasks 26-30: a new node type is now written once.
+* Emitted class size, seven shapes, before and after:
+
+| shape | before | after | delta |
+|---|---|---|---|
+| `addDays` | 4292 | 4386 | +2.2% |
+| depth-4 chain | 4855 | 4903 | +1.0% |
+| depth-16 chain | 6931 | 7027 | +1.4% |
+| `dayofweek` | 5171 | 5224 | +1.0% |
+| filter `Compare` root | 4341 | 4267 | -1.7% |
+| every node type | 8215 | 8031 | -2.2% |
+| 4 x depth-16 (64 ops) | 21574 | 21817 | +1.1% |
+
+  Prediction 2 said +-20% with no shape past +50%; the answer is -2.2% to
+  +2.2%, and the direction is the predicted one - narrow shapes grow a little,
+  node-rich shapes shrink, because the scalar walk cost grew with node count
+  while one masked vector body does not.
+
+## 5. What did not move: the milestone plan corrected
+
+`PLAN_MILESTONE_4.md` section 2.1 says task 24 "changes emitted bytes, so the
+two pinned shape hashes and the pinned line-map literal move, and are
+regenerated under their own update rule - the one task in the spine where that
+is expected rather than alarming."
+
+**That is wrong, and the correction matters more than the error.**
+`VarkaShapeCacheImpl.shapeHash` is SHA-256 over `VarkaVectorIR.canonical` of
+the outputs plus `numInputs|numLiterals` plus `options.canonical()`, which is
+empty for `DEFAULTS`. This task adds no IR node and no emit option, so
+`586434f9b9739c40` and `612c94d132690dc2` cannot move. The line map renders
+`analysis.topoOrder` through `canonicalShallow`, a property of the IR and its
+schedule rather than of how many bodies consume it, so `pinnedLineMap` cannot
+move either.
+
+Both held, untouched. That makes them this task's **behaviour-preservation
+proof** rather than its collateral - the same role they played in task 23. A
+change that deletes one of the emitter's two lowerings of every node type and
+leaves both committed hashes byte-identical has demonstrated something; if
+either had moved, that would have been a bug, not a regeneration.
+
+The milestone file is corrected in place, per the rule that a plan is a record:
+the sentence is rewritten with what was actually found, not deleted.
