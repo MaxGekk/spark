@@ -516,9 +516,44 @@ opens is on the way to everywhere else: an `IntegerType` column is the first
 non-date input the engine has ever read, and items 2, 3 and 4 all need that
 boundary open before they can start.
 
+### 2.13 `date - date`, the first mixed-width kernel (task 39)
+
+The natural first consumer of tasks 28 and 29, and a better one than the
+synthetic `cast(int AS long) + long` chain their measurement used: int32 inputs,
+an int64 output, exactly one width conversion, one output, and an error path.
+The smallest real expression with that shape.
+
+It is not `datediff`, which Varka already compiles and which returns an
+`IntegerType` day count. Since Spark 3.2 the `-` operator between two dates
+returns `DayTimeIntervalType(DAY)` - physically **long microseconds** - as
+`Math.multiplyExact(Math.subtractExact(l, r), MICROS_PER_DAY)`. Two facts about
+that line shape the task: it throws unconditionally, not only under ANSI, since
+`SubtractDates` carries no `failOnError`; and the legacy
+`CalendarIntervalType` variant behind `spark.sql.legacy.interval.enabled` is a
+different result type that must decline.
+
+**The finding that made this worth writing down now is that it does not need
+task 30.** A lane cannot throw, but it does not have to: task 26 built the
+channel where a kernel notices what it cannot compute, returns a status, and
+the row engine recomputes the batch - and the row engine then raises the
+identical exception at the identical row, because it *is* the row engine. Both
+overflow tests are cheap and branchless (`((l ^ r) & (l ^ diff)) < 0` for the
+subtraction, and a comparison against `Long.MAX_VALUE / MICROS_PER_DAY =
+106751991` for the multiply), and overflow needs a date range of 292,000 years,
+so the fallback costs nothing anyone will measure. Task 30 exists for
+expressions where declining is too expensive; this is not one, and the recipe
+says so rather than reaching for machinery because it is there.
+
+The recipe is the first written **against machinery that does not exist yet**,
+so it names tasks 28's and 29's plumbing provisionally and tells the executing
+agent to stop and report if the real thing differs rather than adapt on the
+fly. The gap between what it assumed and what 28 and 29 actually build is the
+most useful thing its outcome section can record - and it is a cheap trial of
+whether a recipe can usefully be written ahead of its dependencies at all.
+
 ## 3. Task breakdown
 
-Tasks 24-38 are the committed spine, in dependency order: 24 halves the
+Tasks 24-39 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
@@ -535,8 +570,8 @@ which is worth watching rather than ignoring.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now tasks 32-38, sections 2.9 to 2.12), so
-milestone 5 resumes at 39.
+(task 31, section 2.2, and now tasks 32-39, sections 2.9 to 2.13), so
+milestone 5 resumes at 40.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -554,6 +589,7 @@ milestone 5 resumes at 39.
 | 36 | `last_day` | The node and the month-length tail, with February's leap case as its own branch | As 34, with every month length exercised in both a leap and a common year |
 | 37 | `weekofyear` | The node, the ISO-8601 rule including both year-boundary corrections, and the weeks-in-year helper called for two years | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list |
 | 38 | A day offset that is a column | The four guards moved, the `andRef` validity fix, `IntegerType` leaves and Arrow `IntVector` inputs accepted, short and byte offsets declining | A null offset producing a null row, at both widths; short and byte columns declining; **no pinned value and no committed number moves**, since no node type is added and the literal path is untouched |
+| 39 | `date - date` | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
 | 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
