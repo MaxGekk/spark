@@ -443,9 +443,47 @@ The corpus does not ask for `next_day` any more than it asked for `month`.
 This task is not claiming otherwise; it is buying a measurement of the handover
 itself, and picking the cheapest possible payload to buy it with.
 
+### 2.11 The rest of the date-field family (tasks 34-37)
+
+Four more expressions the survey after task 26 turned up, taken for the same
+reason task 33 was: each is a **tail on a decomposition that already exists**,
+so the whole of each task is one IR node, one case in `emitChrono`'s tail
+switch, and its tests. They are separate tasks rather than one because they are
+meant to go to separate agents, and because they are genuinely independent -
+the only ordering is that 34 builds the leap flag 35, 36 and 37 all want.
+
+| task | expression | lowering | size |
+|---|---|---|---|
+| 34 | `dayofyear` | `doy >= 306 ? doy - 305 : doy + 60 + L` | ~10 ops |
+| 35 | `trunc(d, 'YEAR'\|'MONTH'\|'QUARTER')` | `d - dayofyear + 1`, `d - dom + 1`, and a four-way quarter-start select | ~5-15 ops |
+| 36 | `last_day` | `d + length - dom`, length from the same linear form the day tail uses, February special-cased | ~12 ops |
+| 37 | `weekofyear` | ISO-8601: provisional week from day-of-year and weekday, then the two year-boundary corrections | ~60 ops |
+
+**Every formula above was verified during planning against `java.time` over
+all 3,652,059 days of `0001-01-01..9999-12-31` - zero mismatches**, by
+`plans/verify_chrono_tails.py`, which is committed beside the recipes so the
+claim is re-runnable by whoever is asked to trust it. That check
+is why they are worth handing over: the four recipes carry arithmetic that has
+already been run, so the executing agent is transcribing rather than deriving.
+It also earned its keep immediately - the first draft of `dayofyear` used 59
+where the answer is 60, and failed on 84% of days.
+
+Two things the four have in common, both written into the recipes. Their
+oracles are all `LocalDate`, which is exact, so the ordinary no-overflow rule
+applies - the opposite of task 33, where Spark's own arithmetic wraps and the
+lowering has to wrap with it. And the leap flag they need is computed from the
+*reported* year with two magic multiplies over a year biased by 13200, rather
+than from `yoc` and `century` with bit tricks that go wrong at the century and
+era boundaries.
+
+The corpus asks for none of them. As with 33, that is said plainly rather than
+argued around: what these buy is a second, wider trial of the handover - four
+tasks, four agents, one of them (37) deliberately harder than the rest, and
+four outcome sections recording where the recipes misled whoever ran them.
+
 ## 3. Task breakdown
 
-Tasks 24-33 are the committed spine, in dependency order: 24 halves the
+Tasks 24-37 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
@@ -456,12 +494,14 @@ because 26 measured what its own design cost and the number was worth a task
 (see 2.9), which is the milestone's own rule about debts working as intended;
 33 exists to measure something else entirely - whether a task can be handed to
 a cheap agent as a recipe (see 2.10) - and picks the smallest payload it can
-to do it.
+to do it. 34-37 widen that trial to four more payloads of increasing size
+(see 2.11), and each of them makes task 32's debt a little more expensive,
+which is worth watching rather than ignoring.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now tasks 32 and 33, sections 2.9 and 2.10), so
-milestone 5 resumes at 34.
+(task 31, section 2.2, and now tasks 32-37, sections 2.9 to 2.11), so
+milestone 5 resumes at 38.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -474,6 +514,10 @@ milestone 5 resumes at 34.
 | 29 | int64 lanes: `TimestampNTZ`, `bigint` | The second `LaneType`; `TimestampNTZ` comparisons, differences, literal arithmetic; `TimestampType` and `LongType` comparisons and diffs; range-narrowed magic constants for 1000000 and 86400 or a recorded decline; the field differential mode from task 22 | Every parity gate re-run at the long species and both vector widths; the halved-headroom number committed rather than discovered; zoned operations demonstrably declined, not wrong |
 | 30 | ANSI integer arithmetic | `try_add`/`try_subtract`/`try_multiply` via the difference-mask-as-validity path; the ANSI throw path via saturating detection and scalar re-walk, priced with a registered prediction; `Multiply` overflow through 28's widening if it is cheap, declined with a reason if not | The error-identity differential: same `SparkException`, same row, as the row engine under ANSI; `try_*` differential over overflow-dense and overflow-free data; committed number on the no-overflow path against Janino |
 | 33 | `next_day`, as a handover experiment | The node, the compiler arm declining every non-literal weekday, and the emitter arm over the existing mod-7 lowering; `PLAN_TASK_33.md` written as an executable recipe and scored in its own outcome section on which steps misled the agent that ran it | Every Varka suite green at both widths; the two pinned fixtures re-pinned under their update rule; no committed benchmark number moves, since the task adds a node type and changes no existing shape |
+| 34 | `dayofyear` | The node, the January-based conversion off `emitChrono`'s March-based day of year, and the shared leap-flag helper tasks 35-37 reuse | Every Varka suite green at both widths; the pinned fixtures re-pinned; a day outside the covered range still declines |
+| 35 | `trunc(date, YEAR/MONTH/QUARTER)` | One node carrying the level as a shape-bearing field, three lowerings, and the decline path for every level and format this task does not cover | As 34, plus a `DateType` output proved to feed further date arithmetic in the same chain |
+| 36 | `last_day` | The node and the month-length tail, with February's leap case as its own branch | As 34, with every month length exercised in both a leap and a common year |
+| 37 | `weekofyear` | The node, the ISO-8601 rule including both year-boundary corrections, and the weeks-in-year helper called for two years | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list |
 | 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
