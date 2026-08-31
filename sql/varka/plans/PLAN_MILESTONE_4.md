@@ -626,9 +626,65 @@ mode the invalid case also declines, because a lane cannot throw - the same
 trick task 39 uses, and the reason this task needs no error machinery of its
 own.
 
+### 2.16 What `GROUP_BUDGET` does not bound (tasks 43, 44)
+
+Both come out of the review of task 26, and both are the same discovery from
+two sides: `GROUP_BUDGET` bounds one of the three method shapes the emitter
+produces, and task 26's wide nodes made the other two visible. Neither is a
+calendar problem - both would have arrived with any node worth more than a few
+ops - so they are their own tasks rather than corrections to 26.
+
+Both are **design tasks, not recipes**: each opens with a measurement whose
+answer decides between three mechanisms, so neither is delegable the way tasks
+33-42 are.
+
+**Task 43: a loop method inside one output is unbounded.** `groupOutputs`
+partitions *between* outputs and never inside one, so `GROUP_BUDGET` binds only
+when the ops are spread across several. `CHRONO_WEIGHT` therefore separates
+calendar nodes that are separate output roots and does nothing for calendar
+nodes under one root. Measured on the emitter as it stands:
+`CASE WHEN d < DATE '...' THEN year(d) ELSE month(d) END` is one root and emits
+**one** loop method of 926 bytecode bytes; `least(greatest(year, month),
+greatest(dayofmonth, quarter))` is one root and emits **one** method of 1672
+bytes, roughly 190 vector ops. The budget's own javadoc records single-output
+loops as healthy "at every width tried", and the width tried was 59 ops.
+
+The task opens by finding out where that stops being true: single-output loops
+at 60, 100, 150, 190 and 250 vector ops, measuring both steady-state throughput
+and the time to reach it, which is the axis task 11 measured when it set the
+budget. If there is a cliff, three mechanisms, and the choice is the task:
+split inside an output (which the budget's javadoc rejects on register-residency
+grounds, but rejected it without data past 59 ops); decline the shape at compile
+time through `fitsBudgets`, which is honest and loses fusion for a
+`CASE WHEN year ELSE month`; or accept it and record where the cliff sits so
+the next wide node is weighed against a number.
+
+**Task 44: the epilogue is one method over every output.** Task 24 decided that
+deliberately - the epilogue runs one pass per batch, so the compile-time
+argument behind `GROUP_BUDGET` does not apply to it - and that reasoning is
+still right about compile *time* and silent about bytecode *size*. HotSpot
+refuses to compile any method past `HugeMethodLimit`, 8000 bytes by default, so
+past that the epilogue is not compiled by C1 or C2 at all and runs interpreted
+with boxed vectors: the ~1% state the `GROUP_BUDGET` javadoc describes, on
+every batch whose length is not a lane multiple.
+
+Measured, by emitting the classes and reading the method: `epilogueMasked` is
+7530 bytes at 16 calendar outputs and **8079 at 17** - so the limit is crossed
+at seventeen, well inside `MAX_FUSED_NODES = 64`, and five date columns of four
+fields is twenty. The same 32-output projection built from `date_add` instead
+is 1811 bytes, so this is new with wide nodes rather than a standing property.
+
+The task's own trap is that the benchmark cannot see this: every case in the
+year section drives 4096-row chunks, so the epilogue's early return always
+fires and the wide epilogue is never timed. That is exactly the lesson
+`SKILLS.md` records from task 24 - a size ladder needs 4095 and 63 on it
+deliberately - and getting the measurement to show the problem is half the
+task. Then the mechanism: group the epilogue as the loops are grouped, bound it
+by emitted bytes rather than op count, or decline the shape.
+
 ## 3. Task breakdown
 
-Tasks 24-42 are the committed spine, in dependency order: 24 halves the
+Tasks 24-44 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
@@ -645,8 +701,8 @@ which is worth watching rather than ignoring.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now tasks 32-42, sections 2.9 to 2.15), so
-milestone 5 resumes at 43.
+(task 31, section 2.2, and now tasks 32-44, sections 2.9 to 2.16), so
+milestone 5 resumes at 45.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -668,6 +724,8 @@ milestone 5 resumes at 43.
 | 40 | days-from-civil, and month arithmetic | `emitDaysFromCivil` as a helper three later expressions can call; the node behind `date +- INTERVAL n MONTH/YEAR` and `add_months`; the small-dividend month arithmetic and the literal bound it implies | The round trip tested on its own, not only through the expression; the clamp cases in both directions; a non-foldable or over-large month count declining; green at both widths |
 | 41 | `unix_date` / `date_from_unix_date` | Two compiler arms that unwrap to the child, no IR node and no emitted code; the bare-`ColumnRef` output shape tested | A projection mixing a relabelled entry with an ordinary one fuses both; no pinned value moves, no committed number moves, no emitted bytes change for any existing shape |
 | 42 | `make_date` | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
+| 43 | What bounds a loop method inside one output | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
+| 44 | The epilogue's size | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
 | 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
@@ -795,6 +853,17 @@ The scope's section 8, each question now owned by a task or settled here:
 One bullet per debt: what it is, why it is a debt, and what closing it would
 take. Opened during task 24, per `sql/varka/AGENTS.md` - a swept entry is
 rewritten in the past tense with what the sweep found, never deleted.
+
+* **`GROUP_BUDGET` bounds one of the emitter's three method shapes.** **Adopted as tasks
+  43 and 44 (see 2.16)**, both found by the review of task 26 rather than planned.
+  `groupOutputs` partitions between outputs and never inside one, so a single output root
+  holding several wide nodes emits one unbounded loop method - measured at 1672 bytes and
+  roughly 190 vector ops for `least(greatest(year, month), greatest(dayofmonth, quarter))`,
+  against the 59-op width the budget's own evidence covers. And the epilogue is one method
+  over every output by task 24's deliberate decision, which is right about compile time and
+  silent about bytecode size: `epilogueMasked` measures 7530 bytes at 16 calendar outputs
+  and 8079 at 17, crossing the 8000-byte `HugeMethodLimit` past which HotSpot compiles
+  nothing at all. Neither is a calendar defect; task 26 only made them reachable.
 
 * **A calendar field is computed once per output, not once per date.** **Adopted as task
   32 (see 2.9)**, which is what a debt register is for: this entry is where the cost was
