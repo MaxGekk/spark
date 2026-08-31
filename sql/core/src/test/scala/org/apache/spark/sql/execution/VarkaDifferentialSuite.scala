@@ -530,6 +530,49 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("a date past the shipped lowering's range falls back rather than answering wrongly") {
+    // The guard, end to end and without a hook: date_add pushes the dates past the range the
+    // narrowed civil-from-days lowering is defined over (years -12800..33134), so the kernel
+    // declines the batch and the row engine answers it. What this asserts is that the answers
+    // are the row engine's - a wrong year here would be the one failure mode task 26's guard
+    // exists to prevent - and that the batch is counted as declined, not as a kernel failure.
+    val rows = Seq("2024-01-01", "1970-01-01", "9999-12-31", null)
+    Seq(spark, varkaSpark).foreach { session =>
+      import scala.jdk.CollectionConverters._
+      val schema = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("d", org.apache.spark.sql.types.DateType, true)))
+      val data = rows.map(v =>
+        org.apache.spark.sql.Row(if (v == null) null else java.sql.Date.valueOf(v)))
+      session.createDataFrame(data.asJava, schema).createOrReplaceTempView("varka_far")
+      session.catalog.cacheTable("varka_far")
+    }
+    try {
+      // 20 million days past 9999-12-31 is year ~64750, well outside the range.
+      val q = "SELECT year(date_add(d, 20000000)) AS a FROM varka_far ORDER BY a"
+      val expected = spark.sql(q)
+      val actual = varkaSpark.sql(q)
+      val plan = actual.queryExecution.executedPlan
+      assertFused(plan)
+      checkAnswer(actual, expected)
+      def metric(name: String): Long = plan.collectFirst { case v: VarkaColumnarToRowExec => v }
+        .flatMap(_.metrics.get(name)).map(_.value).getOrElse(0L)
+      assert(metric("numFallbackBatchesDeclined") > 0L,
+        "the out-of-range date should have declined the batch")
+      assert(metric("numFallbackBatchesKernel") === 0L,
+        "a declined batch is not a kernel failure")
+      // In-range dates on the same column still run on the kernel, so the guard is not
+      // condemning everything it sees.
+      val inRange = varkaSpark.sql("SELECT year(d) AS a FROM varka_far ORDER BY a")
+      checkAnswer(inRange, spark.sql("SELECT year(d) AS a FROM varka_far ORDER BY a"))
+      val inRangePlan = inRange.queryExecution.executedPlan
+      val declined = inRangePlan.collectFirst { case v: VarkaColumnarToRowExec => v }
+        .flatMap(_.metrics.get("numFallbackBatchesDeclined")).map(_.value).getOrElse(0L)
+      assert(declined === 0L, "in-range dates must not decline")
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_far"))
+    }
+  }
+
   test("a declined batch falls back with the row engine's answers, counted as its own cause") {
     // Task 26: a partial lowering (the narrowed civil-from-days one) reports a batch it cannot
     // compute, and the evaluator recomputes it row by row. The shipped lowering is total, so

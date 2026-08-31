@@ -89,22 +89,27 @@ public record VarkaEmitOptions(
 
   /**
    * The two civil-from-days lowerings (task 26), differing only in how they reach the day of
-   * era. {@link #TOTAL} splits the dividend so the arithmetic is correct for every {@code int}
-   * day and needs no runtime check. {@link #NARROWED} divides once, which is about five vector
-   * ops cheaper, but is defined only over {@link VarkaChrono#NARROW_MIN_DAYS}..
-   * {@link VarkaChrono#NARROW_MAX_DAYS} - years -12800 to 33134, which contains every date
-   * SQL can write but is reachable past by {@code date_add} - so it also emits a per-lane guard
-   * and reports {@link VarkaFusedKernel#STATUS_CHRONO_RANGE} for a batch it cannot compute,
-   * which the caller then recomputes on the row engine.
+   * era. {@link #NARROWED} divides once and is what ships: it is defined only over
+   * {@link VarkaChrono#NARROW_MIN_DAYS}..{@link VarkaChrono#NARROW_MAX_DAYS} - years -12800 to
+   * 33134, which contains every date SQL can write but is reachable past by {@code date_add} -
+   * so it emits a per-lane guard and reports {@link VarkaFusedKernel#STATUS_CHRONO_RANGE} for a
+   * batch it cannot compute, which the caller then recomputes on the row engine.
+   * {@link #TOTAL} splits the dividend instead, so its arithmetic is correct for every
+   * {@code int} day and needs no guard at all.
    *
-   * <p>Both ship: whichever is not the default stays a live reference variant the differential
-   * suite checks the other against, the way {@link FloorMod7} keeps its two.
+   * <p>The owner chose {@link #NARROWED} on the measurement in
+   * {@code VarkaEmitterParityBenchmark}'s year section: totality costs 14 to 24% depending on
+   * width and null pattern (1461 against 1818 M rows/s at AVX-512 null-free, 532 against 619 at
+   * 128-bit), and the range it gives up is one no SQL date literal can reach.
+   *
+   * <p>Both ship: {@link #TOTAL} stays a live reference variant the differential suite checks
+   * the shipped one against, the way {@link FloorMod7} keeps its two.
    */
   public enum CivilFromDays { TOTAL, NARROWED }
 
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS = new VarkaEmitOptions(
-      VarkaLoopEmitter.GROUP_BUDGET, true, FloorMod7.MAGIC, CivilFromDays.TOTAL, false);
+      VarkaLoopEmitter.GROUP_BUDGET, true, FloorMod7.MAGIC, CivilFromDays.NARROWED, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {

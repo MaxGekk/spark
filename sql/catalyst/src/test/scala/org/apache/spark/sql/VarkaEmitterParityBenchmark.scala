@@ -367,20 +367,24 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             pass += 1
           }
         }
-        val narrowed = VarkaEmitOptions.DEFAULTS
-          .withCivilFromDays(VarkaEmitOptions.CivilFromDays.NARROWED)
-        val yearTotal = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 800)
-        val yearNarrow = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 801, narrowed)
+        val total = VarkaEmitOptions.DEFAULTS
+          .withCivilFromDays(VarkaEmitOptions.CivilFromDays.TOTAL)
+        val yearTotal = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 800, total)
+        val yearNarrow = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 801)
         val fourFields = Seq[VarkaVectorIR](new Year(new ColumnRef(0)),
           new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
           new Quarter(new ColumnRef(0)))
-        val fourTotal = emit(fourFields, 1, 0, loader, 802)
-        val fourNarrow = emit(fourFields, 1, 0, loader, 803, narrowed)
+        val fourTotal = emit(fourFields, 1, 0, loader, 802, total)
+        val fourNarrow = emit(fourFields, 1, 0, loader, 803)
         val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804)
-        benchmark.addCase("year, total (shipped), null-free") { _ => chunked(yearTotal, false) }
-        benchmark.addCase("year, total (shipped), mixed nulls") { _ => chunked(yearTotal, true) }
-        benchmark.addCase("year, narrowed + guard, null-free") { _ => chunked(yearNarrow, false) }
-        benchmark.addCase("year, narrowed + guard, mixed nulls") { _ => chunked(yearNarrow, true) }
+        benchmark.addCase("year, total (reference), null-free") { _ => chunked(yearTotal, false) }
+        benchmark.addCase("year, total (reference), mixed nulls") { _ => chunked(yearTotal, true) }
+        benchmark.addCase("year, narrowed + guard (shipped), null-free") { _ =>
+          chunked(yearNarrow, false)
+        }
+        benchmark.addCase("year, narrowed + guard (shipped), mixed nulls") { _ =>
+          chunked(yearNarrow, true)
+        }
         benchmark.addCase("year+month+day+quarter, total, null-free") { _ =>
           chunked(fourTotal, false, outputs = 4)
         }

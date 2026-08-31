@@ -715,7 +715,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("the calendar extractions match LocalDate across the Gregorian range") {
+  test("the total lowering matches LocalDate across the whole int day range") {
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
       new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
@@ -734,11 +734,15 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       LocalDate.of(1969, 12, 31).toEpochDay.toInt, LocalDate.of(1970, 1, 1).toEpochDay.toInt)
     def days(c: Int, i: Int): Int =
       if (i < extremes.length) extremes(i) else i * 99991 - 500000
+    // Explicitly the total lowering: these days run past what the shipped narrowed one is
+    // defined over, which is the whole point of keeping it as a reference variant.
     checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "chrono")
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "chrono",
+      options = VarkaEmitOptions.DEFAULTS
+        .withCivilFromDays(VarkaEmitOptions.CivilFromDays.TOTAL))
   }
 
-  test("the narrowed lowering agrees with the total one, and reports nothing, in range") {
+  test("the shipped narrowed lowering matches LocalDate, and reports nothing, in range") {
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
       new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
@@ -752,16 +756,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     def days(c: Int, i: Int): Int =
       if (i < inRange.length) inRange(i) else i * 9973 - 400000
     checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed",
-      options = VarkaEmitOptions.DEFAULTS
-        .withCivilFromDays(VarkaEmitOptions.CivilFromDays.NARROWED))
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed")
   }
 
   test("the narrowed lowering declines a batch holding a day outside its range") {
     val root = new Year(new ColumnRef(0))
-    val narrowed = VarkaEmitOptions.DEFAULTS
-      .withCivilFromDays(VarkaEmitOptions.CivilFromDays.NARROWED)
-    val (kernel, loader) = load(emitMulti(Seq(root), 1, 0, narrowed))
+    val (kernel, loader) = load(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS))
     try {
       val arena = Arena.ofConfined()
       try {
@@ -785,7 +785,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1 else i * 97)
         assert(runKernel(kernel, nulled, out, length) === 0)
         // The total lowering never declines, whatever it is given.
-        val (total, totalLoader) = load(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS))
+        val (total, totalLoader) = load(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS
+          .withCivilFromDays(VarkaEmitOptions.CivilFromDays.TOTAL)))
         try {
           assert(runKernel(total, bad, out, length) === 0)
         } finally {
