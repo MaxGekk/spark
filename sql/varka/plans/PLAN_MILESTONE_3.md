@@ -191,7 +191,7 @@ review of the milestone, which set the Java-first direction recorded in
 | 20 | The four gating shapes | `cast(string AS DATE)` folding, `BETWEEN` -> paired comparisons, `In`/`InSet` over the existing lane types -> a `Compare(EQ)` chain joined by `Or`, and `Coalesce` -> a `blend` chain over a new validity-reading condition node (with `IsNull`/`IsNotNull` riding it), all in `VarkaExpressionCompiler`; a literal-count cap for `In` with a recorded number. **DONE** (`PLAN_TASK_20.md`): the cap is 16 deduped literals (balanced EQ-OR chain; 3.5x at 5 literals, 4.0x at the cap, parity above it and on the filter anchors); `IsNotNull` is the IR's first total, validity-reading condition (guarded operands restricted to bare columns); cast folding and bare-column BETWEEN were already served by the optimizer (identity unwrap and a defensive replacement case added); and the compiler now mirrors the emitter budgets, demoting an overflowing entry to residual with a reason instead of the pre-existing silent per-batch fallback | Differential over the survey's shapes, over `IN` lists at 5, 50, 200 and 500 literals including the cap boundary, and over `Coalesce` with every null pattern including all-null and no-null arguments; the three-valued rules still hold for `And`/`Or` with a validity predicate among their operands; the corpus' wrapped date expressions compile where they previously declined, with decline reasons (task 16) showing the change; a columnar-terminal variant of Spark's `InExpressionBenchmark` committed against its upstream baseline |
 | 21 | Filters and selection vectors | Mask as a first-class value leaving the loop; selection vector with the ~15% compaction rule; `VarkaColumnarRule` rewriting a filter, and the batch contract for a selected batch. **DONE** (`PLAN_TASK_21.md`): a filter root is an existing `Cond` (no new IR node - the selection bitmap is the known-true word written where output validity goes, unknown-as-false by construction); per-conjunct eligibility splits mixed predicates with the residual in a row filter above; the compacting `VarkaFilterExec` wins 2.3-2.7x across the whole selectivity ladder and the mask-skip row node 2.3x down to 1.1x, so the ~15% threshold was not warranted and no threshold conf exists; found and fixed a latent task-6 wrong-results bug (the cache builder stripped fused transitions) | Differential on filter-heavy shapes including all-selected and none-selected; committed throughput against Janino on the survey's `d_date BETWEEN` shape |
 | 22 | Operational debuggability, and the charter answer | Fallback-cause metrics in the SQL UI speaking task 16's taxonomy; JFR events for emission, cache and fallback; item 10 answered in `VISION.md`. **DONE** (`PLAN_TASK_22.md`): four cause-keyed metrics per node (non-Arrow batches, kernel failures, emission failures, residual entries - reasons stay in EXPLAIN), three JFR events under the `Varka` category with the repo's first JFR tests, and the charter answered by the owner: whole-stage generation stays in charter (`VISION.md` section 13) | A fallen-back production query is diagnosable from metrics alone; the JFR event set covers emission and cache hit/miss; the whole-stage question has a written answer |
-| 23 | Java-first migration | The Java-over-Scala house rule in `sql/varka/AGENTS.md` (landed with this row); migration of the Varka Scala components that nothing forces to stay Scala - `VarkaShapeCache` first, as the natural vehicle for the debt register's emit-options rework (section 10), then an assessment of `VarkaExpressionCompiler` - and a recorded boundary naming what stays Scala and why (`SparkPlan` nodes, the columnar rule, ScalaTest suites) | Behavior-preserving: every Varka suite green at both vector widths with committed numbers unchanged; scalastyle and `dev/lint-java` clean; the boundary record names each surviving Scala file's reason |
+| 23 | Java-first migration | The Java-over-Scala house rule in `sql/varka/AGENTS.md` (landed with this row); migration of the Varka Scala components that nothing forces to stay Scala - `VarkaShapeCache` first, as the natural vehicle for the debt register's emit-options rework (section 10), then an assessment of `VarkaExpressionCompiler` - and a recorded boundary naming what stays Scala and why (`SparkPlan` nodes, the columnar rule, ScalaTest suites) **DONE** (`PLAN_TASK_23.md`): the migration is honestly 474 unforced Scala lines in two files - `VarkaGeneratedClassLoader` (70, which had a Java twin already) and `VarkaShapeCache` (404, split into a pure-JDK Java core plus a 95-line Scala facade that owns every read of Spark's configuration and environment) - with the boundary recorded per file and per reason; and the debt register (section 10) is swept whole, including a third hook race the register did not know about | Behavior-preserving: every Varka suite green at both vector widths with committed numbers unchanged; scalastyle and `dev/lint-java` clean; the boundary record names each surviving Scala file's reason |
 
 ## 4. Files
 
@@ -221,9 +221,21 @@ The milestone's standing gates, inherited and unchanged:
 * The ghost fallback still never fails a query, and the cache never returns a
   class for a shape it was not emitted from.
 
-One gap is recorded rather than closed: four-lane coverage is local only, via
-`-XX:MaxVectorSize=16`. A real aarch64 runner is the residual half of
-`ISSUES.md` finding 4 and remains CI work, dependent on runner availability.
+One gap was recorded rather than closed, and task 23 found it half closed
+already, so the record splits rather than being struck. Commit `1cf964c9abe`
+added an aarch64 CI job (`build_and_test.yml`, matrix over `ubuntu-latest` and
+`ubuntu-24.04-arm`), and it runs `./build/mvn -f sql/varka/engine/pom.xml
+install` - the engine module alone, five JUnit classes, each twice: at the
+host's width and again under `-XX:MaxVectorSize=16`. The catalyst and sql/core
+jobs that run `VarkaLoopEmitterSuite`, `VarkaShapeCacheSuite` and
+`VarkaDifferentialSuite` are `runs-on: ubuntu-latest`, x86_64 only, and build
+the engine with `-Dmaven.test.skip=true`.
+
+So: **the hand-written kernels are covered on real ARM hardware; the emitted
+loops are not.** Four-lane coverage of the emitter remains local only, via
+`-XX:MaxVectorSize=16`, which exercises the narrow species but not a different
+instruction set. Closing that half means running the catalyst and sql/core
+Varka suites on the arm matrix leg too, and is CI work rather than engine work.
 
 ## 6. Risks
 
@@ -444,7 +456,7 @@ Opened after task 18, in the milestone-2 register's form
 is a debt, what closing it takes - and a swept entry is rewritten in the
 past tense by the task that sweeps it, not deleted.
 
-* **Task 18 review follow-up** (the fourth review round's residue, deferred
+* ~~**Task 18 review follow-up** (the fourth review round's residue, deferred
   by decision; full record in `PLAN_TASK_18.md` section 10). What it is:
   rework the emitter test hooks into an explicit emit-options input that
   rides the shape-cache key, retiring the generation/gate guard stack and
@@ -460,4 +472,22 @@ past tense by the task that sweeps it, not deleted.
   fourth time - but the hook machinery is four cooperating mechanisms in
   two files, which is complexity milestone 4 would build on. What closing
   it takes: one focused task; the emit-options refactor should land before
-  milestone 4 widens the emitter's option surface.
+  milestone 4 widens the emitter's option surface.~~ Swept whole by task 23
+  (`PLAN_TASK_23.md`), which found three things the register did not know.
+  The hook stack held **three** races, not two: a hook *reset* also bumped
+  the write generation, so one suite clearing its hook spuriously failed an
+  unrelated thread's in-flight emit. The builder-set-statics boundary is
+  sharper than "never reaches an executor" - such a value reaches one only
+  when the builder also created the `SparkContext`, because
+  `SQLConf.mergeNonStaticSQLConfigs` drops static keys on an attached
+  session, so it is lost on the driver too. And `canonical` was not the
+  drop-in the entry implies for `renderLineMap`: it recurses, so the key
+  would have carried a whole subtree per line - which is exactly what
+  `Record.toString` was already doing, making the old key grow
+  quadratically in the sharing the emitter exists to exploit. Task 23 added
+  a shallow rendering beside `canonical`, pinned by its own committed line
+  map, and found a third `Record.toString` site the register had not named:
+  `VarkaKernelEvaluator.kernelIdentity`, which every fallback warning and
+  the JFR fallback event quote. One item came out smaller than expected -
+  `fitsBudgets` needed no change, because the group budget is not an
+  eligibility limit and it was right to ignore it.

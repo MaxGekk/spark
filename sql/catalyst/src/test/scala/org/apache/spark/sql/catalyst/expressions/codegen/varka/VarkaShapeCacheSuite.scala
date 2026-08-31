@@ -24,6 +24,8 @@ import java.util.concurrent.{CountDownLatch, Executors, TimeUnit}
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
+import org.apache.spark.util.Utils
 
 /**
  * Task 18: the cross-task class cache. The one failure mode the ghost fallback cannot catch is
@@ -56,14 +58,25 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   }
 
   private def keyOf(root: VarkaVectorIR, numInputs: Int = 1, numLiterals: Int = 1) =
-    VarkaShapeKey(Seq(root), numInputs, numLiterals)
+    new VarkaShapeKey(java.util.List.of(root), numInputs, numLiterals)
+
+  /**
+   * The parent loader `VarkaShapeCache` passes on the production path. Since task 23 the cache
+   * core takes it as a value rather than reading the thread's context loader itself - the facade
+   * owns every read of Spark's environment - so the tests name it here once.
+   */
+  private def parent: ClassLoader = Utils.getContextOrSparkClassLoader
+
+  /** The core returns a `java.util.List`; the facade's Scala view is what these tests read. */
+  private def executionsOf(cache: VarkaShapeCacheImpl, hash: String): Seq[String] =
+    cache.executionsFor(hash).asScala.toSeq
 
   test("equal shapes share one loaded class; the second lookup is a hit") {
     val cache = new VarkaShapeCacheImpl(8)
     // Two independently built but structurally equal keys: what two queries with the same
     // shape and different constants produce, since the constants never enter the IR.
-    val first = cache.getOrEmit(keyOf(chain(bits = 5, depth = 3)), "execA")
-    val second = cache.getOrEmit(keyOf(chain(bits = 5, depth = 3)), "execB")
+    val first = cache.getOrEmit(parent, keyOf(chain(bits = 5, depth = 3)), "execA")
+    val second = cache.getOrEmit(parent, keyOf(chain(bits = 5, depth = 3)), "execB")
     assert(!first.hit && second.hit)
     assert(first.entry eq second.entry, "equal keys must share one entry")
     assert(cache.hitCount === 1 && cache.missCount === 1)
@@ -73,8 +86,8 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   test("task 21: a condition-root shape - the filter kernel - caches and hits like any other") {
     val cache = new VarkaShapeCacheImpl(8)
     val cond = new VarkaVectorIR.Compare(VarkaVectorIR.CompareOp.LT, columnRef, literal)
-    val first = cache.getOrEmit(keyOf(cond), "execFilterA")
-    val second = cache.getOrEmit(keyOf(cond), "execFilterB")
+    val first = cache.getOrEmit(parent, keyOf(cond), "execFilterA")
+    val second = cache.getOrEmit(parent, keyOf(cond), "execFilterB")
     assert(!first.hit && second.hit)
     assert(first.entry eq second.entry, "equal mask shapes must share one entry")
     // The mask root and the same condition inside a value root are different shapes: the
@@ -96,7 +109,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
       // Swapped op order at depth 2: same op multiset, different structure.
       keyOf(chain(bits = 1, depth = 2)),
       keyOf(chain(bits = 2, depth = 2)))
-    val entries = keys.map(cache.getOrEmit(_, "exec").entry)
+    val entries = keys.map(cache.getOrEmit(parent, _, "exec").entry)
     assert(cache.missCount === keys.size && cache.hitCount === 0)
     assert(entries.map(_.klass).distinct.size === keys.size)
     assert(entries.map(_.shapeHash).distinct.size === keys.size)
@@ -107,7 +120,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val b = keyOf(chain(bits = 9, depth = 4))
     assert(VarkaShapeCache.shapeHash(a) === VarkaShapeCache.shapeHash(b))
     assert(VarkaShapeCache.shapeHash(a) !== VarkaShapeCache.shapeHash(keyOf(chain(6, 4))))
-    val entry = new VarkaShapeCacheImpl(2).getOrEmit(a, "exec").entry
+    val entry = new VarkaShapeCacheImpl(2).getOrEmit(parent, a, "exec").entry
     val hash = VarkaShapeCache.shapeHash(a)
     assert(hash.matches("[0-9a-f]{16}"), hash)
     assert(entry.shapeHash === hash)
@@ -126,7 +139,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
         pool.submit(new java.util.concurrent.Callable[Class[_]] {
           override def call(): Class[_] = {
             start.await()
-            cache.getOrEmit(keyOf(chain(bits = 3, depth = 5)), "exec").entry.klass
+            cache.getOrEmit(parent, keyOf(chain(bits = 3, depth = 5)), "exec").entry.klass
           }
         })
       }
@@ -138,7 +151,43 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     } finally {
       pool.shutdownNow()
     }
-    assert(cache.getOrEmit(key, "exec").hit)
+    assert(cache.getOrEmit(parent, key, "exec").hit)
+  }
+
+  test("a failed emit is not shared: every racing caller fails for its own reason") {
+    val cache = new VarkaShapeCacheImpl(8)
+    val threads = 6
+    val start = new CountDownLatch(1)
+    val pool = Executors.newFixedThreadPool(threads)
+    val thrown =
+      try {
+        val futures = (0 until threads).map { _ =>
+          pool.submit(new java.util.concurrent.Callable[Throwable] {
+            override def call(): Throwable = {
+              start.await()
+              // numInputs = 0 is outside what the emitter serves, so emitting this shape always
+              // throws - a deterministic failure that needs no hook in the production path.
+              val failing = new VarkaShapeKey(java.util.List.of(chain(bits = 1, depth = 2)), 0, 1)
+              intercept[IllegalArgumentException] {
+                cache.getOrEmit(parent, failing, "exec")
+              }
+            }
+          })
+        }
+        start.countDown()
+        futures.map(_.get(30, TimeUnit.SECONDS))
+      } finally {
+        pool.shutdownNow()
+      }
+    // SPARK-43300's property, asserted directly: `Throwable` does not override `equals`, so
+    // distinct elements are distinct instances. A caller that inherited the winner's failure
+    // would hold the winner's very Throwable - which is what would turn one task's cancelled
+    // emit into unrelated tasks' ghost fallbacks.
+    assert(thrown.distinct.size === threads,
+      "each caller must fail with its own exception, never a co-waiter's")
+    assert(thrown.forall(_.getMessage.contains("numInputs")))
+    // A failure caches nothing and counts as neither a hit nor a miss.
+    assert(cache.hitCount === 0 && cache.missCount === 0)
   }
 
   test("eviction releases the evicted loader, and the class unloads once unreferenced") {
@@ -146,8 +195,8 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val queue = new ReferenceQueue[ClassLoader]()
     val evictedRef = emitForEviction(cache, queue)
     // Two more shapes evict the first (LRU capacity 2).
-    cache.getOrEmit(keyOf(chain(bits = 1, depth = 1)), "exec")
-    cache.getOrEmit(keyOf(chain(bits = 0, depth = 2)), "exec")
+    cache.getOrEmit(parent, keyOf(chain(bits = 1, depth = 1)), "exec")
+    cache.getOrEmit(parent, keyOf(chain(bits = 0, depth = 2)), "exec")
     assert(cache.size <= 2)
     // The removal listener released the loader; with the entry unreferenced the loader (and
     // so its class) must now be collectable - the milestone-3 form of the Metaspace proof.
@@ -163,7 +212,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   private def emitForEviction(
       cache: VarkaShapeCacheImpl,
       queue: ReferenceQueue[ClassLoader]): WeakReference[ClassLoader] = {
-    val entry = cache.getOrEmit(keyOf(chain(bits = 0, depth = 1)), "exec").entry
+    val entry = cache.getOrEmit(parent, keyOf(chain(bits = 0, depth = 1)), "exec").entry
     assert(!entry.loader.isReleased)
     new WeakReference[ClassLoader](entry.loader, queue)
   }
@@ -176,7 +225,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val before = metaspaceUsed()
     val refs = (0 until shapes).map { i =>
       // Depth 14 gives 16384 distinct op patterns, so every index is its own shape.
-      val entry = cache.getOrEmit(keyOf(chain(bits = i, depth = 14)), "stress").entry
+      val entry = cache.getOrEmit(parent, keyOf(chain(bits = i, depth = 14)), "stress").entry
       new WeakReference[ClassLoader](entry.loader, queue)
     }
     assert(cache.size <= capacity)
@@ -195,8 +244,8 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   test("capacity 0 disables sharing: every lookup emits, evicted and released on load") {
     val cache = new VarkaShapeCacheImpl(0)
     val key = keyOf(chain(bits = 5, depth = 3))
-    val first = cache.getOrEmit(key, "exec")
-    val second = cache.getOrEmit(key, "exec")
+    val first = cache.getOrEmit(parent, key, "exec")
+    val second = cache.getOrEmit(parent, key, "exec")
     assert(!first.hit && !second.hit)
     assert(!(first.entry eq second.entry))
     assert(cache.size === 0 && cache.missCount === 2)
@@ -207,40 +256,64 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(first.entry.newKernel() != null)
     // Diagnostics still record while sharing is off: with the bytes carrying only the shape,
     // the side table is the one place the execution identity lives.
-    assert(cache.executionsFor(first.entry.shapeHash) === Seq("exec"))
+    assert(executionsOf(cache, first.entry.shapeHash) === Seq("exec"))
   }
 
-  test("an emitter test hook refuses every cache lookup, hit and miss alike") {
+  test("emit options are part of the key: a variant gets its own entry and its own name") {
     val cache = new VarkaShapeCacheImpl(4)
-    val key = keyOf(chain(bits = 3, depth = 2))
-    assert(!cache.getOrEmit(key, "exec").hit) // cached plain, before any hook
-    VarkaLoopEmitter.setDisableCseForTesting(true)
-    try {
-      // Both directions are wrong and both are refused: a hit would serve plain bytes to a
-      // hooked caller, a miss would cache hooked bytes under the plain key.
-      intercept[IllegalStateException](cache.getOrEmit(key, "exec"))
-      intercept[IllegalStateException](cache.getOrEmit(keyOf(chain(bits = 9, depth = 2)), "e"))
-    } finally {
-      VarkaLoopEmitter.setDisableCseForTesting(false)
-    }
-    assert(cache.size === 1, "a refused lookup must cache nothing")
-    // With the hook reset, the pre-hook entry serves again and new shapes emit normally.
-    assert(cache.getOrEmit(key, "exec").hit)
-    assert(!cache.getOrEmit(keyOf(chain(bits = 9, depth = 2)), "exec").hit)
+    val shape = chain(bits = 3, depth = 2)
+    val plain = keyOf(shape)
+    val noCse =
+      new VarkaShapeKey(java.util.List.of(shape), 1, 1, VarkaEmitOptions.DEFAULTS.withCse(false))
+    // Before task 23 this pair could not coexist. The emitter's non-shape inputs were static
+    // hooks the key could not see, so the cache refused every lookup - hit and miss alike -
+    // while any of them was set. They are a key component now, so the variant simply misses.
+    val first = cache.getOrEmit(parent, plain, "exec")
+    val variant = cache.getOrEmit(parent, noCse, "exec")
+    assert(!first.hit && !variant.hit)
+    assert(!(first.entry eq variant.entry))
+    assert(first.entry.shapeHash !== variant.entry.shapeHash,
+      "a variant must get its own name, or the two merge in the execution side table")
+    assert(cache.size === 2)
+    // And both keep serving: neither poisons the other, which is what the gate was for.
+    assert(cache.getOrEmit(parent, plain, "exec").hit)
+    assert(cache.getOrEmit(parent, noCse, "exec").hit)
   }
 
-  test("the context class loader is part of the key: another loader gets its own entry") {
+  test("the default options are the ones the three-argument key supplies, and render to none") {
+    val shape = chain(bits = 3, depth = 2)
+    val explicit = new VarkaShapeKey(java.util.List.of(shape), 1, 1, VarkaEmitOptions.DEFAULTS)
+    // The convenience constructor every production caller uses must mean exactly DEFAULTS, and
+    // DEFAULTS must contribute nothing to the hash - that is what keeps the two committed
+    // hashes below a valid oracle for the task-23 migration.
+    assert(keyOf(shape) === explicit)
+    assert(VarkaEmitOptions.DEFAULTS.canonical() === "")
+    assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
+  }
+
+  test("newKernel unwraps the reflective wrapper, so a fatal constructor error stays fatal") {
+    // Constructor.newInstance wraps whatever the constructor body throws in an
+    // InvocationTargetException, which is itself NonFatal - so rethrowing the wrapper would
+    // make the evaluator's isCatchable test say "ordinary kernel failure" about an error that
+    // must fail the task. The entry unwraps for exactly this case.
+    def entryFor(klass: Class[_]): VarkaShapeEntry =
+      new VarkaShapeEntry(new VarkaGeneratedClassLoader(getClass.getClassLoader), klass,
+        Array.emptyByteArray, "0123456789abcdef", klass.getConstructor())
+    val fatal = intercept[OutOfMemoryError](entryFor(classOf[FatalKernel]).newKernel())
+    assert(fatal.getMessage === "injected")
+    val ordinary = intercept[IllegalStateException](entryFor(classOf[FailingKernel]).newKernel())
+    assert(ordinary.getMessage === "injected")
+  }
+
+  test("the parent class loader is part of the key: another loader gets its own entry") {
     val cache = new VarkaShapeCacheImpl(8)
     val key = keyOf(chain(bits = 5, depth = 3))
-    val original = Thread.currentThread().getContextClassLoader
-    val first = cache.getOrEmit(key, "sessionA")
-    val isolated = new java.net.URLClassLoader(Array.empty, original)
-    val second = try {
-      Thread.currentThread().setContextClassLoader(isolated)
-      cache.getOrEmit(key, "sessionB")
-    } finally {
-      Thread.currentThread().setContextClassLoader(original)
-    }
+    // Since task 23 the parent is an argument rather than something the cache reads off the
+    // thread, so the two linkage contexts are named here directly. `VarkaShapeCache` is what
+    // binds it to `Utils.getContextOrSparkClassLoader` on the production path.
+    val isolated = new java.net.URLClassLoader(Array.empty, parent)
+    val first = cache.getOrEmit(parent, key, "sessionA")
+    val second = cache.getOrEmit(isolated, key, "sessionB")
     // Same shape, different linkage context: no sharing across loaders (a class linked
     // through one session's chain must not serve another), same shape identity outward.
     assert(!second.hit)
@@ -249,7 +322,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(first.entry.shapeHash === second.entry.shapeHash)
     assert(cache.size === 2)
     // The original loader's entry still hits for the original context.
-    assert(cache.getOrEmit(key, "sessionC").hit)
+    assert(cache.getOrEmit(parent, key, "sessionC").hit)
   }
 
   test("task 22: JFR events cover emission and lookups, joined by the shape hash") {
@@ -262,8 +335,8 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val longIdentity = "jfr-exec-b-" + ("x" * (VarkaShapeCache.maxExecutionIdentityLength * 2))
     val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(
       classOf[VarkaEmissionEvent], classOf[VarkaCacheLookupEvent]) {
-      assert(!cache.getOrEmit(key, "jfr-exec-a").hit)
-      assert(cache.getOrEmit(key, longIdentity).hit)
+      assert(!cache.getOrEmit(parent, key, "jfr-exec-a").hit)
+      assert(cache.getOrEmit(parent, key, longIdentity).hit)
     }
     // The recording sees every cache in the JVM (suites share it): filter by this test's
     // shape hash, never count globally.
@@ -280,7 +353,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val bounded = (executions - "jfr-exec-a").head
     assert(bounded.length <= VarkaShapeCache.maxExecutionIdentityLength,
       "the lookup event must carry the bounded identity, not the raw one")
-    assert(cache.executionsFor(hash).contains(bounded),
+    assert(executionsOf(cache, hash).contains(bounded),
       "the event's identity must equal the side table's entry, or the join breaks")
   }
 
@@ -311,38 +384,12 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "612c94d132690dc2")
   }
 
-  test("every *ForTesting hook field registers in anyTestHookSet") {
-    // The guard hand-enumerates the hook fields; this closes the enumeration by reflection,
-    // so a future byte-affecting hook cannot silently bypass the cache's refusal. Hooks are
-    // written via reflection here on purpose - the setters are what production-path code
-    // uses, while this test checks the fields behind them.
-    val hookFields = classOf[VarkaLoopEmitter].getDeclaredFields.toSeq
-      .filter(_.getName.endsWith("ForTesting"))
-    assert(hookFields.nonEmpty, "the hook fields moved; update this test's discovery rule")
-    hookFields.foreach { field =>
-      field.setAccessible(true)
-      assert(!VarkaLoopEmitter.anyTestHookSet(), s"a hook was left set before ${field.getName}")
-      val original = field.get(null)
-      try {
-        field.set(null, field.getType match {
-          case java.lang.Boolean.TYPE => java.lang.Boolean.TRUE
-          case java.lang.Integer.TYPE => Int.box(1)
-          case other => fail(s"unhandled hook field type $other for ${field.getName}")
-        })
-        assert(VarkaLoopEmitter.anyTestHookSet(),
-          s"${field.getName} is a *ForTesting hook that anyTestHookSet() does not check")
-      } finally {
-        field.set(null, original)
-      }
-    }
-  }
-
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {
     val cache = new VarkaShapeCacheImpl(4)
     val key = keyOf(chain(bits = 6, depth = 3))
     val longIdentity = "Varka_Project_Stage1: " + ("x" * 1000)
-    cache.getOrEmit(key, longIdentity)
-    val recorded = cache.executionsFor(cache.getOrEmit(key, "short").entry.shapeHash)
+    cache.getOrEmit(parent, key, longIdentity)
+    val recorded = executionsOf(cache, cache.getOrEmit(parent, key, "short").entry.shapeHash)
     assert(recorded.exists(_.endsWith("...")), recorded.mkString("; "))
     assert(recorded.forall(_.length < 300), "identities must be bounded")
     assert(recorded.contains("short"))
@@ -352,18 +399,18 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val cache = new VarkaShapeCacheImpl(8)
     val key = keyOf(chain(bits = 7, depth = 3))
     val hash = VarkaShapeCache.shapeHash(key)
-    cache.getOrEmit(key, "Varka_Project_Stage3: date_add(d#1, 3) AS a#2")
-    cache.getOrEmit(key, "Varka_ProjectToRow_Stage4: date_add(d#5, 9) AS b#6")
-    val recorded = cache.executionsFor(hash)
+    cache.getOrEmit(parent, key, "Varka_Project_Stage3: date_add(d#1, 3) AS a#2")
+    cache.getOrEmit(parent, key, "Varka_ProjectToRow_Stage4: date_add(d#5, 9) AS b#6")
+    val recorded = executionsOf(cache, hash)
     assert(recorded === Seq(
       "Varka_Project_Stage3: date_add(d#1, 3) AS a#2",
       "Varka_ProjectToRow_Stage4: date_add(d#5, 9) AS b#6"))
     // Bounded per shape: the oldest identities fall off, most recent kept in order.
-    (0 until 12).foreach(i => cache.getOrEmit(key, s"exec$i"))
-    val bounded = cache.executionsFor(hash)
+    (0 until 12).foreach(i => cache.getOrEmit(parent, key, s"exec$i"))
+    val bounded = executionsOf(cache, hash)
     assert(bounded.size === 8)
     assert(bounded.last === "exec11" && bounded.head === "exec4")
-    assert(cache.executionsFor("no such hash") === Seq.empty)
+    assert(executionsOf(cache, "no such hash") === Seq.empty)
   }
 
   // --- helpers -------------------------------------------------------------
@@ -412,4 +459,22 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     }
     collected
   }
+}
+
+/** A kernel whose constructor raises a fatal error; see the unwrap test above. */
+private class FatalKernel extends VarkaFusedKernel {
+  // scalastyle:off throwerror
+  throw new OutOfMemoryError("injected")
+  // scalastyle:on throwerror
+  override def run(srcData: Array[Long], srcValidity: Array[Long], srcNullCount: Array[Int],
+      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Unit =
+    ()
+}
+
+/** A kernel whose constructor raises an ordinary, catchable failure. */
+private class FailingKernel extends VarkaFusedKernel {
+  throw new IllegalStateException("injected")
+  override def run(srcData: Array[Long], srcValidity: Array[Long], srcNullCount: Array[Int],
+      dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Unit =
+    ()
 }

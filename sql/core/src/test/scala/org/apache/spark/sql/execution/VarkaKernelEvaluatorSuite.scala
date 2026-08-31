@@ -176,7 +176,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
       // (task 18) - the fused IR, the shape-hash SourceFile, `shape <hash>` as the plan
       // fragment - because the class is shared and must not replay one execution's identity
       // for another.
-      assert(VarkaDebugInfoReader.ir(bytes).contains("AddDays"))
+      assert(VarkaDebugInfoReader.ir(bytes).contains("(addDays "))
       val sourceFile = VarkaDebugInfoReader.sourceFile(bytes)
       assert(sourceFile.matches("VarkaFusedProjection_[0-9a-f]{16}\\.java"), sourceFile)
       val hash = sourceFile.stripPrefix("VarkaFusedProjection_").stripSuffix(".java")
@@ -206,7 +206,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
         // Byte-identical to what ran, and still a class the reader can parse - which is what
         // makes `javap` on it worth anything.
         assert(java.util.Arrays.equals(Files.readAllBytes(dumped.toPath), bytes))
-        assert(VarkaDebugInfoReader.ir(Files.readAllBytes(dumped.toPath)).contains("AddDays"))
+        assert(VarkaDebugInfoReader.ir(Files.readAllBytes(dumped.toPath)).contains("(addDays "))
         completeTask()
       }
     }

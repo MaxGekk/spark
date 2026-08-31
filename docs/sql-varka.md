@@ -350,7 +350,7 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
 | Location | Responsibility |
 | :--- | :--- |
 | `sql/varka/engine` | Standalone Java 25 module (`varka-engine`, Arrow 19.0.0): `VarkaMorsel`, `DateVectorOps`, `VarkaClassLoader` and their tests. |
-| `sql/catalyst` | The vector IR, loop emitter and telemetry attribute under `codegen/varka/`; `VarkaExpressionCompiler`; `VarkaGeneratedClassLoader`; `DateVarkaSupport`'s day-offset folding; the Varka configs. |
+| `sql/catalyst` | The vector IR, loop emitter, emit options, shape cache and telemetry attribute under `codegen/varka/`, all Java; `VarkaGeneratedClassLoader`, also Java; `VarkaExpressionCompiler` and the shape cache's Spark-facing facade, which stay Scala; `DateVarkaSupport`'s day-offset folding; the Varka configs. |
 | `sql/core` | `VarkaColumnarRule`, `VarkaColumnarToRowExec`, end-to-end test suites and benchmarks. |
 | `sql/varka` | `VISION.md`, `Varka_MVP.md`, and `plans/` with the milestone plans (`PLAN_MILESTONE_1.md` is the MVP) and per-task plans. |
 

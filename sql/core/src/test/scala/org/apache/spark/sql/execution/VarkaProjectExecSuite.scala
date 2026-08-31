@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, DateAdd, DateDiff, DateSub, Literal, NamedExpression}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitterTestSupport, VarkaFallbackEvent, VarkaJfrTestSupport}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaJfrTestSupport}
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
@@ -189,7 +189,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
         .getOrElse(fail("no fallback warning was logged"))
       // The kernel's own telemetry name, plus the IR it computes.
       assert(warning.contains("Varka_Project_Stage"), warning)
-      assert(warning.contains("AddDays"), warning)
+      assert(warning.contains("(addDays "), warning)
     } finally {
       VarkaColumnarToRowExec.setFailKernelForTesting(false)
     }
@@ -379,11 +379,11 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
   }
 
   test("task 22: an emission failure counts once per task, evented, not mislabeled") {
-    // A set emitter hook makes the shape cache refuse the lookup, so the runner cannot be
+    // The injected emission failure makes the class lookup throw, so the runner cannot be
     // built: the evaluator counts one emission failure and emits the JFR fallback event, and
     // the per-batch fallbacks are NOT counted as non-Arrow (the carve-out under test).
     val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
-      VarkaEmitterTestSupport.setDisableCse(true)
+      VarkaColumnarToRowExec.setFailEmissionForTesting(true)
       try {
         val plan = node(
           project(Alias(DateAdd(attrD, Literal(3)), "add")()),
@@ -395,7 +395,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
         assert(plan.metrics("numFallbackBatchesNonArrow").value === 0)
         assert(plan.metrics("numFallbackBatchesKernel").value === 0)
       } finally {
-        VarkaEmitterTestSupport.setDisableCse(false)
+        VarkaColumnarToRowExec.setFailEmissionForTesting(false)
       }
     }
     val causes = recorded

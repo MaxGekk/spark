@@ -168,6 +168,26 @@ private[sql] object VarkaColumnarToRowExec {
   }
 
   private[sql] def isFailKernelForTesting: Boolean = failKernelForTesting
+
+  // Test-only hook that fails the kernel-class lookup, simulating an emission failure, so every
+  // batch takes the fallback path with `numEmissionFailures` counted once. Same discipline as
+  // the one above - static because Spark runs tasks on other threads, reset in a finally block.
+  //
+  // It exists because task 23 removed the emitter's static test hooks, and with them the shape
+  // cache's JVM-wide refusal to serve any lookup while one was set. Two suites used that refusal
+  // as a fault injector: they set a hook and relied on the cache throwing. Emit options ride the
+  // key now, so such an emission succeeds - correctly - and the injection has to happen at the
+  // seam that actually produces an emission failure, which is where the evaluator resolves the
+  // class. Injecting here rather than through a new SQLConf entry keeps this out of the
+  // production configuration surface, and puts it beside the fault injector this file already
+  // owns. Read by [[VarkaKernelEvaluator]], so it covers every Varka exec node.
+  @volatile private var failEmissionForTesting = false
+
+  private[sql] def setFailEmissionForTesting(fail: Boolean): Unit = {
+    failEmissionForTesting = fail
+  }
+
+  private[sql] def isFailEmissionForTesting: Boolean = failEmissionForTesting
 }
 
 private[sql] class VarkaColumnarToRowEvaluatorFactory(

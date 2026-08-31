@@ -74,9 +74,12 @@ masked load and store use the same bad mask.
 it simply never runs on a 4-lane host. Anyone on Graviton, Ampere, or an Apple-silicon
 laptop gets wrong query results with no error.
 
-Remaining caveat: the fix and its test pin down the bit arithmetic, but no `IntVector`
-path has actually executed at 4 lanes. Genuine end-to-end coverage needs an ARM or
-SSE-only runner, which depends on finding 4.
+Remaining caveat, narrowed by task 23: the aarch64 CI job added in `1cf964c9abe` runs
+the engine module's JUnit classes on `ubuntu-24.04-arm`, at the host width and again
+under `-XX:MaxVectorSize=16`, so the hand-written kernels' `IntVector` path now does
+execute at 4 lanes on real ARM hardware. The emitted loops still do not: the catalyst
+and sql/core jobs that run them are x86_64 only and skip the engine's tests. Closing
+that means putting those suites on the arm matrix leg as well.
 
 ### 2. Per-batch `addTaskCompletionListener` retains every result batch for the whole task
 
@@ -535,7 +538,8 @@ interfaces, so a drifted one would silently mis-dispatch.
   would also cost real coverage: `VarkaClassLoaderTest` pins the define/release semantics
   and the Metaspace-unload proof against it, and `DateVectorOpsEmissionTest` loads its
   probe class through it. Both javadocs now say the duplication is deliberate and that a
-  change to one belongs in the other.
+  change to one belongs in the other. Task 23 ported the catalyst copy from Scala to Java,
+  so the two bodies now differ only in class name and package.
 * ~~**Non-local return in a closure**: `buildOutputPlan`
   (`VarkaColumnarToRowExec.scala:382`) uses `return None` inside a `map`. It works on
   2.13 via an exception and is deprecated in 3; `collectFirst` / `traverse` reads
@@ -591,9 +595,13 @@ note. That candour is worth keeping.
    together, both in `VarkaColumnarToRowExec.scala`.
 8. ~~The sub-57-row vector loop (10), which is engine-only, then the reflective
    `Method.invoke` (11).~~ Done in `b58bc2fc87e` and in the change this file ships with.
-9. Left: the residual half of finding 4 - an aarch64 runner to exercise the kernels at
+9. ~~Left: the residual half of finding 4 - an aarch64 runner to exercise the kernels at
    4 lanes. The other half of that residual, `sql/varka/engine` as a reactor module,
-   shipped in PR #22, so a plain `./build/mvn install` builds the engine today. The
-   aarch64 half is CI work dependent on runner availability, and is carried forward in
-   `plans/PLAN_MILESTONE_3.md` section 5, which records four-lane coverage as local only
-   (via `-XX:MaxVectorSize=16`) until a runner exists.
+   shipped in PR #22, so a plain `./build/mvn install` builds the engine today.~~ The
+   runner exists: `1cf964c9abe` gave the `varka-engine` job a matrix over
+   `ubuntu-latest` and `ubuntu-24.04-arm`, and it ran green on PR #51. It runs the
+   engine module alone, so what it closes is the kernels' half. The emitter's half is
+   still open, and task 23 split the record accordingly (`PLAN_MILESTONE_3.md`
+   section 5): the catalyst and sql/core Varka suites are x86_64 only, so an emitted
+   loop has never executed on ARM - only under `-XX:MaxVectorSize=16`, which is the
+   narrow species on the same instruction set.

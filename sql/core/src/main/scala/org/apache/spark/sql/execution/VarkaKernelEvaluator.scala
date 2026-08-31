@@ -22,6 +22,7 @@ import java.lang.foreign.MemorySegment
 import java.nio.file.Files
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.arrow.memory.{ArrowBuf, BufferAllocator}
@@ -31,7 +32,7 @@ import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaFusedKernel, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaFusedKernel, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -209,7 +210,7 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /** The cache key of the fused sub-plan: exactly the emitter inputs the bytes follow. */
   protected def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
-    VarkaShapeKey(plan.outputs, plan.inputOrdinals.size, plan.literals.size)
+    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.literals.size)
 
   /**
    * The kernel named the way its telemetry names it (task 16, shape-based since task 18): the
@@ -219,11 +220,16 @@ private[sql] abstract class VarkaEvaluatorBase(
    * Reading it forces no emission: the shape hash is computed from the IR, not the bytes.
    * A lazy val (task-21 review): the rendering hashes the canonical IR, and it is constant
    * per evaluator, so per-batch fallback paths must not recompute it.
+   *
+   * The IR renders through `VarkaVectorIR.canonical` rather than `Record.toString` (task 23,
+   * with the line map): the same rendering the class's own `VarkaDebugInfo` carries, so a log
+   * line and the bytes it names describe the shape the same way - and neither depends on a
+   * format no JDK promises.
    */
   private[execution] lazy val kernelIdentity: String = {
     fusedPlan match {
       case Some(plan) =>
-        val ir = plan.outputs.mkString(", ")
+        val ir = plan.outputs.map(VarkaVectorIR.canonical).mkString(", ")
         val hash = VarkaShapeCache.shapeHash(shapeKey(plan))
         s"${VarkaShapeCache.sourceFileFor(hash)} [$ir] ($executionName)"
       case None => s"[no compiled projection] ($executionName)"
@@ -526,7 +532,12 @@ private[sql] abstract class VarkaEvaluatorBase(
     // The lookup records this execution (operator, stage, the evaluator's leading entries)
     // in the cache's side table, so the shape-named class joins back to the plan nodes that
     // ran it.
-    private val lookup = VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
+    private val lookup = {
+      if (VarkaColumnarToRowExec.isFailEmissionForTesting) {
+        throw new IllegalStateException("injected Varka emission failure")
+      }
+      VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
+    }
     private val entry = lookup.entry
     (if (lookup.hit) metrics.cacheHits else metrics.cacheMisses).foreach(_ += 1)
 

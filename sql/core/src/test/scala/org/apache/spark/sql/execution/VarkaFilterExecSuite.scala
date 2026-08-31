@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, DateAdd, GreaterThan, IsNotNull, LessThan, Literal}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitterTestSupport, VarkaFallbackEvent, VarkaJfrTestSupport}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaJfrTestSupport}
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
@@ -182,7 +182,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
 
   test("an emission failure counts once per task, evented, not mislabeled") {
     val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
-      VarkaEmitterTestSupport.setDisableCse(true)
+      VarkaColumnarToRowExec.setFailEmissionForTesting(true)
       try {
         val plan = columnarNode(dLess10,
           Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), null, Int.box(42))))), Seq(attrD))
@@ -192,7 +192,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
         assert(plan.metrics("numFallbackBatchesNonArrow").value === 0)
         assert(plan.metrics("numFallbackBatchesKernel").value === 0)
       } finally {
-        VarkaEmitterTestSupport.setDisableCse(false)
+        VarkaColumnarToRowExec.setFailEmissionForTesting(false)
       }
     }
     val causes = recorded

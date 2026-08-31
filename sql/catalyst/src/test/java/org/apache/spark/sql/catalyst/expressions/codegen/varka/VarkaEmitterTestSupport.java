@@ -66,39 +66,4 @@ public final class VarkaEmitterTestSupport {
     }
     return new java.util.ArrayList<>(lines);
   }
-
-  /**
-   * Toggles {@code VarkaLoopEmitter.disableCseForTesting} for callers outside the emitter's
-   * package - the parity benchmark prices CSE by emitting the same trees with the memo off.
-   */
-  public static void setDisableCse(boolean disable) {
-    VarkaLoopEmitter.setDisableCseForTesting(disable);
-  }
-
-  /**
-   * Toggles {@code VarkaLoopEmitter.divFloorModForTesting} for callers outside the emitter's
-   * package - the parity benchmark prices the shipped digit-sum mod-7 against the lanewise-DIV
-   * reference variant (task 11, plan 2.3).
-   */
-  public static void setDivFloorMod(boolean div) {
-    VarkaLoopEmitter.setDivFloorModForTesting(div);
-  }
-
-  /**
-   * Toggles {@code VarkaLoopEmitter.digitSumFloorModForTesting} for callers outside the
-   * emitter's package - the parity benchmark prices the shipped two-fold magic-multiply
-   * mod-7 (task 14 follow-up) against the task 11 digit sum it replaced.
-   */
-  public static void setDigitSumFloorMod(boolean digitSum) {
-    VarkaLoopEmitter.setDigitSumFloorModForTesting(digitSum);
-  }
-
-  /**
-   * Overrides {@code VarkaLoopEmitter.GROUP_BUDGET} for callers outside the emitter's package,
-   * or restores the constant when given 0 - the parity benchmark prices the register's open
-   * retuning candidate by emitting one shape at two widths (task 17).
-   */
-  public static void setGroupBudget(int budget) {
-    VarkaLoopEmitter.setGroupBudgetForTesting(budget);
-  }
 }
