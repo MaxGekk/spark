@@ -100,9 +100,11 @@ class has a deliberate method anatomy:
   `VectorMask` per lane group from the bit-packed validity words otherwise.
 * The vector walk is split into sibling loop methods of at most
   `GROUP_BUDGET` (16) IR nodes each, one output group per method, plus a
-  shared scalar-tail method. Separate methods, not one big loop: each gets
-  its own C2 compilation, so no method's inlining budget can starve
-  another's intrinsics - task 10 measured 3-4x on exactly that cliff.
+  shared *epilogue* method for the remainder rows. Separate methods, not one
+  big loop: each gets its own C2 compilation, so no method's inlining budget
+  can starve another's intrinsics - task 10 measured 3-4x on exactly that
+  cliff, and task 24 measured the same cliff from the other side when it
+  tried leaving the epilogue inline in a kernel's loop method.
 * Interned subtrees (DAG-CSE) are computed once per lane group and reused
   across outputs; literals are hoisted to broadcast vectors in the prologue.
 * Caps: chains up to `MAX_CHAIN_DEPTH` (16) deep, up to `MAX_FUSED_NODES`
@@ -110,8 +112,15 @@ class has a deliberate method anatomy:
   beyond falls back.
 
 Int32 arithmetic wraps on overflow, matching Spark's `DateAdd`/`DateSub`
-non-ANSI semantics. The scalar tail mirrors the vector body row for row and
-handles the remainder lanes.
+non-ANSI semantics. The rows past `loopBound` are one more iteration of the
+same lane-group body under the mask `VectorSpecies.indexInRange` builds for a
+partial group (task 24): the loop stays unmasked, only the epilogue's loads and
+stores take their masked overloads, and the lane count becomes the remainder so
+every validity access stays bounded by the group. This replaced a scalar tail
+that lowered every IR node a second time - the half of the emitter that would
+otherwise have had to grow with every node type added after it. One invariant
+comes with it: lanes outside the mask read `0`, so no operation in the walk may
+trap on `0`.
 
 The milestone-1 per-op kernels (`DateVectorOps.vectorAddDays` and friends)
 remain in the engine as reference code and as the differential oracle for the
@@ -416,19 +425,19 @@ least five two-second-windowed iterations and lives in the committed results
 files, which are the source of truth as the code moves):
 
 * **End-to-end columnar throughput** over 2M Arrow-cached rows
-  (`VarkaThroughputBenchmark`): 3.8-5.7x Janino for single ops and small
-  trees (`date_add` 3.8x, `datediff` 5.6x, the nested
-  `datediff(date_add(d, 1), d2)` 5.7x, the two-output shared subchain 5.7x),
+  (`VarkaThroughputBenchmark`): 3.6-6.0x Janino for single ops and small
+  trees (`date_add` 3.6x, `datediff` 4.8x, the nested
+  `datediff(date_add(d, 1), d2)` 5.6x, the two-output shared subchain 6.0x),
   2.5x for a mixed projection where only one entry fuses. Before the class
   cache these read 1.7-2.3x: the per-task JIT warm-up was most of the gap
   between the buffer-level kernels and the end-to-end numbers.
-* **`CASE WHEN` by mask blend**: 7.1x on data where the condition flips
+* **`CASE WHEN` by mask blend**: 7.0x on data where the condition flips
   pseudo-randomly, 5.8x where it is perfectly predictable. The varka side
   costs the same on both within a millisecond (branch-free execution is
   data-oblivious, 8-9 ms best in the committed cases); the gap is Janino's
   branch misprediction on the unpredictable data.
 * **Chain depth** (alternating `date_add`/`date_sub`, columnar consumer):
-  7.0-7.5x, *flat* from depth 1 to depth 8. Task 14 committed this curve as
+  6.4-6.9x, *flat* from depth 1 to depth 8. Task 14 committed this curve as
   2.2x eroding to 1.3x and diagnosed the erosion as the fixed per-task JIT
   warm-up that grew with the loop method's op count (`PLAN_TASK_14.md` 7.5);
   task 18's cross-task class cache removed exactly that term - every task
@@ -446,23 +455,29 @@ files, which are the source of truth as the code moves):
   winners from the losers - an 8-op chain loses while the ~6-op `CASE WHEN`
   wins, because the differencer is Janino's cost, not Varka's - so the rule
   keeps fusing row consumers: task 19's recorded decision.
-* **`dayofweek`**: 9.8x - 7 ms against Janino's 65 ms, the largest committed
+* **`dayofweek`**: 8.8x - the largest committed
   win, and the shape that pays even through a row consumer (1.2x there). This case shipped as the honest loss of the original task 14 run
   (0.9x, the magic-multiply lowering of 7.7 took it to 1.2x): its ~12-op
   loop method paid the heaviest per-task warm-up (~50 ms), so removing the
   ladder moved it furthest.
-* **Filters** (`VarkaFilterBenchmark`, task 21, `d < DATE` over 2M rows at a
-  0-100% selectivity ladder): the compacting `VarkaFilterExec` wins
-  2.3x-2.7x at every rung - the typed scalar compaction costs only
-  ~1-3 ns/row over the mask itself, which is why no compaction threshold
-  exists - and the mask-skip row node wins 2.3x at low selectivity, decaying
-  to 1.1x at all-selected as the task-19 read-back floor takes over. The
-  stacked filter-then-fused-projection shape holds 2.4x-2.6x, and the
-  previously-parity `WHERE d IN (5 literals)` anchor now runs 2.0x. The
-  honest loss: `COUNT(*)` over an 85%-selective filter is 0.8x (1.8x at
+* **Filters** (`VarkaFilterBenchmark`, tasks 21 and 24, `d < DATE` over 2M
+  rows at a 0-100% selectivity ladder): the compacting `VarkaFilterExec` wins
+  2.5x at 0% selected, rising to 5.4x at 100%. The rise is task 24's
+  `compress(mask)` compaction and it is the interesting part: the typed
+  scalar copy it replaced was one Arrow call per *selected row*, so its cost
+  grew across the ladder (5.4 ns/row at 15% selected to 8.6 at 100%), while
+  `IntVector.compress` is one instruction per lane group whatever the group
+  holds and stays flat at 3.8-4.2 ns/row. Compaction has stopped being a
+  function of selectivity, which is why there is still no compaction
+  threshold - there is now less reason for one than when task 21 declined it.
+  The mask-skip row node wins 2.3x at low selectivity, decaying to 1.1x at
+  all-selected as the task-19 read-back floor takes over. The stacked
+  filter-then-fused-projection shape holds 3.5x-4.7x, and the
+  previously-parity `WHERE d IN (5 literals)` anchor runs 2.0x. The honest
+  loss is unchanged: `COUNT(*)` over an 85%-selective filter is 0.8x (1.8x at
   15%) - nearly every row crosses the row boundary into the aggregate.
 * **Cold start** (`VarkaColdStartBenchmark`, first execution of a fresh plan
-  shape over 100K rows): 1.7x - 19 ms vs 31 ms best, 25 ms vs 38 ms average.
+  shape over 100K rows): 1.8x - 17 ms vs 31 ms best, 22 ms vs 37 ms average.
   A fresh shape misses the class cache, and the benchmark enforces that by
   invalidating the cache before each timed iteration - its column-and-literal
   freshness is invisible to the structural shape key. The varka side pays
@@ -470,7 +485,7 @@ files, which are the source of truth as the code moves):
   only repeated shapes get the cache's win.
 * **Class generation in isolation** (`VarkaCodegenBenchmark`): emitting,
   defining, loading and instantiating a fused two-output kernel takes
-  ~130 us against ~9 ms for one Janino projection compile - 68x. (The
+  ~99 us against ~6.5 ms for one Janino projection compile - 66x. (The
   milestone-1 single-op dispatcher case that used to sit beside it, at
   ~420x, went with the dispatchers in task 17.)
 

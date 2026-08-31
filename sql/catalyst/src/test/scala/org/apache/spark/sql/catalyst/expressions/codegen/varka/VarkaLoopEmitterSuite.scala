@@ -722,9 +722,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
 
   test("task 21: a comparison root emits the selection bitmap with null-as-false") {
     // The simplest filter kernel: one Compare root, its bitmap checked against the Kleene
-    // reference with unknown collapsed to false at the root - across lengths (tail rows
-    // included) and every pair of null patterns, all-null included (the all-null shortcut
-    // must leave a correct all-clear bitmap for a null-intolerant root).
+    // reference with unknown collapsed to false at the root - across lengths (partial lane
+    // groups included) and every pair of null patterns, all-null included (the all-null
+    // shortcut must leave a correct all-clear bitmap for a null-intolerant root).
     val root = new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1))
     checkMatrix(Seq(root), 2, Array.emptyIntArray, Seq(0, 5, 16, 17, 65, 1000), combos(2),
       ctx = "cmp-root")
@@ -951,8 +951,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   }
 
   test("telemetry: the emitted lines index the IR nodes the debug attribute records") {
-    // datediff(date_add(d, 1), d2): five distinct nodes, so the loop and the tail attribute
-    // their instructions to lines 1..5 and the key decodes every one of them.
+    // datediff(date_add(d, 1), d2): five distinct nodes, so the loop and the epilogue
+    // attribute their instructions to lines 1..5 and the key decodes every one of them.
     val add = new AddDays(new ColumnRef(0), new LiteralSlot(0))
     val root = new DateDiff(add, new ColumnRef(1))
     val (_, bytes) = emitMulti(Seq(root), 2, 1)
@@ -963,7 +963,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(key(key.size).startsWith("(dateDiff"), s"the root should be last: ${key(key.size)}")
     assert(key.values.exists(_.startsWith("col:")))
     assert(key.values.count(_.startsWith("(addDays")) === 1)
-    for (method <- Seq("loopMasked0", "tailMasked", "loopDense0", "tailDense")) {
+    for (method <- Seq("loopMasked0", "epilogueMasked", "loopDense0", "epilogueDense")) {
       val lines = VarkaEmitterTestSupport.lineNumbers(bytes, method)
       assert(lines.asScala.nonEmpty, s"$method carries no LineNumberTable")
       assert(lines.asScala.forall(line => key.contains(line)),

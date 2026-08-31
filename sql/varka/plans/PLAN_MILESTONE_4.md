@@ -3,7 +3,7 @@
 Milestone 3 closed with task 23, so this file is no longer the scope document it
 opened as: it is the task plan that document promised, written against the
 measurements it said should order it. The scope catalogue it grew from is kept
-whole in section 9, with every item's number unchanged, because other plans cite
+whole in section 10, with every item's number unchanged, because other plans cite
 those numbers (`PLAN_TASK_21.md` cites items 5 and 11, `SKILLS.md` cites item
 13, and `SCOPE_MILESTONE_5.md` cites items 1 through 12 throughout). Where the
 catalogue and this plan disagree, this plan wins - the catalogue records what
@@ -17,7 +17,8 @@ four gating shapes, cross-task class reuse. Milestone 4 is **breadth**: the
 engine stops being a single-type demo and learns the types, expressions and
 loop schedules a query actually contains. Task numbering continues the
 project's single sequence and resumes at 24, after milestone 3's 18-23; the
-committed spine is tasks 24-30.
+committed spine is tasks 24-31 (24-30 as planned, plus 31, added during task 24
+at the owner's request; see 2.2).
 
 ## 1. Why this order
 
@@ -82,11 +83,70 @@ verdict is written either way. Third: `anyTrue`/`allTrue` per-lane-group
 all-null and all-valid fast paths, where the prologue today has them only per
 batch.
 
-This task changes emitted bytes, so the two pinned shape hashes and the
-pinned line-map literal move, and are regenerated under their own update
-rule - the one task in the spine where that is expected rather than alarming.
+This task changes emitted bytes, and the expectation written here before it
+ran was that the two pinned shape hashes and the pinned line-map literal
+would move with them. **They did not, and task 24 records why**
+(`PLAN_TASK_24.md` section 5): the hashes are taken over the IR, the input
+counts and the emit options, and the line map over the IR's topological
+schedule - none of which a change to the emitted method structure touches.
+So the pinned oracles were this task's behaviour-preservation proof rather
+than its collateral. The spine's first task that legitimately moves them is
+26, which adds IR nodes.
 
-### 2.2 Instruction-level parallelism (task 25, item 13)
+### 2.2 Asserting the instructions, not the ratio (task 31)
+
+Added during task 24, at the owner's request, and scheduled before task 25
+because it is task 25's instrument. Every vectorization claim this project
+makes today is inferred from a throughput ratio - the parity gate's "emitted
+loop within 0.9x of the hand-written kernel" stands in for "C2 intrinsified the
+Vector API calls". Task 24 showed how weak that inference is: the same kernels
+measured 50-190% apart under `-XX:CompileCommand=inline,jdk/incubator/vector/*.*`
+in the engine's JMH harness and within 1% under it in the catalyst harness, so a
+ratio can move for reasons that have nothing to do with the instructions
+emitted. A test that reads the instructions cannot.
+
+The mechanism is a forked JVM with `-XX:+UnlockDiagnosticVMOptions
+-XX:+PrintAssembly -XX:CompileCommand=compileonly,<class>::<method>`, whose
+output is scanned for the instruction *family* the shape should produce. Four
+things decide whether this is a good test or a flaky one:
+
+* **It asserts a family, never a mnemonic.** The lane width is a property of the
+  host - `zmm` on AVX-512, `ymm` on AVX2, NEON on aarch64, and `xmm` under the
+  narrow-vector CI run - so the assertion is "a packed integer add on a vector
+  register of the width this host reports", derived from `IntVector.SPECIES_PREFERRED`
+  rather than hard-coded. The interesting negative is a *scalar* body where a
+  vector one was expected, and that is what the test names when it fails.
+* **It skips cleanly without `hsdis`.** `PrintAssembly` degrades to a warning and
+  bytecode-level output when the disassembler is absent, which is the likely
+  state of a CI runner; the suite must detect that and skip rather than fail, and
+  say which it did. It is a gate on the developer machine and the runners that
+  have `hsdis`, not a gate that goes red for missing tooling.
+* **It names methods the emitter generates.** Emitted classes are named for their
+  shape hash, so `compileonly` takes a wildcard over the generated package and
+  the loop-method naming scheme (`loopDense0`, `epilogueMasked`), which task 24
+  made stable.
+* **The kernels come first.** `DateVectorOps` is the reference and its shapes are
+  fixed; the emitted loops follow, one per gating shape, so a regression is
+  attributable to the emitter rather than to the whole stack.
+
+The deliverable that makes this pay beyond a one-off: the assertion sits beside
+the existing parity gate, so a future task learns from a *named missing
+instruction* instead of from a number that drifted.
+
+This task also owns the second half of the same question, deferred here by the
+owner: **whether forcing C2 to inline Varka's own packages changes anything**.
+Task 24 measured the JDK half - `-XX:CompileCommand=inline,jdk/incubator/vector/*.*`
+moved the engine's JMH numbers by 50-190% and the catalyst benchmark by under 1%,
+which turned out to be a fact about the JMH harness rather than about Varka (see
+section 9's debt register). The same flag aimed at
+`org/apache/spark/sql/varka/**` and at the emitted classes' package is untested,
+and belongs with the assembly work because both answer "what did C2 actually do"
+with evidence rather than with a ratio. Whatever it finds, a JVM flag cannot be
+the shipped answer - it would have to be set on every executor - so the outcome
+is either a documented recommendation in `docs/sql-varka.md` or a recorded
+decline.
+
+### 2.3 Instruction-level parallelism (task 25, item 13)
 
 The debt register's rule applies: a prediction goes in writing before the
 first measurement, and the honest null hypothesis is that C2 plus the
@@ -140,7 +200,7 @@ questions 4 and 5) - and the batch-size knee sweep (question 6) rides the same
 harness for the wide-shape case. Whatever the outcome, the `SKILLS.md`
 unrolling bullet is rewritten with the numbers, as it promises itself.
 
-### 2.3 Calendar extraction, `year` first (task 26, item 6)
+### 2.4 Calendar extraction, `year` first (task 26, item 6)
 
 The one vocabulary item that fits milestone 2's machinery as it stands: int32
 lanes, existing operators, task 17's range-narrowed magic multiply. The task
@@ -167,7 +227,7 @@ algebra yields them. The corpus calibration stands and is not overridden:
 past `year` is vocabulary completeness, taken because it is nearly free - not
 because the corpus asks for it.
 
-### 2.4 Boolean outputs (task 27, item 5)
+### 2.5 Boolean outputs (task 27, item 5)
 
 The cheapest item and the only pure continuation of milestone 3: comparisons
 and `And`/`Or`/`Not` as projection *results*, built on task 21's mask-as-value
@@ -196,7 +256,7 @@ rules holding there exactly as they hold in the interior - a null input
 produces a null output, never a false one. The differential runs every null
 pattern for exactly that reason.
 
-### 2.5 Lane-width conversion (task 28, item 1)
+### 2.6 Lane-width conversion (task 28, item 1)
 
 The width machinery items 2 and 4 lean on. The hard part is not the
 conversion, it is the lane count: at one shape an int32 species holds twice
@@ -206,7 +266,7 @@ loop per conversion and carries two trip counts. That is the one decision in
 this item that is expensive to reverse, so the scope's open question 2 was
 pre-registered as a measurement before the task opens: both shapes on a
 `cast(int AS long) + long` chain. Measured
-(`VarkaMilestone4MeasurementsBenchmark`, same committed results file as 2.4):
+(`VarkaMilestone4MeasurementsBenchmark`, same committed results file as 2.5):
 narrowest-drive and part-loop are statistically tied at both vector widths,
 on two separate runs, narrowest-drive very slightly ahead each time (within
 1.01x-1.05x, inside this file's own noise band). Part-loop's extra
@@ -217,7 +277,7 @@ fallback if a wider mixed-type shape measures differently once task 28 is
 under way: items 2 and the multiply half of 4 can be built width-locked and
 retrofitted.
 
-### 2.6 int64 lanes: `TimestampNTZ` and `bigint` (task 29, item 2)
+### 2.7 int64 lanes: `TimestampNTZ` and `bigint` (task 29, item 2)
 
 The first new lane type, and the natural one: the only type whose semantics
 are already written down (milestone 2 section 2.6 quality, for dates) and
@@ -238,7 +298,7 @@ against 5657 M rows/s on the `dayofweek` case). This task also lands the field
 differential mode task 22 explicitly left to it, because this is where the
 correctness surface widens.
 
-### 2.7 ANSI-correct integer arithmetic (task 30, item 4)
+### 2.8 ANSI-correct integer arithmetic (task 30, item 4)
 
 Most arithmetic in most queries, and the `datediff(d2, d1) + 1` shape that
 keeps appearing in date work. The order inside the task is the risk order:
@@ -261,34 +321,45 @@ keeps appearing in date work. The order inside the task is the risk order:
 assertion the suites have never made: an error-*identity* differential - the
 same `SparkException` as the row engine, attributed to the same row.
 
-Any division this task (or a later one) adds inherits a mechanism question
-task 24 already flagged and did not answer: the emitter's masked epilogue
-leaves inactive lanes reading 0, and integer division traps on a zero
-divisor - the first trapping op the walk admits. Two fixes exist: blend a
-safe divisor (1) into inactive lanes before an unmasked `DIV`, or the masked
-lanewise `DIV` form, which never evaluates inactive lanes. Pre-measured
-(`VarkaMilestone4MeasurementsBenchmark`, same committed results file as 2.4):
-blend-then-`DIV` beats masked `DIV` at both vector widths, on two separate
-runs - 1.08-1.12x at AVX-512, 1.18-1.19x at 128-bit by minimum. The smallest
-margin of the five measurements in that file, but the only one where all four
-data points (two widths times two runs) agree in both direction and rough
-magnitude, which is the interleaved comparison the under-1.3x rule asks for.
-Blend a safe divisor; do not reach for the masked lanewise form.
+One obligation task 24 left at this task's door, sharpened by its review: the
+masked epilogue's invariant that **no operation in the walk may trap on `0`**
+(inactive lanes read `0` from a masked load) currently lives only in the
+emitter's class doc, and division is the first node that will violate it. This
+task must not just remember the paragraph - it should make the invariant
+structural when the first trapping node lands: an explicit zero-safety member on
+the sealed `VarkaVectorIR` (no default), so a node that can trap does not
+compile until the epilogue emitter blends a safe divisor or takes the masked
+lanewise form. A prose invariant fails only on unaligned batch lengths, which
+task 24 measured as the lengths no committed harness ever runs.
+
+Which of those two mechanisms the enforcement should reach for is
+pre-measured (`VarkaMilestone4MeasurementsBenchmark`, same committed results
+file as 2.5): blend-then-`DIV` beats masked `DIV` at both vector widths, on
+two separate runs - 1.08-1.12x at AVX-512, 1.18-1.19x at 128-bit by minimum.
+The smallest margin of the five measurements in that file, but the only one
+where all four data points (two widths times two runs) agree in both
+direction and rough magnitude, which is the interleaved comparison the
+under-1.3x rule asks for. Blend a safe divisor into inactive lanes; the
+structural check exists to make sure some such mechanism runs before an
+unmasked `DIV`, not to leave the choice open each time.
 
 ## 3. Task breakdown
 
-Tasks 24-30 are the committed spine, in dependency order: 24 halves the
-per-node emitter surface every later task would otherwise pay twice; 25 shares
+Tasks 24-31 are the committed spine, in dependency order: 24 halves the
+per-node emitter surface every later task would otherwise pay twice; 31 gives
+25 an instrument that reads instructions rather than ratios, which is what 25's
+central question needs (see 2.2); 25 shares
 24's harness and changes how every later kernel is emitted; 26 and 27 spend
 milestone 2's machinery before 28 complicates it; 28 enables 29 and 30's
 widening. Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
-the single sequence; milestone 5 resumes it at 31 unless this plan grows the
-way milestone 3's did.
+the single sequence; this plan has already grown once the way milestone 3's did
+(task 31, section 2.2), so milestone 5 resumes at 32.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
-| 24 | The scalar tail, interrogation, compaction | The tail-cost measurement (open question 3) recorded first; the unmasked-body-plus-masked-epilogue loop via `indexInRange`, deleting the emitter's second scalar IR walk; `compress(mask)` compaction in `VarkaFilterExec` against the committed ~1-3 ns/row ceiling, with the non-AVX-512 verdict; per-lane-group `anyTrue`/`allTrue` fast paths | Differential green at both vector widths, all null patterns, all-selected and none-selected; pinned hashes regenerated under their update rule; filter ladder re-run and committed; emitter per-node surface reduction stated as a number |
+| 24 | The scalar tail, interrogation, compaction. **DONE** (`PLAN_TASK_24.md`) | The tail-cost measurement (open question 3) recorded first; the unmasked-body-plus-masked-epilogue loop via `indexInRange`, deleting the emitter's second scalar IR walk; `compress(mask)` compaction in `VarkaFilterExec` against the committed ~1-3 ns/row ceiling, with the non-AVX-512 verdict; per-lane-group `anyTrue`/`allTrue` fast paths | Differential green at both vector widths, all null patterns, all-selected and none-selected; the pinned hashes and line map unchanged, which is the proof the refactor preserved behaviour (they were expected to move; see `PLAN_TASK_24.md` section 5); filter ladder re-run and committed; emitter per-node surface reduction stated as a number |
+| 31 | Assert the instructions, not the ratio | A forked-JVM `PrintAssembly` harness; host-derived instruction-family assertions over the `DateVectorOps` kernels and one emitted loop per gating shape; a clean skip where `hsdis` is absent | The suite fails on a scalar body where a vector one is expected, and says which method and which family; green at both vector widths; skipped-not-failed on a runner without a disassembler |
 | 25 | ILP: the unroll factor as a plan decision | The registered prediction, then the three-confounder matrix (K x broadcast strategy x `GROUP_BUDGET`) on `dayofweek`, unpredictable `CASE WHEN`, and the depth-8 chain; if K > 1 pays, per-shape K chosen from the live-temporary count the emitter already computes; the `SKILLS.md` bullet rewritten with the numbers; the batch-size knee sweep (question 6) on a wide fused shape | A committed number per candidate shape against its existing baseline; prediction scored honestly; no committed number regresses on shapes where K stays 1 |
 | 26 | Calendar extraction, `year` first | The four-constant range-narrowing admission check, recorded before emitter work; `year`, `month` and `dayofmonth` committed - one civil-from-days decomposition yields all three - with `quarter` riding `month` and `dayofyear`/date-level `date_trunc` as the algebra yields them; fields whose constants will not narrow declined with a task-16 reason | Differential across the Gregorian range including pre-1970, leap years, month-length boundaries and the 400-year cycle edges, at both widths; parity numbers committed; `year` demonstrably compiling on the TPC-H q7/q8/q9 shape |
 | 27 | Boolean outputs | Mask-to-column materialisation (`toVector` against `blend`, measured); the bit-packed format decision at the Spark/Arrow boundary; three-valued rules holding at the output boundary | Differential over every null pattern - a null input never becomes false; `SELECT d > DATE '2000-01-01' AS flag` and filter-leftover boolean columns compile; committed number on one boolean-output shape |
@@ -351,8 +422,8 @@ The standing gates, inherited, with the two hardenings the scope promised:
 * **Numbers move under the milestone's own feet.** Tasks 24 and 25 change
   emitted bytes and committed relatives; docs are requoted from one run, never
   patched case by case.
-* **Scope creep through the catalogue.** The spine is 24-30. Items 7, 10, 9
-  and 8 are real and stay in section 9 with full design input; each enters
+* **Scope creep through the catalogue.** The spine is 24-31. Items 7, 10, 9
+  and 8 are real and stay in section 10 with full design input; each enters
   only with its own argument, the way `In` and `Coalesce` entered milestone 3.
 
 ## 7. Open questions, and where each is settled
@@ -397,13 +468,13 @@ The scope's section 8, each question now owned by a task or settled here:
 * **The Arrow-native Parquet reader and writer** - the project owner's work.
   Coordinate, do not duplicate.
 * **Buffer alignment enforcement** - the missing measurement is no longer
-  missing (`VarkaMilestone4MeasurementsBenchmark`, section 2.4's committed
+  missing (`VarkaMilestone4MeasurementsBenchmark`, section 2.5's committed
   results file, `addAligned`/`addMisaligned`): a buffer start offset by 4
   bytes (still 4-byte int-aligned, but every AVX-512 load then spans two
   64-byte cache lines) costs 1.56-1.68x throughput at the default width and
   1.22-1.25x at 128-bit, reproduced on two separate runs, over the L1/L2-
   resident 4096-row working set every real Varka kernel actually runs at.
-  Section 2.2's ILP item does not absorb this for free either: a 2-way
+  Section 2.3's ILP item does not absorb this for free either: a 2-way
   unrolled version of the same misaligned kernel (not committed - a scratch
   check, not this file's methodology) still lost 50-60%, so unrolling and
   alignment are independent levers, not substitutes. The measurement item 13
@@ -414,7 +485,30 @@ The scope's section 8, each question now owned by a task or settled here:
 * **Whole-stage code generation** - in the charter (`VISION.md` section 13),
   not in this milestone.
 
-## 9. Scope catalogue
+## 9. Debt register
+
+One bullet per debt: what it is, why it is a debt, and what closing it would
+take. Opened during task 24, per `sql/varka/AGENTS.md` - a swept entry is
+rewritten in the past tense with what the sweep found, never deleted.
+
+* **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
+  runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
+  exercised the same kernels - so every committed figure in
+  `DateVectorOpsBenchmark-jdk25-results.txt` is measured against profiles those
+  suites polluted. Task 24 found it the hard way: three rounds of A/B in that
+  harness said a kernel change cost 4-50%, and the clean catalyst harness then
+  put the same change inside its own noise. The tell was
+  `-XX:CompileCommand=inline,jdk/incubator/vector/*.*`, which moved the JMH
+  numbers by 50-190% and the catalyst numbers by under 1% - a flag worth that
+  much in only one harness is measuring the harness. A second symptom, visible
+  in the committed file's own error columns: `scalarSubDays.MIXED_NULL`, which
+  no recent task has touched, swings 3x between runs. Closing it means giving
+  the JMH phase its own JVM (`forks = 1`) or separating it from the test phase,
+  and then regenerating the whole results file, because every number in it
+  moves. It matters now because task 25 is about to ask this harness whether an
+  unroll factor pays, and on today's evidence it cannot answer.
+
+## 10. Scope catalogue
 
 The pre-plan catalogue, item numbers preserved. Items the plan above adopts
 are condensed to a pointer; items it defers keep their full design input,
@@ -422,7 +516,7 @@ which is what makes them worth carrying forward.
 
 ### Item 1. Lane-width conversion, and mixed-type expression trees
 
-Adopted as task 28 (see 2.5). The design input carried over whole: the hard
+Adopted as task 28 (see 2.6). The design input carried over whole: the hard
 part is the lane count, not the conversion; `convertShape(I2L, longSpecies,
 part)` yields one long vector per part with `partLimit` parts; the
 narrowest-drive-versus-part-loop choice is measured before either is built in;
@@ -431,7 +525,7 @@ item 4.
 
 ### Item 2. int64 lanes: `TimestampNTZ`, `bigint`, and the second lane width
 
-Adopted as task 29 (see 2.6). Kept for the zoned day when it comes: pack the
+Adopted as task 29 (see 2.7). Kept for the zoned day when it comes: pack the
 IANA tzdata transitions into flat `long[]` interval arrays and resolve a
 vector of timestamps against them with a SIMD binary search, rather than
 per-row `ZoneRules` lookups.
@@ -466,18 +560,18 @@ with `SQRT`, `EXP`, `LOG`, `LOG10`, `CBRT`, `SIN` through `TANH`, `EXPM1`,
 
 ### Item 4. ANSI-correct integer arithmetic, priced rather than assumed
 
-Adopted as task 30 (see 2.7). The pricing argument carried over whole:
+Adopted as task 30 (see 2.8). The pricing argument carried over whole:
 wrap-versus-saturate difference lanes are exactly the overflowed lanes, one
 vector op and one well-predicted branch on the common path, `try_*` as the
 branchless easy case worth shipping alone.
 
 ### Item 5. Boolean outputs
 
-Adopted as task 27 (see 2.4).
+Adopted as task 27 (see 2.5).
 
 ### Item 6. Calendar field extraction, `year` first
 
-Adopted as task 26 (see 2.3). The corpus calibration kept on the record:
+Adopted as task 26 (see 2.4). The corpus calibration kept on the record:
 TPC-DS pre-materialises calendar parts (`d_year`, `d_moy`, `d_dom`, `d_qoy`,
 `d_dow`), so extraction appears zero times there; TPC-H q7, q8 and q9 use
 `year(date)` and nothing else. Intuition overweights this item; the corpus
@@ -607,7 +701,7 @@ Recorded so they are not re-proposed:
 
 ### Item 13. Instruction-level parallelism: the unroll factor
 
-Adopted as task 25 (see 2.2). The full three-constraint pricing - the 7x
+Adopted as task 25 (see 2.3). The full three-constraint pricing - the 7x
 pinned-broadcast collapse, the ~1 ms-per-vector-op compile cliff against
 `GROUP_BUDGET`, and `DIV` scalarization that unrolling cannot rescue - lives
 in `SKILLS.md`'s "Vector API on HotSpot, Measured", whose unrolling bullet

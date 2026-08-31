@@ -17,15 +17,14 @@
 
 package org.apache.spark.sql.varka.vector;
 
-import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.isBitSet;
 import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.ofAddress;
+import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.orPartialValidityBitsAt;
 import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.orValidityBitsAt;
-import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.setBit;
+import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.partialValidityBitsAt;
 import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.validityBitsAt;
 import static org.apache.spark.sql.varka.vector.VarkaVectorSupport.zero;
 
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
 
 import jdk.incubator.vector.IntVector;
@@ -72,11 +71,23 @@ import jdk.incubator.vector.VectorSpecies;
  *       the source has no nulls - and use it for the loads, the arithmetic and the store alike.
  *       Masked-off lanes are never read, so a null row cannot fault or contribute; with several
  *       sources, AND their masks so a row is valid only where all of them are.</li>
- *   <li><b>Run the vector loop to {@link VectorSpecies#loopBound} and finish with a scalar
- *       tail</b> of fewer than one lane group. The two must agree row for row.
- *       {@code DateVectorOpsTest} checks each kernel against a scalar reference at sizes that
- *       straddle every lane and byte boundary, and {@code DateVectorOpsBitmapTest} walks every
- *       lane width the Vector API admits, including the ones this host cannot produce.</li>
+ *   <li><b>Run the vector loop to {@link VectorSpecies#loopBound} and finish with a masked
+ *       epilogue</b> - the fewer than {@code lanes} rows no whole group covered, done as one
+ *       more iteration of the same body rather than as a scalar loop beside it (task 24).
+ *       {@link VectorSpecies#indexInRange} builds the bounds mask; AND it into the validity
+ *       mask and the group is bounded on both counts at once, so a row past the batch is
+ *       neither read nor written. Two things change with it and are easy to miss: the row
+ *       count is no longer a lane width, so the validity bits go through
+ *       {@link VarkaVectorSupport#partialValidityBitsAt} and
+ *       {@link VarkaVectorSupport#orPartialValidityBitsAt} (the whole-group forms derive their
+ *       byte span from the width and would read one byte for a nine-row group, or write past
+ *       a nominally sized bitmap); and the loop body is now mirrored in two places, which the
+ *       helpers below keep down to three lines. That is the whole reason to prefer this shape
+ *       to a scalar tail: a scalar tail is a second, different lowering of the same
+ *       arithmetic, and it has to agree row for row. {@code DateVectorOpsTest} checks each
+ *       kernel against a scalar reference at sizes that straddle every lane and byte
+ *       boundary, and {@code DateVectorOpsBitmapTest} walks every lane width the Vector API
+ *       admits, including the ones this host cannot produce.</li>
  * </ol>
  *
  * <p>Three things are easy to get wrong and hard to see afterwards. The destination data of a
@@ -92,6 +103,32 @@ public final class DateVectorOps {
   private static final VectorSpecies<Integer> SPECIES = IntVector.SPECIES_PREFERRED;
   private static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
   private DateVectorOps() {}
+
+  /**
+   * The epilogue's lane mask: this partial group's validity bits ANDed with the bounds mask
+   * {@link VectorSpecies#indexInRange} builds, so one mask still drives the load, the
+   * arithmetic and the store, and bounds the group by the batch as well as by validity. The
+   * validity bits come from {@link VarkaVectorSupport#partialValidityBitsAt} because
+   * {@code rows} is a row count here, not a lane width; see the class doc's step 5.
+   *
+   * <p><b>The epilogue lives in its own method, and the loops build their masks inline.</b>
+   * Two cheaper-looking factorings were written first and both cost throughput on the
+   * mixed-null path (task 24, measured with interleaved A/B runs). Sharing one mask helper
+   * between the loop and the epilogue cost 24-50%: it puts {@code partialValidityBitsAt},
+   * which contains a byte loop, inside what the hot loop has to inline. Leaving the epilogue
+   * inline in the kernel method cost 8-40%, in proportion to how many times it calls this
+   * helper - the epilogue's own Vector API calls compete with the loop's for C2's budget even
+   * though the branch runs at most once per batch. Both are the house rule in
+   * {@code sql/varka/AGENTS.md} arriving from a new direction: sibling methods, not longer
+   * methods.
+   */
+  private static VectorMask<Integer> epilogueMask(
+      MemorySegment validity, boolean hasNulls, long row, int rows, int length) {
+    VectorMask<Integer> bounds = SPECIES.indexInRange((int) row, length);
+    return hasNulls
+        ? VectorMask.fromLong(SPECIES, partialValidityBitsAt(validity, row, rows)).and(bounds)
+        : bounds;
+  }
 
   /**
    * dst[i] = src[i] + daysOffset; dst null iff src null.
@@ -148,16 +185,24 @@ public final class DateVectorOps {
       // The same mask is this group's output validity: dst is null exactly where src was.
       orValidityBitsAt(dstValiditySeg, i, mask.toLong(), lanes);
     }
-    // Scalar tail: the fewer than `lanes` rows no whole group covered. It has to agree with the
-    // loop above row for row, so it repeats the same three steps one row at a time.
-    for (; i < length; i++) {
-      boolean valid = !hasNulls || isBitSet(validity, (int) i);
-      if (valid) {
-        dst.set(ValueLayout.JAVA_INT, i * 4L,
-            src.get(ValueLayout.JAVA_INT, i * 4L) + daysOffset);
-        setBit(dstValiditySeg, (int) i);
-      }
+    // The epilogue: the fewer than `lanes` rows no whole group covered, as one more iteration
+    // of the body above with the bounds mask ANDed in (class doc, step 5). Its own method, for
+    // the reason the class doc gives - it must not be inlined into the loop's.
+    if (i < length) {
+      addDaysEpilogue(src, dst, dstValiditySeg, validity, hasNulls, i, length, offsetVec);
     }
+  }
+
+  /** {@link #vectorAddDays}'s final partial lane group; see the class doc's step 5. */
+  private static void addDaysEpilogue(MemorySegment src, MemorySegment dst,
+      MemorySegment dstValiditySeg, MemorySegment validity, boolean hasNulls,
+      long i, int length, IntVector offsetVec) {
+    int rows = (int) (length - i);
+    VectorMask<Integer> mask = epilogueMask(validity, hasNulls, i, rows, length);
+    long byteOffset = i * 4L;
+    IntVector va = IntVector.fromMemorySegment(SPECIES, src, byteOffset, ORDER, mask);
+    va.add(offsetVec, mask).intoMemorySegment(dst, byteOffset, ORDER, mask);
+    orPartialValidityBitsAt(dstValiditySeg, i, mask.toLong(), rows);
   }
 
   /**
@@ -219,6 +264,8 @@ public final class DateVectorOps {
     int lanes = SPECIES.length();
     long i = 0;
     for (; i < loopBound; i += lanes) {
+      // A row survives only where both inputs are valid, so the two masks are ANDed - and the
+      // result is again both the store mask and the output validity for this group.
       VectorMask<Integer> maskA = hasNullA
           ? VectorMask.fromLong(SPECIES, validityBitsAt(validityAseg, i, lanes))
           : VectorMask.fromLong(SPECIES, -1L);  // all-true mask
@@ -234,15 +281,29 @@ public final class DateVectorOps {
       va.sub(vb, mask).intoMemorySegment(dst, byteOffset, ORDER, mask);
       orValidityBitsAt(dstValiditySeg, i, mask.toLong(), lanes);
     }
-    for (; i < length; i++) {
-      boolean validA = !hasNullA || isBitSet(validityAseg, (int) i);
-      boolean validB = !hasNullB || isBitSet(validityBseg, (int) i);
-      if (validA && validB) {
-        dst.set(ValueLayout.JAVA_INT, i * 4L,
-            a.get(ValueLayout.JAVA_INT, i * 4L) - b.get(ValueLayout.JAVA_INT, i * 4L));
-        setBit(dstValiditySeg, (int) i);
-      }
+    // The epilogue; see vectorAddDays and the class doc's step 5.
+    if (i < length) {
+      dateDiffEpilogue(a, b, dst, dstValiditySeg, validityAseg, hasNullA, validityBseg,
+          hasNullB, i, length);
     }
+  }
+
+  /**
+   * {@link #vectorDateDiff}'s final partial lane group. The bounds mask only has to reach one
+   * of the two operand masks - they are ANDed - but {@link #epilogueMask} puts it in both,
+   * because a reader checking one side should not have to find the bound on the other.
+   */
+  private static void dateDiffEpilogue(MemorySegment a, MemorySegment b, MemorySegment dst,
+      MemorySegment dstValiditySeg, MemorySegment validityAseg, boolean hasNullA,
+      MemorySegment validityBseg, boolean hasNullB, long i, int length) {
+    int rows = (int) (length - i);
+    VectorMask<Integer> mask = epilogueMask(validityAseg, hasNullA, i, rows, length)
+        .and(epilogueMask(validityBseg, hasNullB, i, rows, length));
+    long byteOffset = i * 4L;
+    IntVector va = IntVector.fromMemorySegment(SPECIES, a, byteOffset, ORDER, mask);
+    IntVector vb = IntVector.fromMemorySegment(SPECIES, b, byteOffset, ORDER, mask);
+    va.sub(vb, mask).intoMemorySegment(dst, byteOffset, ORDER, mask);
+    orPartialValidityBitsAt(dstValiditySeg, i, mask.toLong(), rows);
   }
 
 }

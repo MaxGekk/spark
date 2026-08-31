@@ -69,7 +69,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wee
  * a dense or masked <i>driver</i>, which zeroes the output validity, takes the all-null
  * shortcut, then calls one sibling <i>loop</i> method per output group (at most
  * {@link #GROUP_BUDGET} ops each; see that constant for the measured reason) and finally the
- * sibling <i>tail</i> method. The dense side runs with no validity bookkeeping at all, which
+ * sibling <i>epilogue</i> method. The dense side runs with no validity bookkeeping at all, which
  * task 11's invariant keeps sound: every node maps valid inputs to valid outputs (there is no
  * null-literal node), so null-free in means all-valid out. Separate methods, not one big one:
  * each gets its own C2 compilation, so no method's node and inlining budgets can starve
@@ -109,10 +109,22 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wee
  * a subset of the operands' validity. This is the filter kernel: one Cond root per predicate,
  * no value outputs beside it in milestone 3.
  *
- * <p>The scalar tail is a per-row topological pass over the same DAG: each distinct node's
- * value (and, in the masked body, its validity bit and a condition's kT/kF bits) lands in an
- * int local computed once per row, mirroring the vector algebra rule for rule. Shared subtrees
- * are therefore computed once per row too.
+ * <p><b>The epilogue, not a scalar tail</b> (task 24): the rows past {@code loopBound} are one
+ * more iteration of the same lane-group body, under the mask {@code indexInRange} builds for a
+ * partial group - {@code i} is {@code loopBound}, {@code lanes} becomes the remainder so every
+ * validity helper stays bounded by the group, and only the loads and the stores take their
+ * masked overloads. The masked load is required rather than preferred: the data segment is
+ * sized to {@code length * 4}, so an unmasked load of the last partial group would run off its
+ * end. This replaced a per-row topological pass that lowered every node type a second time
+ * into int locals - a complete second walk of the IR, and the half that would have had to grow
+ * with every node type added after this.
+ *
+ * <p><b>Inactive lanes read {@code 0}, so no operation in the walk may trap on {@code 0}.</b>
+ * That is the invariant the epilogue rests on, and today it holds for free: the mod-7
+ * lowerings divide by the constant 7, and add, sub, compare, blend, max, min and the shifts
+ * are total. The first trapping operation to enter the IR - ANSI division above all - has to
+ * blend a safe value into the inactive lanes or use a masked lanewise form, because the
+ * epilogue computes them and only declines to store them.
  *
  * <p>Every call the loop makes is declared once in the descriptor table below - erasure is
  * this milestone's named risk ({@code IntVector.add}, {@code compare}, {@code blend},
@@ -195,10 +207,6 @@ public final class VarkaLoopEmitter {
 
   private static final ClassDesc MEMORY_SEGMENT =
       ClassDesc.of("java.lang.foreign.MemorySegment");
-  private static final ClassDesc VALUE_LAYOUT =
-      ClassDesc.of("java.lang.foreign.ValueLayout");
-  private static final ClassDesc VALUE_LAYOUT_OF_INT =
-      ClassDesc.ofDescriptor("Ljava/lang/foreign/ValueLayout$OfInt;");
   private static final ClassDesc BYTE_ORDER = ClassDesc.of("java.nio.ByteOrder");
   private static final ClassDesc INT_VECTOR = ClassDesc.of("jdk.incubator.vector.IntVector");
   private static final ClassDesc VECTOR = ClassDesc.of("jdk.incubator.vector.Vector");
@@ -211,7 +219,6 @@ public final class VarkaLoopEmitter {
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Comparison;");
   private static final ClassDesc VO_BINARY =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Binary;");
-  private static final ClassDesc MATH = ClassDesc.of("java.lang.Math");
   private static final ClassDesc SUPPORT =
       ClassDesc.of("org.apache.spark.sql.varka.vector.VarkaVectorSupport");
   private static final ClassDesc FUSED_KERNEL = ClassDesc.of(VarkaFusedKernel.class.getName());
@@ -238,17 +245,17 @@ public final class VarkaLoopEmitter {
   private static final MethodTypeDesc OR_VALIDITY_BITS_AT = MethodTypeDesc.of(
       ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, ConstantDescs.CD_long,
       ConstantDescs.CD_int);
-  /** {@code boolean VarkaVectorSupport.isBitSet(MemorySegment, int)}. */
-  private static final MethodTypeDesc IS_BIT_SET =
-      MethodTypeDesc.of(ConstantDescs.CD_boolean, MEMORY_SEGMENT, ConstantDescs.CD_int);
-  /** {@code void VarkaVectorSupport.setBit(MemorySegment, int)}. */
-  private static final MethodTypeDesc SET_BIT =
-      MethodTypeDesc.of(ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_int);
 
   /** {@code int VectorSpecies.length()} / {@code int VectorSpecies.loopBound(int)}. */
   private static final MethodTypeDesc SPECIES_LENGTH = MethodTypeDesc.of(ConstantDescs.CD_int);
   private static final MethodTypeDesc LOOP_BOUND =
       MethodTypeDesc.of(ConstantDescs.CD_int, ConstantDescs.CD_int);
+  /**
+   * {@code VectorMask VectorSpecies.indexInRange(int, int)} - the partial lane group's mask,
+   * and the whole reason the epilogue can replace a scalar walk (task 24).
+   */
+  private static final MethodTypeDesc INDEX_IN_RANGE =
+      MethodTypeDesc.of(VECTOR_MASK, ConstantDescs.CD_int, ConstantDescs.CD_int);
   /** {@code IntVector IntVector.broadcast(VectorSpecies, int)} (static). */
   private static final MethodTypeDesc BROADCAST =
       MethodTypeDesc.of(INT_VECTOR, VECTOR_SPECIES, ConstantDescs.CD_int);
@@ -263,6 +270,13 @@ public final class VarkaLoopEmitter {
    */
   private static final MethodTypeDesc FROM_MEMORY_SEGMENT_DENSE = MethodTypeDesc.of(INT_VECTOR,
       VECTOR_SPECIES, MEMORY_SEGMENT, ConstantDescs.CD_long, BYTE_ORDER);
+  /**
+   * The same load with a mask (task 24): the epilogue's only reason to differ from the loop.
+   * Lanes outside the mask are neither read nor faulted on, which is what lets one masked
+   * iteration cover a partial lane group whose data segment ends at {@code length * 4}.
+   */
+  private static final MethodTypeDesc FROM_MEMORY_SEGMENT_MASKED = MethodTypeDesc.of(INT_VECTOR,
+      VECTOR_SPECIES, MEMORY_SEGMENT, ConstantDescs.CD_long, BYTE_ORDER, VECTOR_MASK);
   /**
    * {@code IntVector IntVector.add/sub/max/min(Vector)} - the parameter is the *erased*
    * {@code Vector}, not {@code IntVector}; the covariant return stays {@code IntVector}.
@@ -296,15 +310,9 @@ public final class VarkaLoopEmitter {
   /** {@code void IntVector.intoMemorySegment(MemorySegment, long, ByteOrder)} - unmasked. */
   private static final MethodTypeDesc INTO_MEMORY_SEGMENT_DENSE = MethodTypeDesc.of(
       ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, BYTE_ORDER);
-  /** {@code int MemorySegment.get(ValueLayout.OfInt, long)}. */
-  private static final MethodTypeDesc SEGMENT_GET_INT = MethodTypeDesc.of(
-      ConstantDescs.CD_int, VALUE_LAYOUT_OF_INT, ConstantDescs.CD_long);
-  /** {@code void MemorySegment.set(ValueLayout.OfInt, long, int)}. */
-  private static final MethodTypeDesc SEGMENT_SET_INT = MethodTypeDesc.of(ConstantDescs.CD_void,
-      VALUE_LAYOUT_OF_INT, ConstantDescs.CD_long, ConstantDescs.CD_int);
-  /** {@code int Math.floorMod(int, int)} / {@code int Math.max/min(int, int)} (static). */
-  private static final MethodTypeDesc MATH_II_I = MethodTypeDesc.of(
-      ConstantDescs.CD_int, ConstantDescs.CD_int, ConstantDescs.CD_int);
+  /** {@code void IntVector.intoMemorySegment(MemorySegment, long, ByteOrder, VectorMask)}. */
+  private static final MethodTypeDesc INTO_MEMORY_SEGMENT_MASKED = MethodTypeDesc.of(
+      ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, BYTE_ORDER, VECTOR_MASK);
 
   // Parameter slots of `run` (instance method: `this` is slot 0, finding 11's lesson).
   private static final int P_SRC_DATA = 1;
@@ -384,7 +392,7 @@ public final class VarkaLoopEmitter {
     // `run` dispatches per batch to a dense or masked *driver*; the driver zeroes the output
     // validity, takes the all-null shortcut, then calls one sibling *loop* method per output
     // group (each at most GROUP_BUDGET ops - see that constant for the measured reason) and
-    // finally the sibling *tail* method. Separate methods, not one big one: each gets its own
+    // finally the sibling *epilogue* method. Separate methods, not one big one: each gets its own
     // C2 compilation, so no method's node and inlining budgets can starve another's
     // intrinsics (task 10 measured 3x to 4x on exactly that).
     ClassDesc classDesc = ClassDesc.of(className);
@@ -412,8 +420,8 @@ public final class VarkaLoopEmitter {
           .withMethodBody("runDense", RUN, AccessFlag.PRIVATE.mask(),
               (CodeBuilder cb) -> emitBody(cb, true, BodyMode.DRIVER, -1, classDesc, outputs,
                   analysis, numLiterals, groups))
-          .withMethodBody("tailDense", RUN, AccessFlag.PRIVATE.mask(),
-              (CodeBuilder cb) -> emitBody(cb, true, BodyMode.TAIL, -1, classDesc, outputs,
+          .withMethodBody("epilogueDense", RUN, AccessFlag.PRIVATE.mask(),
+              (CodeBuilder cb) -> emitBody(cb, true, BodyMode.EPILOGUE, -1, classDesc, outputs,
                   analysis, numLiterals, groups));
       for (int g = 0; g < groups.size(); g++) {
         final int group = g;
@@ -425,9 +433,9 @@ public final class VarkaLoopEmitter {
         b.withMethodBody("runMasked", RUN, AccessFlag.PRIVATE.mask(),
             (CodeBuilder cb) -> emitBody(cb, false, BodyMode.DRIVER, -1, classDesc, outputs,
                 analysis, numLiterals, groups))
-            .withMethodBody("tailMasked", RUN, AccessFlag.PRIVATE.mask(),
-                (CodeBuilder cb) -> emitBody(cb, false, BodyMode.TAIL, -1, classDesc, outputs,
-                    analysis, numLiterals, groups));
+            .withMethodBody("epilogueMasked", RUN, AccessFlag.PRIVATE.mask(),
+                (CodeBuilder cb) -> emitBody(cb, false, BodyMode.EPILOGUE, -1, classDesc,
+                    outputs, analysis, numLiterals, groups));
         for (int g = 0; g < groups.size(); g++) {
           final int group = g;
           b.withMethodBody("loopMasked" + g, RUN, AccessFlag.PRIVATE.mask(),
@@ -490,7 +498,7 @@ public final class VarkaLoopEmitter {
   }
 
   /** The three body-method roles; see the method-layout note in {@link #emit}. */
-  private enum BodyMode { DRIVER, LOOP, TAIL }
+  private enum BodyMode { DRIVER, LOOP, EPILOGUE }
 
   /**
    * Partitions the outputs into loop-method groups of at most {@code budget} ops (normally
@@ -653,8 +661,9 @@ public final class VarkaLoopEmitter {
    * One walk over the output trees, before any bytecode exists: validates every node, counts
    * uses on structural equality (the DAG view of trees the caller may have built
    * independently), computes per node the referenced-column bitset and its height, collects a
-   * post-order (children-first) topological order for the scalar tail, and marks the
-   * null-skipping subtrees the all-null shortcut must not reason about.
+   * post-order (children-first) topological order - the line map's numbering, and the
+   * schedule planSlots' validity aliasing depends on - and marks the null-skipping subtrees
+   * the all-null shortcut must not reason about.
    */
   private static final class Analysis {
     final int numInputs;
@@ -665,7 +674,9 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, Integer> useCount = new LinkedHashMap<>();
     /** Per distinct node, the bitset of input ordinals its subtree references. */
     final Map<VarkaVectorIR, Long> columns = new HashMap<>();
-    /** Distinct nodes, children strictly before parents - the scalar tail's schedule. */
+    /** Distinct nodes, children strictly before parents - the line map's numbering and
+     * planSlots' schedule: a word reference planned here always sees concrete child
+     * references, which the validity aliasing depends on. */
     final List<VarkaVectorIR> topoOrder = new ArrayList<>();
     /**
      * Each distinct node's 1-based position in {@link #topoOrder}, which is the line number
@@ -858,11 +869,12 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, int[]> pairTmp = new HashMap<>();
     /** Per DayOfWeek/WeekDay: the original-value and fold temporaries. */
     final Map<VarkaVectorIR, int[]> dowTmp = new HashMap<>();
-    /** Scalar-tail int slots: value, validity bit, condition kt/kf bits. */
-    final Map<VarkaVectorIR, Integer> tailVal = new HashMap<>();
-    final Map<VarkaVectorIR, Integer> tailValid = new HashMap<>();
-    final Map<VarkaVectorIR, Integer> tailKt = new HashMap<>();
-    final Map<VarkaVectorIR, Integer> tailKf = new HashMap<>();
+    /**
+     * The epilogue's bounds mask (task 24), or null in every other body role. Non-null is
+     * exactly the signal that loads and stores take their masked overloads: the value is a
+     * {@code VectorMask} local, live for the whole single pass.
+     */
+    Integer epilogueMask;
 
     Slots(int numInputs, int numOutputs) {
       srcSeg = new int[numInputs];
@@ -876,11 +888,11 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Assigns every local slot the body needs, including the per-node word/condition/tail slots,
+   * Assigns every local slot the body needs, including the per-node word and condition slots,
    * with word aliasing: a node whose validity equals one child's (a literal offset, a unary
    * op) shares that child's reference instead of recomputing it. Per-node slots are planned
-   * only for the body role that emits them - the vector-walk slots for a loop method, the tail
-   * slots for the tail method, neither for the driver, which runs only the shared prologue.
+   * only for the body roles that emit them - the vector-walk slots for a loop or epilogue
+   * method, neither for the driver, which runs only the shared prologue.
    */
   private static Slots planSlots(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
       Analysis analysis, int numLiterals) {
@@ -931,9 +943,16 @@ public final class VarkaLoopEmitter {
     slot += 2;
     s.maskTmp = slot++;
 
+    if (mode == BodyMode.EPILOGUE) {
+      s.epilogueMask = slot++;
+    }
+
+    // The epilogue is the loop body run once over a partial lane group, so it needs exactly
+    // the loop's slots - the word, condition, CSE and temporary locals - and none of its own.
+    boolean vectorWalk = mode == BodyMode.LOOP || mode == BodyMode.EPILOGUE;
     boolean cse = analysis.options.cse();
     for (VarkaVectorIR node : analysis.topoOrder) {
-      if (mode == BodyMode.LOOP) {
+      if (vectorWalk) {
         // Vector-walk slots. Children precede parents in the topo order, so a word reference
         // computed here always sees concrete child references - the aliasing depends on it.
         if (!(node instanceof Cond)) {
@@ -968,19 +987,6 @@ public final class VarkaLoopEmitter {
             s.kf.put(node, slot);
             slot += 2;
             s.ownCond.add(node);
-          }
-        }
-      } else if (mode == BodyMode.TAIL) {
-        // Scalar-tail slots.
-        if (node instanceof Cond) {
-          s.tailKt.put(node, slot++);
-          if (!dense) {
-            s.tailKf.put(node, slot++);
-          }
-        } else if (!(node instanceof LiteralSlot)) {
-          s.tailVal.put(node, slot++);
-          if (!dense) {
-            s.tailValid.put(node, slot++);
           }
         }
       }
@@ -1027,8 +1033,8 @@ public final class VarkaLoopEmitter {
    * so they emit no all-null shortcut and no validity words; the masked variants are the
    * general ones, and the pairs must agree wherever both could run. Every method re-derives
    * the prologue state from the same seven parameters; only the driver zeroes the destination
-   * validity (the loop and tail methods run after bits were written and must not), and the
-   * tail starts its row loop at {@code loopBound}.
+   * validity (the loop and epilogue methods run after bits were written and must not), and
+   * the epilogue starts its single pass at {@code loopBound}.
    */
   private static void emitBody(CodeBuilder cb, boolean dense, BodyMode mode, int group,
       ClassDesc classDesc, List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals,
@@ -1060,8 +1066,8 @@ public final class VarkaLoopEmitter {
 
     // (3) Per output: segments, and - in the driver only - zero(dstValidity) before any
     // return below, the emitter invariant: an output nothing writes must still read as
-    // all-null. The loop and tail methods run after bits were written and must not. A Cond
-    // root's data address is 0L by the interface contract and must not be materialized
+    // all-null. The loop and epilogue methods run after bits were written and must not. A
+    // Cond root's data address is 0L by the interface contract and must not be materialized
     // (the same rule as an all-null input's validity address); zeroing its bitmap doubles
     // as the selection invariant - an unwritten row reads as unselected.
     for (int o = 0; o < numOutputs; o++) {
@@ -1130,7 +1136,7 @@ public final class VarkaLoopEmitter {
     // (5) All-null shortcut: return iff every output reads at least one all-null column.
     // Sound only for null-intolerant outputs - a null-skipping subtree (greatest, IfElse) can
     // be valid over an all-null column - and emitted in the masked driver only (the dense
-    // body has nothing null; the loop and tail methods are never called when it fires), and
+    // body has nothing null; the loop and epilogue methods never run when it fires), and
     // only when every output references a column. A Cond root (task 21) is excluded outright
     // rather than reasoned about: Or(unknown, known-true) is known true, so an OR over one
     // all-null column and one live one still selects rows, which the zeroed bitmap the
@@ -1195,21 +1201,29 @@ public final class VarkaLoopEmitter {
         for (int g = 0; g < groups.size(); g++) {
           invokeCall(cb, classDesc, (dense ? "loopDense" : "loopMasked") + g);
         }
-        // The rows past loopBound belong to the sibling tail method.
-        invokeBody(cb, classDesc, dense ? "tailDense" : "tailMasked");
+        // The rows past loopBound belong to the sibling epilogue method.
+        invokeBody(cb, classDesc, dense ? "epilogueDense" : "epilogueMasked");
       }
       case LOOP -> {
         emitVectorLoop(cb, dense, outputs, groups.get(group), analysis, s);
         cb.return_();
       }
-      case TAIL -> emitTailLoop(cb, dense, outputs, analysis, s);
+      case EPILOGUE -> {
+        // One method for every output, not one per group: the epilogue runs a single pass per
+        // batch, so GROUP_BUDGET - which exists to keep a *hot* method's C2 compile cheap -
+        // has nothing to bound here. This is the same shape the scalar tail it replaces had.
+        List<Integer> all = new java.util.ArrayList<>();
+        for (int o = 0; o < numOutputs; o++) {
+          all.add(o);
+        }
+        emitEpilogue(cb, dense, outputs, all, analysis, s);
+        cb.return_();
+      }
     }
   }
 
   private static void emitVectorLoop(CodeBuilder cb, boolean dense,
       List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, Slots s) {
-    int numInputs = analysis.numInputs;
-
     // (6) The lane-group loop: for (i = 0; i < loopBound; i += lanes).
     cb.loadConstant(0);
     cb.istore(s.iVar);
@@ -1219,6 +1233,91 @@ public final class VarkaLoopEmitter {
     cb.iload(s.iVar);
     cb.iload(s.loopBound);
     cb.if_icmpge(loopEnd);
+
+    emitLaneGroup(cb, dense, outputs, outputIdx, analysis, s);
+
+    cb.iload(s.iVar);
+    cb.iload(s.lanes);
+    cb.iadd();
+    cb.istore(s.iVar);
+    cb.goto_(loopTop);
+    cb.labelBinding(loopEnd);
+  }
+
+  /**
+   * (7) The masked epilogue, as its own method body (task 24): the rows past
+   * {@code loopBound}, done as one more iteration of the very same lane-group body rather
+   * than as a second, scalar walk of the IR. Three substitutions make it so - {@code i} is
+   * {@code loopBound} with no back edge, {@code lanes} becomes the remainder so every
+   * validity helper is bounded by it, and {@code indexInRange} supplies the mask the loads
+   * and the stores take. Nothing between a load and a store is masked, exactly as in the
+   * loop.
+   *
+   * <p>The masked load is not an optimization here: the data segment is sized to
+   * {@code length * 4}, so an unmasked load of the last partial group would run off the end
+   * of the segment. Its other consequence is the invariant recorded in the class doc - lanes
+   * outside the mask read {@code 0}, so no operation in the walk may trap on {@code 0}.
+   *
+   * <p>What this replaces: a per-row topological pass that computed every distinct node's
+   * value (and, masked, its validity bit and a condition's kT/kF bits) into int locals - a
+   * complete second lowering of the IR, roughly 330 lines and a second {@code switch} over
+   * every node type, which every node type added after task 24 would have had to extend
+   * twice and keep in agreement row for row.
+   */
+  private static void emitEpilogue(CodeBuilder cb, boolean dense,
+      List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, Slots s) {
+    // Nothing to do when the batch divides evenly - the common case, since the default
+    // COLUMN_BATCH_SIZE is 4096 and every lane count this runs at divides it.
+    Label remainder = cb.newLabel();
+    cb.iload(s.loopBound);
+    cb.iload(P_LENGTH);
+    cb.if_icmplt(remainder);
+    cb.return_();
+    cb.labelBinding(remainder);
+
+    cb.iload(s.loopBound);
+    cb.istore(s.iVar);
+    // `lanes` means "how many rows this group covers" everywhere below, which for the last
+    // group is the remainder - not a lane width, which is why the validity helpers switch to
+    // their partial-group forms (see validityBits / orValidityBits). This one store is what
+    // keeps the partial group's validity from reading or writing past the batch.
+    cb.iload(P_LENGTH);
+    cb.iload(s.loopBound);
+    cb.isub();
+    cb.istore(s.lanes);
+    cb.aload(s.species);
+    cb.iload(s.loopBound);
+    cb.iload(P_LENGTH);
+    cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
+    cb.astore(s.epilogueMask);
+
+    emitLaneGroup(cb, dense, outputs, outputIdx, analysis, s);
+  }
+
+  /**
+   * The two validity helpers, named per group shape. A whole lane group spans a power-of-two
+   * number of bytes and is read or written in one access; the epilogue's partial group is not
+   * a lane width at all, so it takes the {@code partial} pair, which walks the bytes it spans
+   * and cannot run off a nominally sized bitmap. The descriptors are identical, so the body
+   * emitters differ only in the name they pass. Getting this wrong is silent, not loud: a
+   * nine-row group handed to the whole-group form reads one byte and calls its ninth row null.
+   */
+  private static String validityBits(Slots s) {
+    return s.epilogueMask != null ? "partialValidityBitsAt" : "validityBitsAt";
+  }
+
+  private static String orValidityBits(Slots s) {
+    return s.epilogueMask != null ? "orPartialValidityBitsAt" : "orValidityBitsAt";
+  }
+
+  /**
+   * One lane group: this group's validity words, then each output's vector walk and store.
+   * Shared by the loop, which calls it per iteration, and the epilogue, which calls it once
+   * with {@code s.epilogueMask} set - the only difference between them inside here.
+   */
+  private static void emitLaneGroup(CodeBuilder cb, boolean dense,
+      List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, Slots s) {
+    int numInputs = analysis.numInputs;
 
     // byteOffset = (long) i * 4.
     cb.iload(s.iVar);
@@ -1256,7 +1355,7 @@ public final class VarkaLoopEmitter {
         cb.iload(s.iVar);
         cb.i2l();
         cb.iload(s.lanes);
-        cb.invokestatic(SUPPORT, "validityBitsAt", VALIDITY_BITS_AT);
+        cb.invokestatic(SUPPORT, validityBits(s), VALIDITY_BITS_AT);
         cb.goto_(wDone);
         cb.labelBinding(wNoNulls);
         cb.loadConstant(-1L);
@@ -1287,14 +1386,19 @@ public final class VarkaLoopEmitter {
           cb.lload(s.kt.get(cond));
         }
         cb.iload(s.lanes);
-        cb.invokestatic(SUPPORT, "orValidityBitsAt", OR_VALIDITY_BITS_AT);
+        cb.invokestatic(SUPPORT, orValidityBits(s), OR_VALIDITY_BITS_AT);
         continue;
       }
       emitValue(cb, root, dense, analysis, s, computed);
       cb.aload(s.dstSeg[o]);
       cb.lload(s.byteOffset);
       cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
-      cb.invokevirtual(INT_VECTOR, "intoMemorySegment", INTO_MEMORY_SEGMENT_DENSE);
+      if (s.epilogueMask != null) {
+        cb.aload(s.epilogueMask);
+        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", INTO_MEMORY_SEGMENT_MASKED);
+      } else {
+        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", INTO_MEMORY_SEGMENT_DENSE);
+      }
       cb.aload(s.dstValSeg[o]);
       cb.iload(s.iVar);
       cb.i2l();
@@ -1304,74 +1408,8 @@ public final class VarkaLoopEmitter {
         loadWord(cb, s.wordRef.get(root));
       }
       cb.iload(s.lanes);
-      cb.invokestatic(SUPPORT, "orValidityBitsAt", OR_VALIDITY_BITS_AT);
+      cb.invokestatic(SUPPORT, orValidityBits(s), OR_VALIDITY_BITS_AT);
     }
-
-    cb.iload(s.iVar);
-    cb.iload(s.lanes);
-    cb.iadd();
-    cb.istore(s.iVar);
-    cb.goto_(loopTop);
-    cb.labelBinding(loopEnd);
-  }
-
-  /**
-   * (7) The scalar tail, as its own method body: per row, one topological pass over the
-   * distinct nodes - each value (and, masked, each validity bit and condition bit pair)
-   * computed once into an int local, mirroring the vector algebra rule for rule - then one
-   * guarded write per output. Starts at {@code loopBound}: everything below it belongs to the
-   * loop method that called here.
-   */
-  private static void emitTailLoop(CodeBuilder cb, boolean dense,
-      List<VarkaVectorIR> outputs, Analysis analysis, Slots s) {
-    int numOutputs = outputs.size();
-    cb.iload(s.loopBound);
-    cb.istore(s.iVar);
-    Label tailTop = cb.newLabel();
-    Label tailEnd = cb.newLabel();
-    cb.labelBinding(tailTop);
-    cb.iload(s.iVar);
-    cb.iload(P_LENGTH);
-    cb.if_icmpge(tailEnd);
-    for (VarkaVectorIR node : analysis.topoOrder) {
-      line(cb, analysis, node);
-      emitTailNode(cb, node, dense, s);
-    }
-    for (int o = 0; o < numOutputs; o++) {
-      VarkaVectorIR root = outputs.get(o);
-      Label rowDone = cb.newLabel();
-      if (root instanceof Cond) {
-        // A Cond root (task 21): set this row's selection bit iff known true - the tail's
-        // form of the loop's kT write. No data store, matching the vector loop.
-        cb.iload(s.tailKt.get(root));
-        cb.ifeq(rowDone);
-        cb.aload(s.dstValSeg[o]);
-        cb.iload(s.iVar);
-        cb.invokestatic(SUPPORT, "setBit", SET_BIT);
-        cb.labelBinding(rowDone);
-        continue;
-      }
-      if (!dense) {
-        cb.iload(s.tailValid.get(root));
-        cb.ifeq(rowDone);
-      }
-      cb.aload(s.dstSeg[o]);
-      cb.getstatic(VALUE_LAYOUT, "JAVA_INT", VALUE_LAYOUT_OF_INT);
-      cb.iload(s.iVar);
-      cb.i2l();
-      cb.loadConstant(4L);
-      cb.lmul();
-      tailValue(cb, root, s);
-      cb.invokeinterface(MEMORY_SEGMENT, "set", SEGMENT_SET_INT);
-      cb.aload(s.dstValSeg[o]);
-      cb.iload(s.iVar);
-      cb.invokestatic(SUPPORT, "setBit", SET_BIT);
-      cb.labelBinding(rowDone);
-    }
-    cb.iinc(s.iVar, 1);
-    cb.goto_(tailTop);
-    cb.labelBinding(tailEnd);
-    cb.return_();
   }
 
   /** {@code local = VarkaVectorSupport.ofAddress(param[index], lload(bytes))}. */
@@ -1472,7 +1510,12 @@ public final class VarkaLoopEmitter {
         cb.aload(s.srcSeg[c.ordinal()]);
         cb.lload(s.byteOffset);
         cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
-        cb.invokestatic(INT_VECTOR, "fromMemorySegment", FROM_MEMORY_SEGMENT_DENSE);
+        if (s.epilogueMask != null) {
+          cb.aload(s.epilogueMask);
+          cb.invokestatic(INT_VECTOR, "fromMemorySegment", FROM_MEMORY_SEGMENT_MASKED);
+        } else {
+          cb.invokestatic(INT_VECTOR, "fromMemorySegment", FROM_MEMORY_SEGMENT_DENSE);
+        }
       }
       case LiteralSlot l -> {
         line(cb, analysis, node);
@@ -1850,261 +1893,5 @@ public final class VarkaLoopEmitter {
         }
       }
     }
-  }
-
-  // ---------------------------------------------------------------------------------------------
-  // The scalar tail.
-  // ---------------------------------------------------------------------------------------------
-
-  /** Pushes a node's tail value: an int local, or the scalar argument for a literal. */
-  private static void tailValue(CodeBuilder cb, VarkaVectorIR node, Slots s) {
-    if (node instanceof LiteralSlot l) {
-      cb.iload(s.scalarArg[l.index()]);
-    } else {
-      cb.iload(s.tailVal.get(node));
-    }
-  }
-
-  /** Pushes a node's tail validity bit; literals are always valid. */
-  private static void tailValid(CodeBuilder cb, VarkaVectorIR node, Slots s) {
-    if (node instanceof LiteralSlot) {
-      cb.loadConstant(1);
-    } else {
-      cb.iload(s.tailValid.get(node));
-    }
-  }
-
-  /** Emits one row's slot computations for one distinct node, in topological order. */
-  private static void emitTailNode(CodeBuilder cb, VarkaVectorIR node, boolean dense, Slots s) {
-    switch (node) {
-      case ColumnRef c -> {
-        cb.aload(s.srcSeg[c.ordinal()]);
-        cb.getstatic(VALUE_LAYOUT, "JAVA_INT", VALUE_LAYOUT_OF_INT);
-        cb.iload(s.iVar);
-        cb.i2l();
-        cb.loadConstant(4L);
-        cb.lmul();
-        cb.invokeinterface(MEMORY_SEGMENT, "get", SEGMENT_GET_INT);
-        cb.istore(s.tailVal.get(node));
-        if (!dense) {
-          // valid = !dead && (!hasNulls || isBitSet).
-          Label invalid = cb.newLabel();
-          Label validYes = cb.newLabel();
-          Label done = cb.newLabel();
-          cb.iload(s.dead[c.ordinal()]);
-          cb.ifne(invalid);
-          cb.iload(s.hasNulls[c.ordinal()]);
-          cb.ifeq(validYes);
-          cb.aload(s.srcValSeg[c.ordinal()]);
-          cb.iload(s.iVar);
-          cb.invokestatic(SUPPORT, "isBitSet", IS_BIT_SET);
-          cb.ifeq(invalid);
-          cb.labelBinding(validYes);
-          cb.loadConstant(1);
-          cb.goto_(done);
-          cb.labelBinding(invalid);
-          cb.loadConstant(0);
-          cb.labelBinding(done);
-          cb.istore(s.tailValid.get(node));
-        }
-      }
-      case LiteralSlot l -> {
-        // Inlined at use sites.
-      }
-      case AddDays n -> tailBinaryArith(cb, node, n.days(), n.offset(), true, dense, s);
-      case SubDays n -> tailBinaryArith(cb, node, n.days(), n.offset(), false, dense, s);
-      case DateDiff n -> tailBinaryArith(cb, node, n.end(), n.start(), false, dense, s);
-      case DayOfWeek n -> tailDow(cb, node, n.days(), 4, true, dense, s);
-      case WeekDay n -> tailDow(cb, node, n.days(), 3, false, dense, s);
-      case Greatest n -> tailPick(cb, node, n.left(), n.right(), "max", dense, s);
-      case Least n -> tailPick(cb, node, n.left(), n.right(), "min", dense, s);
-      case IfElse n -> {
-        Label useElse = cb.newLabel();
-        Label done = cb.newLabel();
-        cb.iload(s.tailKt.get(n.cond()));
-        cb.ifeq(useElse);
-        tailValue(cb, n.thenNode(), s);
-        cb.goto_(done);
-        cb.labelBinding(useElse);
-        tailValue(cb, n.elseNode(), s);
-        cb.labelBinding(done);
-        cb.istore(s.tailVal.get(node));
-        if (!dense) {
-          Label vElse = cb.newLabel();
-          Label vDone = cb.newLabel();
-          cb.iload(s.tailKt.get(n.cond()));
-          cb.ifeq(vElse);
-          tailValid(cb, n.thenNode(), s);
-          cb.goto_(vDone);
-          cb.labelBinding(vElse);
-          tailValid(cb, n.elseNode(), s);
-          cb.labelBinding(vDone);
-          cb.istore(s.tailValid.get(node));
-        }
-      }
-      case Compare n -> {
-        // cmp as 0/1 first.
-        Label isTrue = cb.newLabel();
-        Label done = cb.newLabel();
-        tailValue(cb, n.left(), s);
-        tailValue(cb, n.right(), s);
-        switch (n.op()) {
-          case LT -> cb.if_icmplt(isTrue);
-          case LE -> cb.if_icmple(isTrue);
-          case GT -> cb.if_icmpgt(isTrue);
-          case GE -> cb.if_icmpge(isTrue);
-          case EQ -> cb.if_icmpeq(isTrue);
-        }
-        cb.loadConstant(0);
-        cb.goto_(done);
-        cb.labelBinding(isTrue);
-        cb.loadConstant(1);
-        cb.labelBinding(done);
-        cb.istore(s.tailKt.get(node));
-        if (!dense) {
-          // known = validL & validR; kT = known & cmp; kF = known & !cmp.
-          tailValid(cb, n.left(), s);
-          tailValid(cb, n.right(), s);
-          cb.iand();
-          cb.dup();
-          cb.iload(s.tailKt.get(node));
-          cb.loadConstant(1);
-          cb.ixor();
-          cb.iand();
-          cb.istore(s.tailKf.get(node));
-          cb.iload(s.tailKt.get(node));
-          cb.iand();
-          cb.istore(s.tailKt.get(node));
-        }
-      }
-      case And n -> {
-        cb.iload(s.tailKt.get(n.left()));
-        cb.iload(s.tailKt.get(n.right()));
-        cb.iand();
-        cb.istore(s.tailKt.get(node));
-        if (!dense) {
-          cb.iload(s.tailKf.get(n.left()));
-          cb.iload(s.tailKf.get(n.right()));
-          cb.ior();
-          cb.istore(s.tailKf.get(node));
-        }
-      }
-      case Or n -> {
-        cb.iload(s.tailKt.get(n.left()));
-        cb.iload(s.tailKt.get(n.right()));
-        cb.ior();
-        cb.istore(s.tailKt.get(node));
-        if (!dense) {
-          cb.iload(s.tailKf.get(n.left()));
-          cb.iload(s.tailKf.get(n.right()));
-          cb.iand();
-          cb.istore(s.tailKf.get(node));
-        }
-      }
-      case Not n -> {
-        if (dense) {
-          cb.iload(s.tailKt.get(n.child()));
-          cb.loadConstant(1);
-          cb.ixor();
-          cb.istore(s.tailKt.get(node));
-        } else {
-          cb.iload(s.tailKf.get(n.child()));
-          cb.istore(s.tailKt.get(node));
-          cb.iload(s.tailKt.get(n.child()));
-          cb.istore(s.tailKf.get(node));
-        }
-      }
-      case IsNotNull n -> {
-        if (dense) {
-          // Dense rows are all-valid: constant true. No tailKf slot exists in dense mode.
-          cb.loadConstant(1);
-          cb.istore(s.tailKt.get(node));
-        } else {
-          tailValid(cb, n.child(), s);
-          cb.istore(s.tailKt.get(node));
-          cb.iload(s.tailKt.get(node));
-          cb.loadConstant(1);
-          cb.ixor();
-          cb.istore(s.tailKf.get(node));
-        }
-      }
-    }
-  }
-
-  private static void tailBinaryArith(CodeBuilder cb, VarkaVectorIR node, VarkaVectorIR left,
-      VarkaVectorIR right, boolean add, boolean dense, Slots s) {
-    tailValue(cb, left, s);
-    tailValue(cb, right, s);
-    if (add) {
-      cb.iadd();
-    } else {
-      cb.isub();
-    }
-    cb.istore(s.tailVal.get(node));
-    if (!dense) {
-      tailValid(cb, left, s);
-      tailValid(cb, right, s);
-      cb.iand();
-      cb.istore(s.tailValid.get(node));
-    }
-  }
-
-  private static void tailDow(CodeBuilder cb, VarkaVectorIR node, VarkaVectorIR child,
-      int offset, boolean plusOne, boolean dense, Slots s) {
-    // r = Math.floorMod(v, 7) + offset; if (r >= 7) r -= 7; then + 1 for dayofweek.
-    tailValue(cb, child, s);
-    cb.loadConstant(7);
-    cb.invokestatic(MATH, "floorMod", MATH_II_I);
-    cb.loadConstant(offset);
-    cb.iadd();
-    Label small = cb.newLabel();
-    cb.dup();
-    cb.loadConstant(7);
-    cb.if_icmplt(small);
-    cb.loadConstant(7);
-    cb.isub();
-    cb.labelBinding(small);
-    if (plusOne) {
-      cb.loadConstant(1);
-      cb.iadd();
-    }
-    cb.istore(s.tailVal.get(node));
-    if (!dense) {
-      tailValid(cb, child, s);
-      cb.istore(s.tailValid.get(node));
-    }
-  }
-
-  private static void tailPick(CodeBuilder cb, VarkaVectorIR node, VarkaVectorIR left,
-      VarkaVectorIR right, String op, boolean dense, Slots s) {
-    if (dense) {
-      tailValue(cb, left, s);
-      tailValue(cb, right, s);
-      cb.invokestatic(MATH, op, MATH_II_I);
-      cb.istore(s.tailVal.get(node));
-      return;
-    }
-    Label useRight = cb.newLabel();
-    Label useLeft = cb.newLabel();
-    Label done = cb.newLabel();
-    tailValid(cb, left, s);
-    cb.ifeq(useRight);
-    tailValid(cb, right, s);
-    cb.ifeq(useLeft);
-    tailValue(cb, left, s);
-    tailValue(cb, right, s);
-    cb.invokestatic(MATH, op, MATH_II_I);
-    cb.goto_(done);
-    cb.labelBinding(useLeft);
-    tailValue(cb, left, s);
-    cb.goto_(done);
-    cb.labelBinding(useRight);
-    tailValue(cb, right, s);
-    cb.labelBinding(done);
-    cb.istore(s.tailVal.get(node));
-    tailValid(cb, left, s);
-    tailValid(cb, right, s);
-    cb.ior();
-    cb.istore(s.tailValid.get(node));
   }
 }
