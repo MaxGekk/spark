@@ -65,6 +65,10 @@ days since epoch) and foldable integer day offsets:
   `numFallbackBatchesDeclined`. Such a day does not have to be written by hand:
   `DATE_ADD` arithmetic reaches one, and so does a stored column, since a
   Parquet `INT32` date carries any day value the writer put there.
+* `NEXT_DAY` (task 33), for a literal weekday only - a non-foldable, null or
+  unrecognized weekday declines, since resolving it is a compile-time step
+  and the row engine's ANSI-mode behavior for a bad weekday is not
+  reproduced.
 * `UNIX_DATE` relabels a date column to its underlying `INT` day count with no
   new node and no emitted code (task 41); the paired `DATE_FROM_UNIX_DATE`
   compiles the same way but still declines today, since its child is an
