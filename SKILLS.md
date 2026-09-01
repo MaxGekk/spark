@@ -318,8 +318,8 @@ apparent small wins turned out to be noise.
   method also cuts the per-task JIT warm-up above by ~28 ms per task.
 - **The vector path is worth 6.5x over good scalar code, and the project had never checked.**
   `ChronoScalarOps` is `year(date)` as an ordinary Java loop over the same Arrow buffer, in the
-  same 4096-row chunks, writing the same outputs: 284.4 M rows/s against the emitted kernel's
-  1834.5 at AVX-512. Until it was written, the only scalar anchor in the parity file was a
+  same 4096-row chunks, writing the same outputs: 284.3 M rows/s against the emitted kernel's
+  1819.3 at AVX-512, both from the committed parity file. Until it was written, the only scalar anchor in the parity file was a
   per-row `LocalDate` loop, and the headline ratio was quoted against that. Keep the real
   baseline: "faster than `java.time`" and "faster than scalar arithmetic" are different claims
   and the second is the one that justifies the emitter.
@@ -327,12 +327,12 @@ apparent small wins turned out to be noise.
   scalar baseline.** It measures 480.9 M rows/s, and C2 scalar-replaces the `LocalDate` -
   escape analysis sees it created and consumed in the same loop. It is worth stating because the
   opposite is the natural assumption and it was asserted out loud in this project before being
-  checked. It also beats a hand-written 64-bit civil-from-days by 1.7x (480.9 against 284.4):
+  checked. It also beats a hand-written 64-bit civil-from-days by 1.7x (480.9 against 284.3):
   `java.time` does the same Hinnant decomposition in 32-bit ints, and forcing everything through
   64-bit longs to buy exactness over the whole int32 range costs more than the exactness is
   worth in scalar code.
 - **Spelling a constant division as `(x * M) >>> k` instead of `x / d` is worth 1.38x in scalar
-  code** - 284.4 against 205.8 M rows/s for the same algorithm. C2 lowers `long / constant` to
+  code** - 284.3 against 205.7 M rows/s for the same algorithm. C2 lowers `long / constant` to
   `MulHiL`, one instruction but a costlier one: it keeps the high half, and on x86-64 it
   clobbers RDX:RAX. An ordinary `imulq` plus a shift is cheaper wherever the product fits 64
   bits, which for a 32-bit dividend and a ~30-bit magic it does.
@@ -340,10 +340,15 @@ apparent small wins turned out to be noise.
   and neither is the `MemorySegment`.** The `(x * M) >>> k` form uses only `MulL` and
   `URShiftL`, both of which have vector counterparts (`MulVL`, `URShiftVL`), and the loop body
   was written branchless for exactly this reason. C2 still does not vectorize it:
-  `-XX:-UseSuperWord` moves the number by 0.1% (284.1 against 284.4). A four-case bisection -
+  `-XX:-UseSuperWord` moves the number by 0.1% (284.1 against 284.4 in the A/B run). A
+  four-case bisection -
   {`int[]`, `MemorySegment`} x {trivial body, full decomposition} - locates it: the trivial
   `int[]` loop gains 4.84x from SuperWord, the trivial `MemorySegment` loop only 1.09x, and the
-  full body gains nothing on *either* (0.99x on `int[]`, 1.00x on the segment). So the
+  full body gains nothing on *either* (0.99x on `int[]`, 1.00x on the segment). The absolute
+  figures in the committed parity file say the same thing: 34164.8 M rows/s for the trivial
+  `int[]` loop against 6284.5 for the same body over a `MemorySegment`, and 286.1 for the full
+  body on `int[]` against 284.3 over the segment - identical once the arithmetic is the real
+  work. So the
   arithmetic is the binding constraint; segment addressing hurts as well but is not what stops
   it.
   `-XX:+TraceSuperWord` on a fastdebug JVM gives the mechanism exactly:
