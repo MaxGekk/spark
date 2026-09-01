@@ -25,7 +25,7 @@ import org.apache.spark.benchmark.{Benchmark, BenchmarkBase}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaFusedKernel, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
-import org.apache.spark.sql.varka.vector.DateVectorOps
+import org.apache.spark.sql.varka.vector.{ChronoScalarOps, DateVectorOps}
 
 /**
  * The emitter's gates as a benchmark (see `sql/varka/plans/PLAN_TASK_9.md`,
@@ -396,6 +396,35 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
         benchmark.addCase("year+month+day+quarter, null-free") { _ =>
           chunked(four, false, outputs = 4)
+        }
+        // The scalar baseline this file never had. The LocalDate anchor below is not one: it
+        // allocates a LocalDate per row, so it prices allocation rather than arithmetic.
+        // ChronoScalarOps is the same civil-from-days as an ordinary Java loop over the same
+        // buffer, in the same chunks, writing the same outputs - so the gap between these and
+        // the emitted "year, null-free" case above is what the Vector API is actually worth
+        // here. The two spellings differ only in how each division is written, and that is the
+        // second question: `/` becomes a high-half multiply, which has no vector node and so
+        // can never auto-vectorize, while `(x * M) >>> k` is a plain 64-bit multiply and shift,
+        // which SuperWord may vectorize on its own. Running the magic case again under
+        // -XX:-UseSuperWord says whether it did.
+        def scalarChunked(kernel: (Long, Long, Long, Int) => Unit): Unit = {
+          var pass = 0
+          while (pass < repeats) {
+            var done = 0
+            while (done < numRows) {
+              val n = math.min(chunk, numRows - done)
+              kernel(nfData.address() + done * 4L, dst.address() + done * 4L,
+                dstValidity.address() + done / 8L, n)
+              done += n
+            }
+            pass += 1
+          }
+        }
+        benchmark.addCase("scalar year, division (cannot auto-vectorize), null-free") { _ =>
+          scalarChunked(ChronoScalarOps.yearByDivision)
+        }
+        benchmark.addCase("scalar year, magic multiply (may auto-vectorize), null-free") { _ =>
+          scalarChunked(ChronoScalarOps.yearByMagic)
         }
         // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector
         // body against year's ~50), and the per-row LocalDate loop is what Spark runs today.

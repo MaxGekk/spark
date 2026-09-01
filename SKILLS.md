@@ -316,6 +316,42 @@ apparent small wins turned out to be noise.
   reference variant), ~9x lanewise `DIV` (no SIMD divide exists on x86; it
   effectively scalarizes), and ~57x a per-row `LocalDate` loop. The ~10-op-smaller
   method also cuts the per-task JIT warm-up above by ~28 ms per task.
+- **The vector path is worth 6.5x over good scalar code, and the project had never checked.**
+  `ChronoScalarOps` is `year(date)` as an ordinary Java loop over the same Arrow buffer, in the
+  same 4096-row chunks, writing the same outputs: 284.4 M rows/s against the emitted kernel's
+  1834.5 at AVX-512. Until it was written, the only scalar anchor in the parity file was a
+  per-row `LocalDate` loop, and the headline ratio was quoted against that. Keep the real
+  baseline: "faster than `java.time`" and "faster than scalar arithmetic" are different claims
+  and the second is the one that justifies the emitter.
+- **`LocalDate.ofEpochDay(d).getYear()` in a tight loop does not allocate, and is a legitimate
+  scalar baseline.** It measures 480.9 M rows/s, and C2 scalar-replaces the `LocalDate` -
+  escape analysis sees it created and consumed in the same loop. It is worth stating because the
+  opposite is the natural assumption and it was asserted out loud in this project before being
+  checked. It also beats a hand-written 64-bit civil-from-days by 1.7x (480.9 against 284.4):
+  `java.time` does the same Hinnant decomposition in 32-bit ints, and forcing everything through
+  64-bit longs to buy exactness over the whole int32 range costs more than the exactness is
+  worth in scalar code.
+- **Spelling a constant division as `(x * M) >>> k` instead of `x / d` is worth 1.38x in scalar
+  code** - 284.4 against 205.8 M rows/s for the same algorithm. C2 lowers `long / constant` to
+  `MulHiL`, one instruction but a costlier one: it keeps the high half, and on x86-64 it
+  clobbers RDX:RAX. An ordinary `imulq` plus a shift is cheaper wherever the product fits 64
+  bits, which for a 32-bit dividend and a ~30-bit magic it does.
+- **Do not count on SuperWord to vectorize a `MemorySegment` loop, even one written to be
+  vectorizable.** The `(x * M) >>> k` form uses only `MulL` and `URShiftL`, both of which have
+  vector counterparts (`MulVL`, `URShiftVL`), and the loop body was made branchless for exactly
+  this reason - the January turn and the month fixup as arithmetic rather than `if`. C2 still
+  did not vectorize it: `-XX:-UseSuperWord` moves the number by 0.1% (284.1 against 284.4), and
+  the figure is identical under `-XX:MaxVectorSize=16`, so nothing vector-related is happening
+  at all. The likely cause is the `MemorySegment.get(ValueLayout.JAVA_INT, ...)` addressing
+  rather than the arithmetic. The A/B against `-XX:-UseSuperWord` is the cheap way to ask this
+  question and needs no disassembler.
+- **Op counts bound a speed-up; they do not estimate one.** Three predictions in one milestone,
+  all made from op ratios, all optimistic: sharing one decomposition across four calendar fields
+  was predicted at 2.0x-3.2x and measured 1.5x; a scalar `year` was predicted within 2.5x of the
+  vector kernel and came in at 6.5x; keeping fewer values live was predicted to help at narrow
+  widths and lost at both. What the op-count model leaves out - stores, validity bookkeeping,
+  loop control, dependency-chain latency - is routinely half the time or more. Predict a bound,
+  say it is a bound, and measure.
 - Masked lanewise ops and masked stores cost 2.3x-2.9x even when the mask is all-true:
   a runtime mask is opaque to C2 and a masked store never becomes a plain store. If
   masks carry no correctness (in-bounds accesses, invalid destination lanes declared
