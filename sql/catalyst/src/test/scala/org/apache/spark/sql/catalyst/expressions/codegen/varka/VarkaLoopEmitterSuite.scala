@@ -28,6 +28,7 @@ import scala.jdk.CollectionConverters._
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.varka.vector.DateVectorOps
 
 /**
@@ -224,6 +225,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       // implementation is not an oracle.
       evalValue(n.days(), row, lits)
         .map(v => LocalDate.ofEpochDay(v.toLong).get(IsoFields.QUARTER_OF_YEAR))
+    // The oracle is DateTimeUtils.dateAddMonths - the definition AddMonthsBase's nullSafeEval
+    // calls - not VarkaChrono.daysFromCivil, which is the model this node's own arithmetic was
+    // derived from and checked against; using it here would test the lowering against itself.
+    case n: AddMonths =>
+      for (d <- evalValue(n.days(), row, lits); m <- evalValue(n.months(), row, lits))
+        yield DateTimeUtils.dateAddMonths(d, m)
     case n: Greatest =>
       pick(evalValue(n.left(), row, lits), evalValue(n.right(), row, lits), math.max)
     case n: Least =>
@@ -743,6 +750,33 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed")
   }
 
+  test("task 40: add_months matches DateTimeUtils across clamp boundaries and month offsets") {
+    val root = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
+    // Every one of these has a different day-of-month than the month it lands in, at both
+    // ends of the year and across a common/leap February - the clamp is where a wrong
+    // implementation fails, per PLAN_TASK_40.md section 4.
+    val clampDays = Array(
+      LocalDate.of(2023, 1, 31).toEpochDay.toInt, LocalDate.of(2023, 3, 31).toEpochDay.toInt,
+      LocalDate.of(2020, 2, 29).toEpochDay.toInt, LocalDate.of(2024, 2, 28).toEpochDay.toInt,
+      LocalDate.of(1900, 1, 31).toEpochDay.toInt, LocalDate.of(2000, 1, 31).toEpochDay.toInt,
+      LocalDate.of(2023, 12, 31).toEpochDay.toInt, 0, -1, 1,
+      // A four-digit year plus a multi-century month offset overflows the 32-bit lane
+      // multiply behind the /400 and /100 magic (VarkaChrono.YEAR_CENTURY_M's javadoc) -
+      // the exact shape that found the bug during development. Near-epoch dates alone do
+      // not reach it.
+      VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
+      VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1, 3818579, 3811279)
+    def days(c: Int, i: Int): Int =
+      if (i < clampDays.length) clampDays(i) else i * 9973 - 400000
+    // Offsets of 0, +-1, +-11, +-12, +-13, +-1200 cross a multiple of 12 both ways, which is
+    // where the month-arithmetic dividend's own bias could be off by one.
+    for (offset <- Seq(0, 1, -1, 11, -11, 12, -12, 13, -13, 1200, -1200,
+        VarkaChrono.MONTH_ARITH_MAX_MONTHS, VarkaChrono.MONTH_ARITH_MIN_MONTHS)) {
+      checkMatrix(Seq(root), 1, Array(offset), Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = days, ctx = s"add_months offset=$offset")
+    }
+  }
+
   test("the epilogue's inactive lanes do not decline a batch whose real rows are in range") {
     // A masked load fills the lanes past `length` with 0, and 0 is in range - but the guard
     // runs on the node's *input*, which here is a computed value: 0 - 5400000 is outside the
@@ -1088,8 +1122,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "21=(dayOfWeek 1)",
     "22=(dateDiff 20 21)",
     "23=(weekDay 1)",
-    "24=(least 22 23)",
-    "25=(if 10 13 24)").mkString("\n")
+    "24=(addMonths 1 2)",
+    "25=(least 23 24)",
+    "26=(least 22 25)",
+    "27=(if 10 13 26)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -1113,12 +1149,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to
-    // ride Record.toString, whose format no JDK promises. One key using all 19 node types (and
+    // ride Record.toString, whose format no JDK promises. One key using all 20 node types (and
     // three CompareOps), so a change to any rendering, to the operand order, or to the
     // topological schedule fails here. If it does: make sure the change is intended, then
     // update the literal and say so in the task plan - the same rule as the pinned shape
     // hashes in VarkaShapeCacheSuite. Task 26 added the four calendar extractions and
-    // re-pinned it (PLAN_TASK_26.md).
+    // re-pinned it (PLAN_TASK_26.md); task 40 added AddMonths and re-pinned it again.
     val col = new ColumnRef(0)
     val lit = new LiteralSlot(0)
     val cond = new And(
@@ -1132,7 +1168,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
-      new Least(new DateDiff(chrono, new DayOfWeek(col)), new WeekDay(col)))
+      new Least(new DateDiff(chrono, new DayOfWeek(col)),
+        new Least(new WeekDay(col), new AddMonths(col, lit))))
     val (_, bytes) = emitMulti(Seq(everyNode), 1, 1)
     assert(VarkaDebugInfoReader.lineMap(bytes) === pinnedLineMap)
     // The DAG, not a tree: col:0 is written once as line 1 and pointed at fifteen times. The
