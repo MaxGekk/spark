@@ -319,8 +319,9 @@ apparent small wins turned out to be noise.
 - **The vector path is worth 6.5x over good scalar code, and the project had never checked.**
   `ChronoScalarOps` is `year(date)` as an ordinary Java loop over the same Arrow buffer, in the
   same 4096-row chunks, writing the same outputs: 284.3 M rows/s against the emitted kernel's
-  1819.3 at AVX-512, both from the committed parity file. Until it was written, the only scalar anchor in the parity file was a
-  per-row `LocalDate` loop, and the headline ratio was quoted against that. Keep the real
+  1819.3 at AVX-512, both from the committed parity file. Until it was written, the only
+  scalar anchor in that file was a per-row `LocalDate` loop, and the headline ratio was quoted
+  against it. Keep the real
   baseline: "faster than `java.time`" and "faster than scalar arithmetic" are different claims
   and the second is the one that justifies the emitter.
 - **`LocalDate.ofEpochDay(d).getYear()` in a tight loop does not allocate, and is a legitimate
