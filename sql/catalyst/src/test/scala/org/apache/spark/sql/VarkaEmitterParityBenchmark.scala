@@ -356,36 +356,43 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // dayofweek kernel reads 7746.1 M rows/s over the whole buffer against 8058.8 over a
         // warm prefix, so the regime is worth about 4% here - small, but it is the difference
         // between a measured ratio and a nearly-measured one.
-        def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1): Unit = {
+        // The chunk walk itself, shared by every case in this section: `repeats` passes over the
+        // whole buffer in 4096-row chunks, handing the body each chunk's source data offset,
+        // validity offset and row count. Written once because two cases measured against each
+        // other must not differ in their addressing - task 32's first pass hand-copied this loop
+        // for its own case, which is exactly the drift this prevents.
+        def eachChunk(body: (Long, Long, Int) => Unit): Unit = {
           var pass = 0
           while (pass < repeats) {
             var done = 0
             while (done < numRows) {
               val n = math.min(chunk, numRows - done)
-              val dataOff = done * 4L
-              val validityOff = done / 8L
-              val dstData = if (outputs == 1) Array(dst.address() + dataOff)
-                else dstData4.map(_ + dataOff)
-              val dstValid = if (outputs == 1) Array(dstValidity.address() + validityOff)
-                else dstValidity4.map(_ + validityOff)
-              // A declined batch does the same vector work and reports the same time, so a
-              // discarded status would let this file commit a rate production never sees -
-              // it pays the kernel and then the whole row path. Same reason checkMatrix
-              // asserts it.
-              val status = if (mixed) {
-                kernel.run(Array(mxData.address() + dataOff),
-                  Array(mxValidity.address() + validityOff),
-                  Array(nullsIn(n)), dstData, dstValid, Array.empty[Int], n)
-              } else {
-                kernel.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
-                  dstData, dstValid, Array.empty[Int], n)
-              }
-              require(status == 0, s"the kernel declined a batch: status $status")
+              body(done * 4L, done / 8L, n)
               done += n
             }
             pass += 1
           }
         }
+        def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1): Unit =
+          eachChunk { (dataOff, validityOff, n) =>
+            val dstData = if (outputs == 1) Array(dst.address() + dataOff)
+              else dstData4.map(_ + dataOff)
+            val dstValid = if (outputs == 1) Array(dstValidity.address() + validityOff)
+              else dstValidity4.map(_ + validityOff)
+            // A declined batch does the same vector work and reports the same time, so a
+            // discarded status would let this file commit a rate production never sees -
+            // it pays the kernel and then the whole row path. Same reason checkMatrix
+            // asserts it.
+            val status = if (mixed) {
+              kernel.run(Array(mxData.address() + dataOff),
+                Array(mxValidity.address() + validityOff),
+                Array(nullsIn(n)), dstData, dstValid, Array.empty[Int], n)
+            } else {
+              kernel.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
+                dstData, dstValid, Array.empty[Int], n)
+            }
+            require(status == 0, s"the kernel declined a batch: status $status")
+          }
         val year = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 801)
         val fourFields = Seq[VarkaVectorIR](new Year(new ColumnRef(0)),
           new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
@@ -397,28 +404,21 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year+month+day+quarter, null-free") { _ =>
           chunked(four, false, outputs = 4)
         }
-        // Task 32's ceiling (PLAN_MILESTONE_4.md section 2.9): the same four fields from one
-        // shared decomposition, computed by hand outside the emitter (ChronoVectorOps), against
-        // the four independently emitted nodes above. Driven in the same 4096-row chunks over
-        // the same repeat count so the two cases are measured in the same regime; the four
-        // outputs reuse the "four" case's destination buffers, and all four share one
-        // validity buffer since they all come from the single source column.
+        // Task 32's ceiling (PLAN_TASK_32.md): the same four fields from one shared
+        // decomposition, computed by hand outside the emitter (ChronoVectorOps), against the four
+        // independently emitted nodes above. It runs through the same eachChunk walk, over the
+        // same buffers, writing the same four data and four validity destinations, and pays the
+        // same narrow-range guard - once, where the four-node case pays it four times, which is
+        // the saving being measured rather than an omission. The first version of this case
+        // omitted the guard, wrote one shared validity buffer and hand-copied the chunk loop;
+        // the number it produced is why task 32 was first declined.
         benchmark.addCase("year+month+day+quarter, shared decomposition (hand-written ceiling)") {
           _ =>
-            var pass = 0
-            while (pass < repeats) {
-              var done = 0
-              while (done < numRows) {
-                val n = math.min(chunk, numRows - done)
-                val dataOff = done * 4L
-                val validityOff = done / 8L
-                val outAddrs = dstData4.map(_ + dataOff)
-                ChronoVectorOps.vectorFourFields(nfData.address() + dataOff, 0L, 0,
-                  outAddrs(0), outAddrs(1), outAddrs(2), outAddrs(3),
-                  dstValidity.address() + validityOff, n)
-                done += n
-              }
-              pass += 1
+            eachChunk { (dataOff, validityOff, n) =>
+              val status = ChronoVectorOps.vectorFourFields(
+                nfData.address() + dataOff, 0L, 0,
+                dstData4.map(_ + dataOff), dstValidity4.map(_ + validityOff), n)
+              require(status == 0, s"the ceiling kernel declined a batch: status $status")
             }
         }
         // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector

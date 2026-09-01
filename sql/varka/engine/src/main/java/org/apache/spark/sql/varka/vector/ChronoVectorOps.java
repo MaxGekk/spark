@@ -33,22 +33,55 @@ import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
 
 /**
- * A hand-written measurement kernel for task 32 ({@code PLAN_MILESTONE_4.md} section 2.9): the
- * ceiling on computing {@code year}, {@code month}, {@code dayofmonth} and {@code quarter} from
- * ONE civil-from-days decomposition per row, against the 441.2 M rows/s four independently
- * emitted nodes reach today ({@code VarkaEmitterParityBenchmark-jdk25-results.txt}).
+ * A hand-written measurement kernel for task 32 ({@code PLAN_TASK_32.md}): the ceiling on
+ * computing {@code year}, {@code month}, {@code dayofmonth} and {@code quarter} from ONE
+ * civil-from-days decomposition per row, against the 450.4 M rows/s four independently emitted
+ * nodes reach today ({@code VarkaEmitterParityBenchmark-jdk25-results.txt}).
  *
- * <p>This is deliberately not production code and is not wired into {@link
- * org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel} - the engine module
- * cannot depend on catalyst, which owns that interface and the narrow-range guard
- * ({@code VarkaChrono.inNarrowRange}). The guard is intentionally omitted here: this kernel
- * exists only to measure the ceiling on sharing the decomposition, using the same in-range,
- * null-aware data the "year+month+day+quarter, null-free" benchmark case already drives, and the
- * decision this measures is whether task 32 proceeds at all - not to ship a second, guardless
- * lowering. If the task proceeds, the guard and the fallback status belong to whatever mechanism
- * gets built, not to this file.
+ * <p><b>Everything in the lane path is written out by hand, with no method call of any kind.</b>
+ * That is not a style choice, it is the whole validity of the measurement. The first version of
+ * this file factored the decomposition into a {@code computeFields} helper returning a record of
+ * four {@link IntVector}s; that helper compiled to 376 bytes of bytecode, past C2's 325-byte
+ * {@code FreqInlineSize}, so it never inlined into the loop. Once it does not inline, escape
+ * analysis cannot see the allocation and its consumers in one compilation unit, so the record and
+ * its four vectors were really heap-allocated once per lane group - and three of the six calls to
+ * a 12-byte {@code magic} helper stopped inlining too, once the enclosing method was over budget.
+ * The kernel measured 225.8 M rows/s and task 32 was declined on that number. It was measuring
+ * the cost of a Java abstraction, not the cost of sharing.
  *
- * <p>The arithmetic below is a lane-for-lane transcription of {@code VarkaChrono.narrowed} /
+ * <p>{@code VarkaLoopEmitter.emitChrono} - the path this kernel exists to model - emits zero call
+ * boundaries in the lane path: every intermediate is a local and every op is a
+ * {@code jdk.incubator.vector} intrinsic in one method. So this file matches that shape, at the
+ * cost of writing the decomposition out twice (main loop and epilogue), which is exactly what the
+ * emitter does with its {@code loopDense}/{@code epilogueDense} pair. <b>Do not refactor the
+ * arithmetic below into a shared helper.</b> If it must be touched, re-check with
+ * {@code -XX:+PrintInlining} that no call survives in the loop, and with {@code javap -c -p} that
+ * no method holding lane arithmetic exceeds 325 bytes.
+ *
+ * <p>This is deliberately not production code and is not wired into {@code VarkaFusedKernel} -
+ * the engine module cannot depend on catalyst, which owns that interface. It exists only to
+ * answer task 32's ceiling question. But it now pays what a shippable shared lowering would pay,
+ * because a ceiling has to charge both sides of the comparison the same things:
+ *
+ * <ul>
+ *   <li><b>The narrow-range guard</b> ({@code VarkaChrono.NARROW_MIN_DAYS}..
+ *       {@code NARROW_MAX_DAYS}), emitted once for all four fields - two compares, an OR, an AND
+ *       with the row's validity, and an OR into an accumulator, with one {@code anyTrue} after
+ *       the loop. Sharing the decomposition shares the guard, so a shared lowering pays one where
+ *       the four-node baseline pays four; charging zero here, as the first version did, flattered
+ *       the baseline instead.</li>
+ *   <li><b>Four destination validity buffers</b>, one per output, since four Arrow output vectors
+ *       have four physical validity buffers however correlated their contents are. The first
+ *       version wrote one shared buffer, which flattered the ceiling.</li>
+ * </ul>
+ *
+ * <p>Two places where this kernel is still slightly better than what the emitter would produce,
+ * both known and both small: {@code januaryTurned} is computed once and read by the year and
+ * month tails, and {@code quarter} reads the {@code month} the month tail already built. The
+ * emitter's per-node tails recompute both, about 5 vector ops out of ~65. The number below is
+ * therefore a ceiling in the strict sense - the emitted shared path should land just under it.
+ *
+ * <p>The arithmetic is a lane-for-lane transcription of {@code VarkaChrono.narrowed} /
  * {@code VarkaChrono.fromEra} and of the bytecode {@code VarkaLoopEmitter.emitChrono} emits for
  * each field today - same magic constants, same correction steps, same order of operations - so
  * that the only thing this measures is sharing the decomposition, not a different algorithm.
@@ -58,15 +91,29 @@ public final class ChronoVectorOps {
   private static final VectorSpecies<Integer> SPECIES = IntVector.SPECIES_PREFERRED;
   private static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
 
+  /** Output order of the {@code dstData}/{@code dstValidity} arrays. */
+  public static final int YEAR = 0;
+  public static final int MONTH = 1;
+  public static final int DAY_OF_MONTH = 2;
+  public static final int QUARTER = 3;
+
+  /**
+   * Mirrors {@code VarkaFusedKernel.STATUS_CHRONO_RANGE} (bit 0), which this module cannot
+   * reference; a non-zero return means the batch must be recomputed on the row engine.
+   */
+  public static final int STATUS_CHRONO_RANGE = 1;
+
   // The narrowed civil-from-days constants, copied from VarkaChrono (catalyst) rather than
   // referenced - the engine module cannot depend on catalyst. Keep these in lockstep with
-  // VarkaChrono by hand; ChronoVectorOpsTest sweeps this kernel against java.time directly,
+  // VarkaChrono by hand; ChronoVectorOpsTest checks this kernel against java.time directly,
   // so a drift here fails a test rather than silently mismeasuring the ceiling.
   private static final int ERA_DAYS = 146097;
   private static final int CENTURY_DAYS = 36524;
   private static final int MARCH_EPOCH_SHIFT = 719468;
   private static final int NARROW_ERA_BIAS = 32;
   private static final int NARROW_BIAS = MARCH_EPOCH_SHIFT + NARROW_ERA_BIAS * ERA_DAYS;
+  private static final int NARROW_MIN_DAYS = -NARROW_BIAS;
+  private static final int NARROW_MAX_DAYS = NARROW_MIN_DAYS + (1 << 24) - 1;
   private static final int NARROW_ERA_M = 114;
   private static final int NARROW_ERA_K = 24;
   private static final int CENTURY_M = 7349;
@@ -83,102 +130,53 @@ public final class ChronoVectorOps {
 
   private ChronoVectorOps() {}
 
-  /** The four fields one decomposition yields, one lane group at a time. */
-  private record Fields(IntVector year, IntVector month, IntVector dayOfMonth,
-      IntVector quarter) {}
-
-  private static IntVector magic(IntVector v, int m, int k) {
-    return v.mul(m).lanewise(VectorOperators.LSHR, k);
-  }
-
   /**
-   * The shared civil-from-days decomposition, computed once and read four ways - the thing
-   * task 32 measures the value of. Mirrors {@code VarkaLoopEmitter.emitChrono}'s bytecode
-   * exactly, including both round-down-magic correction steps and both overshoot fixes (the
-   * era's spilling fourth century, and the exact {@code / 365} naming the following year).
-   */
-  private static Fields computeFields(IntVector days) {
-    IntVector w = days.add(NARROW_BIAS);
-    IntVector era = magic(w, NARROW_ERA_M, NARROW_ERA_K);
-    IntVector rem = w.sub(era.mul(ERA_DAYS));
-    VectorMask<Integer> eraCarry = rem.compare(VectorOperators.GE, ERA_DAYS);
-    era = era.add(1, eraCarry);
-    rem = rem.sub(ERA_DAYS, eraCarry);
-    era = era.sub(NARROW_ERA_BIAS);
-
-    IntVector century = magic(rem, CENTURY_M, CENTURY_K);
-    rem = rem.sub(century.mul(CENTURY_DAYS));
-    VectorMask<Integer> centuryCarry = rem.compare(VectorOperators.GE, CENTURY_DAYS);
-    century = century.add(1, centuryCarry);
-    rem = rem.sub(CENTURY_DAYS, centuryCarry);
-
-    // The era's fourth century holds one extra day (its leap day); fold it back into century 3.
-    VectorMask<Integer> century4 = century.compare(VectorOperators.EQ, 4);
-    century = century.sub(1, century4);
-    rem = rem.add(CENTURY_DAYS, century4);
-
-    IntVector yearOfCentury = magic(rem, YEAR_M, YEAR_K);
-    IntVector dayOfYear =
-        rem.sub(yearOfCentury.mul(365).add(yearOfCentury.lanewise(VectorOperators.LSHR, 2)));
-
-    // The exact /365 ignores leap days, so it can name the following year; step back where it
-    // did, giving one more day back if the year stepped into is a leap year.
-    VectorMask<Integer> negDoy = dayOfYear.compare(VectorOperators.LT, 0);
-    VectorMask<Integer> leap =
-        yearOfCentury.and(3).compare(VectorOperators.EQ, 0).and(negDoy);
-    dayOfYear = dayOfYear.add(365, negDoy).add(1, leap);
-    yearOfCentury = yearOfCentury.sub(1, negDoy);
-
-    IntVector marchMonth = magic(dayOfYear.mul(5).add(2), MONTH_M, MONTH_K);
-    VectorMask<Integer> januaryTurned = marchMonth.compare(VectorOperators.GE, MARCH_YEAR_JANUARY);
-
-    IntVector year =
-        era.mul(400).add(century.mul(100)).add(yearOfCentury).add(1, januaryTurned);
-    IntVector month = marchMonth.add(3).sub(12, januaryTurned);
-    IntVector dayOfMonth =
-        dayOfYear.sub(magic(marchMonth.mul(153).add(2), DAY_M, DAY_K)).add(1);
-    IntVector quarter = magic(month.add(2), QUARTER_M, QUARTER_K);
-
-    return new Fields(year, month, dayOfMonth, quarter);
-  }
-
-  /**
-   * dst[i] = the four fields of {@code src[i]}'s civil-from-days decomposition; every dst null
-   * iff src is null. {@code src} must lie in {@code VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS}
-   * - this kernel has no guard and does not check, per the class doc.
+   * dst[YEAR|MONTH|DAY_OF_MONTH|QUARTER][i] = the four fields of {@code src[i]}'s
+   * civil-from-days decomposition; every dst null iff src is null.
+   *
+   * <p>The parameter shape mirrors {@code VarkaFusedKernel.run} minus its scalar arguments -
+   * per-output address arrays read once in the prologue, exactly as the emitted kernel reads
+   * them - so the ceiling is not measured against a friendlier ABI than the baseline's.
    *
    * @param srcData address of the source int32 day values.
    * @param srcValidity address of the source bit-packed validity; ignored (may be 0L) when
    *        {@code srcNullCount == 0} or {@code srcNullCount == length}.
    * @param srcNullCount number of null rows in the source.
-   * @param dstYear address of the destination year int32 values (length * 4 bytes).
-   * @param dstMonth address of the destination month int32 values (length * 4 bytes).
-   * @param dstDayOfMonth address of the destination day-of-month int32 values (length * 4 bytes).
-   * @param dstQuarter address of the destination quarter int32 values (length * 4 bytes).
-   * @param dstValidity address of the shared destination bit-packed validity
-   *        ((length + 7) / 8 bytes); always required. All four outputs share one validity
-   *        buffer because all four come from the same single source column.
+   * @param dstData four addresses of int32 destination values (length * 4 bytes each).
+   * @param dstValidity four addresses of bit-packed destination validity
+   *        ((length + 7) / 8 bytes each).
    * @param length number of rows.
+   * @return 0 when every row was in the narrowed range, {@link #STATUS_CHRONO_RANGE} otherwise,
+   *         in which case the outputs are not valid and the batch belongs on the row engine.
    */
-  public static void vectorFourFields(
-      long srcData, long srcValidity, int srcNullCount,
-      long dstYear, long dstMonth, long dstDayOfMonth, long dstQuarter,
-      long dstValidity, int length) {
+  public static int vectorFourFields(long srcData, long srcValidity, int srcNullCount,
+      long[] dstData, long[] dstValidity, int length) {
     if (length <= 0) {
-      return;
+      return 0;
     }
     MemorySegment src = ofAddress(srcData, length * 4L);
-    MemorySegment yearSeg = ofAddress(dstYear, length * 4L);
-    MemorySegment monthSeg = ofAddress(dstMonth, length * 4L);
-    MemorySegment dayOfMonthSeg = ofAddress(dstDayOfMonth, length * 4L);
-    MemorySegment quarterSeg = ofAddress(dstQuarter, length * 4L);
-    MemorySegment dstValiditySeg = ofAddress(dstValidity, (length + 7) / 8L);
-    zero(dstValiditySeg);
+    MemorySegment yearSeg = ofAddress(dstData[YEAR], length * 4L);
+    MemorySegment monthSeg = ofAddress(dstData[MONTH], length * 4L);
+    MemorySegment daySeg = ofAddress(dstData[DAY_OF_MONTH], length * 4L);
+    MemorySegment quarterSeg = ofAddress(dstData[QUARTER], length * 4L);
+    long validityBytes = (length + 7) / 8L;
+    MemorySegment yearValSeg = ofAddress(dstValidity[YEAR], validityBytes);
+    MemorySegment monthValSeg = ofAddress(dstValidity[MONTH], validityBytes);
+    MemorySegment dayValSeg = ofAddress(dstValidity[DAY_OF_MONTH], validityBytes);
+    MemorySegment quarterValSeg = ofAddress(dstValidity[QUARTER], validityBytes);
+    zero(yearValSeg);
+    zero(monthValSeg);
+    zero(dayValSeg);
+    zero(quarterValSeg);
     if (srcNullCount == length) {
-      return;
+      return 0;
     }
     boolean hasNulls = srcNullCount > 0;
-    MemorySegment validity = hasNulls ? ofAddress(srcValidity, (length + 7) / 8L) : null;
+    MemorySegment validity = hasNulls ? ofAddress(srcValidity, validityBytes) : null;
+
+    // One accumulator for the whole batch, as the emitter allocates one guard accumulator per
+    // body method rather than one per node: the caller acts on the batch, not on the lane.
+    VectorMask<Integer> guard = VectorMask.fromLong(SPECIES, 0L);
 
     long loopBound = SPECIES.loopBound(length);
     int lanes = SPECIES.length();
@@ -189,24 +187,103 @@ public final class ChronoVectorOps {
           : VectorMask.fromLong(SPECIES, -1L);
       long byteOffset = i * 4L;
       IntVector days = IntVector.fromMemorySegment(SPECIES, src, byteOffset, ORDER, mask);
-      Fields f = computeFields(days);
-      f.year().intoMemorySegment(yearSeg, byteOffset, ORDER, mask);
-      f.month().intoMemorySegment(monthSeg, byteOffset, ORDER, mask);
-      f.dayOfMonth().intoMemorySegment(dayOfMonthSeg, byteOffset, ORDER, mask);
-      f.quarter().intoMemorySegment(quarterSeg, byteOffset, ORDER, mask);
-      orValidityBitsAt(dstValiditySeg, i, mask.toLong(), lanes);
+
+      // ---- the shared decomposition, hand-inlined; see the class doc before refactoring ----
+
+      // The guard, narrowed by the row's validity: a null row's data bytes are undefined, so an
+      // out-of-range value under one must not condemn the batch.
+      guard = guard.or(days.compare(VectorOperators.LT, NARROW_MIN_DAYS)
+          .or(days.compare(VectorOperators.GT, NARROW_MAX_DAYS))
+          .and(mask));
+
+      // w = days + BIAS, non-negative throughout the range, so one round-down magic and one
+      // carry give the era - and the bias's whole eras come back off in the year assembly.
+      IntVector rem = days.add(NARROW_BIAS);
+      IntVector era = rem.mul(NARROW_ERA_M).lanewise(VectorOperators.LSHR, NARROW_ERA_K);
+      rem = rem.sub(era.mul(ERA_DAYS));
+      VectorMask<Integer> carry = rem.compare(VectorOperators.GE, ERA_DAYS);
+      era = era.add(1, carry);
+      rem = rem.sub(ERA_DAYS, carry);
+      era = era.sub(NARROW_ERA_BIAS);
+
+      // rem is now the day of era, in [0, 146096].
+      // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
+      IntVector century = rem.mul(CENTURY_M).lanewise(VectorOperators.LSHR, CENTURY_K);
+      rem = rem.sub(century.mul(CENTURY_DAYS));
+      carry = rem.compare(VectorOperators.GE, CENTURY_DAYS);
+      century = century.add(1, carry);
+      rem = rem.sub(CENTURY_DAYS, carry);
+
+      // An era's fourth century holds one extra day - its leap day - so the quotient can land
+      // on 4 for exactly one day of each era. Fold that back into century 3.
+      carry = century.compare(VectorOperators.EQ, 4);
+      century = century.sub(1, carry);
+      rem = rem.add(CENTURY_DAYS, carry);
+
+      // yoc = doc / 365 - exact here, because the split into centuries left a dividend under
+      // 44859. It ignores leap days, so it can name the following year; the fix is below.
+      IntVector yearOfCentury = rem.mul(YEAR_M).lanewise(VectorOperators.LSHR, YEAR_K);
+
+      // doy = doc - (365 * yoc + yoc / 4). Negative exactly where yoc overshot.
+      rem = rem.sub(yearOfCentury.mul(365)
+          .add(yearOfCentury.lanewise(VectorOperators.LSHR, 2)));
+
+      // Where it overshot, step back a year and give the days back - one more when the year we
+      // step into is a leap year, which in a March-based year is simply yoc divisible by four.
+      VectorMask<Integer> negDoy = rem.compare(VectorOperators.LT, 0);
+      VectorMask<Integer> leap =
+          yearOfCentury.and(3).compare(VectorOperators.EQ, 0).and(negDoy);
+      rem = rem.add(365, negDoy).add(1, leap);
+      yearOfCentury = yearOfCentury.sub(1, negDoy);
+
+      // mp = (5 * doy + 2) / 153: the March-based month, 0 for March through 11 for February.
+      IntVector marchMonth = rem.mul(5).add(2)
+          .mul(MONTH_M).lanewise(VectorOperators.LSHR, MONTH_K);
+      VectorMask<Integer> januaryTurned =
+          marchMonth.compare(VectorOperators.GE, MARCH_YEAR_JANUARY);
+
+      // ---- the four tails ----
+
+      IntVector year = era.mul(400).add(century.mul(100)).add(yearOfCentury)
+          .add(1, januaryTurned);
+      IntVector month = marchMonth.add(3).sub(12, januaryTurned);
+      IntVector dayOfMonth = rem.sub(marchMonth.mul(153).add(2)
+          .mul(DAY_M).lanewise(VectorOperators.LSHR, DAY_K)).add(1);
+      IntVector quarter = month.add(2)
+          .mul(QUARTER_M).lanewise(VectorOperators.LSHR, QUARTER_K);
+
+      year.intoMemorySegment(yearSeg, byteOffset, ORDER, mask);
+      month.intoMemorySegment(monthSeg, byteOffset, ORDER, mask);
+      dayOfMonth.intoMemorySegment(daySeg, byteOffset, ORDER, mask);
+      quarter.intoMemorySegment(quarterSeg, byteOffset, ORDER, mask);
+      long bits = mask.toLong();
+      orValidityBitsAt(yearValSeg, i, bits, lanes);
+      orValidityBitsAt(monthValSeg, i, bits, lanes);
+      orValidityBitsAt(dayValSeg, i, bits, lanes);
+      orValidityBitsAt(quarterValSeg, i, bits, lanes);
     }
+    boolean declined = guard.anyTrue();
     if (i < length) {
-      fourFieldsEpilogue(src, yearSeg, monthSeg, dayOfMonthSeg, quarterSeg, dstValiditySeg,
-          validity, hasNulls, i, length);
+      declined |= fourFieldsEpilogue(src, yearSeg, monthSeg, daySeg, quarterSeg,
+          yearValSeg, monthValSeg, dayValSeg, quarterValSeg, validity, hasNulls, i, length);
     }
+    return declined ? STATUS_CHRONO_RANGE : 0;
   }
 
-  /** {@link #vectorFourFields}'s final partial lane group; see {@code DateVectorOps}'s class
-   * doc, step 5, for why this is its own method rather than inlined into the loop's. */
-  private static void fourFieldsEpilogue(MemorySegment src, MemorySegment yearSeg,
-      MemorySegment monthSeg, MemorySegment dayOfMonthSeg, MemorySegment quarterSeg,
-      MemorySegment dstValiditySeg, MemorySegment validity, boolean hasNulls,
+  /**
+   * {@link #vectorFourFields}'s final partial lane group; see {@code DateVectorOps}'s class doc,
+   * step 5, for why this is its own method rather than inlined into the loop's. It runs once per
+   * call rather than once per lane group, so its own inlining does not matter - but the
+   * decomposition is still written out by hand here, because the emitter's
+   * {@code epilogueDense}/{@code epilogueMasked} pair carries its own copy of the same bytes
+   * rather than calling the loop's.
+   *
+   * @return whether any in-bounds, non-null row of this group was outside the narrowed range.
+   */
+  private static boolean fourFieldsEpilogue(MemorySegment src, MemorySegment yearSeg,
+      MemorySegment monthSeg, MemorySegment daySeg, MemorySegment quarterSeg,
+      MemorySegment yearValSeg, MemorySegment monthValSeg, MemorySegment dayValSeg,
+      MemorySegment quarterValSeg, MemorySegment validity, boolean hasNulls,
       long i, int length) {
     int rows = (int) (length - i);
     VectorMask<Integer> bounds = SPECIES.indexInRange((int) i, length);
@@ -215,11 +292,65 @@ public final class ChronoVectorOps {
         : bounds;
     long byteOffset = i * 4L;
     IntVector days = IntVector.fromMemorySegment(SPECIES, src, byteOffset, ORDER, mask);
-    Fields f = computeFields(days);
-    f.year().intoMemorySegment(yearSeg, byteOffset, ORDER, mask);
-    f.month().intoMemorySegment(monthSeg, byteOffset, ORDER, mask);
-    f.dayOfMonth().intoMemorySegment(dayOfMonthSeg, byteOffset, ORDER, mask);
-    f.quarter().intoMemorySegment(quarterSeg, byteOffset, ORDER, mask);
-    orPartialValidityBitsAt(dstValiditySeg, i, mask.toLong(), rows);
+
+    // The guard, narrowed by validity AND the bounds mask. Both narrowings are load-bearing;
+    // VarkaLoopEmitter.emitEra's javadoc has the failure each one prevents. A masked load fills
+    // the lanes past `length` with 0, which is in range, but a computed input maps 0 wherever it
+    // likes - so the bounds mask is not redundant there, and is kept here for the same reason.
+    VectorMask<Integer> guard = days.compare(VectorOperators.LT, NARROW_MIN_DAYS)
+        .or(days.compare(VectorOperators.GT, NARROW_MAX_DAYS))
+        .and(mask);
+
+    IntVector rem = days.add(NARROW_BIAS);
+    IntVector era = rem.mul(NARROW_ERA_M).lanewise(VectorOperators.LSHR, NARROW_ERA_K);
+    rem = rem.sub(era.mul(ERA_DAYS));
+    VectorMask<Integer> carry = rem.compare(VectorOperators.GE, ERA_DAYS);
+    era = era.add(1, carry);
+    rem = rem.sub(ERA_DAYS, carry);
+    era = era.sub(NARROW_ERA_BIAS);
+
+    IntVector century = rem.mul(CENTURY_M).lanewise(VectorOperators.LSHR, CENTURY_K);
+    rem = rem.sub(century.mul(CENTURY_DAYS));
+    carry = rem.compare(VectorOperators.GE, CENTURY_DAYS);
+    century = century.add(1, carry);
+    rem = rem.sub(CENTURY_DAYS, carry);
+
+    carry = century.compare(VectorOperators.EQ, 4);
+    century = century.sub(1, carry);
+    rem = rem.add(CENTURY_DAYS, carry);
+
+    IntVector yearOfCentury = rem.mul(YEAR_M).lanewise(VectorOperators.LSHR, YEAR_K);
+    rem = rem.sub(yearOfCentury.mul(365)
+        .add(yearOfCentury.lanewise(VectorOperators.LSHR, 2)));
+
+    VectorMask<Integer> negDoy = rem.compare(VectorOperators.LT, 0);
+    VectorMask<Integer> leap =
+        yearOfCentury.and(3).compare(VectorOperators.EQ, 0).and(negDoy);
+    rem = rem.add(365, negDoy).add(1, leap);
+    yearOfCentury = yearOfCentury.sub(1, negDoy);
+
+    IntVector marchMonth = rem.mul(5).add(2)
+        .mul(MONTH_M).lanewise(VectorOperators.LSHR, MONTH_K);
+    VectorMask<Integer> januaryTurned =
+        marchMonth.compare(VectorOperators.GE, MARCH_YEAR_JANUARY);
+
+    IntVector year = era.mul(400).add(century.mul(100)).add(yearOfCentury)
+        .add(1, januaryTurned);
+    IntVector month = marchMonth.add(3).sub(12, januaryTurned);
+    IntVector dayOfMonth = rem.sub(marchMonth.mul(153).add(2)
+        .mul(DAY_M).lanewise(VectorOperators.LSHR, DAY_K)).add(1);
+    IntVector quarter = month.add(2)
+        .mul(QUARTER_M).lanewise(VectorOperators.LSHR, QUARTER_K);
+
+    year.intoMemorySegment(yearSeg, byteOffset, ORDER, mask);
+    month.intoMemorySegment(monthSeg, byteOffset, ORDER, mask);
+    dayOfMonth.intoMemorySegment(daySeg, byteOffset, ORDER, mask);
+    quarter.intoMemorySegment(quarterSeg, byteOffset, ORDER, mask);
+    long bits = mask.toLong();
+    orPartialValidityBitsAt(yearValSeg, i, bits, rows);
+    orPartialValidityBitsAt(monthValSeg, i, bits, rows);
+    orPartialValidityBitsAt(dayValSeg, i, bits, rows);
+    orPartialValidityBitsAt(quarterValSeg, i, bits, rows);
+    return guard.anyTrue();
   }
 }

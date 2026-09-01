@@ -382,19 +382,40 @@ apparent small wins turned out to be noise.
   one, not a real unrolling cost - a benchmark comparing "K=1" against "K>1" has to
   keep every other structural choice, including loop-vs-straight-line shape, identical
   between the arms.
-- Sharing a decomposition across several outputs can lose even when the shared work
-  dwarfs each output's own tail. Task 32 measured a hand-written kernel computing
-  `year`/`month`/`dayofmonth`/`quarter` from one civil-from-days decomposition against
-  the four independently emitted nodes it would replace - each redoes the whole ~45-op
-  decomposition for its own ~6-op tail - and the shared version was 1.4-1.9x *slower*
-  at both vector widths (`PLAN_MILESTONE_4.md` section 2.9). Five values (era, century,
-  year of century, day of year, the March-based month) staying live across four output
-  tails cost more in register pressure than the ~135 ops the sharing saved. This is
-  task 17's `GROUP_BUDGET` finding (raising it to keep two outputs' cross-output CSE in
-  one method lost 4587 against 3196 M rows/s) confirmed a second time on a much larger
-  shared computation - two independent measurements now agree that op count does not
-  predict this trade's direction, and a case built on "this touches N ops, sharing
-  should help" needs a measurement before it needs code.
+- A hand-written kernel standing in for emitted code must not introduce a method
+  boundary the emitted code does not have, and "it is a small private helper, it will
+  inline" is not something to assume. Task 32 built a kernel to price sharing one
+  civil-from-days decomposition across `year`/`month`/`dayofmonth`/`quarter`, wrote the
+  decomposition as a `computeFields` helper returning a record of four `IntVector`s, and
+  measured it 1.9x *slower* than the four independently emitted nodes - and task 32 was
+  declined on that number. `computeFields` compiles to 376 bytecode bytes; C2's
+  `FreqInlineSize` is 325, so it never inlined, so escape analysis never saw the record's
+  allocation and its consumers in one compilation unit, so the record and its four vectors
+  were really heap-allocated once per lane group. `VarkaLoopEmitter.emitChrono` emits zero
+  call boundaries in its lane path. The kernel was measuring a Java abstraction the thing
+  it modelled does not have. **Two cheap checks that would have caught it before the
+  number was believed**: `javap -c -p` for any method holding lane arithmetic that exceeds
+  325 bytes, and `-XX:+PrintInlining` (narrowed with
+  `-XX:CompileCommand=option,Class::method,PrintInlining`) for a `failed to inline` inside
+  the loop. Rebuilt hand-inlined, the same kernel runs 1.5x *faster* than the four nodes.
+- An op-count ratio bounds a sharing win; it does not estimate one. The same task 32
+  kernel shares ~45 of each field's ~50 vector ops, so four fields cost ~200 ops separate
+  against ~65 shared - a 3x op-count ratio, which was registered as a prediction of
+  2.0x-3.2x throughput. Measured: **1.51x-1.54x** at AVX-512 (692.4 and 678.8 against
+  450.4 and 448.8 M rows/s). The half that went missing is everything the model ignored -
+  four stores, four validity-bitmap read-modify-writes, the chunk prologue, loop control -
+  none of which sharing touches. Predict a bound, not a number.
+- The same sharing win is width-dependent, and that is where task 17's register-pressure
+  finding actually lives. At 128-bit the identical kernel is a wash: 1.06x in four runs of
+  five, 1.50x in the fifth, stdev 0 ms inside each run and 42% between them - a
+  compilation the JVM either finds or does not, so the two modes must be reported rather
+  than averaged. Five live intermediates plus four outputs fit comfortably in 32 zmm plus
+  8 dedicated mask registers and marginally in 16 xmm that must hold masks too; C1 refuses
+  the 936-byte body outright at both widths ("out of virtual registers in linear scan").
+  Task 17's `GROUP_BUDGET` result (raising it to keep two outputs' cross-output CSE in one
+  method lost 4194.9 against 3042.5 M rows/s, current committed parity file) is the same
+  effect. It sets a ceiling on how much sharing can win; it does not decide the sign, and
+  a narrow-vector measurement is not optional for anything that shares live values.
 
 ## Generated Code Can Carry Its Own Debug Info (Class-File API)
 
