@@ -100,6 +100,15 @@ emitted bytes change for any shape that existed before.**
 * **Making a bare column projection fuse in general.** If `SELECT d` does not
   fuse today, this task does not change that; it only ensures the relabelled
   form is not a blocker inside a projection that has other work.
+* **A relabel nested inside a larger expression.** `compileNode` fails the
+  whole enclosing entry the moment any subtree declines, with no partial
+  credit inside one expression tree - unlike across projection entries, where
+  task 12's residual classification already isolates one bad entry from its
+  siblings. A relabel buried inside such a tree (`greatest(date_add(d, 1),
+  unix_date(x))` where `x` cannot yet be read) takes the whole entry down with
+  it today. Not tested here (found and recorded during the code review that
+  followed this task, per section 6); if this shape recurs, it is a follow-up
+  recipe, not a defect in this task.
 
 ## 6. Outcome
 
@@ -138,10 +147,9 @@ two compiler arms and re-reading `compilePartial`'s classification logic
 rather than trusting the milestone doc's framing. The actual argument for the
 task holds, but as a vectorization gain (no residual fallback for a relabel)
 rather than a correctness one; where the doc's framing would be literally true
-is a relabel nested *inside* a larger expression (`compileNode` fails the
-whole enclosing entry when any subtree declines, with no partial credit inside
-one expression tree, unlike across projection entries) - that shape was not
-separately tested here and is worth a follow-up recipe note if it recurs.
+is a relabel nested *inside* a larger expression - filed as its own bullet in
+section 5, since it is a gap in this task's own scope rather than ownerless
+follow-up work.
 
 The end-to-end differential added (`VarkaDifferentialSuite`, "task 41:
 unix_date and date_from_unix_date fuse as a pure relabel") covers all three
@@ -155,3 +163,60 @@ Neither pinned value moved, and no committed benchmark number moved - both
 verified by running the suites rather than assumed: `VarkaShapeCacheSuite`'s
 `everyNode` hash and `VarkaLoopEmitterSuite`'s line map are untouched from
 master, and no existing benchmark shape changed emitted bytes.
+
+## 7. Second pass: code review
+
+`/code-review` ran against this branch (10 finder angles plus a gap sweep, max
+effort) and found no correctness bugs - every finding was documentation,
+process, or test-coverage. All five were addressed:
+
+1. **Test-coverage gap, fixed.** The two new relabel arms make `compileNode`
+   return a bare `ColumnRef`, the shape `compileCoalesce` and `compileValidity`
+   both use as their proxy for "this operand is a bare column" - untested for
+   a relabel specifically. Added `unix_date(d) IS NOT NULL` (via `If(IsNotNull
+   (UnixDate(d)), ...)`) and `coalesce(unix_date(d), unix_date(d2))` to the
+   task-41 compiler test, confirming both compile exactly as a bare-column
+   guard would.
+2. **Docs gap, fixed.** `docs/sql-varka.md`'s supported-expression list did
+   not mention `unix_date`. Added a bullet; `date_from_unix_date` correctly
+   stays unmentioned, since its child is still an unreadable integer column on
+   this branch's base.
+3. **Process gap, fixed.** The relabel-nested-inside-a-larger-expression gap
+   was loose prose in this section rather than filed per `sql/varka/AGENTS.md`.
+   Moved to section 5 as its own bullet.
+4. **Simplification, tried and reverted, documented rather than forced.** The
+   two relabel arms are identical one-liners differing only in the matched
+   case class. Tried collapsing them into one arm via a Scala alternative
+   pattern, `case UnixDate(child) | DateFromUnixDate(child) =>` - illegal in
+   Scala, which does not allow a pattern variable to be bound inside an
+   alternative (`illegal variable in pattern alternative`). A dedicated
+   extractor object (`private object DateRelabel { def unapply(e: Expression)
+   ... }`) would work around that, but for exactly two one-line arms it trades
+   a two-line duplication for a small standalone object plus an extra level of
+   indirection - not a clear win. Left as two explicit arms; worth revisiting
+   if a third relabel expression arrives and the duplication triples.
+5. **Latent gap, left as documented rather than fixed.** `compileNode`'s
+   date-literal arm does not match a null-valued `Literal`, and the two
+   relabel arms add two more recursive paths into that same match with no
+   null-aware case of their own. Left as-is: `ConstantFolding` removes a null
+   date literal from any real query before it reaches here, so there is
+   nothing to test with real SQL, and the ghost-fallback contract already
+   routes a hand-built tree that does reach it to the row engine via the
+   generic decline. Documented explicitly with a comment on the date-literal
+   arm instead, naming the two new paths that share the blind spot.
+
+Also documented, not counted as a numbered finding: the `ColumnRef`-as-proxy
+invariant a late-arriving finder angle raised - `compileCoalesce` and
+`compileValidity`'s javadocs now say explicitly that the guard is exact only
+because every `ColumnRef`-producing arm is either a real column read or a
+null-intolerant identity relabel, so a future non-identity relabel would need
+to be excluded from it deliberately.
+
+Re-verified after the fixes: 94 catalyst / 128 sql-core Varka tests green at
+both vector widths (unchanged counts from before the review - these fixes
+extended the existing task-41 test with more assertions rather than adding
+new test cases), `dev/lint-java` and `dev/scalastyle` both pass, no
+non-ASCII, no line over 100 characters, no `TODO`/`FIXME` in any changed file.
+Neither pinned value moved and no committed benchmark number moved, unchanged
+from section 6's claim - none of these five fixes touch emitted bytes for any
+shape.

@@ -166,6 +166,20 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(mixed.outputs === Seq(new AddDays(new ColumnRef(0), new LiteralSlot(0)),
       new ColumnRef(0)))
     assert(mixed.outputTypes === Seq(DateType, IntegerType))
+    // A relabel compiles to a bare ColumnRef, the same IR shape a bare column produces -
+    // compileCoalesce and compileValidity both use that shape as their proxy for "this
+    // operand is a bare column" (their own doc comments now say so), and a relabel is safe
+    // to guard exactly because it is a null-intolerant identity like the column it wraps.
+    val c0 = new ColumnRef(0)
+    val c1 = new ColumnRef(1)
+    val guarded = VarkaExpressionCompiler.compile(
+      Seq(out(If(IsNotNull(UnixDate(d)), UnixDate(d), UnixDate(d2)))), childOutput).get
+    assert(guarded.outputs === Seq(new IfElse(new IRIsNotNull(c0), c0, c1)))
+    assert(guarded.outputTypes === Seq(IntegerType))
+    val coalesced = VarkaExpressionCompiler.compile(
+      Seq(out(Coalesce(Seq(UnixDate(d), UnixDate(d2))))), childOutput).get
+    assert(coalesced.outputs === Seq(new IfElse(new IRIsNotNull(c0), c0, c1)))
+    assert(coalesced.outputTypes === Seq(IntegerType))
   }
 
   test("task 11 declines: null-safe equality, bare boolean outputs") {

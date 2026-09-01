@@ -65,6 +65,10 @@ days since epoch) and foldable integer day offsets:
   `numFallbackBatchesDeclined`. Such a day does not have to be written by hand:
   `DATE_ADD` arithmetic reaches one, and so does a stored column, since a
   Parquet `INT32` date carries any day value the writer put there.
+* `UNIX_DATE` relabels a date column to its underlying `INT` day count with no
+  new node and no emitted code (task 41); the paired `DATE_FROM_UNIX_DATE`
+  compiles the same way but still declines today, since its child is an
+  integer column and no leaf can read one until task 38 lands.
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
 

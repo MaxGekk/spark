@@ -372,7 +372,11 @@ private[sql] object VarkaExpressionCompiler {
       Some(new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size)))
     // A date literal's value is already an epoch-day int, so it takes a slot in the shared
     // per-distinct-value table like a folded day offset does (task 11) - what makes
-    // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all.
+    // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. `days: Int` does not
+    // match a null-valued Literal, which falls through to the catch-all below; that is a
+    // safe blind spot, not a bug, since ConstantFolding removes a null date literal from any
+    // real query before it can reach here (unix_date/date_from_unix_date add two more
+    // recursive paths into this same match, both equally covered by that guarantee).
     case Literal(days: Int, DateType) =>
       Some(new LiteralSlot(literals.getOrElseUpdate(days, literals.size)))
     // The identity cast (task 20): the corpus wraps date expressions in `CAST(... AS DATE)`
@@ -487,7 +491,11 @@ private[sql] object VarkaExpressionCompiler {
    * The Coalesce right-fold (task 20). Every operand except the last compiles and must be a
    * bare date column: `IsNotNull` reads the per-input validity word, which only a column has
    * before value emission (the recorded milestone-3 restriction) - a computed operand
-   * declines with its own reason.
+   * declines with its own reason. The `ColumnRef` match below is a proxy for "this operand
+   * is a bare column" that is exact only because every `compileNode` arm producing a
+   * `ColumnRef` today is either an actual column read or a null-intolerant identity relabel
+   * (`unix_date`/`date_from_unix_date`, task 41, and the identity date `Cast`) - a future
+   * relabel that changes nullability or value would silently break this guard.
    */
   private def compileCoalesce(
       children: Seq[Expression],
@@ -650,7 +658,9 @@ private[sql] object VarkaExpressionCompiler {
   /**
    * Compiles the operand of a validity predicate, which must land on a bare date column: the
    * emitter reads the column's per-lane-group validity word, and only a column's word is live
-   * before value emission (the recorded milestone-3 restriction).
+   * before value emission (the recorded milestone-3 restriction). As in `compileCoalesce`
+   * above, the `ColumnRef` match is a proxy for "bare column" that depends on every relabel
+   * expression compiling to `ColumnRef` staying a null-intolerant identity.
    */
   private def compileValidity(
       child: Expression,
