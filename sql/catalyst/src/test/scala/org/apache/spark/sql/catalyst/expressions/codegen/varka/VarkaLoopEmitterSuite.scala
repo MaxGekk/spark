@@ -731,36 +731,80 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("the calendar extractions match LocalDate over the range they cover") {
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
-      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
     val inRange = Array(
       VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
       VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1,
       -1, 0, 1, -719468, -719162,
       LocalDate.of(1600, 2, 29).toEpochDay.toInt, LocalDate.of(1900, 3, 1).toEpochDay.toInt,
       LocalDate.of(2000, 2, 29).toEpochDay.toInt, LocalDate.of(1, 1, 1).toEpochDay.toInt,
-      LocalDate.of(9999, 12, 31).toEpochDay.toInt)
+      LocalDate.of(9999, 12, 31).toEpochDay.toInt
+    ) ++ Array(
+      // dayofyear's own boundary set (task 34): every year-end/year-start pair a leap flag
+      // could get wrong, plus February's own boundary in a leap and a century-non-leap year.
+      LocalDate.of(2000, 1, 1), LocalDate.of(2000, 12, 31), // leap
+      LocalDate.of(2024, 1, 1), LocalDate.of(2024, 12, 31), // leap
+      LocalDate.of(2023, 1, 1), LocalDate.of(2023, 12, 31), // common
+      LocalDate.of(1900, 1, 1), LocalDate.of(1900, 12, 31), // century, not leap
+      LocalDate.of(2000, 2, 28), LocalDate.of(1900, 2, 28)
+    ).map(_.toEpochDay.toInt)
     def days(c: Int, i: Int): Int =
       if (i < inRange.length) inRange(i) else i * 9973 - 400000
     checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
       nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed")
   }
 
-  test("dayofyear matches LocalDate over the boundary set that matters") {
-    val root = new DayOfYear(new ColumnRef(0))
-    val boundary = Array(
-      LocalDate.of(2000, 1, 1), LocalDate.of(2000, 12, 31), // leap
-      LocalDate.of(2024, 1, 1), LocalDate.of(2024, 12, 31), // leap
-      LocalDate.of(2023, 1, 1), LocalDate.of(2023, 12, 31), // common
-      LocalDate.of(1900, 1, 1), LocalDate.of(1900, 12, 31), // century, not leap
-      LocalDate.of(2000, 2, 28), LocalDate.of(2000, 2, 29), LocalDate.of(2000, 3, 1),
-      LocalDate.of(1900, 2, 28), LocalDate.of(1900, 3, 1)
-    ).map(_.toEpochDay.toInt) ++ Array(
+  test("the emitted kernel agrees with VarkaChrono's scalar twin, not only with LocalDate") {
+    // Every other test in this file checks the emitted kernel against LocalDate and
+    // VarkaChronoSuite checks VarkaChrono against LocalDate separately - each a genuine
+    // definition-level oracle, deliberately not each other (see evalValue's comment above).
+    // That leaves a gap this test closes: nothing committed (the direct comparison only runs
+    // opt-in, in the exhaustive sweep below) ever compares the emitted bytecode against
+    // VarkaChrono directly, so a future edit that moved both the same wrong way could agree
+    // with LocalDate on every curated/pseudo-random day above and still have silently
+    // diverged from VarkaChrono - contradicting VarkaChrono's own class-doc promise that "any
+    // disagreement with the emitted kernel is an emission bug". A committed, non-exhaustive
+    // sample is enough to catch that: it does not need to be exhaustive, since the exhaustive
+    // sweep already exists for the LocalDate side and opting into it is what full coverage
+    // means here.
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
+    val days = Array(
       VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
-      VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1)
-    def days(c: Int, i: Int): Int =
-      if (i < boundary.length) boundary(i) else i * 9973 - 400000
-    checkMatrix(Seq(root), 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "dayofyear")
+      VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1, -1, 0, 1,
+      LocalDate.of(1600, 2, 29).toEpochDay.toInt, LocalDate.of(1900, 3, 1).toEpochDay.toInt,
+      LocalDate.of(2000, 2, 29).toEpochDay.toInt
+    ) ++ Array.tabulate(2000)(i => i * 9973 - 400000)
+      .filter(VarkaChrono.inNarrowRange)
+    val (kernel, loader) = load(emitMulti(roots, 1, 0))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val data = alloc(arena, days.length * 4L)
+        val validity = alloc(arena, (days.length + 7) / 8L)
+        validity.fill(0xFF.toByte)
+        days.zipWithIndex.foreach { case (d, i) => data.set(ValueLayout.JAVA_INT, i * 4L, d) }
+        val outs = roots.map(_ => makeOutput(arena, days.length))
+        val status = kernel.run(Array(data.address()), Array(validity.address()), Array(0),
+          outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
+          Array.empty[Int], days.length)
+        assert(status === 0, "the kernel declined an in-range batch")
+        days.indices.foreach { i =>
+          val fields = VarkaChrono.narrowed(days(i))
+          val want = Seq(fields.year, fields.month, fields.dayOfMonth, fields.quarter,
+            fields.dayOfYear)
+          val got = outs.map(_._1.get(ValueLayout.JAVA_INT, i * 4L))
+          assert(got === want, s"day ${days(i)}: emitted $got, VarkaChrono $want")
+        }
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
   }
 
   test("the epilogue's inactive lanes do not decline a batch whose real rows are in range") {

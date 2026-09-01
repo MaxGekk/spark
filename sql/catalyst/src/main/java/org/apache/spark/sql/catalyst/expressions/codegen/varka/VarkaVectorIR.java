@@ -185,11 +185,12 @@ public sealed interface VarkaVectorIR
    * Spark's {@code year} (task 26): the proleptic Gregorian year of a date, as
    * {@code LocalDate#getYear} gives it. An {@code IntegerType} output at the Spark level.
    *
-   * <p>The four calendar nodes below are unlike every other node here in one way worth naming:
-   * each expands to about fifty lane ops rather than one or two, because there is no vector
-   * divide and a civil-from-days decomposition is mostly division. {@link VarkaChrono} holds
-   * the arithmetic and the constants; {@link VarkaLoopEmitter} weighs these nodes accordingly
-   * when it partitions outputs into loop methods, so four of them cannot land in one method.
+   * <p>The five calendar nodes below are unlike every other node here in one way worth naming:
+   * each expands to about fifty lane ops or more rather than one or two, because there is no
+   * vector divide and a civil-from-days decomposition is mostly division. {@link VarkaChrono}
+   * holds the arithmetic and the constants; {@link VarkaLoopEmitter} weighs these nodes
+   * accordingly when it partitions outputs into loop methods, so no two of them land in one
+   * method.
    *
    * <p>Each node carries the whole decomposition rather than sharing it: two calendar fields of
    * the same date compute it twice, in two sibling methods, which is the trade task 17 measured

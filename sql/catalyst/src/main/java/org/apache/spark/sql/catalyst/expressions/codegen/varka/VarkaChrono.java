@@ -105,7 +105,7 @@ public final class VarkaChrono {
    * calendar terms, 15 August 33134. */
   public static final int NARROW_MAX_DAYS = (1 << NARROW_ERA_K) - 1 - NARROW_BIAS;
 
-  // --- Day of era to the four fields ---------------------------------------
+  // --- Day of era to the five fields ---------------------------------------
 
   /** {@code floor(2^28 / 36524)}, round-down; one correction, dividend at most 146096. */
   public static final int CENTURY_M = 7349;
@@ -153,6 +153,80 @@ public final class VarkaChrono {
 
   /** The day of the March-based year on which January arrives, and the year number turns. */
   public static final int MARCH_YEAR_JANUARY = 10;
+
+  /**
+   * The five calendar fields one decomposition yields, in the order the emitter's per-field
+   * tails branch off the shared work.
+   *
+   * @param year the proleptic Gregorian year, as {@code java.time.LocalDate#getYear} gives it.
+   * @param month 1-12.
+   * @param dayOfMonth 1-31.
+   * @param quarter 1-4.
+   * @param dayOfYear the January-based day of year, 1-365 or 1-366.
+   */
+  public record Fields(int year, int month, int dayOfMonth, int quarter, int dayOfYear) {}
+
+  /** Whether {@link #narrowed} is defined for {@code days} - the guard the emitted kernel
+   * evaluates per lane when the narrowed lowering is in use. */
+  public static boolean inNarrowRange(int days) {
+    return days >= NARROW_MIN_DAYS && days <= NARROW_MAX_DAYS;
+  }
+
+  /**
+   * The narrowed decomposition. Undefined - not merely inaccurate - outside
+   * {@link #inNarrowRange}, which is why the emitted form carries a guard and the batch falls
+   * back to the row engine rather than publishing whatever this returns.
+   */
+  public static Fields narrowed(int days) {
+    int w = days + NARROW_BIAS;
+    int era = (w * NARROW_ERA_M) >>> NARROW_ERA_K;
+    int rem = w - era * ERA_DAYS;
+    if (rem >= ERA_DAYS) {
+      era++;
+      rem -= ERA_DAYS;
+    }
+    return fromEra(era - NARROW_ERA_BIAS, rem);
+  }
+
+  /**
+   * Day of era to the five fields - the half whose input domain ({@code [0, 146096]}) is small
+   * enough to verify exhaustively on its own.
+   *
+   * <p>Two overshoot fixes earn their place here. The century magic can land on century 4,
+   * which exists for exactly one day of each era (the fourth century holds the era's extra leap
+   * day); it is folded back into century 3. And the exact {@code / 365} ignores leap days, so
+   * it can name the next year when the day of century falls in one - detected by a negative day
+   * of year, and undone by giving the day back, one more when the year we step back into is a
+   * leap year.
+   */
+  private static Fields fromEra(int era, int dayOfEra) {
+    int century = (dayOfEra * CENTURY_M) >>> CENTURY_K;
+    int dayOfCentury = dayOfEra - century * CENTURY_DAYS;
+    if (dayOfCentury >= CENTURY_DAYS) {
+      century++;
+      dayOfCentury -= CENTURY_DAYS;
+    }
+    if (century == 4) {
+      century = 3;
+      dayOfCentury += CENTURY_DAYS;
+    }
+    int yearOfCentury = (dayOfCentury * YEAR_M) >>> YEAR_K;
+    int dayOfYear = dayOfCentury - (365 * yearOfCentury + (yearOfCentury >>> 2));
+    if (dayOfYear < 0) {
+      dayOfYear += 365 + ((yearOfCentury & 3) == 0 ? 1 : 0);
+      yearOfCentury--;
+    }
+    int marchMonth = ((5 * dayOfYear + 2) * MONTH_M) >>> MONTH_K;
+    int dayOfMonth = dayOfYear - (((153 * marchMonth + 2) * DAY_M) >>> DAY_K) + 1;
+    int month = marchMonth < MARCH_YEAR_JANUARY ? marchMonth + 3 : marchMonth - 9;
+    int year = 400 * era + 100 * century + yearOfCentury
+        + (marchMonth >= MARCH_YEAR_JANUARY ? 1 : 0);
+    int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;
+    int januaryDayOfYear = dayOfYear >= MARCH_TO_JANUARY_DAYS
+        ? dayOfYear - (MARCH_TO_JANUARY_DAYS - 1)
+        : dayOfYear + MARCH_DAY_OF_YEAR + (isLeapYear(year) ? 1 : 0);
+    return new Fields(year, month, dayOfMonth, quarter, januaryDayOfYear);
+  }
 
   // --- The January-based day of year, and the leap flag it needs (task 34) ------------------
 
@@ -207,6 +281,16 @@ public final class VarkaChrono {
    * biased, non-negative year, rather than a shortcut off {@code yearOfCentury}/{@code century}
    * - which is tempting but goes wrong at the century and era boundaries, where the reported
    * year has already rolled over relative to those intermediates.
+   *
+   * <p>Verified correct for {@code year} in {@link #narrowed}'s covered range (-12800..33134,
+   * the only range a {@link Fields#year} this method's one caller, {@link #fromEra}, ever
+   * produces) - not merely inaccurate but genuinely undefined outside it, the same contract
+   * {@link #narrowed} carries: {@code LEAP_CENTURY_M} and {@code LEAP_ERA_M} both overflow the
+   * {@code biased * M < 2^31} bound every magic multiply in this class must respect once
+   * {@code biased} climbs far enough past the range this class is swept against. No guard is
+   * added here because the one caller never supplies an out-of-range year; a future caller
+   * outside {@link #fromEra} must check {@link #inNarrowRange} on the originating {@code days}
+   * first, the way every other public entry point in this class expects.
    */
   public static boolean isLeapYear(int year) {
     int biased = year + LEAP_YEAR_BIAS;
@@ -217,77 +301,4 @@ public final class VarkaChrono {
     return (biased & 3) == 0 && (!by100 || by400);
   }
 
-  /**
-   * The five calendar fields one decomposition yields, in the order the emitter's per-field
-   * tails branch off the shared work.
-   *
-   * @param year the proleptic Gregorian year, as {@code java.time.LocalDate#getYear} gives it.
-   * @param month 1-12.
-   * @param dayOfMonth 1-31.
-   * @param quarter 1-4.
-   * @param dayOfYear the January-based day of year, 1-365 or 1-366.
-   */
-  public record Fields(int year, int month, int dayOfMonth, int quarter, int dayOfYear) {}
-
-  /** Whether {@link #narrowed} is defined for {@code days} - the guard the emitted kernel
-   * evaluates per lane when the narrowed lowering is in use. */
-  public static boolean inNarrowRange(int days) {
-    return days >= NARROW_MIN_DAYS && days <= NARROW_MAX_DAYS;
-  }
-
-  /**
-   * The narrowed decomposition. Undefined - not merely inaccurate - outside
-   * {@link #inNarrowRange}, which is why the emitted form carries a guard and the batch falls
-   * back to the row engine rather than publishing whatever this returns.
-   */
-  public static Fields narrowed(int days) {
-    int w = days + NARROW_BIAS;
-    int era = (w * NARROW_ERA_M) >>> NARROW_ERA_K;
-    int rem = w - era * ERA_DAYS;
-    if (rem >= ERA_DAYS) {
-      era++;
-      rem -= ERA_DAYS;
-    }
-    return fromEra(era - NARROW_ERA_BIAS, rem);
-  }
-
-  /**
-   * Day of era to the four fields - the half whose input domain ({@code [0, 146096]}) is small
-   * enough to verify exhaustively on its own.
-   *
-   * <p>Two overshoot fixes earn their place here. The century magic can land on century 4,
-   * which exists for exactly one day of each era (the fourth century holds the era's extra leap
-   * day); it is folded back into century 3. And the exact {@code / 365} ignores leap days, so
-   * it can name the next year when the day of century falls in one - detected by a negative day
-   * of year, and undone by giving the day back, one more when the year we step back into is a
-   * leap year.
-   */
-  private static Fields fromEra(int era, int dayOfEra) {
-    int century = (dayOfEra * CENTURY_M) >>> CENTURY_K;
-    int dayOfCentury = dayOfEra - century * CENTURY_DAYS;
-    if (dayOfCentury >= CENTURY_DAYS) {
-      century++;
-      dayOfCentury -= CENTURY_DAYS;
-    }
-    if (century == 4) {
-      century = 3;
-      dayOfCentury += CENTURY_DAYS;
-    }
-    int yearOfCentury = (dayOfCentury * YEAR_M) >>> YEAR_K;
-    int dayOfYear = dayOfCentury - (365 * yearOfCentury + (yearOfCentury >>> 2));
-    if (dayOfYear < 0) {
-      dayOfYear += 365 + ((yearOfCentury & 3) == 0 ? 1 : 0);
-      yearOfCentury--;
-    }
-    int marchMonth = ((5 * dayOfYear + 2) * MONTH_M) >>> MONTH_K;
-    int dayOfMonth = dayOfYear - (((153 * marchMonth + 2) * DAY_M) >>> DAY_K) + 1;
-    int month = marchMonth < MARCH_YEAR_JANUARY ? marchMonth + 3 : marchMonth - 9;
-    int year = 400 * era + 100 * century + yearOfCentury
-        + (marchMonth >= MARCH_YEAR_JANUARY ? 1 : 0);
-    int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;
-    int januaryDayOfYear = dayOfYear >= MARCH_TO_JANUARY_DAYS
-        ? dayOfYear - (MARCH_TO_JANUARY_DAYS - 1)
-        : dayOfYear + MARCH_DAY_OF_YEAR + (isLeapYear(year) ? 1 : 0);
-    return new Fields(year, month, dayOfMonth, quarter, januaryDayOfYear);
-  }
 }

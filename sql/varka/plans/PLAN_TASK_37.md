@@ -72,14 +72,36 @@ weeksIn(y) = 52 + ((p(y) == 4 || p(y - 1) == 3) ? 1 : 0)
 The bias of 13200 is the one `PLAN_TASK_34.md` section 2.1 introduces: a
 multiple of 400 so the leap structure is unchanged, and large enough that
 `y - 1` stays non-negative at the bottom of `VarkaChrono`'s covered range,
-which is the reason it is 13200 and not 12800. Every division here is a magic
-multiply on a non-negative dividend under the exactness bound:
+which is the reason it is 13200 and not 12800.
+
+**Do not use `M=167773` (`k=24`/`26`) for the `/100`/`/400` divisions below.**
+An earlier draft of `PLAN_TASK_34.md` used exactly these constants for the
+same divisors over the same biased-year range and they are wrong: they are
+exact only under unbounded-precision arithmetic and overflow the
+`v * M < 2^31` no-overflow bound every magic multiply in `VarkaChrono` must
+respect - at the top of the range (biased year 46334), `46334 * 167773` is
+over three and a half times past `2^31`. `PLAN_TASK_34.md` section 7's
+Outcome records finding this the hard way, with a corrected round-down magic
+(`M=41943` at `k=22` for `/100`, `k=24` for `/400`) that `VarkaChrono`
+actually ships. Use those corrected constants here too - they cover the same
+range with the same bias, so they carry over directly - but note one
+difference from `emitLeapFlag`'s use of them: `emitLeapFlag` only needs a
+**boolean** ("is the remainder 0 or the divisor"), which a round-down magic
+answers directly. `p(y)` here needs the actual **quotient** `y'/100`/`y'/400`
+added into a sum, and a round-down magic can undershoot the true quotient by
+one - so this table's divisions need an explicit correction step
+(`emitCarry`'s round-down-plus-one-correction idiom) before the quotient is
+used, which the constants alone do not provide. Re-verify section 2's whole
+claim ("checked against `java.time`... zero mismatches") with a simulation of
+true 32-bit truncating multiplication once the correction is in place, the
+way `PLAN_TASK_34.md`'s fix was - a plain-Python check without overflow
+truncation is what let the wrong constants through the first time:
 
 | divisor | M | k |
 |---|---|---|
 | 4 | shift by 2 | - |
-| 100 | 167773 | 24 |
-| 400 | 167773 | 26 |
+| 100 | 41943 | 22 |
+| 400 | 41943 | 24 |
 | 7 (the outer mod) | the standard mod-7 magic, dividend is small and non-negative | - |
 
 `weeksIn` is needed for **two** years - `year` and `year - 1` - so emit it as a
