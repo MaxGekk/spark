@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, Not, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, Not, Nvl, Nvl2, Or, Quarter, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
@@ -145,6 +145,27 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val ts = AttributeReference("t", TimestampType)()
     val bound = Seq(out(Year(Cast(ts, DateType))))
     assert(VarkaExpressionCompiler.compile(bound, Seq(ts)).isEmpty)
+  }
+
+  test("task 41: unix_date/date_from_unix_date relabel rather than compiling to a node") {
+    // unix_date's child is a date column, readable today: the relabel vanishes and the IR is
+    // a bare ColumnRef, with the output type coming from the Catalyst expression (IntegerType)
+    // rather than from anything the IR rendered.
+    val unixDate = VarkaExpressionCompiler.compile(Seq(out(UnixDate(d))), childOutput).get
+    assert(unixDate.outputs === Seq(new ColumnRef(0)))
+    assert(unixDate.outputTypes === Seq(IntegerType))
+    // date_from_unix_date's child is an integer column, which no leaf can read until task 38
+    // opens it - until then this declines through the ordinary non-date-column path, exactly
+    // as any other read of `i` would.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(DateFromUnixDate(i))), childOutput).isEmpty)
+    // The actual argument for the task: a relabelled entry must not demote the rest of the
+    // projection to the row path. Before this task UnixDate itself declined, taking `a` with it.
+    val mixed = VarkaExpressionCompiler.compile(
+      Seq(out(DateAdd(d, Literal(1))), out(UnixDate(d))), childOutput).get
+    assert(mixed.outputs === Seq(new AddDays(new ColumnRef(0), new LiteralSlot(0)),
+      new ColumnRef(0)))
+    assert(mixed.outputTypes === Seq(DateType, IntegerType))
   }
 
   test("task 11 declines: null-safe equality, bare boolean outputs") {

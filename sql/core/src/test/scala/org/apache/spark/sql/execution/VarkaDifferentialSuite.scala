@@ -407,6 +407,29 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
+  test("task 41: unix_date and date_from_unix_date fuse as a pure relabel") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT unix_date(d) AS u FROM varka_dates ORDER BY u",
+      expectFused = true)
+    // date_from_unix_date's child is an integer column, which no leaf can read until task 38
+    // opens it - it declines through the ordinary non-date-column path and the projection has
+    // nothing left to fuse, exactly like any other read of a bare int column today.
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_from_unix_date(i) AS x FROM varka_dates",
+      expectFused = false)
+    // The actual argument for the task: a relabelled entry beside an ordinary one must not
+    // demote the whole projection to Janino. Before this task the relabel became a residual
+    // (per-row) entry rather than blocking `a` too - task 12's per-entry eligibility already
+    // covered that - but it still cost a Janino re-evaluation of every row for `b` instead of
+    // riding the same vectorized loop as `a`; see VarkaExpressionCompilerSuite for the
+    // compiler-level proof that both entries now fuse rather than one falling to residual.
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, 1) AS a, unix_date(d) AS b FROM varka_dates ORDER BY a",
+      expectFused = true)
+  }
+
   test("AND, OR and NOT conditions follow three-valued logic like the row engine") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)

@@ -20,7 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, Not, Or, Quarter, RuntimeReplaceable, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
@@ -382,6 +382,18 @@ private[sql] object VarkaExpressionCompiler {
     // string lane and stays declined below.
     case c: Cast if c.dataType == DateType && c.child.dataType == DateType =>
       compileNode(c.child, inputs, literals, sink)
+    // unix_date/date_from_unix_date (task 41) are Spark's own `input.asInstanceOf[Int]` in
+    // full - a date IS a day count, so both are a pure type relabel with nothing to compute.
+    // Unwrapping to the child rather than adding an IR node means `SELECT unix_date(d)` and
+    // `SELECT d` compile to the same IR and share a shape hash - correct, since kernel
+    // identity is about lane math and theirs is identical; the entry's output type still
+    // comes from the Catalyst expression, not the IR. `date_from_unix_date`'s child is an
+    // integer column, unreadable until task 38 opens that leaf - until then this arm simply
+    // declines through the existing non-date-column path below.
+    case UnixDate(child) =>
+      compileNode(child, inputs, literals, sink)
+    case DateFromUnixDate(child) =>
+      compileNode(child, inputs, literals, sink)
     case DateAdd(child, days) =>
       for {
         offset <- foldOffset(days, sink)

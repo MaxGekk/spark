@@ -103,6 +103,55 @@ emitted bytes change for any shape that existed before.**
 
 ## 6. Outcome
 
-Filled in when the work lands. Two things worth recording: whether the bare
-`ColumnRef` output shape worked first time, and whether the no-IR-node design
-survived contact - if it did not, what forced a node.
+Landed as planned: two compiler arms (`case UnixDate(child) => compileNode(...)`,
+`case DateFromUnixDate(child) => compileNode(...)`), no IR node, no emitter
+code. The no-IR-node design survived contact with no changes - the two arms
+are exactly the one-liners section 2 predicted, placed beside the identity
+`Cast` arm in `VarkaExpressionCompiler.compileNode` (the other "unwrap to
+child, nothing to compute" arm).
+
+**The bare `ColumnRef` output shape worked first time**, both at the compiler
+level (`unix_date(d)` compiles to `Seq(new ColumnRef(0))` with
+`outputTypes === Seq(IntegerType)`) and at the emitter level (a
+`checkMatrix(Seq(new ColumnRef(0)), ...)` case added to
+`VarkaLoopEmitterSuite` - a loop that only loads and stores) - it is not a new
+kind of failure the way section 2 worried it might be.
+
+**As predicted in section 3**: `unix_date(d)` was testable end to end today
+(its child is a date column). `date_from_unix_date(i)` still declines, through
+the ordinary non-date-column path, exactly as anticipated - task 38 has not
+landed on this branch's base. Both arms are written and will start working
+for `date_from_unix_date` with no further change once 38 does.
+
+**One correction to the milestone doc's motivating claim.** `PLAN_MILESTONE_4.md`
+section 2.15 frames the argument for this task as "one unsupported expression
+demotes a whole projection entry to the row path" / "blocks everything around
+it." That is not quite what happens today: task 12's per-entry eligibility
+already means a declined entry (`UnixDate`/`DateFromUnixDate` hitting
+`compileNode`'s catch-all) becomes a *residual* entry, evaluated correctly
+per-row via Janino, while sibling entries still fuse through the kernel - see
+`VarkaExpressionCompiler`'s class doc on `compilePartial`. So
+`SELECT date_add(d, 1) AS a, unix_date(d) AS b` was already CORRECT before
+this task, just not fully vectorized: `b` paid a per-row Janino re-evaluation
+instead of riding the same loop as `a`. Confirmed by temporarily reverting the
+two compiler arms and re-reading `compilePartial`'s classification logic
+rather than trusting the milestone doc's framing. The actual argument for the
+task holds, but as a vectorization gain (no residual fallback for a relabel)
+rather than a correctness one; where the doc's framing would be literally true
+is a relabel nested *inside* a larger expression (`compileNode` fails the
+whole enclosing entry when any subtree declines, with no partial credit inside
+one expression tree, unlike across projection entries) - that shape was not
+separately tested here and is worth a follow-up recipe note if it recurs.
+
+The end-to-end differential added (`VarkaDifferentialSuite`, "task 41:
+unix_date and date_from_unix_date fuse as a pure relabel") covers all three
+cases: `unix_date(d)` fused, `date_from_unix_date(i)` correctly unfused today,
+and the mixed `date_add`/`unix_date` projection - the compiler-level test
+proves the mixed case is *fully* fused (both entries `FusedOutput`, via
+`VarkaExpressionCompiler.compile`'s all-fused special case) rather than merely
+"eligible," which is the stronger claim this task is actually worth.
+
+Neither pinned value moved, and no committed benchmark number moved - both
+verified by running the suites rather than assumed: `VarkaShapeCacheSuite`'s
+`everyNode` hash and `VarkaLoopEmitterSuite`'s line map are untouched from
+master, and no existing benchmark shape changed emitted bytes.
