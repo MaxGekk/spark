@@ -217,3 +217,59 @@ Between the two failure rounds, five pre-existing tests needed their decline
 example changed - a normal and expected consequence of legalizing a shape
 that used to be the canonical "this doesn't fuse" example, not a sign
 anything was wrong with the fix itself.
+
+**Review pass, addressing 7 findings.** A `/code-review` run against this
+commit found seven issues, all fixed here:
+
+1. **`requireLiteralOffset`'s deletion was too broad, and is now narrowed
+   rather than removed.** The recipe's own decision to delete the check
+   outright (section 4.1) turned out wrong: it left the emitter with no
+   fail-fast guard against a hand-built `AddDays`/`SubDays` whose offset is
+   neither a `LiteralSlot` nor a `ColumnRef` - not reachable through
+   `VarkaExpressionCompiler` today, but a real defense-in-depth loss for any
+   future IR producer. Replaced with `requireOffsetShape`, accepting either
+   shape and rejecting anything else, restoring the class javadoc's
+   out-of-shape-IR list to match.
+2. **The evaluation-order question in `compileNode`'s `DateAdd`/`DateSub`
+   arms turned out to have a right answer already on the books.** The review
+   flagged that compiling the date child before the offset (this diff's
+   choice) changed which of two independently-true decline reasons wins when
+   both are unfusable, versus the pre-task-38 offset-first order. Reverting
+   to offset-first looked like the safe fix and was tried first - but it
+   broke two passing tests (`VarkaExpressionCompilerSuite`'s literal-slot and
+   column-ordinal ordering tests), because `VarkaExpressionCompiler` already
+   documents a house rule for exactly this (`CaseWhen`'s comment: "input
+   ordinals and literal slots register deterministically in reading order").
+   Child-before-offset is what that rule requires, once an offset can be a
+   column rather than always a foldable literal with nothing to register.
+   Kept the child-first order, documented why, and added a test
+   (`"with two independently unfusable operands, the child's reason is
+   reported"`) pinning the decline-priority behavior as intentional rather
+   than leaving it as an unrecorded accident of evaluation order.
+3. **`andRef`/`emitAndWord` in the emitter's `AddDays`/`SubDays`/`DateDiff`
+   arms were hand-copied a second and third time.** Factored the
+   emit-both-children-then-AND-their-validity-words shape into
+   `emitAndValidatedOp`, called by all three arms, so the exact silent
+   miscompilation this task's own development hit once (a dropped
+   `emitAndWord` call, caught only by a dedicated test) becomes structurally
+   harder to reintroduce on a fourth binary date-arithmetic node.
+4. **`docs/sql-varka.md`'s EXPLAIN section quoted the wrong decline-reason
+   text** for a `ShortType`/`ByteType` offset column, and had dropped the
+   pre-existing "not a foldable literal" mention entirely. Corrected to quote
+   the actual strings `compileOffset` emits.
+5. **No test exercised a column-offset `date_add` inside a filter
+   predicate**, only inside a projection. Added one
+   (`"a column-offset date_add fuses inside a filter predicate too"`),
+   confirming `VarkaFilterEvaluator`'s inherited widening actually works on
+   the mask-kernel path, not only the projection path.
+6. **`compileOffset`'s `IntegerType` leaf duplicated `compileNode`'s
+   `DateType` leaf's one-line `ColumnRef`-interning expression.** Factored
+   into a shared `columnRef` helper both call.
+7. **A stale comment** in `VarkaLoopEmitterSuite` pointed at a test title
+   that did not exist. Fixed to name the real test.
+
+Re-verified end to end after the fixes: 96 catalyst / 131 sql-core Varka
+tests green at both vector widths, `dev/lint-java` and `dev/scalastyle` both
+pass, and the "no pinned value, no committed number" claim above still holds
+- none of these seven fixes touch emitted bytes for any shape besides the
+new column-offset one.

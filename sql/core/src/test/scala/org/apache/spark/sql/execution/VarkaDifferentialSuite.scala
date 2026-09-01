@@ -157,6 +157,24 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = false)
   }
 
+  test("task 38: a column-offset date_add fuses inside a filter predicate too") {
+    // The projection-side column-offset tests above never exercise the mask kernel - a
+    // WHERE clause is the shape VarkaFilterExec/VarkaFilterColumnarToRowExec compile, and
+    // compileOffset is shared code, so this proves the column-offset path works there too,
+    // not only when the offset column feeds a projected value.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    try {
+      val fused = checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c FROM varka_date_pairs WHERE date_add(d, i) > d2",
+        expectFused = true)
+      assert(!fused.toString.contains("Filter (date_add("),
+        s"the column-offset predicate should be fused, not residual:\n$fused")
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
+    }
+  }
+
   test("datediff matches the row engine in both argument orders with nulls") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)

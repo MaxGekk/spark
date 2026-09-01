@@ -1005,7 +1005,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     rejects(emit(new AddDays(new ColumnRef(1), new LiteralSlot(0)), 1), "column ordinal")
     rejects(emit(new AddDays(new ColumnRef(0), new LiteralSlot(1)), 1), "literal slot")
     // A column offset (task 38) is legal IR now - AddDays(ColumnRef, ColumnRef) no longer
-    // throws; see "a day offset that is a column, not a literal" below for its coverage.
+    // throws; see "AddDays/SubDays with a column offset (task 38) match the reference
+    // evaluator" above for its coverage.
     rejects(VarkaLoopEmitter.emit("t", java.util.List.of[VarkaVectorIR](), 1, 0),
       "no output chains")
     rejects(VarkaLoopEmitter.emit("t", java.util.List.of(addDays(0)), 0, 1), "numInputs")

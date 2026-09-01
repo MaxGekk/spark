@@ -215,10 +215,13 @@ attributes alone did not answer:
   projection node lists every projection entry as fused, forwarded (naming the
   child column) or residual with the compiler's decline reason - "unsupported
   expression", "CASE WHEN without an ELSE branch", "non-date column of
-  type ..." (also what a `ShortType`/`ByteType` day-offset column earns,
-  since task 38) - in the query's own column
-  names; a Varka filter node (task 21) reports its predicate the same way,
-  one line per conjunct. The same account goes to the debug log once per
+  type ..." - in the query's own column names. Since task 38, a `date_add`/
+  `date_sub` day offset that is neither a foldable literal nor a supported
+  column gets its own reasons: "non-integer day offset column of type ..."
+  for a `ShortType`/`ByteType` column, and "day offset is not a foldable
+  literal or an integer column" for anything else (e.g. a computed
+  expression). A Varka filter node (task 21) reports its predicate the same
+  way, one line per conjunct. The same account goes to the debug log once per
   task.
 
 Task 22 extends the account to the SQL UI and to JDK Flight Recorder:

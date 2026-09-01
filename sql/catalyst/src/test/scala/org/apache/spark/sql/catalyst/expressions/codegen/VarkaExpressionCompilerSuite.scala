@@ -179,6 +179,18 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(VarkaExpressionCompiler.compile(withInterval, childOutput :+ iv).isEmpty)
   }
 
+  test("task 38: with two independently unfusable operands, the child's reason is reported") {
+    // date_add compiles its date child before its offset (VarkaExpressionCompiler's own
+    // reading-order rule, the same one CaseWhen documents), so when BOTH operands are
+    // unfusable, DeclineSink's "first note wins" rule surfaces the child's reason here, not
+    // the offset's - pinning that as intentional rather than an accident of evaluation order.
+    val s = AttributeReference("s", StringType)()
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(Cast(s, DateType), sh)), out(DateAdd(d, Literal(1)))),
+      s +: childOutput).get
+    assert(partial.declines(0).reason === "unsupported expression")
+  }
+
   test("task 11 declines: null-safe equality, bare boolean outputs") {
     // <=> on two nulls is true, which breaks the null-intolerant comparison rule.
     assert(VarkaExpressionCompiler.compile(

@@ -369,7 +369,7 @@ private[sql] object VarkaExpressionCompiler {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = expr match {
     case br: BoundReference if br.dataType == DateType =>
-      Some(new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size)))
+      Some(columnRef(br, inputs))
     // A date literal's value is already an epoch-day int, so it takes a slot in the shared
     // per-distinct-value table like a folded day offset does (task 11) - what makes
     // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all.
@@ -383,6 +383,13 @@ private[sql] object VarkaExpressionCompiler {
     case c: Cast if c.dataType == DateType && c.child.dataType == DateType =>
       compileNode(c.child, inputs, literals, sink)
     case DateAdd(child, days) =>
+      // The date child compiles before the offset, matching CaseWhen's rule a few cases below:
+      // ordinals and literal slots register in reading order. Before task 38 the offset was
+      // always a foldable literal (no ordinal to register), so this ordering is new in an
+      // observable way now that an offset can be a column: when BOTH operands are unfusable,
+      // DeclineSink's "first note wins" rule reports the child's reason, not the offset's
+      // (pinned by VarkaExpressionCompilerSuite's "with two independently unfusable operands,
+      // the child's reason is reported" test).
       for {
         node <- compileNode(child, inputs, literals, sink)
         offsetNode <- compileOffset(days, inputs, literals, sink)
@@ -496,6 +503,14 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
+   * Interns `br`'s ordinal into `inputs` and wraps it as a `ColumnRef` - shared by
+   * `compileNode`'s `DateType` leaf and `compileOffset`'s `IntegerType` one, the two column
+   * kinds the compiler admits.
+   */
+  private def columnRef(br: BoundReference, inputs: mutable.LinkedHashMap[Int, Int]): ColumnRef =
+    new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size))
+
+  /**
    * The day offset of a `date_add`/`date_sub`: a folded literal keeps today's `LiteralSlot`
    * shape (existing plans and their cached kernels are untouched), and a non-foldable offset
    * (task 38) is a bare `IntegerType` column - deliberately not a general `compileNode`
@@ -516,7 +531,7 @@ private[sql] object VarkaExpressionCompiler {
       case None =>
         days match {
           case br: BoundReference if br.dataType == IntegerType =>
-            Some(new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size)))
+            Some(columnRef(br, inputs))
           case br: BoundReference =>
             sink.note(s"non-integer day offset column of type ${br.dataType.simpleString}", br)
             None
