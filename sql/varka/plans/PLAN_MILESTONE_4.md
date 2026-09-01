@@ -775,6 +775,92 @@ computes `mp` for the month, day-of-month and quarter tails regardless, and
 is about the single-output path, it is independent of task 32 either way, and
 whichever of the two lands second inherits the smaller half of the win.
 
+### 2.19 Exact civil-from-days in long lanes (task 49)
+
+Task 26's whole design rests on one absence: `VectorOperators` has no
+multiply-high on any lane type, so a full-range Granlund-Montgomery magic
+division is not expressible on int lanes, and what ships instead is a
+*range-narrowed* round-down magic with correction carries, a narrow-range guard,
+a batch-decline path and a `VarkaChrono` constant table to support it. That
+absence was re-checked during task 32 and is not temporary: no `MUL_HIGH` in
+JDK 25 or in openjdk/jdk master, and JDK-8219881, the nearest request, has been
+Open at P4 since February 2019 on `repo-panama` (`SKILLS.md` has the detail).
+
+**But multiply-high was never the only route to an exact magic. A 64-bit low
+product is enough, and `LongVector`'s `MUL` provides one today.** Widen the
+dividend to int64 lanes and the product of a 32-bit value and a ~30-bit magic
+lands well inside a signed 64-bit lane, so the quotient is exact with a single
+multiply and a shift - no round-down, no carries, no range restriction.
+
+Checked, over the range the lowering actually needs rather than a round number.
+Days are int32 and the March-based bias makes the dividend
+`w = days + 2^31 + 719468`, so `w` spans `[0, 2^32 + 719468)`:
+
+| division | dividend range | k | M | largest product |
+|---|---|---|---|---|
+| `/146097` | `[0, 2^32 + 719468)` | 47 | 963315389 | 2^61 |
+| `/36524` | `[0, 2^24)` | 38 | 7525953 | 2^46 |
+| `/365` | `[0, 2^24)` | 31 | 5883517 | 2^46 |
+
+Three bits of headroom on the widest one, and none to spare beyond it: the same
+search over `[0, 2^33)` finds no exact pair at all. So the margin is real but
+thin, and the admission check is not a formality.
+
+That table is reproducible rather than asserted:
+`sql/varka/plans/verify_long_lane_magic.py` searches for each pair, checks it at
+every multiple-of-`d` boundary in range - which is where an inexact magic must
+first disagree, the error being monotone between them - and fails loudly if the
+`[0, 2^33)` search unexpectedly succeeds, since that would mean this section
+understates the headroom. It is committed for the same reason
+`verify_chrono_tails.py` and `verify_days_from_civil.py` are.
+
+**What it deletes.** The narrow-range guard and its two compares; both
+round-down magics and their correction carries; `STATUS_CHRONO_RANGE` as a
+reason a chrono batch declines, with the evaluator fallback and metric that
+serve it; the `NARROWED` variant and the range constants in `VarkaChrono`; and
+the standing caveat that `year(date_add(d, n))` can decline for a large enough
+`n`. The status ABI itself stays - task 30's ANSI path wants its own bit - but
+the calendar family stops being a reason a batch is recomputed on the row
+engine.
+
+**What it costs.** Half the lanes: eight per vector at AVX-512 instead of
+sixteen, four instead of eight at 128-bit. Plus an `I2L` on the way in and an
+`L2I` per output on the way out. Counting ops out of what `emitChronoPrefix`
+would become, this is roughly 25-28 ops over eight lanes against today's ~45
+over sixteen - about 3.2 against 2.8 ops per row before conversions - so the
+honest expectation is a **small throughput loss bought with a large
+simplification**, not a win. That is a legitimate trade and it is the owner's
+call, but it has to be made on a number.
+
+**Sequencing.** Depends on task 29, which brings int64 lanes and the second
+`LaneType`; there is no cheap way to prototype this before it lands, and no
+reason to try. It is also an *alternative* to task 32's step B rather than a
+complement: the fragment mechanism is lane-type agnostic and would compose
+mechanically, but the two wins overlap, since a long-lane prefix is a different
+prefix to share. Whichever lands second inherits the smaller half, and the
+milestone should not pretend otherwise.
+
+**The gate, and it is the strict one.** Task 26 verified its narrowed lowering
+against `LocalDate` over all 16,777,216 days of its range and its total variant
+against a long-arithmetic reference over **all 2^32 days**, as an opt-in
+committed test, on the grounds that a vector kernel at sixteen lanes makes that
+seconds rather than hours. This lowering claims exactness over a wider range
+than either, on a three-bit margin, so it inherits that standard and not a
+smaller one: the sweep is commit 1, before any emitter change, and the
+boundary set gains `2^31 - 1`, `-2^31`, and both ends of the biased dividend.
+
+**Predictions, registered here.** The lowering lands at 25-30 emitted ops; it
+runs 0.75x to 1.0x the shipped narrowed lowering on `year` at AVX-512 and
+relatively better at 128-bit, where halving an already-small lane count costs
+less than the corrections it removes; and no committed number for a non-calendar
+shape moves. If it clears 1.0x anywhere, that is a surprise worth writing down
+rather than a result to assume.
+
+**Declined if** the sweep finds any day where the exact form disagrees, or the
+measured cost at AVX-512 is worse than 0.75x - at which point the simplification
+is not worth a quarter of the calendar family's throughput, and the entry goes
+to the debt register with the number attached.
+
 ## 3. Task breakdown
 
 Tasks 24-44 are the committed spine, in dependency order: 24 halves the
@@ -800,12 +886,17 @@ writes validity, so whatever they win, every kernel wins. They run after 32
 because 32's kernel is the instrument that measures them, and 45 opens by
 turning its own premise into a number before any of the three is built. 48 is
 unrelated to all of it and is here only because task 32's arithmetic review
-noticed it (see 2.18).
+noticed it (see 2.18). 49 comes from the same review asking why the calendar
+lowering is range-narrowed at all, and finding that the answer - no
+multiply-high on int lanes - stops applying once the lanes are int64 (see
+2.19); it depends on task 29 and it competes with task 32's step B rather than
+adding to it.
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
 (task 31, section 2.2, then tasks 32-44, sections 2.9 to 2.16, and now tasks
-45-48, sections 2.17 and 2.18), so milestone 5 resumes at 49.
+45-48, sections 2.17 and 2.18, and now task 49, section 2.19), so milestone 5
+resumes at 50.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -834,6 +925,7 @@ the single sequence; this plan has already grown twice the way milestone 3's did
 | 46 | Validity helpers that inline | Width-specialised `validityBitsAt`/`orValidityBitsAt` siblings under `MaxInlineSize`, selected by the emitter's existing name choice, with the switch resolved at emit time | `-XX:+PrintInlining` showing no `failed to inline` for them in a wide loop - the diagnostic, not the timing, is the deliverable - plus the full suite at both widths and one parity regeneration |
 | 47 | One validity write per word | Bits accumulated across lane groups and stored once per 64 rows, with the epilogue flushing a partial accumulator | The masked path's committed cases, the 4095/63 non-aligned lengths task 44 adds, and the dense/masked agreement; gated on what 45 and 46 leave |
 | 48 | A `year` that does not compute the month | `doy >= 306` replacing the March-month step in the year tail only, with the equivalence recorded as an integer identity rather than an approximation | The existing exhaustive `VarkaChronoSuite` sweep unchanged and still green; the parity `year` case measured by interleaved A/B compared by minimums, since the expected effect is inside a single run's noise |
+| 49 | Exact civil-from-days in long lanes | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division by 146097, 36524 and 365 with a 64-bit low product and no correction carries; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
 
 ## 4. Files
 
