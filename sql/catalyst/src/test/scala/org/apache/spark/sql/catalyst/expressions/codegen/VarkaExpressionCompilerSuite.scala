@@ -18,11 +18,11 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, NamedExpression, Not, Nvl, Nvl2, Or, WeekDay}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, Not, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
-import org.apache.spark.sql.types.{DateType, IntegerType, StringType}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.types.{DateType, IntegerType, StringType, TimestampType}
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -124,6 +124,27 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       new IRDayOfWeek(new ColumnRef(0)),
       new IRWeekDay(new AddDays(new ColumnRef(0), new LiteralSlot(0)))))
     assert(compiled.outputTypes === Seq(IntegerType, IntegerType))
+  }
+
+  test("task 26: the four calendar extractions compile with IntegerType outputs") {
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(Year(d)), out(Month(d)), out(DayOfMonth(d)), out(Quarter(DateAdd(d, Literal(3))))),
+      childOutput).get
+    assert(compiled.outputs === Seq(
+      new IRYear(new ColumnRef(0)),
+      new IRMonth(new ColumnRef(0)),
+      new IRDayOfMonth(new ColumnRef(0)),
+      new IRQuarter(new AddDays(new ColumnRef(0), new LiteralSlot(0)))))
+    assert(compiled.outputTypes === Seq(IntegerType, IntegerType, IntegerType, IntegerType))
+  }
+
+  test("task 26 declines: year over a timestamp, which the analyzer casts") {
+    // GetDateField's input type is DateType, so year(timestamp) arrives as a Cast the compiler
+    // does not unwrap - only the identity DateType-to-DateType cast is transparent. It declines
+    // at the cast rather than at the extraction, exactly as dayofweek(timestamp) does today.
+    val ts = AttributeReference("t", TimestampType)()
+    val bound = Seq(out(Year(Cast(ts, DateType))))
+    assert(VarkaExpressionCompiler.compile(bound, Seq(ts)).isEmpty)
   }
 
   test("task 11 declines: null-safe equality, bare boolean outputs") {

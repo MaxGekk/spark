@@ -20,10 +20,10 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, NamedExpression, Not, Or, RuntimeReplaceable, WeekDay}
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Not => IRNot, Or => IROr, WeekDay => IRWeekDay}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType}
 
 /**
@@ -446,6 +446,16 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRDayOfWeek(_))
     case WeekDay(child) =>
       compileNode(child, inputs, literals, sink).map(new IRWeekDay(_))
+    // The calendar extractions (task 26). One civil-from-days decomposition per node, so two
+    // fields of the same date are computed twice - see VarkaVectorIR.Year for why.
+    case Year(child) =>
+      compileNode(child, inputs, literals, sink).map(new IRYear(_))
+    case Month(child) =>
+      compileNode(child, inputs, literals, sink).map(new IRMonth(_))
+    case DayOfMonth(child) =>
+      compileNode(child, inputs, literals, sink).map(new IRDayOfMonth(_))
+    case Quarter(child) =>
+      compileNode(child, inputs, literals, sink).map(new IRQuarter(_))
     // A column of any other type: eligible to be forwarded as a whole entry, never to be read
     // by the int32 lanes of a kernel.
     case br: BoundReference =>

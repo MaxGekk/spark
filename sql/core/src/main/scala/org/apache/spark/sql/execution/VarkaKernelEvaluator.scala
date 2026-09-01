@@ -56,6 +56,7 @@ private[sql] case class VarkaExecMetrics(
     fallbackBatchesNonArrow: Option[SQLMetric] = None,
     fallbackBatchesKernel: Option[SQLMetric] = None,
     fallbackBatchesRowPath: Option[SQLMetric] = None,
+    fallbackBatchesDeclined: Option[SQLMetric] = None,
     emissionFailures: Option[SQLMetric] = None)
 
 private[sql] object VarkaExecMetrics {
@@ -81,6 +82,8 @@ private[sql] object VarkaExecMetrics {
       sparkContext, "batches falling back: kernel failure (the ghost fallback)"),
     "numFallbackBatchesRowPath" -> SQLMetrics.createMetric(
       sparkContext, "batches falling back: per-row machinery failure beside the kernel"),
+    "numFallbackBatchesDeclined" -> SQLMetrics.createMetric(
+      sparkContext, "batches falling back: a value outside a lowering's range (task 26)"),
     "numEmissionFailures" -> SQLMetrics.createMetric(
       sparkContext, "tasks that could not emit or define the kernel class"))
 
@@ -98,6 +101,7 @@ private[sql] object VarkaExecMetrics {
     fallbackBatchesNonArrow = Some(metric("numFallbackBatchesNonArrow")),
     fallbackBatchesKernel = Some(metric("numFallbackBatchesKernel")),
     fallbackBatchesRowPath = Some(metric("numFallbackBatchesRowPath")),
+    fallbackBatchesDeclined = Some(metric("numFallbackBatchesDeclined")),
     emissionFailures = Some(metric("numEmissionFailures")))
 }
 
@@ -108,6 +112,15 @@ private[sql] object VarkaExecMetrics {
  * evaluation - is not metered as a kernel failure.
  */
 private[execution] class VarkaKernelFailure(cause: Throwable) extends Exception(cause)
+
+/**
+ * The kernel ran and declined the batch (task 26): its status was non-zero, meaning some lane
+ * lay outside the range a partial lowering is defined over. Not an error - it carries no cause
+ * and no stack trace, because it is control flow on a designed path, and [[serveBatch]] turns
+ * it into the row-engine fallback.
+ */
+private[execution] class VarkaBatchDeclined(val status: Int)
+  extends Exception(null, null, false, false)
 
 /**
  * The task-lifetime machinery shared by every Varka evaluator (split out of
@@ -276,6 +289,10 @@ private[sql] abstract class VarkaEvaluatorBase(
       try {
         kernelPath
       } catch {
+        // Not a failure: the kernel ran and said it could not answer for this batch.
+        case e: VarkaBatchDeclined =>
+          recordDeclinedBatch(e.status)
+          fallbackPath
         // A genuine kernel error is told apart from a failure in the per-row machinery
         // sharing the try by the marker invokeFused wraps it in.
         case e: VarkaKernelFailure =>
@@ -314,6 +331,23 @@ private[sql] abstract class VarkaEvaluatorBase(
     metrics.fallbackBatchesRowPath.foreach(_ += 1)
     VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.ROW_PATH_FAILURE, kernelIdentity,
       e.getClass.getName)
+  }
+
+  /**
+   * A batch the kernel itself declined (task 26): a lowering that is correct only over part of
+   * its input domain met a value outside it - a date beyond the narrowed civil-from-days range
+   * - and reported it rather than publishing an answer it does not have. Logged at debug
+   * rather than warning: unlike the ghost fallback this is a designed outcome, not a defect,
+   * and a batch of far-future dates would otherwise fill the log.
+   */
+  private def recordDeclinedBatch(status: Int): Unit = {
+    logDebug(s"The Varka SIMD kernels $kernelIdentity declined this batch (status $status); " +
+      "falling back to the per-row path.")
+    metrics.fallbackBatchesDeclined.foreach(_ += 1)
+    // The third field is the event's exceptionClass, and a declined batch has no exception:
+    // passing the status there would put "1" in a JFR column a dashboard groups by class
+    // name. The status is in the log line above, where it belongs.
+    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernelIdentity, "")
   }
 
   /**
@@ -483,7 +517,7 @@ private[sql] abstract class VarkaEvaluatorBase(
    * machinery that shares the same try (task-21 review). A fatal error passes unmarked.
    */
   protected def invokeFused(runner: FusedRunner, len: Int): Unit = {
-    try {
+    val status = try {
       if (VarkaColumnarToRowExec.isFailKernelForTesting) {
         // scalastyle:off throwerror
         throw new NoClassDefFoundError("injected Varka kernel failure")
@@ -493,6 +527,14 @@ private[sql] abstract class VarkaEvaluatorBase(
         runner.dstData, runner.dstValidity, runner.scalarArgs, len)
     } catch {
       case e if isCatchable(e) => throw new VarkaKernelFailure(e)
+    }
+    // A non-zero status means the kernel met a value its lowering is not defined over and
+    // declined the batch (task 26). The outputs it wrote are not answers; the batch takes the
+    // caller's fallback path, which recomputes it row by row. Signalled by a throw because
+    // that is the one path every caller of this method already routes to the fallback - the
+    // vectors already allocated are released by the task-completion listener like any other.
+    if (status != 0 || VarkaColumnarToRowExec.isDeclineKernelForTesting) {
+      throw new VarkaBatchDeclined(if (status != 0) status else 1)
     }
   }
 

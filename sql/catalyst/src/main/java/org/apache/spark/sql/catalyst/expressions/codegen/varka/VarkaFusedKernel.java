@@ -39,9 +39,22 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * discipline above doubles as the selection invariant: a row the loop never writes reads as
  * unselected.
  *
+ * <p>Status, and why {@code run} returns one (task 26): a lowering may be correct only over
+ * part of its input domain - the narrowed civil-from-days variant is valid over a bounded day
+ * range, and nothing at compile time can bound a column's values. Such a kernel detects the
+ * lanes it cannot compute and reports them, rather than publishing an answer it does not have.
+ * A non-zero return means <b>this batch's outputs are not valid and the caller must recompute
+ * the batch on the row engine</b>; zero means they are. It is a bitmask so a later lowering can
+ * add its own reason without inventing a second channel - bit 0 is
+ * {@link #STATUS_CHRONO_RANGE}. A kernel with nothing to report returns zero unconditionally,
+ * which costs it one constant.
+ *
  * @see VarkaVectorIR
  */
 public interface VarkaFusedKernel {
+
+  /** {@code run} saw a day outside the range its calendar lowering is defined over. */
+  int STATUS_CHRONO_RANGE = 1;
 
   /**
    * Runs the fused loop over one batch.
@@ -54,7 +67,9 @@ public interface VarkaFusedKernel {
    *        ((length + 7) / 8 bytes each); always required.
    * @param scalarArgs the runtime values of the chain's literal slots.
    * @param length number of rows.
+   * @return zero when the outputs are valid; otherwise a bitmask of the reasons they are not,
+   *         and the caller must recompute this batch on the row engine.
    */
-  void run(long[] srcData, long[] srcValidity, int[] srcNullCount,
+  int run(long[] srcData, long[] srcValidity, int[] srcNullCount,
       long[] dstData, long[] dstValidity, int[] scalarArgs, int length);
 }

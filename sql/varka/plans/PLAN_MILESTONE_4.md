@@ -205,7 +205,9 @@ unrolling bullet is rewritten with the numbers, as it promises itself.
 ### 2.4 Calendar extraction, `year` first (task 26, item 6)
 
 The one vocabulary item that fits milestone 2's machinery as it stands: int32
-lanes, existing operators, task 17's range-narrowed magic multiply. The task
+lanes, existing operators, task 14's range-narrowed magic multiply (this file
+cited task 17 for it until task 26 traced it; the technique shipped as task
+14's follow-up, `PLAN_TASK_14.md` 7.7). The task
 *opens* with its admission check, before any emitter work: each of 146097,
 36524, 1461 and 153 needs its own range-narrowing argument - the value shrunk
 until both `v * e < 2^k` and `v * M < 2^31` hold inside the low 32 bits `mul`
@@ -365,7 +367,7 @@ the single sequence; this plan has already grown once the way milestone 3's did
 | 24 | The scalar tail, interrogation, compaction. **DONE** (`PLAN_TASK_24.md`) | The tail-cost measurement (open question 3) recorded first; the unmasked-body-plus-masked-epilogue loop via `indexInRange`, deleting the emitter's second scalar IR walk; `compress(mask)` compaction in `VarkaFilterExec` against the committed ~1-3 ns/row ceiling, with the non-AVX-512 verdict; per-lane-group `anyTrue`/`allTrue` fast paths | Differential green at both vector widths, all null patterns, all-selected and none-selected; the pinned hashes and line map unchanged, which is the proof the refactor preserved behaviour (they were expected to move; see `PLAN_TASK_24.md` section 5); filter ladder re-run and committed; emitter per-node surface reduction stated as a number |
 | 31 | Assert the instructions, not the ratio | A forked-JVM `PrintAssembly` harness; host-derived instruction-family assertions over the `DateVectorOps` kernels and one emitted loop per gating shape; a clean skip where `hsdis` is absent | The suite fails on a scalar body where a vector one is expected, and says which method and which family; green at both vector widths; skipped-not-failed on a runner without a disassembler |
 | 25 | ILP: the unroll factor as a plan decision | The registered prediction, then the three-confounder matrix (K x broadcast strategy x `GROUP_BUDGET`) on `dayofweek`, unpredictable `CASE WHEN`, and the depth-8 chain; if K > 1 pays, per-shape K chosen from the live-temporary count the emitter already computes; the `SKILLS.md` bullet rewritten with the numbers; the batch-size knee sweep (question 6) on a wide fused shape | A committed number per candidate shape against its existing baseline; prediction scored honestly; no committed number regresses on shapes where K stays 1 |
-| 26 | Calendar extraction, `year` first | The four-constant range-narrowing admission check, recorded before emitter work; `year`, `month` and `dayofmonth` committed - one civil-from-days decomposition yields all three - with `quarter` riding `month` and `dayofyear`/date-level `date_trunc` as the algebra yields them; fields whose constants will not narrow declined with a task-16 reason | Differential across the Gregorian range including pre-1970, leap years, month-length boundaries and the 400-year cycle edges, at both widths; parity numbers committed; `year` demonstrably compiling on the TPC-H q7/q8/q9 shape |
+| 26 | Calendar extraction, `year` first. **DONE** (`PLAN_TASK_26.md`) | The four-constant range-narrowing admission check, recorded before emitter work; `year`, `month` and `dayofmonth` committed - one civil-from-days decomposition yields all three - with `quarter` riding `month` and `dayofyear`/date-level `date_trunc` as the algebra yields them; fields whose constants will not narrow declined with a task-16 reason | Differential across the Gregorian range including pre-1970, leap years, month-length boundaries and the 400-year cycle edges, at both widths; parity numbers committed; `year` demonstrably compiling on the TPC-H q7/q8/q9 shape |
 | 27 | Boolean outputs | Mask-to-column materialisation (`toVector` against `blend`, measured); the bit-packed format decision at the Spark/Arrow boundary; three-valued rules holding at the output boundary | Differential over every null pattern - a null input never becomes false; `SELECT d > DATE '2000-01-01' AS flag` and filter-leftover boolean columns compile; committed number on one boolean-output shape |
 | 28 | Lane-width conversion | The mixed-width loop-shape measurement (open question 2: narrowest-drive against part loops) on `cast(int AS long) + long`, committed before integration; `convert`/`convertShape` emission following the winner; numeric `Cast` and Catalyst's implicit promotions over the supported types | Differential on mixed int32/int64 trees at both widths; the loop-shape decision recorded with its numbers; no regression on single-width shapes |
 | 29 | int64 lanes: `TimestampNTZ`, `bigint` | The second `LaneType`; `TimestampNTZ` comparisons, differences, literal arithmetic; `TimestampType` and `LongType` comparisons and diffs; range-narrowed magic constants for 1000000 and 86400 or a recorded decline; the field differential mode from task 22 | Every parity gate re-run at the long species and both vector widths; the halved-headroom number committed rather than discovered; zoned operations demonstrably declined, not wrong |
@@ -496,6 +498,17 @@ The scope's section 8, each question now owned by a task or settled here:
 One bullet per debt: what it is, why it is a debt, and what closing it would
 take. Opened during task 24, per `sql/varka/AGENTS.md` - a swept entry is
 rewritten in the past tense with what the sweep found, never deleted.
+
+* **A calendar field is computed once per output, not once per date.** Task 26's four
+  extractions each carry the whole civil-from-days decomposition, so `SELECT year(d),
+  month(d)` computes it twice, in two sibling loop methods - measured at 441 M rows/s for
+  four fields against 1778 for one. That is the trade task 17 trained the emitter on
+  (recomputing in registers beats a wider method's register pressure), and the corpus asks
+  for one field at a time, so it is a debt rather than a defect. Closing it needs a
+  multi-value IR node: the IR's every node is one value on the operand stack, and a shared
+  decomposition would have to leave four. It matters if a later item wants `date_trunc`
+  or `dayofyear` beside `year` in one projection, which is when the recomputation stops
+  being hypothetical.
 
 * **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have

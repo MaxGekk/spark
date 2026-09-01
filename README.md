@@ -9,8 +9,10 @@ anything the engine cannot serve. A Varka failure never fails a query.
 
 The current scope is date arithmetic (`date_add`, `date_sub`, `datediff`,
 `CASE WHEN`/`IF` over date comparisons, `greatest`/`least`,
-`dayofweek`/`weekday`) and, since task 21, date filters (`BETWEEN`, `IN`,
-`IS [NOT] NULL` and their `AND`/`OR` combinations as mask kernels) over
+`dayofweek`/`weekday`, and since task 26 the calendar extractions
+`year`/`month`/`dayofmonth`/`quarter`) and, since task 21, date filters
+(`BETWEEN`, `IN`, `IS [NOT] NULL` and their `AND`/`OR` combinations as mask
+kernels) over
 Arrow-cached data - deep enough to exercise real fusion, small enough to
 measure honestly.
 

@@ -280,6 +280,31 @@ apparent small wins turned out to be noise.
 
 ## Vector API on HotSpot, Measured (JDK 25, x86-64)
 
+- An *exact* magic multiply on int lanes exists only for dividends under roughly
+  **46341**, and the bound falls straight out of the two conditions rather than
+  needing a search: worst-case `e ~ d` forces `2^k > d * v`, hence `M ~ v`, hence
+  `v * M < 2^31` gives `v < 2^15.5`. Past that, use a **round-down** magic
+  (`M = floor(2^k/d)`), which never overestimates the quotient, and pay a fixed
+  number of carry steps - one compare and two masked adjustments each, on a
+  remainder the algorithm usually wants anyway. Task 26 needed two such divisions
+  (146097 and 36524) and found no exact form at any useful range for either; what
+  made the rest exact was *restructuring* - splitting an era into centuries first
+  drops the `/365` dividend from 146096 to 36524, under the bound. Reach for a
+  different decomposition before reaching for more carries.
+- Those carries are not free, and the reason is the masked ops in them. Task 26
+  predicted that its full-range variant would cost 5-12% over its narrowed one on
+  op count alone (five ops on forty) and measured 14-24%: the five extra ops are
+  masked adds and subtracts, which this project has separately measured at 2.3-2.9x
+  an unmasked one. Count masked ops at their own weight when predicting.
+- **`java.time` itself got 2.0x faster between JDK 17 and JDK 25**
+  (`LocalDate.ofEpochDay(d).getYear()`: 236 against 479 M rows/s, same machine,
+  `sql/varka/baselines/`). Any speedup quoted against a scalar `java.time` baseline
+  has to say which JDK the baseline ran on, and a figure inherited from an older
+  task may have a denominator two-fold different from today's. The same trap in the
+  other direction: escape analysis scalarizes the `LocalDate` allocation in a tight
+  loop, so a scalar calendar loop measured in a microbenchmark is far faster than
+  the same code inside a query - task 26 predicted 15-30x over it and measured 3.7x.
+
 - `VectorOperators` has no multiply-high on any lane type, so full-range
   Granlund-Montgomery magic division is not expressible on int lanes - but a
   *range-narrowed* magic is: shrink the value first until the correctness condition

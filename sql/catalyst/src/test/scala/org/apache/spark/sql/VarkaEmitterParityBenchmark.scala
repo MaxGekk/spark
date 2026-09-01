@@ -323,6 +323,98 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.run()
       }
 
+      runBenchmark("year: the calendar extractions against LocalDate (task 26)") {
+        // The emitted civil-from-days decomposition against the scalar path Spark runs today.
+        // A second lowering, which split the dividend to cover the whole int day range without
+        // a guard, was measured here before being dropped for costing 14-24%; see
+        // PLAN_TASK_26.md section 11.2 for that comparison.
+        //
+        // Driven in 4096-row chunks - Spark's COLUMN_BATCH_SIZE - rather than one
+        // million-row call, so the per-call prologue is paid at the rate production pays it,
+        // and walking the buffer rather than a warm prefix so the kernel and the scalar
+        // anchor below are measured in the same memory regime. The four-field case is here
+        // because task 26 gave
+        // calendar nodes a GROUP_BUDGET weight so they cannot share a loop method; this is
+        // where that is measured rather than assumed.
+        val repeats = 20
+        val chunk = 4096
+        val benchmark = new Benchmark(s"${numRows.toLong * repeats} rows in 4096-row chunks",
+          numRows.toLong * repeats,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        def nullsIn(n: Int): Int = (n + 6) / 7
+        // Four outputs need four destinations; one shared buffer would have the kernels
+        // overwrite each other and alias four stores onto one cache line.
+        val extraDst = Array.fill(3)(arena.allocate(numRows * 4L, 8))
+        val extraDstValidity = Array.fill(3)(arena.allocate((numRows + 7) / 8L, 8))
+        val dstData4 = (dst +: extraDst.toSeq).map(_.address()).toArray
+        val dstValidity4 = (dstValidity +: extraDstValidity.toSeq).map(_.address()).toArray
+        // Each chunk advances the source and destination addresses, so a pass walks the whole
+        // buffer rather than re-reading a cache-warm prefix 245 times. That matters here and
+        // not in the task-24 ladder below: this section's scalar anchor walks all one million
+        // rows, so a cache-resident kernel measured against a streaming scalar loop would put
+        // the two sides of the headline ratio in different regimes. Measured: the same
+        // dayofweek kernel reads 7746.1 M rows/s over the whole buffer against 8058.8 over a
+        // warm prefix, so the regime is worth about 4% here - small, but it is the difference
+        // between a measured ratio and a nearly-measured one.
+        def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1): Unit = {
+          var pass = 0
+          while (pass < repeats) {
+            var done = 0
+            while (done < numRows) {
+              val n = math.min(chunk, numRows - done)
+              val dataOff = done * 4L
+              val validityOff = done / 8L
+              val dstData = if (outputs == 1) Array(dst.address() + dataOff)
+                else dstData4.map(_ + dataOff)
+              val dstValid = if (outputs == 1) Array(dstValidity.address() + validityOff)
+                else dstValidity4.map(_ + validityOff)
+              // A declined batch does the same vector work and reports the same time, so a
+              // discarded status would let this file commit a rate production never sees -
+              // it pays the kernel and then the whole row path. Same reason checkMatrix
+              // asserts it.
+              val status = if (mixed) {
+                kernel.run(Array(mxData.address() + dataOff),
+                  Array(mxValidity.address() + validityOff),
+                  Array(nullsIn(n)), dstData, dstValid, Array.empty[Int], n)
+              } else {
+                kernel.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
+                  dstData, dstValid, Array.empty[Int], n)
+              }
+              require(status == 0, s"the kernel declined a batch: status $status")
+              done += n
+            }
+            pass += 1
+          }
+        }
+        val year = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 801)
+        val fourFields = Seq[VarkaVectorIR](new Year(new ColumnRef(0)),
+          new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
+          new Quarter(new ColumnRef(0)))
+        val four = emit(fourFields, 1, 0, loader, 803)
+        val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804)
+        benchmark.addCase("year, null-free") { _ => chunked(year, false) }
+        benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
+        benchmark.addCase("year+month+day+quarter, null-free") { _ =>
+          chunked(four, false, outputs = 4)
+        }
+        // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector
+        // body against year's ~50), and the per-row LocalDate loop is what Spark runs today.
+        benchmark.addCase("dayofweek, for scale, null-free") { _ => chunked(dow, false) }
+        benchmark.addCase("per-row LocalDate year (the path Spark uses today)") { _ =>
+          var pass = 0
+          while (pass < repeats) {
+            var i = 0
+            while (i < numRows) {
+              val days = nfData.get(ValueLayout.JAVA_INT, i * 4L)
+              dst.set(ValueLayout.JAVA_INT, i * 4L, java.time.LocalDate.ofEpochDay(days).getYear)
+              i += 1
+            }
+            pass += 1
+          }
+        }
+        benchmark.run()
+      }
+
       runBenchmark("GROUP_BUDGET: two outputs over one shared chain, split vs kept together") {
         // The register's open retuning candidate (task 17). A shared depth-8 chain with six
         // more ops on each of two outputs is 20 distinct ops, straddling the shipped budget of

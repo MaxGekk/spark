@@ -1,0 +1,45 @@
+================================================================================================
+The scalar calendar baseline, on Java 17 and Java 25 (task 26)
+================================================================================================
+
+Source: sql/varka/baselines/ChronoScalarBaseline.java - deliberately outside the build, because
+the fork targets Java 25 (the emitter needs java.lang.classfile, JDK 24 and later) and so
+nothing in it runs on the Java 17 that Apache Spark still builds with by default. This loop is
+plain java.time, so both JDKs run it, and it is the only part of the comparison that exists on
+both.
+
+What it measures: LocalDate.ofEpochDay(d).getYear(), which is exactly what
+DateTimeUtils.getYear does and therefore what Spark's row path costs per row for year(date).
+It measures nothing else - no Arrow access, no row boundary, no query.
+
+Methodology per PLAN_TASK_14.md 2.1: 2 s warm-up, five 2 s measured windows, reported by the
+minimum, on an otherwise idle machine. One million rows of `i % 20000 - 10000` days walked in
+4096-row chunks - the same data and chunking as VarkaEmitterParityBenchmark's year section, so
+the two are directly comparable. Run twice per JDK.
+
+OpenJDK 64-Bit Server VM on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M, machine otherwise idle
+
+    java  case                              run 1            run 2
+    ----  --------------------------------  ---------------  ---------------
+    25    year                              478.8 M rows/s   473.4 M rows/s
+    25    year+month+day+quarter            184.6 M rows/s   186.7 M rows/s
+    17    year                              236.1 M rows/s   230.1 M rows/s
+    17    year+month+day+quarter            144.8 M rows/s   137.9 M rows/s
+
+--- Reading these numbers ---
+
+* The same scalar loop is 2.0x faster on Java 25 than on Java 17 (478.8 against 236.1 M rows/s
+  by minimums, reproduced on both runs). The four-field case narrows to 1.3x. None of that is
+  Varka; it is what the JVM did to java.time between the two releases.
+* The Java 25 figure agrees with the in-harness one: VarkaEmitterParityBenchmark's
+  "per-row LocalDate year" case measures 478.6 M rows/s against this file's 478.8, which is
+  what makes this program usable as the same denominator.
+* So a Varka ratio has to say which denominator it uses. The shipped narrowed lowering runs at
+  1778 M rows/s at AVX-512, which is 3.7x the Java 25 row path and 7.5x the Java 17 one - and
+  the difference between those two ratios is the JDK upgrade Varka already requires, not
+  anything the kernels do. Quote the 3.7x: it is the honest one, because Varka cannot run on
+  Java 17 at all.
+* The gap also sets what the narrow-vector result means. At 128-bit the emitted kernel runs at
+  599 M rows/s, only 1.25x the Java 25 row path - but 2.5x the Java 17 one, which is what a
+  user on Spark's default JDK would actually be leaving behind.

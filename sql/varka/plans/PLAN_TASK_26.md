@@ -204,11 +204,19 @@ healthy at 59 ops.
 The consequence is stated up front rather than discovered: `SELECT year(d),
 month(d)` computes the decomposition twice, once per method. That is the trade
 task 17 measured and chose - recomputing ops in registers beat a wider method's
-register pressure, 4587.1 against 3196.2 M rows/s (`PLAN_TASK_17.md` section 5;
-the `GROUP_BUDGET` javadoc's "4.1 G against 3.0 G" rounding of the same run is
-a misquote, corrected alongside the attribution in commit 5) - and the corpus
-asks for one field at a time. It opens a debt register entry in `PLAN_MILESTONE_4.md` naming what
-closing it would take, which is multi-value IR nodes.
+register pressure - 4471.9 against 3110.5 M rows/s in the parity file this task
+regenerates. (That figure moved twice before it settled, and both wrong turns
+belong on the record. The task first "corrected" the `GROUP_BUDGET` javadoc from
+"4.1 G against 3.0 G" to 4587.1/3196.2, which is `PLAN_TASK_17.md`'s prose and
+appears in no results file; the first review caught it and the revert restored
+figures that rounded the *pre-task* run. The second review caught that too: this
+task regenerates the parity file, so the javadoc had to be requoted from the new
+run, not from the old one. Twice the same mistake - prose written before the
+numbers were regenerated - which is what `sql/varka/AGENTS.md` means by
+requoting from one run.) The
+corpus asks for one field at a time, so this opens a debt register entry in
+`PLAN_MILESTONE_4.md` naming what closing it would take, which is multi-value
+IR nodes.
 
 ## 6. Verification
 
@@ -312,8 +320,7 @@ Five commits, each green on its own:
 5. **The default and the docs**: the owner's choice recorded here,
    `docs/sql-varka.md` and `README.md` requoted from that one run, the
    milestone's task-26 row marked done, its debt register entry opened, and its
-   task-17 attribution corrected, along with the `GROUP_BUDGET` javadoc's
-   4.1/3.0 G misquote of the task-17 run.
+   task-17 attribution corrected.
 
 ## 10. Risks, ranked
 
@@ -336,15 +343,159 @@ Five commits, each green on its own:
 6. **Numbers moving under the task's own feet.** Commits 2 to 4 all touch
    emitted bytes; regenerate once, in commit 4.
 
-## 11. Explicitly out of task 26
+## 11. Outcome
+
+Built in six commits, in the sequence section 9 registered, with one addition
+the owner asked for mid-flight (the Java 17 baseline, section 11.4).
+
+### 11.1 What the admission check turned out to be
+
+Section 1's bound held and decided the algorithm: no exact magic multiply
+exists on int lanes for a dividend past roughly 46341, so 146097 and 36524 have
+none at any useful range. Round-down magic plus a fixed number of carries does,
+and the century-then-year split retires 1461 by replacing it with a `/365`
+whose dividend is at most 36524 - under the bound, and so exact.
+
+Verified rather than argued, as committed opt-in tests (`-Dvarka.sweep=true`,
+41.9 s in total):
+
+| sweep | result |
+|---|---|
+| the model against `LocalDate`, all 16777216 days of its range | 0 mismatches |
+
+Two further sweeps ran while the total variant existed - it against a
+long-arithmetic reference over all 2^32 days, and that reference against
+`LocalDate` - both with zero mismatches. They went when the variant did.
+
+### 11.2 The measurement, and the owner's choice
+
+`VarkaEmitterParityBenchmark`'s year section, 20M rows in 4096-row chunks,
+best-time rates. The default-width table is committed; the 128-bit one is here,
+as this file's own section 6 said it would be.
+
+| case | AVX-512 | 128-bit |
+|---|---|---|
+| `year` | 1778 M/s | 599 M/s |
+| `year`, mixed nulls | 1694 M/s | 566 M/s |
+| four fields | 441 M/s | 157 M/s |
+| `dayofweek`, for scale | 7746 M/s | 2640 M/s |
+| per-row `LocalDate` | 479 M/s | 480 M/s |
+
+**These are not the numbers this section first carried, and the correction is
+worth recording.** The review of the pull request found that the year section's
+chunk loop advanced its row counter but never offset its addresses, so every
+call re-read the same 16 KB while the scalar anchor in the same table walked
+all one million rows - an L1-resident numerator against a streaming
+denominator. Fixed, and the whole table regenerated in the corrected regime.
+The distortion turned out smaller than feared (`year` 1834 to 1778, `dayofweek`
+8059 to 7746, about 3-4%) because a 4096-row chunk of a 4 MB buffer is largely
+L2-resident either way, but the comparison the section rests on is now measured
+rather than nearly measured.
+
+One consequence cannot be repaired: the `TOTAL`-against-`NARROWED` figures
+below were taken in the old regime and `TOTAL` has since been deleted, so they
+cannot be re-run. They are left as they were measured, with this note, because
+the correction factor on every comparable case was 3-4% and the gap they
+decided was 14-24%.
+
+**The owner chose `NARROWED`**, on the finding that totality costs 14 to 24%
+depending on width and null pattern while the range it gives up - years outside
+-12800 to 33134 - is one no SQL date literal can reach. **`TOTAL` was then
+removed**, on a second decision: it had been planned as a live reference variant
+the way `FloorMod7` keeps two, but a variant nothing selects is a second lowering
+to keep correct for as long as it lives, and the measurement it existed to
+produce is above. What makes dropping it safe is the guard: a batch holding a day
+past the range is declined and recomputed on the row path, which the differential
+asserts with `date_add` pushing twenty million days past 9999-12-31.
+
+Section 2's decision 2 said both would ship. That is the one place this file's
+plan and its outcome disagree, and the outcome is what happened.
+
+### 11.3 Two results worth naming separately
+
+**At 128-bit the item barely pays.** 599 M/s against the row path's 480 is
+1.25x, where AVX-512 gives 3.7x. This is the vocabulary item's weakest width
+and the number is on the record rather than inferred; a future decision to
+decline the extraction family below some vector width would start here.
+
+**The four-field projection costs 4.0x one field, not 4x-with-sharing.** Each
+extraction carries its own decomposition, which is the trade task 17 trained
+the emitter on and which section 5 predicted. It opens the milestone's debt
+register entry rather than being fixed here.
+
+### 11.4 The scalar denominator, on both JDKs
+
+Asked for after the measurement: what the baseline is on Java 17, which is what
+Apache Spark still builds with by default. The fork cannot answer from inside
+its own build - it targets Java 25, because the emitter needs
+`java.lang.classfile` - so the loop the ratio is against became a committed
+program outside the build (`sql/varka/baselines/`). The same scalar loop is
+**2.0x faster on Java 25 than on Java 17** (479 against 236 M rows/s), which is
+not Varka but what the JVM did to `java.time` between the releases. So the
+shipped kernel is 3.7x the Java 25 row path and 7.5x the Java 17 one; the
+results file says to quote the 3.7x, because Varka cannot run on Java 17 at
+all.
+
+### 11.4b One finding left unfixed, deliberately
+
+The second review found that `emitChrono` emits five Year-only steps - the era
+carry's masked add, `era -= NARROW_ERA_BIAS`, the century fold's masked
+subtract, the century carry's masked add and `yearOfCentury -= 1` - into the
+`Month`, `DayOfMonth` and `Quarter` methods, which never read them. Four of the
+five are masked ops, which this project prices at 2.3-2.9x an unmasked one, so
+it is roughly 10% of those three methods. The finding is correct.
+
+It is not fixed here, for a reason worth stating rather than leaving as a
+silence: the saving falls entirely on the three fields the corpus never calls -
+`year` is the only extraction TPC-H uses and the only one those steps are live
+for - while the fix threads a "which field is this" flag through `emitEra` and
+`emitCarry`, the shared arithmetic all four fields depend on. Trading risk in
+the field that is used for speed in the three that are not is the wrong way
+round. It belongs in task 32, which is already about restructuring these tails,
+and where a multi-value node would make the question moot.
+
+### 11.5 The predictions, scored
+
+1. **Op count: right.** ~51 emitted vector ops for `year` against the 40-45
+   predicted, and about 2.5x `dayofweek`'s 20-op body against the predicted 2x.
+2. **What totality costs: wrong, and by more than noise.** Predicted 5 to 12%;
+   measured 14 to 24%. The prediction reasoned from op count alone (five ops on
+   forty) and missed that the carries the total variant adds are *masked* ops,
+   which this project has measured at 2.3-2.9x an unmasked one. Both ratios are
+   under the 1.3x rule and were reproduced across three runs of the table.
+3. **The speedups: one right, one badly wrong.** 3.7x over the scalar loop was
+   predicted 3 to 5x against the Janino row path, and the in-harness Janino arm
+   was never built - the comparison landed against the scalar `LocalDate` loop
+   instead. The 15 to 30x
+   over that loop was wrong by an order of magnitude: it is 3.7x (1778.0 against
+   478.6 M rows/s, both from the committed run), because
+   escape analysis scalarizes the `LocalDate` allocation in a tight loop, which
+   the prediction anchored on task 11's 62 M rows/s figure without checking
+   whether that figure was measured the same way.
+4. **The grouping change: right.** Single-field projections are unchanged, the
+   four-field one stays off the compile cliff, and no committed number for an
+   existing shape moved.
+5. **The pinned literals: right.** Both moved, and nothing else did.
+
+### 11.6 What it cost
+
+| | |
+|---|---|
+| Vector ops emitted for `year` | ~51 (~45 shared with the other three fields) |
+| New IR node types | 4 |
+| Shape hash | `612c94d132690dc2` to `041e35db20d62e91` |
+| Pinned line map | 18 lines to 25 |
+| New tests | 6 emitter, 2 compiler, 5 differential, 3 model |
+
+## 12. Explicitly out of task 26
 
 * **`dayofyear`, date-level `date_trunc`, `last_day`, `next_day`.** The algebra
   yields them and the corpus does not ask; they enter with their own argument
   the way `IN` and `Coalesce` entered milestone 3.
-* **A `DIV` reference variant** of the decomposition, the way `FloorMod7` keeps
-  one. Two independently derived variants already check each other, and the
-  exhaustive sweep against the JDK calendar is a stronger oracle than a third
-  lowering would be.
+* **Any reference variant of the decomposition**, the way `FloorMod7` keeps two.
+  The `TOTAL` variant was built as one and then removed (section 11.2); a `DIV`
+  one was never built. The exhaustive sweep against the JDK calendar is a
+  stronger oracle than either would be, and it costs nothing to keep correct.
 * **Multi-value IR nodes** so several calendar fields share one decomposition -
   the debt register entry from section 5, not this task's change.
 * **`year(timestamp)`.** The analyzer inserts `Cast(TimestampType, DateType)`,

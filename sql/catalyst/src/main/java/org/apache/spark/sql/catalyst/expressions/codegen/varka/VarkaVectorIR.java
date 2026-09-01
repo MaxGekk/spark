@@ -50,7 +50,8 @@ public sealed interface VarkaVectorIR
     permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
             VarkaVectorIR.IfElse, VarkaVectorIR.Greatest, VarkaVectorIR.Least,
-            VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.Cond {
+            VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay,
+            VarkaVectorIR.Chrono, VarkaVectorIR.Cond {
 
   /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
   enum LaneType { INT }
@@ -168,6 +169,43 @@ public sealed interface VarkaVectorIR
   record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {}
 
   /**
+   * The civil-from-days extractions, as a sealed family rather than a set the emitter has to
+   * recognise by hand. Two of the emitter's decisions key off "is this a calendar node" - the
+   * {@code GROUP_BUDGET} weight, and whether a body needs a range-guard accumulator - and
+   * before this interface existed both asked an {@code instanceof} chain, which a fifth
+   * extraction would have silently answered "no": weight 1 instead of the real one, and no
+   * guard at all, publishing wrong dates instead of declining them. Adding a member here
+   * makes every exhaustive switch in {@link VarkaLoopEmitter} a compile error until it is
+   * handled, which is the same protection {@link Cond} gives the condition nodes.
+   */
+  sealed interface Chrono extends VarkaVectorIR permits Year, Month, DayOfMonth, Quarter {}
+
+  /**
+   * Spark's {@code year} (task 26): the proleptic Gregorian year of a date, as
+   * {@code LocalDate#getYear} gives it. An {@code IntegerType} output at the Spark level.
+   *
+   * <p>The four calendar nodes below are unlike every other node here in one way worth naming:
+   * each expands to about fifty lane ops rather than one or two, because there is no vector
+   * divide and a civil-from-days decomposition is mostly division. {@link VarkaChrono} holds
+   * the arithmetic and the constants; {@link VarkaLoopEmitter} weighs these nodes accordingly
+   * when it partitions outputs into loop methods, so four of them cannot land in one method.
+   *
+   * <p>Each node carries the whole decomposition rather than sharing it: two calendar fields of
+   * the same date compute it twice, in two sibling methods, which is the trade task 17 measured
+   * and chose. Sharing it would need a multi-value node, which the IR has no shape for.
+   */
+  record Year(VarkaVectorIR days) implements Chrono {}
+
+  /** Spark's {@code month}, 1-12; see {@link Year} for what the node costs and why. */
+  record Month(VarkaVectorIR days) implements Chrono {}
+
+  /** Spark's {@code dayofmonth}, 1-31; see {@link Year}. */
+  record DayOfMonth(VarkaVectorIR days) implements Chrono {}
+
+  /** Spark's {@code quarter}, 1-4 - the month's own division by three; see {@link Year}. */
+  record Quarter(VarkaVectorIR days) implements Chrono {}
+
+  /**
    * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is
    * derived from it and must be stable across JVMs, restarts and JDK releases - one shape,
    * one {@code VarkaFusedProjection_<hash>} name, everywhere. {@link Record#toString} makes
@@ -201,6 +239,10 @@ public sealed interface VarkaVectorIR
       case Least n -> "(least " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + canonical(n.days()) + ")";
       case WeekDay n -> "(weekDay " + canonical(n.days()) + ")";
+      case Year n -> "(year " + canonical(n.days()) + ")";
+      case Month n -> "(month " + canonical(n.days()) + ")";
+      case DayOfMonth n -> "(dayOfMonth " + canonical(n.days()) + ")";
+      case Quarter n -> "(quarter " + canonical(n.days()) + ")";
     };
   }
 
@@ -252,6 +294,10 @@ public sealed interface VarkaVectorIR
           + lineOf.applyAsInt(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + lineOf.applyAsInt(n.days()) + ")";
       case WeekDay n -> "(weekDay " + lineOf.applyAsInt(n.days()) + ")";
+      case Year n -> "(year " + lineOf.applyAsInt(n.days()) + ")";
+      case Month n -> "(month " + lineOf.applyAsInt(n.days()) + ")";
+      case DayOfMonth n -> "(dayOfMonth " + lineOf.applyAsInt(n.days()) + ")";
+      case Quarter n -> "(quarter " + lineOf.applyAsInt(n.days()) + ")";
     };
   }
 }

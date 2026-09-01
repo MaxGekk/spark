@@ -40,20 +40,25 @@ import java.util.Set;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Chrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Or;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Quarter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.SubDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekDay;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Year;
 
 /**
  * Emits a fused vector loop for a {@link VarkaVectorIR} DAG with the Class-File API
@@ -184,9 +189,10 @@ public final class VarkaLoopEmitter {
    * <p>Task 17 priced the one candidate the debt register left open - raising the budget so
    * two outputs sharing a deep chain keep their cross-output CSE in one method - and closed
    * it against the change: on 20 distinct ops split across two outputs, the shipped 16 runs
-   * 4.1 G rows/s (two loop methods, the shared chain recomputed per lane group) against
-   * 3.0 G at 24 (one method, CSE kept). Recomputing eight ops in registers is cheaper than
-   * the wider method's register pressure, which is the same effect that made sibling methods
+   * 4471.9 M rows/s (two loop methods, the shared chain recomputed per lane group) against
+   * 3110.5 M at 24 (one method, CSE kept) - the committed parity file, requoted whenever it
+   * is regenerated, which task 26 had to learn twice. Recomputing eight ops in registers is
+   * cheaper than the wider method's register pressure, the same effect that made sibling methods
    * the rule in the first place. The parity benchmark keeps both cases so a future retune is
    * measured rather than argued.
    */
@@ -197,6 +203,16 @@ public final class VarkaLoopEmitter {
    * bitset, which fixes the representation limit at 64; real projections reference a handful.
    */
   public static final int MAX_INPUTS = 64;
+
+  /**
+   * What a calendar node weighs against {@link #GROUP_BUDGET}: the vector ops
+   * {@link #emitChrono} emits for one, counted and rounded to the nearest ten. It only has to
+   * exceed the budget for each calendar output to get its own loop method; the real figure is
+   * used rather than a flag so that a future node of intermediate width sorts sensibly beside
+   * it, which is the only reason the exact value matters - re-count it if the lowering
+   * changes shape rather than leaving it to drift.
+   */
+  private static final int CHRONO_WEIGHT = 50;
 
   private VarkaLoopEmitter() {
   }
@@ -226,8 +242,12 @@ public final class VarkaLoopEmitter {
   private static final ClassDesc LONG_ARRAY = ConstantDescs.CD_long.arrayType();
   private static final ClassDesc INT_ARRAY = ConstantDescs.CD_int.arrayType();
 
-  /** {@code void run(long[], long[], int[], long[], long[], int[], int)}. */
-  private static final MethodTypeDesc RUN = MethodTypeDesc.of(ConstantDescs.CD_void,
+  /**
+   * {@code int run(long[], long[], int[], long[], long[], int[], int)} - every body method
+   * shares it, so slots line up everywhere and the driver can forward a callee's status
+   * without repacking. The int is the batch status; see {@link VarkaFusedKernel#run}.
+   */
+  private static final MethodTypeDesc RUN = MethodTypeDesc.of(ConstantDescs.CD_int,
       LONG_ARRAY, LONG_ARRAY, INT_ARRAY, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
       ConstantDescs.CD_int);
   private static final MethodTypeDesc INIT = MethodTypeDesc.of(ConstantDescs.CD_void);
@@ -306,6 +326,7 @@ public final class VarkaLoopEmitter {
       MethodTypeDesc.of(INT_VECTOR, VECTOR, VECTOR_MASK);
   /** {@code VectorMask VectorMask.and/or(VectorMask)} and {@code VectorMask.not()}. */
   private static final MethodTypeDesc MASK_BINARY = MethodTypeDesc.of(VECTOR_MASK, VECTOR_MASK);
+  private static final MethodTypeDesc ANY_TRUE = MethodTypeDesc.of(ConstantDescs.CD_boolean);
   private static final MethodTypeDesc MASK_UNARY = MethodTypeDesc.of(VECTOR_MASK);
   /** {@code void IntVector.intoMemorySegment(MemorySegment, long, ByteOrder)} - unmasked. */
   private static final MethodTypeDesc INTO_MEMORY_SEGMENT_DENSE = MethodTypeDesc.of(
@@ -515,7 +536,12 @@ public final class VarkaLoopEmitter {
     for (int o = 0; o < outputs.size(); o++) {
       Set<VarkaVectorIR> withNext = new HashSet<>(seen);
       int marginal = addOps(outputs.get(o), withNext);
-      if (!current.isEmpty() && ops + marginal > budget) {
+      // marginal == 0 means this output adds no node the group does not already have - it
+      // is structurally the same tree - so splitting it off cannot reduce the method's op
+      // count and only costs it the CSE. That matters once a node can outweigh the budget on
+      // its own: after one calendar output `ops` already exceeds it, so without this test
+      // `SELECT year(d) AS a, year(d) AS b` would emit the decomposition twice.
+      if (!current.isEmpty() && marginal > 0 && ops + marginal > budget) {
         groups.add(current);
         current = new ArrayList<>();
         withNext = new HashSet<>();
@@ -535,11 +561,54 @@ public final class VarkaLoopEmitter {
     if (!seen.add(node)) {
       return 0;
     }
-    int count = node instanceof ColumnRef || node instanceof LiteralSlot ? 0 : 1;
+    int count = weightOf(node);
     for (VarkaVectorIR child : childrenOf(node)) {
       count += addOps(child, seen);
     }
     return count;
+  }
+
+  /**
+   * What one node costs against {@link #GROUP_BUDGET}. Every node has weighed 1 since task 10,
+   * because every node was one or two lane ops; task 26's calendar nodes are not - each expands
+   * to roughly forty, since a civil-from-days decomposition is mostly division and there is no
+   * vector divide. Counting them as 1 would let four calendar outputs share a loop method of
+   * ~180 vector ops, which is the compile cliff {@link #GROUP_BUDGET} exists to avoid (see its
+   * javadoc: a 64-op loop took a ~10 s tier-4 compile). Weighing them by what they emit puts
+   * each in its own sibling method instead, which is the shape the budget's own doc blesses -
+   * an output wider than the budget forms its own group, and single-output loops measured
+   * healthy at 59 ops.
+   *
+   * <p>This is deliberately only about <i>grouping</i>. {@link #MAX_FUSED_NODES} still counts
+   * nodes, so a projection may fuse as many calendar fields as it likes; they simply do not
+   * share a method.
+   */
+  private static int weightOf(VarkaVectorIR node) {
+    if (node instanceof ColumnRef || node instanceof LiteralSlot) {
+      return 0;
+    }
+    return isChrono(node) ? CHRONO_WEIGHT : 1;
+  }
+
+  /** Whether {@code node}'s subtree contains a calendar extraction, which is what decides
+   * whether a body needs a guard accumulator at all. */
+  private static boolean hasChrono(VarkaVectorIR node) {
+    if (isChrono(node)) {
+      return true;
+    }
+    for (VarkaVectorIR child : childrenOf(node)) {
+      if (hasChrono(child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether {@code node} is one of the civil-from-days extractions. The IR's sealed
+   * {@link Chrono} interface is what makes this total: a new extraction joins the family and
+   * is weighed and guarded without touching this method. */
+  private static boolean isChrono(VarkaVectorIR node) {
+    return node instanceof Chrono;
   }
 
   private static VarkaVectorIR[] childrenOf(VarkaVectorIR node) {
@@ -551,6 +620,10 @@ public final class VarkaLoopEmitter {
       case DateDiff n -> new VarkaVectorIR[] {n.end(), n.start()};
       case DayOfWeek n -> new VarkaVectorIR[] {n.days()};
       case WeekDay n -> new VarkaVectorIR[] {n.days()};
+      case Year n -> new VarkaVectorIR[] {n.days()};
+      case Month n -> new VarkaVectorIR[] {n.days()};
+      case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
+      case Quarter n -> new VarkaVectorIR[] {n.days()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IfElse n -> new VarkaVectorIR[] {n.cond(), n.thenNode(), n.elseNode()};
@@ -647,10 +720,10 @@ public final class VarkaLoopEmitter {
     cb.invokespecial(classDesc, name, RUN);
   }
 
-  /** {@link #invokeCall} followed by {@code return}. */
+  /** {@link #invokeCall} whose status becomes this method's own - a tail call in effect. */
   private static void invokeBody(CodeBuilder cb, ClassDesc classDesc, String name) {
     invokeCall(cb, classDesc, name);
-    cb.return_();
+    cb.ireturn();
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -760,6 +833,10 @@ public final class VarkaLoopEmitter {
         case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
         case DayOfWeek n -> analyzeOp(node, false, n.days());
         case WeekDay n -> analyzeOp(node, false, n.days());
+        case Year n -> analyzeOp(node, false, n.days());
+        case Month n -> analyzeOp(node, false, n.days());
+        case DayOfMonth n -> analyzeOp(node, false, n.days());
+        case Quarter n -> analyzeOp(node, false, n.days());
         case Greatest n -> analyzeOp(node, true, n.left(), n.right());
         case Least n -> analyzeOp(node, true, n.left(), n.right());
         case IfElse n -> analyzeOp(node, true, n.cond(), n.thenNode(), n.elseNode());
@@ -869,12 +946,23 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, int[]> pairTmp = new HashMap<>();
     /** Per DayOfWeek/WeekDay: the original-value and fold temporaries. */
     final Map<VarkaVectorIR, int[]> dowTmp = new HashMap<>();
+    /** Per calendar node: the civil-from-days temporaries (task 26), six vectors and two
+     * masks - the decomposition is too long to keep on the operand stack. */
+    final Map<VarkaVectorIR, int[]> chronoTmp = new HashMap<>();
     /**
      * The epilogue's bounds mask (task 24), or null in every other body role. Non-null is
      * exactly the signal that loads and stores take their masked overloads: the value is a
      * {@code VectorMask} local, live for the whole single pass.
      */
     Integer epilogueMask;
+    /** The driver's status accumulator (an int slot), where its callees' returns are ORed. */
+    int status;
+    /**
+     * The guard's accumulated out-of-range mask (task 26), or null when this body has no
+     * chrono node at all. Non-null is exactly the signal that the method returns something
+     * other than a constant zero.
+     */
+    Integer guardAcc;
 
     Slots(int numInputs, int numOutputs) {
       srcSeg = new int[numInputs];
@@ -942,6 +1030,15 @@ public final class VarkaLoopEmitter {
     s.cmpTmp = slot;
     slot += 2;
     s.maskTmp = slot++;
+    s.status = slot++;
+    // The guard exists only where a lowering is partial - today, the narrowed calendar one.
+    // Allocated for the whole body rather than per node: one accumulator carries every guarded
+    // node's verdict, since the caller acts on the batch, not on the lane.
+    boolean guarded = mode != BodyMode.DRIVER
+        && outputs.stream().anyMatch(VarkaLoopEmitter::hasChrono);
+    if (guarded) {
+      s.guardAcc = slot++;
+    }
 
     if (mode == BodyMode.EPILOGUE) {
       s.epilogueMask = slot++;
@@ -973,6 +1070,11 @@ public final class VarkaLoopEmitter {
           }
           if (node instanceof DayOfWeek || node instanceof WeekDay) {
             s.dowTmp.put(node, new int[] {slot++, slot++});
+          }
+          if (isChrono(node)) {
+            // Six int-vector temporaries and two masks; see emitChrono for what stays live.
+            s.chronoTmp.put(node, new int[] {
+                slot++, slot++, slot++, slot++, slot++, slot++, slot++, slot++});
           }
         } else if (dense) {
           s.condMask.put(node, slot++);
@@ -1007,6 +1109,10 @@ public final class VarkaLoopEmitter {
       case SubDays n -> s.wordRef.get(n.days());
       case DayOfWeek n -> s.wordRef.get(n.days());
       case WeekDay n -> s.wordRef.get(n.days());
+      case Year n -> s.wordRef.get(n.days());
+      case Month n -> s.wordRef.get(n.days());
+      case DayOfMonth n -> s.wordRef.get(n.days());
+      case Quarter n -> s.wordRef.get(n.days());
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
@@ -1043,11 +1149,12 @@ public final class VarkaLoopEmitter {
     int numOutputs = outputs.size();
     Slots s = planSlots(dense, mode, outputs, analysis, numLiterals);
 
-    // (1) if (length <= 0) return;
+    // (1) if (length <= 0) return 0 - nothing ran, so there is nothing to report.
     Label nonEmpty = cb.newLabel();
     cb.iload(P_LENGTH);
     cb.ifgt(nonEmpty);
-    cb.return_();
+    cb.loadConstant(0);
+    cb.ireturn();
     cb.labelBinding(nonEmpty);
 
     // (2) Nominal sizes: dataBytes = (long) length * 4; validityBytes = (length + 7) / 8L.
@@ -1168,7 +1275,8 @@ public final class VarkaLoopEmitter {
         firstOutput = false;
       }
       cb.ifeq(live);
-      cb.return_();
+      cb.loadConstant(0);
+      cb.ireturn();
       cb.labelBinding(live);
     }
 
@@ -1196,17 +1304,35 @@ public final class VarkaLoopEmitter {
       }
     }
 
+    if (s.guardAcc != null) {
+      // An empty mask: no lane has been found out of range yet.
+      cb.aload(s.species);
+      cb.loadConstant(0L);
+      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+      cb.astore(s.guardAcc);
+    }
+
     switch (mode) {
       case DRIVER -> {
+        // Every callee returns a status; the batch's is their union, so one out-of-range lane
+        // anywhere condemns the whole batch - which is what the caller acts on.
+        cb.loadConstant(0);
+        cb.istore(s.status);
         for (int g = 0; g < groups.size(); g++) {
+          cb.iload(s.status);
           invokeCall(cb, classDesc, (dense ? "loopDense" : "loopMasked") + g);
+          cb.ior();
+          cb.istore(s.status);
         }
         // The rows past loopBound belong to the sibling epilogue method.
-        invokeBody(cb, classDesc, dense ? "epilogueDense" : "epilogueMasked");
+        cb.iload(s.status);
+        invokeCall(cb, classDesc, dense ? "epilogueDense" : "epilogueMasked");
+        cb.ior();
+        cb.ireturn();
       }
       case LOOP -> {
         emitVectorLoop(cb, dense, outputs, groups.get(group), analysis, s);
-        cb.return_();
+        emitStatusReturn(cb, s);
       }
       case EPILOGUE -> {
         // One method for every output, not one per group: the epilogue runs a single pass per
@@ -1217,9 +1343,32 @@ public final class VarkaLoopEmitter {
           all.add(o);
         }
         emitEpilogue(cb, dense, outputs, all, analysis, s);
-        cb.return_();
+        emitStatusReturn(cb, s);
       }
     }
+  }
+
+  /**
+   * Ends a loop or epilogue method with its status: a constant zero where nothing is guarded,
+   * and otherwise whether any lane the body saw fell outside the lowering's range. The
+   * reduction is once per method, not once per lane group - the accumulator is a mask OR in
+   * the loop, which is one op.
+   */
+  private static void emitStatusReturn(CodeBuilder cb, Slots s) {
+    if (s.guardAcc == null) {
+      cb.loadConstant(0);
+      cb.ireturn();
+      return;
+    }
+    Label clean = cb.newLabel();
+    cb.aload(s.guardAcc);
+    cb.invokevirtual(VECTOR_MASK, "anyTrue", ANY_TRUE);
+    cb.ifeq(clean);
+    cb.loadConstant(VarkaFusedKernel.STATUS_CHRONO_RANGE);
+    cb.ireturn();
+    cb.labelBinding(clean);
+    cb.loadConstant(0);
+    cb.ireturn();
   }
 
   private static void emitVectorLoop(CodeBuilder cb, boolean dense,
@@ -1272,7 +1421,8 @@ public final class VarkaLoopEmitter {
     cb.iload(s.loopBound);
     cb.iload(P_LENGTH);
     cb.if_icmplt(remainder);
-    cb.return_();
+    cb.loadConstant(0);
+    cb.ireturn();
     cb.labelBinding(remainder);
 
     cb.iload(s.loopBound);
@@ -1566,6 +1716,26 @@ public final class VarkaLoopEmitter {
         emitFloorMod7(cb, node, analysis, s);
         emitModOffset(cb, s, 3);
       }
+      case Year n -> {
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        emitChrono(cb, node, dense, analysis, s);
+      }
+      case Month n -> {
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        emitChrono(cb, node, dense, analysis, s);
+      }
+      case DayOfMonth n -> {
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        emitChrono(cb, node, dense, analysis, s);
+      }
+      case Quarter n -> {
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        emitChrono(cb, node, dense, analysis, s);
+      }
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
       case Least n -> emitPick(cb, n, n.left(), n.right(), "min", dense, analysis, s,
@@ -1777,6 +1947,303 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(k);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     emitSubSevenWhereGe(cb, s);
+  }
+
+  /**
+   * Consumes the child's {@code IntVector} of epoch days and leaves one of the four calendar
+   * fields (task 26). {@link VarkaChrono} is the scalar twin of everything below - it holds
+   * every constant this method loads, and its own javadoc carries the derivation - so the two
+   * cannot drift and a disagreement between them is an emission bug rather than an arithmetic
+   * one.
+   *
+   * <p>The shape is a civil-from-days decomposition in a March-based year, where the leap day
+   * is a year's last day rather than an interior one. There is no vector divide, so every
+   * division is a magic multiply: the three small ones are exact, and the two large ones
+   * ({@code / 146097} and {@code / 36524}) use a round-down magic that never overestimates,
+   * followed by carries that are one compare and two masked adjustments each. That is the
+   * whole reason this node weighs {@link #CHRONO_WEIGHT} rather than 1.
+   *
+   * <p>The temporaries are locals rather than operand-stack juggling because six values stay
+   * live across the tail - era, century, year of century, day of year, the March month, and
+   * two masks - which is past what the stack can hold legibly.
+   */
+  private static void emitChrono(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s) {
+    int[] t = s.chronoTmp.get(node);
+    int days = t[0];
+    int era = t[1];
+    int rem = t[2];
+    int century = t[3];
+    int yearOfCentury = t[4];
+    int marchMonth = t[5];
+    int mask = t[6];
+    int leap = t[7];
+
+    cb.astore(days);
+
+    emitEra(cb, node, dense, analysis, s, days, era, rem, mask);
+
+    // rem is now the day of era, in [0, 146096]. Everything below works on that.
+    // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
+    cb.aload(rem);
+    emitMagic(cb, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K);
+    cb.astore(century);
+    cb.aload(rem);
+    cb.aload(century);
+    cb.loadConstant(VarkaChrono.CENTURY_DAYS);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(rem);
+    emitCarry(cb, century, rem, VarkaChrono.CENTURY_DAYS, mask);
+
+    // An era's fourth century holds one extra day - its leap day - so the quotient can land on
+    // 4 for exactly one day of each era. Fold that back into century 3.
+    cb.aload(century);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(4);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.astore(mask);
+    cb.aload(century);
+    cb.loadConstant(1);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+    cb.astore(century);
+    cb.aload(rem);
+    cb.loadConstant(VarkaChrono.CENTURY_DAYS);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.astore(rem);
+
+    // yoc = doc / 365 - exact here, because the split into centuries left a dividend under
+    // 44859. It ignores leap days, so it can name the following year; the fix is below.
+    cb.aload(rem);
+    emitMagic(cb, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K);
+    cb.astore(yearOfCentury);
+
+    // doy = doc - (365 * yoc + yoc / 4). Negative exactly where yoc overshot.
+    cb.aload(rem);
+    cb.aload(yearOfCentury);
+    cb.loadConstant(365);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.aload(yearOfCentury);
+    emitShift(cb, "LSHR", 2);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(rem);
+
+    // Where it overshot, step back a year and give the days back - one more when the year we
+    // step into is a leap year, which in a March-based year is simply yoc divisible by four.
+    cb.aload(rem);
+    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.astore(mask);
+    cb.aload(yearOfCentury);
+    cb.loadConstant(3);
+    cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.aload(mask);
+    cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+    cb.astore(leap);
+    cb.aload(rem);
+    cb.loadConstant(365);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.loadConstant(1);
+    cb.aload(leap);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.astore(rem);
+    cb.aload(yearOfCentury);
+    cb.loadConstant(1);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+    cb.astore(yearOfCentury);
+
+    // mp = (5 * doy + 2) / 153: the March-based month, 0 for March through 11 for February.
+    cb.aload(rem);
+    cb.loadConstant(5);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.loadConstant(2);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
+    cb.astore(marchMonth);
+
+    switch (node) {
+      case Year n -> {
+        // 400 * era + 100 * century + yoc, plus one where the March year has turned January.
+        cb.aload(era);
+        cb.loadConstant(400);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.aload(century);
+        cb.loadConstant(100);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.aload(yearOfCentury);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.loadConstant(1);
+        emitJanuaryMask(cb, marchMonth);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+      }
+      case Month n -> emitChronoMonth(cb, marchMonth);
+      case DayOfMonth n -> {
+        // doy - (153 * mp + 2) / 5 + 1, the inverse of the month's own linear form.
+        cb.aload(rem);
+        cb.aload(marchMonth);
+        cb.loadConstant(153);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.loadConstant(2);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+        cb.loadConstant(1);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+      }
+      case Quarter n -> {
+        emitChronoMonth(cb, marchMonth);
+        cb.loadConstant(2);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+      }
+      default -> throw new IllegalStateException("not a calendar node: " + node);
+    }
+  }
+
+  /**
+   * The day-of-era step: one round-down division and one carry over a biased day, which is
+   * defined only over {@link VarkaChrono#NARROW_MIN_DAYS}..{@link VarkaChrono#NARROW_MAX_DAYS} -
+   * so it also emits the guard, which is what makes the cheaper arithmetic safe to publish.
+   *
+   * <p>A variant that split the dividend instead, and so needed no guard at all over the whole
+   * int range, was built and measured against this one before being dropped: it cost 14 to 24%
+   * depending on width and null pattern, to buy a range no SQL date literal can reach. The
+   * numbers are in {@code PLAN_TASK_26.md} section 11.2.
+   *
+   * <p>The guard is two compares ORed together, then narrowed twice before it is ORed into
+   * the body's accumulator, and both narrowings are load-bearing:
+   *
+   * <ul>
+   *   <li><b>The row's validity</b>, taken from the node's own word reference. A null row's
+   *       data bytes are undefined, so an out-of-range value under one must not condemn the
+   *       batch. {@code planWordRef} aliases a chrono node's word to its child's, and the
+   *       child's word is live by the time this runs, so this covers a computed child as
+   *       well as a bare column - which an earlier version did not, and which is the shape
+   *       {@code year(date_add(d, n))} takes.</li>
+   *   <li><b>The epilogue's bounds mask</b>, where there is one. A masked load fills the
+   *       lanes past {@code length} with 0, and 0 is in range - but the guard runs on this
+   *       node's <i>input</i>, and a computed child maps 0 wherever it likes. Without this,
+   *       {@code year(date_sub(d, 5400000))} declines every batch whose length is not a lane
+   *       multiple while every real row is in range: correct answers, silent total loss of
+   *       fusion, and nothing above debug logging to say so.</li>
+   * </ul>
+   */
+  private static void emitEra(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s, int days, int era, int rem, int mask) {
+    cb.aload(days);
+    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.NARROW_MIN_DAYS);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.aload(days);
+    cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.NARROW_MAX_DAYS);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    if (!dense) {
+      // The node's own word, which planWordRef has aliased to its child's - so this is the
+      // child's validity whatever shape the child has.
+      Integer word = s.wordRef.get(node);
+      if (word != null && word != WORD_ALL_TRUE) {
+        cb.aload(s.species);
+        loadWord(cb, word);
+        cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+        cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+      }
+    }
+    if (s.epilogueMask != null) {
+      cb.aload(s.epilogueMask);
+      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+    }
+    cb.aload(s.guardAcc);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.astore(s.guardAcc);
+
+    // w = days + BIAS, non-negative throughout the range, so one round-down magic and one
+    // carry give the era - and the bias's whole eras come back off in the year assembly.
+    cb.aload(days);
+    cb.loadConstant(VarkaChrono.NARROW_BIAS);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(rem);
+    cb.aload(rem);
+    emitMagic(cb, VarkaChrono.NARROW_ERA_M, VarkaChrono.NARROW_ERA_K);
+    cb.astore(era);
+    cb.aload(rem);
+    cb.aload(era);
+    cb.loadConstant(VarkaChrono.ERA_DAYS);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(rem);
+    emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
+    cb.aload(era);
+    cb.loadConstant(VarkaChrono.NARROW_ERA_BIAS);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+    cb.astore(era);
+  }
+
+  /** {@code [v] -> [(v * m) >>> k]}, the shape every division in {@link #emitChrono} takes. */
+  private static void emitMagic(CodeBuilder cb, int m, int k) {
+    cb.loadConstant(m);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    emitShift(cb, "LSHR", k);
+  }
+
+  /** {@code [v] -> [v shifted]} by a constant, for either shift direction. */
+  private static void emitShift(CodeBuilder cb, String op, int bits) {
+    cb.getstatic(VECTOR_OPERATORS, op, VO_BINARY);
+    cb.loadConstant(bits);
+    cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_I);
+  }
+
+  /**
+   * One correction step of a round-down magic division: where the remainder still reaches the
+   * divisor, the quotient was one short. Consumes nothing and leaves nothing on the stack -
+   * both operands are locals, because the pair is applied up to twice in a row.
+   */
+  private static void emitCarry(CodeBuilder cb, int quotient, int remainder, int divisor,
+      int mask) {
+    cb.aload(remainder);
+    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+    cb.loadConstant(divisor);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.astore(mask);
+    cb.aload(quotient);
+    cb.loadConstant(1);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.astore(quotient);
+    cb.aload(remainder);
+    cb.loadConstant(divisor);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+    cb.astore(remainder);
+  }
+
+  /** Leaves the mask of lanes whose March-based year has already turned into January. */
+  private static void emitJanuaryMask(CodeBuilder cb, int marchMonth) {
+    cb.aload(marchMonth);
+    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+  }
+
+  /** Leaves the January-based month: {@code mp + 3}, less 12 once the year has turned. */
+  private static void emitChronoMonth(CodeBuilder cb, int marchMonth) {
+    cb.aload(marchMonth);
+    cb.loadConstant(3);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.loadConstant(12);
+    emitJanuaryMask(cb, marchMonth);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
   }
 
   /**
