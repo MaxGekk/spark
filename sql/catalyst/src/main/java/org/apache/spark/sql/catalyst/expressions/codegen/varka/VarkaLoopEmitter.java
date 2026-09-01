@@ -31,6 +31,7 @@ import java.lang.constant.ConstantDescs;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.reflect.AccessFlag;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -217,9 +218,19 @@ public final class VarkaLoopEmitter {
   private static final int CHRONO_WEIGHT = 50;
 
   /**
-   * How many int-vector/mask locals {@link #emitAddMonths} needs: the eight
-   * {@link #emitChronoPrefix} already uses, three more to hold the decomposed year/month/day,
-   * and the rest for the month arithmetic and the {@code days_from_civil} recompose. Reusing
+   * How many int-vector/mask locals {@link #emitChronoPrefix} leaves its results in: six
+   * vectors - the biased day, era, day of era (later day of year), century, year of century
+   * and the March-based month - and two masks the carries use as scratch. They are the
+   * fragment's, in the sense of {@link FragmentKey}: a node that shares the prefix reads these
+   * very locals instead of re-deriving them.
+   */
+  private static final int CHRONO_PREFIX_SLOTS = 8;
+
+  /**
+   * How many int-vector/mask locals {@link #emitAddMonths} needs: the
+   * {@link #CHRONO_PREFIX_SLOTS} {@link #emitChronoPrefix} already uses, three more to hold
+   * the decomposed year/month/day, and the rest for the month arithmetic and the
+   * {@code days_from_civil} recompose. Reusing
    * {@link #CHRONO_WEIGHT} for its {@link #weightOf} cost (rather than a separate, larger
    * constant) is deliberate: both only need to exceed {@link #GROUP_BUDGET} to force the node
    * into its own loop method, which 50 already does.
@@ -639,6 +650,52 @@ public final class VarkaLoopEmitter {
     return node instanceof Chrono || node instanceof AddMonths;
   }
 
+  /** The date a calendar node decomposes - the one child its shared prefix depends on. */
+  private static VarkaVectorIR chronoChild(VarkaVectorIR node) {
+    return switch (node) {
+      case Year n -> n.days();
+      case Month n -> n.days();
+      case DayOfMonth n -> n.days();
+      case Quarter n -> n.days();
+      case AddMonths n -> n.days();
+      default -> throw new IllegalStateException("not a calendar node: " + node);
+    };
+  }
+
+  /**
+   * A run of emitted lane ops that several nodes need, that depends on one shared child, and
+   * that leaves its results in scratch locals rather than on the operand stack (task 32 step
+   * B). It is the sub-node counterpart of the CSE {@link #emitValue} already does between whole
+   * nodes: what is worth sharing between {@code year(d)} and {@code month(d)} is not a node -
+   * the IR has none for it - but the forty-odd ops in the middle of both their emissions.
+   *
+   * <p>One kind so far. The key carries it so that a second one is additive rather than a
+   * rewrite of everything keyed on it.
+   */
+  private enum FragmentKind { CHRONO_PREFIX }
+
+  /**
+   * What makes two emissions of a fragment interchangeable: the kind, the child they decompose,
+   * and - because {@link #emitChronoPrefix} carries the narrow-range guard, and the guard reads
+   * the node's validity word - the reference that word resolves to.
+   *
+   * <p>The word is what stops this being keyed on the child alone. {@code planWordRef} aliases
+   * every {@link Chrono} extraction's word to its child's, so {@code year(d)} and {@code
+   * month(d)} agree and share; {@link AddMonths}'s word is the AND of the date's and the month
+   * count's, so {@code add_months(d, n)} over a nullable {@code n} does not share with {@code
+   * year(d)} - and must not, because its guard would then be ANDed with a mask that is not its
+   * own. In a dense body no word is planned at all and the child alone decides.
+   *
+   * @param word the node's validity-word reference, or null in a dense body.
+   */
+  private record FragmentKey(FragmentKind kind, VarkaVectorIR child, Integer word) {}
+
+  /** {@link FragmentKey} for {@code node}'s civil-from-days prefix; see that record's doc. */
+  private static FragmentKey fragmentKey(VarkaVectorIR node, boolean dense, Slots s) {
+    return new FragmentKey(FragmentKind.CHRONO_PREFIX, chronoChild(node),
+        dense ? null : s.wordRef.get(node));
+  }
+
   private static VarkaVectorIR[] childrenOf(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef c -> new VarkaVectorIR[0];
@@ -987,8 +1044,24 @@ public final class VarkaLoopEmitter {
      * emitValue arm keeps that copy on the operand stack instead (dup/swap). */
     final Map<VarkaVectorIR, int[]> dowTmp = new HashMap<>();
     /** Per calendar node: the civil-from-days temporaries (task 26), six vectors and two
-     * masks - the decomposition is too long to keep on the operand stack. */
+     * masks - the decomposition is too long to keep on the operand stack. The first
+     * {@link #CHRONO_PREFIX_SLOTS} are the prefix fragment's and may be shared with a sibling
+     * (see {@link #chronoPrefixTmp}); anything past them is the node's own. */
     final Map<VarkaVectorIR, int[]> chronoTmp = new HashMap<>();
+    /** Per prefix fragment: the {@link #CHRONO_PREFIX_SLOTS} locals its run leaves its results
+     * in. Two nodes with the same {@link FragmentKey} name the same locals, which is what lets
+     * the second one skip the run - so this is planned even when
+     * {@link VarkaEmitOptions#shareChronoPrefix} is off, it is simply never hit twice. */
+    final Map<FragmentKey, int[]> chronoPrefixTmp = new HashMap<>();
+    /**
+     * The prefix fragments already emitted in the lane group being emitted now. Emit-time
+     * state rather than plan-time, cleared at the top of {@link #emitLaneGroup} for exactly the
+     * reason its {@code computed} set is a fresh local there: a local's value does not survive
+     * from one lane group to the next, so each one re-earns every fragment it uses. A body
+     * emits one lane group, so this is also per body - which is what makes a fragment shared in
+     * the epilogue independent of one shared in a loop method.
+     */
+    final Set<FragmentKey> emittedFragments = new HashSet<>();
     /**
      * The epilogue's bounds mask (task 24), or null in every other body role. Non-null is
      * exactly the signal that loads and stores take their masked overloads: the value is a
@@ -1088,6 +1161,7 @@ public final class VarkaLoopEmitter {
     // the loop's slots - the word, condition, CSE and temporary locals - and none of its own.
     boolean vectorWalk = mode == BodyMode.LOOP || mode == BodyMode.EPILOGUE;
     boolean cse = analysis.options.cse();
+    boolean shareChronoPrefix = analysis.options.shareChronoPrefix();
     for (VarkaVectorIR node : analysis.topoOrder) {
       if (vectorWalk) {
         // Vector-walk slots. Children precede parents in the topo order, so a word reference
@@ -1117,9 +1191,23 @@ public final class VarkaLoopEmitter {
             // Six int-vector temporaries and two masks for a plain extraction (see emitChrono
             // for what stays live); AddMonths (task 40) needs the same eight plus the rest of
             // emitAddMonths's own locals, since it decomposes and recomposes in one node.
-            int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT : 8;
-            int[] tmp = new int[count];
-            for (int i = 0; i < count; i++) {
+            // The first eight are the prefix fragment's and are allocated once per fragment
+            // when sharing is on, so siblings over one date name the same locals; the rest are
+            // the node's own, because emitAddMonths writes them and its siblings must not see
+            // that. (Its one write into a shared slot is the prefix's carry mask, which no
+            // field's tail reads - see emitChronoPrefixOnce.)
+            int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT : CHRONO_PREFIX_SLOTS;
+            FragmentKey key = fragmentKey(node, dense, s);
+            int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
+            if (prefix == null) {
+              prefix = new int[CHRONO_PREFIX_SLOTS];
+              for (int i = 0; i < CHRONO_PREFIX_SLOTS; i++) {
+                prefix[i] = slot++;
+              }
+              s.chronoPrefixTmp.put(key, prefix);
+            }
+            int[] tmp = Arrays.copyOf(prefix, count);
+            for (int i = CHRONO_PREFIX_SLOTS; i < count; i++) {
               tmp[i] = slot++;
             }
             s.chronoTmp.put(node, tmp);
@@ -1572,6 +1660,7 @@ public final class VarkaLoopEmitter {
     // OR-ed into dstValidity exactly where a value root ORs its validity word; the dstData
     // slot stays untouched, per the interface contract.
     Set<VarkaVectorIR> computed = new HashSet<>();
+    s.emittedFragments.clear();
     for (int o : outputIdx) {
       VarkaVectorIR root = outputs.get(o);
       if (root instanceof Cond cond) {
@@ -1788,29 +1877,11 @@ public final class VarkaLoopEmitter {
         cb.loadConstant(1);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
       }
-      case Year n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
-      case Month n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
-      case DayOfMonth n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
-      case Quarter n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
+      case Year n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case Month n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case DayOfMonth n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case Quarter n -> emitChrono(cb, node, dense, analysis, s, computed);
       case AddMonths n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
         emitAddMonths(cb, n, dense, analysis, s, computed);
         if (!dense && s.ownWord.contains(node)) {
           emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.months()));
@@ -2054,7 +2125,7 @@ public final class VarkaLoopEmitter {
    * two masks - which is past what the stack can hold legibly.
    */
   private static void emitChrono(CodeBuilder cb, VarkaVectorIR node, boolean dense,
-      Analysis analysis, Slots s) {
+      Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
     int[] t = s.chronoTmp.get(node);
     int era = t[1];
     int rem = t[2];
@@ -2062,7 +2133,7 @@ public final class VarkaLoopEmitter {
     int yearOfCentury = t[4];
     int marchMonth = t[5];
 
-    emitChronoPrefix(cb, node, dense, analysis, s, t);
+    emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
 
     switch (node) {
       case Year n -> emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
@@ -2079,6 +2150,33 @@ public final class VarkaLoopEmitter {
   }
 
   /**
+   * The prefix, and the date it consumes, emitted unless a sibling over that same date already
+   * left the prefix in these very locals earlier in this lane group (task 32 step B). This is
+   * the only place a value node's child is emitted from anywhere but its own {@link #emitValue}
+   * arm, and it has to be: {@link #emitChronoPrefix} takes the date off the operand stack, so
+   * whether the date is emitted at all is the same decision as whether the prefix is.
+   *
+   * <p>With {@link VarkaEmitOptions#shareChronoPrefix} off this is exactly what the four
+   * extraction arms and {@link #emitAddMonths} used to do inline, in the same order and with
+   * the same line-number marker, so the bytes are unchanged for every existing shape.
+   */
+  private static void emitChronoPrefixOnce(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s, int[] t, Set<VarkaVectorIR> computed) {
+    if (analysis.options.shareChronoPrefix()
+        && !s.emittedFragments.add(fragmentKey(node, dense, s))) {
+      // A sibling over this date already ran the prefix into these very locals earlier in this
+      // lane group, so this node needs nothing but its own tail. The date itself is not loaded
+      // either: emitChronoPrefix is the only consumer of it here, and a CSE'd child would
+      // otherwise be loaded and dropped.
+      line(cb, analysis, node);
+      return;
+    }
+    emitValue(cb, chronoChild(node), dense, analysis, s, computed);
+    line(cb, analysis, node);
+    emitChronoPrefix(cb, node, dense, analysis, s, t);
+  }
+
+  /**
    * The civil-from-days decomposition through the March-based month, shared by every field
    * {@link #emitChrono} computes and by {@link #emitAddMonths} (task 40), which needs three of
    * the four fields at once rather than one. Factored out of what was a single {@code
@@ -2089,6 +2187,13 @@ public final class VarkaLoopEmitter {
    * <p>Leaves {@code era}, {@code century}, {@code yearOfCentury} and {@code marchMonth} in
    * {@code t[1..5]} for a field's own tail to read, and the day of year in {@code t[2]}
    * ({@code rem}, reused across the prefix the way the original method reused it).
+   *
+   * <p>Those five locals outliving the call is what makes the run a shareable fragment, since
+   * {@link #emitChronoYear}, {@link #emitChronoMonth} and {@link #emitChronoDayOfMonth} read
+   * them from there rather than from the operand stack: a later sibling finds them intact. The
+   * two masks in {@code t[6..7]} are the carries' own scratch and are deliberately not part of
+   * that contract - {@link #emitAddMonths} reuses {@code t[6]} for its compares once the prefix
+   * is done, which is sound precisely because no tail reads it.
    */
   private static void emitChronoPrefix(CodeBuilder cb, VarkaVectorIR node, boolean dense,
       Analysis analysis, Slots s, int[] t) {
@@ -2290,7 +2395,7 @@ public final class VarkaLoopEmitter {
     int leapRemScratch = t[31];
     int leapCarryMask = t[32];
 
-    emitChronoPrefix(cb, node, dense, analysis, s, t);
+    emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
     emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
     cb.astore(year);
     emitChronoMonth(cb, marchMonth);

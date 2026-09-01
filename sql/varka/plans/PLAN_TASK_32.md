@@ -618,6 +618,96 @@ would choose. Whether the 128-bit bimodality follows the emitted body is the
 first thing B2 should find out, since it has the same shape and the same register
 demand - and per the section above, no JVM flag will make that question go away.
 
+### 7.1 Step B1's outcome: the fragment is built, and the epilogue's cliff moves out
+
+Built as planned, minus the grouping change, which stays with B2: `FragmentKind`,
+`FragmentKey`, `chronoChild` and `fragmentKey` in `VarkaLoopEmitter`; `planSlots`
+allocating the eight prefix locals once per fragment instead of once per node;
+`emitChronoPrefixOnce` between `emitChrono`/`emitAddMonths` and the prefix; and
+`VarkaEmitOptions.shareChronoPrefix`. `weightOf`/`addOps`/`groupOutputs` are untouched,
+so every calendar output still gets its own loop method.
+
+**The key is (kind, child, validity word), not (kind, child).** The plan wrote the key
+as the kind and the child. That is not enough, because the prefix carries the range
+guard and the guard is ANDed with the node's validity word: `planWordRef` aliases every
+`Chrono` extraction's word to its child's, so `year(d)` and `month(d)` agree, but
+`AddMonths`'s word is the AND of the date's and the month count's, so
+`add_months(d, n)` over a nullable `n` must not inherit a guard computed under `year(d)`'s
+mask. Adding the word to the key makes that structural rather than a rule someone has to
+remember. In a dense body no word is planned at all and the child alone decides.
+
+**One slot is written after the prefix, and it is deliberately outside the contract.**
+`emitAddMonths` reuses `t[6]` - the prefix's carry mask - as scratch for its own compares.
+That is sound because no field tail reads `t[6]`: the tails read only `t[1..5]`. The
+contract is now stated in `emitChronoPrefix`'s javadoc rather than implied, and a test
+orders `add_months` *before* the three extractions so a violation of it fails.
+
+**The default was flipped in this step, not deferred to step 7.** Step 7 in section 9 is
+about B2's throughput default, which needs both widths measured. B1's case is not a
+throughput case at all - it is a compilability one, it needs no benchmark, and with the
+option off it delivers nothing. Flipping it moved no pinned oracle: the line map, the
+`everyNode` fixture and the shape hash are all unchanged, because `canonical()` renders
+options only when they differ from `DEFAULTS` and `DEFAULTS` is what moved.
+
+**No parity regeneration, and the reason is structural rather than a judgement.** Under
+today's grouping no loop method holds two calendar nodes, so there is nothing in one for
+the fragment to share and every `loopDense`/`loopMasked` method is byte for byte what it
+was - asserted by a test, not by inspection. The parity benchmark drives 4096-row chunks,
+which every lane count divides, so its epilogue returns at the length check and is never
+timed. No committed figure can therefore have moved, and re-running the file would have
+added a run's worth of noise to numbers this change cannot reach. The same test fails the
+moment B2 relaxes the budget, which is the signal to regenerate.
+
+#### The ladder
+
+`epilogueMasked`'s bytecode size, four calendar fields per date over as many dates as the
+width needs, measured through `VarkaEmitterTestSupport.codeSize` (the `Code` attribute's
+length, which is what HotSpot measures against `HugeMethodLimit`):
+
+| outputs | dates | unshared | shared |
+|---|---|---|---|
+| 1 | 1 | 662 | 662 |
+| 2 | 1 | 1088 | 732 |
+| 4 | 1 | 1964 | 896 |
+| 8 | 2 | 3817 | 1681 |
+| 16 | 4 | 7531 | 3259 |
+| 17 | 5 | **8080** | 3808 |
+| 20 | 5 | 9436 | 4048 |
+| 24 | 6 | 12043 | 4837 |
+| 32 | 8 | 17215 | 6421 |
+| 40 | 10 | 22443 | **8025** |
+| 48 | 12 | 27913 | 10405 |
+
+The 8000-byte crossing moves from **17 outputs to 40** - from four date columns to ten.
+Past it HotSpot compiles the method not at all, so the epilogue runs interpreted with
+boxed vectors on every batch whose length is not a lane multiple. (The debt register
+records 7530 and 8079 for the same two shapes; the numbers here are one byte higher
+because they are the `Code` attribute's length. Same measurement, same conclusion.)
+
+This does not close tasks 43 or 44. Task 43 is about a single output holding several wide
+nodes, which the fragment does not touch, and a wide enough projection still crosses -
+it now takes ten date columns instead of five. What it does is give task 44 a real
+baseline instead of a cliff four columns away.
+
+#### Predictions, scored
+
+6. **Nearly right, and the miss is worth recording.** Predicted `epilogueMasked` at 16
+   calendar outputs over one column drops from 8079 bytes to under 3000. Two corrections.
+   First the shape: 16 calendar outputs over *one* column do not exist - the IR's records
+   compare by value, so four fields over one date are four nodes and repeating them is
+   free. The debt register's 16 was four fields over four dates, and the prediction
+   inherited the misreading. Second the number: 7531 to 3259, not under 3000. The
+   direction and the mechanism were right and the magnitude was 9% optimistic, which is
+   the better failure mode than step A's prediction 1.
+
+#### What B2 still needs
+
+Unchanged from the section above: the two-field measurement gates it. One thing B1 adds
+is that the shape is already known to be *correct* - a test drives four calendar outputs
+through one loop method under a widened `groupBudget`, and the exhaustive sweep over all
+16,777,216 days of the covered range now runs under both settings - so B2 is a
+measurement and a policy decision, with no correctness work left in front of it.
+
 ## 8. Risks
 
 1. **Prediction 4.** The compile cliff is the one thing that could cap this, and
@@ -665,3 +755,12 @@ number clearing the four-node baseline:
 7. The default flipped, pinned oracles re-pinned, `docs/sql-varka.md` and
    `README.md` requoted from that run, section 2.9 and the debt register swept in
    the past tense.
+
+**What step B1 actually did**, recorded here because it departs from the list
+above in two places (section 7.1 has the reasons): it branched off
+`varka-task-40` rather than master, because the factoring it keys on lives only
+there and re-doing it would have collided with PR #67 line for line; and it
+carried out step 4 and the *default half* of step 7 together, because with the
+option off B1 delivers nothing at all and the epilogue argument that justifies it
+needs no measurement. Steps 5 and 6, and the parity regeneration, stay with B2
+where the numbers they rest on are. Nothing pinned moved.

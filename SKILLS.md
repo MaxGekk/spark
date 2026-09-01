@@ -278,6 +278,46 @@ apparent small wins turned out to be noise.
   every benchmark's freshness argument from the new key rather than trusting the
   harness; the fix here invalidates the shape cache inside the timer loop.
 
+- **Op count is not the only compile gate: bytes are a second, harder one.**
+  `GROUP_BUDGET` bounds a loop method's *vector ops* because compile time grows with
+  them. `HugeMethodLimit` (8000 bytes, a product default) bounds a method's *bytecode*,
+  and past it HotSpot does not compile the method slowly - it does not compile it at
+  all, at any tier, so the method runs interpreted with boxed vectors forever. The two
+  gates catch different shapes, and the emitter's epilogue is where the second one
+  bites: task 24 made it one method over *every* output, so its size grows with the
+  whole projection rather than with a group, and four calendar fields over five date
+  columns crossed 8000 bytes. Measure it rather than estimating - the `Code`
+  attribute's length, which is exactly what HotSpot measures, is two lines through
+  `java.lang.classfile` (`VarkaEmitterTestSupport.codeSize`) - and assert the crossing
+  in a test, so the next wide node moves a number instead of quietly falling off.
+  Task 32 step B1's ladder is in `PLAN_TASK_32.md` section 7.1.
+
+## Sharing below the node level in an emitter
+
+- **The values worth sharing are not always nodes.** Varka's DAG-CSE memoizes on
+  structural equality between IR nodes, which cannot help when the redundancy is
+  *inside* one node's emitted run: `year(d)` and `month(d)` are two nodes that each
+  emit the same forty-op civil-from-days decomposition, and era, century and the rest
+  are locals, invisible to any walk over nodes. The fix does not need an IR change -
+  a *fragment*, keyed on (kind, child) and tracked in a per-lane-group set beside the
+  node-level `computed` set, shares the locals directly. A multi-value IR node emits
+  identical bytes, so choosing between them is engineering cost, not throughput; the
+  fragment wins because it generalizes to every node built on the same prefix without
+  the IR naming any of them.
+- **A shared run must be keyed on everything it reads, not just on its input.** The
+  prefix here also emits a range guard, and the guard is ANDed with the node's
+  validity word. Every plain extraction aliases its word to its child's, so those
+  share safely - but `add_months(d, n)` ANDs the date's word with the month count's,
+  so keying on the child alone would have given it a guard computed under a different
+  mask. Put the extra input in the key and the mistake becomes unrepresentable rather
+  than a rule in a comment.
+- **A generated class's raw bytes never compare equal across two emissions**, because
+  the harness names each class afresh and the name is in the constant pool. An
+  assertion of the form "this option changed / did not change the bytecode" has to
+  compare a *method's* code size (or its instructions), not `Arrays.equals` on the
+  class. The false direction is the dangerous one: `!Arrays.equals` passes for any two
+  emissions whatsoever, so a test written that way proves nothing at all.
+
 ## Vector API on HotSpot, Measured (JDK 25, x86-64)
 
 - An *exact* magic multiply on int lanes exists only for dividends under roughly
