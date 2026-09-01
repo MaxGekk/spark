@@ -209,6 +209,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       evalValue(n.days(), row, lits).map(v => (Math.floorMod(v, 7) + 4) % 7 + 1)
     case n: WeekDay =>
       evalValue(n.days(), row, lits).map(v => (Math.floorMod(v, 7) + 3) % 7)
+    // The oracle is Spark's own getNextDateForDayOfWeek, quoted directly, not the lowering:
+    // Scala's Int arithmetic wraps exactly as the lanes do, so this is exact even at
+    // Int.MinValue, and it is byte-for-byte what the row engine evaluates.
+    case n: NextDay =>
+      for (d <- evalValue(n.days(), row, lits); k <- evalValue(n.offset(), row, lits))
+        yield d + 1 + Math.floorMod(k - d, 7)
     // The calendar oracle is java.time, which is what DateTimeUtils.getYear and its three
     // siblings call - not VarkaChrono, so the emitted bytes are checked against the
     // definition rather than against the model they were derived from.
@@ -726,6 +732,35 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("next_day matches Spark's own wrapping formula for every weekday, at the extremes") {
+    // One root per weekday offset (k = dayOfWeek - 1). DateTimeUtils.getDayOfWeekFromString
+    // returns [0, 6] with THURSDAY = 0 .. WEDNESDAY = 6, so k itself ranges over [-1, 5], not
+    // [0, 6] - THURSDAY's k = -1 is the one value a naive 0-to-6 sweep would miss (caught by
+    // this task's code review). All seven share one emitted class and one literal-slot array
+    // - the point of "k is a runtime literal" (section 2).
+    val roots = (0 to 6).map(slot => new NextDay(new ColumnRef(0), new LiteralSlot(slot)))
+    val lits = Array(-1, 0, 1, 2, 3, 4, 5)
+    // The 15-bit fold boundaries are edges of the shared floorMod7 lowering; the rest probe
+    // the deliberate k - d overflow (section 2) near both ends of the int range.
+    val extremes = Array(Int.MinValue, Int.MaxValue, Int.MinValue + 1, Int.MaxValue - 1,
+      -1, 0, 1, -7, 7, -8, 8, Int.MaxValue - 3, Int.MinValue + 3,
+      32767, 32768, -32768, -32769)
+    def days(c: Int, i: Int): Int =
+      if (i < extremes.length) extremes(i) else i * 997 - 300000
+    checkMatrix(roots, 1, lits, Seq(1, 13, 17, 64, 1000),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "next_day")
+    // The independent oracle behind the reference: Spark's own getNextDateForDayOfWeek,
+    // which wraps in plain int arithmetic - checked against the reduce-first form the recipe
+    // warns is wrong, to confirm the two really do disagree at the boundary it names.
+    def spark(startDay: Int, dayOfWeek: Int): Int =
+      startDay + 1 + ((dayOfWeek - 1 - startDay) % 7 + 7) % 7
+    def reduceFirst(startDay: Int, k: Int): Int =
+      startDay + 1 + Math.floorMod(k - Math.floorMod(startDay, 7), 7)
+    assert(spark(Int.MinValue, 3) === -2147483647, "oracle self-check")
+    assert(reduceFirst(Int.MinValue, 2) === -2147483643, "reduce-first disagrees as documented")
+    assert(spark(Int.MinValue, 3) !== reduceFirst(Int.MinValue, 2))
+  }
+
   test("the calendar extractions match LocalDate over the range they cover") {
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
@@ -1088,8 +1123,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "21=(dayOfWeek 1)",
     "22=(dateDiff 20 21)",
     "23=(weekDay 1)",
-    "24=(least 22 23)",
-    "25=(if 10 13 24)").mkString("\n")
+    "24=(nextDay 1 2)",
+    "25=(least 23 24)",
+    "26=(least 22 25)",
+    "27=(if 10 13 26)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -1113,12 +1150,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to
-    // ride Record.toString, whose format no JDK promises. One key using all 19 node types (and
+    // ride Record.toString, whose format no JDK promises. One key using all 20 node types (and
     // three CompareOps), so a change to any rendering, to the operand order, or to the
     // topological schedule fails here. If it does: make sure the change is intended, then
     // update the literal and say so in the task plan - the same rule as the pinned shape
     // hashes in VarkaShapeCacheSuite. Task 26 added the four calendar extractions and
-    // re-pinned it (PLAN_TASK_26.md).
+    // re-pinned it (PLAN_TASK_26.md); task 33 added NextDay and re-pinned it again
+    // (PLAN_TASK_33.md).
     val col = new ColumnRef(0)
     val lit = new LiteralSlot(0)
     val cond = new And(
@@ -1132,7 +1170,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
-      new Least(new DateDiff(chrono, new DayOfWeek(col)), new WeekDay(col)))
+      new Least(new DateDiff(chrono, new DayOfWeek(col)),
+        new Least(new WeekDay(col), new NextDay(col, lit))))
     val (_, bytes) = emitMulti(Seq(everyNode), 1, 1)
     assert(VarkaDebugInfoReader.lineMap(bytes) === pinnedLineMap)
     // The DAG, not a tree: col:0 is written once as line 1 and pointed at fifteen times. The

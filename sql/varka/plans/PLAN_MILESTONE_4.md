@@ -352,8 +352,8 @@ unmasked `DIV`, not to leave the choice open each time.
 ### 2.9 One decomposition, several fields (task 32, from the debt register)
 
 Added after task 26 measured what its own design cost, which is the only
-reason it is here: `SELECT year(d)` runs at 1778 M rows/s and
-`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 441 - 4.0x for four
+reason it is here: `SELECT year(d)` runs at 1797 M rows/s and
+`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 435 - 4.1x for four
 fields, which is near enough to 4x that nothing is being shared but the column
 load and the loop control.
 
@@ -371,8 +371,9 @@ emitted bytecode, invisible to the walk that would share them.
 computing all four fields from one decomposition, against the 441 M rows/s the
 four separate nodes reach, at both widths. That gate exists because task 17
 already measured the opposite of the obvious answer: raising `GROUP_BUDGET` so
-two outputs could keep their cross-output CSE in one method *lost*, 4587
-against 3196 M rows/s, because the wider method's register pressure cost more
+two outputs could keep their cross-output CSE in one method *lost*, 4119.9
+against 2928.2 M rows/s in the current committed parity file, because the wider
+method's register pressure cost more
 than recomputing the shared ops. Here the shared work is ~45 ops rather than
 eight, but five values would have to stay live across four output tails, so the
 same effect is in play and the direction is not predictable from op counts. If
@@ -406,6 +407,50 @@ If it clears, three mechanisms, in the order they should be considered:
 
 Whatever the outcome, the deliverable includes sweeping the debt register entry
 in the past tense with what the measurement found, per `sql/varka/AGENTS.md`.
+
+**Outcome: the gate clears at AVX-512, and the task proceeds. Replanned in
+`PLAN_TASK_32.md`, which supersedes this section.**
+
+It was first answered the other way. A ceiling kernel was built
+(`sql/varka/engine/.../vector/ChronoVectorOps.java`, differentially tested against
+`java.time.LocalDate` in `ChronoVectorOpsTest`), measured 225.8 M rows/s against 430.7 for
+the four emitted nodes, and task 32 was declined on that number. **The number was wrong, and
+in a way worth recording**: the kernel factored its decomposition into a `computeFields`
+helper returning a record of four `IntVector`s, that helper compiled to 376 bytecode bytes,
+and C2's `FreqInlineSize` is 325 - so it never inlined into the loop, the record and its four
+vectors could not be scalar-replaced, and the kernel really allocated five objects per lane
+group. `emitChrono`, the path it exists to model, emits no call boundary at all. The kernel
+was measuring the cost of a Java abstraction the emitted code does not have. `SKILLS.md`
+carries the general lesson.
+
+Rebuilt with the whole lane path written out by hand (`javap` and `-XX:+PrintInlining` both
+confirm no call survives in the loop), with the narrow-range guard it had omitted, and writing
+four destination validity buffers instead of one - so that both arms are charged the same
+things. Measured in `VarkaEmitterParityBenchmark`'s "year" section, same 4096-row chunks and
+the same `eachChunk` walk as the case it sits beside:
+
+| | AVX-512 (M rows/s) | 128-bit (M rows/s) |
+|---|---|---|
+| four separate emitted nodes | 450.4, 448.8, 435.1, 445.7 | 154.1 to 157.6 over five runs |
+| shared decomposition, hand-written | **692.4, 678.8, 661.7, 679.0** | 165.6 to 167.0, once 236.1 |
+| ratio | **1.54x, 1.51x, 1.52x, 1.52x** | 1.06x, once 1.50x |
+
+So sharing is worth about **1.5x at AVX-512**, reproducibly, and is a **wash at 128-bit** -
+four of five runs at 1.06x, one at 1.50x, with zero stdev inside each run and 42% between
+them. That bimodality is a compilation the JVM either finds or does not; C1 declines the
+936-byte body outright ("out of virtual registers in linear scan") at both widths. Task 17's
+register-pressure effect is real and visible here, but as a width-dependent ceiling on the
+size of the win rather than as a reversal of its sign: 32 vector registers and 8 mask
+registers hold five live intermediates and four outputs comfortably, 16 vector registers
+holding masks as well do not.
+
+Mechanism 3 (decomposing into primitive IR nodes) stays declined in advance for the reason
+above. Mechanism 1 (a multi-value IR node) is also declined, on a reason this section did not
+have: mechanisms 1 and 2 emit *identical bytes*, so the choice between them is engineering
+cost, not throughput, and mechanism 2 - emitter-side sharing keyed on (fragment, child node) -
+needs no IR change and generalizes to tasks 33, 34 and 40's nodes for free. `PLAN_TASK_32.md`
+section 3 has the design; the default is not flipped on the AVX-512 number alone, since the
+narrow-vector shape has to be measured on the emitted path first.
 
 ### 2.10 `next_day`, as a handover experiment (task 33)
 
@@ -861,6 +906,60 @@ measured cost at AVX-512 is worse than 0.75x - at which point the simplification
 is not worth a quarter of the calendar family's throughput, and the entry goes
 to the debt register with the number attached.
 
+### 2.20 Making a bad register allocation visible (task 50)
+
+Task 32 spent six failed hypotheses on a kernel that ran at either 165 or 236 M
+rows/s under `-XX:MaxVectorSize=16` - stdev 0 inside a run, 42% between runs -
+before the cause turned out to be C2's register allocator. The two compilations
+contain *identical* vector op counts; the whole difference is spill traffic,
+four stack moves against seventy-four. The allocator sometimes finds a clean
+assignment for a body that sits at the edge of the 16-register xmm file and
+sometimes does not, from the same IR. `SKILLS.md` has the evidence.
+
+The structural answer is task 32's own: do not put four outputs in one loop
+method at a width whose register file cannot hold them, which is what the
+`shareChronoPrefix` decision becomes once its default is made width-dependent.
+This task is the other half - **not preventing it, but noticing it** - because
+today a badly-allocated kernel is completely invisible. It costs 30 to 40% and
+nothing anywhere reports that it happened.
+
+**It is observable with public API.** JFR's `jdk.Compilation` event carries
+`method`, `compileLevel`, `isOsr` and `codeSize`, and
+`jdk.jfr.consumer.RecordingStream` (public since JDK 14) can consume those
+events in-process with no agent and no diagnostic flags. The fast and slow
+allocations of the same kernel differ by about 2x in compiled size - 1581
+instructions against 3000 - so the anomaly is plainly present in that one field.
+
+**The expectation is self-calibrating, which is what makes this worth building.**
+The obvious design is a committed table of expected sizes per shape, and it is
+the wrong one: it has to come from somewhere and it drifts every time the
+emitter changes. Varka already keys every kernel by a shape hash, and the same
+shape emits byte-identical bytecode, so the comparison is between *compilations
+of the same shape hash* rather than against any constant. The first compilation
+of a shape establishes the size; a later one that differs materially is the
+report. No table, no drift, and it gets more accurate the longer a JVM lives.
+
+Scope, deliberately narrow:
+
+* A `RecordingStream` subscribed to `jdk.Compilation`, filtered to Varka's
+  generated kernel classes, with OSR compilations excluded - they are not what
+  the steady-state path runs and task 32 found them identical across both modes
+  anyway.
+* Per shape hash, the first non-OSR `codeSize` seen, and a metric plus a debug
+  log when a later one for the same hash differs by more than a threshold the
+  task picks from measured data rather than guessing.
+* Off unless enabled, through Varka's own configuration surface. Subscribing to
+  `jdk.Compilation` is not free and this is a diagnostic, not a feature, so it
+  should cost exactly nothing when nobody has asked for it.
+* **A diagnostic and never a control loop.** Section 9's debt entry records the
+  detect-and-re-emit idea and why it is not being built.
+
+Risks worth stating: JFR may be unavailable or disabled in a deployment, in
+which case this reports nothing and must degrade silently; the stream costs a
+thread; and a shape whose kernel is only ever compiled once in a JVM produces no
+comparison at all, which is the common case for a short query and means this
+mostly serves long-lived sessions.
+
 ## 3. Task breakdown
 
 Tasks 24-44 are the committed spine, in dependency order: 24 halves the
@@ -895,8 +994,9 @@ Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
 (task 31, section 2.2, then tasks 32-44, sections 2.9 to 2.16, and now tasks
-45-48, sections 2.17 and 2.18, and now task 49, section 2.19), so milestone 5
-resumes at 50.
+45-48, sections 2.17 and 2.18, task 49, section 2.19, and now task 50,
+section 2.20), so milestone 5
+resumes at 51.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -920,12 +1020,13 @@ resumes at 50.
 | 42 | `make_date` | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
 | 43 | What bounds a loop method inside one output | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
 | 44 | The epilogue's size | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
-| 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 441 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
+| 32 | One decomposition, several fields. **REPLANNED, gate cleared** (see 2.9 and `PLAN_TASK_32.md`) | The first ceiling kernel measured a non-inlining `computeFields` helper rather than the sharing, and was rebuilt hand-inlined, guarded and writing four validity buffers: 692.4/678.8 against 450.4/448.8 M rows/s at AVX-512 (1.5x), and a wash at 128-bit (1.06x, one run of five at 1.50x). Step B builds emitter-side fragment sharing behind a `VarkaEmitOptions` switch, with the default decided at both widths rather than closed | `ChronoVectorOpsTest` differentials the kernel against `java.time` over its exact sweep range and a boundary set, at both widths (the engine module's own narrow-vector Maven profile); no pinned oracle moved, no committed number for any existing shape changed |
 | 45 | The null-free validity fast path | The bound first: a validity-free variant of `ChronoVectorOps` sizing the prize (2.17), then the dense driver filling the output validity once per batch instead of the dense loop ORing it per lane group | The whole Varka suite at both widths with the dense/masked pair still agreeing bit for bit; the committed parity cases regenerated in one run, with the null-free and mixed-null rows of each moving in opposite directions or not at all |
 | 46 | Validity helpers that inline | Width-specialised `validityBitsAt`/`orValidityBitsAt` siblings under `MaxInlineSize`, selected by the emitter's existing name choice, with the switch resolved at emit time | `-XX:+PrintInlining` showing no `failed to inline` for them in a wide loop - the diagnostic, not the timing, is the deliverable - plus the full suite at both widths and one parity regeneration |
 | 47 | One validity write per word | Bits accumulated across lane groups and stored once per 64 rows, with the epilogue flushing a partial accumulator | The masked path's committed cases, the 4095/63 non-aligned lengths task 44 adds, and the dense/masked agreement; gated on what 45 and 46 leave |
 | 48 | A `year` that does not compute the month | `doy >= 306` replacing the March-month step in the year tail only, with the equivalence recorded as an integer identity rather than an approximation | The existing exhaustive `VarkaChronoSuite` sweep unchanged and still green; the parity `year` case measured by interleaved A/B compared by minimums, since the expected effect is inside a single run's noise |
 | 49 | Exact civil-from-days in long lanes | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division by 146097, 36524 and 365 with a 64-bit low product and no correction carries; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
+| 50 | Make a bad register allocation visible | A `jdk.Compilation` JFR stream filtered to Varka's generated kernels, non-OSR only, comparing `codeSize` between compilations of the same shape hash rather than against any committed table; a metric and a debug log on divergence; off unless enabled | The stream observed to see Varka kernel compilations and report their sizes at both widths; zero cost when disabled, asserted rather than assumed; explicitly no re-emission on detection (see section 9) |
 
 ## 4. Files
 
@@ -1064,18 +1165,43 @@ rewritten in the past tense with what the sweep found, never deleted.
   and 8079 at 17, crossing the 8000-byte `HugeMethodLimit` past which HotSpot compiles
   nothing at all. Neither is a calendar defect; task 26 only made them reachable.
 
-* **A calendar field is computed once per output, not once per date.** **Adopted as task
-  32 (see 2.9)**, which is what a debt register is for: this entry is where the cost was
-  first written down, and the task is where it gets measured and paid or declined. Task
-  26's four extractions each carry the whole civil-from-days decomposition, so
-  `SELECT year(d), month(d)` computes it twice, in two sibling loop methods - measured at
-  441 M rows/s for four fields against 1778 for one. That is the trade task 17 trained the
-  emitter on (recomputing in registers beats a wider method's register pressure), and the
-  corpus asks for one field at a time, so it is a debt rather than a defect. Closing it
-  needs a multi-value IR node: every node in the IR is one value on the operand stack, and
-  a shared decomposition would have to leave several. It matters if a later item wants
-  `date_trunc` or `dayofyear` beside `year` in one projection, which is when the
-  recomputation stops being hypothetical.
+* **A calendar field is computed once per output, not once per date.** **Being closed as
+  task 32 (see 2.9 and `PLAN_TASK_32.md`)**, after a first pass that swept this entry the
+  other way and had to be redone. A calendar field is ~50 vector ops, ~45 of which are the
+  shared civil-from-days prefix and ~5 the field's own tail; four fields therefore cost
+  ~200 ops as four independent nodes against ~65 shared, a saving of ~135 ops. The
+  hand-written ceiling kernel that prices that saving reaches 679.0 M rows/s against the
+  four emitted nodes' 445.7 in the committed parity file - **1.5x** over four runs - and 165.6 to
+  167.0 against 154.1 to 157.6 at 128-bit, a wash (`ChronoVectorOps`,
+  `ChronoVectorOpsTest`, sql/varka/engine). The first pass measured 225.8 for the same
+  kernel and declined the task; that kernel had a 376-byte helper past C2's 325-byte
+  inlining budget in its lane path, so it priced a heap allocation per lane group rather
+  than the sharing. Task 17's finding (raising `GROUP_BUDGET` so two outputs could share
+  cross-output CSE in one method *lost*, 4119.9 against 2928.2 M rows/s in the current
+  committed results file) still holds and is visible here as the reason the win is 1.5x
+  rather than the ~3x the op count alone would predict, and as the reason it disappears at
+  128-bit - but it does not reverse the sign. Closing the debt needs neither a multi-value
+  IR node nor any IR change: the values worth sharing are locals inside one node's emitted
+  bytecode, and the emitter can share them keyed on (fragment, child node). That is step B
+  of `PLAN_TASK_32.md`. A multi-value node stays parked here for a future primitive whose
+  shared value must be visible to the *planner* rather than only to the emitter -
+  `divmod` and a string operation returning an offset and a length were the general
+  examples; neither has been measured.
+
+* **A badly-allocated kernel could be detected and re-emitted, and deliberately is not.**
+  Every Varka kernel is emitted into a fresh class, so re-emitting the same shape under a new
+  class name gives C2's register allocator a fresh roll - and task 50 makes the bad roll
+  detectable. A detect-and-resample loop is therefore *buildable* with no new machinery. It is
+  not scheduled, in this milestone or the next, and the reasoning is recorded here so it is not
+  re-proposed as an obvious win. Each resample costs another class, another compilation and
+  another warm-up, against a kernel a short query may run only a handful of times, so the
+  expected value is negative wherever it matters most; class churn is already a watched concern
+  (`VarkaClassLoaderTest` stresses a thousand loaders against metaspace); nothing bounds the
+  retry, so a cap turns it into a slot machine and no cap turns it into a loop; and it treats a
+  symptom whose structural cause - four outputs in one loop method at a width with sixteen
+  vector registers - task 32 can remove outright at zero runtime cost. Revisit only for a
+  kernel long-lived enough that one extra compilation amortises, and only with task 50's
+  numbers in hand to say how often the bad roll actually happens.
 
 * **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have

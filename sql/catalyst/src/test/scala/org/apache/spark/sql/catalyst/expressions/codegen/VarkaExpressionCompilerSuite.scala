@@ -18,10 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, Not, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.types.{DateType, IntegerType, StringType, TimestampType}
 
 /**
@@ -124,6 +124,49 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       new IRDayOfWeek(new ColumnRef(0)),
       new IRWeekDay(new AddDays(new ColumnRef(0), new LiteralSlot(0)))))
     assert(compiled.outputTypes === Seq(IntegerType, IntegerType))
+  }
+
+  test("task 33: next_day with a literal weekday compiles; a column weekday declines") {
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, Literal("MO"), false))), childOutput).get
+    assert(compiled.outputs === Seq(new IRNextDay(new ColumnRef(0), new LiteralSlot(0))))
+    assert(compiled.outputTypes === Seq(DateType))
+    // MONDAY = 4 in DateTimeUtils's private weekday numbering, so k = dayOfWeek - 1 = 3.
+    assert(compiled.literals === Seq(3))
+    val dow = AttributeReference("dow", StringType)()
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, dow, false))), childOutput :+ dow).isEmpty)
+  }
+
+  test("task 33: next_day's weekday range is [-1, 5], not [0, 6] - THURSDAY is the negative") {
+    // DateTimeUtils.getDayOfWeekFromString returns [0, 6] with THURSDAY = 0, so
+    // k = dayOfWeek - 1 = -1 for THURSDAY: the one weekday a naive [0, 6] assumption misses.
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, Literal("THURSDAY"), false))), childOutput).get
+    assert(compiled.outputs === Seq(new IRNextDay(new ColumnRef(0), new LiteralSlot(0))))
+    assert(compiled.literals === Seq(-1))
+  }
+
+  test("task 33: next_day declines cleanly on a null weekday, without crashing planning") {
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, Literal.create(null, StringType), false))), childOutput).isEmpty)
+  }
+
+  test("task 33: next_day declines cleanly on an unrecognized weekday name") {
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, Literal("ZZ"), false))), childOutput).isEmpty)
+  }
+
+  test("task 33: next_day declines, rather than crashes planning, when the weekday " +
+      "expression itself throws on eval") {
+    // A computed (not bare-Literal) foldable expression whose eval() throws for a reason
+    // that has nothing to do with the weekday name - forcing ANSI's divide-by-zero error
+    // via an explicit NumericEvalContext so this does not depend on session configuration.
+    val throwsOnEval = Divide(
+      Literal(1.0), Literal(0.0), NumericEvalContext(EvalMode.ANSI))
+    assert(throwsOnEval.foldable)
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, throwsOnEval, false))), childOutput).isEmpty)
   }
 
   test("task 26: the four calendar extractions compile with IntegerType outputs") {
