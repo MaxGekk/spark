@@ -190,8 +190,8 @@ public final class VarkaLoopEmitter {
    * <p>Task 17 priced the one candidate the debt register left open - raising the budget so
    * two outputs sharing a deep chain keep their cross-output CSE in one method - and closed
    * it against the change: on 20 distinct ops split across two outputs, the shipped 16 runs
-   * 4494.0 M rows/s (two loop methods, the shared chain recomputed per lane group) against
-   * 3044.7 M at 24 (one method, CSE kept) - the committed parity file, requoted whenever it
+   * 4119.9 M rows/s (two loop methods, the shared chain recomputed per lane group) against
+   * 2928.2 M at 24 (one method, CSE kept) - the committed parity file, requoted whenever it
    * is regenerated, which task 26 had to learn twice and task 32 requoted again.
    * Recomputing eight ops in registers is cheaper than the wider method's register pressure,
    * the same effect that made sibling methods the rule in the first place. The parity

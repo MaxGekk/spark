@@ -35,7 +35,7 @@ import jdk.incubator.vector.VectorSpecies;
 /**
  * A hand-written measurement kernel for task 32 ({@code PLAN_TASK_32.md}): the ceiling on
  * computing {@code year}, {@code month}, {@code dayofmonth} and {@code quarter} from ONE
- * civil-from-days decomposition per row, against the 435.1 M rows/s four independently emitted
+ * civil-from-days decomposition per row, against the 445.7 M rows/s four independently emitted
  * nodes reach today ({@code VarkaEmitterParityBenchmark-jdk25-results.txt}).
  *
  * <p><b>Everything in the lane path is written out by hand, with no method call of any kind.</b>

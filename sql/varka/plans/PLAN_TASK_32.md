@@ -48,8 +48,8 @@ Two further reasons the number is not comparable, both from the same review:
 They push in opposite directions and neither is large, but a ceiling measurement
 has to charge both sides the same things.
 
-**What the arithmetic says the answer should be.** `year` alone runs at 1797.2
-M rows/s and the four-field projection at 435.1 - a ratio of 4.13, i.e. nothing
+**What the arithmetic says the answer should be.** `year` alone runs at 1816.6
+M rows/s and the four-field projection at 445.7 - a ratio of 4.08, i.e. nothing
 is shared today beyond the column load and the loop control.
 
 **One op count, used everywhere.** A calendar field is ~50 vector ops, of which
@@ -62,15 +62,15 @@ PR #66 read those two as contradicting each other, "~45 shared ops" against
 three redundant copies a four-field projection drops. Both now say which.)
 
 If throughput tracked op count the way task 26 found it does for a single-output
-loop, the shared shape would land near 1797 x 50/65 ~ 1380 M rows/s, i.e. **3x
+loop, the shared shape would land near 1817 x 50/65 ~ 1400 M rows/s, i.e. **3x
 the four-node number** - not 0.5x. The measured 225.8 is a factor of six away
 from that, which is about what a per-lane-group heap allocation costs.
 
 Register pressure is also the wrong worry at these widths. Five int vectors and
 two masks stay live across the tails; AVX-512 has 32 zmm registers and 8 mask
 registers, 128-bit SSE has 16 xmm. Task 17's contrary result (raising
-`GROUP_BUDGET` so two outputs kept cross-output CSE *lost*, 4494.0 against
-3044.7) was a different trade: there the shared chain was eight ops, so
+`GROUP_BUDGET` so two outputs kept cross-output CSE *lost*, 4119.9 against
+2928.2) was a different trade: there the shared chain was eight ops, so
 recomputing it was nearly free and the wider method was pure cost. Here the
 shared work is ~45 ops and the tails are ~5. The ratio that decides the direction
 is shared-work to per-field-tail, and it is 9:1 here against roughly 1:1 there.
@@ -228,7 +228,7 @@ plan against real numbers.
   regenerated in the same commit as the benchmark change, as every prior commit
   touching it did.
 * `SKILLS.md` - the task-17 figures reintroduced stale (4587/3196) go back to the
-  committed parity file's current 4494.0/3044.7 - which this task's own
+  committed parity file's current 4119.9/2928.2 - which this task's own
   regeneration moves again, so both are requoted from the regenerated file, and
   `VarkaLoopEmitter`'s `GROUP_BUDGET` javadoc with them; the "ops saved" figure
   is reconciled with
@@ -304,10 +304,10 @@ iterations over two-second windows, any ratio under 1.3x re-checked by minimums:
 
 | case | shared | per-output |
 |---|---|---|
-| `year` | - | 1797.2 (committed) |
+| `year` | - | 1816.6 (committed) |
 | `year, month` | new | new |
 | `year, month, dayofmonth` | new | new |
-| `year, month, dayofmonth, quarter` | new | 435.1 (committed) |
+| `year, month, dayofmonth, quarter` | new | 445.7 (committed) |
 | four fields, mixed nulls | new | new |
 | `year(d1), year(d2)` (two columns, nothing to share) | new | new |
 
@@ -411,15 +411,15 @@ AVX-512 (`IntVector.SPECIES_PREFERRED`, the development machine's native width),
 `VarkaEmitterParityBenchmark`'s "year" section, 4096-row chunks, five iterations
 over two-second windows, idle machine:
 
-| | run 1 | run 2 | run 3 (the committed file) |
-|---|---|---|---|
-| four separate emitted nodes | 450.4 | 448.8 | 435.1 |
-| shared decomposition, hand-written | **692.4** | **678.8** | **661.7** |
-| ratio | **1.54x** | **1.51x** | **1.52x** |
+| | run 1 | run 2 | run 3 | run 4 (the committed file) |
+|---|---|---|---|---|
+| four separate emitted nodes | 450.4 | 448.8 | 435.1 | 445.7 |
+| shared decomposition, hand-written | **692.4** | **678.8** | **661.7** | **679.0** |
+| ratio | **1.54x** | **1.51x** | **1.52x** | **1.52x** |
 
-This is a record of three runs; the committed results file is run 3, and it is
-the one every other document quotes. `year` alone measured 1791.2, 1822.2 and
-1797.2 in the same runs, so the four-node case is still about 4x one field:
+This is a record of four runs; the committed results file is run 4, and it is
+the one every other document quotes. `year` alone measured 1791.2, 1822.2, 1797.2
+and 1816.6 in the same runs, so the four-node case is still about 4x one field:
 nothing is shared today.
 
 128-bit (`-XX:MaxVectorSize=16`), five runs, because the ratio came in under the
@@ -454,9 +454,9 @@ win rather than as a reversal of its sign.
 ### Predictions, scored
 
 1. **Wrong.** Predicted 900-1400 M rows/s at AVX-512 (2.0x-3.2x); measured 661.7
-   to 692.4 over three runs (1.51x-1.54x). The direction was right and the confidence was stated
+   to 692.4 over four runs (1.51x-1.54x). The direction was right and the confidence was stated
    as high, so this is a real miss on magnitude: the op-count model
-   (`1797 x 50/65 ~ 1380`) assumes throughput is proportional to vector ops and
+   (`1817 x 50/65 ~ 1400`) assumes throughput is proportional to vector ops and
    nothing else, and it over-predicts by a factor of two. Time not accounted for
    by the decomposition - four stores, four validity-bitmap read-modify-writes,
    the chunk prologue and the loop control - is roughly half the four-node case's
