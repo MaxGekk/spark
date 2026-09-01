@@ -261,13 +261,21 @@ Acceptance:
 
 ## 6. Outcome
 
-Built exactly as section 3 specified: `VarkaVectorIR.NextDay(days, offset)`, the
-five emitter switch arms, the new `LANEWISE_UNARY` descriptor (it did not
+Built essentially as section 3 specified: `VarkaVectorIR.NextDay(days, offset)`,
+the five emitter switch arms, the new `LANEWISE_UNARY` descriptor (it did not
 exist, as predicted), the compiler arm ahead of the calendar-extraction block,
-and tests in all four files section 3.4 named. Every step in section 3 applied
-without modification - the emitted `emitValue` arm, the three-slot `dowTmp`
-entry, and the compiler's guarded-arm-first ordering all worked exactly as
-written. Nothing here misled the agent that ran it; the recipe format held up.
+and tests in all four files section 3.4 named. The emitted `emitValue` arm,
+the three-slot `dowTmp` entry, and the compiler's guarded-arm-first ordering
+all worked as written. One place did not: section 3.1 step 2 instructs the
+javadoc to say `offset` is `dayOfWeek - 1 + 7`, and the shipped javadoc and
+runtime code both wrote `dayOfWeek - 1` (no `+7`) instead - a silent,
+undisclosed deviation the first version of this outcome section did not
+mention, caught by this task's own code review rather than by the agent that
+made the change. The runtime code never actually used the `+7` form, so there
+was no live arithmetic bug, only a gap between what the recipe said and what
+this section claimed happened. See section 7 for what else the review found
+and how it was addressed - the honest statement is that the recipe format
+mostly held up, not that it held up "without modification."
 
 Two places needed a judgment call the recipe left open, both flagged rather
 than guessed past:
@@ -314,3 +322,83 @@ All Varka suites green at both vector widths (94 catalyst, 128 sql/core,
 emitter/compiler tests and the one new differential test this task added);
 `catalyst/doc`, `dev/lint-java` and `dev/scalastyle` all pass; no non-ASCII,
 no line over 100 characters, no `TODO`/`FIXME` in any changed file.
+
+## 7. Second pass: code review
+
+`/code-review` ran against this branch and returned 12 findings, most severe
+first. All twelve were addressed; none were declined.
+
+1. **Real bug, fixed.** `dow.eval()` for the weekday literal ran outside the
+   try/catch meant to turn a bad weekday into a decline, so any other
+   exception it raised (evaluating a computed, not just literal, foldable
+   expression) crashed query planning instead of declining - a ghost-fallback
+   violation. Folded the eval, the null check, and both catches into one new
+   `foldWeekday` helper (mirroring `foldOffset`'s shape, which also answers
+   finding 11) so there is exactly one place this can go wrong.
+2. **Real bug, fixed.** The `NextDay` `emitValue` arm called `line(cb,
+   analysis, node)` after emitting only its first child, so the later
+   `emitValue(n.offset())` call re-tagged the rest of the bytecode to the
+   literal's line. Fixed by emitting both children before the single
+   `line()` call, matching `AddDays`/`SubDays`/`DateDiff`'s existing pattern.
+3. **Real bug, fixed.** `weightOf()` priced `NextDay` at the flat default
+   weight of 1 against `GROUP_BUDGET` despite it emitting fifteen real vector
+   ops (its own subtract and two adds, plus `emitFloorMod7`'s twelve under
+   the shipped `MAGIC` lowering). Added `NEXT_DAY_WEIGHT = 15`, counted the
+   same way `CHRONO_WEIGHT` is.
+4. **Javadoc error plus a real test gap, fixed.** The javadoc claimed
+   `DateTimeUtils#getDayOfWeekFromString` returns `[1, 7]`; it returns
+   `[0, 6]` (`THURSDAY = 0 .. WEDNESDAY = 6`), so the real literal
+   `k = dayOfWeek - 1` ranges over `[-1, 5]`, and the negative case
+   (THURSDAY, k = -1) was untested everywhere. Fixed the javadoc and added
+   THURSDAY coverage to the emitter matrix, the compiler suite, and the
+   differential suite.
+5. **Test coverage gap, fixed.** The null-weekday and unrecognized-weekday
+   decline paths had no test. Added both, plus a third the review did not
+   ask for but `foldWeekday`'s fix makes newly reachable: a weekday
+   expression that throws some other exception during `eval()`, proving
+   finding 1 is actually fixed rather than just plausible.
+6. **Docs gap, fixed.** `docs/sql-varka.md`'s supported-expression list did
+   not mention `next_day`. Added a bullet matching the file's existing style.
+7. **Docs gap, fixed.** `SKILLS.md`'s unconditional "apply constant offsets
+   after a mod, not before" rule was not updated with the exception this
+   task discovered (`next_day` must apply the offset *before* the mod,
+   because Spark's own oracle wraps). Added the exception and the reasoning
+   for it to that entry.
+8. **Simplification, fixed.** `w = k - d` was computed as
+   `date.neg().add(offset)`, needing a new `LANEWISE_UNARY` descriptor and
+   the emitter's only `neg()` call. Rewritten as `offset.sub(date)` using
+   the file's existing `sub` idiom - one fewer instruction, and
+   `LANEWISE_UNARY` is now dead code, removed.
+9. **Simplification, fixed.** The dedicated third `dowTmp` slot for `date`
+   was unnecessary: `emitFloorMod7` only touches the stack top plus its own
+   two scratch slots, so `date`'s second use now rides the operand stack via
+   `dup`/`swap` instead of a named local, and `NextDay` shares
+   `DayOfWeek`/`WeekDay`'s existing two-slot allocation. This interacted
+   with finding 8's rewrite (the new op order is what makes the `dup`/`swap`
+   sequence line up correctly with `sub`'s `[receiver, arg]` shape) and with
+   finding 2 (both children are now emitted, in this order, before the
+   single `line()` call).
+10. **Plan-honesty gap, fixed.** This outcome section originally claimed
+    section 3 was followed "exactly as specified... without modification,"
+    but section 3.1's own instruction to javadoc the offset as
+    `dayOfWeek - 1 + 7` was silently changed to `dayOfWeek - 1` in the
+    shipped javadoc. Section 6 above now discloses this.
+11. **Simplification, fixed.** `NextDay`'s weekday fold/decline logic was
+    inline across two match arms. Factored into `foldWeekday`, alongside
+    fixing finding 1 - `compileNode`'s `NextDay` arm is now a three-line
+    for-comprehension matching `DateAdd`/`DateSub`'s shape.
+12. **Documentation gap, fixed.** `emitFloorMod7`'s javadoc documented the
+    numeric algorithm but not its `dowTmp[0]`/`dowTmp[1]` slot contract with
+    callers. Added a paragraph stating the contract explicitly, naming
+    `NextDay` as the caller that needs to keep its own copy of a value the
+    call does not preserve.
+
+Re-verified after the fixes: all Varka suites green at both vector widths,
+`dev/lint-java` and `dev/scalastyle` pass, no non-ASCII, no line over 100
+characters, no `TODO`/`FIXME` in any changed file. The `dowTmp` slot-count
+change (finding 9) and the weight change (finding 3) are both compile-time
+constants with no effect on any node's *value*, only on temp-slot count and
+loop-method grouping respectively - re-run to see whether either pinned
+fixture moved again, and the result is in section 6's pinned-values table
+above if so, otherwise this line stands as the record that they were checked
+and did not.

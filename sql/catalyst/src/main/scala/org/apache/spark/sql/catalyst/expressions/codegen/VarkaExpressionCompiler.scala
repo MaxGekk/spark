@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
+import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
@@ -450,27 +451,17 @@ private[sql] object VarkaExpressionCompiler {
     case WeekDay(child) =>
       compileNode(child, inputs, literals, sink).map(new IRWeekDay(_))
     // next_day (task 33): the weekday must be resolved at compile time, since the emitted
-    // lowering needs the offset as a runtime literal, not a per-row string. An unrecognized
-    // or non-foldable weekday declines rather than throws - it is the row engine's business,
-    // and it has two different behaviours for it depending on ANSI mode which Varka must not
-    // try to reproduce.
+    // lowering needs the offset as a runtime literal, not a per-row string. An unrecognized,
+    // null or non-foldable weekday declines rather than throws - it is the row engine's
+    // business, and it has two different behaviours for it depending on ANSI mode which
+    // Varka must not try to reproduce. Evaluating a foldable-but-computed weekday expression
+    // (not only a bare Literal) can itself throw for reasons unrelated to the weekday name -
+    // that must decline too, per the ghost-fallback contract, rather than crash planning.
     case NextDay(start, dow, _) if dow.foldable =>
-      val name = dow.eval()
-      if (name == null) {
-        sink.note("next_day with a null weekday", dow)
-        None
-      } else {
-        try {
-          val k = DateTimeUtils.getDayOfWeekFromString(name.asInstanceOf[UTF8String]) - 1
-          compileNode(start, inputs, literals, sink).map { d =>
-            new IRNextDay(d, new LiteralSlot(literals.getOrElseUpdate(k, literals.size)))
-          }
-        } catch {
-          case _: SparkIllegalArgumentException =>
-            sink.note("next_day with an unrecognized weekday", dow)
-            None
-        }
-      }
+      for {
+        k <- foldWeekday(dow, sink)
+        d <- compileNode(start, inputs, literals, sink)
+      } yield new IRNextDay(d, new LiteralSlot(literals.getOrElseUpdate(k, literals.size)))
     case n: NextDay =>
       sink.note("next_day with a non-foldable weekday", n)
       None
@@ -534,6 +525,36 @@ private[sql] object VarkaExpressionCompiler {
       sink.note("day offset is not a foldable literal", days)
     }
     folded
+  }
+
+  /**
+   * Resolves `next_day`'s weekday operand (task 33) to the runtime literal
+   * `k = dayOfWeek - 1` the emitted lowering needs. `dayOfWeek` comes from
+   * `DateTimeUtils.getDayOfWeekFromString`, whose range is `[0, 6]`
+   * (`THURSDAY = 0 .. WEDNESDAY = 6`), so `k` ranges over `{-1, 0, ..., 5}`. Unlike
+   * `foldOffset`, the operand need not be a bare `Literal` - `next_day`'s weekday is any
+   * foldable expression - so it is evaluated eagerly, and every way that can fail declines
+   * rather than throws: a null result, an unrecognized weekday name
+   * (`SparkIllegalArgumentException`), or any other exception `dow.eval()` itself raises
+   * while evaluating a computed (not just literal) expression.
+   */
+  private def foldWeekday(dow: Expression, sink: DeclineSink): Option[Int] = {
+    try {
+      val name = dow.eval()
+      if (name == null) {
+        sink.note("next_day with a null weekday", dow)
+        None
+      } else {
+        Some(DateTimeUtils.getDayOfWeekFromString(name.asInstanceOf[UTF8String]) - 1)
+      }
+    } catch {
+      case _: SparkIllegalArgumentException =>
+        sink.note("next_day with an unrecognized weekday", dow)
+        None
+      case NonFatal(e) =>
+        sink.note(s"next_day weekday failed to evaluate: ${e.getMessage}", dow)
+        None
+    }
   }
 
   private def foldPick(

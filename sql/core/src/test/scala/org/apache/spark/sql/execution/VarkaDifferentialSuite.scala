@@ -503,9 +503,12 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       session.catalog.cacheTable("varka_next_day")
     }
     try {
+      // THURSDAY maps to k = -1 (DateTimeUtils.getDayOfWeekFromString's [0, 6] range has
+      // THURSDAY = 0), the one weekday whose runtime literal is negative - included so the
+      // end-to-end path, not only the emitter unit test, covers it.
       checkDifferential(spark, varkaSpark,
-        "SELECT next_day(d, 'MO') AS a, next_day(d, 'SUNDAY') AS b FROM varka_next_day " +
-          "ORDER BY a, b",
+        "SELECT next_day(d, 'MO') AS a, next_day(d, 'SUNDAY') AS b, " +
+          "next_day(d, 'THURSDAY') AS c FROM varka_next_day ORDER BY a, b, c",
         expectFused = true)
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_next_day"))

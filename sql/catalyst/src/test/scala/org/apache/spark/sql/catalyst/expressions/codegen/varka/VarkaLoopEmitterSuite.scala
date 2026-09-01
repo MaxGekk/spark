@@ -733,10 +733,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   }
 
   test("next_day matches Spark's own wrapping formula for every weekday, at the extremes") {
-    // One root per weekday offset (k = dayOfWeek - 1, in [0, 6]), all sharing one emitted
-    // class and one literal-slot array - the point of "k is a runtime literal" (section 2).
-    val roots = (0 to 6).map(k => new NextDay(new ColumnRef(0), new LiteralSlot(k)))
-    val lits = Array(0, 1, 2, 3, 4, 5, 6)
+    // One root per weekday offset (k = dayOfWeek - 1). DateTimeUtils.getDayOfWeekFromString
+    // returns [0, 6] with THURSDAY = 0 .. WEDNESDAY = 6, so k itself ranges over [-1, 5], not
+    // [0, 6] - THURSDAY's k = -1 is the one value a naive 0-to-6 sweep would miss (caught by
+    // this task's code review). All seven share one emitted class and one literal-slot array
+    // - the point of "k is a runtime literal" (section 2).
+    val roots = (0 to 6).map(slot => new NextDay(new ColumnRef(0), new LiteralSlot(slot)))
+    val lits = Array(-1, 0, 1, 2, 3, 4, 5)
     // The 15-bit fold boundaries are edges of the shared floorMod7 lowering; the rest probe
     // the deliberate k - d overflow (section 2) near both ends of the int range.
     val extremes = Array(Int.MinValue, Int.MaxValue, Int.MinValue + 1, Int.MaxValue - 1,

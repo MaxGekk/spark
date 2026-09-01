@@ -215,6 +215,16 @@ public final class VarkaLoopEmitter {
    */
   private static final int CHRONO_WEIGHT = 50;
 
+  /**
+   * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
+   * way as {@link #CHRONO_WEIGHT}: its own {@code w = k - d} subtract and the final
+   * {@code d + r + 1} (two ops) plus {@link #emitFloorMod7}'s twelve vector ops under the
+   * shipped {@link VarkaEmitOptions.FloorMod7#MAGIC} lowering - fifteen real vector ops, not
+   * the flat default weight of 1 the emitter used to give it. Re-count it if the lowering
+   * changes shape.
+   */
+  private static final int NEXT_DAY_WEIGHT = 15;
+
   private VarkaLoopEmitter() {
   }
 
@@ -307,9 +317,6 @@ public final class VarkaLoopEmitter {
   /** The deliberately wrong shape behind {@link VarkaEmitOptions#misdescribeAdd()}. */
   private static final MethodTypeDesc LANEWISE_VV_WRONG =
       MethodTypeDesc.of(INT_VECTOR, INT_VECTOR);
-  /** {@code IntVector IntVector.neg()} - the no-argument unary lane ops. */
-  private static final MethodTypeDesc LANEWISE_UNARY =
-      MethodTypeDesc.of(INT_VECTOR);
   /** {@code IntVector IntVector.add/sub/and/mul/div(int)} - broadcast-scalar convenience. */
   private static final MethodTypeDesc LANEWISE_VI =
       MethodTypeDesc.of(INT_VECTOR, ConstantDescs.CD_int);
@@ -591,7 +598,10 @@ public final class VarkaLoopEmitter {
     if (node instanceof ColumnRef || node instanceof LiteralSlot) {
       return 0;
     }
-    return isChrono(node) ? CHRONO_WEIGHT : 1;
+    if (isChrono(node)) {
+      return CHRONO_WEIGHT;
+    }
+    return node instanceof NextDay ? NEXT_DAY_WEIGHT : 1;
   }
 
   /** Whether {@code node}'s subtree contains a calendar extraction, which is what decides
@@ -953,9 +963,9 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, Integer> sharedSlot = new HashMap<>();
     /** Per Greatest/Least (masked): the two operand temporaries the substitution needs. */
     final Map<VarkaVectorIR, int[]> pairTmp = new HashMap<>();
-    /** Per DayOfWeek/WeekDay: the original-value and fold temporaries. NextDay reuses the
-     * first two for {@code emitFloorMod7}'s own input and adds a third for the date, which
-     * the mod's input already occupies but which the result still needs. */
+    /** Per DayOfWeek/WeekDay/NextDay: {@code emitFloorMod7}'s own original-value and fold
+     * temporaries. NextDay needs no third slot for the date it reuses after the mod - its
+     * emitValue arm keeps that copy on the operand stack instead (dup/swap). */
     final Map<VarkaVectorIR, int[]> dowTmp = new HashMap<>();
     /** Per calendar node: the civil-from-days temporaries (task 26), six vectors and two
      * masks - the decomposition is too long to keep on the operand stack. */
@@ -1079,13 +1089,10 @@ public final class VarkaLoopEmitter {
           if (!dense && (node instanceof Greatest || node instanceof Least)) {
             s.pairTmp.put(node, new int[] {slot++, slot++});
           }
-          if (node instanceof DayOfWeek || node instanceof WeekDay) {
+          if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay) {
+            // emitFloorMod7's own two scratch slots; NextDay's second copy of the date rides
+            // the operand stack (dup/swap in its emitValue arm) rather than needing a third.
             s.dowTmp.put(node, new int[] {slot++, slot++});
-          }
-          if (node instanceof NextDay) {
-            // emitFloorMod7 claims the first two for its own input (here, w = k - d); the
-            // third holds the date across the mod, since the date is needed again after.
-            s.dowTmp.put(node, new int[] {slot++, slot++, slot++});
           }
           if (isChrono(node)) {
             // Six int-vector temporaries and two masks; see emitChrono for what stays live.
@@ -1734,20 +1741,23 @@ public final class VarkaLoopEmitter {
         emitModOffset(cb, s, 3);
       }
       case NextDay n -> {
-        int date = s.dowTmp.get(node)[2];
+        // date is needed twice - once inside w = k - d, once again for the final d + r - and
+        // both children must be emitted before line() re-tags the node's own instructions
+        // (matching AddDays/SubDays/DateDiff), so it rides the operand stack via dup/swap
+        // rather than a dedicated local: [date] -dup-> [date, date] -offset-> [date, date, k]
+        // -swap-> [date, k, date], leaving exactly k.sub(date)'s [receiver, arg] shape on top
+        // with the reserved date copy underneath for the later d.add(r).
         emitValue(cb, n.days(), dense, analysis, s, computed);
+        cb.dup();
+        emitValue(cb, n.offset(), dense, analysis, s, computed);
+        cb.swap();
         line(cb, analysis, node);
-        cb.astore(date);
         // w = k - d, wrapping on purpose: next_day's oracle is Spark's own
         // getNextDateForDayOfWeek, which computes this in plain int arithmetic, so
         // byte-exactness with the row engine means reproducing the wrap, not avoiding it.
-        cb.aload(date);
-        cb.invokevirtual(INT_VECTOR, "neg", LANEWISE_UNARY);
-        emitValue(cb, n.offset(), dense, analysis, s, computed);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
         emitFloorMod7(cb, node, analysis, s);
         // result = d + r + 1, wrapping again.
-        cb.aload(date);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
         cb.loadConstant(1);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
@@ -1883,6 +1893,12 @@ public final class VarkaLoopEmitter {
    * {@link VarkaEmitOptions.FloorMod7#DIGIT_SUM} and the lanewise DIV behind
    * {@link VarkaEmitOptions.FloorMod7#DIV} are the reference variants the parity benchmark
    * prices this one against.
+   *
+   * <p>Slot contract: {@code node}'s {@code dowTmp} entry supplies exactly the two scratch
+   * locals this method uses as its own working storage ({@code tmp[0]} for the input value,
+   * {@code tmp[1]} for the fold) - it touches no other local of the caller's. A caller needing
+   * the pre-mod value again afterward (as {@link VarkaVectorIR.NextDay} does) must keep its
+   * own copy some other way, since neither slot survives this call for that purpose.
    */
   private static void emitFloorMod7(
       CodeBuilder cb, VarkaVectorIR node, Analysis analysis, Slots s) {

@@ -171,10 +171,12 @@ public sealed interface VarkaVectorIR
   /**
    * Spark's {@code next_day(date, day_of_week)} (task 33): the first date strictly later than
    * {@code days} falling on the weekday {@code offset} names. {@code offset} is
-   * {@code dayOfWeek - 1}, where {@code dayOfWeek} is the {@code [1, 7]} value
-   * {@code DateTimeUtils#getDayOfWeekFromString} parses from the (necessarily literal) weekday
-   * argument, and must be a {@link LiteralSlot} - the weekday name is resolved at compile time,
-   * never at runtime, so one emitted class serves every weekday.
+   * {@code dayOfWeek - 1}, where {@code dayOfWeek} is the {@code [0, 6]} value
+   * ({@code THURSDAY = 0 .. WEDNESDAY = 6}) {@code DateTimeUtils#getDayOfWeekFromString}
+   * parses from the (necessarily literal) weekday argument - so {@code offset} itself ranges
+   * over {@code [-1, 5]}, not {@code [0, 6]} - and must be a {@link LiteralSlot}: the weekday
+   * name is resolved at compile time, never at runtime, so one emitted class serves every
+   * weekday.
    */
   record NextDay(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
 
