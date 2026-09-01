@@ -371,8 +371,9 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     // to any of them - operand order, a token - fails here even though the chain-based
     // pinned hash above would still pass. Same update rule as above when intended. Task 20
     // added IsNotNull and re-pinned the value (recorded in PLAN_TASK_20.md); task 26 added
-    // the four calendar extractions and re-pinned it again (PLAN_TASK_26.md); task 34 added
-    // dayofyear and re-pinned it again (PLAN_TASK_34.md).
+    // the four calendar extractions and re-pinned it again (PLAN_TASK_26.md); task 33 added
+    // NextDay and task 34 added DayOfYear, each re-pinning it again (PLAN_TASK_33.md,
+    // PLAN_TASK_34.md).
     import VarkaVectorIR._
     val cond = new And(
       new Or(
@@ -387,8 +388,9 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(columnRef, literal), new SubDays(columnRef, literal)),
-      new Least(new DateDiff(chrono, new DayOfWeek(columnRef)), new WeekDay(columnRef)))
-    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "e8314287849e8cf8")
+      new Least(new DateDiff(chrono, new DayOfWeek(columnRef)),
+        new Least(new WeekDay(columnRef), new NextDay(columnRef, literal))))
+    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "6b1350154da77f7e")
   }
 
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {

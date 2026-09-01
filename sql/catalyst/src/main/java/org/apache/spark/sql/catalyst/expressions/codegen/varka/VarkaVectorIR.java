@@ -50,7 +50,7 @@ public sealed interface VarkaVectorIR
     permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
             VarkaVectorIR.IfElse, VarkaVectorIR.Greatest, VarkaVectorIR.Least,
-            VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay,
+            VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.NextDay,
             VarkaVectorIR.Chrono, VarkaVectorIR.Cond {
 
   /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
@@ -169,6 +169,18 @@ public sealed interface VarkaVectorIR
   record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {}
 
   /**
+   * Spark's {@code next_day(date, day_of_week)} (task 33): the first date strictly later than
+   * {@code days} falling on the weekday {@code offset} names. {@code offset} is
+   * {@code dayOfWeek - 1}, where {@code dayOfWeek} is the {@code [0, 6]} value
+   * ({@code THURSDAY = 0 .. WEDNESDAY = 6}) {@code DateTimeUtils#getDayOfWeekFromString}
+   * parses from the (necessarily literal) weekday argument - so {@code offset} itself ranges
+   * over {@code [-1, 5]}, not {@code [0, 6]} - and must be a {@link LiteralSlot}: the weekday
+   * name is resolved at compile time, never at runtime, so one emitted class serves every
+   * weekday.
+   */
+  record NextDay(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
+
+  /**
    * The civil-from-days extractions, as a sealed family rather than a set the emitter has to
    * recognise by hand. Two of the emitter's decisions key off "is this a calendar node" - the
    * {@code GROUP_BUDGET} weight, and whether a body needs a range-guard accumulator - and
@@ -248,6 +260,7 @@ public sealed interface VarkaVectorIR
       case Least n -> "(least " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + canonical(n.days()) + ")";
       case WeekDay n -> "(weekDay " + canonical(n.days()) + ")";
+      case NextDay n -> "(nextDay " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
       case Year n -> "(year " + canonical(n.days()) + ")";
       case Month n -> "(month " + canonical(n.days()) + ")";
       case DayOfMonth n -> "(dayOfMonth " + canonical(n.days()) + ")";
@@ -304,6 +317,8 @@ public sealed interface VarkaVectorIR
           + lineOf.applyAsInt(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + lineOf.applyAsInt(n.days()) + ")";
       case WeekDay n -> "(weekDay " + lineOf.applyAsInt(n.days()) + ")";
+      case NextDay n -> "(nextDay " + lineOf.applyAsInt(n.days()) + " "
+          + lineOf.applyAsInt(n.offset()) + ")";
       case Year n -> "(year " + lineOf.applyAsInt(n.days()) + ")";
       case Month n -> "(month " + lineOf.applyAsInt(n.days()) + ")";
       case DayOfMonth n -> "(dayOfMonth " + lineOf.applyAsInt(n.days()) + ")";

@@ -344,7 +344,14 @@ apparent small wins turned out to be noise.
 - Apply constant offsets *after* a mod, not before: `floorMod(days + 4, 7)` overflows
   int for days near `Int.MaxValue`, while `(floorMod(days, 7) + 4) mod 7` cannot.
   Negative inputs are where every strength-reduced mod goes wrong silently - a test
-  range that never crosses zero proves nothing.
+  range that never crosses zero proves nothing. The rule is about avoiding overflow,
+  though, not an end in itself - it inverts when the oracle's own arithmetic already
+  overflows on purpose. `next_day` (`PLAN_TASK_33.md`) computes `k - d` *before* the
+  mod because Spark's `getNextDateForDayOfWeek` computes it in plain wrapping `int`
+  arithmetic; reducing first disagreed with the row engine on 28 boundary cases in the
+  planning pass's own check. Whose arithmetic the oracle is - exact (`LocalDate`,
+  never wraps) or wrapping (plain Spark `int` math) - decides which way this rule
+  points, and the reflex answer for one is the wrong answer for the other.
 - A fixed-width species literal (`IntVector.SPECIES_256`) is not a safe way to get "the
   int species with half `LongVector.SPECIES_PREFERRED`'s lane count": under
   `-XX:MaxVectorSize=16` (this project's narrow-vector CI shape, 128-bit), no 256-bit
