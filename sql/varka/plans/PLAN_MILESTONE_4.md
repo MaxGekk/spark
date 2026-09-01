@@ -861,6 +861,60 @@ measured cost at AVX-512 is worse than 0.75x - at which point the simplification
 is not worth a quarter of the calendar family's throughput, and the entry goes
 to the debt register with the number attached.
 
+### 2.20 Making a bad register allocation visible (task 50)
+
+Task 32 spent six failed hypotheses on a kernel that ran at either 165 or 236 M
+rows/s under `-XX:MaxVectorSize=16` - stdev 0 inside a run, 42% between runs -
+before the cause turned out to be C2's register allocator. The two compilations
+contain *identical* vector op counts; the whole difference is spill traffic,
+four stack moves against seventy-four. The allocator sometimes finds a clean
+assignment for a body that sits at the edge of the 16-register xmm file and
+sometimes does not, from the same IR. `SKILLS.md` has the evidence.
+
+The structural answer is task 32's own: do not put four outputs in one loop
+method at a width whose register file cannot hold them, which is what the
+`shareChronoPrefix` decision becomes once its default is made width-dependent.
+This task is the other half - **not preventing it, but noticing it** - because
+today a badly-allocated kernel is completely invisible. It costs 30 to 40% and
+nothing anywhere reports that it happened.
+
+**It is observable with public API.** JFR's `jdk.Compilation` event carries
+`method`, `compileLevel`, `isOsr` and `codeSize`, and
+`jdk.jfr.consumer.RecordingStream` (public since JDK 14) can consume those
+events in-process with no agent and no diagnostic flags. The fast and slow
+allocations of the same kernel differ by about 2x in compiled size - 1581
+instructions against 3000 - so the anomaly is plainly present in that one field.
+
+**The expectation is self-calibrating, which is what makes this worth building.**
+The obvious design is a committed table of expected sizes per shape, and it is
+the wrong one: it has to come from somewhere and it drifts every time the
+emitter changes. Varka already keys every kernel by a shape hash, and the same
+shape emits byte-identical bytecode, so the comparison is between *compilations
+of the same shape hash* rather than against any constant. The first compilation
+of a shape establishes the size; a later one that differs materially is the
+report. No table, no drift, and it gets more accurate the longer a JVM lives.
+
+Scope, deliberately narrow:
+
+* A `RecordingStream` subscribed to `jdk.Compilation`, filtered to Varka's
+  generated kernel classes, with OSR compilations excluded - they are not what
+  the steady-state path runs and task 32 found them identical across both modes
+  anyway.
+* Per shape hash, the first non-OSR `codeSize` seen, and a metric plus a debug
+  log when a later one for the same hash differs by more than a threshold the
+  task picks from measured data rather than guessing.
+* Off unless enabled, through Varka's own configuration surface. Subscribing to
+  `jdk.Compilation` is not free and this is a diagnostic, not a feature, so it
+  should cost exactly nothing when nobody has asked for it.
+* **A diagnostic and never a control loop.** Section 9's debt entry records the
+  detect-and-re-emit idea and why it is not being built.
+
+Risks worth stating: JFR may be unavailable or disabled in a deployment, in
+which case this reports nothing and must degrade silently; the stream costs a
+thread; and a shape whose kernel is only ever compiled once in a JVM produces no
+comparison at all, which is the common case for a short query and means this
+mostly serves long-lived sessions.
+
 ## 3. Task breakdown
 
 Tasks 24-44 are the committed spine, in dependency order: 24 halves the
@@ -895,8 +949,9 @@ Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
 (task 31, section 2.2, then tasks 32-44, sections 2.9 to 2.16, and now tasks
-45-48, sections 2.17 and 2.18, and now task 49, section 2.19), so milestone 5
-resumes at 50.
+45-48, sections 2.17 and 2.18, task 49, section 2.19, and now task 50,
+section 2.20), so milestone 5
+resumes at 51.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -926,6 +981,7 @@ resumes at 50.
 | 47 | One validity write per word | Bits accumulated across lane groups and stored once per 64 rows, with the epilogue flushing a partial accumulator | The masked path's committed cases, the 4095/63 non-aligned lengths task 44 adds, and the dense/masked agreement; gated on what 45 and 46 leave |
 | 48 | A `year` that does not compute the month | `doy >= 306` replacing the March-month step in the year tail only, with the equivalence recorded as an integer identity rather than an approximation | The existing exhaustive `VarkaChronoSuite` sweep unchanged and still green; the parity `year` case measured by interleaved A/B compared by minimums, since the expected effect is inside a single run's noise |
 | 49 | Exact civil-from-days in long lanes | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division by 146097, 36524 and 365 with a 64-bit low product and no correction carries; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
+| 50 | Make a bad register allocation visible | A `jdk.Compilation` JFR stream filtered to Varka's generated kernels, non-OSR only, comparing `codeSize` between compilations of the same shape hash rather than against any committed table; a metric and a debug log on divergence; off unless enabled | The stream observed to see Varka kernel compilations and report their sizes at both widths; zero cost when disabled, asserted rather than assumed; explicitly no re-emission on detection (see section 9) |
 
 ## 4. Files
 
@@ -1076,6 +1132,21 @@ rewritten in the past tense with what the sweep found, never deleted.
   a shared decomposition would have to leave several. It matters if a later item wants
   `date_trunc` or `dayofyear` beside `year` in one projection, which is when the
   recomputation stops being hypothetical.
+
+* **A badly-allocated kernel could be detected and re-emitted, and deliberately is not.**
+  Every Varka kernel is emitted into a fresh class, so re-emitting the same shape under a new
+  class name gives C2's register allocator a fresh roll - and task 50 makes the bad roll
+  detectable. A detect-and-resample loop is therefore *buildable* with no new machinery. It is
+  not scheduled, in this milestone or the next, and the reasoning is recorded here so it is not
+  re-proposed as an obvious win. Each resample costs another class, another compilation and
+  another warm-up, against a kernel a short query may run only a handful of times, so the
+  expected value is negative wherever it matters most; class churn is already a watched concern
+  (`VarkaClassLoaderTest` stresses a thousand loaders against metaspace); nothing bounds the
+  retry, so a cap turns it into a slot machine and no cap turns it into a loop; and it treats a
+  symptom whose structural cause - four outputs in one loop method at a width with sixteen
+  vector registers - task 32 can remove outright at zero runtime cost. Revisit only for a
+  kernel long-lived enough that one extra compilation amortises, and only with task 50's
+  numbers in hand to say how often the bad roll actually happens.
 
 * **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
