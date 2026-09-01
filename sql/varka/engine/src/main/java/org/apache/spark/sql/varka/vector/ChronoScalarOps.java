@@ -173,4 +173,56 @@ public final class ChronoScalarOps {
     MemorySegment validity = ofAddress(dstValidity, (length + 7) / 8L);
     validity.fill((byte) -1);
   }
+
+  // -------------------------------------------------------------------------------------------
+  // Auto-vectorization probes
+  //
+  // yearByMagic is written so SuperWord *could* vectorize it - only MulL and URShiftL, no
+  // branches - and it measurably does not (-XX:-UseSuperWord moves it 0.1%). These four methods
+  // separate the two candidate reasons by bisection, since TraceAutoVectorization is a develop
+  // flag and this JDK is a product build with no hsdis to disassemble with.
+  //
+  //                        trivial body            full civil-from-days body
+  //   int[] array          probeArrayTrivial       probeArrayYear
+  //   MemorySegment        probeSegmentTrivial     yearByMagic (above)
+  //
+  // Run each with and without -XX:-UseSuperWord. A case SuperWord vectorizes slows down when it
+  // is disabled; a case it never touched does not move. If the segment-trivial case responds and
+  // the segment-year case does not, the arithmetic is what blocks it; if the array cases respond
+  // and the segment cases do not, MemorySegment addressing is what blocks it.
+  // -------------------------------------------------------------------------------------------
+
+  /** Probe: the simplest vectorizable body there is, over an int array. The control. */
+  public static void probeArrayTrivial(int[] src, int[] dst, int length) {
+    for (int i = 0; i < length; i++) {
+      dst[i] = src[i] * 3 + 1;
+    }
+  }
+
+  /** Probe: the same body over a MemorySegment, isolating the addressing. */
+  public static void probeSegmentTrivial(long srcData, long dstData, int length) {
+    MemorySegment src = ofAddress(srcData, length * 4L);
+    MemorySegment dst = ofAddress(dstData, length * 4L);
+    for (int i = 0; i < length; i++) {
+      dst.set(ValueLayout.JAVA_INT, i * 4L, src.get(ValueLayout.JAVA_INT, i * 4L) * 3 + 1);
+    }
+  }
+
+  /** Probe: {@link #yearByMagic}'s exact body over int arrays, isolating the arithmetic. */
+  public static void probeArrayYear(int[] src, int[] dst, int length) {
+    for (int i = 0; i < length; i++) {
+      long w = src[i] + BIAS;
+      long era = (w * ERA_M) >>> ERA_K;
+      long doe = w - era * ERA_DAYS;
+      long u = doe - ((doe * D1460_M) >>> D1460_K)
+          + ((doe * D36524_M) >>> D36524_K) - ((doe * D146096_M) >>> D146096_K);
+      long yoe = (u * D365_M) >>> D365_K;
+      long doy = doe - (365 * yoe + (yoe >>> 2) - ((yoe * D100_M) >>> D100_K));
+      long mp = ((5 * doy + 2) * D153_M) >>> D153_K;
+      long lt10 = (mp - 10) >>> 63;
+      long m = mp + 3 - 12 * (1 - lt10);
+      long turned = ((2 - m) >>> 63) ^ 1L;
+      dst[i] = (int) (400 * (era - BIAS_ERAS) + yoe + turned);
+    }
+  }
 }

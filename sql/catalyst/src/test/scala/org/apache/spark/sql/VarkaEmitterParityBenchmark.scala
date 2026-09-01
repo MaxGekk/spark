@@ -426,6 +426,40 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("scalar year, magic multiply (may auto-vectorize), null-free") { _ =>
           scalarChunked(ChronoScalarOps.yearByMagic)
         }
+        // The 2x2 that says *why* SuperWord declined the case above: array against
+        // MemorySegment, trivial body against the full decomposition. Re-run the section under
+        // -XX:-UseSuperWord; a case SuperWord vectorized slows down, one it never touched does
+        // not move. See ChronoScalarOps's probe block. These are diagnostics, not kernels, and
+        // they are here rather than in a scratch program so the answer stays reproducible.
+        val probeSrc = new Array[Int](chunk)
+        val probeDst = new Array[Int](chunk)
+        var pi = 0
+        while (pi < chunk) {
+          probeSrc(pi) = nfData.get(ValueLayout.JAVA_INT, pi * 4L)
+          pi += 1
+        }
+        val probePasses = repeats * (numRows / chunk)
+        benchmark.addCase("probe: trivial body, int[] (control)") { _ =>
+          var p = 0
+          while (p < probePasses) {
+            ChronoScalarOps.probeArrayTrivial(probeSrc, probeDst, chunk)
+            p += 1
+          }
+        }
+        benchmark.addCase("probe: trivial body, MemorySegment") { _ =>
+          var p = 0
+          while (p < probePasses) {
+            ChronoScalarOps.probeSegmentTrivial(nfData.address(), dst.address(), chunk)
+            p += 1
+          }
+        }
+        benchmark.addCase("probe: full year body, int[]") { _ =>
+          var p = 0
+          while (p < probePasses) {
+            ChronoScalarOps.probeArrayYear(probeSrc, probeDst, chunk)
+            p += 1
+          }
+        }
         // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector
         // body against year's ~50), and the per-row LocalDate loop is what Spark runs today.
         benchmark.addCase("dayofweek, for scale, null-free") { _ => chunked(dow, false) }

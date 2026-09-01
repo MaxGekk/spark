@@ -336,15 +336,34 @@ apparent small wins turned out to be noise.
   `MulHiL`, one instruction but a costlier one: it keeps the high half, and on x86-64 it
   clobbers RDX:RAX. An ordinary `imulq` plus a shift is cheaper wherever the product fits 64
   bits, which for a 32-bit dividend and a ~30-bit magic it does.
-- **Do not count on SuperWord to vectorize a `MemorySegment` loop, even one written to be
-  vectorizable.** The `(x * M) >>> k` form uses only `MulL` and `URShiftL`, both of which have
-  vector counterparts (`MulVL`, `URShiftVL`), and the loop body was made branchless for exactly
-  this reason - the January turn and the month fixup as arithmetic rather than `if`. C2 still
-  did not vectorize it: `-XX:-UseSuperWord` moves the number by 0.1% (284.1 against 284.4), and
-  the figure is identical under `-XX:MaxVectorSize=16`, so nothing vector-related is happening
-  at all. The likely cause is the `MemorySegment.get(ValueLayout.JAVA_INT, ...)` addressing
-  rather than the arithmetic. The A/B against `-XX:-UseSuperWord` is the cheap way to ask this
-  question and needs no disassembler.
+- **SuperWord will not auto-vectorize the calendar arithmetic, for two independent reasons,
+  and neither is the `MemorySegment`.** The `(x * M) >>> k` form uses only `MulL` and
+  `URShiftL`, both of which have vector counterparts (`MulVL`, `URShiftVL`), and the loop body
+  was written branchless for exactly this reason. C2 still does not vectorize it:
+  `-XX:-UseSuperWord` moves the number by 0.1% (284.1 against 284.4). A four-case bisection -
+  {`int[]`, `MemorySegment`} x {trivial body, full decomposition} - locates it: the trivial
+  `int[]` loop gains 4.84x from SuperWord, the trivial `MemorySegment` loop only 1.09x, and the
+  full body gains nothing on *either* (0.99x on `int[]`, 1.00x on the segment). So the
+  arithmetic is the binding constraint; segment addressing hurts as well but is not what stops
+  it.
+  `-XX:+TraceSuperWord` on a fastdebug JVM gives the mechanism exactly:
+    - At the default `LoopUnrollLimit=60`, `SuperWord::transform_loop` is entered **zero
+      times**. The body is too large to unroll, and with no pre/main/post structure there is no
+      main loop for SuperWord to work on. It never gets asked.
+    - At `-XX:LoopUnrollLimit=1000` it is entered four times and succeeds none. It builds packs
+      - 8-wide `LoadI`, 8-wide `MulL` - and then
+      `SuperWord::filter_packs_for_profitable` discards all of them
+      (`WARNING: Removed pack: not profitable`), ending at `0 packs` and
+      `SLP_extract did not vectorize`. The width mismatch is visible in the pack contents:
+      eight 32-bit loads feeding 64-bit multiplies do not occupy one vector.
+  The consequence for this project: the explicit Vector API is not a convenience over
+  auto-vectorization here, it is the only route, and that is now measured rather than assumed.
+  A lowering with no int-to-long mixing would clear the second gate, but the first is a tunable
+  no shipped Spark can depend on.
+- **The A/B that needs no tools**: run the case twice, once with `-XX:-UseSuperWord`. A loop
+  SuperWord vectorized slows down; one it never touched does not move. That answers "did it
+  vectorize" in a product JVM. Answering *why not* needs a fastdebug build - see the
+  fastdebug section below.
 - **Op counts bound a speed-up; they do not estimate one.** Three predictions in one milestone,
   all made from op ratios, all optimistic: sharing one decomposition across four calendar fields
   was predicted at 2.0x-3.2x and measured 1.5x; a scalar `year` was predicted within 2.5x of the
@@ -511,3 +530,49 @@ apparent small wins turned out to be noise.
   the actual tool (recent PRs: `Generated-by: Claude Code (Claude Fable 5)`).
 - Branch naming: `varka-<topic>` tracks `origin/master` and stays one commit ahead
   per PR.
+
+## Building a fastdebug JDK for HotSpot diagnostics
+
+Three questions in milestone 4 could not be answered from a product JVM - why SuperWord
+declined a loop, what C2 actually emitted, and which of two compilations a bimodal kernel had
+landed on. The flags that answer them (`TraceSuperWord`, `PrintOptoAssembly`, and a
+`PrintAssembly` that can actually disassemble) are `develop` flags or need `hsdis`, and neither
+ships in a product build. No prebuilt debug JDK exists on `jdk.java.net` for any version, so
+building one is the only route. It takes about three and a half minutes on 24 cores.
+
+```
+git clone --depth 1 --branch jdk-25-ga https://github.com/openjdk/jdk.git
+bash configure --with-debug-level=fastdebug --enable-headless-only \
+    --with-hsdis=capstone --with-boot-jdk=$JAVA_HOME \
+    --with-jobs=24 --disable-warnings-as-errors
+make images build-hsdis
+cp build/*/support/hsdis/libhsdis.so build/*/images/jdk/lib/server/
+```
+
+Four things that cost time and are not obvious:
+
+* **`--enable-headless-only` does not remove the X11 or cups build dependencies.** It affects
+  the runtime, not what configure demands. The full Ubuntu list is still needed: `autoconf`,
+  `libx11-dev`, `libxext-dev`, `libxrender-dev`, `libxrandr-dev`, `libxtst-dev`, `libxt-dev`,
+  `libcups2-dev`, `libfontconfig1-dev`, `libfreetype-dev`, `libasound2-dev`, and
+  `libcapstone-dev` for hsdis.
+* **Ubuntu 26.04 ships `uutils coreutils` as `date`, and it breaks the build.** OpenJDK's
+  configure decides GNU-ness with `date --version | grep "GNU\|BusyBox"`
+  (`make/autoconf/basic_tools.m4`). uutils names itself differently while behaving
+  GNU-compatibly, so configure falls back to the BSD `date -u -j -f` form, produces an empty
+  `SOURCE_DATE_ISO_8601`, and the build later fails packaging `jrt-fs.jar` with
+  `option --date requires an argument`. Passing `--with-source-date=<ISO string>` does not help
+  - it is rejected as unparseable by the same broken path. The fix is a shim earlier in `PATH`
+  that answers `--version` with a string containing "GNU" and `exec`s `/usr/bin/date` for
+  everything else.
+* **`make images` does not build hsdis.** It needs the separate `build-hsdis` target, and the
+  result is left in `support/hsdis/libhsdis.so`. HotSpot looks for it beside `libjvm.so`, so it
+  has to be copied to `images/jdk/lib/server/` - putting it in `images/jdk/lib/` is not enough
+  and yields `Loading hsdis library failed` with no further explanation.
+* **The flag is `TraceSuperWord`, not `TraceAutoVectorization`**, in JDK 25 - check
+  `src/hotspot/share/opto/c2_globals.hpp` rather than trusting a flag name from a newer
+  release.
+
+**Never take a number from this JVM.** fastdebug keeps the assertions, so absolute throughput
+is not comparable with the product build and nothing measured on it belongs in a committed
+results file. It is for reading what C2 did, not how fast it did it.
