@@ -67,6 +67,10 @@ still declines):
   `numFallbackBatchesDeclined`. Such a day does not have to be written by hand:
   `DATE_ADD` arithmetic reaches one, and so does a stored column, since a
   Parquet `INT32` date carries any day value the writer put there.
+* `NEXT_DAY` (task 33), for a literal weekday only - a non-foldable, null or
+  unrecognized weekday declines, since resolving it is a compile-time step
+  and the row engine's ANSI-mode behavior for a bad weekday is not
+  reproduced.
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
 

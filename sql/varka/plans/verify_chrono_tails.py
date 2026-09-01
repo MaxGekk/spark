@@ -35,20 +35,28 @@ answer is 60, and failed on 84% of days.
 """
 
 import datetime
+
 ERA, CEN, BIAS = 146097, 36524, 5394572
 def decompose(d):
     w = d + BIAS
     era = (w * 114) >> 24
     r = w - era * ERA
-    if r >= ERA: era += 1; r -= ERA
+    if r >= ERA:
+        era += 1
+        r -= ERA
     c = (r * 7349) >> 28
     doc = r - c * CEN
-    if doc >= CEN: c += 1; doc -= CEN
-    if c == 4: c = 3; doc += CEN
+    if doc >= CEN:
+        c += 1
+        doc -= CEN
+    if c == 4:
+        c = 3
+        doc += CEN
     yoc = (doc * 45966) >> 24
     doy = doc - (365 * yoc + (yoc >> 2))
     if doy < 0:
-        doy += 365 + (1 if (yoc & 3) == 0 else 0); yoc -= 1
+        doy += 365 + (1 if (yoc & 3) == 0 else 0)
+        yoc -= 1
     mp = ((5 * doy + 2) * 877241) >> 27
     dom = doy - (((153 * mp + 2) * 838861) >> 22) + 1
     month = mp + 3 if mp < 10 else mp - 9
@@ -83,8 +91,10 @@ def weeks_in(year): return 52 + (1 if (pofy(year) == 4 or pofy(year - 1) == 3) e
 def weekofyear(d, jdoy, year):
     isodow = ((d + 3) % 7 + 7) % 7 + 1          # Varka's weekday + 1
     w = (jdoy - isodow + 10) // 7
-    if w < 1: return weeks_in(year - 1)
-    if w > weeks_in(year): return 1
+    if w < 1:
+        return weeks_in(year - 1)
+    if w > weeks_in(year):
+        return 1
     return w
 
 bad = {"doy": 0, "last": 0, "ty": 0, "tm": 0, "tq": 0, "woy": 0, "leap": 0}
@@ -96,19 +106,29 @@ for i in range(0, 2932897 - d0):
     era, c, yoc, doy, mp, dom, month, year = decompose(d)
     L = leap(year)
     ref_leap = 1 if (cur.year % 4 == 0 and (cur.year % 100 != 0 or cur.year % 400 == 0)) else 0
-    if L != ref_leap: bad["leap"] += 1
+    if L != ref_leap:
+        bad["leap"] += 1
     jdoy = dayofyear(doy, L)
-    if jdoy != cur.timetuple().tm_yday: bad["doy"] += 1
+    if jdoy != cur.timetuple().tm_yday:
+        bad["doy"] += 1
     ld = lastday(d, mp, dom, L)
     ref_ld = d - cur.day + [31,29 if ref_leap else 28,31,30,31,30,31,31,30,31,30,31][cur.month-1]
-    if ld != ref_ld: bad["last"] += 1
-    if d - jdoy + 1 != d - cur.timetuple().tm_yday + 1: bad["ty"] += 1
-    if d - dom + 1 != d - cur.day + 1: bad["tm"] += 1
+    if ld != ref_ld:
+        bad["last"] += 1
+    if d - jdoy + 1 != d - cur.timetuple().tm_yday + 1:
+        bad["ty"] += 1
+    if d - dom + 1 != d - cur.day + 1:
+        bad["tm"] += 1
     qs = datetime.date(cur.year, ((cur.month - 1) // 3) * 3 + 1, 1)
-    if truncq(d, jdoy, month, L) != d - (cur - qs).days: bad["tq"] += 1
-    if weekofyear(d, jdoy, year) != cur.isocalendar()[1]: bad["woy"] += 1
+    if truncq(d, jdoy, month, L) != d - (cur - qs).days:
+        bad["tq"] += 1
+    if weekofyear(d, jdoy, year) != cur.isocalendar()[1]:
+        bad["woy"] += 1
     n += 1
-    try: cur += datetime.timedelta(days=1)
-    except OverflowError: break
+    try:
+        cur += datetime.timedelta(days=1)
+    except OverflowError:
+        break
 print("checked", n, "days (0001-01-01..9999-12-31)")
-for k, v in bad.items(): print(f"  {k:5s} mismatches: {v}")
+for k, v in bad.items():
+    print(f"  {k:5s} mismatches: {v}")
