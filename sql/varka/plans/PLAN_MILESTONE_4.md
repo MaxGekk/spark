@@ -349,18 +349,360 @@ under-1.3x rule asks for. Blend a safe divisor into inactive lanes; the
 structural check exists to make sure some such mechanism runs before an
 unmasked `DIV`, not to leave the choice open each time.
 
+### 2.9 One decomposition, several fields (task 32, from the debt register)
+
+Added after task 26 measured what its own design cost, which is the only
+reason it is here: `SELECT year(d)` runs at 1778 M rows/s and
+`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 441 - 4.0x for four
+fields, which is near enough to 4x that nothing is being shared but the column
+load and the loop control.
+
+The cause is structural rather than accidental. All four fields fall out of one
+civil-from-days decomposition, and ~45 of a field's ~51 vector ops are that
+shared work; only the last handful differ. But `Year(col0)`, `Month(col0)`,
+`DayOfMonth(col0)` and `Quarter(col0)` are four distinct IR nodes, each
+emitting the whole decomposition before its own tail. The emitter's DAG-CSE
+cannot help: it memoizes on structural equality between *nodes*, and the values
+worth sharing here - era, century, year of century, day of year, the
+March-based month - are not nodes at all. They are locals inside one node's
+emitted bytecode, invisible to the walk that would share them.
+
+**The task opens with the ceiling, not the mechanism.** A hand-written kernel
+computing all four fields from one decomposition, against the 441 M rows/s the
+four separate nodes reach, at both widths. That gate exists because task 17
+already measured the opposite of the obvious answer: raising `GROUP_BUDGET` so
+two outputs could keep their cross-output CSE in one method *lost*, 4587
+against 3196 M rows/s, because the wider method's register pressure cost more
+than recomputing the shared ops. Here the shared work is ~45 ops rather than
+eight, but five values would have to stay live across four output tails, so the
+same effect is in play and the direction is not predictable from op counts. If
+the ceiling is close to 441, the task is declined with a task-16 reason before
+any IR changes - which is a real possible outcome, not a formality.
+
+If it clears, three mechanisms, in the order they should be considered:
+
+1. **A multi-value node and its selectors.** `ChronoFields(days)` computes the
+   decomposition into slots and leaves nothing on the operand stack;
+   `Year(fields)`, `Month(fields)` and the rest read one slot each. This is the
+   general answer: any future primitive with several results - `divmod`, a
+   string operation returning an offset and a length, date-level `date_trunc`
+   beside `year` - takes the same shape. It is also the expensive one, because
+   the IR's whole contract is that a node evaluates to exactly one value:
+   `emitValue`, slot planning, the CSE memo, `canonicalShallow` and the line
+   map, the shape hash, and a rule keeping a multi-value node out of value
+   positions the way `Cond` is kept out of them today.
+2. **Emitter-side fusion, with no IR change.** When one group holds two or more
+   calendar nodes over the same child, emit the decomposition once and branch to
+   the tails. Local and cheap, but it argues with task 26's own node weight,
+   which deliberately puts each calendar output in its own loop method; the
+   grouping would need the opposite rule for exactly this case, and the fused
+   method lands near 60 ops across four outputs - the multi-output shape task 11
+   measured the C2 compile cliff on.
+3. **Decomposing into primitive IR nodes** so ordinary DAG-CSE shares them.
+   **Declined in advance, with the reason on the record**: one `year` is ~51
+   ops, so a four-field projection would be ~60 distinct nodes against
+   `MAX_FUSED_NODES = 64` and a `GROUP_BUDGET` of 16, and the IR would acquire a
+   general arithmetic vocabulary to serve one family.
+
+Whatever the outcome, the deliverable includes sweeping the debt register entry
+in the past tense with what the measurement found, per `sql/varka/AGENTS.md`.
+
+### 2.10 `next_day`, as a handover experiment (task 33)
+
+The smallest piece of vocabulary the survey after task 26 turned up, taken for
+a reason that is not about vocabulary at all: it is the first task written to
+be executed by a cheap agent rather than by whoever planned it, and it is
+chosen because it is the one candidate where nothing has to be decided.
+
+`next_day(d, <literal weekday>)` is `d + 1 + floorMod(k - d, 7)` for a
+compile-time `k`, and every piece of that already exists - the mod-7 magic
+multiply from task 14's follow-up, the unary null-intolerant node shape, the
+literal-in-a-slot convention from `date_add`. About seventeen vector ops,
+twelve of them already measured as `dayofweek`. There is no measurement to
+take, no range to guard, no lowering to choose between.
+
+The one trap is a trap in the opposite direction from the one `SKILLS.md`
+records. `k - d` does overflow near `Integer.MIN_VALUE` - but Spark's own
+`getNextDateForDayOfWeek` computes it in plain `int` arithmetic and wraps, so
+byte-exactness requires reproducing the overflow rather than avoiding it. The
+planning pass wrote the careful version first and checked it: reducing before
+subtracting disagrees with the row engine on the bottom handful of int days for
+every weekday, 28 cases in the boundary set. `dayofweek` is the reverse case,
+because its oracle is `LocalDate`, which never wraps. Whose arithmetic the
+oracle is decides which way the rule points, and that distinction is now in the
+recipe because it is exactly what a cheap agent would get wrong.
+
+`PLAN_TASK_33.md` is written as a step-by-step recipe - exact files,
+exact switches, the oracle to write the test against, the two-step form of the
+narrow-vector run that `JAVA_OPTS` silently gets wrong - and its outcome
+section asks the executing agent to record which steps turned out to be
+misleading. That record is the point of the experiment: whether a task of this
+shape can be handed over, and what a recipe has to contain before it can be.
+
+The corpus does not ask for `next_day` any more than it asked for `month`.
+This task is not claiming otherwise; it is buying a measurement of the handover
+itself, and picking the cheapest possible payload to buy it with.
+
+### 2.11 The rest of the date-field family (tasks 34-37)
+
+Four more expressions the survey after task 26 turned up, taken for the same
+reason task 33 was: each is a **tail on a decomposition that already exists**,
+so the whole of each task is one IR node, one case in `emitChrono`'s tail
+switch, and its tests. They are separate tasks rather than one because they are
+meant to go to separate agents, and because they are genuinely independent -
+the only ordering is that 34 builds the leap flag 35, 36 and 37 all want.
+
+| task | expression | lowering | size |
+|---|---|---|---|
+| 34 | `dayofyear` | `doy >= 306 ? doy - 305 : doy + 60 + L` | ~10 ops |
+| 35 | `trunc(d, 'YEAR'\|'MONTH'\|'QUARTER')` | `d - dayofyear + 1`, `d - dom + 1`, and a four-way quarter-start select | ~5-15 ops |
+| 36 | `last_day` | `d + length - dom`, length from the same linear form the day tail uses, February special-cased | ~12 ops |
+| 37 | `weekofyear` | ISO-8601: provisional week from day-of-year and weekday, then the two year-boundary corrections | ~60 ops |
+
+**Every formula above was verified during planning against `java.time` over
+all 3,652,059 days of `0001-01-01..9999-12-31` - zero mismatches**, by
+`plans/verify_chrono_tails.py`, which is committed beside the recipes so the
+claim is re-runnable by whoever is asked to trust it. That check
+is why they are worth handing over: the four recipes carry arithmetic that has
+already been run, so the executing agent is transcribing rather than deriving.
+It also earned its keep immediately - the first draft of `dayofyear` used 59
+where the answer is 60, and failed on 84% of days.
+
+Two things the four have in common, both written into the recipes. Their
+oracles are all `LocalDate`, which is exact, so the ordinary no-overflow rule
+applies - the opposite of task 33, where Spark's own arithmetic wraps and the
+lowering has to wrap with it. And the leap flag they need is computed from the
+*reported* year with two magic multiplies over a year biased by 13200, rather
+than from `yoc` and `century` with bit tricks that go wrong at the century and
+era boundaries.
+
+The corpus asks for none of them. As with 33, that is said plainly rather than
+argued around: what these buy is a second, wider trial of the handover - four
+tasks, four agents, one of them (37) deliberately harder than the rest, and
+four outcome sections recording where the recipes misled whoever ran them.
+
+### 2.12 A day offset that is a column (task 38)
+
+Not a new expression: `date_add(d, n)` and `d + n` already reach the compiler
+as `DateAdd`, and the emitter's arm for it is already vector-vector lane math.
+What declines them when `n` is a column rather than a literal is four guards,
+three of which exist to enforce milestone 1's scope - "foldable integer day
+offsets" - rather than to protect against anything the engine cannot do.
+
+The finding that makes this worth a task is that foldability is the visible
+guard and not the real one: **Varka cannot read a non-date column at all.** The
+compiler's only leaf is a `DateType` `BoundReference`, and `isArrowBacked`
+requires every referenced column to be an Arrow `DateDayVector`. So this task
+is really the input boundary opening by one type, and the day offset is what
+makes that concrete and testable.
+
+Two things in it can produce wrong answers rather than declines, which is why
+it is written as a recipe rather than left as a one-line note. `planWordRef`
+aliases `AddDays`'s validity to the date child alone - correct while the offset
+is always a literal, wrong the moment it can be a nullable column, and the fix
+is `andRef` over both children, which is provably a no-op for a literal because
+`andRef(a, WORD_ALL_TRUE)` returns `a`. And `DateAdd.inputTypes` accepts
+`ShortType` and `ByteType` **without a cast**, so a short column would be read
+by an int32 lane load as garbage; those must decline by naming `IntegerType`
+exactly rather than by accepting any integral type.
+
+Because no node type is added and the literal path is untouched, this is the
+one task in the milestone whose acceptance includes **neither pinned value
+moving and no committed number moving** - which also makes it the easiest to
+review.
+
+The corpus does not ask for this either. What argues for it is that the door it
+opens is on the way to everywhere else: an `IntegerType` column is the first
+non-date input the engine has ever read, and items 2, 3 and 4 all need that
+boundary open before they can start.
+
+### 2.13 `date - date`, the first mixed-width kernel (task 39)
+
+The natural first consumer of tasks 28 and 29, and a better one than the
+synthetic `cast(int AS long) + long` chain their measurement used: int32 inputs,
+an int64 output, exactly one width conversion, one output, and an error path.
+The smallest real expression with that shape.
+
+It is not `datediff`, which Varka already compiles and which returns an
+`IntegerType` day count. Since Spark 3.2 the `-` operator between two dates
+returns `DayTimeIntervalType(DAY)` - physically **long microseconds** - as
+`Math.multiplyExact(Math.subtractExact(l, r), MICROS_PER_DAY)`. Two facts about
+that line shape the task: it throws unconditionally, not only under ANSI, since
+`SubtractDates` carries no `failOnError`; and the legacy
+`CalendarIntervalType` variant behind `spark.sql.legacy.interval.enabled` is a
+different result type that must decline.
+
+**The finding that made this worth writing down now is that it does not need
+task 30.** A lane cannot throw, but it does not have to: task 26 built the
+channel where a kernel notices what it cannot compute, returns a status, and
+the row engine recomputes the batch - and the row engine then raises the
+identical exception at the identical row, because it *is* the row engine. Both
+overflow tests are cheap and branchless (`((l ^ r) & (l ^ diff)) < 0` for the
+subtraction, and a comparison against `Long.MAX_VALUE / MICROS_PER_DAY =
+106751991` for the multiply), and overflow needs a date range of 292,000 years,
+so the fallback costs nothing anyone will measure. Task 30 exists for
+expressions where declining is too expensive; this is not one, and the recipe
+says so rather than reaching for machinery because it is there.
+
+The recipe is the first written **against machinery that does not exist yet**,
+so it names tasks 28's and 29's plumbing provisionally and tells the executing
+agent to stop and report if the real thing differs rather than adapt on the
+fly. The gap between what it assumed and what 28 and 29 actually build is the
+most useful thing its outcome section can record - and it is a cheap trial of
+whether a recipe can usefully be written ahead of its dependencies at all.
+
+### 2.14 days-from-civil, and month arithmetic (task 40)
+
+The headline of this task is not an expression. It is **days-from-civil** - the
+inverse of task 26's decomposition - which `make_date`, `months_between`,
+`date_trunc('QUARTER')` and interval month arithmetic all want, and none of
+which has it. `date + INTERVAL n MONTH / YEAR` is what makes it concrete and
+testable, and it comes with `add_months(d, n)` and `d - INTERVAL n MONTH` for
+free: all three are the same node, and the subtraction arrives as a
+`RuntimeReplaceable` the compiler already unwraps.
+
+Notably this needs **none** of tasks 28, 29 or 30: a year-month interval is
+physically a month count, so the whole thing is int32 and is available as soon
+as 26 lands.
+
+The investigation behind it turned up two things worth recording here rather
+than only in the recipe.
+
+**The inverse is cheaper than the forward direction.** Its divisions are by
+400, 4, 100 and 5, all on small operands, so every one admits an *exact* magic
+multiply with no correction step, where task 26's forward direction needed two
+round-down magics with carries. Checked: the round trip is the identity over
+all 3,652,059 days from year 1 to year 9999.
+
+**The natural formulation of the month arithmetic does not work.** Folding the
+year into a total month count and dividing by 12 puts the dividend near
+400,000, far past the ~46341 bound an exact magic needs and past the ~160,000
+that round-down plus one correction reaches. Keeping the dividend small - the
+month index plus the offset, divided by 12, with the quotient added to the year
+- makes it exact at `M = 43691, k = 19`, and bounds the literal the compiler
+will accept at about two thousand years. The planning pass wrote the wrong one
+first; `plans/verify_days_from_civil.py` is committed beside the recipe so the
+right one can be re-run rather than trusted.
+
+There is no vectorization-specific algorithm here to find, and the recipe says
+so: Hinnant's `days_from_civil` and Neri-Schneider's optimized form are plain
+branch-free integer arithmetic, which is exactly what makes them vectorize.
+What is not avoidable is the decompose-adjust-recompose round trip, because the
+clamp - 31 January plus one month is 28 or 29 February - needs the day of
+month. About 90 ops, roughly twice `year`.
+
+### 2.15 The two ends of the date-integer boundary (tasks 41, 42)
+
+Both come out of the same sweep as tasks 34-40, and both are about the boundary
+between a date and the integers it is made of rather than about calendar
+arithmetic.
+
+**Task 41, `unix_date` and `date_from_unix_date`**, is the smallest task in the
+milestone and the only one that adds no IR node, no emitter code and no lane
+arithmetic. Spark's implementation of each is `input.asInstanceOf[Int]` in
+full: a date *is* a day count and these two only relabel the type. So the
+lowering is two compiler arms that unwrap to the child, and the entry's output
+type comes from the Catalyst expression as it already does. Neither pinned
+value moves and no emitted bytes change.
+
+The argument for it is not the functions, which nobody calls. It is that one
+unsupported expression demotes a whole projection entry to the row path, so a
+free relabel sitting in the middle of an otherwise fusible chain currently
+blocks everything around it. The task's real test is a projection with one
+ordinary entry and one relabelled one, which must fuse both.
+
+**Task 42, `make_date`**, is the other direction and much the larger: three
+integer columns in, a date out. It is the first expression to read three
+integer columns - so it waits on task 38 - and the first whose result can be
+**null for a non-null input**, which is what makes it worth a recipe.
+
+Its three-way distinction is the thing an implementer will get wrong. A null
+input is ordinary validity. An **invalid** date - month 13, 30 February - is a
+*semantic* result: null in non-ANSI, an exception in ANSI. A year beyond what
+the lowering's magic multiplies cover is an *engine limitation*, which declines
+the batch in both modes and lets the row engine answer. Confusing the last two
+gives wrong answers in one direction and spurious errors in the other. In ANSI
+mode the invalid case also declines, because a lane cannot throw - the same
+trick task 39 uses, and the reason this task needs no error machinery of its
+own.
+
+### 2.16 What `GROUP_BUDGET` does not bound (tasks 43, 44)
+
+Both come out of the review of task 26, and both are the same discovery from
+two sides: `GROUP_BUDGET` bounds one of the three method shapes the emitter
+produces, and task 26's wide nodes made the other two visible. Neither is a
+calendar problem - both would have arrived with any node worth more than a few
+ops - so they are their own tasks rather than corrections to 26.
+
+Both are **design tasks, not recipes**: each opens with a measurement whose
+answer decides between three mechanisms, so neither is delegable the way tasks
+33-42 are.
+
+**Task 43: a loop method inside one output is unbounded.** `groupOutputs`
+partitions *between* outputs and never inside one, so `GROUP_BUDGET` binds only
+when the ops are spread across several. `CHRONO_WEIGHT` therefore separates
+calendar nodes that are separate output roots and does nothing for calendar
+nodes under one root. Measured on the emitter as it stands:
+`CASE WHEN d < DATE '...' THEN year(d) ELSE month(d) END` is one root and emits
+**one** loop method of 926 bytecode bytes; `least(greatest(year, month),
+greatest(dayofmonth, quarter))` is one root and emits **one** method of 1672
+bytes, roughly 190 vector ops. The budget's own javadoc records single-output
+loops as healthy "at every width tried", and the width tried was 59 ops.
+
+The task opens by finding out where that stops being true: single-output loops
+at 60, 100, 150, 190 and 250 vector ops, measuring both steady-state throughput
+and the time to reach it, which is the axis task 11 measured when it set the
+budget. If there is a cliff, three mechanisms, and the choice is the task:
+split inside an output (which the budget's javadoc rejects on register-residency
+grounds, but rejected it without data past 59 ops); decline the shape at compile
+time through `fitsBudgets`, which is honest and loses fusion for a
+`CASE WHEN year ELSE month`; or accept it and record where the cliff sits so
+the next wide node is weighed against a number.
+
+**Task 44: the epilogue is one method over every output.** Task 24 decided that
+deliberately - the epilogue runs one pass per batch, so the compile-time
+argument behind `GROUP_BUDGET` does not apply to it - and that reasoning is
+still right about compile *time* and silent about bytecode *size*. HotSpot
+refuses to compile any method past `HugeMethodLimit`, 8000 bytes by default, so
+past that the epilogue is not compiled by C1 or C2 at all and runs interpreted
+with boxed vectors: the ~1% state the `GROUP_BUDGET` javadoc describes, on
+every batch whose length is not a lane multiple.
+
+Measured, by emitting the classes and reading the method: `epilogueMasked` is
+7530 bytes at 16 calendar outputs and **8079 at 17** - so the limit is crossed
+at seventeen, well inside `MAX_FUSED_NODES = 64`, and five date columns of four
+fields is twenty. The same 32-output projection built from `date_add` instead
+is 1811 bytes, so this is new with wide nodes rather than a standing property.
+
+The task's own trap is that the benchmark cannot see this: every case in the
+year section drives 4096-row chunks, so the epilogue's early return always
+fires and the wide epilogue is never timed. That is exactly the lesson
+`SKILLS.md` records from task 24 - a size ladder needs 4095 and 63 on it
+deliberately - and getting the measurement to show the problem is half the
+task. Then the mechanism: group the epilogue as the loops are grouped, bound it
+by emitted bytes rather than op count, or decline the shape.
+
 ## 3. Task breakdown
 
-Tasks 24-31 are the committed spine, in dependency order: 24 halves the
+Tasks 24-44 are the committed spine, in dependency order: 24 halves the
 per-node emitter surface every later task would otherwise pay twice; 31 gives
 25 an instrument that reads instructions rather than ratios, which is what 25's
 central question needs (see 2.2); 25 shares
 24's harness and changes how every later kernel is emitted; 26 and 27 spend
 milestone 2's machinery before 28 complicates it; 28 enables 29 and 30's
-widening. Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
+widening. 32 and 33 are the two tasks here that no scope document predicted. 32 exists
+because 26 measured what its own design cost and the number was worth a task
+(see 2.9), which is the milestone's own rule about debts working as intended;
+33 exists to measure something else entirely - whether a task can be handed to
+a cheap agent as a recipe (see 2.10) - and picks the smallest payload it can
+to do it. 34-37 widen that trial to four more payloads of increasing size
+(see 2.11), and each of them makes task 32's debt a little more expensive,
+which is worth watching rather than ignoring.
+Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
-the single sequence; this plan has already grown once the way milestone 3's did
-(task 31, section 2.2), so milestone 5 resumes at 32.
+the single sequence; this plan has already grown twice the way milestone 3's did
+(task 31, section 2.2, and now tasks 32-44, sections 2.9 to 2.16), so
+milestone 5 resumes at 45.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -372,6 +714,19 @@ the single sequence; this plan has already grown once the way milestone 3's did
 | 28 | Lane-width conversion | The mixed-width loop-shape measurement (open question 2: narrowest-drive against part loops) on `cast(int AS long) + long`, committed before integration; `convert`/`convertShape` emission following the winner; numeric `Cast` and Catalyst's implicit promotions over the supported types | Differential on mixed int32/int64 trees at both widths; the loop-shape decision recorded with its numbers; no regression on single-width shapes |
 | 29 | int64 lanes: `TimestampNTZ`, `bigint` | The second `LaneType`; `TimestampNTZ` comparisons, differences, literal arithmetic; `TimestampType` and `LongType` comparisons and diffs; range-narrowed magic constants for 1000000 and 86400 or a recorded decline; the field differential mode from task 22 | Every parity gate re-run at the long species and both vector widths; the halved-headroom number committed rather than discovered; zoned operations demonstrably declined, not wrong |
 | 30 | ANSI integer arithmetic | `try_add`/`try_subtract`/`try_multiply` via the difference-mask-as-validity path; the ANSI throw path via saturating detection and scalar re-walk, priced with a registered prediction; `Multiply` overflow through 28's widening if it is cheap, declined with a reason if not | The error-identity differential: same `SparkException`, same row, as the row engine under ANSI; `try_*` differential over overflow-dense and overflow-free data; committed number on the no-overflow path against Janino |
+| 33 | `next_day`, as a handover experiment | The node, the compiler arm declining every non-literal weekday, and the emitter arm over the existing mod-7 lowering; `PLAN_TASK_33.md` written as an executable recipe and scored in its own outcome section on which steps misled the agent that ran it | Every Varka suite green at both widths; the two pinned fixtures re-pinned under their update rule; no committed benchmark number moves, since the task adds a node type and changes no existing shape |
+| 34 | `dayofyear` | The node, the January-based conversion off `emitChrono`'s March-based day of year, and the shared leap-flag helper tasks 35-37 reuse | Every Varka suite green at both widths; the pinned fixtures re-pinned; a day outside the covered range still declines |
+| 35 | `trunc(date, YEAR/MONTH/QUARTER)` | One node carrying the level as a shape-bearing field, three lowerings, and the decline path for every level and format this task does not cover | As 34, plus a `DateType` output proved to feed further date arithmetic in the same chain |
+| 36 | `last_day` | The node and the month-length tail, with February's leap case as its own branch | As 34, with every month length exercised in both a leap and a common year |
+| 37 | `weekofyear` | The node, the ISO-8601 rule including both year-boundary corrections, and the weeks-in-year helper called for two years | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list |
+| 38 | A day offset that is a column | The four guards moved, the `andRef` validity fix, `IntegerType` leaves and Arrow `IntVector` inputs accepted, short and byte offsets declining | A null offset producing a null row, at both widths; short and byte columns declining; **no pinned value and no committed number moves**, since no node type is added and the literal path is untouched |
+| 39 | `date - date` | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
+| 40 | days-from-civil, and month arithmetic | `emitDaysFromCivil` as a helper three later expressions can call; the node behind `date +- INTERVAL n MONTH/YEAR` and `add_months`; the small-dividend month arithmetic and the literal bound it implies | The round trip tested on its own, not only through the expression; the clamp cases in both directions; a non-foldable or over-large month count declining; green at both widths |
+| 41 | `unix_date` / `date_from_unix_date` | Two compiler arms that unwrap to the child, no IR node and no emitted code; the bare-`ColumnRef` output shape tested | A projection mixing a relabelled entry with an ordinary one fuses both; no pinned value moves, no committed number moves, no emitted bytes change for any existing shape |
+| 42 | `make_date` | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
+| 43 | What bounds a loop method inside one output | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
+| 44 | The epilogue's size | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
+| 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 441 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
 
@@ -499,16 +854,29 @@ One bullet per debt: what it is, why it is a debt, and what closing it would
 take. Opened during task 24, per `sql/varka/AGENTS.md` - a swept entry is
 rewritten in the past tense with what the sweep found, never deleted.
 
-* **A calendar field is computed once per output, not once per date.** Task 26's four
-  extractions each carry the whole civil-from-days decomposition, so `SELECT year(d),
-  month(d)` computes it twice, in two sibling loop methods - measured at 441 M rows/s for
-  four fields against 1778 for one. That is the trade task 17 trained the emitter on
-  (recomputing in registers beats a wider method's register pressure), and the corpus asks
-  for one field at a time, so it is a debt rather than a defect. Closing it needs a
-  multi-value IR node: the IR's every node is one value on the operand stack, and a shared
-  decomposition would have to leave four. It matters if a later item wants `date_trunc`
-  or `dayofyear` beside `year` in one projection, which is when the recomputation stops
-  being hypothetical.
+* **`GROUP_BUDGET` bounds one of the emitter's three method shapes.** **Adopted as tasks
+  43 and 44 (see 2.16)**, both found by the review of task 26 rather than planned.
+  `groupOutputs` partitions between outputs and never inside one, so a single output root
+  holding several wide nodes emits one unbounded loop method - measured at 1672 bytes and
+  roughly 190 vector ops for `least(greatest(year, month), greatest(dayofmonth, quarter))`,
+  against the 59-op width the budget's own evidence covers. And the epilogue is one method
+  over every output by task 24's deliberate decision, which is right about compile time and
+  silent about bytecode size: `epilogueMasked` measures 7530 bytes at 16 calendar outputs
+  and 8079 at 17, crossing the 8000-byte `HugeMethodLimit` past which HotSpot compiles
+  nothing at all. Neither is a calendar defect; task 26 only made them reachable.
+
+* **A calendar field is computed once per output, not once per date.** **Adopted as task
+  32 (see 2.9)**, which is what a debt register is for: this entry is where the cost was
+  first written down, and the task is where it gets measured and paid or declined. Task
+  26's four extractions each carry the whole civil-from-days decomposition, so
+  `SELECT year(d), month(d)` computes it twice, in two sibling loop methods - measured at
+  441 M rows/s for four fields against 1778 for one. That is the trade task 17 trained the
+  emitter on (recomputing in registers beats a wider method's register pressure), and the
+  corpus asks for one field at a time, so it is a debt rather than a defect. Closing it
+  needs a multi-value IR node: every node in the IR is one value on the operand stack, and
+  a shared decomposition would have to leave several. It matters if a later item wants
+  `date_trunc` or `dayofyear` beside `year` in one projection, which is when the
+  recomputation stops being hypothetical.
 
 * **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
