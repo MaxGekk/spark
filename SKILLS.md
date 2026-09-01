@@ -531,6 +531,77 @@ apparent small wins turned out to be noise.
 - Branch naming: `varka-<topic>` tracks `origin/master` and stays one commit ahead
   per PR.
 
+## A bimodal kernel is usually the register allocator, and here is how to prove it
+
+Task 32's shared four-field calendar kernel ran at either 165 or 236 M rows/s under
+`-XX:MaxVectorSize=16` - stdev 0 ms *inside* a run, 42% *between* runs, 4 fast outcomes in 21.
+Six hypotheses were tested and all failed: shorter live ranges, forcing the validity helpers to
+inline, forcing every Varka class to inline, disabling on-stack replacement, raising
+`LoopUnrollLimit`, and buffer alignment (which had an OpenJDK bug report behind it,
+JDK-8380195, describing the same shape and blaming alignment - it is not that here).
+
+**What it actually is.** Capture `PrintAssembly` for the method in both modes and compare the
+*standard* (non-OSR) nmethod:
+
+| | instructions | stack traffic | xmm spill moves | vpmulld | vpsrld | vpsubd |
+|---|---|---|---|---|---|---|
+| fast (240.6) | 1581 | 721 | **4** | 26 | 14 | 20 |
+| slow (164.7) | 3000 | 1567 | **74** | 26 | 14 | 20 |
+
+The vector op counts are **identical**, so it is not unrolling, not a different lowering and
+not a missing intrinsic. The entire 1581-to-3000 difference is spill and reload traffic, 18x
+more of it. C2's register allocator sometimes finds a clean allocation for this body and
+sometimes does not, from the same IR. The OSR compilations, by contrast, are the same in both
+runs to within one instruction (7303 against 7304).
+
+It is width-specific for the obvious reason: 128-bit has 16 xmm registers and this body sits at
+the edge of them - C1 refuses the same method outright with
+`COMPILE SKIPPED: out of virtual registers in linear scan` - while AVX-512's 32 zmm registers
+leave slack and show no bimodality at all.
+
+**It is a property of the measurement environment, not of the kernel.** It does not reproduce
+standalone (six runs, all 210.5 M rows/s, no spread) and does not reproduce under a fastdebug
+JVM even running the whole benchmark (six runs, all ~161). It needs the product C2 *and* the
+benchmark's accumulated JVM state. So production is not exposed to it, but a long benchmark's
+later cases are, and a ratio is only trustworthy when both arms sit in the same run - which for
+the shared-versus-four-node comparison they do, since they are adjacent cases.
+
+**The general rule.** When a kernel is bimodal across JVMs with no spread inside a run, diff
+the standard nmethod between the two modes and count spill moves before theorising. Equal op
+counts with unequal instruction counts means allocation, not transformation, and no amount of
+inlining, unrolling or alignment flags will touch it. The design answer is to reduce what must
+be live at once - and note that *scheduling* to shorten live ranges did not help here
+(`vectorFourFieldsShortLive` is bimodal too); what helps is not putting four outputs in one
+method at a narrow width, which is why the four-node baseline is stable in all 21 runs.
+
+**The effect is observable at runtime, with public API.** JFR's `jdk.Compilation` event
+carries `method`, `compileLevel`, `isOsr` and - the useful one - `codeSize`, so a
+`jdk.jfr.consumer.RecordingStream` can watch the compiled size of Varka's own generated kernel
+methods as they are compiled, with no agent and no diagnostic flags. The fast and slow
+allocations differ by roughly 2x in code size here, so the anomaly is visible in that number.
+And because every kernel is emitted into a fresh class, "recompile it" is available too: emit
+the same shape again under a new class name and the allocator gets a fresh roll.
+That makes a detect-and-resample loop *possible*; it does not make it wise. Each resample costs
+another class, another compile and another warm-up, against a shape whose kernel a short query
+may only run a handful of times, and the detection needs a per-shape expected size that will
+drift. Prefer the structural fix - do not put four outputs in one method at a width whose
+register file cannot hold them - and use the JFR signal as a *diagnostic*, so that a
+badly-allocated kernel is reportable rather than invisible, instead of as a control loop.
+
+**You do not need to run the fastdebug JVM to read product assembly.** HotSpot's fourth
+fallback for locating the disassembler is `hsdis-<arch>.so` on `LD_LIBRARY_PATH`
+(`disassembler.cpp`), so a `libhsdis.so` built once against a fastdebug tree can be copied to
+`hsdis-amd64.so` and used with the *product* JVM:
+
+```
+LD_LIBRARY_PATH=<dir with hsdis-amd64.so> java -XX:+UnlockDiagnosticVMOptions \
+    -XX:CompileCommand=print,<class>::<method> ...
+```
+
+That matters because some behaviour only appears in the product build - this bimodality among
+it - so being able to disassemble there rather than only in fastdebug is what made the
+comparison above possible at all.
+
 ## Building a fastdebug JDK for HotSpot diagnostics
 
 Three questions in milestone 4 could not be answered from a product JVM - why SuperWord
