@@ -825,6 +825,53 @@ sixteen-plus-field-wide query pay for landing one row short of an aligned batch,
 question worth having a number for even though such a projection does not exist in the
 milestone's corpus today.
 
+### 7.4 B2 at 128-bit: the gate clears there too, and the bimodality does not travel
+
+Section 7.2 measured the B2 gate at AVX-512 only; the plan is explicit that the default
+cannot be chosen on that number alone, because the hand-written ceiling kernel showed a
+128-bit bimodality that six hypotheses failed to explain (section 7's own record). The open
+question was whether that bimodality belongs to the *mechanism* (a wide shared calendar body
+at a narrow vector width) or to the *specific kernel* it was found on. Three runs of the same
+B2-gate cases under `-XX:MaxVectorSize=16`, one of them run after an unplanned reboot of the
+machine confirmed the environment was otherwise unaffected:
+
+| fields | separate (min best-time, ms) | shared (min best-time, ms) | ratio |
+|---|---|---|---|
+| 2 (`year, month`) | 63 | 48 | **1.31x** |
+| 3 (`year, month, dayofmonth`) | 94 | 64 | **1.47x** |
+| 4 (`year, month, dayofmonth, quarter`) | 127 | 76 | **1.67x** |
+
+Against the AVX-512 numbers (1.29x / 1.57x / 1.80x), these are close - the emitted B2 kernel
+wins by nearly the same factor at both widths, growing with field count at both. Every one
+of these six cases (separate and shared, all three field counts) was stable to a few
+milliseconds across all three runs, with no run showing the outlier pattern the two kernels
+below show. **The gate clears at 128-bit too, by nearly the same margin as at AVX-512.**
+
+**The bimodality belongs to `ChronoVectorOps`, not to "a shared calendar body at 128-bit."**
+Across the same three runs, the *other* two kernels this task built - both hand-written, both
+predating the emitted fragment - reproduce exactly the instability section 7 already
+documented and failed six times to explain:
+
+* **The hand-written ceiling** (`vectorFourFields`): 121ms, 84ms, 121ms - the same roughly
+  2-of-3-slow, 1-of-3-fast split the earlier 21-run investigation found (4 fast out of 21).
+  Even at its fastest observed run the emitted shared kernel (76ms) still beats it (84ms,
+  1.11x); at its ordinary, more frequent speed the margin is 1.59x.
+* **The no-validity variant** (`vectorFourFieldsNoValidity`): a *different* flavor of the same
+  instability, and a new data point for the open investigation. Two of three runs show a
+  "Best Time" of 32ms sitting beside an *average* of 1261-1291ms and a stdev over 2000ms -
+  meaning some individual timed iterations inside one JVM run land fast and others land
+  catastrophically slow, flipping mid-run rather than settling into one mode for the run's
+  duration the way the ceiling kernel does. The third run is stable at 32ms throughout. This
+  is worth recording as a seventh data point for a bimodality that, per section 7's own
+  conclusion, no JVM flag reaches: it is a property of C2's code generation for these two
+  specific 128-bit method bodies, not of the sharing technique, and not, per this section, of
+  the emitted path that implements the same technique in different bytecode.
+
+The practical consequence: **do not quote a 128-bit `ChronoVectorOps` number from a single
+run.** Every number from `vectorFourFields` or `vectorFourFieldsNoValidity` at 128-bit in this
+document or elsewhere is either an explicit multi-run range or should be read as one mode of
+an unresolved bimodal pair - the emitted kernel carries no such caveat, at either width.
+
 ## 8. Risks
 
 1. **Prediction 4.** The compile cliff is the one thing that could cap this, and
