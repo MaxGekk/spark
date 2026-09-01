@@ -305,7 +305,21 @@ apparent small wins turned out to be noise.
   loop, so a scalar calendar loop measured in a microbenchmark is far faster than
   the same code inside a query - task 26 predicted 15-30x over it and measured 3.7x.
 
-- `VectorOperators` has no multiply-high on any lane type, so full-range
+- `VectorOperators` has no multiply-high on any lane type, and there is no sign that it
+  will get one soon, so do not design around its arrival. Checked against JDK 25 (`javap`
+  on `jdk.incubator.vector.VectorOperators`: `MUL` is the only multiply) and against
+  openjdk/jdk master (code search for `MUL_HIGH` and `VECTOR_OP_MULHI`: no hits). C2 does
+  have the operation internally - `MulHiLNode`/`UMulHiLNode` in `opto/mulnode.hpp`, used by
+  `divnode.cpp` to lower scalar division by a constant and by the `Math.multiplyHigh`
+  intrinsics, plus `MulHiLoLNode` for the fused 64x64-to-128 form - it is simply not exposed
+  lanewise. The nearest request is JDK-8219881, "[vector] Optimized 32-to-64 bit vectorized
+  multiply": an Enhancement, still Open, P4, filed February 2019, last touched October 2024,
+  with `fixVersion` `repo-panama` rather than any release. The API does accept new integer
+  ops when someone drives them - JDK-8338352 delivered `SADD`/`SSUB`/`SUADD`/`SUSUB`,
+  `UMIN`/`UMAX` and the unsigned comparisons, all present in JDK 25 - so an RFE backed by a
+  concrete workload is a real option, but it is a contribution to make, not a dependency to
+  plan against.
+- Because of that, full-range
   Granlund-Montgomery magic division is not expressible on int lanes - but a
   *range-narrowed* magic is: shrink the value first until the correctness condition
   (`v * e < 2^k`) and the no-overflow condition (`v * M < 2^31`) both fit in the low
@@ -389,6 +403,66 @@ apparent small wins turned out to be noise.
   one, not a real unrolling cost - a benchmark comparing "K=1" against "K>1" has to
   keep every other structural choice, including loop-vs-straight-line shape, identical
   between the arms.
+- A hand-written kernel standing in for emitted code must not introduce a method
+  boundary the emitted code does not have, and "it is a small private helper, it will
+  inline" is not something to assume. Task 32 built a kernel to price sharing one
+  civil-from-days decomposition across `year`/`month`/`dayofmonth`/`quarter`, wrote the
+  decomposition as a `computeFields` helper returning a record of four `IntVector`s, and
+  measured it 1.9x *slower* than the four independently emitted nodes - and task 32 was
+  declined on that number. `computeFields` compiles to 376 bytecode bytes; C2's
+  `FreqInlineSize` is 325, so it never inlined, so escape analysis never saw the record's
+  allocation and its consumers in one compilation unit, so the record and its four vectors
+  were really heap-allocated once per lane group. `VarkaLoopEmitter.emitChrono` emits zero
+  call boundaries in its lane path. The kernel was measuring a Java abstraction the thing
+  it modelled does not have. **Two cheap checks that would have caught it before the
+  number was believed**: `javap -c -p` for any method holding lane arithmetic that exceeds
+  325 bytes, and `-XX:+PrintInlining` (narrowed with
+  `-XX:CompileCommand=option,Class::method,PrintInlining`) for a `failed to inline` inside
+  the loop. Rebuilt hand-inlined, the same kernel runs 1.5x *faster* than the four nodes.
+- An op-count ratio bounds a sharing win; it does not estimate one. The same task 32
+  kernel shares ~45 of each field's ~50 vector ops, so four fields cost ~200 ops separate
+  against ~65 shared - a 3x op-count ratio, which was registered as a prediction of
+  2.0x-3.2x throughput. Measured: **1.51x-1.54x** at AVX-512 across three runs, the
+  committed parity file's being 661.7 against 435.1 M rows/s. The half that went missing is
+  everything the model ignored - four stores, four validity-bitmap read-modify-writes, the
+  chunk prologue, loop control - none of which sharing touches. Predict a bound, not a number.
+- Once a lane path has no calls left in it, `-XX:CompileCommand=inline` buys nothing, and
+  it was never a fix anyway - Spark cannot require a `CompileCommand` on a user's JVM, so a
+  flag that helped would only be a diagnostic pointing at a code change. Task 32 tested it
+  properly before concluding that: `-XX:+PrintInlining` showed the two `VarkaVectorSupport`
+  validity helpers genuinely failing to inline inside the shared loop
+  (`NodeCountInliningCutoff` on one compilation, `callee is too large` on another - 212
+  bytes of a four-arm switch on the lane width that a constant lane count would fold away),
+  and forcing them in changed nothing at either vector width. Nor did forcing every Varka
+  class (`inline,*varka*::*`). This is the third time an inlining flag has moved under 1% in
+  the catalyst parity harness while the engine's JMH harness moves 50-190% on the same flag;
+  a flag worth that much in only one harness is measuring the harness.
+- A kernel can have two stable machine-code outcomes and no reachable reason. Task 32's
+  shared kernel is bimodal at 128-bit: 121 ms or 85 ms, stdev 0 ms inside a run and 42%
+  between runs, 3 fast outcomes in 14 runs. Neither forcing inlining, nor disabling
+  on-stack replacement, nor rescheduling the body to keep fewer values live made either mode
+  deterministic or shifted the distribution. **Report both modes; never average them** - the
+  mean describes a state no run is ever in - and treat "which compilation the JVM landed on"
+  as a first-class outcome rather than as noise to be smoothed away.
+- Keeping fewer values live is not automatically faster, and the intuition is worth
+  distrusting. Task 32 built a variant of the same kernel that hoisted the year assembly so
+  three intermediates died early and stored each of four outputs the moment it existed
+  instead of all four at the end. It lost at both widths (599.6 against 661.7 M rows/s in
+  the committed parity file, 156.5 against 165.6 at 128-bit). C2's scheduler did better with
+  the wider window than with the shorter live ranges - and the losing shape is the one the
+  emitter naturally produces, which is worth knowing before assuming emitted code will match
+  a hand-written ceiling.
+- The same sharing win is width-dependent, and that is where task 17's register-pressure
+  finding actually lives. At 128-bit the identical kernel is a wash: 1.06x in four runs of
+  five, 1.50x in the fifth, stdev 0 ms inside each run and 42% between them - a
+  compilation the JVM either finds or does not, so the two modes must be reported rather
+  than averaged. Five live intermediates plus four outputs fit comfortably in 32 zmm plus
+  8 dedicated mask registers and marginally in 16 xmm that must hold masks too; C1 refuses
+  the 936-byte body outright at both widths ("out of virtual registers in linear scan").
+  Task 17's `GROUP_BUDGET` result (raising it to keep two outputs' cross-output CSE in one
+  method lost 4494.0 against 3044.7 M rows/s, current committed parity file) is the same
+  effect. It sets a ceiling on how much sharing can win; it does not decide the sign, and
+  a narrow-vector measurement is not optional for anything that shares live values.
 
 ## Generated Code Can Carry Its Own Debug Info (Class-File API)
 
