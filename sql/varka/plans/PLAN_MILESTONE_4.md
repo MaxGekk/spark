@@ -727,6 +727,99 @@ deliberately - and getting the measurement to show the problem is half the
 task. Then the mechanism: group the epilogue as the loops are grouped, bound it
 by emitted bytes rather than op count, or decline the shape.
 
+### 2.17 The validity write, which costs more than the arithmetic (tasks 45-47)
+
+Added after task 32, and for the same reason 2.9 was added after task 26: a
+measurement said something the design did not expect, and the number was worth
+tasks.
+
+Task 32's repaired ceiling kernel gives three AVX-512 points on one line -
+`year` alone at 0.556 ns/row over ~50 vector ops, the shared four-field kernel
+at 1.512 over ~65, and four independent nodes at 2.298 over ~200. Fitting them
+puts the marginal cost of a vector op at about **0.0058 ns/row**, which makes
+the shared kernel's entire civil-from-days decomposition worth about **0.38
+ns/row of its 1.512**. The other **1.13 ns/row - three quarters of it - is
+fixed per-lane-group cost**, and going from one output to four adds about 0.29
+ns/row *per extra output*: at sixteen lanes that is ~4.6 ns per extra
+store-and-validity pair per lane group, roughly eighteen cycles. A vector store
+is a fraction of that.
+
+The suspect is `VarkaVectorSupport.orValidityBitsAt`, and task 32 established
+from `-XX:+PrintInlining` rather than from timings that it **does not inline**
+inside a wide loop: 212 bytes, refused with `NodeCountInliningCutoff` on one
+compilation and `callee is too large` on another, and neither
+`-XX:CompileCommand=inline` nor `-XX:LiveNodeCountInliningCutoff` at 400000
+lifts it. So each of the four calls per lane group is a real call doing bounds
+checks, a four-arm switch on `groupBytes(lanes)` and a read-modify-write.
+
+**This is a three-point fit, not a measurement, and task 45 opens by settling
+it** - the same discipline 2.9 used and then failed to apply to its own kernel.
+A variant of `ChronoVectorOps` that computes everything and writes no validity
+at all bounds the prize. If the fit holds, the four-field case is dominated by
+bookkeeping the decomposition never touches, and tasks 45-47 are worth more
+than task 32's own mechanism; if it does not, they close cheaply and the
+milestone has learned where the time really goes.
+
+Three tasks, in this order, because each may shrink the next:
+
+* **Task 45, the null-free fast path.** Arrow permits an output vector with
+  `null_count == 0` to carry no validity buffer at all, and the driver already
+  knows `srcNullCount == 0` when it dispatches to the dense body. Today the
+  dense path still loads `-1L` per lane group and calls `orValidityBitsAt`
+  anyway (`emitLaneGroup`, the `loadConstant(-1L)` beside
+  `invokestatic(SUPPORT, orValidityBits(s), ...)`). One fill in the driver -
+  which already walks the buffer once to zero it - replaces every one of those
+  calls on the shape most real queries take. The masked path is untouched.
+* **Task 46, validity helpers that can inline.** The emitter already chooses
+  the helper by *name* at emit time (`validityBits`, `orValidityBits`, which
+  select the partial variants for the epilogue), and it knows the species, so
+  the width can join the name: `orValidityBitsAt16` and its siblings, each about
+  thirty bytes with the switch already resolved, under `MaxInlineSize` and
+  therefore inlinable whether or not the call site is judged hot. The current
+  helper cannot fold its switch because it cannot inline, and cannot inline
+  because it has not folded; naming the width breaks that cycle. This one is
+  generic - every Varka kernel calls these helpers, not just the calendar ones -
+  which is both its value and the reason it needs the whole suite green at both
+  widths rather than a calendar-shaped argument.
+* **Task 47, one validity write per word instead of per lane group.** At sixteen
+  lanes a lane group covers sixteen rows and touches two bytes; four lane groups
+  fill one 64-bit word. Accumulating the bits in a register and storing once per
+  64 rows turns four read-modify-writes into one store, and removes the
+  read entirely. It is the largest change of the three - the loop grows a
+  second, coarser stride, and the epilogue has to flush a partial accumulator -
+  so it goes last, and only if 45 and 46 leave something on the table.
+
+Task 45 is expected to make the null-free case nearly free and do nothing for
+the masked one; 46 to pay across the board and most at narrow widths, where
+lane groups are smallest and the per-group cost is amortised over four rows
+instead of sixteen; 47 to pay only on the masked path once 45 has taken the
+dense one away. All three are measured on `VarkaEmitterParityBenchmark`'s
+existing cases rather than new ones, because the point is what they do to
+kernels that already exist.
+
+### 2.18 A `year` that does not compute the month (task 48)
+
+`emitChrono`'s year tail needs one bit out of the March-based month: whether
+the March year has turned January, which is `mp >= 10`. But `mp` is
+`(5 * doy + 2) / 153`, so `mp >= 10` is exactly `doy >= 306` - integer
+arithmetic, no approximation, and `doy` is already in a local when the tail
+runs. So `year` alone never needs the month step at all: one compare replaces a
+multiply, an add, a magic multiply and a shift.
+
+It is worth its own task rather than a line in another because of which shape
+it helps. `year` alone is what TPC-H q7, q8 and q9 run, and it is the only
+calendar extraction the headline corpus asks for; it is also the case task 26
+measured at 1797 M rows/s and the one every later calendar task is compared
+against. Four or five ops off a ~50-op body is a few percent, which is inside
+the noise of a single run and therefore has to be measured on the
+interleaved-A/B, compare-by-minimums methodology rather than asserted.
+
+It does **not** help a shared prefix: if task 32's step B lands, the prefix
+computes `mp` for the month, day-of-month and quarter tails regardless, and
+`year` reading `doy >= 306` instead saves one op rather than five. So this task
+is about the single-output path, it is independent of task 32 either way, and
+whichever of the two lands second inherits the smaller half of the win.
+
 ## 3. Task breakdown
 
 Tasks 24-44 are the committed spine, in dependency order: 24 halves the
@@ -743,11 +836,21 @@ a cheap agent as a recipe (see 2.10) - and picks the smallest payload it can
 to do it. 34-37 widen that trial to four more payloads of increasing size
 (see 2.11), and each of them makes task 32's debt a little more expensive,
 which is worth watching rather than ignoring.
+45-48 are the third unplanned addition, and they arrive the way 32 did: task
+32's own measurement, once it was repaired, showed that three quarters of the
+four-field kernel's time is validity bookkeeping rather than date arithmetic
+(see 2.17). 45, 46 and 47 are that bookkeeping, and unlike everything else in
+this milestone they are not about the calendar at all - every Varka kernel
+writes validity, so whatever they win, every kernel wins. They run after 32
+because 32's kernel is the instrument that measures them, and 45 opens by
+turning its own premise into a number before any of the three is built. 48 is
+unrelated to all of it and is here only because task 32's arithmetic review
+noticed it (see 2.18).
 Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
-(task 31, section 2.2, and now tasks 32-44, sections 2.9 to 2.16), so
-milestone 5 resumes at 45.
+(task 31, section 2.2, then tasks 32-44, sections 2.9 to 2.16, and now tasks
+45-48, sections 2.17 and 2.18), so milestone 5 resumes at 49.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -772,6 +875,10 @@ milestone 5 resumes at 45.
 | 43 | What bounds a loop method inside one output | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
 | 44 | The epilogue's size | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
 | 32 | One decomposition, several fields. **REPLANNED, gate cleared** (see 2.9 and `PLAN_TASK_32.md`) | The first ceiling kernel measured a non-inlining `computeFields` helper rather than the sharing, and was rebuilt hand-inlined, guarded and writing four validity buffers: 692.4/678.8 against 450.4/448.8 M rows/s at AVX-512 (1.5x), and a wash at 128-bit (1.06x, one run of five at 1.50x). Step B builds emitter-side fragment sharing behind a `VarkaEmitOptions` switch, with the default decided at both widths rather than closed | `ChronoVectorOpsTest` differentials the kernel against `java.time` over its exact sweep range and a boundary set, at both widths (the engine module's own narrow-vector Maven profile); no pinned oracle moved, no committed number for any existing shape changed |
+| 45 | The null-free validity fast path | The bound first: a validity-free variant of `ChronoVectorOps` sizing the prize (2.17), then the dense driver filling the output validity once per batch instead of the dense loop ORing it per lane group | The whole Varka suite at both widths with the dense/masked pair still agreeing bit for bit; the committed parity cases regenerated in one run, with the null-free and mixed-null rows of each moving in opposite directions or not at all |
+| 46 | Validity helpers that inline | Width-specialised `validityBitsAt`/`orValidityBitsAt` siblings under `MaxInlineSize`, selected by the emitter's existing name choice, with the switch resolved at emit time | `-XX:+PrintInlining` showing no `failed to inline` for them in a wide loop - the diagnostic, not the timing, is the deliverable - plus the full suite at both widths and one parity regeneration |
+| 47 | One validity write per word | Bits accumulated across lane groups and stored once per 64 rows, with the epilogue flushing a partial accumulator | The masked path's committed cases, the 4095/63 non-aligned lengths task 44 adds, and the dense/masked agreement; gated on what 45 and 46 leave |
+| 48 | A `year` that does not compute the month | `doy >= 306` replacing the March-month step in the year tail only, with the equivalence recorded as an integer identity rather than an approximation | The existing exhaustive `VarkaChronoSuite` sweep unchanged and still green; the parity `year` case measured by interleaved A/B compared by minimums, since the expected effect is inside a single run's noise |
 
 ## 4. Files
 
