@@ -479,8 +479,8 @@ win rather than as a reversal of its sign.
 
 ### What does not fix the 128-bit mode, measured
 
-Four hypotheses were tested against the bimodality, because a 1.5x win that the
-narrow-vector shape cannot reach is what decides step B's scope. All four
+Five hypotheses were tested against the bimodality, because a 1.5x win that the
+narrow-vector shape cannot reach is what decides step B's scope. All five
 failed, and they are recorded so nobody pays for them twice.
 
 1. **Shorter live ranges.** `ChronoVectorOps.vectorFourFieldsShortLive` is the
@@ -504,6 +504,21 @@ failed, and they are recorded so nobody pays for them twice.
    `groupBytes(lanes)` that a constant lane count would fold away if it ever got
    in. Forcing them changes **nothing**: 691.3 at AVX-512 against 686.2 unforced,
    and at 128-bit one fast run and one slow one, the same split as without it.
+   **And the reason is not that inlining does not matter - it is that the force
+   never takes.** Re-run with the flag *and* `PrintInlining`, the same
+   `failed to inline` lines are still there, and raising
+   `-XX:LiveNodeCountInliningCutoff` to 400000 does not remove them either:
+   `CompileCommand=inline` overrides the size heuristics but neither flag lifts
+   the check that actually fires. The call site is also not judged hot, so the
+   35-byte `MaxInlineSize` applies rather than the 325-byte `FreqInlineSize`,
+   and 212 bytes is over both. The lever is therefore not a flag at all - it is
+   **shrinking the callee**. `orValidityBitsAt` is a four-arm switch on
+   `groupBytes(lanes)` that cannot fold because it cannot inline and cannot
+   inline because it has not folded; splitting it into width-specialised methods
+   of about thirty bytes, which the emitter can select at emit time since it
+   knows the species, breaks that cycle. That is a change to a helper every
+   Varka kernel calls, so it belongs in its own task - but it is a motivated one
+   now rather than a guess.
 3. **Forcing every Varka class to inline**, `-XX:CompileCommand=inline,*varka*::*`
    under `-XX:+UnlockDiagnosticVMOptions`. Also nothing: 119 ms then 83 ms, both
    modes, unchanged distribution. (Its AVX-512 companion run is discarded rather
@@ -514,10 +529,18 @@ failed, and they are recorded so nobody pays for them twice.
 4. **Disabling on-stack replacement**, `-XX:-UseOnStackReplacement`, on the
    theory that the mode was OSR-versus-standard compilation. Three runs, all
    slow: 121, 123, 119 ms.
+5. **Raising `-XX:LoopUnrollLimit` from its default 60 to 250**, on the theory
+   that the four-node arms sit under the limit and the ~65-op shared body over
+   it, so only the former get unrolled. Nothing: 679.3 at AVX-512 and 164.9 at
+   128-bit, both inside the existing spread. The flag is not inert - it moved
+   `dayofweek`, a ~20-op body, from 2630.7 to 3445.2 M rows/s at 128-bit, a 31%
+   gain - so C2 does unroll more under it. It simply does not help a body this
+   wide, which is worth knowing before anyone proposes unrolling as the answer
+   for a large kernel.
 
-Across all four configurations the shared kernel was measured 14 times at
-128-bit and landed the fast mode 3 times, with no configuration making either
-mode deterministic and none shifting the distribution enough to call from three
+Across all these configurations the shared kernel was measured 17 times at
+128-bit and landed the fast mode 4 times, with no configuration making either
+mode deterministic and none shifting the distribution enough to call from four
 successes. Whatever picks the mode is inside C2's code generation for this body
 and is not reachable from any of these levers.
 
