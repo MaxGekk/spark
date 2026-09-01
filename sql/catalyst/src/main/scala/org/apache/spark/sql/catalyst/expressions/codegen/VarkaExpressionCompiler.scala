@@ -20,11 +20,14 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
+import org.apache.spark.SparkIllegalArgumentException
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType}
+import org.apache.spark.unsafe.types.UTF8String
 
 /**
  * A whole projection compiled to the Varka vector IR (milestone 2, task 10): the trees
@@ -446,6 +449,31 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRDayOfWeek(_))
     case WeekDay(child) =>
       compileNode(child, inputs, literals, sink).map(new IRWeekDay(_))
+    // next_day (task 33): the weekday must be resolved at compile time, since the emitted
+    // lowering needs the offset as a runtime literal, not a per-row string. An unrecognized
+    // or non-foldable weekday declines rather than throws - it is the row engine's business,
+    // and it has two different behaviours for it depending on ANSI mode which Varka must not
+    // try to reproduce.
+    case NextDay(start, dow, _) if dow.foldable =>
+      val name = dow.eval()
+      if (name == null) {
+        sink.note("next_day with a null weekday", dow)
+        None
+      } else {
+        try {
+          val k = DateTimeUtils.getDayOfWeekFromString(name.asInstanceOf[UTF8String]) - 1
+          compileNode(start, inputs, literals, sink).map { d =>
+            new IRNextDay(d, new LiteralSlot(literals.getOrElseUpdate(k, literals.size)))
+          }
+        } catch {
+          case _: SparkIllegalArgumentException =>
+            sink.note("next_day with an unrecognized weekday", dow)
+            None
+        }
+      }
+    case n: NextDay =>
+      sink.note("next_day with a non-foldable weekday", n)
+      None
     // The calendar extractions (task 26). One civil-from-days decomposition per node, so two
     // fields of the same date are computed twice - see VarkaVectorIR.Year for why.
     case Year(child) =>

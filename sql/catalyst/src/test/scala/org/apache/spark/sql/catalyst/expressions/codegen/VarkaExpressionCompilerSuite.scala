@@ -18,10 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, Not, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, NextDay, Not, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.types.{DateType, IntegerType, StringType, TimestampType}
 
 /**
@@ -124,6 +124,18 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       new IRDayOfWeek(new ColumnRef(0)),
       new IRWeekDay(new AddDays(new ColumnRef(0), new LiteralSlot(0)))))
     assert(compiled.outputTypes === Seq(IntegerType, IntegerType))
+  }
+
+  test("task 33: next_day with a literal weekday compiles; a column weekday declines") {
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, Literal("MO"), false))), childOutput).get
+    assert(compiled.outputs === Seq(new IRNextDay(new ColumnRef(0), new LiteralSlot(0))))
+    assert(compiled.outputTypes === Seq(DateType))
+    // MONDAY = 4 in DateTimeUtils's private weekday numbering, so k = dayOfWeek - 1 = 3.
+    assert(compiled.literals === Seq(3))
+    val dow = AttributeReference("dow", StringType)()
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(NextDay(d, dow, false))), childOutput :+ dow).isEmpty)
   }
 
   test("task 26: the four calendar extractions compile with IntegerType outputs") {

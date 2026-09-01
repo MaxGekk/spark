@@ -53,6 +53,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsN
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Or;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Quarter;
@@ -306,6 +307,9 @@ public final class VarkaLoopEmitter {
   /** The deliberately wrong shape behind {@link VarkaEmitOptions#misdescribeAdd()}. */
   private static final MethodTypeDesc LANEWISE_VV_WRONG =
       MethodTypeDesc.of(INT_VECTOR, INT_VECTOR);
+  /** {@code IntVector IntVector.neg()} - the no-argument unary lane ops. */
+  private static final MethodTypeDesc LANEWISE_UNARY =
+      MethodTypeDesc.of(INT_VECTOR);
   /** {@code IntVector IntVector.add/sub/and/mul/div(int)} - broadcast-scalar convenience. */
   private static final MethodTypeDesc LANEWISE_VI =
       MethodTypeDesc.of(INT_VECTOR, ConstantDescs.CD_int);
@@ -620,6 +624,7 @@ public final class VarkaLoopEmitter {
       case DateDiff n -> new VarkaVectorIR[] {n.end(), n.start()};
       case DayOfWeek n -> new VarkaVectorIR[] {n.days()};
       case WeekDay n -> new VarkaVectorIR[] {n.days()};
+      case NextDay n -> new VarkaVectorIR[] {n.days(), n.offset()};
       case Year n -> new VarkaVectorIR[] {n.days()};
       case Month n -> new VarkaVectorIR[] {n.days()};
       case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
@@ -833,6 +838,10 @@ public final class VarkaLoopEmitter {
         case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
         case DayOfWeek n -> analyzeOp(node, false, n.days());
         case WeekDay n -> analyzeOp(node, false, n.days());
+        case NextDay n -> {
+          requireLiteralOffset(n.offset());
+          analyzeOp(node, false, n.days(), n.offset());
+        }
         case Year n -> analyzeOp(node, false, n.days());
         case Month n -> analyzeOp(node, false, n.days());
         case DayOfMonth n -> analyzeOp(node, false, n.days());
@@ -944,7 +953,9 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, Integer> sharedSlot = new HashMap<>();
     /** Per Greatest/Least (masked): the two operand temporaries the substitution needs. */
     final Map<VarkaVectorIR, int[]> pairTmp = new HashMap<>();
-    /** Per DayOfWeek/WeekDay: the original-value and fold temporaries. */
+    /** Per DayOfWeek/WeekDay: the original-value and fold temporaries. NextDay reuses the
+     * first two for {@code emitFloorMod7}'s own input and adds a third for the date, which
+     * the mod's input already occupies but which the result still needs. */
     final Map<VarkaVectorIR, int[]> dowTmp = new HashMap<>();
     /** Per calendar node: the civil-from-days temporaries (task 26), six vectors and two
      * masks - the decomposition is too long to keep on the operand stack. */
@@ -1071,6 +1082,11 @@ public final class VarkaLoopEmitter {
           if (node instanceof DayOfWeek || node instanceof WeekDay) {
             s.dowTmp.put(node, new int[] {slot++, slot++});
           }
+          if (node instanceof NextDay) {
+            // emitFloorMod7 claims the first two for its own input (here, w = k - d); the
+            // third holds the date across the mod, since the date is needed again after.
+            s.dowTmp.put(node, new int[] {slot++, slot++, slot++});
+          }
           if (isChrono(node)) {
             // Six int-vector temporaries and two masks; see emitChrono for what stays live.
             s.chronoTmp.put(node, new int[] {
@@ -1109,6 +1125,7 @@ public final class VarkaLoopEmitter {
       case SubDays n -> s.wordRef.get(n.days());
       case DayOfWeek n -> s.wordRef.get(n.days());
       case WeekDay n -> s.wordRef.get(n.days());
+      case NextDay n -> s.wordRef.get(n.days());
       case Year n -> s.wordRef.get(n.days());
       case Month n -> s.wordRef.get(n.days());
       case DayOfMonth n -> s.wordRef.get(n.days());
@@ -1715,6 +1732,25 @@ public final class VarkaLoopEmitter {
         line(cb, analysis, node);
         emitFloorMod7(cb, node, analysis, s);
         emitModOffset(cb, s, 3);
+      }
+      case NextDay n -> {
+        int date = s.dowTmp.get(node)[2];
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        cb.astore(date);
+        // w = k - d, wrapping on purpose: next_day's oracle is Spark's own
+        // getNextDateForDayOfWeek, which computes this in plain int arithmetic, so
+        // byte-exactness with the row engine means reproducing the wrap, not avoiding it.
+        cb.aload(date);
+        cb.invokevirtual(INT_VECTOR, "neg", LANEWISE_UNARY);
+        emitValue(cb, n.offset(), dense, analysis, s, computed);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        emitFloorMod7(cb, node, analysis, s);
+        // result = d + r + 1, wrapping again.
+        cb.aload(date);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.loadConstant(1);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
       }
       case Year n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);

@@ -261,8 +261,56 @@ Acceptance:
 
 ## 6. Outcome
 
-Filled in when the work lands: what was built, what the pinned values moved
-from and to, and anything the recipe above got wrong. That last part is the
-most useful thing you can write here - this file is an experiment in whether a
-task can be handed over as a recipe, and a step that turned out to be
-misleading is the finding.
+Built exactly as section 3 specified: `VarkaVectorIR.NextDay(days, offset)`, the
+five emitter switch arms, the new `LANEWISE_UNARY` descriptor (it did not
+exist, as predicted), the compiler arm ahead of the calendar-extraction block,
+and tests in all four files section 3.4 named. Every step in section 3 applied
+without modification - the emitted `emitValue` arm, the three-slot `dowTmp`
+entry, and the compiler's guarded-arm-first ordering all worked exactly as
+written. Nothing here misled the agent that ran it; the recipe format held up.
+
+Two places needed a judgment call the recipe left open, both flagged rather
+than guessed past:
+
+* **Where to graft `NextDay` into the two pinned `everyNode` fixtures.** The
+  recipe says to extend the trees so no rendering is unguarded but does not
+  say where a fifth binary node joins a tree already built from the other
+  four. Wrapped the existing `Least(WeekDay, ...)` in one more
+  `Least(WeekDay, NextDay)`, matching the fixture's existing style of nesting
+  same-arity nodes rather than appending a sibling at the root.
+* **The differential fixture's day set.** The recipe names the `dayofweek`
+  test as the shape to copy, but that test's `varka_dow` view has no exact
+  1970-01-01 row, and this task's own acceptance criteria asks for "including
+  nulls, pre-1970 and the epoch". Built a new view, `varka_next_day`, with the
+  epoch date included explicitly rather than stretching the existing fixture
+  to cover something it was not built for.
+
+One thing confirmed rather than assumed: the recipe states that an invalid
+weekday "has two different behaviours... depending on ANSI mode which Varka
+must not try to reproduce" without saying whether the *arithmetic* differs
+between modes too, only the error handling. Checked `DateTimeExpressionUtils
+.getNextDateExact` (the ANSI path): it calls the same
+`DateTimeUtils.getNextDateForDayOfWeek` as the non-ANSI path, so the wrapping
+formula is identical in both modes and only the invalid-weekday handling
+differs - which is exactly what a compile-time-only decline needs to be true,
+and it is.
+
+**Pinned values, old to new** (task 26's re-pin was the most recent prior
+value for both):
+
+| fixture | old | new |
+|---|---|---|
+| `VarkaLoopEmitterSuite` line map (`pinnedLineMap`) | ended `21=(dayOfWeek 1)`, `22=(dateDiff 20 21)`, `23=(weekDay 1)`, `24=(least 22 23)`, `25=(if 10 13 24)` | ends `21=(dayOfWeek 1)`, `22=(dateDiff 20 21)`, `23=(weekDay 1)`, `24=(nextDay 1 2)`, `25=(least 23 24)`, `26=(least 22 25)`, `27=(if 10 13 26)` |
+| `VarkaShapeCacheSuite` shape hash | `041e35db20d62e91` | `cb7581449132ebaf` |
+
+No committed benchmark number moved (none was expected to, per section 4's
+acceptance criteria - this task adds a node type and touches no existing
+shape). Not independently measured: the predicted ~17-op size, since task 33
+explicitly excludes a benchmark and there was no existing committed number to
+compare a new one against.
+
+All Varka suites green at both vector widths (94 catalyst, 128 sql/core,
+0 failures - up from the pre-task baseline of 92 and 127 by the two new
+emitter/compiler tests and the one new differential test this task added);
+`catalyst/doc`, `dev/lint-java` and `dev/scalastyle` all pass; no non-ASCII,
+no line over 100 characters, no `TODO`/`FIXME` in any changed file.
