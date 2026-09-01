@@ -352,8 +352,8 @@ unmasked `DIV`, not to leave the choice open each time.
 ### 2.9 One decomposition, several fields (task 32, from the debt register)
 
 Added after task 26 measured what its own design cost, which is the only
-reason it is here: `SELECT year(d)` runs at 1834 M rows/s and
-`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 480 - 3.8x for four
+reason it is here: `SELECT year(d)` runs at 1778 M rows/s and
+`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 441 - 4.0x for four
 fields, which is near enough to 4x that nothing is being shared but the column
 load and the loop control.
 
@@ -368,7 +368,7 @@ March-based month - are not nodes at all. They are locals inside one node's
 emitted bytecode, invisible to the walk that would share them.
 
 **The task opens with the ceiling, not the mechanism.** A hand-written kernel
-computing all four fields from one decomposition, against the 480 M rows/s the
+computing all four fields from one decomposition, against the 441 M rows/s the
 four separate nodes reach, at both widths. That gate exists because task 17
 already measured the opposite of the obvious answer: raising `GROUP_BUDGET` so
 two outputs could keep their cross-output CSE in one method *lost*, 4587
@@ -376,7 +376,7 @@ against 3196 M rows/s, because the wider method's register pressure cost more
 than recomputing the shared ops. Here the shared work is ~45 ops rather than
 eight, but five values would have to stay live across four output tails, so the
 same effect is in play and the direction is not predictable from op counts. If
-the ceiling is close to 480, the task is declined with a task-16 reason before
+the ceiling is close to 441, the task is declined with a task-16 reason before
 any IR changes - which is a real possible outcome, not a formality.
 
 If it clears, three mechanisms, in the order they should be considered:
@@ -726,7 +726,7 @@ milestone 5 resumes at 45.
 | 42 | `make_date` | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
 | 43 | What bounds a loop method inside one output | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
 | 44 | The epilogue's size | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
-| 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 480 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
+| 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 441 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
 
 ## 4. Files
 
