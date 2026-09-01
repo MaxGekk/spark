@@ -92,7 +92,10 @@ public sealed interface VarkaVectorIR
 
   /**
    * {@code days + offset}, lane-wise, wrapping on overflow exactly as Spark's {@code DateAdd}
-   * does. The {@code offset} must be a {@link LiteralSlot}.
+   * does. {@code offset} is a {@link LiteralSlot} for a foldable day count, or (since task 38) a
+   * {@link ColumnRef} for an {@code IntegerType} column - a nullable one makes the result's
+   * validity the AND of both children's, not just {@code days}' (see
+   * {@code VarkaLoopEmitter.planWordRef}).
    */
   record AddDays(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
 

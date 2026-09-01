@@ -223,8 +223,10 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
   }
 
   test("task 16: a declined offset and a missing ELSE report their own reasons") {
+    // A bare int column offset fuses since task 38; `i + 1` is still a non-foldable,
+    // non-column offset expression, which stays declined.
     val nonLiteralOffset = Seq[NamedExpression](
-      Alias(DateAdd(attrD, intAttr), "shifted")(),
+      Alias(DateAdd(attrD, Add(intAttr, Literal(1))), "shifted")(),
       Alias(DateAdd(attrD, Literal(1)), "fused")())
     val offsetLines = VarkaFusionReport.lines(nonLiteralOffset, childOutput)
     assert(offsetLines(0).contains("day offset is not a foldable literal"), offsetLines(0))

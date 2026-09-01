@@ -137,9 +137,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * by pointing at one line, not by disassembling the output.
  *
  * <p>Out-of-shape IR - unknown lane types, a condition in a value position, out-of-range
- * ordinals or slots, non-literal day offsets, trees past {@link #MAX_CHAIN_DEPTH} or
- * {@link #MAX_FUSED_NODES} - is rejected with {@link IllegalArgumentException}, which the
- * evaluator wiring treats as "fall back".
+ * ordinals or slots, trees past {@link #MAX_CHAIN_DEPTH} or {@link #MAX_FUSED_NODES} - is
+ * rejected with {@link IllegalArgumentException}, which the evaluator wiring treats as
+ * "fall back".
  *
  * <p><b>Telemetry</b> (task 13): every emitted class carries a {@code SourceFile} attribute -
  * the caller-supplied name, meant to identify the operator and stage
@@ -822,14 +822,8 @@ public final class VarkaLoopEmitter {
           height.put(node, 0);
           skipping.put(node, false);
         }
-        case AddDays n -> {
-          requireLiteralOffset(n.offset());
-          analyzeOp(node, false, n.days(), n.offset());
-        }
-        case SubDays n -> {
-          requireLiteralOffset(n.offset());
-          analyzeOp(node, false, n.days(), n.offset());
-        }
+        case AddDays n -> analyzeOp(node, false, n.days(), n.offset());
+        case SubDays n -> analyzeOp(node, false, n.days(), n.offset());
         case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
         case DayOfWeek n -> analyzeOp(node, false, n.days());
         case WeekDay n -> analyzeOp(node, false, n.days());
@@ -891,11 +885,6 @@ public final class VarkaLoopEmitter {
       skipping.put(node, skips || childSkips);
     }
 
-    private static void requireLiteralOffset(VarkaVectorIR offset) {
-      if (!(offset instanceof LiteralSlot)) {
-        throw new IllegalArgumentException("day offsets must be literal slots, got " + offset);
-      }
-    }
   }
 
   private static boolean referenced(Analysis analysis, int ordinal) {
@@ -1105,8 +1094,8 @@ public final class VarkaLoopEmitter {
     return switch (node) {
       case ColumnRef c -> s.word[c.ordinal()];
       case LiteralSlot l -> WORD_ALL_TRUE;
-      case AddDays n -> s.wordRef.get(n.days());
-      case SubDays n -> s.wordRef.get(n.days());
+      case AddDays n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
+      case SubDays n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
       case DayOfWeek n -> s.wordRef.get(n.days());
       case WeekDay n -> s.wordRef.get(n.days());
       case Year n -> s.wordRef.get(n.days());
@@ -1685,12 +1674,18 @@ public final class VarkaLoopEmitter {
             analysis.options.misdescribeAdd() ? LANEWISE_VV_WRONG : LANEWISE_VV;
         line(cb, analysis, node);
         cb.invokevirtual(INT_VECTOR, "add", desc);
+        if (!dense && s.ownWord.contains(node)) {
+          emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
+        }
       }
       case SubDays n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         emitValue(cb, n.offset(), dense, analysis, s, computed);
         line(cb, analysis, node);
         cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+        if (!dense && s.ownWord.contains(node)) {
+          emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
+        }
       }
       case DateDiff n -> {
         emitValue(cb, n.end(), dense, analysis, s, computed);

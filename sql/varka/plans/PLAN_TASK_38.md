@@ -162,6 +162,58 @@ should have - find out what before going on.
 
 ## 7. Outcome
 
-Filled in when the work lands, including which steps of this recipe misled you.
-Say in particular whether section 3's trap was clear enough before you hit it,
-because that is the step this recipe exists for.
+Built as planned: the four guards moved (compiler leaf arm, `foldOffset`
+replaced by a folded-literal-then-column fallback, `requireLiteralOffset`
+deleted from the emitter's analyze pass, `isArrowBacked`/`extractMorsel`
+widened to `IntVector`/`BaseFixedWidthVector`), `date_add(d, i)` and
+`date_sub(d, i)` compile to a two-column `AddDays`/`SubDays`, a foldable
+offset still compiles to a `LiteralSlot` unchanged, and `ShortType`/`ByteType`
+offset columns and a non-foldable interval column all still decline. No
+pinned value moved and no committed benchmark number moved, both as
+predicted - verified rather than assumed: for a literal offset,
+`s.wordRef.get(offset)` is `WORD_ALL_TRUE`, so `andRef` always returns the
+`days` reference and `s.ownWord` never gains the node, so the new
+`emitAndWord` branch never emits for any existing shape.
+
+**Section 3's trap was real, and the recipe under-stated it.** It named the
+`planWordRef` fix correctly, but that fix alone is not enough: `planWordRef`
+only decides *whether* a node needs its own validity word slot (`s.ownWord`);
+the slot is filled by an `emitAndWord` call written into `emitValue`, which
+`DateDiff`'s arm already has and `AddDays`/`SubDays`'s arms did not. The
+recipe quoted only the `planWordRef` half of `DateDiff`'s pattern, not the
+`emitValue` half - "the same shape `DateDiff` already uses" was true but
+incomplete as a pointer. Missing this would not have failed loudly: the
+kernel would have compiled and run, `s.ownWord` would have held a slot,
+and that slot's local would simply never be written before its use in the
+epilogue mask, an uninitialized-local situation the class-file verifier
+should reject at load time (or, in the worst case, silently reads a stale
+value). The column-offset validity test in `VarkaLoopEmitterSuite` was
+written specifically to catch exactly this, and the first failure surfaced
+there before the change ever reached a build with the emitAndWord call.
+
+**Section 4.2's "fall back to `compileNode(days, ...)`" was the recipe's real
+mistake, and this one *did* fail loudly - as a change in unrelated tests, not
+as a wrong answer.** `compileNode` is the one function every compiler arm
+routes through for every child position - `Compare`, `DateDiff`,
+`Coalesce`, `Greatest`, all of it - so widening its shared `BoundReference`
+leaf arm to accept `IntegerType` did not just legalize `date_add`'s offset:
+it legalized an `IntegerType` column *anywhere* `compileNode` is called,
+including as a `Compare` operand. `GreaterThan(i, Literal(5))` and
+`DateDiff(x, i)` (i an int column) would have started fusing as plain
+integer comparisons and mixed date/int subtraction - correct arithmetic,
+since int32 lanewise ops do not care what the bits mean, but a capability
+task 38 never asked for and section 6 explicitly rules out ("do not open it
+wider"). Two catalyst-suite tests caught it immediately, because they used a
+bare int column as their "this declines" example and started compiling
+instead. The fix was a dedicated `compileOffset` fallback that pattern
+matches `BoundReference` directly rather than recursing through
+`compileNode`, so the general leaf arm never moved - only the exact
+grammatical position (`DateAdd`/`DateSub`'s offset) accepts an int column.
+Three more tests across `sql/core` (`VarkaColumnarWriteSuite`,
+`VarkaKernelEvaluatorSuite`, `VarkaEndToEndSuite`) had the same "bare int
+column declines" assumption baked into their example query and needed the
+same swap, to `i + 1` (still non-foldable, still not a bare column).
+Between the two failure rounds, five pre-existing tests needed their decline
+example changed - a normal and expected consequence of legalizing a shape
+that used to be the canonical "this doesn't fuse" example, not a sign
+anything was wrong with the fix itself.

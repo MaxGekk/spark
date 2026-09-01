@@ -18,11 +18,11 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, Not, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, EqualNullSafe, EqualTo, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, Not, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
-import org.apache.spark.sql.types.{DateType, IntegerType, StringType, TimestampType}
+import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType}
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -38,7 +38,9 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
   private val d = AttributeReference("d", DateType)()
   private val d2 = AttributeReference("d2", DateType)()
   private val i = AttributeReference("i", IntegerType)()
-  private val childOutput: Seq[Attribute] = Seq(d, d2, i)
+  private val sh = AttributeReference("sh", ShortType)()
+  private val by = AttributeReference("by", ByteType)()
+  private val childOutput: Seq[Attribute] = Seq(d, d2, i, sh, by)
 
   private def out(e: org.apache.spark.sql.catalyst.expressions.Expression): NamedExpression =
     Alias(e, "c")()
@@ -145,6 +147,36 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val ts = AttributeReference("t", TimestampType)()
     val bound = Seq(out(Year(Cast(ts, DateType))))
     assert(VarkaExpressionCompiler.compile(bound, Seq(ts)).isEmpty)
+  }
+
+  test("task 38: date_add/date_sub with an IntegerType column offset compile to a two-column " +
+      "AddDays/SubDays, and a foldable offset still compiles to a LiteralSlot") {
+    val addCompiled = VarkaExpressionCompiler.compile(Seq(out(DateAdd(d, i))), childOutput).get
+    assert(addCompiled.outputs === Seq(new AddDays(new ColumnRef(0), new ColumnRef(1))))
+    assert(addCompiled.inputOrdinals === Seq(0, 2))
+    assert(addCompiled.outputTypes === Seq(DateType))
+    val subCompiled = VarkaExpressionCompiler.compile(Seq(out(DateSub(d, i))), childOutput).get
+    assert(subCompiled.outputs === Seq(new SubDays(new ColumnRef(0), new ColumnRef(1))))
+    // A foldable offset keeps today's LiteralSlot shape - existing plans and their cached
+    // kernels are untouched by the fallback path this task adds.
+    val literalCompiled =
+      VarkaExpressionCompiler.compile(Seq(out(DateAdd(d, Literal(3)))), childOutput).get
+    assert(literalCompiled.outputs === Seq(new AddDays(new ColumnRef(0), new LiteralSlot(0))))
+  }
+
+  test("task 38 declines: a ShortType or ByteType offset column, and an interval column") {
+    // DateAdd.inputTypes accepts ShortType/ByteType with no cast, so a short or byte column
+    // arrives as a bare BoundReference the leaf arm must not accept - its Arrow vector is 2 or
+    // 1 bytes wide, which an int32 lane load would read as garbage rather than decline.
+    assert(VarkaExpressionCompiler.compile(Seq(out(DateAdd(d, sh))), childOutput).isEmpty)
+    assert(VarkaExpressionCompiler.compile(Seq(out(DateAdd(d, by))), childOutput).isEmpty)
+    // `d + <non-foldable INTERVAL DAY column>` resolves to
+    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)) (BinaryArithmeticWithDatetimeResolver);
+    // ExtractANSIIntervalDays has no compiler arm, so this declines through the ordinary
+    // unsupported-expression path rather than needing its own guard.
+    val iv = AttributeReference("iv", DayTimeIntervalType(DayTimeIntervalType.DAY))()
+    val withInterval = Seq(out(DateAdd(d, ExtractANSIIntervalDays(iv))))
+    assert(VarkaExpressionCompiler.compile(withInterval, childOutput :+ iv).isEmpty)
   }
 
   test("task 11 declines: null-safe equality, bare boolean outputs") {
@@ -291,9 +323,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(out(DateAdd(d, Literal(1))), out(i)), childOutput).isEmpty)
     assert(VarkaExpressionCompiler.compilePartial(
       Seq(out(DateAdd(d, Literal(1))), out(i)), childOutput).isDefined)
-    // A non-literal day offset: residual, so `compile` declines.
+    // An IntegerType column offset now compiles (task 38); a ShortType one still declines,
+    // so `compile` still declines the whole projection over it.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(DateAdd(d, i))), childOutput).isEmpty)
+      Seq(out(DateAdd(d, i))), childOutput).isDefined)
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(DateAdd(d, sh))), childOutput).isEmpty)
     // A cast in the tree (how `date_add` over a `datediff` result reaches the planner).
     assert(VarkaExpressionCompiler.compile(
       Seq(out(DateAdd(Cast(DateDiff(d, d2), DateType), Literal(1)))), childOutput).isEmpty)

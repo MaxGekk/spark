@@ -24,7 +24,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindRef
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{And => IRAnd, Compare, Cond, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, Month => IRMonth, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType}
+import org.apache.spark.sql.types.{BooleanType, DataType, DateType, IntegerType}
 
 /**
  * A whole projection compiled to the Varka vector IR (milestone 2, task 10): the trees
@@ -384,14 +384,14 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(c.child, inputs, literals, sink)
     case DateAdd(child, days) =>
       for {
-        offset <- foldOffset(days, sink)
         node <- compileNode(child, inputs, literals, sink)
-      } yield new AddDays(node, new LiteralSlot(literals.getOrElseUpdate(offset, literals.size)))
+        offsetNode <- compileOffset(days, inputs, literals, sink)
+      } yield new AddDays(node, offsetNode)
     case DateSub(child, days) =>
       for {
-        offset <- foldOffset(days, sink)
         node <- compileNode(child, inputs, literals, sink)
-      } yield new SubDays(node, new LiteralSlot(literals.getOrElseUpdate(offset, literals.size)))
+        offsetNode <- compileOffset(days, inputs, literals, sink)
+      } yield new SubDays(node, offsetNode)
     case DateDiff(end, start) =>
       for {
         endNode <- compileNode(end, inputs, literals, sink)
@@ -496,16 +496,35 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * The literal day offset of a `date_add`/`date_sub`, or `None` with the reason noted: a
-   * non-foldable offset is a per-row value, and the kernel's offsets are runtime arguments
-   * fixed for the whole batch.
+   * The day offset of a `date_add`/`date_sub`: a folded literal keeps today's `LiteralSlot`
+   * shape (existing plans and their cached kernels are untouched), and a non-foldable offset
+   * (task 38) is a bare `IntegerType` column - deliberately not a general `compileNode`
+   * recursion. `compileNode`'s `BoundReference` leaf stays `DateType`-only: widening it instead
+   * of this dedicated path would let an int column reach every other position that calls
+   * `compileNode` too (`Compare`, `DateDiff`, `Coalesce`, `Greatest`...), fusing plain
+   * integer-vs-integer predicates that were never part of this task's scope (task 38 section 6:
+   * "do not open it wider").
    */
-  private def foldOffset(days: Expression, sink: DeclineSink): Option[Int] = {
-    val folded = DateVarkaSupport.foldDaysOffset(days)
-    if (folded.isEmpty) {
-      sink.note("day offset is not a foldable literal", days)
+  private def compileOffset(
+      days: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = {
+    DateVarkaSupport.foldDaysOffset(days) match {
+      case Some(offset) =>
+        Some(new LiteralSlot(literals.getOrElseUpdate(offset, literals.size)))
+      case None =>
+        days match {
+          case br: BoundReference if br.dataType == IntegerType =>
+            Some(new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size)))
+          case br: BoundReference =>
+            sink.note(s"non-integer day offset column of type ${br.dataType.simpleString}", br)
+            None
+          case other =>
+            sink.note("day offset is not a foldable literal or an integer column", other)
+            None
+        }
     }
-    folded
   }
 
   private def foldPick(
