@@ -382,6 +382,19 @@ apparent small wins turned out to be noise.
   one, not a real unrolling cost - a benchmark comparing "K=1" against "K>1" has to
   keep every other structural choice, including loop-vs-straight-line shape, identical
   between the arms.
+- Sharing a decomposition across several outputs can lose even when the shared work
+  dwarfs each output's own tail. Task 32 measured a hand-written kernel computing
+  `year`/`month`/`dayofmonth`/`quarter` from one civil-from-days decomposition against
+  the four independently emitted nodes it would replace - each redoes the whole ~45-op
+  decomposition for its own ~6-op tail - and the shared version was 1.4-1.9x *slower*
+  at both vector widths (`PLAN_MILESTONE_4.md` section 2.9). Five values (era, century,
+  year of century, day of year, the March-based month) staying live across four output
+  tails cost more in register pressure than the ~135 ops the sharing saved. This is
+  task 17's `GROUP_BUDGET` finding (raising it to keep two outputs' cross-output CSE in
+  one method lost 4587 against 3196 M rows/s) confirmed a second time on a much larger
+  shared computation - two independent measurements now agree that op count does not
+  predict this trade's direction, and a case built on "this touches N ops, sharing
+  should help" needs a measurement before it needs code.
 
 ## Generated Code Can Carry Its Own Debug Info (Class-File API)
 

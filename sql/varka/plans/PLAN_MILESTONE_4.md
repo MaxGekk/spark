@@ -407,6 +407,40 @@ If it clears, three mechanisms, in the order they should be considered:
 Whatever the outcome, the deliverable includes sweeping the debt register entry
 in the past tense with what the measurement found, per `sql/varka/AGENTS.md`.
 
+**Outcome: declined.** The ceiling kernel was built
+(`sql/varka/engine/.../vector/ChronoVectorOps.java`, differentially tested against
+`java.time.LocalDate` in `ChronoVectorOpsTest` - both the emitted narrowed lowering's exact
+sweep range and a curated boundary set) as a lane-for-lane transcription of
+`VarkaLoopEmitter.emitChrono`'s bytecode: same magic constants, same correction order, same
+overshoot fixes, sharing the decomposition once and reading it four ways. It is not wired
+through `VarkaFusedKernel` - the engine module cannot depend on catalyst, which owns that
+interface and the range guard - so it carries no guard and is not shippable as-is; it exists
+only to answer the ceiling question, per the task's own framing.
+
+Measured in `VarkaEmitterParityBenchmark`'s existing "year" section, same 4096-row chunks,
+same repeat count, same in-range null-free data as the "year+month+day+quarter, null-free"
+case it sits beside:
+
+| | AVX-512 (M rows/s) | 128-bit (M rows/s) |
+|---|---|---|
+| four separate emitted nodes | 430.7 | 153.6 |
+| shared decomposition, hand-written | 225.8 | 108.7 |
+
+The shared kernel is 1.4-1.9x *slower*, not faster, at both widths - reproduced across three
+runs (two at AVX-512, one at 128-bit; the first AVX-512 run showed 179.4 against 392.7 with a
+~40% relative stdev under measured contention from sibling work on the same machine, so it
+was re-run once contention cleared before this number was written down, per the project's own
+under-1.3x rule - here the gap is nowhere near that threshold, but the noisy first run was not
+trusted regardless). Section 2's prediction that "the direction is not predictable from op
+counts" held in the direction task 17 already found: five values (era, century, year of
+century, day of year, the March-based month) staying live across four output tails costs more
+in register pressure than the ~45 shared ops it saves. Mechanism 3 (decomposing into primitive
+IR nodes) was already declined in advance in the text above; mechanisms 1 and 2 are not built,
+because the number that would justify either does not exist. The debt register entry (section
+9) is swept with this finding rather than closed by a task 32 code change - the entry stays
+open for a future primitive whose shared-to-per-field-cost ratio differs enough that this
+result does not apply, as its rewritten text says.
+
 ### 2.10 `next_day`, as a handover experiment (task 33)
 
 The smallest piece of vocabulary the survey after task 26 turned up, taken for
@@ -726,7 +760,7 @@ milestone 5 resumes at 45.
 | 42 | `make_date` | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
 | 43 | What bounds a loop method inside one output | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
 | 44 | The epilogue's size | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
-| 32 | One decomposition, several fields | The ceiling first: a hand-written four-field kernel against the 441 M rows/s four separate nodes reach, at both widths, with a task-16 decline on the record if sharing does not clear it; then the mechanism, multi-value IR node or emitter-side fusion, chosen on that number; the debt register entry swept in the past tense either way | The four-field projection's committed number moves or the decline is recorded with the measurement behind it; single-field projections unchanged; the pinned oracles move only if the IR gains a node type, and are re-pinned under their update rule if so |
+| 32 | One decomposition, several fields. **DECLINED** (see 2.9) | The hand-written ceiling kernel (`ChronoVectorOps`) measured *slower* than the four separate emitted nodes at both widths (225.8 vs 430.7 M rows/s at AVX-512, 108.7 vs 153.6 at 128-bit) - the register-pressure effect task 17 found, a second time; no IR or emitter change followed, and the debt register entry was swept with the finding rather than closed | `ChronoVectorOpsTest` differentials the kernel against `java.time` over its exact sweep range and a boundary set, at both widths (the engine module's own narrow-vector Maven profile); no pinned oracle moved, no committed number for any existing shape changed |
 
 ## 4. Files
 
@@ -865,18 +899,22 @@ rewritten in the past tense with what the sweep found, never deleted.
   and 8079 at 17, crossing the 8000-byte `HugeMethodLimit` past which HotSpot compiles
   nothing at all. Neither is a calendar defect; task 26 only made them reachable.
 
-* **A calendar field is computed once per output, not once per date.** **Adopted as task
-  32 (see 2.9)**, which is what a debt register is for: this entry is where the cost was
-  first written down, and the task is where it gets measured and paid or declined. Task
-  26's four extractions each carry the whole civil-from-days decomposition, so
-  `SELECT year(d), month(d)` computes it twice, in two sibling loop methods - measured at
-  441 M rows/s for four fields against 1778 for one. That is the trade task 17 trained the
-  emitter on (recomputing in registers beats a wider method's register pressure), and the
-  corpus asks for one field at a time, so it is a debt rather than a defect. Closing it
-  needs a multi-value IR node: every node in the IR is one value on the operand stack, and
-  a shared decomposition would have to leave several. It matters if a later item wants
-  `date_trunc` or `dayofyear` beside `year` in one projection, which is when the
-  recomputation stops being hypothetical.
+* **A calendar field is computed once per output, not once per date.** **Measured and
+  declined as task 32 (see 2.9)**: the ceiling a hand-written kernel sharing one
+  decomposition across all four fields reaches is *slower* than the four independently
+  emitted nodes, not faster - 225.8 against 430.7 M rows/s at AVX-512, 108.7 against 153.6
+  at 128-bit (`ChronoVectorOps`, `ChronoVectorOpsTest`, sql/varka/engine). Task 17's own
+  finding predicted the direction was not obvious from op count alone (raising
+  `GROUP_BUDGET` so two outputs could share cross-output CSE in one method *lost*, 4587
+  against 3196 M rows/s); this is the same register-pressure effect measured a second time,
+  on a wider shared computation, and it points the same way. Closing this debt would need a
+  multi-value IR node - every node in the IR is one value on the operand stack, and a
+  shared decomposition would have to leave several - but there is no longer a throughput
+  case for building one from this entry: the mechanism that would consume it is now known
+  to cost more than what it would replace. Left open for a future primitive whose shared
+  work is cheap enough, relative to its per-field tails, that this direction does not
+  apply - `divmod` and a string operation returning an offset and a length were the
+  general examples task 32 named; neither has been measured.
 
 * **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have

@@ -25,7 +25,7 @@ import org.apache.spark.benchmark.{Benchmark, BenchmarkBase}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaFusedKernel, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
-import org.apache.spark.sql.varka.vector.DateVectorOps
+import org.apache.spark.sql.varka.vector.{ChronoVectorOps, DateVectorOps}
 
 /**
  * The emitter's gates as a benchmark (see `sql/varka/plans/PLAN_TASK_9.md`,
@@ -396,6 +396,30 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
         benchmark.addCase("year+month+day+quarter, null-free") { _ =>
           chunked(four, false, outputs = 4)
+        }
+        // Task 32's ceiling (PLAN_MILESTONE_4.md section 2.9): the same four fields from one
+        // shared decomposition, computed by hand outside the emitter (ChronoVectorOps), against
+        // the four independently emitted nodes above. Driven in the same 4096-row chunks over
+        // the same repeat count so the two cases are measured in the same regime; the four
+        // outputs reuse the "four" case's destination buffers, and all four share one
+        // validity buffer since they all come from the single source column.
+        benchmark.addCase("year+month+day+quarter, shared decomposition (hand-written ceiling)") {
+          _ =>
+            var pass = 0
+            while (pass < repeats) {
+              var done = 0
+              while (done < numRows) {
+                val n = math.min(chunk, numRows - done)
+                val dataOff = done * 4L
+                val validityOff = done / 8L
+                val outAddrs = dstData4.map(_ + dataOff)
+                ChronoVectorOps.vectorFourFields(nfData.address() + dataOff, 0L, 0,
+                  outAddrs(0), outAddrs(1), outAddrs(2), outAddrs(3),
+                  dstValidity.address() + validityOff, n)
+                done += n
+              }
+              pass += 1
+            }
         }
         // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector
         // body against year's ~50), and the per-row LocalDate loop is what Spark runs today.
