@@ -872,11 +872,73 @@ run.** Every number from `vectorFourFields` or `vectorFourFieldsNoValidity` at 1
 document or elsewhere is either an explicit multi-run range or should be read as one mode of
 an unresolved bimodal pair - the emitted kernel carries no such caveat, at either width.
 
+### 7.5 The compile cliff (risk 1 / prediction 4): measured, and it did not happen
+
+`GROUP_BUDGET` exists because a 64-op loop method took a ~10-second tier-4 compile in this
+project's own earlier findings (`SKILLS.md`, "C2 Compile Latency Is the Wide-Vector-Loop
+Cliff"), and the plan named this the risk most likely to cap B2 - "the one thing that could
+cap this," measured before `FUSED_CEILING` is chosen rather than discovered after. Every
+number reported in 7.2 was steady-state throughput; none of it says how long the widened
+kernels took to reach that steady state; that is what this section measures.
+
+`-XX:+PrintCompilation` across the whole parity benchmark run, filtered to each generated
+class's own name (every kernel in this file gets a distinct numbered class, so this is exact,
+not a guess about which lines belong to which kernel):
+
+| kernel | shape | wall time, first tier-3 compile to every method's tier-4 landing |
+|---|---|---|
+| `VarkaFusedBench806` | 2 fields, 1 method, 100 ops | 142 ms |
+| `VarkaFusedBench808` | 3 fields, 1 method, 150 ops | 207 ms |
+| `VarkaFusedBench809` | 4 fields, 1 method, 200 ops (the B2 case measured in 7.2) | 272 ms |
+| `VarkaFusedBench803` | 4 fields, 4 separate methods (today's shape) | 624 ms |
+| `VarkaFusedBench900` | 20 outputs, 20 separate methods, unshared (task 44's crossing) | 2434 ms |
+| `VarkaFusedBench901` | 20 outputs, 1 method, 200 ops, shared | 1971 ms |
+
+None of these approach the historic 10-second cliff, and none show the cliff's own tell: a
+repeated tier-4 task line marked `blocked` (zero occurrences anywhere in the log, for any
+Varka-generated class) or a compile that never lands. Every method compiles exactly once past
+tier 3 (a normal, single "made not entrant: not used" per method as tier 4 supersedes it), with
+one expected exception: `run`/`epilogueDense` on the kernels that later see a masked or
+larger-remainder batch for the first time take a second, equally fast recompile via an
+`uncommon trap` deopt when that shape is first exercised - not thrashing, just C2 learning a
+branch it had not yet profiled.
+
+**809's own timeline is the direct answer to the risk.** The case "year+month+day+quarter,
+shared (1 loop method), null-free" begins, `loopDense0` (776 bytes, the 200-op body) reaches
+an OSR tier-4 compile 58ms after its first tier-3 compile and a standard tier-4 compile 171ms
+after that; every dependent method (`run`, `runDense`, `epilogueDense`) is fully tier-4 within
+272ms of the case starting. Against a 2-second warmup window, that leaves roughly 1.7 seconds
+of genuinely steady-state execution before the measured window even opens - the throughput
+numbers in 7.2 are not measuring a partially-compiled kernel.
+
+**900 is the outlier worth naming, and it still is not a risk.** Twenty separate 1000-byte-ish
+loop methods take a combined 2.4 seconds to all reach tier 4 - the longest compile window in
+the whole suite, because there are twenty independent compile tasks rather than one or four.
+That is close enough to the 2-second warmup window that it is worth flagging rather than
+waving past: the case's own committed stdev (3ms on a 278ms best time, in the run this
+section's numbers are quoted from) shows no sign of contamination, and `Benchmark`'s
+best-time statistic is by construction robust to one slow early iteration even when a stdev is
+not - but this is the one case in the suite where the compile-cliff risk was closest to
+mattering, and it mattered at 20 outputs, not at four.
+
+**Prediction 4, scored:** wrong in the same direction as prediction 1 was wrong in step A, and
+for a related reason - both predictions reasoned from the *historic* 64-op finding on a
+different kernel (a hand-written body compiled by `javac`) rather than measuring the actual
+emitted bytecode this task produces. The emitted path's own methods compile in low hundreds of
+milliseconds even at 200 ops in one method, and the historic cliff does not reproduce anywhere
+in this file's kernels. Confidence was stated as low ("the one most likely to be wrong, and
+the one with a real chance of capping the mechanism"); it was wrong, in the favorable
+direction.
+
 ## 8. Risks
 
-1. **Prediction 4.** The compile cliff is the one thing that could cap this, and
+1. **Prediction 4.** ~~The compile cliff is the one thing that could cap this, and
    it is measured in 5.3 before `FUSED_CEILING` is chosen rather than discovered
-   after the mechanism ships.
+   after the mechanism ships.~~ **Closed, section 7.5.** Measured directly via
+   `-XX:+PrintCompilation` on every kernel in the parity suite: the widest single
+   loop method (200 ops, four fields) reaches tier 4 in 272 ms, the widest kernel
+   overall (twenty separate methods) in 2.4 s - neither the historic 10-second
+   cliff nor its `blocked`-task tell appears anywhere. Did not cap the mechanism.
 2. **A shared prefix under a changed guard.** Sharing the guard is correct only
    because the guard reads nothing but the child and the masks. Any future chrono
    node whose guard depends on something else (an ANSI throw path, task 30) must
