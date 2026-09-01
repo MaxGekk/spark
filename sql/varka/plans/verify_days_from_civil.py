@@ -40,20 +40,28 @@ fix is in the code below and is the single most important thing in the recipe.
 """
 
 import datetime
+
 ERA, CEN, BIAS = 146097, 36524, 5394572
 def decompose(d):                      # VarkaChrono.narrowed, as shipped
     w = d + BIAS
     era = (w * 114) >> 24
     r = w - era * ERA
-    if r >= ERA: era += 1; r -= ERA
+    if r >= ERA:
+        era += 1
+        r -= ERA
     c = (r * 7349) >> 28
     doc = r - c * CEN
-    if doc >= CEN: c += 1; doc -= CEN
-    if c == 4: c = 3; doc += CEN
+    if doc >= CEN:
+        c += 1
+        doc -= CEN
+    if c == 4:
+        c = 3
+        doc += CEN
     yoc = (doc * 45966) >> 24
     doy = doc - (365 * yoc + (yoc >> 2))
     if doy < 0:
-        doy += 365 + (1 if (yoc & 3) == 0 else 0); yoc -= 1
+        doy += 365 + (1 if (yoc & 3) == 0 else 0)
+        yoc -= 1
     mp = ((5 * doy + 2) * 877241) >> 27
     dom = doy - (((153 * mp + 2) * 838861) >> 22) + 1
     month = mp + 3 if mp < 10 else mp - 9
@@ -97,7 +105,8 @@ def add_months(d, months):
 bad_rt = 0
 for d in range(-719162, 2932897):
     y, m, dom = decompose(d)
-    if days_from_civil(y, m, dom) != d: bad_rt += 1
+    if days_from_civil(y, m, dom) != d:
+        bad_rt += 1
 print("round trip over", 2932897 + 719162, "days -> mismatches:", bad_rt)
 
 # 2. add_months against LocalDate.plusMonths semantics, on a broad sample.
@@ -106,7 +115,8 @@ def ref_add(dt, months):
     ny, nm = divmod(total, 12)
     ln = LEN[nm] + (1 if nm == 1 and (ny % 4 == 0 and (ny % 100 != 0 or ny % 400 == 0)) else 0)
     return datetime.date(ny, nm + 1, min(dt.day, ln))
-bad_am = 0; n = 0
+bad_am = 0
+n = 0
 for d in range(-719162, 2932897, 37):
     dt = datetime.date.fromordinal(d + 719162 + 1)
     for months in (0, 1, -1, 12, -12, 13, -13, 100, -100, 1200, -1200):
@@ -118,5 +128,6 @@ for d in range(-719162, 2932897, 37):
         n += 1
         if got != want.toordinal() - 719162 - 1:
             bad_am += 1
-            if bad_am < 4: print("MISMATCH", dt, months, got, want)
+            if bad_am < 4:
+                print("MISMATCH", dt, months, got, want)
 print("add_months over", n, "cases -> mismatches:", bad_am)
