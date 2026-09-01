@@ -292,6 +292,50 @@ apparent small wins turned out to be noise.
   in a test, so the next wide node moves a number instead of quietly falling off.
   Task 32 step B1's ladder is in `PLAN_TASK_32.md` section 7.1.
 
+## A hand-written comparison kernel needs every fast path the real one has
+
+`ChronoVectorOps.vectorFourFields` was built as task 32's throughput ceiling: same
+arithmetic, same guard, same op count as the emitted kernel it stands in for. It has no
+dense/masked split, though - it always builds a `VectorMask` and uses masked load/store
+overloads, even when the caller reports every row non-null. On null-free data the emitted
+kernel dispatches to a genuinely unmasked dense body (task 10's split), so the "ceiling" was
+silently measuring the masked-body cost the whole time. Once step B2 made the true emitted
+dense-shared kernel buildable, it beat the "ceiling" by 1.15-1.20x, reproducibly across three
+runs. The lesson generalizes past this one kernel: a hand-written stand-in for an emitted
+path is only a fair bound if it takes every fast path the emitted dispatcher can reach for
+the data it is fed - a masked-only comparison kernel run on null-free data is not measuring
+the same thing the emitted kernel is, and the gap does not announce itself; nothing crashes
+or looks wrong, the "ceiling" just quietly is not one.
+
+## Calling into an uncompilable method costs something even when it does nothing
+
+A method past `HugeMethodLimit` is never compiled at any tier, so every call into it runs
+interpreted - including a call that hits an early return and does no real work at all.
+Measured on a 20-calendar-output epilogue (9436 bytes unshared, past the limit; 4048 bytes
+shared, under it) at an *aligned* chunk size, where the generated early-return check
+(`if (loopBound < length) ...; return 0`) fires on every single call and the epilogue never
+executes a real row: the unshared (uncompilable) version still cost 1.36x the shared
+(compilable) one, invisible at large chunks (4096 calls per pass, real vector work
+dominates) and clearly visible at small ones (15625 calls per pass, the per-call cost
+dominates). Do not describe a `HugeMethodLimit` crossing as "costs nothing on aligned
+batches" - it costs nothing *extra in arithmetic* on aligned batches, but the call itself,
+paid on every batch whether aligned or not, is measurably more expensive when the callee can
+never leave the interpreter. The unaligned case remains far larger (7.3x at a chunk where
+most of the batch is remainder) because there real interpreted arithmetic dominates too.
+
+## A benchmark that reuses `repeats` for wall-clock scaling must also scale its declared row count
+
+`Benchmark`'s Rate/Per-Row columns divide the measured time by the row count passed to its
+constructor, not by what the timed closure actually does. A section whose closure loops
+`repeats` times over `numRows` (the pattern this file's "year" and alignment-ladder sections
+both use, to pay the per-call prologue at production rate rather than timing one giant call)
+must construct `Benchmark` with `numRows * repeats`, not `numRows` - passing the smaller
+number does not corrupt any *ratio* between cases in the same section (both are scaled by the
+same missing factor), but every absolute Rate and Per-Row figure comes out wrong by exactly
+that factor, silently, with no error and a plausible-looking table. Sanity-check a new
+section's absolute numbers against a neighboring section of comparable op count before
+trusting them, not just its ratios.
+
 ## Sharing below the node level in an emitter
 
 - **The values worth sharing are not always nodes.** Varka's DAG-CSE memoizes on

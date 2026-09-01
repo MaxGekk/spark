@@ -708,6 +708,123 @@ through one loop method under a widened `groupBudget`, and the exhaustive sweep 
 16,777,216 days of the covered range now runs under both settings - so B2 is a
 measurement and a policy decision, with no correctness work left in front of it.
 
+### 7.2 Step B2's gate: measured, and it clears - plus two findings the gate did not ask for
+
+Section 7's gate: extend the ceiling to `year, month` and measure it; build B2 if it clears
+~1.3x at AVX-512. With B1's fragment already built, the actual B2 shape - the emitted path
+under a widened `groupBudget` - can be measured directly rather than approximated, which is
+better evidence than the gate asked for. Six new cases in `VarkaEmitterParityBenchmark`'s
+"year" section (`VarkaEmitOptions.DEFAULTS.withGroupBudget(200)`, comfortably past four
+fields' 200 ops so `groupOutputs` fuses every calendar output into one method, where
+`shareChronoPrefix` - on by default since B1 - then shares the prefix once): `year+month` and
+`year+month+day` each measured separate and shared, `year+month+day+quarter` shared against
+the existing four-node baseline and the hand-written ceiling, and `year(d1), year(d2)` as the
+regression guard section 5.2 names.
+
+Three runs, AVX-512, idle machine, five iterations per case per run; ratios compared by the
+minimum best-time across the three runs where the ratio came in near the 1.3x re-check line,
+per the project's standing rule:
+
+| fields | separate (M rows/s) | shared (M rows/s) | ratio (min best-time) |
+|---|---|---|---|
+| 2 (`year, month`) | 902.2-914.6 | 1174.3-1244.2 | **1.29x** (22ms / 17ms, identical across all 3 runs) |
+| 3 (`year, month, dayofmonth`) | 587.9-604.8 | 892.4-934.4 | **1.57x** (33ms / 21ms) |
+| 4 (`year, month, dayofmonth, quarter`) | 437.6-444.6 | 761.7-799.8 | **1.80x** (45ms / 25ms) |
+
+**The gate clears, and the win grows with field count rather than shrinking.** Prediction 3
+(section 6) expected a *sublinear* gain - 1.6-1.9x at two fields, 2.2-2.7x at three - reasoning
+from the four-field op-count ratio the way prediction 1 did, which section 7 already found
+overstates a sharing win by about 2x. The corrected shape is the opposite of what was
+predicted: two fields sit at the stated 1.3x bar almost exactly (1.29x, stable to the ms
+across three separate JVM runs, not a fluke), and the ratio climbs through 1.57x to 1.80x as
+more of the loop method's fixed per-lane-group cost (section 2.17) gets to amortize over more
+outputs. **Recommendation: build B2.** The two-field number is not a comfortable clearance of
+the stated bar, but it is a stable one, and it is the worst case in the table rather than the
+typical one - every additional field makes the case stronger. The owner's call, per section
+2's decision to have the owner pick after seeing the numbers - but there is no reading of this
+table where declining B2 is the safer choice.
+
+**Finding 1: the hand-written "ceiling" was measuring the masked body, not the dense one, and
+the true dense-body number beats it.** `ChronoVectorOps.vectorFourFields` builds a
+`VectorMask` and uses masked load/store overloads on every lane group regardless of
+`hasNulls` - it has no separate unmasked path, because it predates task 10's dense/masked
+split existing as a *variant* the way the emitter has it. The emitted kernel does have one,
+and on null-free data (`srcNullCount == 0`) the driver dispatches to the true dense body -
+unmasked loads and stores, no `VectorMask` machinery at all. Measured across the same three
+runs: the emitted four-field **shared** kernel (25ms best time) is reliably **1.15-1.20x
+faster** than the hand-written **ceiling** (30ms, identical across all three runs) on the
+same null-free data the ceiling was measured on. A kernel named "ceiling" that a real,
+already-built path exceeds is not a ceiling; it is a masked-body measurement that happened to
+read as one because nothing dense existed to compare it with until B1/B2 made the emitted
+path buildable. This does not retroactively wrong step A's own number (679.0 vs 445.7,
+1.52x) - both sides of *that* comparison were dense-dispatched, since the four independently
+emitted nodes get the same dispatch the shared kernel does - but it does mean `ChronoVectorOps`
+should not be read as an upper bound on what a dense null-free shared kernel can reach. It is
+a same-arithmetic reference kernel, and a masked one; the emitted path is the ceiling now.
+
+**Finding 2: the validity write is just over half the ceiling kernel's time - not three
+quarters, and not a fit.** Section 2.17 asked this question from a three-point fit across
+different op counts and called it "a fit, not a measurement." `ChronoVectorOps.vectorFourFieldsNoValidity`
+is the direct measurement: the exact same arithmetic, the exact same guard, with every
+destination validity buffer and every `orValidityBitsAt`/`orPartialValidityBitsAt` call
+removed (`ChronoVectorOpsTest.noValidityMatchesFourFieldsOnNullFreeData` pins that removing
+them changes no value). Across the same three runs the ceiling (with validity) costs
+1.50-1.52 ns/row and the no-validity variant costs 0.65-0.67 ns/row - a difference of
+0.84-0.85 ns/row, which is **55.6% to 56.7% of the ceiling's total time**, spent on four
+`zero()` calls and, per lane group, four `orValidityBitsAt` calls that write back a value
+already implied by the guard mask. This is a different number from section 2.17's fitted
+"three quarters is fixed per-lane-group cost" because that fit priced *everything* the
+decomposition does not touch (the four stores, the chunk prologue, the loop control), not
+validity alone; validity is the majority of that fixed cost but not all of it. Tasks 45-47
+are confirmed worth doing on this number alone, with 45 (the null-free fast path, one fill
+per batch instead of one OR per lane group per output) the most directly targeted at it.
+
+### 7.3 Task 44's crossing, priced directly rather than inferred from bytecode size
+
+Section 7.1 measured `epilogueMasked`'s *bytecode size* crossing `HugeMethodLimit` at 40
+outputs; it did not measure what crossing it costs, because no committed harness runs a
+non-aligned chunk on a wide enough calendar shape - the four-field ladder in section 7.1's own
+table stays under the limit unshared (7531 bytes at four dates) and so has nothing to cross.
+A new section, five date columns of four fields (20 calendar outputs: 9436 bytes unshared,
+past the limit; 4048 bytes shared, comfortably under it), at the same four chunk sizes task
+24's ladder uses:
+
+| chunk | unshared (ns/row) | shared (ns/row) | ratio |
+|---|---|---|---|
+| 4096 (aligned) | 13.9 | 13.7 | 1.01x |
+| 4095 (lanes-1 tail) | 18.7 | 13.7 | **1.36x** |
+| 64 (aligned) | 64.0 | 46.9 | **1.36x** |
+| 63 (lanes-1 tail) | 410.5 | 56.1 | **7.32x** |
+
+Two things this shows that the size ladder alone could not:
+
+**The crossing costs something even on an aligned batch.** `emitEpilogue`'s own generated
+body returns immediately when `loopBound == length` (`Label remainder; ... ireturn`), so at
+chunk 4096 and chunk 64 the epilogue never does real work under either setting - and yet chunk
+64 shows a stable 1.36x cost anyway. The reason is that the epilogue method is *called*
+unconditionally on every `run` invocation regardless of remainder, and an interpreted call
+into a method HotSpot will never compile at any tier is measurably slower than a compiled
+one's early return - invisible at chunk 4096, where 4880 calls per iteration are swamped by
+real vector work, and visible at chunk 64, where 312500 calls per iteration make the per-call
+difference the dominant cost. **This means the debt register's framing - "runs interpreted...
+on every batch whose length is not a lane multiple" - understates the cost surface: the method
+is invoked, and pays an interpreter-call tax, on every batch, aligned or not; it only does
+interpreted *arithmetic* on the unaligned ones.** Section 2.9 and the debt register are
+corrected to say so, since a reader relying on the old framing would conclude a production
+workload of aligned 4096-row batches pays nothing for a method past the limit, which chunk
+64's number says is not quite true even if the effect is small at that width.
+
+**Where the effect is real work, it is not small.** At chunk 63 - the closest committed shape
+to "most of a batch is remainder," which no production query produces but which isolates the
+mechanism - the unshared kernel is **7.3x slower**: fifteen rows of civil-from-days arithmetic
+over twenty outputs, run to completion by the interpreter with boxed vectors, dominates the
+sixty-three-row call. At the shape closer to production, chunk 4095 (one lane group's worth of
+remainder out of 4096, i.e. a batch shy by one row of the shipped `COLUMN_BATCH_SIZE`), the
+cost is a measured 1.36x - the honest number for "what does a fifteen-column-of-dates,
+sixteen-plus-field-wide query pay for landing one row short of an aligned batch," which is a
+question worth having a number for even though such a projection does not exist in the
+milestone's corpus today.
+
 ## 8. Risks
 
 1. **Prediction 4.** The compile cliff is the one thing that could cap this, and
