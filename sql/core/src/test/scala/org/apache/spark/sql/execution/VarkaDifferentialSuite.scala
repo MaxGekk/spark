@@ -491,6 +491,30 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("next_day matches the row engine across 1970, pre-1970 and nulls") {
+    val rows = Seq("2024-01-01", "1969-12-31", "1970-01-01", "1900-02-28", "2100-07-04", null)
+    Seq(spark, varkaSpark).foreach { session =>
+      import scala.jdk.CollectionConverters._
+      val schema = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("d", org.apache.spark.sql.types.DateType, true)))
+      val data = rows.map(v =>
+        org.apache.spark.sql.Row(if (v == null) null else java.sql.Date.valueOf(v)))
+      session.createDataFrame(data.asJava, schema).createOrReplaceTempView("varka_next_day")
+      session.catalog.cacheTable("varka_next_day")
+    }
+    try {
+      // THURSDAY maps to k = -1 (DateTimeUtils.getDayOfWeekFromString's [0, 6] range has
+      // THURSDAY = 0), the one weekday whose runtime literal is negative - included so the
+      // end-to-end path, not only the emitter unit test, covers it.
+      checkDifferential(spark, varkaSpark,
+        "SELECT next_day(d, 'MO') AS a, next_day(d, 'SUNDAY') AS b, " +
+          "next_day(d, 'THURSDAY') AS c FROM varka_next_day ORDER BY a, b, c",
+        expectFused = true)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_next_day"))
+    }
+  }
+
   test("the rule fires and the kernels run under AQE") {
     // Every Varka session disables AQE for plan determinism, so this pins the default-config
     // path. With AQE on the fused node sits inside a query stage, which a plain
