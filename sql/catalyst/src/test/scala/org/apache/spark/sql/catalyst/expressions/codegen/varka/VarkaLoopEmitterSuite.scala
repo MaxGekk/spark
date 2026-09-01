@@ -224,6 +224,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       // implementation is not an oracle.
       evalValue(n.days(), row, lits)
         .map(v => LocalDate.ofEpochDay(v.toLong).get(IsoFields.QUARTER_OF_YEAR))
+    case n: DayOfYear =>
+      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getDayOfYear)
     case n: Greatest =>
       pick(evalValue(n.left(), row, lits), evalValue(n.right(), row, lits), math.max)
     case n: Least =>
@@ -743,6 +745,24 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed")
   }
 
+  test("dayofyear matches LocalDate over the boundary set that matters") {
+    val root = new DayOfYear(new ColumnRef(0))
+    val boundary = Array(
+      LocalDate.of(2000, 1, 1), LocalDate.of(2000, 12, 31), // leap
+      LocalDate.of(2024, 1, 1), LocalDate.of(2024, 12, 31), // leap
+      LocalDate.of(2023, 1, 1), LocalDate.of(2023, 12, 31), // common
+      LocalDate.of(1900, 1, 1), LocalDate.of(1900, 12, 31), // century, not leap
+      LocalDate.of(2000, 2, 28), LocalDate.of(2000, 2, 29), LocalDate.of(2000, 3, 1),
+      LocalDate.of(1900, 2, 28), LocalDate.of(1900, 3, 1)
+    ).map(_.toEpochDay.toInt) ++ Array(
+      VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
+      VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1)
+    def days(c: Int, i: Int): Int =
+      if (i < boundary.length) boundary(i) else i * 9973 - 400000
+    checkMatrix(Seq(root), 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "dayofyear")
+  }
+
   test("the epilogue's inactive lanes do not decline a batch whose real rows are in range") {
     // A masked load fills the lanes past `length` with 0, and 0 is in range - but the guard
     // runs on the node's *input*, which here is a computed value: 0 - 5400000 is outside the
@@ -766,7 +786,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "set -Dvarka.sweep=true to sweep the emitted kernel")
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
-      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
     val (kernel, loader) = load(emitMulti(roots, 1, 0))
     try {
       val arena = Arena.ofConfined()
@@ -794,7 +815,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
             val date = LocalDate.ofEpochDay((day + i).toLong)
             val got = outs.map(_._1.get(ValueLayout.JAVA_INT, i * 4L))
             val want = Seq(date.getYear, date.getMonthValue, date.getDayOfMonth,
-              date.get(IsoFields.QUARTER_OF_YEAR))
+              date.get(IsoFields.QUARTER_OF_YEAR), date.getDayOfYear)
             if (got != want) {
               mismatches += 1
               if (mismatches < 4) {
@@ -1085,11 +1106,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "18=(quarter 1)",
     "19=(greatest 17 18)",
     "20=(least 16 19)",
-    "21=(dayOfWeek 1)",
-    "22=(dateDiff 20 21)",
-    "23=(weekDay 1)",
-    "24=(least 22 23)",
-    "25=(if 10 13 24)").mkString("\n")
+    "21=(dayOfYear 1)",
+    "22=(greatest 20 21)",
+    "23=(dayOfWeek 1)",
+    "24=(dateDiff 22 23)",
+    "25=(weekDay 1)",
+    "26=(least 24 25)",
+    "27=(if 10 13 26)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -1113,12 +1136,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to
-    // ride Record.toString, whose format no JDK promises. One key using all 19 node types (and
+    // ride Record.toString, whose format no JDK promises. One key using all 20 node types (and
     // three CompareOps), so a change to any rendering, to the operand order, or to the
     // topological schedule fails here. If it does: make sure the change is intended, then
     // update the literal and say so in the task plan - the same rule as the pinned shape
     // hashes in VarkaShapeCacheSuite. Task 26 added the four calendar extractions and
-    // re-pinned it (PLAN_TASK_26.md).
+    // re-pinned it (PLAN_TASK_26.md); task 34 added dayofyear and re-pinned it again
+    // (PLAN_TASK_34.md).
     val col = new ColumnRef(0)
     val lit = new LiteralSlot(0)
     val cond = new And(
@@ -1126,9 +1150,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         new Compare(CompareOp.LT, col, lit),
         new Not(new Compare(CompareOp.EQ, col, lit))),
       new And(new Compare(CompareOp.GE, col, lit), new IsNotNull(col)))
-    val chrono = new Least(
-      new Greatest(new Year(col), new Month(col)),
-      new Greatest(new DayOfMonth(col), new Quarter(col)))
+    val chrono = new Greatest(
+      new Least(
+        new Greatest(new Year(col), new Month(col)),
+        new Greatest(new DayOfMonth(col), new Quarter(col))),
+      new DayOfYear(col))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),

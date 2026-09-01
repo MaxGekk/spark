@@ -47,6 +47,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Con
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
@@ -624,6 +625,7 @@ public final class VarkaLoopEmitter {
       case Month n -> new VarkaVectorIR[] {n.days()};
       case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
       case Quarter n -> new VarkaVectorIR[] {n.days()};
+      case DayOfYear n -> new VarkaVectorIR[] {n.days()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IfElse n -> new VarkaVectorIR[] {n.cond(), n.thenNode(), n.elseNode()};
@@ -837,6 +839,7 @@ public final class VarkaLoopEmitter {
         case Month n -> analyzeOp(node, false, n.days());
         case DayOfMonth n -> analyzeOp(node, false, n.days());
         case Quarter n -> analyzeOp(node, false, n.days());
+        case DayOfYear n -> analyzeOp(node, false, n.days());
         case Greatest n -> analyzeOp(node, true, n.left(), n.right());
         case Least n -> analyzeOp(node, true, n.left(), n.right());
         case IfElse n -> analyzeOp(node, true, n.cond(), n.thenNode(), n.elseNode());
@@ -1072,9 +1075,12 @@ public final class VarkaLoopEmitter {
             s.dowTmp.put(node, new int[] {slot++, slot++});
           }
           if (isChrono(node)) {
-            // Six int-vector temporaries and two masks; see emitChrono for what stays live.
+            // Eight int-vector temporaries and two masks; see emitChrono for what stays live.
+            // The last two (the biased year and a remainder scratch) are only used by
+            // DayOfYear's leap-flag tail, but every chrono node gets them so the slot layout
+            // stays uniform.
             s.chronoTmp.put(node, new int[] {
-                slot++, slot++, slot++, slot++, slot++, slot++, slot++, slot++});
+                slot++, slot++, slot++, slot++, slot++, slot++, slot++, slot++, slot++, slot++});
           }
         } else if (dense) {
           s.condMask.put(node, slot++);
@@ -1113,6 +1119,7 @@ public final class VarkaLoopEmitter {
       case Month n -> s.wordRef.get(n.days());
       case DayOfMonth n -> s.wordRef.get(n.days());
       case Quarter n -> s.wordRef.get(n.days());
+      case DayOfYear n -> s.wordRef.get(n.days());
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
@@ -1736,6 +1743,11 @@ public final class VarkaLoopEmitter {
         line(cb, analysis, node);
         emitChrono(cb, node, dense, analysis, s);
       }
+      case DayOfYear n -> {
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        emitChrono(cb, node, dense, analysis, s);
+      }
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
       case Least n -> emitPick(cb, n, n.left(), n.right(), "min", dense, analysis, s,
@@ -1978,6 +1990,8 @@ public final class VarkaLoopEmitter {
     int marchMonth = t[5];
     int mask = t[6];
     int leap = t[7];
+    int biasedYear = t[8];
+    int remScratch = t[9];
 
     cb.astore(days);
 
@@ -2105,6 +2119,46 @@ public final class VarkaLoopEmitter {
         cb.loadConstant(2);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
         emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+      }
+      case DayOfYear n -> {
+        // year = 400 * era + 100 * century + yoc, plus one past January - Year's own formula,
+        // recomputed here because the leap flag needs a plain year and nothing upstream keeps
+        // one around.
+        cb.aload(era);
+        cb.loadConstant(400);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.aload(century);
+        cb.loadConstant(100);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.aload(yearOfCentury);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.loadConstant(1);
+        emitJanuaryMask(cb, marchMonth);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+        cb.astore(biasedYear);
+        emitLeapFlag(cb, biasedYear, remScratch);
+        cb.astore(leap);
+
+        // dayofyear = doy >= 306 ? doy - 305 : doy + 60 + L
+        cb.aload(rem);
+        cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+        cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS);
+        cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+        cb.astore(mask);
+
+        cb.aload(rem);
+        cb.loadConstant(VarkaChrono.MARCH_DAY_OF_YEAR);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        cb.loadConstant(1);
+        cb.aload(leap);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+
+        cb.aload(rem);
+        cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS - 1);
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+        cb.aload(mask);
+        cb.invokevirtual(INT_VECTOR, "blend", BLEND);
       }
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
@@ -2244,6 +2298,79 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(12);
     emitJanuaryMask(cb, marchMonth);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+  }
+
+  /**
+   * Leaves the mask of lanes whose reported (January-based) year is a leap year -
+   * {@link VarkaChrono#isLeapYear}'s lane-wise twin, two round-down magic-multiply modulo
+   * tests over a year biased non-negative, rather than a shortcut off
+   * {@code yearOfCentury}/{@code century}: that shortcut is tempting but wrong at the century
+   * and era boundaries, where the reported year has already rolled over relative to those
+   * intermediates. Tasks 35 and 37 call this too, so it is written to be called rather than
+   * inlined.
+   *
+   * <p>Both magics are round-down, so the quotient can undershoot by one and the remainder
+   * they leave is either the true one or the true one plus the divisor - which is why each
+   * test below is "remainder is 0 or the divisor" rather than a single {@code == 0}.
+   *
+   * @param biasedYear a slot holding the plain reported year on entry; overwritten with the
+   *     biased year, since the biased value is read five times below.
+   * @param remScratch a scratch slot for a remainder that is read twice.
+   */
+  private static void emitLeapFlag(CodeBuilder cb, int biasedYear, int remScratch) {
+    cb.aload(biasedYear);
+    cb.loadConstant(VarkaChrono.LEAP_YEAR_BIAS);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(biasedYear);
+
+    // by4 = (biasedYear & 3) == 0
+    cb.aload(biasedYear);
+    cb.loadConstant(3);
+    cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+
+    // not(by100), by100 = mod(biasedYear, 100) in {0, 100}
+    cb.aload(biasedYear);
+    cb.aload(biasedYear);
+    emitMagic(cb, VarkaChrono.LEAP_CENTURY_M, VarkaChrono.LEAP_CENTURY_K);
+    cb.loadConstant(100);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(remScratch);
+    cb.aload(remScratch);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.aload(remScratch);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(100);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+
+    // by400 = mod(biasedYear, 400) in {0, 400}
+    cb.aload(biasedYear);
+    cb.aload(biasedYear);
+    emitMagic(cb, VarkaChrono.LEAP_ERA_M, VarkaChrono.LEAP_ERA_K);
+    cb.loadConstant(400);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(remScratch);
+    cb.aload(remScratch);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.aload(remScratch);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(400);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+
+    // leap = by4 & (not(by100) | by400)
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
   }
 
   /**

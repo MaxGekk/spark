@@ -53,7 +53,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     // and an oracle that restates the implementation checks nothing. DateTimeUtils.getQuarter
     // is the first form, so it is the definition this must be held to.
     new Fields(date.getYear, date.getMonthValue, date.getDayOfMonth,
-      date.get(IsoFields.QUARTER_OF_YEAR))
+      date.get(IsoFields.QUARTER_OF_YEAR), date.getDayOfYear)
   }
 
   /**

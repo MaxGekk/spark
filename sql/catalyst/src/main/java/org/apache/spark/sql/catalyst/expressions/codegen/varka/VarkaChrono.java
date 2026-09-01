@@ -154,16 +154,80 @@ public final class VarkaChrono {
   /** The day of the March-based year on which January arrives, and the year number turns. */
   public static final int MARCH_YEAR_JANUARY = 10;
 
+  // --- The January-based day of year, and the leap flag it needs (task 34) ------------------
+
   /**
-   * The four calendar fields one decomposition yields, in the order the emitter's per-field
+   * Days from 1 March to 31 December: the March-based day of year at or past which a date has
+   * rolled into January of the reported year. {@link #fromEra}'s {@code dayOfYear} is
+   * March-based ({@code 0} is 1 March); past this threshold it converts to the January-based
+   * day of year by subtracting {@code MARCH_TO_JANUARY_DAYS - 1}.
+   */
+  public static final int MARCH_TO_JANUARY_DAYS = 306;
+
+  /**
+   * The January-based day of year of 1 March in a common year ({@code 31 + 28 + 1}). A leap
+   * year adds one, because its extra day (29 February) falls before March.
+   */
+  public static final int MARCH_DAY_OF_YEAR = 60;
+
+  /**
+   * The bias added to the reported year before testing its leap-ness with the two magic
+   * multiplies below - a multiple of 400, so leapness is unchanged, and large enough that
+   * {@code year - 1} stays non-negative at the bottom of the range {@link #narrowed} covers
+   * (needed by {@code weekofyear}, task 37).
+   */
+  public static final int LEAP_YEAR_BIAS = 13200;
+
+  /**
+   * {@code floor(2^22 / 100)}, round-down so the quotient never overestimates. The biggest
+   * biased year this file computes over is 46334, and {@code 46334 * M < 2^31} is what bounds
+   * {@code k} at 22 here - one bit more and the product overflows, the same constraint every
+   * other division in this class respects. Round-down means the quotient can undershoot by
+   * one, so {@link #isLeapYear} tests the remainder against both {@code 0} and {@code 100}
+   * rather than folding a correction step into a value nothing else here needs.
+   */
+  public static final int LEAP_CENTURY_M = 41943;
+
+  /** The shift paired with {@link #LEAP_CENTURY_M}. */
+  public static final int LEAP_CENTURY_K = 22;
+
+  /**
+   * {@code floor(2^24 / 400)} - equal to {@link #LEAP_CENTURY_M} because 400 is 100 times 4 and
+   * this shift is two more, which cancels exactly. Named separately anyway: the two divisions
+   * are independent, and a future re-derivation of one must not assume the other stays in sync.
+   */
+  public static final int LEAP_ERA_M = 41943;
+
+  /** The shift paired with {@link #LEAP_ERA_M}. */
+  public static final int LEAP_ERA_K = 24;
+
+  /**
+   * Whether {@code year} (proleptic Gregorian, as {@link Fields#year} reports it) is a leap
+   * year, computed the way the emitter does: two round-down magic-multiply modulo tests over a
+   * biased, non-negative year, rather than a shortcut off {@code yearOfCentury}/{@code century}
+   * - which is tempting but goes wrong at the century and era boundaries, where the reported
+   * year has already rolled over relative to those intermediates.
+   */
+  public static boolean isLeapYear(int year) {
+    int biased = year + LEAP_YEAR_BIAS;
+    int r100 = biased - ((biased * LEAP_CENTURY_M) >>> LEAP_CENTURY_K) * 100;
+    boolean by100 = r100 == 0 || r100 == 100;
+    int r400 = biased - ((biased * LEAP_ERA_M) >>> LEAP_ERA_K) * 400;
+    boolean by400 = r400 == 0 || r400 == 400;
+    return (biased & 3) == 0 && (!by100 || by400);
+  }
+
+  /**
+   * The five calendar fields one decomposition yields, in the order the emitter's per-field
    * tails branch off the shared work.
    *
    * @param year the proleptic Gregorian year, as {@code java.time.LocalDate#getYear} gives it.
    * @param month 1-12.
    * @param dayOfMonth 1-31.
    * @param quarter 1-4.
+   * @param dayOfYear the January-based day of year, 1-365 or 1-366.
    */
-  public record Fields(int year, int month, int dayOfMonth, int quarter) {}
+  public record Fields(int year, int month, int dayOfMonth, int quarter, int dayOfYear) {}
 
   /** Whether {@link #narrowed} is defined for {@code days} - the guard the emitted kernel
    * evaluates per lane when the narrowed lowering is in use. */
@@ -221,6 +285,9 @@ public final class VarkaChrono {
     int year = 400 * era + 100 * century + yearOfCentury
         + (marchMonth >= MARCH_YEAR_JANUARY ? 1 : 0);
     int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;
-    return new Fields(year, month, dayOfMonth, quarter);
+    int januaryDayOfYear = dayOfYear >= MARCH_TO_JANUARY_DAYS
+        ? dayOfYear - (MARCH_TO_JANUARY_DAYS - 1)
+        : dayOfYear + MARCH_DAY_OF_YEAR + (isLeapYear(year) ? 1 : 0);
+    return new Fields(year, month, dayOfMonth, quarter, januaryDayOfYear);
   }
 }

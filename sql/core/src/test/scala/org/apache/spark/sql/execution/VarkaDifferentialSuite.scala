@@ -454,7 +454,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     try {
       checkDifferential(spark, varkaSpark,
         "SELECT year(d) AS a, month(d) AS b, dayofmonth(d) AS c, quarter(d) AS e, " +
-          "year(date_add(d, 1)) AS f FROM varka_cal ORDER BY a, b, c, e, f",
+          "dayofyear(d) AS g, year(date_add(d, 1)) AS f FROM varka_cal " +
+          "ORDER BY a, b, c, e, g, f",
         expectFused = true)
       // EXTRACT desugars to the same nodes, so it must fuse the same way.
       checkDifferential(spark, varkaSpark,
@@ -593,8 +594,10 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       session.catalog.cacheTable("varka_far")
     }
     try {
-      // 20 million days past 9999-12-31 is year ~64750, well outside the range.
-      val q = "SELECT year(date_add(d, 20000000)) AS a FROM varka_far ORDER BY a"
+      // 20 million days past 9999-12-31 is year ~64750, well outside the range. dayofyear
+      // rides the same emitChrono guard as year, so one query proves both share it correctly.
+      val q = "SELECT year(date_add(d, 20000000)) AS a, " +
+        "dayofyear(date_add(d, 20000000)) AS b FROM varka_far ORDER BY a, b"
       val expected = spark.sql(q)
       val actual = varkaSpark.sql(q)
       val plan = actual.queryExecution.executedPlan

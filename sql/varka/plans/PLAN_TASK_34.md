@@ -138,5 +138,63 @@ include the `date_add` push-past-the-range case task 26 added.
 
 ## 7. Outcome
 
-Filled in when the work lands, including which steps of this recipe turned out
-to be wrong or unclear. That record is worth as much as the feature.
+Built as planned: `VarkaVectorIR.DayOfYear`, wired through the five emitter
+switches and `emitChrono`'s tail switch, a `VarkaExpressionCompiler` arm, and
+tests in all four files section 4 named. This worktree was branched directly
+off `master` (post PR #60, which already carries task 26) rather than off a
+merged task 33 - task 33 was still sitting in its own unmerged worktree at the
+time, so this task never saw `NextDay` or the `LANEWISE_UNARY` descriptor
+`PLAN_TASK_33.md` section 3 mentions. That is not a deviation: the "follow
+section 3 for the mechanics" pointer is about the shape of the edit (five
+switches, a compiler arm, two pinned fixtures), which does not depend on
+`NextDay` existing.
+
+**One step in this recipe was wrong, and it was a real defect, not a
+clarity problem.** Section 2.1's leap-flag constants (`M=167773` at `k=24`
+for mod 100, `k=26` for mod 400) are exact only under unbounded-precision
+arithmetic. They silently violate the `v * M < 2^31` no-overflow bound this
+very file's own opening javadoc derives and every other magic in it respects:
+at the covered range's top (biased year 46334), `46334 * 167773 ~ 7.77e9` -
+over three and a half times past `2^31`. `plans/verify_chrono_tails.py`'s
+`mod_magic` helper never caught this because Python integers do not overflow,
+so the script confirmed the formula was mathematically exact without ever
+computing what a 32-bit lane multiply actually produces. `VarkaChronoSuite`'s
+boundary/random sweep did catch it - `Fields[year=14500, ..., dayOfYear=280]`
+against `LocalDate`'s `279` on day 4576767 - because that suite's oracle is
+`LocalDate` compared against `VarkaChrono`'s own Java arithmetic, which is
+genuine `int` arithmetic and genuinely overflows where the constant is wrong.
+
+The fix: round-down magic constants that respect the bound (`M=41943` at
+`k=22` for mod 100, `k=24` for mod 400 - equal by construction, since
+`400 = 100 * 4` and `k` is two higher, which cancels exactly). Round-down
+means the quotient can undershoot by one, so unlike a same-shape `== 0` test
+the corrected form checks the remainder against **both** `0` and the divisor
+(`r == 0 || r == d`), the same "round-down plus one correction" idiom
+`emitCarry`/`CENTURY_M` already use elsewhere in this file, adapted to a
+modulo test rather than a quotient one. Verified over the full covered range
+(years -12800..33134) against the reference leap rule with a Python
+simulation of true 32-bit truncating multiplication, not the unbounded
+arithmetic the first pass trusted - zero mismatches.
+
+That fix needed **one more scratch slot than the plan anticipated**: nine
+int-vector chrono temporaries, not eight. Section 3 said "one more slot for
+the biased year"; the corrected leap test also needs a slot to hold each
+remainder across its two-way equality check, since it is read twice.
+
+Everything else held exactly as written: the `doy >= 306 ? doy - 305 :
+doy + 60 + L` formula, `MARCH_TO_JANUARY_DAYS = 306` and
+`MARCH_DAY_OF_YEAR = 60`, and the "do not hoist the leap flag into
+`emitChrono`'s main body" instruction - `emitLeapFlag` is a private helper
+called only from `DayOfYear`'s case, ready for tasks 35 and 37 to call but
+not forced on `Year`/`Month`/`DayOfMonth`/`Quarter`.
+
+**Pinned values moved**, both re-pinned here as the update rule requires:
+`VarkaLoopEmitterSuite`'s line map key (line 21 `(dayOfYear 1)` inserted, the
+`if`'s line moving 25 -> 27) and `VarkaShapeCacheSuite`'s shape hash,
+`041e35db20d62e91` -> `e8314287849e8cf8`.
+
+**Final state**: 94 catalyst / 127 sql-core Varka tests green at both vector
+widths, `catalyst/doc`, `dev/lint-java` and `dev/scalastyle` all pass, no
+non-ASCII/no TODO/no line over 100 characters in any changed file. No
+committed benchmark number moved (none was expected to: `dayofyear` adds a
+node type and shares the existing shape's guard, touching no existing shape).
