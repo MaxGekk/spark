@@ -479,8 +479,8 @@ win rather than as a reversal of its sign.
 
 ### What does not fix the 128-bit mode, measured
 
-Five hypotheses were tested against the bimodality, because a 1.5x win that the
-narrow-vector shape cannot reach is what decides step B's scope. All five
+Six hypotheses were tested against the bimodality, because a 1.5x win that the
+narrow-vector shape cannot reach is what decides step B's scope. All six
 failed, and they are recorded so nobody pays for them twice.
 
 1. **Shorter live ranges.** `ChronoVectorOps.vectorFourFieldsShortLive` is the
@@ -538,10 +538,33 @@ failed, and they are recorded so nobody pays for them twice.
    wide, which is worth knowing before anyone proposes unrolling as the answer
    for a large kernel.
 
-Across all these configurations the shared kernel was measured 17 times at
+6. **Buffer alignment**, the one hypothesis that came with outside evidence and
+   still failed. JDK-8380195, "Vector API produces bimodal performance -
+   nondeterministic C2 intrinsification across JVM forks", reports this exact
+   shape - roughly 2x, across identically configured JVM forks, on
+   `IntVector.SPECIES_256` - and was closed **Not an Issue** in April 2026 with
+   the diagnosis that the array "is not always aligned, and so sometimes one
+   gets fast performance (when aligned), sometimes slow performance (when
+   misaligned)". `VarkaEmitterParityBenchmark` allocates every buffer at
+   **8-byte** alignment, under the 16-byte vector width at 128-bit and far under
+   64 for AVX-512; chunk offsets advance by 4096 rows, i.e. 16384 bytes, so the
+   base address is the only thing that varies between runs. Raising every
+   allocation to 64 bytes: three 128-bit runs at 164.0, 164.6 and 165.5, **all
+   slow, none fast**, and one AVX-512 run at 709.1 against a 462.3 baseline,
+   ratio 1.53x - every figure inside the existing spread at both widths.
+   The result refutes the hypothesis in the informative direction: if alignment
+   were the cause, pinning it at 64 bytes should have pinned the *fast* mode,
+   not the slow one. It also says Varka's 8-byte allocations are costing nothing
+   measurable, so the change was reverted rather than committed - it would move
+   no number while forcing another parity regeneration. If a future task
+   regenerates that file anyway, raising the alignment is a free tidy-up.
+
+Across all these configurations the shared kernel was measured 21 times at
 128-bit and landed the fast mode 4 times, with no configuration making either
 mode deterministic and none shifting the distribution enough to call from four
-successes. Whatever picks the mode is inside C2's code generation for this body
+successes. The bimodality affects only the shared kernel: the four-node
+baseline it is measured against sat between 126 and 130 ms in every one of
+those runs, fast mode or slow. Whatever picks the mode is inside C2's code generation for this body
 and is not reachable from any of these levers.
 
 Two things follow. First, **a JVM flag was never going to be the answer anyway**:

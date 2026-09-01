@@ -305,7 +305,21 @@ apparent small wins turned out to be noise.
   loop, so a scalar calendar loop measured in a microbenchmark is far faster than
   the same code inside a query - task 26 predicted 15-30x over it and measured 3.7x.
 
-- `VectorOperators` has no multiply-high on any lane type, so full-range
+- `VectorOperators` has no multiply-high on any lane type, and there is no sign that it
+  will get one soon, so do not design around its arrival. Checked against JDK 25 (`javap`
+  on `jdk.incubator.vector.VectorOperators`: `MUL` is the only multiply) and against
+  openjdk/jdk master (code search for `MUL_HIGH` and `VECTOR_OP_MULHI`: no hits). C2 does
+  have the operation internally - `MulHiLNode`/`UMulHiLNode` in `opto/mulnode.hpp`, used by
+  `divnode.cpp` to lower scalar division by a constant and by the `Math.multiplyHigh`
+  intrinsics, plus `MulHiLoLNode` for the fused 64x64-to-128 form - it is simply not exposed
+  lanewise. The nearest request is JDK-8219881, "[vector] Optimized 32-to-64 bit vectorized
+  multiply": an Enhancement, still Open, P4, filed February 2019, last touched October 2024,
+  with `fixVersion` `repo-panama` rather than any release. The API does accept new integer
+  ops when someone drives them - JDK-8338352 delivered `SADD`/`SSUB`/`SUADD`/`SUSUB`,
+  `UMIN`/`UMAX` and the unsigned comparisons, all present in JDK 25 - so an RFE backed by a
+  concrete workload is a real option, but it is a contribution to make, not a dependency to
+  plan against.
+- Because of that, full-range
   Granlund-Montgomery magic division is not expressible on int lanes - but a
   *range-narrowed* magic is: shrink the value first until the correctness condition
   (`v * e < 2^k`) and the no-overflow condition (`v * M < 2^31`) both fit in the low
