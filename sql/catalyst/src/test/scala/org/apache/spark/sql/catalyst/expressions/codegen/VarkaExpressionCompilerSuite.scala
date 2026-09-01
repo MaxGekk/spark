@@ -18,10 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.types.{DateType, IntegerType, StringType, TimestampType}
 
 /**
@@ -179,6 +179,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       new IRDayOfMonth(new ColumnRef(0)),
       new IRQuarter(new AddDays(new ColumnRef(0), new LiteralSlot(0)))))
     assert(compiled.outputTypes === Seq(IntegerType, IntegerType, IntegerType, IntegerType))
+  }
+
+  test("task 36: last_day compiles with a DateType output, unlike its four siblings") {
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(LastDay(d))), childOutput).get
+    assert(compiled.outputs === Seq(new IRLastDay(new ColumnRef(0))))
+    assert(compiled.outputTypes === Seq(DateType))
   }
 
   test("task 26 declines: year over a timestamp, which the analyzer casts") {

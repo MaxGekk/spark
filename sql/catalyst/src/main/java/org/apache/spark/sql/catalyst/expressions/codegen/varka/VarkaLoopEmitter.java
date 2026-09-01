@@ -51,6 +51,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Gre
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LastDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
@@ -639,6 +640,7 @@ public final class VarkaLoopEmitter {
       case Month n -> new VarkaVectorIR[] {n.days()};
       case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
       case Quarter n -> new VarkaVectorIR[] {n.days()};
+      case LastDay n -> new VarkaVectorIR[] {n.days()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IfElse n -> new VarkaVectorIR[] {n.cond(), n.thenNode(), n.elseNode()};
@@ -856,6 +858,7 @@ public final class VarkaLoopEmitter {
         case Month n -> analyzeOp(node, false, n.days());
         case DayOfMonth n -> analyzeOp(node, false, n.days());
         case Quarter n -> analyzeOp(node, false, n.days());
+        case LastDay n -> analyzeOp(node, false, n.days());
         case Greatest n -> analyzeOp(node, true, n.left(), n.right());
         case Least n -> analyzeOp(node, true, n.left(), n.right());
         case IfElse n -> analyzeOp(node, true, n.cond(), n.thenNode(), n.elseNode());
@@ -1137,6 +1140,7 @@ public final class VarkaLoopEmitter {
       case Month n -> s.wordRef.get(n.days());
       case DayOfMonth n -> s.wordRef.get(n.days());
       case Quarter n -> s.wordRef.get(n.days());
+      case LastDay n -> s.wordRef.get(n.days());
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
@@ -1782,6 +1786,11 @@ public final class VarkaLoopEmitter {
         line(cb, analysis, node);
         emitChrono(cb, node, dense, analysis, s);
       }
+      case LastDay n -> {
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        emitChrono(cb, node, dense, analysis, s);
+      }
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
       case Least n -> emitPick(cb, n, n.left(), n.right(), "min", dense, analysis, s,
@@ -2158,8 +2167,159 @@ public final class VarkaLoopEmitter {
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
         emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
       }
+      case LastDay n -> {
+        // last_day = d + length - dom, where length is the March-based month's own length
+        // and dom is the day of month DayOfMonth's own tail already computes (task 36).
+        //
+        // era, century, yearOfCentury and mask are all dead once the reported year below is
+        // formed, so this tail reuses their locals rather than asking planSlots for more: era
+        // becomes the leap flag's biased year, century and yearOfCentury are emitLeapFlag's
+        // own scratch and then become cumMp and dom in turn, mask is emitLeapFlag's carry
+        // scratch, and leap - unused by every other tail - holds the leap flag itself. days
+        // and marchMonth are read, never overwritten - the four existing tails need them
+        // untouched, and days is still needed for the final sum below.
+
+        // Reported year, biased by +13200 (a multiple of 400, so leapness is unchanged) here
+        // rather than inside emitLeapFlag, so no extra local is needed for the unbiased value.
+        cb.aload(era);
+        cb.loadConstant(400);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.aload(century);
+        cb.loadConstant(100);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.aload(yearOfCentury);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.loadConstant(1);
+        emitJanuaryMask(cb, marchMonth);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+        cb.loadConstant(13200);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        cb.astore(era);
+        emitLeapFlag(cb, era, century, yearOfCentury, mask, leap);
+
+        // cumMp = (153 * mp + 2) / 5, the linear form DayOfMonth's own tail uses; then
+        // dom = doy - cumMp + 1, the same value DayOfMonth returns.
+        cb.aload(marchMonth);
+        cb.loadConstant(153);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.loadConstant(2);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
+        cb.astore(century);
+        cb.aload(rem);
+        cb.aload(century);
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+        cb.loadConstant(1);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        cb.astore(yearOfCentury);
+
+        // last_day = days + length - dom, length = mp < 11 ? cum(mp + 1) - cum(mp) : 28 + L.
+        // The linear form only models March through January (mp 0..10); February (mp 11) is
+        // the year's last month and carries the leap day, so it is the one branch that needs
+        // the flag above rather than the formula.
+        cb.aload(days);
+        cb.aload(marchMonth);
+        cb.loadConstant(153);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.loadConstant(155);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
+        cb.aload(century);
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+        cb.aload(s.species);
+        cb.loadConstant(28);
+        cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+        cb.loadConstant(1);
+        cb.aload(leap);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+        cb.aload(marchMonth);
+        cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+        cb.loadConstant(11);
+        cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+        cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+        cb.aload(yearOfCentury);
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+      }
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
+  }
+
+  /**
+   * Leaves, in {@code mask}, whether the already-biased year in {@code y} is a leap year:
+   * {@code ((y & 3) == 0) && (y % 100 != 0 || y % 400 == 0)}.
+   *
+   * <p>Each {@code %} is a round-down magic - {@code M = 41943}, {@code k = 22} for 100 and
+   * {@code k = 24} for 400 - followed by {@link #emitCarry}'s usual one-step correction, the
+   * same shape every large division in {@link #emitChronoPrefix}'s prefix already takes. An
+   * exact one-shot magic (no correction) was tried first and is wrong: over this method's
+   * range an exact pair would need {@code M} close to the divisor itself, and
+   * {@code M * (y_max)} then overflows the signed 32-bit product a vector lane multiply
+   * produces - {@code 199728 * 167773} silently wraps and gives the wrong quotient, a bug
+   * this method shipped with once and {@code ProbeLastDay}-style exhaustive sweeping over
+   * every day the covered range holds is what caught it. {@code M = 41943} keeps the largest
+   * product, {@code 46334 * 41943}, under {@code 2^31}; the pair, its correction bound and
+   * the resulting quotient and remainder were verified exhaustively over {@code y} in
+   * {@code [0, 46334]} - the covered range's full width after the bias below - before being
+   * written here, zero mismatches, correction never more than one step.
+   *
+   * <p>{@code y} must already be biased non-negative by the caller - every caller of this
+   * shares one bias, +13200, a multiple of 400 so leapness is unchanged - because the magic
+   * form requires it and callers three tasks apart biasing by three different amounts would be
+   * three chances to get one of them wrong. {@code q}, {@code r} and {@code carryMask} are
+   * int-vector (the first two) and mask locals live only inside this method and dead on
+   * return; {@code mask} is the sole output.
+   */
+  private static void emitLeapFlag(CodeBuilder cb, int y, int q, int r, int carryMask,
+      int mask) {
+    // q = (y * 41943) >>> 22, r = y - q * 100, corrected; mask = r != 0.
+    cb.aload(y);
+    emitMagic(cb, 41943, 22);
+    cb.astore(q);
+    cb.aload(y);
+    cb.aload(q);
+    cb.loadConstant(100);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(r);
+    emitCarry(cb, q, r, 100, carryMask);
+    cb.aload(r);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+    cb.astore(mask);
+
+    // q = (y * 41943) >>> 24, r = y - q * 400, corrected; mask |= r == 0.
+    cb.aload(y);
+    emitMagic(cb, 41943, 24);
+    cb.astore(q);
+    cb.aload(y);
+    cb.aload(q);
+    cb.loadConstant(400);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(r);
+    emitCarry(cb, q, r, 400, carryMask);
+    cb.aload(r);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.aload(mask);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.astore(mask);
+
+    // mask &= (y & 3) == 0
+    cb.aload(y);
+    cb.loadConstant(3);
+    cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.aload(mask);
+    cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+    cb.astore(mask);
   }
 
   /**

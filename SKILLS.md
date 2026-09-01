@@ -291,6 +291,28 @@ apparent small wins turned out to be noise.
   made the rest exact was *restructuring* - splitting an era into centuries first
   drops the `/365` dividend from 146096 to 36524, under the bound. Reach for a
   different decomposition before reaching for more carries.
+- **The `v * M < 2^31` bound is easy to check for the wrong variable and still
+  ship.** Both `PLAN_TASK_34.md`'s leap-flag derivation and, independently,
+  task 36's own local copy of it picked `M = 167773` for `/100` and `/400` by
+  reasoning about the divisor rather than checking the bound against the actual
+  dividend range: the biased year climbs to 46334 over the covered range, and
+  `46334 * 167773` is over three and a half times past `2^31`, so a lane's
+  signed 32-bit multiply wraps and the shifted quotient is silently wrong past
+  roughly year 12400. No boundary list either task's differential used - 1900,
+  2000, 2100, 2400, the usual century years - reaches that far, so the bug
+  shipped past every targeted test both times; only an **exhaustive sweep of
+  the real emitted kernel over the whole covered range** (16,777,216 days,
+  seconds of wall time at these widths) found it, on the first and only day it
+  could show up. The fix both times was the same round-down-plus-one-carry
+  shape the paragraph above already prescribes for a large divisor
+  (`M = 41943` at `k = 22`/`24`, the largest product `46334 * 41943` safely
+  under `2^31`). The generalizable lesson: when a magic pair is *derived* by
+  hand rather than found by the kind of exhaustive search
+  `verify_long_lane_magic.py` runs, checking `M * dividend_max < 2^31` is a
+  five-second arithmetic check worth doing explicitly before trusting the
+  derivation's own prose - and an opt-in exhaustive sweep against the emitted
+  kernel, not a curated boundary list, is what actually catches it if that
+  check is skipped or miscounted.
 - Those carries are not free, and the reason is the masked ops in them. Task 26
   predicted that its full-range variant would cost 5-12% over its narrowed one on
   op count alone (five ops on forty) and measured 14-24%: the five extra ops are

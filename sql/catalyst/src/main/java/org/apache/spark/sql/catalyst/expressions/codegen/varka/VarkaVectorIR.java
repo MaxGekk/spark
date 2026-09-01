@@ -190,7 +190,8 @@ public sealed interface VarkaVectorIR
    * makes every exhaustive switch in {@link VarkaLoopEmitter} a compile error until it is
    * handled, which is the same protection {@link Cond} gives the condition nodes.
    */
-  sealed interface Chrono extends VarkaVectorIR permits Year, Month, DayOfMonth, Quarter {}
+  sealed interface Chrono extends VarkaVectorIR
+      permits Year, Month, DayOfMonth, Quarter, LastDay {}
 
   /**
    * Spark's {@code year} (task 26): the proleptic Gregorian year of a date, as
@@ -216,6 +217,13 @@ public sealed interface VarkaVectorIR
 
   /** Spark's {@code quarter}, 1-4 - the month's own division by three; see {@link Year}. */
   record Quarter(VarkaVectorIR days) implements Chrono {}
+
+  /**
+   * Spark's {@code last_day} (task 36): the last date of the month {@code days} falls in - a
+   * {@link org.apache.spark.sql.types.DateType} output, unlike {@link Year}'s three siblings,
+   * which all return an int. See {@link Year} for what a chrono node costs and why.
+   */
+  record LastDay(VarkaVectorIR days) implements Chrono {}
 
   /**
    * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is
@@ -256,6 +264,7 @@ public sealed interface VarkaVectorIR
       case Month n -> "(month " + canonical(n.days()) + ")";
       case DayOfMonth n -> "(dayOfMonth " + canonical(n.days()) + ")";
       case Quarter n -> "(quarter " + canonical(n.days()) + ")";
+      case LastDay n -> "(lastDay " + canonical(n.days()) + ")";
     };
   }
 
@@ -313,6 +322,7 @@ public sealed interface VarkaVectorIR
       case Month n -> "(month " + lineOf.applyAsInt(n.days()) + ")";
       case DayOfMonth n -> "(dayOfMonth " + lineOf.applyAsInt(n.days()) + ")";
       case Quarter n -> "(quarter " + lineOf.applyAsInt(n.days()) + ")";
+      case LastDay n -> "(lastDay " + lineOf.applyAsInt(n.days()) + ")";
     };
   }
 }

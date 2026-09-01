@@ -105,4 +105,67 @@ Task 33's section 4, unchanged.
 
 ## 7. Outcome
 
-Filled in when the work lands, including which steps of this recipe misled you.
+Built as the recipe described - `LastDay` copying `Quarter`'s shape, the four
+routine emitter cases, the tail inside `emitChrono`'s switch - with one
+addition the recipe did not anticipate: task 34 had not landed, so
+`emitLeapFlag` was written locally, per the recipe's own opening
+dependency note.
+
+**The escape hatch's own caveat ("write it here instead") did not save this
+from the bug it was trying to prevent.** This recipe's leap-flag derivation
+(section 2.1 was actually inherited from `PLAN_TASK_34.md` section 2.1, quoted
+into this file's own section 2 by reference rather than copied) names
+`M = 167773` at `k = 24`/`26` for `/100` and `/400`, calling `y`'s bound of
+46334 "well inside both bounds." It is not: `46334 * 167773` is over three and
+a half times past `2^31`, so a vector lane's signed 32-bit multiply wraps, and
+`(y * M) >>> k` returns a wrong quotient for every biased year past roughly
+25600 (year 12400) - silently, since the arithmetic never traps. The
+differential's own boundary list (1900, 2000, 2100, 2400, and the century
+years already in `PLAN_TASK_26.md`'s set) all sit under that threshold, so
+nothing short of an exhaustive sweep or a deliberately-chosen far-future date
+would have caught it; `ProbeLastDay`, a throwaway sweep of the whole covered
+range through the real emitted kernel (16,777,216 days), found one mismatch at
+day 4576527 (+14500-02-08) and none anywhere else. That sweep is now the
+permanent opt-in test in section 4's list, specifically because a bounded
+boundary list is what missed this the first time.
+
+The fix is the standard one this codebase already uses for every other large
+division in `emitChrono` - round-down magic plus one `emitCarry` correction,
+not an exact one-shot magic: `M = 41943` at `k = 22` for `/100` and `k = 24`
+for `/400`, chosen so the largest product (`46334 * 41943 = 1,943,386,962`)
+stays under `2^31`, and exhaustively verified (zero mismatches, correction
+never more than one step) over every `y` in `[0, 46334]` before being written
+into `emitLeapFlag`.
+
+**This was already found and already fixed on task 34's own branch (PR #64),
+independently, before this task started - its `PLAN_TASK_34.md` (unmerged)
+carries a fuller account in its own section 7, and its shipped
+`VarkaChrono.LEAP_CENTURY_M`/`LEAP_ERA_M` are `41943` at `22`/`24`, the exact
+pair this task re-derived from scratch.** The version of `PLAN_TASK_34.md` on
+`master` - what this task actually read, since task 34 has not merged - still
+carries the disproven `167773` derivation; PR #64 will correct it, so no
+edit is made to that file from here to avoid fighting that PR's own, more
+complete rewrite of the same section. Two things follow for whoever merges
+both:
+
+1. **`VarkaLoopEmitter.emitLeapFlag`, written independently by both tasks,
+   will very likely collide by name and signature once both branches meet.**
+   Whichever of #64 and this task's PR merges second should delete its own
+   copy and either call the other's or confirm they are identical (they use
+   the same constants and the same round-down-plus-carry shape, so they
+   should be) rather than leaving two copies to drift.
+2. **The stale `167773` text should not survive into whichever `PLAN_TASK_34.md`
+   lands last** - PR #64's own version already fixes it; if this task's branch
+   is what ends up merged into the shared plan history first for some reason,
+   its `PLAN_TASK_34.md` copy needs the same correction PR #64 already has.
+
+`SKILLS.md` gains the general lesson (a magic-multiply-then-shift pair can
+overflow a 32-bit lane at the top of its range even when a derivation claims
+otherwise, and only an exhaustive sweep against the real emitted kernel is
+proof) - found independently twice now, which is exactly the signal that it
+belongs there rather than in a second task-plan footnote.
+
+No other step of this recipe misled: `LastDay`'s IR shape, the four routine
+emitter cases, the `blend`-based length selection and the reuse of `century`
+and `yearOfCentury` as scratch all worked as designed on the first pass once
+the leap flag itself was correct.
