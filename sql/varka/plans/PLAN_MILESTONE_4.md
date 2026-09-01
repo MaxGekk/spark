@@ -352,8 +352,8 @@ unmasked `DIV`, not to leave the choice open each time.
 ### 2.9 One decomposition, several fields (task 32, from the debt register)
 
 Added after task 26 measured what its own design cost, which is the only
-reason it is here: `SELECT year(d)` runs at 1791 M rows/s and
-`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 450 - 4.0x for four
+reason it is here: `SELECT year(d)` runs at 1797 M rows/s and
+`SELECT year(d), month(d), dayofmonth(d), quarter(d)` at 435 - 4.1x for four
 fields, which is near enough to 4x that nothing is being shared but the column
 load and the loop control.
 
@@ -371,8 +371,8 @@ emitted bytecode, invisible to the walk that would share them.
 computing all four fields from one decomposition, against the 441 M rows/s the
 four separate nodes reach, at both widths. That gate exists because task 17
 already measured the opposite of the obvious answer: raising `GROUP_BUDGET` so
-two outputs could keep their cross-output CSE in one method *lost*, 4194.9
-against 3042.5 M rows/s in the current committed parity file, because the wider
+two outputs could keep their cross-output CSE in one method *lost*, 4494.0
+against 3044.7 M rows/s in the current committed parity file, because the wider
 method's register pressure cost more
 than recomputing the shared ops. Here the shared work is ~45 ops rather than
 eight, but five values would have to stay live across four output tails, so the
@@ -431,9 +431,9 @@ the same `eachChunk` walk as the case it sits beside:
 
 | | AVX-512 (M rows/s) | 128-bit (M rows/s) |
 |---|---|---|
-| four separate emitted nodes | 450.4, 448.8 | 154.1 to 157.6 over five runs |
-| shared decomposition, hand-written | **692.4, 678.8** | 165.6 to 167.0, and once 236.1 |
-| ratio | **1.54x, 1.51x** | 1.06x, and once 1.50x |
+| four separate emitted nodes | 450.4, 448.8, 435.1 | 154.1 to 157.6 over five runs |
+| shared decomposition, hand-written | **692.4, 678.8, 661.7** | 165.6 to 167.0, once 236.1 |
+| ratio | **1.54x, 1.51x, 1.52x** | 1.06x, once 1.50x |
 
 So sharing is worth about **1.5x at AVX-512**, reproducibly, and is a **wash at 128-bit** -
 four of five runs at 1.06x, one at 1.50x, with zero stdev inside each run and 42% between
@@ -915,14 +915,14 @@ rewritten in the past tense with what the sweep found, never deleted.
   other way and had to be redone. A calendar field is ~50 vector ops, ~45 of which are the
   shared civil-from-days prefix and ~5 the field's own tail; four fields therefore cost
   ~200 ops as four independent nodes against ~65 shared, a saving of ~135 ops. The
-  hand-written ceiling kernel that prices that saving reaches 692.4 and 678.8 M rows/s
-  against the four emitted nodes' 450.4 and 448.8 at AVX-512 - **1.5x** - and 165.6 to
+  hand-written ceiling kernel that prices that saving reaches 661.7 M rows/s against the
+  four emitted nodes' 435.1 in the committed parity file - **1.5x** over three runs - and 165.6 to
   167.0 against 154.1 to 157.6 at 128-bit, a wash (`ChronoVectorOps`,
   `ChronoVectorOpsTest`, sql/varka/engine). The first pass measured 225.8 for the same
   kernel and declined the task; that kernel had a 376-byte helper past C2's 325-byte
   inlining budget in its lane path, so it priced a heap allocation per lane group rather
   than the sharing. Task 17's finding (raising `GROUP_BUDGET` so two outputs could share
-  cross-output CSE in one method *lost*, 4194.9 against 3042.5 M rows/s in the current
+  cross-output CSE in one method *lost*, 4494.0 against 3044.7 M rows/s in the current
   committed results file) still holds and is visible here as the reason the win is 1.5x
   rather than the ~3x the op count alone would predict, and as the reason it disappears at
   128-bit - but it does not reverse the sign. Closing the debt needs neither a multi-value

@@ -401,10 +401,36 @@ apparent small wins turned out to be noise.
 - An op-count ratio bounds a sharing win; it does not estimate one. The same task 32
   kernel shares ~45 of each field's ~50 vector ops, so four fields cost ~200 ops separate
   against ~65 shared - a 3x op-count ratio, which was registered as a prediction of
-  2.0x-3.2x throughput. Measured: **1.51x-1.54x** at AVX-512 (692.4 and 678.8 against
-  450.4 and 448.8 M rows/s). The half that went missing is everything the model ignored -
-  four stores, four validity-bitmap read-modify-writes, the chunk prologue, loop control -
-  none of which sharing touches. Predict a bound, not a number.
+  2.0x-3.2x throughput. Measured: **1.51x-1.54x** at AVX-512 across three runs, the
+  committed parity file's being 661.7 against 435.1 M rows/s. The half that went missing is
+  everything the model ignored - four stores, four validity-bitmap read-modify-writes, the
+  chunk prologue, loop control - none of which sharing touches. Predict a bound, not a number.
+- Once a lane path has no calls left in it, `-XX:CompileCommand=inline` buys nothing, and
+  it was never a fix anyway - Spark cannot require a `CompileCommand` on a user's JVM, so a
+  flag that helped would only be a diagnostic pointing at a code change. Task 32 tested it
+  properly before concluding that: `-XX:+PrintInlining` showed the two `VarkaVectorSupport`
+  validity helpers genuinely failing to inline inside the shared loop
+  (`NodeCountInliningCutoff` on one compilation, `callee is too large` on another - 212
+  bytes of a four-arm switch on the lane width that a constant lane count would fold away),
+  and forcing them in changed nothing at either vector width. Nor did forcing every Varka
+  class (`inline,*varka*::*`). This is the third time an inlining flag has moved under 1% in
+  the catalyst parity harness while the engine's JMH harness moves 50-190% on the same flag;
+  a flag worth that much in only one harness is measuring the harness.
+- A kernel can have two stable machine-code outcomes and no reachable reason. Task 32's
+  shared kernel is bimodal at 128-bit: 121 ms or 85 ms, stdev 0 ms inside a run and 42%
+  between runs, 3 fast outcomes in 14 runs. Neither forcing inlining, nor disabling
+  on-stack replacement, nor rescheduling the body to keep fewer values live made either mode
+  deterministic or shifted the distribution. **Report both modes; never average them** - the
+  mean describes a state no run is ever in - and treat "which compilation the JVM landed on"
+  as a first-class outcome rather than as noise to be smoothed away.
+- Keeping fewer values live is not automatically faster, and the intuition is worth
+  distrusting. Task 32 built a variant of the same kernel that hoisted the year assembly so
+  three intermediates died early and stored each of four outputs the moment it existed
+  instead of all four at the end. It lost at both widths (599.6 against 661.7 M rows/s in
+  the committed parity file, 156.5 against 165.6 at 128-bit). C2's scheduler did better with
+  the wider window than with the shorter live ranges - and the losing shape is the one the
+  emitter naturally produces, which is worth knowing before assuming emitted code will match
+  a hand-written ceiling.
 - The same sharing win is width-dependent, and that is where task 17's register-pressure
   finding actually lives. At 128-bit the identical kernel is a wash: 1.06x in four runs of
   five, 1.50x in the fifth, stdev 0 ms inside each run and 42% between them - a
@@ -413,7 +439,7 @@ apparent small wins turned out to be noise.
   8 dedicated mask registers and marginally in 16 xmm that must hold masks too; C1 refuses
   the 936-byte body outright at both widths ("out of virtual registers in linear scan").
   Task 17's `GROUP_BUDGET` result (raising it to keep two outputs' cross-output CSE in one
-  method lost 4194.9 against 3042.5 M rows/s, current committed parity file) is the same
+  method lost 4494.0 against 3044.7 M rows/s, current committed parity file) is the same
   effect. It sets a ceiling on how much sharing can win; it does not decide the sign, and
   a narrow-vector measurement is not optional for anything that shares live values.
 

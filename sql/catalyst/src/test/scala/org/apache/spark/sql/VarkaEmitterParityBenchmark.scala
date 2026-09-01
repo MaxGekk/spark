@@ -421,6 +421,20 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
               require(status == 0, s"the ceiling kernel declined a batch: status $status")
             }
         }
+        // The same arithmetic and the same op count, scheduled to keep fewer values live: the
+        // year assembly hoisted so era/century/yoc die early, and each output stored as soon as
+        // it exists rather than all four at the end (which is also what emitLaneGroup does). The
+        // pair prices the schedule alone, which is what decides whether the 128-bit width can
+        // reach the win the native width gets - see PLAN_TASK_32.md section 7.
+        benchmark.addCase("year+month+day+quarter, shared decomposition (short live ranges)") {
+          _ =>
+            eachChunk { (dataOff, validityOff, n) =>
+              val status = ChronoVectorOps.vectorFourFieldsShortLive(
+                nfData.address() + dataOff, 0L, 0,
+                dstData4.map(_ + dataOff), dstValidity4.map(_ + validityOff), n)
+              require(status == 0, s"the short-live kernel declined a batch: status $status")
+            }
+        }
         // The in-harness anchors: dayofweek is the cheapest emitted date node (a 20-op vector
         // body against year's ~50), and the per-row LocalDate loop is what Spark runs today.
         benchmark.addCase("dayofweek, for scale, null-free") { _ => chunked(dow, false) }

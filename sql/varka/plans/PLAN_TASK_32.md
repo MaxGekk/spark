@@ -9,9 +9,8 @@ the measurement first and then, if it clears, builds the sharing.
 
 Section 2.9's gate was the right gate: build the ceiling before the mechanism,
 and decline the task if the ceiling is close to the 441.2 M rows/s four
-independently emitted nodes reached in the parity file as it then stood (450.4
-after this task's regeneration). The gate ran, reported 225.8, and the task was
-declined.
+independently emitted nodes reached in the parity file as it then stood. The
+gate ran, reported 225.8, and the task was declined.
 
 The kernel that produced 225.8 does not have the shape it claims. It is written
 as
@@ -49,8 +48,8 @@ Two further reasons the number is not comparable, both from the same review:
 They push in opposite directions and neither is large, but a ceiling measurement
 has to charge both sides the same things.
 
-**What the arithmetic says the answer should be.** `year` alone runs at 1791.2
-M rows/s and the four-field projection at 450.4 - a ratio of 3.98, i.e. nothing
+**What the arithmetic says the answer should be.** `year` alone runs at 1797.2
+M rows/s and the four-field projection at 435.1 - a ratio of 4.13, i.e. nothing
 is shared today beyond the column load and the loop control.
 
 **One op count, used everywhere.** A calendar field is ~50 vector ops, of which
@@ -63,15 +62,15 @@ PR #66 read those two as contradicting each other, "~45 shared ops" against
 three redundant copies a four-field projection drops. Both now say which.)
 
 If throughput tracked op count the way task 26 found it does for a single-output
-loop, the shared shape would land near 1791 x 50/65 ~ 1380 M rows/s, i.e. **3x
+loop, the shared shape would land near 1797 x 50/65 ~ 1380 M rows/s, i.e. **3x
 the four-node number** - not 0.5x. The measured 225.8 is a factor of six away
 from that, which is about what a per-lane-group heap allocation costs.
 
 Register pressure is also the wrong worry at these widths. Five int vectors and
 two masks stay live across the tails; AVX-512 has 32 zmm registers and 8 mask
 registers, 128-bit SSE has 16 xmm. Task 17's contrary result (raising
-`GROUP_BUDGET` so two outputs kept cross-output CSE *lost*, 4194.9 against
-3042.5) was a different trade: there the shared chain was eight ops, so
+`GROUP_BUDGET` so two outputs kept cross-output CSE *lost*, 4494.0 against
+3044.7) was a different trade: there the shared chain was eight ops, so
 recomputing it was nearly free and the wider method was pure cost. Here the
 shared work is ~45 ops and the tails are ~5. The ratio that decides the direction
 is shared-work to per-field-tail, and it is 9:1 here against roughly 1:1 there.
@@ -229,7 +228,7 @@ plan against real numbers.
   regenerated in the same commit as the benchmark change, as every prior commit
   touching it did.
 * `SKILLS.md` - the task-17 figures reintroduced stale (4587/3196) go back to the
-  committed parity file's current 4194.9/3042.5 - which this task's own
+  committed parity file's current 4494.0/3044.7 - which this task's own
   regeneration moves again, so both are requoted from the regenerated file, and
   `VarkaLoopEmitter`'s `GROUP_BUDGET` javadoc with them; the "ops saved" figure
   is reconciled with
@@ -305,10 +304,10 @@ iterations over two-second windows, any ratio under 1.3x re-checked by minimums:
 
 | case | shared | per-output |
 |---|---|---|
-| `year` | - | 1791.2 (committed) |
+| `year` | - | 1797.2 (committed) |
 | `year, month` | new | new |
 | `year, month, dayofmonth` | new | new |
-| `year, month, dayofmonth, quarter` | new | 450.4 (committed) |
+| `year, month, dayofmonth, quarter` | new | 435.1 (committed) |
 | four fields, mixed nulls | new | new |
 | `year(d1), year(d2)` (two columns, nothing to share) | new | new |
 
@@ -412,14 +411,16 @@ AVX-512 (`IntVector.SPECIES_PREFERRED`, the development machine's native width),
 `VarkaEmitterParityBenchmark`'s "year" section, 4096-row chunks, five iterations
 over two-second windows, idle machine:
 
-| | run 1 | run 2 |
-|---|---|---|
-| four separate emitted nodes | 450.4 | 448.8 |
-| shared decomposition, hand-written | **692.4** | **678.8** |
-| ratio | **1.54x** | **1.51x** |
+| | run 1 | run 2 | run 3 (the committed file) |
+|---|---|---|---|
+| four separate emitted nodes | 450.4 | 448.8 | 435.1 |
+| shared decomposition, hand-written | **692.4** | **678.8** | **661.7** |
+| ratio | **1.54x** | **1.51x** | **1.52x** |
 
-`year` alone measured 1791.2 and 1822.2 in the same runs, so the four-node case
-is still 4.0x one field: nothing is shared today.
+This is a record of three runs; the committed results file is run 3, and it is
+the one every other document quotes. `year` alone measured 1791.2, 1822.2 and
+1797.2 in the same runs, so the four-node case is still about 4x one field:
+nothing is shared today.
 
 128-bit (`-XX:MaxVectorSize=16`), five runs, because the ratio came in under the
 project's 1.3x re-check threshold and the first pass was faulted for leaving
@@ -452,10 +453,10 @@ win rather than as a reversal of its sign.
 
 ### Predictions, scored
 
-1. **Wrong.** Predicted 900-1400 M rows/s at AVX-512 (2.0x-3.2x); measured 678.8
-   to 692.4 (1.51x-1.54x). The direction was right and the confidence was stated
+1. **Wrong.** Predicted 900-1400 M rows/s at AVX-512 (2.0x-3.2x); measured 661.7
+   to 692.4 over three runs (1.51x-1.54x). The direction was right and the confidence was stated
    as high, so this is a real miss on magnitude: the op-count model
-   (`1791 x 50/65 ~ 1380`) assumes throughput is proportional to vector ops and
+   (`1797 x 50/65 ~ 1380`) assumes throughput is proportional to vector ops and
    nothing else, and it over-predicts by a factor of two. Time not accounted for
    by the decomposition - four stores, four validity-bitmap read-modify-writes,
    the chunk prologue and the loop control - is roughly half the four-node case's
@@ -476,17 +477,100 @@ win rather than as a reversal of its sign.
    marginal allocation looks like.
 6. Not yet measurable - step B.
 
+### What does not fix the 128-bit mode, measured
+
+Four hypotheses were tested against the bimodality, because a 1.5x win that the
+narrow-vector shape cannot reach is what decides step B's scope. All four
+failed, and they are recorded so nobody pays for them twice.
+
+1. **Shorter live ranges.** `ChronoVectorOps.vectorFourFieldsShortLive` is the
+   same arithmetic and the same op count on a schedule that keeps fewer values
+   live: the year assembly hoisted so `era`, `century` and the year of century
+   die before the tails, and each output stored the moment it exists rather than
+   all four at the end - which is also what `emitLaneGroup` does, so this is the
+   variant that mirrors the emitter. It is **slower at both widths**: 626.9 and
+   642.6 against 686.2 and 691.3 at AVX-512, 156.5 and 157.7 against 165.6 and
+   167.1 at 128-bit. Register pressure is real but is evidently not relieved by
+   holding fewer values; C2's scheduler does better with the wide window. The
+   variant is kept, differentially tested against the other, as the reference
+   that stops this being re-proposed - and as a caution for step B, since the
+   emitter's natural store-as-you-go shape is the losing one here.
+2. **Forcing the two validity helpers to inline.**
+   `-XX:CompileCommand=inline,...VarkaVectorSupport::orValidityBitsAt` and the
+   same for `validityBitsAt`. These are the only calls left in the lane path, and
+   `-XX:+PrintInlining` shows them genuinely failing, at bytecode 828, 839, 850
+   and 861, with `NodeCountInliningCutoff` on one compilation and
+   `callee is too large` on another - 212 bytes of a four-arm switch on
+   `groupBytes(lanes)` that a constant lane count would fold away if it ever got
+   in. Forcing them changes **nothing**: 691.3 at AVX-512 against 686.2 unforced,
+   and at 128-bit one fast run and one slow one, the same split as without it.
+3. **Forcing every Varka class to inline**, `-XX:CompileCommand=inline,*varka*::*`
+   under `-XX:+UnlockDiagnosticVMOptions`. Also nothing: 119 ms then 83 ms, both
+   modes, unchanged distribution. (Its AVX-512 companion run is discarded rather
+   than quoted - it overlapped a build on the same machine and its anchor case,
+   `year`, came in at 1643.6 M rows/s with a stdev of 7 ms against the 1791 to
+   1831 at a stdev of 0 to 1 every clean run of this session produced. The
+   no-effect-at-AVX-512 conclusion rests on experiment 2's clean 691.3 instead.)
+4. **Disabling on-stack replacement**, `-XX:-UseOnStackReplacement`, on the
+   theory that the mode was OSR-versus-standard compilation. Three runs, all
+   slow: 121, 123, 119 ms.
+
+Across all four configurations the shared kernel was measured 14 times at
+128-bit and landed the fast mode 3 times, with no configuration making either
+mode deterministic and none shifting the distribution enough to call from three
+successes. Whatever picks the mode is inside C2's code generation for this body
+and is not reachable from any of these levers.
+
+Two things follow. First, **a JVM flag was never going to be the answer anyway**:
+Spark cannot require `-XX:CompileCommand` on a user's JVM, so a flag that helped
+would have been a diagnostic pointing at a code change, not a fix. The code
+change these results point at, if anything, is making `orValidityBitsAt` small
+enough to inline on its own merit - it is a width-generic switch called from
+kernels that know their width at emit time - and that is a change to a helper
+every Varka kernel calls, so it belongs in its own task with its own
+measurement, not inside task 32. Second, this is the third time in this project
+that a `-XX:CompileCommand=inline` flag has moved nothing in the catalyst parity
+harness; the debt register's note that the same flag moves the engine's JMH
+numbers 50-190% and the catalyst numbers by under 1% is the same observation,
+and the harness is simply not in a state where inlining is what is left on the
+table.
+
 ### What this changes for step B
 
-The mechanism is still worth building: 1.5x on the machine shape that ships is a
-large win, and 1.06x on the narrow shape is not a loss. But **the default cannot
-be flipped on the AVX-512 number alone.** Section 5.2's measurement must run at
-both widths on the emitted path, and section 3.3's `shareChronoPrefix` option has
-to be able to end up defaulting differently from what AVX-512 alone would choose -
-including the possibility that sharing ships on and the narrow-vector shape simply
-accepts a wash. Whether the 128-bit bimodality is the emitter's problem too is the
-first thing step B should find out, since the emitted body has the same shape and
-the same register demand.
+**Step B splits in two, and only the first half is unconditional.** The
+throughput case rests on a four-field projection, and the corpus does not contain
+one - TPC-H uses `year` alone and TPC-DS pre-materialises `d_year`/`d_moy`/
+`d_dom`. So the 1.5x is real but is not, on its own, worth relaxing a grouping
+policy that exists to avoid a measured ten-second compile.
+
+**B1 - fragment sharing inside a method. No policy change, do it.** Section 3.2's
+first three edits only, leaving `groupOutputs` exactly as it is. Today each
+calendar output already forms its own loop method, so no loop method holds two
+chrono nodes and nothing there changes. What does change is the **epilogue**,
+which by task 24's deliberate decision is one method over *every* output: the
+debt register measures `epilogueMasked` at 7530 bytes for 16 calendar outputs and
+8079 for 17, and 8000 is `HugeMethodLimit`, past which HotSpot compiles nothing
+at all. Sixteen calendar outputs over one date column share one prefix under B1
+instead of repeating fifteen, so the method that today falls off that cliff stops
+doing so. That is a compilability win on a shape a user can actually write, it
+needs no measurement to justify, and it is most of the mechanism tasks 43 and 44
+would otherwise have to invent.
+
+**B2 - the grouping change that buys the 1.5x. Gate it on the two-field case
+first.** Extend the ceiling kernel to `year, month` and measure it. Two fields
+share ~45 ops and pay ~5 each, so the op-count ratio is 1.9x - but the four-field
+case delivered 1.5x against a 3.1x op-count ratio, i.e. about half, so two fields
+should be expected around 1.25x-1.4x and could easily land lower. That
+measurement costs an afternoon and decides whether `FUSED_CEILING` and the
+budget-rule relaxation are worth their risk. If two fields clears ~1.3x at
+AVX-512, build B2; if it lands near 1.1x, stop after B1 and record why.
+
+Either way **the default cannot be flipped on the AVX-512 number alone**:
+section 5.2's measurement must run at both widths on the emitted path, and
+`shareChronoPrefix` has to be able to default differently from what AVX-512 alone
+would choose. Whether the 128-bit bimodality follows the emitted body is the
+first thing B2 should find out, since it has the same shape and the same register
+demand - and per the section above, no JVM flag will make that question go away.
 
 ## 8. Risks
 

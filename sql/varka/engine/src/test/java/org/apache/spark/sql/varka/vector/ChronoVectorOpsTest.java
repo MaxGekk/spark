@@ -53,6 +53,12 @@ import org.apache.spark.sql.varka.memory.VarkaMorsel.DateMorsel;
  * {@code (month + 2) / 3}: the latter is the exact formula the kernel implements by magic
  * multiply, so a shared error in the month it derives from would agree with itself and pass.
  * {@code VarkaChronoSuite} carries the same warning about the same formula.
+ *
+ * <p>Every assertion runs against <b>both</b> scheduling variants,
+ * {@link ChronoVectorOps#vectorFourFields} and
+ * {@link ChronoVectorOps#vectorFourFieldsShortLive}. They differ only in where the year assembly
+ * sits and when each output is stored, so any disagreement between them is a transcription bug
+ * in one of the two rather than an arithmetic question.
  */
 public class ChronoVectorOpsTest {
 
@@ -68,6 +74,20 @@ public class ChronoVectorOpsTest {
 
   private static final int[] SIZES =
       {1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 1000, 100000};
+
+  /** The signature both scheduling variants share; see the class doc. */
+  @FunctionalInterface
+  private interface FourFieldsKernel {
+    int run(long srcData, long srcValidity, int srcNullCount, long[] dstData, long[] dstValidity,
+        int length);
+  }
+
+  private static final FourFieldsKernel[] KERNELS = {
+      ChronoVectorOps::vectorFourFields,
+      ChronoVectorOps::vectorFourFieldsShortLive,
+  };
+
+  private static final String[] KERNEL_NAMES = {"vectorFourFields", "vectorFourFieldsShortLive"};
 
   private RootAllocator allocator;
   private final List<DateDayVector> vectors = new ArrayList<>();
@@ -203,7 +223,7 @@ public class ChronoVectorOpsTest {
     return NARROW_MIN_DAYS + Math.floorMod((long) i * 500009L, NARROW_RANGE);
   }
 
-  /** Runs the kernel and discards the outputs; returns its status. */
+  /** Runs every variant and discards the outputs; returns the status all of them agreed on. */
   private int runFourFields(DateDayVector v, int n, int nulls) {
     DateMorsel m = VarkaMorsel.extractDate(v, n);
     try (Arena arena = Arena.ofConfined()) {
@@ -214,12 +234,25 @@ public class ChronoVectorOpsTest {
         dstValidity[o] = arena.allocate((n + 7) / 8L).address();
       }
       long srcValidity = (nulls == 0 || nulls == n) ? 0L : m.validity().address();
-      return ChronoVectorOps.vectorFourFields(
+      int status = KERNELS[0].run(
           m.data().address(), srcValidity, nulls, dstData, dstValidity, n);
+      for (int k = 1; k < KERNELS.length; k++) {
+        assertEquals(status,
+            KERNELS[k].run(m.data().address(), srcValidity, nulls, dstData, dstValidity, n),
+            KERNEL_NAMES[k] + " disagreed with " + KERNEL_NAMES[0] + " on the batch status");
+      }
+      return status;
     }
   }
 
   private void assertFourFields(DateDayVector v, int n, int nulls) {
+    for (int k = 0; k < KERNELS.length; k++) {
+      assertFourFields(KERNELS[k], KERNEL_NAMES[k], v, n, nulls);
+    }
+  }
+
+  private void assertFourFields(FourFieldsKernel kernel, String name, DateDayVector v, int n,
+      int nulls) {
     DateMorsel m = VarkaMorsel.extractDate(v, n);
     try (Arena arena = Arena.ofConfined()) {
       MemorySegment[] data = new MemorySegment[4];
@@ -233,25 +266,25 @@ public class ChronoVectorOpsTest {
         dstValidity[o] = valid[o].address();
       }
       long srcValidity = (nulls == 0 || nulls == n) ? 0L : m.validity().address();
-      int status = ChronoVectorOps.vectorFourFields(
-          m.data().address(), srcValidity, nulls, dstData, dstValidity, n);
-      assertEquals(0, status, "the kernel declined an in-range batch");
+      int status = kernel.run(m.data().address(), srcValidity, nulls, dstData, dstValidity, n);
+      assertEquals(0, status, name + " declined an in-range batch");
       for (int i = 0; i < n; i++) {
         boolean valid1 = !v.isNull(i);
         for (int o = 0; o < 4; o++) {
           assertEquals(valid1, VarkaVectorSupport.isBitSet(valid[o], i),
-              "validity mismatch at row " + i + " for output " + o);
+              name + ": validity mismatch at row " + i + " for output " + o);
         }
         if (valid1) {
           LocalDate expected = LocalDate.ofEpochDay(v.get(i));
           String where = " at row " + i + " for day " + v.get(i);
-          assertEquals(expected.getYear(), at(data[ChronoVectorOps.YEAR], i), "year" + where);
+          assertEquals(expected.getYear(), at(data[ChronoVectorOps.YEAR], i),
+              name + ": year" + where);
           assertEquals(expected.getMonthValue(), at(data[ChronoVectorOps.MONTH], i),
-              "month" + where);
+              name + ": month" + where);
           assertEquals(expected.getDayOfMonth(), at(data[ChronoVectorOps.DAY_OF_MONTH], i),
-              "day-of-month" + where);
+              name + ": day-of-month" + where);
           assertEquals(expected.get(IsoFields.QUARTER_OF_YEAR),
-              at(data[ChronoVectorOps.QUARTER], i), "quarter" + where);
+              at(data[ChronoVectorOps.QUARTER], i), name + ": quarter" + where);
         }
       }
       // The four outputs come from one source column, so their validity buffers must be
@@ -261,7 +294,7 @@ public class ChronoVectorOpsTest {
         for (int i = 0; i < n; i++) {
           assertTrue(
               VarkaVectorSupport.isBitSet(valid[0], i) == VarkaVectorSupport.isBitSet(valid[o], i),
-              "output " + o + " validity diverged from output 0 at row " + i);
+              name + ": output " + o + " validity diverged from output 0 at row " + i);
         }
       }
     }
