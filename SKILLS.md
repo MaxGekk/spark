@@ -399,13 +399,38 @@ trusting them, not just its ratios.
   `int[]`, so the index vector has to be stored and read back, and that spill
   is an artifact of the API rather than of the machine.
 
-- **The gather is nonetheless unreachable for a Varka kernel**, and for an API
-  reason rather than a cost one: `IntVector`'s index-map overload exists only on
-  `fromArray`, never on `fromMemorySegment`, and every Varka input is an
-  off-heap Arrow buffer. Enumerated, not assumed - the whole `from*`/`into*`
+- **`IntVector`'s index-map overload exists only on `fromArray`, never on
+  `fromMemorySegment`.** Enumerated, not assumed - the whole `from*`/`into*`
   surface is `fromArray(species, int[], int, int[], int)` and
   `fromMemorySegment(species, MemorySegment, long, ByteOrder)`, with no third
   form.
+
+  **This bullet first drew the wrong conclusion from that fact, and the
+  correction is the useful part.** It said a gather is therefore unreachable for
+  a Varka kernel, because Varka's inputs are off-heap. The API limit is real but
+  it is about gathering *from* an off-heap table - item 9's dictionary, which
+  genuinely is off-heap. It says nothing about gathering an **on-heap constant
+  table** with indices derived from off-heap data, which is what a calendar
+  table would be: the column loads with `fromMemorySegment`, the index vector
+  spills with `intoArray`, and the gather reads a table Varka owns. Measured in
+  exactly that shape (`year(d) = 1998`, counted, column in a `MemorySegment`):
+  **2070.8 M rows/s against the arithmetic's 1329.3, a 1.6x**. One API fact,
+  two different situations, and reading them as one cost a real option.
+
+- **Size a lookup table to the calendar's period and it needs no fallback.**
+  ClickHouse's `DATE_LUT_SIZE` is `0x23AB1` - 146097, exactly one Gregorian era.
+  It anchors that window at 1900 and falls back outside, but 400 years is the
+  calendar's period, so a table indexed by **day of era** covers every `int32`
+  date with no fallback at all, and the reported year is
+  `400 * (era - bias) + table[dayOfEra]`. Varka's prefix already computes that
+  index - `emitEra` is the first thing it emits - so the table replaces
+  everything after it. 571 KB as an `int[]`; a seven-year query touches 10 KB of
+  it. This is the shape behind the 1.6x above.
+
+  ClickHouse also stores 16 bytes per day - year, month, day, day of week, days
+  in month - so one lookup yields every field, which is the problem task 32
+  solves with a shared prefix, solved with memory instead. That variant is not
+  measured here.
 
 - **Fusion reverses all of it, and that is the result that matters.** The table
   above times one field into an `int[]` - the shape where Varka's advantage is
