@@ -52,8 +52,9 @@ private[sql] trait VarkaFusedTransition extends ColumnarToRowTransition {
  *
  * Per batch: when `spark.sql.codegen.varka.enabled` is set, every input column the fused
  * entries reference is an [[org.apache.spark.sql.vectorized.ArrowColumnVector]] over an Arrow
- * `DateDayVector`, and the projection is Varka-eligible (since task 12: at least one entry
- * compiles), [[VarkaKernelEvaluator]] runs the fused kernel into freshly allocated Arrow
+ * `DateDayVector` (or, for a day-offset column since task 38, an `IntVector`), and the
+ * projection is Varka-eligible (since task 12: at least one entry compiles),
+ * [[VarkaKernelEvaluator]] runs the fused kernel into freshly allocated Arrow
  * vectors. An all-fused projection converts that batch to rows with the standard copy
  * projection; a mixed one merges at the row instead - forwarded and residual entries are read
  * and evaluated during the same per-row pass that produces the output row, because
