@@ -300,6 +300,83 @@ public class ChronoVectorOpsTest {
     }
   }
 
+  /**
+   * {@link ChronoVectorOps#vectorFourFieldsNoValidity} against
+   * {@link ChronoVectorOps#vectorFourFields} on the same null-free data: the arithmetic is a
+   * byte-for-byte copy of the same lines, so the two must agree exactly, on every value and on
+   * the range guard's verdict. This is what makes the pair usable for section 2.17's
+   * measurement - a kernel that silently computed something else would size the wrong bound.
+   */
+  @Test
+  void noValidityMatchesFourFieldsOnNullFreeData() {
+    for (int n : SIZES) {
+      DateDayVector v = newVector(n);
+      for (int i = 0; i < n; i++) {
+        v.set(i, (int) value(i));
+      }
+      v.setValueCount(n);
+      assertNoValidityMatchesFourFields(v, n);
+    }
+  }
+
+  /** The out-of-range guard fires identically with validity removed. */
+  @Test
+  void noValidityOutOfRangeDeclinesTheBatch() {
+    int n = 65;
+    for (long bad : new long[] {NARROW_MIN_DAYS - 1, NARROW_MAX_DAYS + 1, Integer.MIN_VALUE,
+        Integer.MAX_VALUE}) {
+      for (int at : new int[] {0, 3, n - 1}) {
+        DateDayVector v = newVector(n);
+        for (int i = 0; i < n; i++) {
+          v.set(i, (int) (i == at ? bad : value(i)));
+        }
+        v.setValueCount(n);
+        DateMorsel m = VarkaMorsel.extractDate(v, n);
+        long[] dstData = new long[4];
+        try (Arena arena = Arena.ofConfined()) {
+          for (int o = 0; o < 4; o++) {
+            dstData[o] = arena.allocate(n * 4L).address();
+          }
+          assertEquals(ChronoVectorOps.STATUS_CHRONO_RANGE,
+              ChronoVectorOps.vectorFourFieldsNoValidity(m.data().address(), dstData, n),
+              "expected a decline for day " + bad + " at row " + at);
+        }
+      }
+    }
+  }
+
+  private void assertNoValidityMatchesFourFields(DateDayVector v, int n) {
+    DateMorsel m = VarkaMorsel.extractDate(v, n);
+    try (Arena arena = Arena.ofConfined()) {
+      MemorySegment[] withValiditySeg = new MemorySegment[4];
+      MemorySegment[] noValiditySeg = new MemorySegment[4];
+      long[] withValidityData = new long[4];
+      long[] withValidityValid = new long[4];
+      long[] noValidityData = new long[4];
+      for (int o = 0; o < 4; o++) {
+        withValiditySeg[o] = arena.allocate(n * 4L);
+        withValidityData[o] = withValiditySeg[o].address();
+        withValidityValid[o] = arena.allocate((n + 7) / 8L).address();
+        noValiditySeg[o] = arena.allocate(n * 4L);
+        noValidityData[o] = noValiditySeg[o].address();
+      }
+      int status = ChronoVectorOps.vectorFourFields(
+          m.data().address(), 0L, 0, withValidityData, withValidityValid, n);
+      int noValidityStatus = ChronoVectorOps.vectorFourFieldsNoValidity(
+          m.data().address(), noValidityData, n);
+      assertEquals(status, noValidityStatus,
+          "vectorFourFieldsNoValidity disagreed with vectorFourFields on the batch status");
+      if (status == 0) {
+        for (int o = 0; o < 4; o++) {
+          for (int i = 0; i < n; i++) {
+            assertEquals(at(withValiditySeg[o], i), at(noValiditySeg[o], i),
+                "output " + o + " diverged at row " + i + " for day " + v.get(i));
+          }
+        }
+      }
+    }
+  }
+
   private static int at(MemorySegment seg, int i) {
     return seg.get(ValueLayout.JAVA_INT, i * 4L);
   }

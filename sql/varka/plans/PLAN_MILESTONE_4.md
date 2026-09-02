@@ -452,6 +452,20 @@ needs no IR change and generalizes to tasks 33, 34 and 40's nodes for free. `PLA
 section 3 has the design; the default is not flipped on the AVX-512 number alone, since the
 narrow-vector shape has to be measured on the emitted path first.
 
+**Step B1 is built and on by default; step B2 is still gated.** The fragment mechanism ships
+(`VarkaEmitOptions.shareChronoPrefix`, `FragmentKey`, `emitChronoPrefixOnce`) with the
+grouping policy untouched, so every calendar output still gets its own loop method and no loop
+body has anything to share. What it changes is the epilogue, which task 24 made one method
+over *every* output: four fields over one date now decompose once there rather than four
+times, and the 8000-byte `HugeMethodLimit` crossing moves from 17 calendar outputs to 40.
+That is a compilability win on a shape a user can write, it needed no benchmark to justify -
+which is why the default flipped here rather than waiting on B2 - and it moved no pinned
+oracle and no committed number, the latter established by a test asserting every loop method
+is byte for byte what it was rather than by a re-measurement. `PLAN_TASK_32.md` section 7.1
+has the ladder and the two places the plan turned out to be wrong (the fragment key needs the
+validity word, and a 16-field projection over one date does not exist). B2 - the grouping
+relaxation that buys the 1.5x - still waits on the two-field measurement.
+
 ### 2.10 `next_day`, as a handover experiment (task 33)
 
 The smallest piece of vocabulary the survey after task 26 turned up, taken for
@@ -752,13 +766,17 @@ compilation and `callee is too large` on another, and neither
 lifts it. So each of the four calls per lane group is a real call doing bounds
 checks, a four-arm switch on `groupBytes(lanes)` and a read-modify-write.
 
-**This is a three-point fit, not a measurement, and task 45 opens by settling
-it** - the same discipline 2.9 used and then failed to apply to its own kernel.
-A variant of `ChronoVectorOps` that computes everything and writes no validity
-at all bounds the prize. If the fit holds, the four-field case is dominated by
-bookkeeping the decomposition never touches, and tasks 45-47 are worth more
-than task 32's own mechanism; if it does not, they close cheaply and the
-milestone has learned where the time really goes.
+**This was a three-point fit, not a measurement, and task 32's step B2 gate
+settled it** (`PLAN_TASK_32.md` section 7.2, finding 2):
+`ChronoVectorOps.vectorFourFieldsNoValidity` is the same arithmetic and the
+same guard with every validity buffer and every `orValidityBitsAt` call
+removed, and across three runs it costs 0.65-0.67 ns/row against the
+validity-carrying kernel's 1.50-1.52 - **55.6% to 56.7% of the ceiling
+kernel's time is the validity write**, not the three quarters the fit
+estimated (that number priced everything the decomposition does not touch, of
+which validity is the majority but not all). The fit's direction was right
+and tasks 45-47 are confirmed worth more than task 32's own mechanism on this
+number alone.
 
 Three tasks, in this order, because each may shrink the next:
 
@@ -1020,7 +1038,7 @@ resumes at 51.
 | 42 | `make_date` | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
 | 43 | What bounds a loop method inside one output | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
 | 44 | The epilogue's size | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
-| 32 | One decomposition, several fields. **REPLANNED, gate cleared** (see 2.9 and `PLAN_TASK_32.md`) | The first ceiling kernel measured a non-inlining `computeFields` helper rather than the sharing, and was rebuilt hand-inlined, guarded and writing four validity buffers: 692.4/678.8 against 450.4/448.8 M rows/s at AVX-512 (1.5x), and a wash at 128-bit (1.06x, one run of five at 1.50x). Step B builds emitter-side fragment sharing behind a `VarkaEmitOptions` switch, with the default decided at both widths rather than closed | `ChronoVectorOpsTest` differentials the kernel against `java.time` over its exact sweep range and a boundary set, at both widths (the engine module's own narrow-vector Maven profile); no pinned oracle moved, no committed number for any existing shape changed |
+| 32 | One decomposition, several fields. **REPLANNED; step A and step B1 done, step B2's gate cleared** (see 2.9 and `PLAN_TASK_32.md`) | The first ceiling kernel measured a non-inlining `computeFields` helper rather than the sharing, and was rebuilt hand-inlined, guarded and writing four validity buffers: 692.4/678.8 against 450.4/448.8 M rows/s at AVX-512 (1.5x), and a wash at 128-bit (1.06x, one run of five at 1.50x). Step B builds emitter-side fragment sharing behind a `VarkaEmitOptions` switch, with the default decided at both widths rather than closed. Step B1 built the fragment and made it the default: the epilogue's `HugeMethodLimit` crossing moves from 17 calendar outputs to 40, and B2's grouping relaxation stays gated on the two-field measurement. **The gate cleared** (`PLAN_TASK_32.md` 7.2): 1.29x at two fields, 1.57x at three, 1.80x at four, growing rather than shrinking against prediction 3's expectation - and the emitted dense-body shared kernel turns out to beat `ChronoVectorOps`'s own "ceiling" by 1.15-1.20x, since that kernel has no dense path and was measuring the masked body throughout - and the same 1.29x/1.57x/1.80x pattern reproduces at 128-bit (1.31x/1.47x/1.67x), so the width-dependent bimodality that made the hand-written ceiling a wash at 128-bit (`PLAN_TASK_32.md` 7.4) turns out to belong to that specific kernel and not to the sharing mechanism. The compile-cliff risk `GROUP_BUDGET` itself exists to avoid was also measured directly rather than assumed (`PLAN_TASK_32.md` 7.5): `-XX:+PrintCompilation` on every kernel in the parity suite shows the widest single loop method (200 ops, four fields) reaching tier 4 in 272 ms and the widest kernel overall (twenty separate methods) in 2.4 s, nowhere near the historic 10-second cliff and with no `blocked` compile task anywhere in the log | `ChronoVectorOpsTest` differentials the kernel against `java.time` over its exact sweep range and a boundary set, at both widths (the engine module's own narrow-vector Maven profile); the emitted lowering swept against `LocalDate` over all 16,777,216 covered days under both settings; no pinned oracle moved, and every loop method asserted byte for byte unchanged, so no committed number for any existing shape can have |
 | 45 | The null-free validity fast path | The bound first: a validity-free variant of `ChronoVectorOps` sizing the prize (2.17), then the dense driver filling the output validity once per batch instead of the dense loop ORing it per lane group | The whole Varka suite at both widths with the dense/masked pair still agreeing bit for bit; the committed parity cases regenerated in one run, with the null-free and mixed-null rows of each moving in opposite directions or not at all |
 | 46 | Validity helpers that inline | Width-specialised `validityBitsAt`/`orValidityBitsAt` siblings under `MaxInlineSize`, selected by the emitter's existing name choice, with the switch resolved at emit time | `-XX:+PrintInlining` showing no `failed to inline` for them in a wide loop - the diagnostic, not the timing, is the deliverable - plus the full suite at both widths and one parity regeneration |
 | 47 | One validity write per word | Bits accumulated across lane groups and stored once per 64 rows, with the epilogue flushing a partial accumulator | The masked path's committed cases, the 4095/63 non-aligned lengths task 44 adds, and the dense/masked agreement; gated on what 45 and 46 leave |
@@ -1161,13 +1179,34 @@ rewritten in the past tense with what the sweep found, never deleted.
   roughly 190 vector ops for `least(greatest(year, month), greatest(dayofmonth, quarter))`,
   against the 59-op width the budget's own evidence covers. And the epilogue is one method
   over every output by task 24's deliberate decision, which is right about compile time and
-  silent about bytecode size: `epilogueMasked` measures 7530 bytes at 16 calendar outputs
+  silent about bytecode size: `epilogueMasked` measured 7530 bytes at 16 calendar outputs
   and 8079 at 17, crossing the 8000-byte `HugeMethodLimit` past which HotSpot compiles
   nothing at all. Neither is a calendar defect; task 26 only made them reachable.
+  **Task 32 step B1 moved the second number and did not close either task**: sharing the
+  civil-from-days prefix between calendar outputs over one date takes the crossing from 17
+  outputs to 40 - four date columns to ten - with the full ladder in `PLAN_TASK_32.md`
+  section 7.1. Task 44 therefore plans against ten columns rather than four, and task 43's
+  case is untouched, because a single output holding several wide nodes shares nothing.
+  **The crossing's cost is now priced, not just its bytecode size**
+  (`PLAN_TASK_32.md` section 7.3, twenty calendar outputs over five dates): 1.36x at both
+  an aligned chunk (64 rows) and a batch one row short of aligned (4095), and 7.3x where
+  most of a batch is remainder (chunk 63). The 1.36x at chunk 64 is the more important of
+  the two, because it fires even though the epilogue does no real work there -
+  `emitEpilogue`'s own generated body returns immediately when the batch divides evenly,
+  but the *method itself* is still called on every batch, and calling into a method
+  HotSpot will never compile at any tier costs something even when that call does nothing.
+  **This corrects the framing above**: "runs interpreted... on every batch whose length is
+  not a lane multiple" describes only where the interpreter does real *arithmetic*; the
+  interpreter-call tax on the early return is paid on every batch, aligned included, small
+  at these widths but not zero.
 
-* **A calendar field is computed once per output, not once per date.** **Being closed as
-  task 32 (see 2.9 and `PLAN_TASK_32.md`)**, after a first pass that swept this entry the
-  other way and had to be redone. A calendar field is ~50 vector ops, ~45 of which are the
+* **A calendar field is computed once per output, not once per date.** **Half closed by
+  task 32 step B1, the rest gated on a measurement (see 2.9 and `PLAN_TASK_32.md`)**, after
+  a first pass that swept this entry the other way and had to be redone. Step B1 built the
+  emitter-side fragment and made it the default, so a projection's *epilogue* now computes
+  the decomposition once per date rather than once per field; the loop methods still compute
+  it once per field, because relaxing the grouping policy that keeps them apart is step B2
+  and B2 is gated on measuring the two-field case first. A calendar field is ~50 vector ops, ~45 of which are the
   shared civil-from-days prefix and ~5 the field's own tail; four fields therefore cost
   ~200 ops as four independent nodes against ~65 shared, a saving of ~135 ops. The
   hand-written ceiling kernel that prices that saving reaches 679.0 M rows/s against the

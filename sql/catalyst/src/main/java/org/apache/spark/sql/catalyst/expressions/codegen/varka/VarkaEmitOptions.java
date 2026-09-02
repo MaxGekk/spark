@@ -60,6 +60,13 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * @param cse whether shared subtrees are computed once and reused. Results must not change - CSE
  *            is an optimization, never a semantics change - and the emitter suite pins exactly
  *            that; the parity benchmark uses it to price CSE itself.
+ * @param shareChronoPrefix whether two calendar nodes over the same date compute the
+ *                          civil-from-days decomposition once between them rather than once each
+ *                          (task 32 step B). Like {@link #cse} it is an optimization and never a
+ *                          semantics change, and it is pinned the same way; unlike CSE it shares
+ *                          <i>inside</i> a node's emitted run rather than between whole nodes,
+ *                          which is why the emitter needs a separate notion of a fragment for
+ *                          it. See {@code VarkaLoopEmitter.FragmentKey}.
  * @param floorMod7 which lowering {@code dayofweek}/{@code weekday} use for their mod-7.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
@@ -71,6 +78,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 public record VarkaEmitOptions(
     int groupBudget,
     boolean cse,
+    boolean shareChronoPrefix,
     FloorMod7 floorMod7,
     boolean misdescribeAdd) {
 
@@ -85,7 +93,7 @@ public record VarkaEmitOptions(
 
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS =
-      new VarkaEmitOptions(VarkaLoopEmitter.GROUP_BUDGET, true, FloorMod7.MAGIC, false);
+      new VarkaEmitOptions(VarkaLoopEmitter.GROUP_BUDGET, true, true, FloorMod7.MAGIC, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -98,19 +106,24 @@ public record VarkaEmitOptions(
 
   /** {@link #DEFAULTS} with one field changed, for the suites and benchmarks that vary one. */
   public VarkaEmitOptions withGroupBudget(int budget) {
-    return new VarkaEmitOptions(budget, cse, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(budget, cse, shareChronoPrefix, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withCse(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, enabled, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, enabled, shareChronoPrefix, floorMod7,
+        misdescribeAdd);
+  }
+
+  public VarkaEmitOptions withShareChronoPrefix(boolean enabled) {
+    return new VarkaEmitOptions(groupBudget, cse, enabled, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withFloorMod7(FloorMod7 lowering) {
-    return new VarkaEmitOptions(groupBudget, cse, lowering, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, lowering, misdescribeAdd);
   }
 
   public VarkaEmitOptions withMisdescribeAdd(boolean misdescribe) {
-    return new VarkaEmitOptions(groupBudget, cse, floorMod7, misdescribe);
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, floorMod7, misdescribe);
   }
 
   public boolean isDefault() {
@@ -127,6 +140,7 @@ public record VarkaEmitOptions(
     if (isDefault()) {
       return "";
     }
-    return "opts(" + groupBudget + '|' + cse + '|' + floorMod7 + '|' + misdescribeAdd + ')';
+    return "opts(" + groupBudget + '|' + cse + '|' + shareChronoPrefix + '|' + floorMod7
+        + '|' + misdescribeAdd + ')';
   }
 }
