@@ -126,6 +126,348 @@ single-column test and fail here.
 * **`date_trunc`** at timestamp level - it needs int64 lanes, task 29.
 * **Every other `trunc` level.**
 
-## 7. Outcome
+## 7. Re-planned against master, and the two scope decisions
+
+Sections 1-6 are the recipe as it was handed over, and they are left as
+written. This section is what a reader needs on top of them to execute the
+task today: three of the recipe's premises have moved since it was written,
+one of its factual claims is wrong, and the two questions it deliberately left
+to the owner have been answered. The arithmetic in section 2 is untouched -
+it was re-run during this re-plan and is still exact (7.1, item 5).
+
+### 7.1 What moved under the recipe
+
+1. **The leap flag no longer comes from task 34.** Task 40 (`PLAN_TASK_40.md`,
+   merged) shipped `emitLeapFlag` to master for `emitAddMonths`'s own February
+   case:
+
+   ```java
+   emitLeapFlag(cb, y, scratch1, scratch2, remScratch, maskA, maskB, carryMask)
+   ```
+
+   It takes the **plain reported year**, adds `VarkaChrono.YEAR_BIAS` itself,
+   and leaves the flag as a mask on the operand stack rather than in an out
+   parameter. So the recipe's "depends on tasks 26 and 34 ... if 34 has not
+   landed, do not reimplement its pieces; wait, or say so" is stale: this task
+   depends on nothing unmerged, and should not wait for PR #64.
+
+   What task 34 still uniquely owns is the January-based day-of-year
+   *conversion* - `doy >= 306 ? doy - 305 : doy + 60 + L`, four ops - which PR
+   #64 has inline in its `DayOfYear` arm rather than as a callable helper.
+   Write it here as `emitJanuaryDayOfYear`; if #64 lands first, factor its
+   copy out under that name and call it, rather than leaving two.
+
+   **PR #64 currently carries a second `emitLeapFlag` overload** of its own
+   (`(cb, biasedYear, remScratch)`), written before task 40 merged and kept
+   through the merge, so master will hold two once #64 lands. That is the
+   collision `PLAN_TASK_36.md` section 7 predicted and its section 8 resolved
+   for `last_day`. This task calls **task 40's** (the seven-parameter one, on
+   master today) so the duplicate does not acquire a third caller.
+
+2. **Task 32 step B1 has landed, so `emitChrono` is already split.** The
+   recipe's "do not restructure `emitChrono`" was written when the whole
+   decomposition was one method. Today it is `emitChronoPrefix` plus per-field
+   tails (`emitChronoYear`, `emitChronoMonth`, `emitChronoDayOfMonth`,
+   `emitMonthStart`), with `emitChronoPrefixOnce` sharing the prefix between
+   siblings over one date. Obeying that instruction now means writing an
+   `emitChronoTrunc` tail method called from `emitChrono`'s switch - exactly
+   what `emitChronoLastDay` does (PR #78) - and *not* writing anything inline.
+   `PLAN_TASK_32.md`'s own file list records that paragraph as deliberately
+   not actioned because at the time it was still exactly right; step B1 has
+   since landed, so it is stale now, and this is where it is closed.
+
+3. **The range guard is gone** (task 51, PR #73). Every ancestor of this
+   recipe assumed `emitEra` carried a guard and that an out-of-range day
+   declined the batch. Do not write one, and do not write a test asserting
+   that a day past `VarkaChrono.NARROW_MAX_DAYS` declines - it is computed
+   now. Both PR #64 and PR #78 tripped over exactly this while merging past
+   #73; there is no reason for a third task to.
+
+4. **`QTR` is not a spelling `parseTruncLevel` accepts.** Section 1 says
+   "`QUARTER` has `QTR`". It does not: `DateTimeUtils.parseTruncLevel` accepts
+   `QUARTER` alone. `YEAR|YYYY|YY` and `MON|MONTH|MM` are as the recipe says,
+   and `WEEK` is the only other date-level spelling. A test asserting
+   `trunc(d, 'QTR')` fuses would fail; in the row engine that spelling returns
+   NULL, like any other unrecognized format.
+
+5. **The arithmetic re-verified on this checkout.**
+   `python3 sql/varka/plans/verify_chrono_tails.py`: 3,652,059 days
+   (`0001-01-01..9999-12-31`), zero mismatches for `ty`, `tm` and `tq` - this
+   task's three forms - alongside `doy`, `last`, `woy` and `leap`. One caveat
+   to carry: that script's own `leap()` uses `M = 167773`, the magic pair
+   tasks 34 and 36 each independently proved overflows a signed 32-bit lane
+   product. It is harmless there, because Python's integers do not wrap, but
+   it means **the script is an arithmetic oracle, not a constants reference**.
+   The emitter's leap test must come from `emitLeapFlag`, whose constants are
+   `VarkaChrono.YEAR_CENTURY_M = 41943` plus an `emitCarry` correction.
+
+6. **Task 38 (PR #62) landed while this was being written**, and changes
+   nothing here, which is worth saying rather than leaving to be rediscovered:
+   it lets `AddDays`/`SubDays` take an `IntegerType` *column* offset, so
+   `planWordRef` now ANDs both children's validity words through `andRef`.
+   `TruncDate` has no offset operand at all, and the `WEEK` rewrite in 7.2
+   builds `SubDays(d, lit 7)` with a literal, where `andRef` degenerates back
+   to the date's own word. The one thing to carry from it: `analyze`'s
+   `requireLiteralOffset` is no longer the blanket rule this recipe's
+   contemporaries were written against, so copy `AddDays`'s *current* arm
+   rather than one remembered from an older reading of the file.
+
+### 7.2 The two decisions, settled by the owner
+
+**`WEEK` is in, as a compiler rewrite with no emitter code.** Section 6 left
+this to the owner ("say in the pull request if you want it; do not add it
+unasked"), and task 33 has since landed, which is the condition it named.
+Spark defines `truncDate(days, TRUNC_TO_WEEK)` as
+`getNextDateForDayOfWeek(days - 7, MONDAY)` with `MONDAY = 4`, and
+`getNextDateForDayOfWeek(s, k) = s + 1 + floorMod(k - 1 - s, 7)`. Task 33's
+compiler arm stores `dayOfWeek - 1` in the literal slot and its emitted form
+is `d + 1 + floorMod(k - d, 7)` - the same expression. So
+
+```
+trunc(d, 'WEEK')  ==>  IRNextDay(SubDays(d, lit 7), lit 3)
+```
+
+over nodes that already exist: no IR node, no emitter arm, no new pinned
+rendering, and no new weight. It inherits task 33's wrap-for-wrap fidelity
+with the row engine, which is what makes this an exact rewrite rather than an
+approximately-right one. This is the `unix_date` pattern (task 41): a compiler
+arm that retires an expression by rewriting it onto existing nodes.
+
+**Both `YEAR`/`QUARTER` lowerings ship, and the default is chosen on a
+measured number**, per `FloorMod7` (three lowerings, one shipped, the rest
+live reference variants) and task 26 (`TOTAL` and `NARROWED` measured before
+the default was picked). The two are close enough - roughly 27 against 38
+emitted ops - that arguing it would be guessing.
+
+### 7.3 The lowerings, restated for today's emitter
+
+The prefix leaves `days` in `t[0]`, `era` `t[1]`, `rem` (the March-based day
+of year) `t[2]`, `century` `t[3]`, `yearOfCentury` `t[4]`, `marchMonth` (`mp`)
+`t[5]`, and two carry-scratch masks in `t[6..7]` that no tail reads, so a tail
+may reuse them.
+
+**`MONTH`, one form only.** The recipe writes `d - dom + 1`. Since
+`emitChronoDayOfMonth` is `rem - monthStart(mp) + 1`, that is identically
+
+```
+trunc(d,'MONTH') = d - rem + monthStart(mp)
+```
+
+which is the same number with two fewer ops, and is exact wherever
+`emitMonthStart` is - every `mp` in `[0, 11]`, which is all of them. Three ops
+on top of the prefix, no leap flag, no variant.
+
+**`SUBTRACT` variant (`YEAR`, `QUARTER`).** Section 2's forms:
+
+```
+L       = emitLeapFlag(reported year)                     // ~19 ops
+jdoy    = rem >= 306 ? rem - 305 : rem + 60 + L            // ~4 ops
+YEAR    = d - jdoy + 1
+QUARTER = d - jdoy + qstart,   qstart = [1, 91+L, 182+L, 274+L][quarter - 1]
+```
+
+`quarter` comes from the existing `Quarter` tail (`(month + 2) / 3` through
+`QUARTER_M`/`QUARTER_K`) over `emitChronoMonth`'s January-based month - see
+risk 1. The four-way select is three compares and three masked adds over a
+starting value of 1, or a blend chain; they are the same op count. (A closed
+form exists if the chain reads badly: with `q0 = quarter - 1`, the offsets
+`{0, 90, 181, 273}` are `q0 * (179 + q0) / 2`, whose product is always even so
+the halving is a shift. It buys two ops and costs a paragraph of explanation;
+take it only if the measurement says the two ops matter.)
+
+**`RECOMPOSE` variant (`YEAR`, `QUARTER`, and `MONTH` free as a cross-check).**
+
+```
+YEAR    = emitDaysFromCivil(year, 1, 1)
+MONTH   = emitDaysFromCivil(year, month, 1)
+QUARTER = emitDaysFromCivil(year, 3 * quarter - 2, 1)
+```
+
+`year` from `emitChronoYear`, `month` from `emitChronoMonth`. No leap flag
+anywhere: `emitDaysFromCivil` does its own era arithmetic. Its independent
+value beyond the measurement is that it gives task 40's helper a **second
+caller** - today only `emitAddMonths` calls it, so a defect in it that
+`add_months`'s own day clamp happens to mask is currently invisible.
+
+### 7.4 The IR node, and the level as a shape-bearing field
+
+```java
+record TruncDate(VarkaVectorIR days, TruncLevel level) implements Chrono {}
+
+enum TruncLevel { YEAR, MONTH, QUARTER }
+```
+
+* `Chrono` membership is what makes `isChrono`, `weightOf`, `planWordRef`'s
+  word aliasing and the prefix fragment work with no edit to any of them - the
+  sealed family's own javadoc says as much. `LastDay` is the precedent.
+* `level` is a record component, so it reaches `canonical` and
+  `canonicalShallow` and therefore the shape hash: two levels emit different
+  code, so they are two shapes and must not share a cached class. `Compare`'s
+  `CompareOp` is the existing precedent for a shape-bearing enum field, and
+  section 3 of this file already argued the point. Render `(trunc:YEAR <days>)`
+  and `(trunc:YEAR 1)`.
+* `WEEK` is deliberately **not** a `TruncLevel`: per 7.2 it never becomes a
+  `TruncDate` node at all.
+* An enum, not the recipe's `int level` - the house style for a shape-bearing
+  constant, and it makes the emitter's inner switch exhaustive.
+
+### 7.5 Files, and the edit sites
+
+Mechanics per `PLAN_TASK_33.md` section 3; the switches are exhaustive, so
+each omission is a compile error rather than a silent decline.
+
+| file | what |
+|---|---|
+| `VarkaVectorIR.java` | the record, the `Chrono` permits clause, `TruncLevel`, and the two renderings |
+| `VarkaLoopEmitter.java` | `childrenOf`, `analyze`, `planWordRef` (alias the child's word), `planSlots` (`TRUNC_TMP_COUNT`), `emitValue` (`case TruncDate n -> emitChrono(...)`), `chronoChild`, `weightOf`, and the new `emitChronoTrunc` plus `emitJanuaryDayOfYear` |
+| `VarkaEmitOptions.java` | a `TruncDate { SUBTRACT, RECOMPOSE }` field, its `with...`, and its place in `canonical()` - which stays empty for `DEFAULTS`, so no production hash moves |
+| `VarkaExpressionCompiler.scala` | the `TruncDate` arm, `foldTruncLevel`, and the `WEEK` rewrite |
+| `VarkaLoopEmitterSuite.scala` | the `evalValue` arm, the boundary matrix, the variants-agree test, the opt-in sweep, both pinned fixtures |
+| `VarkaShapeCacheSuite.scala` | the `everyNode` hash |
+| `VarkaExpressionCompilerSuite.scala` | one compile test per level, the `WEEK` rewrite's shape, and one decline test per rejected shape |
+| `VarkaDifferentialSuite.scala` | all four levels in one query, and the `DateType`-survives case |
+| `VarkaEmitterParityBenchmark.scala` + its committed results | 7.7 |
+| `PLAN_MILESTONE_4.md`, this file | the status row, and section 8 |
+
+`TRUNC_TMP_COUNT` follows `ADD_MONTHS_TMP_COUNT`'s precedent - fresh named
+slots rather than clever reuse of prefix scratch, which is the lesson PR #78
+recorded after doing it the other way first. `SUBTRACT` needs the prefix's
+eight plus `jdoy`, `qstart` and `emitLeapFlag`'s three scratch (with `t[6]`
+doubling as its `maskA`, as `emitAddMonths` does); `RECOMPOSE` needs the
+prefix's eight plus the twelve locals and two masks `emitDaysFromCivil` takes.
+`planSlots` already holds the options, so allocate per variant.
+
+**`weightOf`.** `MONTH`'s tail is about five ops on top of the roughly forty
+the prefix costs; `YEAR`'s is about twenty-seven (the leap flag alone is
+nineteen); `QUARTER`'s is thirty-five under `SUBTRACT` and forty under
+`RECOMPOSE`. `CHRONO_WEIGHT` (50) is honest for `MONTH` and understates the
+other two, the way it understated `DayOfYear` before PR #64 gave that its own
+`DAY_OF_YEAR_WEIGHT = 70`. Nothing about today's grouping changes either way,
+since all of them already exceed `GROUP_BUDGET` (16) - but per #64's own
+review finding the number should be honest rather than convenient, so read the
+level: `MONTH` weighs `CHRONO_WEIGHT`, `YEAR` and `QUARTER` weigh 75.
+
+**The compiler arm** evaluates the foldable format through
+`DateTimeUtils.parseTruncLevel` - the definition, never a re-implementation of
+its aliases and case folding - and maps `TRUNC_TO_YEAR`/`TRUNC_TO_MONTH`/
+`TRUNC_TO_QUARTER` to the three levels, `TRUNC_TO_WEEK` to the 7.2 rewrite,
+and everything else to a decline with its own `sink.note` reason. It copies
+`foldWeekday`'s shape exactly, including the lesson that evaluating a
+foldable-but-computed expression can throw for reasons unrelated to the
+format: that declines, it does not crash planning.
+
+**Why an unsupported format declines rather than answering.** The row engine
+returns NULL for the whole column when `parseTruncLevel` is below
+`MIN_LEVEL_OF_DATE_TRUNC` - an unrecognized string, a timestamp-only level
+like `'DAY'`, or a null format. Varka has no null-literal IR node, so it
+cannot produce that column and declines instead. That is a decline for
+correctness, not a gap to paper over, and each case gets a distinct reason so
+task 16's report says which one fired.
+
+### 7.6 Tests
+
+Section 4's list stands, with these changes:
+
+* **No decline test for an out-of-range day** - 7.1, item 3.
+* **`WEEK`**: a compiler test asserting it compiles to
+  `IRNextDay(SubDays(col, lit), lit)` with literals 7 and 3 (the shape is the
+  assertion - if the rewrite is wrong, this is where it shows), and a
+  differential over a Sunday, a Monday, and a date in the first week of
+  January, where the Monday of the week belongs to the previous year.
+* **The two variants agree** on every level and every shape the emitter suite
+  drives, at both widths, the way the `FloorMod7` reference-variant test does.
+* **An opt-in exhaustive sweep** (`-Dvarka.sweep=true`) of each level against
+  `DateTimeUtils.truncDate` over all 16,777,216 days `VarkaChrono` covers,
+  under both variants. This is the gate that catches a wrong magic constant at
+  the top of the range, which is the failure mode this family has now shipped
+  twice (tasks 34 and 36) and which no boundary list found either time. Note
+  for whoever runs it: the property does not reach a forked test JVM through
+  `build/sbt -D...`; use
+  `build/sbt 'set LocalProject("catalyst") / Test / javaOptions += "-Dvarka.sweep=true"' ...`.
+* **The pinned fixtures** take one level, not three - section 4 is right that
+  one `(trunc:YEAR ...)` proves the rendering - and both are re-pinned from
+  the values the failing assertion prints, never from arithmetic done by hand.
+* **The `DateType` output** survives a second operation
+  (`date_add(trunc(d, 'MONTH'), 5)`), as section 5 asks. `last_day` (PR #78)
+  has since proved that path, so this is a regression check rather than a
+  first proof.
+* **The prefix fragment fires**: `SELECT trunc(d,'MONTH'), year(d)` emits one
+  prefix, not two, asserted through the emitted method's byte count the way
+  task 32's own tests do.
+
+### 7.7 The measurement that picks the default
+
+A `trunc` section in `VarkaEmitterParityBenchmark`, shaped like the existing
+calendar sections: the three levels under both variants, plus the Janino row
+path, over 4096-row batches, at both vector widths, with the committed results
+file regenerated in one run on an idle machine. The owner picks the default
+from that table and the choice is recorded in section 8 with the numbers
+behind it. Any ratio under 1.3x is re-checked by minimums on an interleaved
+A/B before it is written down, per the standing rule.
+
+### 7.8 Predictions, registered before the measurement
+
+1. `SUBTRACT` beats `RECOMPOSE` on `YEAR` and `QUARTER` by 1.10x to 1.35x at
+   AVX-512, and by less at 128-bit, because both are dominated by the shared
+   prefix that neither of them changes.
+2. `MONTH` lands within noise of `dayofmonth` itself - it is that tail with
+   two ops changed - and beats the Janino row path by 4x to 8x.
+3. The two variants agree bit for bit on every day of the covered range. If
+   they disagree anywhere, the bug is in `emitDaysFromCivil` rather than in the
+   subtract form, because the subtract form is the one
+   `verify_chrono_tails.py` swept.
+4. No committed number for an existing shape moves, and no emitted byte for
+   `year`/`month`/`dayofmonth`/`quarter`/`add_months`/`last_day` changes. The
+   two pinned fixtures move, once, for the new node type.
+5. `WEEK` costs what `next_day` costs to within noise, since it is the same
+   emitted code with one extra literal subtract in front of it.
+6. `TruncDate` needs no new `FragmentKind`: it shares the existing chrono
+   prefix through the key B1 already built.
+
+### 7.9 Risks
+
+1. **The quarter is January-based; `mp` is not.** `quarter` must come from
+   `emitChronoMonth`'s January-based month, never from `mp` directly. Taking
+   `mp` would pass on April-through-December dates and fail on
+   January-through-March, which is exactly the shape of bug a boundary list
+   built around February finds late.
+2. **`emitLeapFlag` biases its own input.** It expects the plain reported year
+   and adds `YEAR_BIAS` internally. Pre-biasing it - which is what this file's
+   own section 2 invites by analogy with `last_day`'s first draft - gives a
+   wrong flag only for far-future and far-past years, silently. That is the
+   defect task 36 shipped once; the sweep in 7.6 is what catches it.
+3. **Two `emitLeapFlag` overloads** will exist on master if PR #64 lands
+   first. Call task 40's seven-parameter one, and say so in the commit.
+4. **The `DateType` output** allocates a different Arrow vector in the
+   evaluator than every `IntegerType` field in this family. `last_day` proved
+   that path, so the risk is smaller than section 3 assumed - but the
+   differential still has to chain a second date operation on top.
+5. **Numbers moving under the task's own feet.** Commits 2 through 4 all touch
+   emitted bytes; regenerate the parity file once, in commit 5.
+
+### 7.10 Sequencing
+
+Five commits, each green on its own:
+
+1. **This re-plan**, the document alone.
+2. **`MONTH` end to end**: the IR node with its level field, the compiler arm,
+   `emitChronoTrunc`'s `MONTH` tail, both pinned fixtures re-pinned, and the
+   compiler, emitter and differential tests. No leap flag and no variants -
+   the smallest change that proves the node's plumbing, which is what section
+   2 recommends landing first.
+3. **`YEAR` and `QUARTER` under both variants**, the `VarkaEmitOptions`
+   switch, the variants-agree test and the opt-in sweep.
+4. **`WEEK`'s compiler rewrite** and its tests.
+5. **The measurement**: the benchmark section, one regeneration run, and the
+   owner's chosen default recorded in section 8.
+
+### 7.11 Still out of scope
+
+* **`date_trunc` at timestamp level** - int64 lanes, task 29.
+* **Reproducing the row engine's NULL** for an unsupported format, which needs
+  a null-literal IR node the IR does not have. Declining instead - 7.5.
+* **A non-foldable format**, per task 33's rule for `next_day`'s weekday.
+
+## 8. Outcome
 
 Filled in when the work lands, including which steps of this recipe misled you.
