@@ -242,10 +242,13 @@ public final class VarkaLoopEmitter {
    * How many int-vector/mask locals {@link #emitChronoLastDay} needs: the
    * {@link #CHRONO_PREFIX_SLOTS} {@link #emitChronoPrefix} already uses, plus the reported
    * year, the day of month, the current month's start and the next one's (clamped, per
-   * {@link #emitMonthStart}'s own exact-range precondition), the blended length, and
-   * {@link #emitLeapFlag}'s five scratch locals for February's own branch.
+   * {@link #emitMonthStart}'s own exact-range precondition), and the blended length.
+   *
+   * <p>This was 19 while {@link #emitLeapFlag} needed five scratch locals threaded in for
+   * February's own branch. It is now a perfect hash taking only the year, so those five are
+   * gone along with the parameters that carried them.
    */
-  private static final int LAST_DAY_TMP_COUNT = 19;
+  private static final int LAST_DAY_TMP_COUNT = 14;
 
   /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
@@ -2680,11 +2683,6 @@ public final class VarkaLoopEmitter {
     int mpNextClamped = t[11];
     int monthStartNext = t[12];
     int length = t[13];
-    int leapScratch1 = t[14];
-    int leapScratch2 = t[15];
-    int leapMaskB = t[16];
-    int leapRemScratch = t[17];
-    int leapCarryMask = t[18];
 
     emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
     cb.astore(year);
@@ -2712,8 +2710,7 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(365);
     cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
     cb.loadConstant(1);
-    emitLeapFlag(cb, year, leapScratch1, leapScratch2, leapRemScratch, mask, leapMaskB,
-        leapCarryMask);
+    emitLeapFlag(cb, year);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
     cb.aload(monthStart);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
