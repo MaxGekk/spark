@@ -365,6 +365,11 @@ it is elided, and the exhaustive sweep says the answers do not move - with the
 number recorded because the repo's rule is that a performance claim traces to a
 committed file, not because the change needs one.
 
+*(Superseded in size, not in direction, by task 53: once the month block moves
+to Neri-Schneider's single-numerator form, a `year`-only kernel elides a two-op
+numerator rather than a four-op magic-multiply step. The elision stays correct
+and stays a win; see `PLAN_TASK_53.md` section 1.)*
+
 ### 9.2 What moved in the committed file, and why it is not this task
 
 The regeneration moves the calendar rows far more than the A/B above can
