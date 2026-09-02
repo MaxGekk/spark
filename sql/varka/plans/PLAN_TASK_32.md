@@ -618,11 +618,327 @@ would choose. Whether the 128-bit bimodality follows the emitted body is the
 first thing B2 should find out, since it has the same shape and the same register
 demand - and per the section above, no JVM flag will make that question go away.
 
+### 7.1 Step B1's outcome: the fragment is built, and the epilogue's cliff moves out
+
+Built as planned, minus the grouping change, which stays with B2: `FragmentKind`,
+`FragmentKey`, `chronoChild` and `fragmentKey` in `VarkaLoopEmitter`; `planSlots`
+allocating the eight prefix locals once per fragment instead of once per node;
+`emitChronoPrefixOnce` between `emitChrono`/`emitAddMonths` and the prefix; and
+`VarkaEmitOptions.shareChronoPrefix`. `weightOf`/`addOps`/`groupOutputs` are untouched,
+so every calendar output still gets its own loop method.
+
+**The key is (kind, child, validity word), not (kind, child).** The plan wrote the key
+as the kind and the child. That is not enough, because the prefix carries the range
+guard and the guard is ANDed with the node's validity word: `planWordRef` aliases every
+`Chrono` extraction's word to its child's, so `year(d)` and `month(d)` agree, but
+`AddMonths`'s word is the AND of the date's and the month count's, so
+`add_months(d, n)` over a nullable `n` must not inherit a guard computed under `year(d)`'s
+mask. Adding the word to the key makes that structural rather than a rule someone has to
+remember. In a dense body no word is planned at all and the child alone decides.
+
+**One slot is written after the prefix, and it is deliberately outside the contract.**
+`emitAddMonths` reuses `t[6]` - the prefix's carry mask - as scratch for its own compares.
+That is sound because no field tail reads `t[6]`: the tails read only `t[1..5]`. The
+contract is now stated in `emitChronoPrefix`'s javadoc rather than implied, and a test
+orders `add_months` *before* the three extractions so a violation of it fails.
+
+**The default was flipped in this step, not deferred to step 7.** Step 7 in section 9 is
+about B2's throughput default, which needs both widths measured. B1's case is not a
+throughput case at all - it is a compilability one, it needs no benchmark, and with the
+option off it delivers nothing. Flipping it moved no pinned oracle: the line map, the
+`everyNode` fixture and the shape hash are all unchanged, because `canonical()` renders
+options only when they differ from `DEFAULTS` and `DEFAULTS` is what moved.
+
+**No parity regeneration, and the reason is structural rather than a judgement.** Under
+today's grouping no loop method holds two calendar nodes, so there is nothing in one for
+the fragment to share and every `loopDense`/`loopMasked` method is byte for byte what it
+was - asserted by a test, not by inspection. The parity benchmark drives 4096-row chunks,
+which every lane count divides, so its epilogue returns at the length check and is never
+timed. No committed figure can therefore have moved, and re-running the file would have
+added a run's worth of noise to numbers this change cannot reach. The same test fails the
+moment B2 relaxes the budget, which is the signal to regenerate.
+
+#### The ladder
+
+`epilogueMasked`'s bytecode size, four calendar fields per date over as many dates as the
+width needs, measured through `VarkaEmitterTestSupport.codeSize` (the `Code` attribute's
+length, which is what HotSpot measures against `HugeMethodLimit`):
+
+| outputs | dates | unshared | shared |
+|---|---|---|---|
+| 1 | 1 | 662 | 662 |
+| 2 | 1 | 1088 | 732 |
+| 4 | 1 | 1964 | 896 |
+| 8 | 2 | 3817 | 1681 |
+| 16 | 4 | 7531 | 3259 |
+| 17 | 5 | **8080** | 3808 |
+| 20 | 5 | 9436 | 4048 |
+| 24 | 6 | 12043 | 4837 |
+| 32 | 8 | 17215 | 6421 |
+| 40 | 10 | 22443 | **8025** |
+| 48 | 12 | 27913 | 10405 |
+
+The 8000-byte crossing moves from **17 outputs to 40** - from four date columns to ten.
+Past it HotSpot compiles the method not at all, so the epilogue runs interpreted with
+boxed vectors on every batch whose length is not a lane multiple. (The debt register
+records 7530 and 8079 for the same two shapes; the numbers here are one byte higher
+because they are the `Code` attribute's length. Same measurement, same conclusion.)
+
+This does not close tasks 43 or 44. Task 43 is about a single output holding several wide
+nodes, which the fragment does not touch, and a wide enough projection still crosses -
+it now takes ten date columns instead of five. What it does is give task 44 a real
+baseline instead of a cliff four columns away.
+
+#### Predictions, scored
+
+6. **Nearly right, and the miss is worth recording.** Predicted `epilogueMasked` at 16
+   calendar outputs over one column drops from 8079 bytes to under 3000. Two corrections.
+   First the shape: 16 calendar outputs over *one* column do not exist - the IR's records
+   compare by value, so four fields over one date are four nodes and repeating them is
+   free. The debt register's 16 was four fields over four dates, and the prediction
+   inherited the misreading. Second the number: 7531 to 3259, not under 3000. The
+   direction and the mechanism were right and the magnitude was 9% optimistic, which is
+   the better failure mode than step A's prediction 1.
+
+#### What B2 still needs
+
+Unchanged from the section above: the two-field measurement gates it. One thing B1 adds
+is that the shape is already known to be *correct* - a test drives four calendar outputs
+through one loop method under a widened `groupBudget`, and the exhaustive sweep over all
+16,777,216 days of the covered range now runs under both settings - so B2 is a
+measurement and a policy decision, with no correctness work left in front of it.
+
+### 7.2 Step B2's gate: measured, and it clears - plus two findings the gate did not ask for
+
+Section 7's gate: extend the ceiling to `year, month` and measure it; build B2 if it clears
+~1.3x at AVX-512. With B1's fragment already built, the actual B2 shape - the emitted path
+under a widened `groupBudget` - can be measured directly rather than approximated, which is
+better evidence than the gate asked for. Six new cases in `VarkaEmitterParityBenchmark`'s
+"year" section (`VarkaEmitOptions.DEFAULTS.withGroupBudget(200)`, comfortably past four
+fields' 200 ops so `groupOutputs` fuses every calendar output into one method, where
+`shareChronoPrefix` - on by default since B1 - then shares the prefix once): `year+month` and
+`year+month+day` each measured separate and shared, `year+month+day+quarter` shared against
+the existing four-node baseline and the hand-written ceiling, and `year(d1), year(d2)` as the
+regression guard section 5.2 names.
+
+Three runs, AVX-512, idle machine, five iterations per case per run; ratios compared by the
+minimum best-time across the three runs where the ratio came in near the 1.3x re-check line,
+per the project's standing rule:
+
+| fields | separate (M rows/s) | shared (M rows/s) | ratio (min best-time) |
+|---|---|---|---|
+| 2 (`year, month`) | 902.2-914.6 | 1174.3-1244.2 | **1.29x** (22ms / 17ms, identical across all 3 runs) |
+| 3 (`year, month, dayofmonth`) | 587.9-604.8 | 892.4-934.4 | **1.57x** (33ms / 21ms) |
+| 4 (`year, month, dayofmonth, quarter`) | 437.6-444.6 | 761.7-799.8 | **1.80x** (45ms / 25ms) |
+
+**The gate clears, and the win grows with field count rather than shrinking.** Prediction 3
+(section 6) expected a *sublinear* gain - 1.6-1.9x at two fields, 2.2-2.7x at three - reasoning
+from the four-field op-count ratio the way prediction 1 did, which section 7 already found
+overstates a sharing win by about 2x. The corrected shape is the opposite of what was
+predicted: two fields sit at the stated 1.3x bar almost exactly (1.29x, stable to the ms
+across three separate JVM runs, not a fluke), and the ratio climbs through 1.57x to 1.80x as
+more of the loop method's fixed per-lane-group cost (section 2.17) gets to amortize over more
+outputs. **Recommendation: build B2.** The two-field number is not a comfortable clearance of
+the stated bar, but it is a stable one, and it is the worst case in the table rather than the
+typical one - every additional field makes the case stronger. The owner's call, per section
+2's decision to have the owner pick after seeing the numbers - but there is no reading of this
+table where declining B2 is the safer choice.
+
+**Finding 1: the hand-written "ceiling" was measuring the masked body, not the dense one, and
+the true dense-body number beats it.** `ChronoVectorOps.vectorFourFields` builds a
+`VectorMask` and uses masked load/store overloads on every lane group regardless of
+`hasNulls` - it has no separate unmasked path, because it predates task 10's dense/masked
+split existing as a *variant* the way the emitter has it. The emitted kernel does have one,
+and on null-free data (`srcNullCount == 0`) the driver dispatches to the true dense body -
+unmasked loads and stores, no `VectorMask` machinery at all. Measured across the same three
+runs: the emitted four-field **shared** kernel (25ms best time) is reliably **1.15-1.20x
+faster** than the hand-written **ceiling** (30ms, identical across all three runs) on the
+same null-free data the ceiling was measured on. A kernel named "ceiling" that a real,
+already-built path exceeds is not a ceiling; it is a masked-body measurement that happened to
+read as one because nothing dense existed to compare it with until B1/B2 made the emitted
+path buildable. This does not retroactively wrong step A's own number (679.0 vs 445.7,
+1.52x) - both sides of *that* comparison were dense-dispatched, since the four independently
+emitted nodes get the same dispatch the shared kernel does - but it does mean `ChronoVectorOps`
+should not be read as an upper bound on what a dense null-free shared kernel can reach. It is
+a same-arithmetic reference kernel, and a masked one; the emitted path is the ceiling now.
+
+**Finding 2: the validity write is just over half the ceiling kernel's time - not three
+quarters, and not a fit.** Section 2.17 asked this question from a three-point fit across
+different op counts and called it "a fit, not a measurement." `ChronoVectorOps.vectorFourFieldsNoValidity`
+is the direct measurement: the exact same arithmetic, the exact same guard, with every
+destination validity buffer and every `orValidityBitsAt`/`orPartialValidityBitsAt` call
+removed (`ChronoVectorOpsTest.noValidityMatchesFourFieldsOnNullFreeData` pins that removing
+them changes no value). Across the same three runs the ceiling (with validity) costs
+1.50-1.52 ns/row and the no-validity variant costs 0.65-0.67 ns/row - a difference of
+0.84-0.85 ns/row, which is **55.6% to 56.7% of the ceiling's total time**, spent on four
+`zero()` calls and, per lane group, four `orValidityBitsAt` calls that write back a value
+already implied by the guard mask. This is a different number from section 2.17's fitted
+"three quarters is fixed per-lane-group cost" because that fit priced *everything* the
+decomposition does not touch (the four stores, the chunk prologue, the loop control), not
+validity alone; validity is the majority of that fixed cost but not all of it. Tasks 45-47
+are confirmed worth doing on this number alone, with 45 (the null-free fast path, one fill
+per batch instead of one OR per lane group per output) the most directly targeted at it.
+
+### 7.3 Task 44's crossing, priced directly rather than inferred from bytecode size
+
+Section 7.1 measured `epilogueMasked`'s *bytecode size* crossing `HugeMethodLimit` at 40
+outputs; it did not measure what crossing it costs, because no committed harness runs a
+non-aligned chunk on a wide enough calendar shape - the four-field ladder in section 7.1's own
+table stays under the limit unshared (7531 bytes at four dates) and so has nothing to cross.
+A new section, five date columns of four fields (20 calendar outputs: 9436 bytes unshared,
+past the limit; 4048 bytes shared, comfortably under it), at the same four chunk sizes task
+24's ladder uses:
+
+| chunk | unshared (ns/row) | shared (ns/row) | ratio |
+|---|---|---|---|
+| 4096 (aligned) | 13.9 | 13.7 | 1.01x |
+| 4095 (lanes-1 tail) | 18.7 | 13.7 | **1.36x** |
+| 64 (aligned) | 64.0 | 46.9 | **1.36x** |
+| 63 (lanes-1 tail) | 410.5 | 56.1 | **7.32x** |
+
+Two things this shows that the size ladder alone could not:
+
+**The crossing costs something even on an aligned batch.** `emitEpilogue`'s own generated
+body returns immediately when `loopBound == length` (`Label remainder; ... ireturn`), so at
+chunk 4096 and chunk 64 the epilogue never does real work under either setting - and yet chunk
+64 shows a stable 1.36x cost anyway. The reason is that the epilogue method is *called*
+unconditionally on every `run` invocation regardless of remainder, and an interpreted call
+into a method HotSpot will never compile at any tier is measurably slower than a compiled
+one's early return - invisible at chunk 4096, where 4880 calls per iteration are swamped by
+real vector work, and visible at chunk 64, where 312500 calls per iteration make the per-call
+difference the dominant cost. **This means the debt register's framing - "runs interpreted...
+on every batch whose length is not a lane multiple" - understates the cost surface: the method
+is invoked, and pays an interpreter-call tax, on every batch, aligned or not; it only does
+interpreted *arithmetic* on the unaligned ones.** Section 2.9 and the debt register are
+corrected to say so, since a reader relying on the old framing would conclude a production
+workload of aligned 4096-row batches pays nothing for a method past the limit, which chunk
+64's number says is not quite true even if the effect is small at that width.
+
+**Where the effect is real work, it is not small.** At chunk 63 - the closest committed shape
+to "most of a batch is remainder," which no production query produces but which isolates the
+mechanism - the unshared kernel is **7.3x slower**: fifteen rows of civil-from-days arithmetic
+over twenty outputs, run to completion by the interpreter with boxed vectors, dominates the
+sixty-three-row call. At the shape closer to production, chunk 4095 (one lane group's worth of
+remainder out of 4096, i.e. a batch shy by one row of the shipped `COLUMN_BATCH_SIZE`), the
+cost is a measured 1.36x - the honest number for "what does a fifteen-column-of-dates,
+sixteen-plus-field-wide query pay for landing one row short of an aligned batch," which is a
+question worth having a number for even though such a projection does not exist in the
+milestone's corpus today.
+
+### 7.4 B2 at 128-bit: the gate clears there too, and the bimodality does not travel
+
+Section 7.2 measured the B2 gate at AVX-512 only; the plan is explicit that the default
+cannot be chosen on that number alone, because the hand-written ceiling kernel showed a
+128-bit bimodality that six hypotheses failed to explain (section 7's own record). The open
+question was whether that bimodality belongs to the *mechanism* (a wide shared calendar body
+at a narrow vector width) or to the *specific kernel* it was found on. Three runs of the same
+B2-gate cases under `-XX:MaxVectorSize=16`, one of them run after an unplanned reboot of the
+machine confirmed the environment was otherwise unaffected:
+
+| fields | separate (min best-time, ms) | shared (min best-time, ms) | ratio |
+|---|---|---|---|
+| 2 (`year, month`) | 63 | 48 | **1.31x** |
+| 3 (`year, month, dayofmonth`) | 94 | 64 | **1.47x** |
+| 4 (`year, month, dayofmonth, quarter`) | 127 | 76 | **1.67x** |
+
+Against the AVX-512 numbers (1.29x / 1.57x / 1.80x), these are close - the emitted B2 kernel
+wins by nearly the same factor at both widths, growing with field count at both. Every one
+of these six cases (separate and shared, all three field counts) was stable to a few
+milliseconds across all three runs, with no run showing the outlier pattern the two kernels
+below show. **The gate clears at 128-bit too, by nearly the same margin as at AVX-512.**
+
+**The bimodality belongs to `ChronoVectorOps`, not to "a shared calendar body at 128-bit."**
+Across the same three runs, the *other* two kernels this task built - both hand-written, both
+predating the emitted fragment - reproduce exactly the instability section 7 already
+documented and failed six times to explain:
+
+* **The hand-written ceiling** (`vectorFourFields`): 121ms, 84ms, 121ms - the same roughly
+  2-of-3-slow, 1-of-3-fast split the earlier 21-run investigation found (4 fast out of 21).
+  Even at its fastest observed run the emitted shared kernel (76ms) still beats it (84ms,
+  1.11x); at its ordinary, more frequent speed the margin is 1.59x.
+* **The no-validity variant** (`vectorFourFieldsNoValidity`): a *different* flavor of the same
+  instability, and a new data point for the open investigation. Two of three runs show a
+  "Best Time" of 32ms sitting beside an *average* of 1261-1291ms and a stdev over 2000ms -
+  meaning some individual timed iterations inside one JVM run land fast and others land
+  catastrophically slow, flipping mid-run rather than settling into one mode for the run's
+  duration the way the ceiling kernel does. The third run is stable at 32ms throughout. This
+  is worth recording as a seventh data point for a bimodality that, per section 7's own
+  conclusion, no JVM flag reaches: it is a property of C2's code generation for these two
+  specific 128-bit method bodies, not of the sharing technique, and not, per this section, of
+  the emitted path that implements the same technique in different bytecode.
+
+The practical consequence: **do not quote a 128-bit `ChronoVectorOps` number from a single
+run.** Every number from `vectorFourFields` or `vectorFourFieldsNoValidity` at 128-bit in this
+document or elsewhere is either an explicit multi-run range or should be read as one mode of
+an unresolved bimodal pair - the emitted kernel carries no such caveat, at either width.
+
+### 7.5 The compile cliff (risk 1 / prediction 4): measured, and it did not happen
+
+`GROUP_BUDGET` exists because a 64-op loop method took a ~10-second tier-4 compile in this
+project's own earlier findings (`SKILLS.md`, "C2 Compile Latency Is the Wide-Vector-Loop
+Cliff"), and the plan named this the risk most likely to cap B2 - "the one thing that could
+cap this," measured before `FUSED_CEILING` is chosen rather than discovered after. Every
+number reported in 7.2 was steady-state throughput; none of it says how long the widened
+kernels took to reach that steady state; that is what this section measures.
+
+`-XX:+PrintCompilation` across the whole parity benchmark run, filtered to each generated
+class's own name (every kernel in this file gets a distinct numbered class, so this is exact,
+not a guess about which lines belong to which kernel):
+
+| kernel | shape | wall time, first tier-3 compile to every method's tier-4 landing |
+|---|---|---|
+| `VarkaFusedBench806` | 2 fields, 1 method, 100 ops | 142 ms |
+| `VarkaFusedBench808` | 3 fields, 1 method, 150 ops | 207 ms |
+| `VarkaFusedBench809` | 4 fields, 1 method, 200 ops (the B2 case measured in 7.2) | 272 ms |
+| `VarkaFusedBench803` | 4 fields, 4 separate methods (today's shape) | 624 ms |
+| `VarkaFusedBench900` | 20 outputs, 20 separate methods, unshared (task 44's crossing) | 2434 ms |
+| `VarkaFusedBench901` | 20 outputs, 1 method, 200 ops, shared | 1971 ms |
+
+None of these approach the historic 10-second cliff, and none show the cliff's own tell: a
+repeated tier-4 task line marked `blocked` (zero occurrences anywhere in the log, for any
+Varka-generated class) or a compile that never lands. Every method compiles exactly once past
+tier 3 (a normal, single "made not entrant: not used" per method as tier 4 supersedes it), with
+one expected exception: `run`/`epilogueDense` on the kernels that later see a masked or
+larger-remainder batch for the first time take a second, equally fast recompile via an
+`uncommon trap` deopt when that shape is first exercised - not thrashing, just C2 learning a
+branch it had not yet profiled.
+
+**809's own timeline is the direct answer to the risk.** The case "year+month+day+quarter,
+shared (1 loop method), null-free" begins, `loopDense0` (776 bytes, the 200-op body) reaches
+an OSR tier-4 compile 58ms after its first tier-3 compile and a standard tier-4 compile 171ms
+after that; every dependent method (`run`, `runDense`, `epilogueDense`) is fully tier-4 within
+272ms of the case starting. Against a 2-second warmup window, that leaves roughly 1.7 seconds
+of genuinely steady-state execution before the measured window even opens - the throughput
+numbers in 7.2 are not measuring a partially-compiled kernel.
+
+**900 is the outlier worth naming, and it still is not a risk.** Twenty separate 1000-byte-ish
+loop methods take a combined 2.4 seconds to all reach tier 4 - the longest compile window in
+the whole suite, because there are twenty independent compile tasks rather than one or four.
+That is close enough to the 2-second warmup window that it is worth flagging rather than
+waving past: the case's own committed stdev (3ms on a 278ms best time, in the run this
+section's numbers are quoted from) shows no sign of contamination, and `Benchmark`'s
+best-time statistic is by construction robust to one slow early iteration even when a stdev is
+not - but this is the one case in the suite where the compile-cliff risk was closest to
+mattering, and it mattered at 20 outputs, not at four.
+
+**Prediction 4, scored:** wrong in the same direction as prediction 1 was wrong in step A, and
+for a related reason - both predictions reasoned from the *historic* 64-op finding on a
+different kernel (a hand-written body compiled by `javac`) rather than measuring the actual
+emitted bytecode this task produces. The emitted path's own methods compile in low hundreds of
+milliseconds even at 200 ops in one method, and the historic cliff does not reproduce anywhere
+in this file's kernels. Confidence was stated as low ("the one most likely to be wrong, and
+the one with a real chance of capping the mechanism"); it was wrong, in the favorable
+direction.
+
 ## 8. Risks
 
-1. **Prediction 4.** The compile cliff is the one thing that could cap this, and
+1. **Prediction 4.** ~~The compile cliff is the one thing that could cap this, and
    it is measured in 5.3 before `FUSED_CEILING` is chosen rather than discovered
-   after the mechanism ships.
+   after the mechanism ships.~~ **Closed, section 7.5.** Measured directly via
+   `-XX:+PrintCompilation` on every kernel in the parity suite: the widest single
+   loop method (200 ops, four fields) reaches tier 4 in 272 ms, the widest kernel
+   overall (twenty separate methods) in 2.4 s - neither the historic 10-second
+   cliff nor its `blocked`-task tell appears anywhere. Did not cap the mechanism.
 2. **A shared prefix under a changed guard.** Sharing the guard is correct only
    because the guard reads nothing but the child and the masks. Any future chrono
    node whose guard depends on something else (an ANSI throw path, task 30) must
@@ -665,3 +981,12 @@ number clearing the four-node baseline:
 7. The default flipped, pinned oracles re-pinned, `docs/sql-varka.md` and
    `README.md` requoted from that run, section 2.9 and the debt register swept in
    the past tense.
+
+**What step B1 actually did**, recorded here because it departs from the list
+above in two places (section 7.1 has the reasons): it branched off
+`varka-task-40` rather than master, because the factoring it keys on lives only
+there and re-doing it would have collided with PR #67 line for line; and it
+carried out step 4 and the *default half* of step 7 together, because with the
+option off B1 delivers nothing at all and the epilogue argument that justifies it
+needs no measurement. Steps 5 and 6, and the parity regeneration, stay with B2
+where the numbers they rest on are. Nothing pinned moved.
