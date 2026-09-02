@@ -50,6 +50,24 @@ public final class VarkaEmitterTestSupport {
   }
 
   /**
+   * The named method's bytecode size - the length of its {@code Code} attribute, which is what
+   * HotSpot measures against {@code HugeMethodLimit} (8000 bytes by default) when it decides
+   * whether to compile the method at all. Past that limit the method is never compiled by C1 or
+   * C2 and runs interpreted with boxed vectors, so this is the number a wide emitted body has to
+   * stay under; see {@code PLAN_MILESTONE_4.md}'s task 44. Zero when the method does not exist.
+   */
+  public static int codeSize(byte[] bytes, String methodName) {
+    for (java.lang.classfile.MethodModel method : ClassFile.of().parse(bytes).methods()) {
+      if (method.methodName().equalsString(methodName)) {
+        return method.code()
+            .map(code -> ((java.lang.classfile.attribute.CodeAttribute) code).codeLength())
+            .orElse(0);
+      }
+    }
+    return 0;
+  }
+
+  /**
    * The line numbers the named method's {@code LineNumberTable} attributes its instructions to,
    * in ascending order and without duplicates - the task 16 mapping, read the way a debugger or
    * a stack trace reads it. Empty when the method carries no table (or does not exist).
