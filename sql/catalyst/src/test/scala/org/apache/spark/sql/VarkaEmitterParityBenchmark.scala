@@ -343,11 +343,12 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
         def nullsIn(n: Int): Int = (n + 6) / 7
         // Four outputs need four destinations; one shared buffer would have the kernels
-        // overwrite each other and alias four stores onto one cache line.
-        val extraDst = Array.fill(3)(arena.allocate(numRows * 4L, 8))
-        val extraDstValidity = Array.fill(3)(arena.allocate((numRows + 7) / 8L, 8))
-        val dstData4 = (dst +: extraDst.toSeq).map(_.address()).toArray
-        val dstValidity4 = (dstValidity +: extraDstValidity.toSeq).map(_.address()).toArray
+        // overwrite each other and alias four stores onto one cache line. wideDst/wideDstValidity
+        // are the same four buffers the "widest shape" section below uses - task 32's own cases
+        // reuse them rather than allocating a second set, since nothing in either section holds
+        // a result across sections.
+        val dstData4 = wideDst.map(_.address())
+        val dstValidity4 = wideDstValidity.map(_.address())
         // Each chunk advances the source and destination addresses, so a pass walks the whole
         // buffer rather than re-reading a cache-warm prefix 245 times. That matters here and
         // not in the task-24 ladder below: this section's scalar anchor walks all one million
@@ -376,9 +377,9 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1): Unit =
           eachChunk { (dataOff, validityOff, n) =>
             val dstData = if (outputs == 1) Array(dst.address() + dataOff)
-              else dstData4.map(_ + dataOff)
+              else dstData4.take(outputs).map(_ + dataOff)
             val dstValid = if (outputs == 1) Array(dstValidity.address() + validityOff)
-              else dstValidity4.map(_ + validityOff)
+              else dstValidity4.take(outputs).map(_ + validityOff)
             // A declined batch does the same vector work and reports the same time, so a
             // discarded status would let this file commit a rate production never sees -
             // it pays the kernel and then the whole row path. Same reason checkMatrix
@@ -403,6 +404,61 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
         benchmark.addCase("year+month+day+quarter, null-free") { _ =>
           chunked(four, false, outputs = 4)
+        }
+        // Task 32 step B2's gate (PLAN_TASK_32.md section 7.2): does the emitted fragment,
+        // fused into one loop method by a widened groupBudget, actually reach the throughput
+        // the hand-written ceiling below promises - and at how few fields does it start to pay.
+        // "Separate" is today's shape: each field its own loop method at the shipped
+        // GROUP_BUDGET (16), which is far under a calendar node's CHRONO_WEIGHT (50) so no
+        // budget short of a deliberate widening ever fuses them. "Shared" widens the budget to
+        // 200 - comfortably past four fields' 200 ops (50 each) - so groupOutputs puts every
+        // field in one method, where shareChronoPrefix (on by default since step B1) then runs
+        // the decomposition once. Neither the option nor the grouping affects results, only
+        // which bytes compute them; VarkaLoopEmitterSuite pins that both ways.
+        val wideBudget = VarkaEmitOptions.DEFAULTS.withGroupBudget(200)
+        val col0 = new ColumnRef(0)
+        val yearMonth = Seq[VarkaVectorIR](new Year(col0), new Month(col0))
+        val yearMonthDay = yearMonth :+ new DayOfMonth(col0)
+        val yearMonthSeparate = emit(yearMonth, 1, 0, loader, 805)
+        val yearMonthShared = emit(yearMonth, 1, 0, loader, 806, wideBudget)
+        val yearMonthDaySeparate = emit(yearMonthDay, 1, 0, loader, 807)
+        val yearMonthDayShared = emit(yearMonthDay, 1, 0, loader, 808, wideBudget)
+        val fourShared = emit(fourFields, 1, 0, loader, 809, wideBudget)
+        benchmark.addCase("year+month, separate (2 loop methods), null-free") { _ =>
+          chunked(yearMonthSeparate, false, outputs = 2)
+        }
+        benchmark.addCase("year+month, shared (1 loop method), null-free") { _ =>
+          chunked(yearMonthShared, false, outputs = 2)
+        }
+        benchmark.addCase("year+month+day, separate (3 loop methods), null-free") { _ =>
+          chunked(yearMonthDaySeparate, false, outputs = 3)
+        }
+        benchmark.addCase("year+month+day, shared (1 loop method), null-free") { _ =>
+          chunked(yearMonthDayShared, false, outputs = 3)
+        }
+        benchmark.addCase("year+month+day+quarter, shared (1 loop method), null-free") { _ =>
+          chunked(fourShared, false, outputs = 4)
+        }
+        benchmark.addCase("year+month+day+quarter, shared (1 loop method), mixed nulls") { _ =>
+          chunked(fourShared, true, outputs = 4)
+        }
+        // The regression guard section 5.2 asks for: two chrono nodes over different dates
+        // must not be pushed into one method by the widened budget clause, since there is
+        // nothing between them to share. VarkaLoopEmitterSuite's correctness test is the one
+        // that would catch a wrong merge; this prices what a right non-merge costs against the
+        // single-date case above.
+        val twoDates = emit(Seq(new Year(col0), new Year(new ColumnRef(1))), 2, 0, loader, 810,
+          wideBudget)
+        benchmark.addCase("year(d1), year(d2), two dates, shared option, null-free") { _ =>
+          eachChunk { (dataOff, validityOff, n) =>
+            val status = twoDates.run(
+              Array(nfData.address() + dataOff, nf2Data.address() + dataOff),
+              Array(0L, 0L), Array(0, 0),
+              Array(dst.address() + dataOff, dst2.address() + dataOff),
+              Array(dstValidity.address() + validityOff, dst2Validity.address() + validityOff),
+              Array.empty[Int], n)
+            require(status == 0, s"the kernel declined a batch: status $status")
+          }
         }
         // Task 32's ceiling (PLAN_TASK_32.md): the same four fields from one shared
         // decomposition, computed by hand outside the emitter (ChronoVectorOps), against the four
@@ -433,6 +489,19 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
                 nfData.address() + dataOff, 0L, 0,
                 dstData4.map(_ + dataOff), dstValidity4.map(_ + validityOff), n)
               require(status == 0, s"the short-live kernel declined a batch: status $status")
+            }
+        }
+        // Section 2.17's bound: the same kernel, the same guard, the same op count, with every
+        // destination validity buffer and every orValidityBitsAt/orPartialValidityBitsAt call
+        // removed. The gap between this and the ceiling above is what the validity write costs,
+        // separated from the arithmetic without touching a single line the two kernels share -
+        // ChronoVectorOpsTest checks that byte for byte.
+        benchmark.addCase("year+month+day+quarter, shared decomposition (no validity write)") {
+          _ =>
+            eachChunk { (dataOff, validityOff, n) =>
+              val status = ChronoVectorOps.vectorFourFieldsNoValidity(
+                nfData.address() + dataOff, dstData4.map(_ + dataOff), n)
+              require(status == 0, s"the no-validity kernel declined a batch: status $status")
             }
         }
         // The scalar baseline this file never had. The LocalDate anchor below is not one: it
@@ -665,6 +734,112 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           benchmark.addCase(s"dayofweek, chunk $chunk ($note), mixed nulls") { _ =>
             chunked(dow, chunk, Array.empty[Int], mixed = true)
           }
+        }
+        // Task 32 step B1's own case for this ladder (PLAN_TASK_32.md section 7.1): four
+        // calendar outputs share nothing in the *loop* under today's grouping - GROUP_BUDGET
+        // keeps each field in its own method whether or not shareChronoPrefix is set, which
+        // VarkaLoopEmitterSuite pins byte for byte - so the two settings can only differ in the
+        // epilogue, the one method every output shares (task 24). That difference is invisible
+        // at chunk 4096, which every case elsewhere in this file uses and which divides evenly
+        // at every supported lane count, so the epilogue always returns at its length check and
+        // is never timed. This ladder's unaligned arms are the only place in the file that runs
+        // it at all.
+        val fourFieldsCol = Seq[VarkaVectorIR](new Year(new ColumnRef(0)),
+          new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
+          new Quarter(new ColumnRef(0)))
+        val fourFieldsUnshared = emit(fourFieldsCol, 1, 0, loader, 710,
+          VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false))
+        val fourFieldsShared = emit(fourFieldsCol, 1, 0, loader, 711)
+        val calDstData = wideDst.map(_.address())
+        val calDstValidity = wideDstValidity.map(_.address())
+        def chunkedCalendar(kernel: VarkaFusedKernel, chunk: Int, mixed: Boolean): Unit = {
+          var pass = 0
+          while (pass < repeats) {
+            var done = 0
+            while (done < numRows) {
+              val n = math.min(chunk, numRows - done)
+              val status = if (mixed) {
+                kernel.run(Array(mxData.address()), Array(mxValidity.address()),
+                  Array(nullsIn(n)), calDstData, calDstValidity, Array.empty[Int], n)
+              } else {
+                kernel.run(Array(nfData.address()), Array(0L), Array(0),
+                  calDstData, calDstValidity, Array.empty[Int], n)
+              }
+              require(status == 0, s"the kernel declined a batch: status $status")
+              done += n
+            }
+            pass += 1
+          }
+        }
+        for ((chunk, note) <- ladder) {
+          benchmark.addCase(
+            s"year+month+day+quarter, unshared, chunk $chunk ($note), null-free") { _ =>
+            chunkedCalendar(fourFieldsUnshared, chunk, mixed = false)
+          }
+          benchmark.addCase(
+            s"year+month+day+quarter, shared, chunk $chunk ($note), null-free") { _ =>
+            chunkedCalendar(fourFieldsShared, chunk, mixed = false)
+          }
+        }
+        benchmark.run()
+      }
+
+      runBenchmark("task 44: the epilogue's HugeMethodLimit crossing (PLAN_TASK_32.md 7.1)") {
+        // The four-field ladder above never shows the crossing this task is actually about:
+        // sixteen calendar outputs (four date columns) sit at 7531 bytes unshared - already
+        // under the 8000-byte HugeMethodLimit, so sharing there has nothing to cross, and the
+        // near-identical numbers above are the honest result of that. Five date columns of
+        // four fields is twenty outputs, which PLAN_TASK_32.md's ladder measures at 9436 bytes
+        // unshared - past the limit, so HotSpot compiles epilogueMasked at no tier at all and it
+        // runs interpreted with boxed vectors on every batch whose length is not a lane
+        // multiple - and 4048 bytes shared, comfortably under it. This section is where that
+        // crossing is priced rather than inferred from bytecode size alone.
+        val repeats = 20
+        val cols = 5
+        val benchmark = new Benchmark(
+          s"${numRows.toLong * repeats} rows, 20 calendar outputs over 5 dates",
+          numRows.toLong * repeats,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        val srcCols = Array.fill(cols)(fill(arena, _ => false)._1)
+        val dstCols = Array.fill(4 * cols)(arena.allocate(numRows * 4L, 8))
+        val dstValCols = Array.fill(4 * cols)(arena.allocate((numRows + 7) / 8L, 8))
+        val roots20 = (0 until cols).flatMap { c =>
+          val col = new ColumnRef(c)
+          Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col),
+            new Quarter(col))
+        }
+        val unshared20 = emit(roots20, cols, 0, loader, 900,
+          VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false))
+        val shared20 = emit(roots20, cols, 0, loader, 901)
+        val srcValidityZero = Array.fill(cols)(0L)
+        val srcNullsZero = Array.fill(cols)(0)
+        def chunked20(kernel: VarkaFusedKernel, chunk: Int): Unit = {
+          var pass = 0
+          while (pass < repeats) {
+            var done = 0
+            while (done < numRows) {
+              val n = math.min(chunk, numRows - done)
+              val dataOff = done * 4L
+              val validityOff = done / 8L
+              val status = kernel.run(
+                srcCols.map(_.address() + dataOff), srcValidityZero, srcNullsZero,
+                dstCols.map(_.address() + dataOff), dstValCols.map(_.address() + validityOff),
+                Array.empty[Int], n)
+              require(status == 0, s"the kernel declined a batch: status $status")
+              done += n
+            }
+            pass += 1
+          }
+        }
+        // 4096/64 never reach the epilogue at all (every supported lane count divides them),
+        // so they are the control: whatever the two settings cost there is the loop, not the
+        // crossing. 4095/63 are where the crossing has to show up if it is real.
+        for ((chunk, note) <- Seq(4096 -> "aligned", 4095 -> "lanes-1 tail rows",
+            64 -> "aligned", 63 -> "lanes-1 tail rows")) {
+          benchmark.addCase(s"unshared (9436B epilogue, past HugeMethodLimit), chunk $chunk " +
+            s"($note)") { _ => chunked20(unshared20, chunk) }
+          benchmark.addCase(s"shared (4048B epilogue, under HugeMethodLimit), chunk $chunk " +
+            s"($note)") { _ => chunked20(shared20, chunk) }
         }
         benchmark.run()
       }
