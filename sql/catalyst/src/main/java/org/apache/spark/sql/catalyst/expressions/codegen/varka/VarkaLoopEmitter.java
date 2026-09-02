@@ -224,19 +224,23 @@ public final class VarkaLoopEmitter {
   /**
    * What {@code DayOfYear} (task 34) weighs against {@link #GROUP_BUDGET}, counted the same
    * way as {@link #CHRONO_WEIGHT}: the shared ~40-op prefix, plus {@link #emitChronoYear} (6),
-   * plus {@code emitLeapFlag} (19: the by-4 test, two {@code emitDivisibleBy} calls at 7 each,
-   * a {@code not} and the final combine), plus the January-based blend (5) - about 70 total,
-   * counted by reading every emitted instruction rather than estimated. Both this and
+   * plus {@link #emitLeapFlag} (22: the bias, the by-4 test, two magic-and-carry modulo tests
+   * at eight each, and the final combine), plus the January-based blend (5) - about 73 total,
+   * counted by reading every emitted instruction rather than estimated. This task first
+   * shipped its own cheaper leap test here (19 ops, a two-way remainder compare in place of
+   * the carry); it was deleted in favour of task 40's, which is the one that survives because
+   * its bias covers the wider year range {@code add_months} reaches - see the note on
+   * {@link VarkaChrono#LEAP_YEAR_BIAS}. Both this and
    * {@link #CHRONO_WEIGHT} already exceed {@link #GROUP_BUDGET}, so the exact value does not
    * change today's grouping decision (a lone {@code DayOfYear} output already forms its own
-   * loop method either way) - but 70 real ops in one single-output method is past the 59-op
+   * loop method either way) - but 73 real ops in one single-output method is past the 59-op
    * width this file's own single-output measurements call healthy and close to the 64-op loop
    * task 26 measured triggering a ~10 second tier-4 compile stall. Whether a lone
    * {@code SELECT dayofyear(d)} actually reaches that stall is exactly task 43's question
    * ("what bounds a loop method inside one output"), not re-measured here - this weight only
    * keeps the accounting honest until task 43 answers it.
    */
-  private static final int DAY_OF_YEAR_WEIGHT = 70;
+  private static final int DAY_OF_YEAR_WEIGHT = 73;
 
   /**
    * How many int-vector/mask locals {@link #emitChronoPrefix} leaves its results in: six
@@ -1229,7 +1233,7 @@ public final class VarkaLoopEmitter {
             // that. (Its one write into a shared slot is the prefix's carry mask, which no
             // field's tail reads - see emitChronoPrefixOnce.)
             int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT
-                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 2 : CHRONO_PREFIX_SLOTS;
+                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 6 : CHRONO_PREFIX_SLOTS;
             FragmentKey key = fragmentKey(node, dense, s);
             int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
             if (prefix == null) {
@@ -2186,18 +2190,23 @@ public final class VarkaLoopEmitter {
         emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
       }
       case DayOfYear n -> {
-        // t[6..9] (mask, leap, biasedYear, remScratch) are DayOfYear's own - a plain
-        // extraction's chronoTmp is only 8 long, so nothing else in this switch may read
-        // past t[5].
+        // t[6..13] are DayOfYear's own - a plain extraction's chronoTmp is only 8 long, so
+        // nothing else in this switch may read past t[5]. t[6] is the prefix's carry scratch,
+        // dead by here, so it doubles as emitLeapFlag's maskA exactly as emitAddMonths does.
         int mask = t[6];
         int leap = t[7];
-        int biasedYear = t[8];
-        int remScratch = t[9];
+        int year = t[8];
+        int leapScratch1 = t[9];
+        int leapScratch2 = t[10];
+        int leapRemScratch = t[11];
+        int leapMaskB = t[12];
+        int leapCarryMask = t[13];
         // year - Year's own formula, recomputed here because the leap flag needs a plain
-        // year and nothing upstream keeps one around.
+        // year and nothing upstream keeps one around. emitLeapFlag applies its own bias.
         emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
-        cb.astore(biasedYear);
-        emitLeapFlag(cb, biasedYear, remScratch);
+        cb.astore(year);
+        emitLeapFlag(cb, year, leapScratch1, leapScratch2, leapRemScratch, mask, leapMaskB,
+            leapCarryMask);
         cb.astore(leap);
 
         // dayofyear = doy >= 306 ? doy - 305 : doy + 60 + L
@@ -2837,80 +2846,6 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
   }
 
-  /**
-   * Leaves the mask of lanes whose reported (January-based) year is a leap year -
-   * {@link VarkaChrono#isLeapYear}'s lane-wise twin, two round-down magic-multiply modulo
-   * tests over a year biased non-negative, rather than a shortcut off
-   * {@code yearOfCentury}/{@code century}: that shortcut is tempting but wrong at the century
-   * and era boundaries, where the reported year has already rolled over relative to those
-   * intermediates. Tasks 35 and 36 call this too (`PLAN_TASK_35.md`, `PLAN_TASK_36.md`), so it
-   * is written to be called rather than inlined - task 37's `weekofyear` does not call this
-   * method; its own `weeksIn` needs a structurally different helper (`PLAN_TASK_37.md` section
-   * 3) even though it shares this method's {@link VarkaChrono#LEAP_YEAR_BIAS} bias.
-   *
-   * <p>Both magics are round-down, so the quotient can undershoot by one and the remainder
-   * they leave is either the true one or the true one plus the divisor - which is why each
-   * test below is "remainder is 0 or the divisor" rather than a single {@code == 0}.
-   *
-   * @param biasedYear a slot holding the plain reported year on entry; overwritten with the
-   *     biased year, since the biased value is read five times below.
-   * @param remScratch a scratch slot for a remainder that is read twice.
-   */
-  private static void emitLeapFlag(CodeBuilder cb, int biasedYear, int remScratch) {
-    cb.aload(biasedYear);
-    cb.loadConstant(VarkaChrono.LEAP_YEAR_BIAS);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.astore(biasedYear);
-
-    // by4 = (biasedYear & 3) == 0
-    cb.aload(biasedYear);
-    cb.loadConstant(3);
-    cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-
-    // not(by100)
-    emitDivisibleBy(cb, biasedYear, remScratch, VarkaChrono.LEAP_CENTURY_M,
-        VarkaChrono.LEAP_CENTURY_K, 100);
-    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
-
-    // by400
-    emitDivisibleBy(cb, biasedYear, remScratch, VarkaChrono.LEAP_ERA_M, VarkaChrono.LEAP_ERA_K,
-        400);
-
-    // leap = by4 & (not(by100) | by400)
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
-  }
-
-  /**
-   * Leaves the mask of lanes where {@code biasedYear} is divisible by {@code divisor}: a
-   * round-down magic-multiply quotient ({@code m}, {@code k}) can undershoot the true quotient
-   * by one, so the remainder is tested against both {@code 0} and {@code divisor} rather than a
-   * single {@code == 0} - the same "round-down plus one correction" idiom {@link #emitCarry}
-   * uses for a quotient, adapted here to a modulo test. {@code remScratch} holds the remainder
-   * across its two-way equality check, since it is read twice.
-   */
-  private static void emitDivisibleBy(CodeBuilder cb, int biasedYear, int remScratch, int m,
-      int k, int divisor) {
-    cb.aload(biasedYear);
-    cb.aload(biasedYear);
-    emitMagic(cb, m, k);
-    cb.loadConstant(divisor);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(remScratch);
-    cb.aload(remScratch);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.aload(remScratch);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(divisor);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-  }
 
   /**
    * Emits a condition node: in the dense body a single {@code VectorMask} local (every input

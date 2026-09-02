@@ -320,6 +320,17 @@ public final class VarkaChrono {
    * multiplies below - a multiple of 400, so leapness is unchanged, and large enough that
    * {@code year - 1} stays non-negative at the bottom of the range {@link #narrowed} covers
    * (needed by {@code weekofyear}, task 37).
+   *
+   * <p><b>This is the scalar model's bias only.</b> The emitter's own leap test
+   * ({@code VarkaLoopEmitter.emitLeapFlag}, written by task 40) biases by {@link #YEAR_BIAS}
+   * (15200) instead, and the two do not have to agree: both are multiples of 400, so both
+   * preserve leapness, and both keep the product under {@code 2^31} over the range each has
+   * to cover. They differ because the ranges do: 13200 is enough for every year
+   * {@link #narrowed} reports, while the emitter's copy also has to serve
+   * {@code add_months}, which reaches about year -14848 and would go negative under this
+   * bias. That is why the emitter has one leap test rather than two - task 34 shipped a
+   * second, cheaper one here and it was deleted in favour of the wider-ranged one, per
+   * {@code PLAN_TASK_36.md} section 7's rule.
    */
   public static final int LEAP_YEAR_BIAS = 13200;
 

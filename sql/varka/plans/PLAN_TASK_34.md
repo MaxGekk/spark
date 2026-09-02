@@ -337,3 +337,50 @@ widths, `catalyst/doc`, `dev/lint-java` and `dev/scalastyle` all pass, no
 non-ASCII/no TODO/no line over 100 characters in any changed file. No
 committed benchmark number moved (none was expected to: `dayofyear` adds a
 node type and shares the existing shape's guard, touching no existing shape).
+
+## The predicted leap-flag collision, and how it resolved
+
+`PLAN_TASK_36.md` section 7 predicted that this task and task 36 would each
+write an `emitLeapFlag` and collide, and gave the rule: whichever merges
+second deletes its own copy and calls the other's rather than leaving two to
+drift. What actually happened is that **task 40 got there first** - it needed
+the same flag for `emitAddMonths`'s February case and merged ahead of both -
+so by the time this branch was rebased past it, master already carried
+`emitLeapFlag(cb, y, scratch1, scratch2, remScratch, maskA, maskB,
+carryMask)` and this branch still carried its own two-parameter one. Task 36
+resolved its half the same way in PR #78; this section records this one.
+
+**Task 40's survives, and it is not the cheaper of the two.** This task's copy
+was 19 emitted ops against task 40's 22, and took two scratch slots against
+seven, because it replaced task 40's `emitCarry` correction with a two-way
+remainder test (`rem == 0 || rem == divisor`) that needs no corrected
+quotient. The deciding difference is range, not cost: the two use the same
+magic (41943 at shifts 22 and 24) and differ only in bias - 13200 here,
+15200 in task 40's - and both are multiples of 400, so both preserve
+leapness. 13200 covers every year `narrowed` can report, but `add_months`
+reaches about year -14848, where a 13200 bias goes negative and the magic
+multiply is then meaningless. So task 40's is the one that can serve both
+callers, and this task's cannot; the swap is in that direction for that
+reason and not because it was written first.
+
+The cost of the swap, stated rather than buried: `DayOfYear` now emits 73 ops
+rather than 70 (`DAY_OF_YEAR_WEIGHT` updated with it), and its `chronoTmp`
+grows from `CHRONO_PREFIX_SLOTS + 2` to `+ 6`, since task 40's helper takes
+three scratch vectors and two mask slots where this one took two locals.
+`t[6]`, the prefix's carry scratch, doubles as its `maskA` exactly as
+`emitAddMonths` does. `VarkaChrono.isLeapYear` and the `LEAP_*` constants stay
+as they are - they are the scalar model, swept by `VarkaChronoSuite`, and
+their javadoc now says why the model's bias and the emitter's differ.
+
+A better single helper is available and was not taken here: task 40's bias
+with this task's two-way remainder test would be 15200-ranged *and* three ops
+cheaper. That would rewrite a shipped, tested helper and move
+`emitAddMonths`'s emitted bytes, so it is left as a follow-up rather than
+folded into a merge fix.
+
+**Verified rather than reasoned**: the opt-in exhaustive sweep
+(`-Dvarka.sweep=true`) checks the emitted five-field kernel - `dayofyear`
+among them - against `LocalDate` over all 16,777,216 days of the covered
+range, under both the shared and unshared prefix, and passes at both vector
+widths. 116 catalyst / 131 sql tests green with the sweeps enabled at both
+widths; `dev/lint-java` and `dev/scalastyle` clean.
