@@ -55,6 +55,15 @@ exact one well inside a lane: `/2141` over `[0, 65535]` is
 `(x * 31345) >>> 26`, exact at every one of the 65536 values, with a maximum
 product of 2054194575 - under `2^31 - 1` with room to spare.
 
+The paper derives the same two constants and states their range itself, which is
+a stronger check than the sweep above because it covers the reasoning and not
+only the values: Example 10 applies its Theorem 3 with `k = 16` to
+`m(N_Y) = (5 * N_Y + 461) / 153`, yielding `a' = 2141`, `b' = 197913` and
+`U = 734`, and Equation (20) gives the remainder form over the same range,
+`for all N_Y in [0, 734[`. Varka's domain is `[0, 365]`, comfortably inside it.
+The transcription is in `sql/varka/papers/`; **read the PDF for the theorem
+statements themselves**, for the reason that directory's README records.
+
 The inverse direction's month-start map is expressible too, and is also a
 shift rather than a magic:
 
