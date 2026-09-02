@@ -407,15 +407,38 @@ trusting them, not just its ratios.
   `fromMemorySegment(species, MemorySegment, long, ByteOrder)`, with no third
   form.
 
-- **What the probe does not measure is the thing that decides it: fusion.** It
-  times one field into an `int[]`, which is exactly the shape where Varka's
-  advantage is zero. A calendar node lowered to scalar code inside a fused
-  vector kernel has to spill its lane group, run scalar, and reload, and the
-  emitter would have to give up fusing that output with the comparisons and
-  connectives around it. So the honest reading is: *for `year` alone, into an
-  array, over a warm table, the lookup wins by 2x* - and before that becomes an
-  argument for emitting scalar code, the same three have to be measured inside a
-  shape like `year(d) = 1998`, where the vector path never leaves lanes. Also
+- **Fusion reverses all of it, and that is the result that matters.** The table
+  above times one field into an `int[]` - the shape where Varka's advantage is
+  zero. Measured again as `year(d) = 1998`, counted, where the vector paths
+  never leave a register:
+
+  | | M rows/s | |
+  |---|---|---|
+  | gathered from the table, compared in lanes | **3999.8** | 2.8x |
+  | arithmetic in lanes, compared in lanes | 1453.0 | 1.0x |
+  | scalar lookup inside a vector kernel (spill, scalar, reload) | 1446.9 | 1.0x |
+  | scalar loop end to end, no lanes anywhere | 848.1 | 0.58x |
+
+  **The scalar loop that won the unfused test by 1.95x loses the fused one by
+  1.7x**, 4630.0 down to 848.1: once the result has to be compared and counted,
+  a per-row loop cannot keep up with lanes doing the same work sixteen at a
+  time. And the hybrid an emitter would actually have to produce - spill the
+  lane group, scalar-lookup, reload, carry on in lanes - is a **wash** with the
+  arithmetic (1446.9 against 1453.0): the spill costs exactly what the lookup
+  saves. So *emitting scalar ops with a lookup table buys nothing inside a fused
+  kernel*, which is the question this was run to answer.
+
+  What does win is the gather, by 2.8x, because it replaces forty lane ops while
+  the compare and the count stay in registers. That is the lowering blocked by
+  the missing `fromMemorySegment` index-map overload and nothing else - the one
+  place where an API gap, not the hardware and not the arithmetic, is costing a
+  measured 2.8x on the corpus shape.
+
+  One caveat on reading the vector rows: all three vector paths end in
+  `VectorMask.trueCount()`, and the arithmetic drops from 2368.3 unfused to
+  1453.0 fused, which is more than a compare should cost. Whatever that is, it
+  is paid equally by the gather and the arithmetic, so the 2.8x between them
+  stands; the scalar comparison is unaffected by it and loses anyway. Also still
   unmeasured: writing to a `MemorySegment` rather than an `int[]`, null
   handling, and the batch-level fallback a 1950-2049 table needs for the
   `0001..9999` range SQL allows.

@@ -1577,11 +1577,19 @@ Two findings come with it. A plain **scalar** `int[]` loop over the same table
 is faster still - 4630.0 M rows/s on the seven-year span, 1.95x the vector
 arithmetic - because the Vector API takes a gather's index map as an `int[]`,
 so the index vector is stored and read back, and that spill is the API's rather
-than the machine's. And the probe deliberately measures the one shape where
-Varka's fusion advantage is zero: one field written to an array. What it cannot
-say is what a scalar node costs *inside* a fused kernel, which has to spill its
-lane group and reload; `SKILLS.md` records that as the measurement this one
-does not replace.
+than the machine's.
+
+**Fused, the ranking inverts.** The same three measured as `year(d) = 1998`,
+counted, where the vector paths never leave a register: the gather reaches
+3999.8 M rows/s against the arithmetic's 1453.0 - **2.8x** - while the scalar
+loop that led the unfused table falls to 848.1, and the hybrid an emitter would
+have to produce (spill the lane group, scalar-lookup, reload) is a wash with the
+arithmetic at 1446.9. So emitting scalar code for a calendar node buys nothing
+once the result is compared and counted, and the only lowering that would pay is
+the one the API forbids. That makes the missing `fromMemorySegment` index-map
+overload a measured 2.8x on the corpus shape rather than a note, and it is the
+strongest argument this milestone has for the on-heap-dictionary option in the
+paragraph above.
 
 ### Item 10. Cross-lane movement: windows, prefix sums, row indices
 

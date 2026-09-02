@@ -119,6 +119,47 @@ object VarkaVectorApiProbeBenchmark extends BenchmarkBase {
       }
       benchmark.run()
     }
+
+    runBenchmark("year(d) = 1998: the same three, fused, where lanes are supposed to pay") {
+      // The probe above measures one field written to an array - the one shape where Varka's
+      // fusion advantage is zero, which is why it cannot settle whether a calendar node should
+      // lower to scalar code. This section is the shape that can: a filter, counted, where the
+      // vector paths never leave a register and the scalar path has to spill and reload.
+      val sevenYears = days(LocalDate.of(1992, 1, 1).toEpochDay.toInt, 7 * 365, 9002)
+      val indexScratch = new Array[Int](VarkaGatherProbe.lanes())
+      val daysScratch = new Array[Int](VarkaGatherProbe.lanes())
+      val yearScratch = new Array[Int](VarkaGatherProbe.lanes())
+      val target = 1998
+
+      val expected = sevenYears.count(d => LocalDate.ofEpochDay(d.toLong).getYear == target)
+      for ((got, ctx) <- Seq(
+          (VarkaGatherProbe.fusedArithmetic(sevenYears, target), "fused arithmetic"),
+          (VarkaGatherProbe.fusedGather(sevenYears, target, indexScratch), "fused gather"),
+          (VarkaGatherProbe.fusedScalarLookup(sevenYears, target), "fused scalar"),
+          (VarkaGatherProbe.fusedScalarInsideVector(sevenYears, target, daysScratch, yearScratch),
+            "scalar inside a vector kernel"))) {
+        require(got == expected, s"$ctx counted $got rows, java.time says $expected")
+      }
+
+      val fused = new Benchmark(
+        s"${numRows.toLong * repeats} dates, ${VarkaGatherProbe.lanes()} lanes",
+        numRows.toLong * repeats,
+        minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+      fused.addCase("arithmetic in lanes, compared in lanes") { _ =>
+        passes(() => VarkaGatherProbe.fusedArithmetic(sevenYears, target))
+      }
+      fused.addCase("gathered from the table, compared in lanes") { _ =>
+        passes(() => VarkaGatherProbe.fusedGather(sevenYears, target, indexScratch))
+      }
+      fused.addCase("scalar loop end to end, no lanes anywhere") { _ =>
+        passes(() => VarkaGatherProbe.fusedScalarLookup(sevenYears, target))
+      }
+      fused.addCase("scalar lookup inside a vector kernel (spill and reload)") { _ =>
+        passes(() => VarkaGatherProbe.fusedScalarInsideVector(
+          sevenYears, target, daysScratch, yearScratch))
+      }
+      fused.run()
+    }
   }
 
   private def checkYears(input: Array[Int], out: Array[Int], ctx: String): Unit = {

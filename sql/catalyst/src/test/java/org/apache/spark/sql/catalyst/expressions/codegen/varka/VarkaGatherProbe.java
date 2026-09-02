@@ -131,6 +131,95 @@ public final class VarkaGatherProbe {
     }
   }
 
+  // --- Fused: year(d) = 1998, counted. The shape where lanes are supposed to pay. -----------
+
+  /**
+   * The filter Varka would emit today: the year computed in lanes, compared in lanes, and the
+   * mask counted. Nothing leaves a vector register between the load and the count.
+   */
+  public static long fusedArithmetic(int[] days, int year) {
+    long count = 0;
+    for (int i = 0; i < days.length; i += SPECIES.length()) {
+      count += yearVector(IntVector.fromArray(SPECIES, days, i))
+          .compare(VectorOperators.EQ, year).trueCount();
+    }
+    return count;
+  }
+
+  /** The same filter with the year gathered from the table instead of computed. */
+  public static long fusedGather(int[] days, int year, int[] indexScratch) {
+    long count = 0;
+    for (int i = 0; i < days.length; i += SPECIES.length()) {
+      IntVector.fromArray(SPECIES, days, i).sub(MIN_DAY_MAPPED).intoArray(indexScratch, 0);
+      count += IntVector.fromArray(SPECIES, YEAR_BY_DAY, 0, indexScratch, 0)
+          .compare(VectorOperators.EQ, year).trueCount();
+    }
+    return count;
+  }
+
+  /** The same filter as a plain scalar loop - no lanes anywhere. */
+  public static long fusedScalarLookup(int[] days, int year) {
+    long count = 0;
+    for (int i = 0; i < days.length; i++) {
+      count += YEAR_BY_DAY[days[i] - MIN_DAY_MAPPED] == year ? 1 : 0;
+    }
+    return count;
+  }
+
+  /**
+   * The shape an emitter would actually have to produce if one node in a fused vector kernel
+   * lowered to scalar code: spill the lane group to an array, run the scalar lookup over it,
+   * reload the result into a vector, and carry on in lanes. This is the case that decides
+   * whether "emit scalar ops with a lookup table" is a real option, because a Varka kernel
+   * never has its input in an {@code int[]} to begin with - it arrives in a vector register
+   * from an off-heap segment, and the spill is the price of leaving it.
+   */
+  public static long fusedScalarInsideVector(int[] days, int year, int[] daysScratch,
+      int[] yearScratch) {
+    long count = 0;
+    int lanes = SPECIES.length();
+    for (int i = 0; i < days.length; i += lanes) {
+      IntVector.fromArray(SPECIES, days, i).intoArray(daysScratch, 0);
+      for (int j = 0; j < lanes; j++) {
+        yearScratch[j] = YEAR_BY_DAY[daysScratch[j] - MIN_DAY_MAPPED];
+      }
+      count += IntVector.fromArray(SPECIES, yearScratch, 0)
+          .compare(VectorOperators.EQ, year).trueCount();
+    }
+    return count;
+  }
+
+  /** The civil-from-days year of one lane group, factored out so the fused cases share it. */
+  private static IntVector yearVector(IntVector date) {
+    IntVector w = date.add(VarkaChrono.NARROW_BIAS);
+    IntVector era = w.mul(VarkaChrono.NARROW_ERA_M)
+        .lanewise(VectorOperators.LSHR, VarkaChrono.NARROW_ERA_K);
+    IntVector rem = w.sub(era.mul(VarkaChrono.ERA_DAYS));
+    VectorMask<Integer> carry = rem.compare(VectorOperators.GE, VarkaChrono.ERA_DAYS);
+    era = era.add(1, carry);
+    rem = rem.sub(VarkaChrono.ERA_DAYS, carry);
+    IntVector century = rem.mul(VarkaChrono.CENTURY_M)
+        .lanewise(VectorOperators.LSHR, VarkaChrono.CENTURY_K);
+    IntVector doc = rem.sub(century.mul(VarkaChrono.CENTURY_DAYS));
+    VectorMask<Integer> carry2 = doc.compare(VectorOperators.GE, VarkaChrono.CENTURY_DAYS);
+    century = century.add(1, carry2);
+    doc = doc.sub(VarkaChrono.CENTURY_DAYS, carry2);
+    VectorMask<Integer> spill = century.compare(VectorOperators.EQ, 4);
+    century = century.sub(1, spill);
+    doc = doc.add(VarkaChrono.CENTURY_DAYS, spill);
+    IntVector yoc = doc.mul(VarkaChrono.YEAR_M)
+        .lanewise(VectorOperators.LSHR, VarkaChrono.YEAR_K);
+    IntVector doy = doc.sub(yoc.mul(365).add(yoc.lanewise(VectorOperators.LSHR, 2)));
+    VectorMask<Integer> over = doy.compare(VectorOperators.LT, 0);
+    VectorMask<Integer> leap = yoc.and(3).compare(VectorOperators.EQ, 0).and(over);
+    doy = doy.add(365, over).add(1, leap);
+    yoc = yoc.sub(1, over);
+    IntVector marchMonth = doy.mul(5).add(2).mul(VarkaChrono.MONTH_M)
+        .lanewise(VectorOperators.LSHR, VarkaChrono.MONTH_K);
+    return era.mul(400).add(century.mul(100)).add(yoc).sub(VarkaChrono.NARROW_ERA_BIAS * 400)
+        .add(1, marchMonth.compare(VectorOperators.GE, VarkaChrono.MARCH_YEAR_JANUARY));
+  }
+
   /** Lanes this JVM runs at, for the benchmark's header. */
   public static int lanes() {
     return SPECIES.length();
