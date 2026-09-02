@@ -400,8 +400,26 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           new Quarter(new ColumnRef(0)))
         val four = emit(fourFields, 1, 0, loader, 803)
         val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804)
+        // Task 48's A/B. The shipped year kernel skips the prefix's March-month step - four
+        // lane ops a year tail never reads, since it takes the January turn off the day of
+        // year instead (PLAN_TASK_48.md section 2) - and this is the same kernel with the
+        // step put back. The two are adjacent, and the pairs interleaved by null pattern,
+        // because that is the interleaving: one regeneration runs both sides back to back
+        // under the same JIT and thermal state, and the file is compared by minimums across
+        // regenerations rather than row against row. Four ops on a 43-op body is under half a
+        // millisecond at this section's 11 ms best time, so "inside noise" is a legitimate
+        // outcome here and the default does not rest on this number - it rests on the step
+        // being provably dead work where it is elided.
+        val yearMonthKept = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 802,
+          VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false))
         benchmark.addCase("year, null-free") { _ => chunked(year, false) }
+        benchmark.addCase("year, month step kept (task 48 A/B), null-free") { _ =>
+          chunked(yearMonthKept, false)
+        }
         benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
+        benchmark.addCase("year, month step kept (task 48 A/B), mixed nulls") { _ =>
+          chunked(yearMonthKept, true)
+        }
         benchmark.addCase("year+month+day+quarter, null-free") { _ =>
           chunked(four, false, outputs = 4)
         }

@@ -227,6 +227,11 @@ are the baseline this task measures against:
 | `year(d1), year(d2), two dates, shared option, null-free` | 22 | 891.4 |
 | `per-row LocalDate year (the path Spark uses today)` | 42 | 479.4 |
 
+*(Every kernel row in this table turned out to be stale by one task when it was
+finally re-measured - the file had not been regenerated since task 32 step B1,
+and task 51 landed in between. Section 9.2 has the replacements and the
+attribution; this table is kept as what the task was planned against.)*
+
 Those five kernel rows are exactly the ones whose `year` loop method elides
 under this task, which is why they are listed and the shared-method rows are
 not. Note the granularity the file reports: `year, null-free` is 11 ms best
@@ -337,5 +342,80 @@ Four commits, each green on its own:
 
 ## 9. Outcome
 
-Filled in when the work lands: the A/B table by minimums at both widths, the
-ladder's new unshared boundary, and which of section 6.1's predictions held.
+### 9.1 The A/B, by minimums
+
+Five regenerations of the parity file at each width on an idle machine, the two
+sides adjacent in one `Benchmark` so each regeneration runs them back to back.
+Best rate over the five, in M rows/s:
+
+| case | month step elided | month step kept | ratio |
+|---|---|---|---|
+| AVX-512, `year, null-free` | 2201.9 | 2181.7 | 1.01x |
+| AVX-512, `year, mixed nulls` | 2161.7 | 2145.2 | 1.01x |
+| 128-bit, `year, null-free` | 746.3 | 742.7 | 1.00x |
+| 128-bit, `year, mixed nulls` | 751.9 | 750.1 | 1.00x |
+
+**Inside noise, and the sign is not stable**: in two of the five AVX-512 runs
+the *kept* side won the mixed-nulls pair, and in two of the five 128-bit runs it
+won as well. Four ops off a 43-op body at a 9 ms best time is under half a
+millisecond, which is what section 6.0 said the file cannot resolve, so this is
+the outcome that section predicted rather than a disappointment. The default
+ships on the argument section 3.3 makes - the step is provably dead work where
+it is elided, and the exhaustive sweep says the answers do not move - with the
+number recorded because the repo's rule is that a performance claim traces to a
+committed file, not because the change needs one.
+
+### 9.2 What moved in the committed file, and why it is not this task
+
+The regeneration moves the calendar rows far more than the A/B above can
+account for, and the difference belongs to **task 51**, not here:
+
+| committed row | before | after |
+|---|---|---|
+| `year, null-free` | 1823.4 | 2166.5 |
+| `year, mixed nulls` | 1717.4 | 2046.0 |
+| `year+month, separate (2 loop methods)` | 913.7 | 1042.8 |
+| `year+month+day, separate (3 loop methods)` | 604.8 | 674.6 |
+| `year(d1), year(d2), two dates` | 891.4 | 1040.9 |
+| `year+month+day+quarter, shared (1 loop method)` | 799.8 | 797.7 |
+| `dayofweek, for scale` | 7665.1 | 7759.6 |
+| `per-row LocalDate year` | 479.4 | 481.3 |
+
+Three things establish the attribution rather than assert it. The scalar anchor
+`per-row LocalDate year`, which no Varka change touches, reads 481.1-481.6
+across all five runs against the committed 479.4, so the machine is in the same
+state and the kernel rows moved for a real reason. The A/B pair inside a single
+run puts this task's own contribution at 1.01x. And the file was last
+regenerated at `06d96642707` (task 32 step B1), after which exactly two commits
+touched the emitter before this task: `71ebc645605`, task 51's removal of the
+per-extraction range guard - two compares, ANDed with validity and the epilogue
+mask and ORed into an accumulator, on every calendar node's tail - and
+`cb176a077eb`, task 38's column offsets for `date_add`/`date_sub`, which no
+calendar kernel runs. By elimination the movement is task 51's, and its shape
+fits: the guard was paid once per calendar node, so a one-field kernel gains
+about a fifth and the four-field shared kernel, which pays it once for four
+tails, does not move at all.
+
+The 128-bit `year` figure moves the same way, 599 M rows/s in `PLAN_TASK_26.md`
+section 11.2 to 746.3 here.
+
+**Task 51 shipped a 19% improvement to every single-field calendar kernel and
+never regenerated the parity file**, which is the process finding worth keeping
+out of this section's arithmetic: a task that shrinks emitted bytecode has to
+regenerate, or the next task to regenerate inherits its win and has to prove it
+did not cause it.
+
+### 9.3 The predictions, scored
+
+1. **Miss, in the absolute only.** 43 to 39 `IntVector` ops, not 45 to 41; the
+   four-op delta is exact. See section 6.1.
+2. **Held.** 1.01x at AVX-512, inside noise, which the prediction admitted as a
+   legitimate outcome.
+3. **Held.** 1.00x at 128-bit, indistinguishable.
+4. **Held.** The unshared `HugeMethodLimit` crossing moved from 19 outputs to
+   20; the shared one stayed at 44.
+5. **Held.** No pinned oracle moved - neither the IR renderings nor `DEFAULTS`'
+   canonical form, and `VarkaShapeCacheSuite` stayed green untouched.
+6. **Carried forward.** `dayofyear` (PR #64) inherits the elision through
+   `tailReadsMarchMonth` returning false for it; it is still in flight, so the
+   arm and its call-site rename land with whichever of the two merges second.

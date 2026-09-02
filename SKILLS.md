@@ -703,6 +703,21 @@ trusting them, not just its ratios.
   and an in-run control (cases the change cannot affect, measured in the same
   process) is what turns "the numbers moved" into "the noise floor is 15% and the
   effect is inside it".
+- **A task that shrinks emitted bytecode must regenerate the committed benchmark
+  file, or the next task to regenerate inherits its win** (task 48, measured).
+  Task 51 removed the per-extraction range guard - two compares plus mask work on
+  every calendar node's tail - and shipped without regenerating
+  `VarkaEmitterParityBenchmark-jdk25-results.txt`. Task 48's regeneration
+  therefore showed `year, null-free` moving 1823.4 to 2166.5 M rows/s, a fifth,
+  for a change whose own A/B measures 1.01x. Three things separated the two, and
+  all three are worth reproducing: an **in-run control** (`per-row LocalDate
+  year`, which no Varka change touches, read 481.1-481.6 against a committed
+  479.4, proving the machine had not drifted); an **in-run A/B** (both sides of
+  the change as adjacent cases in one `Benchmark`, which is what actually
+  isolates the task); and `git log` on the results file itself against `git log`
+  on the emitter directory, which named the two commits that had landed in
+  between and left exactly one candidate. Without the first two, a plausible and
+  entirely false 21% could have been written down.
 - Debugging corollary from the same stretch: before concluding files changed or
   vanished, verify the working directory. A shell whose cwd resets between commands
   plus relative paths fabricates convincing evidence of disaster; absolute paths in

@@ -174,6 +174,16 @@ The rows that decide the default, and the direction each is required to move:
 | `year+month+day+quarter, shared, chunk 64 / 63, null-free` | 396.8 / 400.1 | rise or not move |
 | the task-17 budget rows (mixed nulls) | 4436.3 / 3149.6 | not move |
 
+**The "today" column above is stale; read it off the committed file when this
+task is picked up.** Task 48 regenerated
+`VarkaEmitterParityBenchmark-jdk25-results.txt`, which had not been regenerated
+since task 32 step B1, and every single-field calendar row in it moved by about
+a fifth - task 51's removal of the per-extraction range guard, which shipped
+without a regeneration. `year, null-free` is now 2166.5 and `year, mixed nulls`
+2046.0; the four-field shared rows and the `dayofweek` scale row did not move.
+The *directions* required above are unaffected, since they are about what this
+task's own change must do.
+
 The chunk-64 and chunk-63 rows are there because the fill is paid once per
 *batch*: at 64 rows it is eight bytes against four lane groups, at 4096 it is 512
 bytes against 256, and the ratio between them says whether the fill ever costs
