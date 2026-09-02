@@ -1585,11 +1585,27 @@ counted, where the vector paths never leave a register: the gather reaches
 loop that led the unfused table falls to 848.1, and the hybrid an emitter would
 have to produce (spill the lane group, scalar-lookup, reload) is a wash with the
 arithmetic at 1446.9. So emitting scalar code for a calendar node buys nothing
-once the result is compared and counted, and the only lowering that would pay is
-the one the API forbids. That makes the missing `fromMemorySegment` index-map
-overload a measured 2.8x on the corpus shape rather than a note, and it is the
-strongest argument this milestone has for the on-heap-dictionary option in the
-paragraph above.
+once the result is compared and counted.
+
+**Correction, measured after the above was written.** That paragraph went on to
+say the only lowering which would pay is one the API forbids. It does not. The
+missing `fromMemorySegment` index-map overload blocks gathering *from* an
+off-heap table - this item's dictionary case, where the claim still stands - and
+says nothing about gathering an **on-heap constant table** indexed by off-heap
+data. A calendar table is the second kind, because Varka owns it: the column
+loads with `fromMemorySegment`, the index vector spills with `intoArray`, and
+the gather reads a table on the heap. Measured in that shape, with the column in
+a `MemorySegment` the way a real kernel has it, an era-indexed table reaches
+2070.8 M rows/s against the arithmetic's 1329.3 - a **1.6x**.
+
+The table's size is worth taking from ClickHouse, whose `DATE_LUT_SIZE` is
+146097: one Gregorian era. Indexed by day of era rather than by an arbitrary
+year window, such a table needs **no fallback for any `int32` date**, and the
+index is what `emitEra` already produces, so the table replaces everything after
+it. That is a candidate lowering for the whole calendar family and belongs in
+its own task. What it changes for this item is narrower: the
+copy-the-dictionary-on-heap option is attractive on a measured basis rather than
+on an assumption about what gathers cost.
 
 ### Item 10. Cross-lane movement: windows, prefix sums, row indices
 
