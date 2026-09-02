@@ -404,6 +404,15 @@ tails, does not move at all.
 The 128-bit `year` figure moves the same way, 599 M rows/s in `PLAN_TASK_26.md`
 section 11.2 to 746.3 here.
 
+*(Update, after the fact: the `add_months` benchmark PR landed on master before
+this one and regenerated the file first, so it - not this task - is where the
+catch-up above actually appears in the history. This section is left as written,
+because it is the record of how the discrepancy was found and attributed, and
+because the argument is what makes the attribution checkable. What changed is
+only which commit carries the numbers; this branch was re-merged and the file
+regenerated once more on the merged code, so what it commits is a single
+coherent measurement rather than half of each.)*
+
 **Task 51 shipped a 19% improvement to every single-field calendar kernel and
 never regenerated the parity file**, which is the process finding worth keeping
 out of this section's arithmetic: a task that shrinks emitted bytecode has to
