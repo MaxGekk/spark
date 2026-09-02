@@ -224,23 +224,24 @@ public final class VarkaLoopEmitter {
   /**
    * What {@code DayOfYear} (task 34) weighs against {@link #GROUP_BUDGET}, counted the same
    * way as {@link #CHRONO_WEIGHT}: the shared ~40-op prefix, plus {@link #emitChronoYear} (6),
-   * plus {@link #emitLeapFlag} (22: the bias, the by-4 test, two magic-and-carry modulo tests
-   * at eight each, and the final combine), plus the January-based blend (5) - about 73 total,
-   * counted by reading every emitted instruction rather than estimated. This task first
-   * shipped its own cheaper leap test here (19 ops, a two-way remainder compare in place of
-   * the carry); it was deleted in favour of task 40's, which is the one that survives because
-   * its bias covers the wider year range {@code add_months} reaches - see the note on
-   * {@link VarkaChrono#LEAP_YEAR_BIAS}. Both this and
-   * {@link #CHRONO_WEIGHT} already exceed {@link #GROUP_BUDGET}, so the exact value does not
-   * change today's grouping decision (a lone {@code DayOfYear} output already forms its own
-   * loop method either way) - but 73 real ops in one single-output method is past the 59-op
-   * width this file's own single-output measurements call healthy and close to the 64-op loop
-   * task 26 measured triggering a ~10 second tier-4 compile stall. Whether a lone
-   * {@code SELECT dayofyear(d)} actually reaches that stall is exactly task 43's question
-   * ("what bounds a loop method inside one output"), not re-measured here - this weight only
-   * keeps the accounting honest until task 43 answers it.
+   * plus {@link #emitLeapFlag} (4), plus the January-based blend (5) - about 55 total, counted
+   * by reading every emitted instruction rather than estimated.
+   *
+   * <p>This number has been 73 and is now 55, and the history is worth a sentence because it
+   * is the second time the leap flag has been the reason. This task first shipped its own leap
+   * test (19 ops, a two-way remainder compare) and deleted it in favour of task 40's (22 ops),
+   * which won on bias range rather than cost. Both are gone: the helper is now Huffner's
+   * perfect hash at 4 ops, so what was the dominant term here is a rounding error.
+   *
+   * <p>Both this and {@link #CHRONO_WEIGHT} exceed {@link #GROUP_BUDGET}, so the exact value
+   * does not change today's grouping decision - a lone {@code DayOfYear} output forms its own
+   * loop method either way. What the drop does change is the compile-cliff worry the old value
+   * carried: 55 ops is inside the 59-op single-output width this file's own measurements call
+   * healthy, where 73 was past it and close to the 64-op loop task 26 measured triggering a
+   * ~10 second tier-4 compile stall. Whether a lone {@code SELECT dayofyear(d)} reaches that
+   * stall is still task 43's question, but this task no longer has a reason to expect it.
    */
-  private static final int DAY_OF_YEAR_WEIGHT = 73;
+  private static final int DAY_OF_YEAR_WEIGHT = 55;
 
   /**
    * How many int-vector/mask locals {@link #emitChronoPrefix} leaves its results in: six
@@ -1233,7 +1234,7 @@ public final class VarkaLoopEmitter {
             // that. (Its one write into a shared slot is the prefix's carry mask, which no
             // field's tail reads - see emitChronoPrefixOnce.)
             int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT
-                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 6 : CHRONO_PREFIX_SLOTS;
+                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 1 : CHRONO_PREFIX_SLOTS;
             FragmentKey key = fragmentKey(node, dense, s);
             int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
             if (prefix == null) {
@@ -2190,23 +2191,17 @@ public final class VarkaLoopEmitter {
         emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
       }
       case DayOfYear n -> {
-        // t[6..13] are DayOfYear's own - a plain extraction's chronoTmp is only 8 long, so
-        // nothing else in this switch may read past t[5]. t[6] is the prefix's carry scratch,
-        // dead by here, so it doubles as emitLeapFlag's maskA exactly as emitAddMonths does.
+        // t[6..8] are DayOfYear's own - a plain extraction's chronoTmp is only 8 long, so
+        // nothing else in this switch may read past t[5]. t[6] and t[7] are the prefix's carry
+        // scratch, dead by here, so only t[8] is genuinely extra.
         int mask = t[6];
         int leap = t[7];
         int year = t[8];
-        int leapScratch1 = t[9];
-        int leapScratch2 = t[10];
-        int leapRemScratch = t[11];
-        int leapMaskB = t[12];
-        int leapCarryMask = t[13];
         // year - Year's own formula, recomputed here because the leap flag needs a plain
         // year and nothing upstream keeps one around. emitLeapFlag applies its own bias.
         emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
         cb.astore(year);
-        emitLeapFlag(cb, year, leapScratch1, leapScratch2, leapRemScratch, mask, leapMaskB,
-            leapCarryMask);
+        emitLeapFlag(cb, year);
         cb.astore(leap);
 
         // dayofyear = doy >= 306 ? doy - 305 : doy + 60 + L
