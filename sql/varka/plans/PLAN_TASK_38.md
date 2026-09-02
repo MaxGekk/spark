@@ -162,6 +162,114 @@ should have - find out what before going on.
 
 ## 7. Outcome
 
-Filled in when the work lands, including which steps of this recipe misled you.
-Say in particular whether section 3's trap was clear enough before you hit it,
-because that is the step this recipe exists for.
+Built as planned: the four guards moved (compiler leaf arm, `foldOffset`
+replaced by a folded-literal-then-column fallback, `requireLiteralOffset`
+deleted from the emitter's analyze pass, `isArrowBacked`/`extractMorsel`
+widened to `IntVector`/`BaseFixedWidthVector`), `date_add(d, i)` and
+`date_sub(d, i)` compile to a two-column `AddDays`/`SubDays`, a foldable
+offset still compiles to a `LiteralSlot` unchanged, and `ShortType`/`ByteType`
+offset columns and a non-foldable interval column all still decline. No
+pinned value moved and no committed benchmark number moved, both as
+predicted - verified rather than assumed: for a literal offset,
+`s.wordRef.get(offset)` is `WORD_ALL_TRUE`, so `andRef` always returns the
+`days` reference and `s.ownWord` never gains the node, so the new
+`emitAndWord` branch never emits for any existing shape.
+
+**Section 3's trap was real, and the recipe under-stated it.** It named the
+`planWordRef` fix correctly, but that fix alone is not enough: `planWordRef`
+only decides *whether* a node needs its own validity word slot (`s.ownWord`);
+the slot is filled by an `emitAndWord` call written into `emitValue`, which
+`DateDiff`'s arm already has and `AddDays`/`SubDays`'s arms did not. The
+recipe quoted only the `planWordRef` half of `DateDiff`'s pattern, not the
+`emitValue` half - "the same shape `DateDiff` already uses" was true but
+incomplete as a pointer. Missing this would not have failed loudly: the
+kernel would have compiled and run, `s.ownWord` would have held a slot,
+and that slot's local would simply never be written before its use in the
+epilogue mask, an uninitialized-local situation the class-file verifier
+should reject at load time (or, in the worst case, silently reads a stale
+value). The column-offset validity test in `VarkaLoopEmitterSuite` was
+written specifically to catch exactly this, and the first failure surfaced
+there before the change ever reached a build with the emitAndWord call.
+
+**Section 4.2's "fall back to `compileNode(days, ...)`" was the recipe's real
+mistake, and this one *did* fail loudly - as a change in unrelated tests, not
+as a wrong answer.** `compileNode` is the one function every compiler arm
+routes through for every child position - `Compare`, `DateDiff`,
+`Coalesce`, `Greatest`, all of it - so widening its shared `BoundReference`
+leaf arm to accept `IntegerType` did not just legalize `date_add`'s offset:
+it legalized an `IntegerType` column *anywhere* `compileNode` is called,
+including as a `Compare` operand. `GreaterThan(i, Literal(5))` and
+`DateDiff(x, i)` (i an int column) would have started fusing as plain
+integer comparisons and mixed date/int subtraction - correct arithmetic,
+since int32 lanewise ops do not care what the bits mean, but a capability
+task 38 never asked for and section 6 explicitly rules out ("do not open it
+wider"). Two catalyst-suite tests caught it immediately, because they used a
+bare int column as their "this declines" example and started compiling
+instead. The fix was a dedicated `compileOffset` fallback that pattern
+matches `BoundReference` directly rather than recursing through
+`compileNode`, so the general leaf arm never moved - only the exact
+grammatical position (`DateAdd`/`DateSub`'s offset) accepts an int column.
+Three more tests across `sql/core` (`VarkaColumnarWriteSuite`,
+`VarkaKernelEvaluatorSuite`, `VarkaEndToEndSuite`) had the same "bare int
+column declines" assumption baked into their example query and needed the
+same swap, to `i + 1` (still non-foldable, still not a bare column).
+Between the two failure rounds, five pre-existing tests needed their decline
+example changed - a normal and expected consequence of legalizing a shape
+that used to be the canonical "this doesn't fuse" example, not a sign
+anything was wrong with the fix itself.
+
+**Review pass, addressing 7 findings.** A `/code-review` run against this
+commit found seven issues, all fixed here:
+
+1. **`requireLiteralOffset`'s deletion was too broad, and is now narrowed
+   rather than removed.** The recipe's own decision to delete the check
+   outright (section 4.1) turned out wrong: it left the emitter with no
+   fail-fast guard against a hand-built `AddDays`/`SubDays` whose offset is
+   neither a `LiteralSlot` nor a `ColumnRef` - not reachable through
+   `VarkaExpressionCompiler` today, but a real defense-in-depth loss for any
+   future IR producer. Replaced with `requireOffsetShape`, accepting either
+   shape and rejecting anything else, restoring the class javadoc's
+   out-of-shape-IR list to match.
+2. **The evaluation-order question in `compileNode`'s `DateAdd`/`DateSub`
+   arms turned out to have a right answer already on the books.** The review
+   flagged that compiling the date child before the offset (this diff's
+   choice) changed which of two independently-true decline reasons wins when
+   both are unfusable, versus the pre-task-38 offset-first order. Reverting
+   to offset-first looked like the safe fix and was tried first - but it
+   broke two passing tests (`VarkaExpressionCompilerSuite`'s literal-slot and
+   column-ordinal ordering tests), because `VarkaExpressionCompiler` already
+   documents a house rule for exactly this (`CaseWhen`'s comment: "input
+   ordinals and literal slots register deterministically in reading order").
+   Child-before-offset is what that rule requires, once an offset can be a
+   column rather than always a foldable literal with nothing to register.
+   Kept the child-first order, documented why, and added a test
+   (`"with two independently unfusable operands, the child's reason is
+   reported"`) pinning the decline-priority behavior as intentional rather
+   than leaving it as an unrecorded accident of evaluation order.
+3. **`andRef`/`emitAndWord` in the emitter's `AddDays`/`SubDays`/`DateDiff`
+   arms were hand-copied a second and third time.** Factored the
+   emit-both-children-then-AND-their-validity-words shape into
+   `emitAndValidatedOp`, called by all three arms, so the exact silent
+   miscompilation this task's own development hit once (a dropped
+   `emitAndWord` call, caught only by a dedicated test) becomes structurally
+   harder to reintroduce on a fourth binary date-arithmetic node.
+4. **`docs/sql-varka.md`'s EXPLAIN section quoted the wrong decline-reason
+   text** for a `ShortType`/`ByteType` offset column, and had dropped the
+   pre-existing "not a foldable literal" mention entirely. Corrected to quote
+   the actual strings `compileOffset` emits.
+5. **No test exercised a column-offset `date_add` inside a filter
+   predicate**, only inside a projection. Added one
+   (`"a column-offset date_add fuses inside a filter predicate too"`),
+   confirming `VarkaFilterEvaluator`'s inherited widening actually works on
+   the mask-kernel path, not only the projection path.
+6. **`compileOffset`'s `IntegerType` leaf duplicated `compileNode`'s
+   `DateType` leaf's one-line `ColumnRef`-interning expression.** Factored
+   into a shared `columnRef` helper both call.
+7. **A stale comment** in `VarkaLoopEmitterSuite` pointed at a test title
+   that did not exist. Fixed to name the real test.
+
+Re-verified end to end after the fixes: 96 catalyst / 131 sql-core Varka
+tests green at both vector widths, `dev/lint-java` and `dev/scalastyle` both
+pass, and the "no pinned value, no committed number" claim above still holds
+- none of these seven fixes touch emitted bytes for any shape besides the
+new column-offset one.
