@@ -381,6 +381,45 @@ trusting them, not just its ratios.
 
 ## Vector API on HotSpot, Measured (JDK 25, x86-64)
 
+- **A day-indexed lookup table beats the civil-from-days arithmetic, and a plain
+  scalar loop beats the vector gather** (`VarkaVectorApiProbeBenchmark`,
+  committed). Impala reads `year` out of a table covering 1950-2049 and computes
+  it only outside that window; priced on lanes here, over 20M dates at AVX-512:
+
+  | | whole 100-year table (143 KB) | seven-year span (~10 KB, TPC-H shaped) |
+  |---|---|---|
+  | `IntVector` gather | 3573.9 M rows/s | 3728.2 |
+  | `IntVector` arithmetic | 2379.8 | 2368.3 |
+  | scalar `int[]` loop | 3766.3 | **4630.0** |
+
+  Two expectations died here. A gather is **not** automatically slower than
+  forty lane ops on this hardware, even when the table overflows L1. And the
+  **scalar** loop is fastest of the three - 1.95x the vector arithmetic on the
+  realistic span - because the Vector API's gather takes its index map as an
+  `int[]`, so the index vector has to be stored and read back, and that spill
+  is an artifact of the API rather than of the machine.
+
+- **The gather is nonetheless unreachable for a Varka kernel**, and for an API
+  reason rather than a cost one: `IntVector`'s index-map overload exists only on
+  `fromArray`, never on `fromMemorySegment`, and every Varka input is an
+  off-heap Arrow buffer. Enumerated, not assumed - the whole `from*`/`into*`
+  surface is `fromArray(species, int[], int, int[], int)` and
+  `fromMemorySegment(species, MemorySegment, long, ByteOrder)`, with no third
+  form.
+
+- **What the probe does not measure is the thing that decides it: fusion.** It
+  times one field into an `int[]`, which is exactly the shape where Varka's
+  advantage is zero. A calendar node lowered to scalar code inside a fused
+  vector kernel has to spill its lane group, run scalar, and reload, and the
+  emitter would have to give up fusing that output with the comparisons and
+  connectives around it. So the honest reading is: *for `year` alone, into an
+  array, over a warm table, the lookup wins by 2x* - and before that becomes an
+  argument for emitting scalar code, the same three have to be measured inside a
+  shape like `year(d) = 1998`, where the vector path never leaves lanes. Also
+  unmeasured: writing to a `MemorySegment` rather than an `int[]`, null
+  handling, and the batch-level fallback a 1950-2049 table needs for the
+  `0001..9999` range SQL allows.
+
 - An *exact* magic multiply on int lanes exists only for dividends under roughly
   **46341**, and the bound falls straight out of the two conditions rather than
   needing a search: worst-case `e ~ d` forces `2^k > d * v`, hence `M ~ v`, hence

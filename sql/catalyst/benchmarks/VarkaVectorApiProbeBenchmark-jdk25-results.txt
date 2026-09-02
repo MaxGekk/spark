@@ -1,0 +1,16 @@
+================================================================================================
+year: a gather against the arithmetic (design input for item 9)
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+20971520 dates, 16 lanes:                                   Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------
+gather from a 143 KB table, dates over the whole 100 years              6              6           0       3573.9           0.3       1.0X
+arithmetic, dates over the whole 100 years                              9              9           0       2379.8           0.4       0.7X
+scalar loop over the same table, whole 100 years                        6              6           0       3766.3           0.3       1.1X
+gather from a 143 KB table, dates over seven years                      6              6           0       3728.2           0.3       1.0X
+arithmetic, dates over seven years                                      9              9           1       2368.3           0.4       0.7X
+scalar loop over the same table, seven years                            5              5           0       4630.0           0.2       1.3X
+
+
