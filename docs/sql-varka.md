@@ -125,6 +125,14 @@ class has a deliberate method anatomy:
   tried leaving the epilogue inline in a kernel's loop method.
 * Interned subtrees (DAG-CSE) are computed once per lane group and reused
   across outputs; literals are hoisted to broadcast vectors in the prologue.
+* Below the node level, the calendar extractions share their civil-from-days
+  decomposition: `year(d)`, `month(d)`, `dayofmonth(d)`, `quarter(d)` and
+  `add_months(d, n)` are distinct IR nodes, but a method that emits several of
+  them over one date runs the ~45-op decomposition once and gives each output
+  only its own tail (task 32). Today's grouping puts each of those outputs in
+  its own loop method, so this bites in the epilogue, the one method every
+  output shares - which is what keeps a wide date projection's epilogue small
+  enough for HotSpot to compile at all.
 * Caps: chains up to `MAX_CHAIN_DEPTH` (16) deep, up to `MAX_FUSED_NODES`
   (64) distinct ops and `MAX_INPUTS` (64) input columns per kernel; anything
   beyond falls back.

@@ -556,4 +556,166 @@ public final class ChronoVectorOps {
     orPartialValidityBitsAt(monthValSeg, i, bits, rows);
     return guard.anyTrue();
   }
+
+  /**
+   * The same four fields, the same arithmetic, the same guard and the same op count as
+   * {@link #vectorFourFields}, with every destination validity buffer and every
+   * {@code orValidityBitsAt}/{@code orPartialValidityBitsAt} call removed. Section 2.17 of
+   * {@code PLAN_MILESTONE_4.md} fits three throughput points to a per-vector-op cost and finds
+   * three quarters of the shared kernel's time unaccounted for by the decomposition - the
+   * suspect named there is the validity write, on the strength of {@code -XX:+PrintInlining}
+   * showing {@code orValidityBitsAt} does not inline in a wide loop, not on a timing. This
+   * variant is the bound that turns the suspicion into a number: whatever time it does not
+   * spend against {@link #vectorFourFields} is validity bookkeeping, not arithmetic, since
+   * every other line here is identical.
+   *
+   * <p>Every row is assumed non-null and every output is reported valid, unconditionally - this
+   * is not a shippable null-free fast path (that is task 45's, which still owes one write per
+   * batch), it is a kernel with the validity work deleted rather than made cheap, built to
+   * measure a ceiling rather than to ship.
+   *
+   * @param srcData address of the source int32 day values; every row is assumed non-null.
+   * @param dstData four addresses of int32 destination values (length * 4 bytes each).
+   * @param length number of rows.
+   * @return 0 when every row was in the narrowed range, {@link #STATUS_CHRONO_RANGE} otherwise.
+   */
+  public static int vectorFourFieldsNoValidity(long srcData, long[] dstData, int length) {
+    if (length <= 0) {
+      return 0;
+    }
+    MemorySegment src = ofAddress(srcData, length * 4L);
+    MemorySegment yearSeg = ofAddress(dstData[YEAR], length * 4L);
+    MemorySegment monthSeg = ofAddress(dstData[MONTH], length * 4L);
+    MemorySegment daySeg = ofAddress(dstData[DAY_OF_MONTH], length * 4L);
+    MemorySegment quarterSeg = ofAddress(dstData[QUARTER], length * 4L);
+
+    VectorMask<Integer> guard = VectorMask.fromLong(SPECIES, 0L);
+
+    long loopBound = SPECIES.loopBound(length);
+    int lanes = SPECIES.length();
+    long i = 0;
+    for (; i < loopBound; i += lanes) {
+      long byteOffset = i * 4L;
+      IntVector days = IntVector.fromMemorySegment(SPECIES, src, byteOffset, ORDER);
+
+      // ---- the shared decomposition, hand-inlined; see the class doc before refactoring ----
+
+      guard = guard.or(days.compare(VectorOperators.LT, NARROW_MIN_DAYS))
+          .or(days.compare(VectorOperators.GT, NARROW_MAX_DAYS));
+
+      IntVector rem = days.add(NARROW_BIAS);
+      IntVector era = rem.mul(NARROW_ERA_M).lanewise(VectorOperators.LSHR, NARROW_ERA_K);
+      rem = rem.sub(era.mul(ERA_DAYS));
+      VectorMask<Integer> carry = rem.compare(VectorOperators.GE, ERA_DAYS);
+      era = era.add(1, carry);
+      rem = rem.sub(ERA_DAYS, carry);
+      era = era.sub(NARROW_ERA_BIAS);
+
+      IntVector century = rem.mul(CENTURY_M).lanewise(VectorOperators.LSHR, CENTURY_K);
+      rem = rem.sub(century.mul(CENTURY_DAYS));
+      carry = rem.compare(VectorOperators.GE, CENTURY_DAYS);
+      century = century.add(1, carry);
+      rem = rem.sub(CENTURY_DAYS, carry);
+
+      carry = century.compare(VectorOperators.EQ, 4);
+      century = century.sub(1, carry);
+      rem = rem.add(CENTURY_DAYS, carry);
+
+      IntVector yearOfCentury = rem.mul(YEAR_M).lanewise(VectorOperators.LSHR, YEAR_K);
+      rem = rem.sub(yearOfCentury.mul(365)
+          .add(yearOfCentury.lanewise(VectorOperators.LSHR, 2)));
+
+      VectorMask<Integer> negDoy = rem.compare(VectorOperators.LT, 0);
+      VectorMask<Integer> leap =
+          yearOfCentury.and(3).compare(VectorOperators.EQ, 0).and(negDoy);
+      rem = rem.add(365, negDoy).add(1, leap);
+      yearOfCentury = yearOfCentury.sub(1, negDoy);
+
+      IntVector marchMonth = rem.mul(5).add(2)
+          .mul(MONTH_M).lanewise(VectorOperators.LSHR, MONTH_K);
+      VectorMask<Integer> januaryTurned =
+          marchMonth.compare(VectorOperators.GE, MARCH_YEAR_JANUARY);
+
+      // ---- the four tails ----
+
+      IntVector year = era.mul(400).add(century.mul(100)).add(yearOfCentury)
+          .add(1, januaryTurned);
+      IntVector month = marchMonth.add(3).sub(12, januaryTurned);
+      IntVector dayOfMonth = rem.sub(marchMonth.mul(153).add(2)
+          .mul(DAY_M).lanewise(VectorOperators.LSHR, DAY_K)).add(1);
+      IntVector quarter = month.add(2)
+          .mul(QUARTER_M).lanewise(VectorOperators.LSHR, QUARTER_K);
+
+      year.intoMemorySegment(yearSeg, byteOffset, ORDER);
+      month.intoMemorySegment(monthSeg, byteOffset, ORDER);
+      dayOfMonth.intoMemorySegment(daySeg, byteOffset, ORDER);
+      quarter.intoMemorySegment(quarterSeg, byteOffset, ORDER);
+    }
+    boolean declined = guard.anyTrue();
+    if (i < length) {
+      declined |= noValidityEpilogue(src, yearSeg, monthSeg, daySeg, quarterSeg, i, length);
+    }
+    return declined ? STATUS_CHRONO_RANGE : 0;
+  }
+
+  /** {@link #vectorFourFieldsNoValidity}'s final partial lane group; see
+   * {@link #fourFieldsEpilogue}. */
+  private static boolean noValidityEpilogue(MemorySegment src, MemorySegment yearSeg,
+      MemorySegment monthSeg, MemorySegment daySeg, MemorySegment quarterSeg,
+      long i, int length) {
+    VectorMask<Integer> mask = SPECIES.indexInRange((int) i, length);
+    long byteOffset = i * 4L;
+    IntVector days = IntVector.fromMemorySegment(SPECIES, src, byteOffset, ORDER, mask);
+
+    VectorMask<Integer> guard = days.compare(VectorOperators.LT, NARROW_MIN_DAYS)
+        .or(days.compare(VectorOperators.GT, NARROW_MAX_DAYS))
+        .and(mask);
+
+    IntVector rem = days.add(NARROW_BIAS);
+    IntVector era = rem.mul(NARROW_ERA_M).lanewise(VectorOperators.LSHR, NARROW_ERA_K);
+    rem = rem.sub(era.mul(ERA_DAYS));
+    VectorMask<Integer> carry = rem.compare(VectorOperators.GE, ERA_DAYS);
+    era = era.add(1, carry);
+    rem = rem.sub(ERA_DAYS, carry);
+    era = era.sub(NARROW_ERA_BIAS);
+
+    IntVector century = rem.mul(CENTURY_M).lanewise(VectorOperators.LSHR, CENTURY_K);
+    rem = rem.sub(century.mul(CENTURY_DAYS));
+    carry = rem.compare(VectorOperators.GE, CENTURY_DAYS);
+    century = century.add(1, carry);
+    rem = rem.sub(CENTURY_DAYS, carry);
+
+    carry = century.compare(VectorOperators.EQ, 4);
+    century = century.sub(1, carry);
+    rem = rem.add(CENTURY_DAYS, carry);
+
+    IntVector yearOfCentury = rem.mul(YEAR_M).lanewise(VectorOperators.LSHR, YEAR_K);
+    rem = rem.sub(yearOfCentury.mul(365)
+        .add(yearOfCentury.lanewise(VectorOperators.LSHR, 2)));
+
+    VectorMask<Integer> negDoy = rem.compare(VectorOperators.LT, 0);
+    VectorMask<Integer> leap =
+        yearOfCentury.and(3).compare(VectorOperators.EQ, 0).and(negDoy);
+    rem = rem.add(365, negDoy).add(1, leap);
+    yearOfCentury = yearOfCentury.sub(1, negDoy);
+
+    IntVector marchMonth = rem.mul(5).add(2)
+        .mul(MONTH_M).lanewise(VectorOperators.LSHR, MONTH_K);
+    VectorMask<Integer> januaryTurned =
+        marchMonth.compare(VectorOperators.GE, MARCH_YEAR_JANUARY);
+
+    IntVector year = era.mul(400).add(century.mul(100)).add(yearOfCentury)
+        .add(1, januaryTurned);
+    IntVector month = marchMonth.add(3).sub(12, januaryTurned);
+    IntVector dayOfMonth = rem.sub(marchMonth.mul(153).add(2)
+        .mul(DAY_M).lanewise(VectorOperators.LSHR, DAY_K)).add(1);
+    IntVector quarter = month.add(2)
+        .mul(QUARTER_M).lanewise(VectorOperators.LSHR, QUARTER_K);
+
+    year.intoMemorySegment(yearSeg, byteOffset, ORDER, mask);
+    month.intoMemorySegment(monthSeg, byteOffset, ORDER, mask);
+    dayOfMonth.intoMemorySegment(daySeg, byteOffset, ORDER, mask);
+    quarter.intoMemorySegment(quarterSeg, byteOffset, ORDER, mask);
+    return guard.anyTrue();
+  }
 }
