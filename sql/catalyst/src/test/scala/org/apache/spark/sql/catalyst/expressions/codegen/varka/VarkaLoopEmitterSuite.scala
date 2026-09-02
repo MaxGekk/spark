@@ -812,12 +812,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("the epilogue's inactive lanes do not decline a batch whose real rows are in range") {
-    // A masked load fills the lanes past `length` with 0, and 0 is in range - but the guard
-    // runs on the node's *input*, which here is a computed value: 0 - 5400000 is outside the
-    // range while every real row, near 2022, is comfortably inside it. Without the epilogue
-    // mask on the guard, every batch whose length is not a lane multiple declines, the query
-    // pays the vector kernel and the row path both, and nothing says so above debug logging.
+  test("a chained calendar computation matches across every lane-group tail length") {
+    // Historically an epilogue-mask/guard interaction bug: a masked load fills the lanes past
+    // `length` with 0, and the now-removed guard ran on the node's *input*, which here is a
+    // computed value (0 - 5400000, well outside the guard's range) - so an unmasked check
+    // declined every batch whose length was not a lane multiple, even though every real row,
+    // near 2022, was in range. Task 51 removed the guard entirely; this case is kept as a
+    // general correctness check on a chained node across non-lane-multiple lengths.
     val root = new Year(new SubDays(new ColumnRef(0), new LiteralSlot(0)))
     def days(c: Int, i: Int): Int = 19000 + i
     checkMatrix(Seq(root), 1, Array(5400000), Seq(16, 17, 31, 64, 1000, 4095, 4096),
@@ -883,31 +884,31 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("a batch holding a day outside the covered range is declined, not answered") {
+  test("a day outside the covered range is no longer declined (task 51)") {
+    // Tasks 26 through 40 guarded every calendar extraction against a day outside
+    // VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS, declining the whole batch to the row
+    // engine. Task 51 removed that guard: the arithmetic is still only proven exact inside
+    // the narrowed range (VarkaChronoSuite's exhaustive sweep is over exactly that range), but
+    // nothing checks it at run time anymore, so a day outside it is now computed silently
+    // rather than declined. PLAN_TASK_51.md records why the owner accepted that trade, and
+    // PLAN_TASK_52.md tracks moving the check to the nodes that can actually manufacture such
+    // a day - unbounded runtime arithmetic, not a bare column.
     val root = new Year(new ColumnRef(0))
     val (kernel, loader) = load(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS))
     try {
       val arena = Arena.ofConfined()
       try {
         val length = 64
-        // In range: the kernel answers, and says so.
-        val good = makeInputData(arena, length, _ => false, i => i * 97)
-        val out = makeOutput(arena, length)
-        assert(runKernel(kernel, good, out, length) === 0)
-        // One day past the range, in a lane the vector loop covers: declined.
+        // One day past the range, in a lane the vector loop covers.
         val bad = makeInputData(arena, length, _ => false,
           i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1 else i * 97)
-        assert(runKernel(kernel, bad, out, length) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        val out = makeOutput(arena, length)
+        assert(runKernel(kernel, bad, out, length) === 0)
         // And in a lane only the epilogue covers, whatever the host's lane count.
         val tail = makeInputData(arena, 17, _ => false,
           i => if (i == 16) VarkaChrono.NARROW_MIN_DAYS - 1 else i * 97)
         val tailOut = makeOutput(arena, 17)
-        assert(runKernel(kernel, tail, tailOut, 17) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        // A null row's data is undefined, so an out-of-range value under one must not condemn
-        // the batch: the guard is ANDed with validity.
-        val nulled = makeInputData(arena, length, i => i == 3,
-          i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1 else i * 97)
-        assert(runKernel(kernel, nulled, out, length) === 0)
+        assert(runKernel(kernel, tail, tailOut, 17) === 0)
       } finally {
         arena.close()
       }

@@ -868,6 +868,23 @@ the standing caveat that `year(date_add(d, n))` can decline for a large enough
 the calendar family stops being a reason a batch is recomputed on the row
 engine.
 
+**Update: the guard half of this is already gone (task 51).** Before this task
+was picked up, the owner had the emitter's per-extraction guard removed for a
+different reason - it re-verified a fact CSE and task 32's fragment sharing had
+usually already established, on every calendar node, when the one case that
+actually needs a fresh check is a value a *producer* node manufactured from
+unbounded runtime arithmetic (`date_add`/`date_sub` with a column offset, not a
+literal). `PLAN_TASK_51.md` and `PLAN_TASK_52.md` have the detail; task 52 is
+where the check returns, at the producer, not the extraction. So by the time
+task 49 is picked up, `emitEra` no longer carries the two compares or the
+`s.guardAcc` wiring, `hasChrono` is gone, and `STATUS_CHRONO_RANGE` already goes
+unset - what remains for *this* task to delete is the round-down magics and
+their carries, the `NARROWED` variant, and `VarkaChrono`'s range constants,
+plus reconciling with whatever task 52 has done to the producer nodes by then
+(an exact lowering needs no range check for the calendar extraction itself, but
+task 52's producer-side check is about the query's arithmetic, not the
+extraction, and stays relevant regardless of which lowering reads its output).
+
 **What it costs.** Half the lanes: eight per vector at AVX-512 instead of
 sixteen, four instead of eight at 128-bit. Plus an `I2L` on the way in and an
 `L2I` per output on the way out. Counting ops out of what `emitChronoPrefix`
@@ -960,6 +977,121 @@ thread; and a shape whose kernel is only ever compiled once in a JVM produces no
 comparison at all, which is the common case for a short query and means this
 mostly serves long-lived sessions.
 
+### 2.21 Remove the per-extraction range guard (task 51)
+
+Every calendar extraction (`Year`, `Month`, `DayOfMonth`, `Quarter`,
+`DayOfYear`, `LastDay`, `AddMonths`) has carried a per-lane range check since
+task 26: two compares against `VarkaChrono.NARROW_MIN_DAYS`/`NARROW_MAX_DAYS`,
+ANDed with validity and the epilogue's bounds mask, ORed into a body-wide
+accumulator that declines the whole batch to the row engine if any lane's day
+fell outside the range the narrowed civil-from-days lowering is proven exact
+over. The guard was correct and load-bearing when it shipped.
+
+The owner's objection, raised while reviewing task 36's own copy of the same
+guard: the check re-verifies a fact at every calendar extraction that reads a
+given value, when CSE and task 32's fragment sharing already prove the *same*
+value's range once, for every field read off it in the same query. A query
+extracting `year`, `month` and `last_day` from one column pays the guard once
+today, not three times, because the fragment sharing already collapses the
+extractions onto one shared prefix - but a query with a hundred *different*
+calendar expressions, none of them CSE-equal, still pays it a hundred times for
+what is, in the cases that matter, the same underlying guarantee: the day came
+from a column, which the project's own contract already promises is
+`[0001, 9999]`, or from arithmetic the compiler already bounded (`add_months`'s
+literal-month-count check, task 40).
+
+That argument does not cover every case. `date_add`/`date_sub` with a *column*
+offset (task 38) can push a day arbitrarily far from any bound using a runtime
+value the compiler cannot see - the value did not cross the Spark boundary as
+data, Varka's own `AddDays`/`SubDays` node manufactured it. A guard at the
+extraction is not redundant for that value; it is the only place a check has
+ever existed for it, since the arithmetic node that created the value carries
+no check of its own. So the guard's job splits into two real questions -
+"is this a fact already established elsewhere" (the case for removing the
+extraction-side check) and "who established it, and where" (the case for a
+narrower check somewhere else) - and the owner's ruling was to act on the first
+now and treat the second as its own task: **remove the guard, then add it back
+only at the nodes that can actually manufacture an out-of-range day**, tracked
+as task 52.
+
+**What changed.** `hasChrono` (whose only caller decided whether a body
+allocated a guard accumulator) is deleted. `emitEra` no longer emits the two
+compares, the validity/epilogue-mask ANDing, or the OR into `s.guardAcc`; it is
+now only the day-of-era arithmetic, unconditionally. `s.guardAcc` is therefore
+always null today, and `emitStatusReturn` - already written to return a
+constant zero whenever nothing set a guard - needed no change at all to do the
+right thing. The `int run` ABI, `STATUS_CHRONO_RANGE`, the evaluator's fallback
+routing and its metric all stay: nothing sets the bit today, but task 52 is the
+next task and would need every piece of this back immediately, so leaving it
+is not speculative scaffolding, it is scoped, already-planned reuse.
+
+**What this costs, honestly.** `VarkaChrono.narrowed` is unchanged and is
+still undefined - not merely inaccurate - outside `NARROW_MIN_DAYS`..
+`NARROW_MAX_DAYS`. Before this task, a day outside that range was declined to
+the row engine; after it, the same day is computed anyway and can produce a
+wrong year, month, day or quarter with no signal above debug logging. This is
+a real, temporary violation of the ghost-fallback contract in
+`sql/varka/AGENTS.md` ("a Varka failure degrades to the row engine and never
+returns a wrong answer"), accepted deliberately by the owner rather than found
+and fixed, and it stays open until task 52 lands a check at the nodes that can
+actually produce such a day. Two differential tests that asserted the old
+decline behaviour end to end were removed rather than rewritten to assert the
+new, weaker one (`VarkaDifferentialSuite.scala`, see the test file for the
+pointer back here); two unit tests that checked the same thing at the emitter
+level were rewritten to assert that an out-of-range day is now computed, not
+declined (`VarkaLoopEmitterSuite.scala`).
+
+**No emitted byte moves for an in-range shape.** The guard's removal deletes
+code, it does not change the arithmetic any calendar node runs on an in-range
+day, so neither pinned fixture (`VarkaLoopEmitterSuite`'s line map,
+`VarkaShapeCacheSuite`'s shape hash) moves, and no committed parity number is
+expected to change - a body that used to also compute a guard mask now simply
+does not, which can only help, and is not itself a claim this task measures.
+
+### 2.22 Guard at the producer, not the extraction (task 52)
+
+The other half of 2.21's ruling, not yet built. Where task 26's guard checked
+every calendar *extraction's* input, this task checks the *producer* nodes
+that can put a day outside `VarkaChrono`'s narrowed range using a value the
+compiler cannot bound at compile time - today, that is exactly `AddDays`/
+`SubDays` when the offset is a column rather than a literal (task 38's
+day-offset support). `NextDay`'s own offset is not in this set even though it
+takes the same `(days, offset)` shape: task 33's compiler arm accepts only a
+foldable weekday and always compiles it to a `LiteralSlot`, and floorMod7's
+result is bounded to `[0, 6]`, so `NextDay` cannot move a day far enough to
+matter and needs no guard of its own. `add_months`'s literal month count is
+already bounded at compile time too (task 40's `MONTH_ARITH_MIN_MONTHS`/
+`MONTH_ARITH_MAX_MONTHS` decline), so it needs no runtime check under this
+scheme either; a bare `ColumnRef` needs none, under the project's standing
+contract that column data is `[0001, 9999]` at the Spark boundary. A downstream
+calendar extraction trusts whatever its input already established instead of
+re-checking it - which is exactly task 51's removal, now paired with a check
+that actually covers the gap it opened.
+
+**Shape.** Reuses task 51's still-live plumbing: `s.guardAcc`,
+`emitStatusReturn`'s zero-vs-`STATUS_CHRONO_RANGE` return, and the evaluator's
+existing fallback route and metric. The new work is entirely in deciding
+*which* nodes set the accumulator - the column-offset arithmetic nodes, not
+the calendar extractions - and only when their offset operand is not a
+literal the compiler already bounded.
+
+**Behind a flag, off until measured.** Every column-offset `date_add`/
+`date_sub`/`next_day` pays this whether or not a calendar extraction ever
+reads its result, which is a different cost shape than task 26's guard (paid
+per calendar output, shared by fragment sharing) - it needs its own number
+before it is the default, the way task 32's `shareChronoPrefix` and task 49's
+long-lane lowering each earned their default from a measurement rather than an
+argument. A `VarkaEmitOptions` switch, default off, is where task 52 starts;
+the owner picks the default from the number the way every other guard-shaped
+decision in this milestone has been decided.
+
+**Validation.** A differential shaped like the two task 51 removed - a
+column-offset `date_add` pushing a date past the range, checked end to end
+through both the projection and filter paths - but anchored on the producer
+node rather than the extraction, since that is now where the check lives. Both
+flag settings green; a committed number for the guard's cost isolates what it
+adds on top of the arithmetic it protects.
+
 ## 3. Task breakdown
 
 Tasks 24-44 are the committed spine, in dependency order: 24 halves the
@@ -994,9 +1126,16 @@ Items 7, 10, 9 and 8 are the follow-on ladder in that order - each
 needs its own argument to enter, per the milestone 3 rule. Numbering continues
 the single sequence; this plan has already grown twice the way milestone 3's did
 (task 31, section 2.2, then tasks 32-44, sections 2.9 to 2.16, and now tasks
-45-48, sections 2.17 and 2.18, task 49, section 2.19, and now task 50,
-section 2.20), so milestone 5
-resumes at 51.
+45-48, sections 2.17 and 2.18, task 49, section 2.19, task 50, section 2.20,
+and now tasks 51 and 52, sections 2.21 and 2.22), so milestone 5
+resumes at 53.
+
+Task 51 is a fourth unplanned addition, and unlike 32, 45-48 and 49 it did not
+come from a measurement - it came from the owner questioning task 26's guard
+design directly, mid-review of task 36 (see 2.21). 52 is 51's other half,
+tracked separately because the owner asked for the guard's removal and its
+replacement to ship as two decisions rather than one: 51 is done, 52 is a plan
+only, and nothing currently blocks it from being picked up next.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -1009,9 +1148,9 @@ resumes at 51.
 | 29 | int64 lanes: `TimestampNTZ`, `bigint` | The second `LaneType`; `TimestampNTZ` comparisons, differences, literal arithmetic; `TimestampType` and `LongType` comparisons and diffs; range-narrowed magic constants for 1000000 and 86400 or a recorded decline; the field differential mode from task 22 | Every parity gate re-run at the long species and both vector widths; the halved-headroom number committed rather than discovered; zoned operations demonstrably declined, not wrong |
 | 30 | ANSI integer arithmetic | `try_add`/`try_subtract`/`try_multiply` via the difference-mask-as-validity path; the ANSI throw path via saturating detection and scalar re-walk, priced with a registered prediction; `Multiply` overflow through 28's widening if it is cheap, declined with a reason if not | The error-identity differential: same `SparkException`, same row, as the row engine under ANSI; `try_*` differential over overflow-dense and overflow-free data; committed number on the no-overflow path against Janino |
 | 33 | `next_day`, as a handover experiment | The node, the compiler arm declining every non-literal weekday, and the emitter arm over the existing mod-7 lowering; `PLAN_TASK_33.md` written as an executable recipe and scored in its own outcome section on which steps misled the agent that ran it | Every Varka suite green at both widths; the two pinned fixtures re-pinned under their update rule; no committed benchmark number moves, since the task adds a node type and changes no existing shape |
-| 34 | `dayofyear` | The node, the January-based conversion off `emitChrono`'s March-based day of year, and the shared leap-flag helper tasks 35-37 reuse | Every Varka suite green at both widths; the pinned fixtures re-pinned; a day outside the covered range still declines |
+| 34 | `dayofyear` | The node, the January-based conversion off `emitChrono`'s March-based day of year, and the shared leap-flag helper tasks 35-37 reuse | Every Varka suite green at both widths; the pinned fixtures re-pinned; a day outside the covered range still declines (**this decline was removed by task 51**; see 2.19's update note and `PLAN_TASK_51.md`) |
 | 35 | `trunc(date, YEAR/MONTH/QUARTER)` | One node carrying the level as a shape-bearing field, three lowerings, and the decline path for every level and format this task does not cover | As 34, plus a `DateType` output proved to feed further date arithmetic in the same chain |
-| 36 | `last_day` | The node and the month-length tail, with February's leap case as its own branch | As 34, with every month length exercised in both a leap and a common year |
+| 36 | `last_day` | The node and the month-length tail, with February's leap case as its own branch | As 34, with every month length exercised in both a leap and a common year (the decline this inherited from 34 is likewise removed by task 51) |
 | 37 | `weekofyear` | The node, the ISO-8601 rule including both year-boundary corrections, and the weeks-in-year helper called for two years | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list |
 | 38 | A day offset that is a column | The four guards moved, the `andRef` validity fix, `IntegerType` leaves and Arrow `IntVector` inputs accepted, short and byte offsets declining | A null offset producing a null row, at both widths; short and byte columns declining; **no pinned value and no committed number moves**, since no node type is added and the literal path is untouched |
 | 39 | `date - date` | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
@@ -1027,6 +1166,8 @@ resumes at 51.
 | 48 | A `year` that does not compute the month | `doy >= 306` replacing the March-month step in the year tail only, with the equivalence recorded as an integer identity rather than an approximation | The existing exhaustive `VarkaChronoSuite` sweep unchanged and still green; the parity `year` case measured by interleaved A/B compared by minimums, since the expected effect is inside a single run's noise |
 | 49 | Exact civil-from-days in long lanes | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division by 146097, 36524 and 365 with a 64-bit low product and no correction carries; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
 | 50 | Make a bad register allocation visible | A `jdk.Compilation` JFR stream filtered to Varka's generated kernels, non-OSR only, comparing `codeSize` between compilations of the same shape hash rather than against any committed table; a metric and a debug log on divergence; off unless enabled | The stream observed to see Varka kernel compilations and report their sizes at both widths; zero cost when disabled, asserted rather than assumed; explicitly no re-emission on detection (see section 9) |
+| 51 | Remove the per-extraction range guard. **DONE** (`PLAN_TASK_51.md`) | `hasChrono` and `s.guardAcc`'s allocation deleted; `emitEra`'s two compares and the mask ANDing/ORing into the accumulator removed, leaving only the day-of-era arithmetic; `emitStatusReturn`, the `int run` ABI and `STATUS_CHRONO_RANGE` left in place, unset, for task 52 to reuse; the two guard-specific differential tests removed and the two guard-decline unit tests rewritten to assert the new, weaker behaviour | Every Varka suite green at both widths in both modules; the two pinned fixtures unchanged (no emitted byte for an in-range shape moves); `dev/lint-java`, `dev/scalastyle`, `build/sbt catalyst/doc` clean |
+| 52 | Guard at the producer, not the extraction | A flag-gated guard on `AddDays`/`SubDays` when the offset is a column rather than a literal - the only nodes that can manufacture a day outside `VarkaChrono`'s narrowed range from data the compiler cannot bound (`NextDay`'s offset is always a bounded literal by construction, task 33) - reusing task 51's still-live `s.guardAcc`/`STATUS_CHRONO_RANGE` plumbing; off by default behind `VarkaEmitOptions` until measured | A differential equivalent to the two task 51 removed, reshaped around the producer node rather than the extraction; the flag on and off both green; a committed number for the guard's cost on the column-offset `date_add` shape |
 
 ## 4. Files
 
