@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
@@ -223,6 +223,43 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val ts = AttributeReference("t", TimestampType)()
     val bound = Seq(out(Year(Cast(ts, DateType))))
     assert(VarkaExpressionCompiler.compile(bound, Seq(ts)).isEmpty)
+  }
+
+  test("task 41: unix_date/date_from_unix_date relabel rather than compiling to a node") {
+    // unix_date's child is a date column, readable today: the relabel vanishes and the IR is
+    // a bare ColumnRef, with the output type coming from the Catalyst expression (IntegerType)
+    // rather than from anything the IR rendered.
+    val unixDate = VarkaExpressionCompiler.compile(Seq(out(UnixDate(d))), childOutput).get
+    assert(unixDate.outputs === Seq(new ColumnRef(0)))
+    assert(unixDate.outputTypes === Seq(IntegerType))
+    // date_from_unix_date's child is an integer column, which no general leaf can read, so
+    // this declines through the ordinary non-date-column path exactly as any other read of
+    // `i` would. Task 38 has since landed and does not change that: it opens IntegerType
+    // columns through compileOffset only - deliberately not through compileNode, per that
+    // method's own javadoc - so the offset of a date_add is readable and this is not.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(DateFromUnixDate(i))), childOutput).isEmpty)
+    // The actual argument for the task: a relabelled entry must not demote the rest of the
+    // projection to the row path. Before this task UnixDate itself declined, taking `a` with it.
+    val mixed = VarkaExpressionCompiler.compile(
+      Seq(out(DateAdd(d, Literal(1))), out(UnixDate(d))), childOutput).get
+    assert(mixed.outputs === Seq(new AddDays(new ColumnRef(0), new LiteralSlot(0)),
+      new ColumnRef(0)))
+    assert(mixed.outputTypes === Seq(DateType, IntegerType))
+    // A relabel compiles to a bare ColumnRef, the same IR shape a bare column produces -
+    // compileCoalesce and compileValidity both use that shape as their proxy for "this
+    // operand is a bare column" (their own doc comments now say so), and a relabel is safe
+    // to guard exactly because it is a null-intolerant identity like the column it wraps.
+    val c0 = new ColumnRef(0)
+    val c1 = new ColumnRef(1)
+    val guarded = VarkaExpressionCompiler.compile(
+      Seq(out(If(IsNotNull(UnixDate(d)), UnixDate(d), UnixDate(d2)))), childOutput).get
+    assert(guarded.outputs === Seq(new IfElse(new IRIsNotNull(c0), c0, c1)))
+    assert(guarded.outputTypes === Seq(IntegerType))
+    val coalesced = VarkaExpressionCompiler.compile(
+      Seq(out(Coalesce(Seq(UnixDate(d), UnixDate(d2))))), childOutput).get
+    assert(coalesced.outputs === Seq(new IfElse(new IRIsNotNull(c0), c0, c1)))
+    assert(coalesced.outputTypes === Seq(IntegerType))
   }
 
   test("task 38: date_add/date_sub with an IntegerType column offset compile to a two-column " +
