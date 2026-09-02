@@ -1,0 +1,315 @@
+# Task 48: a `year` that does not compute the month
+
+## 1. Where this came from, and what changed under it
+
+`PLAN_MILESTONE_4.md` section 2.18. The year tail needs one bit out of the
+March-based month `mp`: whether the March year has turned January, which is
+`mp >= 10`. Since `mp = (5 * doy + 2) / 153`, that bit is `doy >= 306` - an
+integer identity, not an approximation (section 2 proves it) - and `doy` is
+already in a local when the tail runs. So a kernel computing `year` alone never
+needs the month step: one compare replaces a multiply, an add, a magic multiply
+and a shift. It matters because `year` alone is what TPC-H q7, q8 and q9 run,
+the only calendar extraction the headline corpus asks for, and the case every
+later calendar task is compared against (1823 M rows/s at AVX-512 in the
+committed parity file).
+
+Section 2.18 also said, correctly, that this task and task 32 step B were in
+tension: "if task 32's step B lands, the prefix computes `mp` for the month,
+day-of-month and quarter tails regardless, and `year` reading `doy >= 306`
+instead saves one op rather than five... whichever of the two lands second
+inherits the smaller half of the win." **Step B1 landed first** (`PLAN_TASK_32.md`
+section 7.1). Read literally, this task is therefore worth one op: the shared
+`emitChronoPrefix` ends with the `mp` step unconditionally, whether or not any
+tail that follows reads it.
+
+This plan does not accept the smaller half. The `mp` step is dead work exactly
+when no consumer of that prefix reads `marchMonth`, and the emitter knows its
+consumers at plan time - so the step becomes conditional on them. For a
+`year`-only kernel that is the full five-op win section 2.18 wanted; for
+`year(d), month(d)` in one method it is correctly nothing, because the month
+tail needs `mp` regardless; and it generalises for free to every other tail
+that does not read the month - `dayofyear` (task 34, PR #64) and task 35's
+`trunc(d, 'YEAR')` both test `doy >= 306` themselves and never touch `mp`.
+
+## 2. The identity, proved rather than asserted
+
+For `doy` in `[0, 365]` (the March-based day of year the prefix leaves in
+`rem` after its overshoot correction), `mp = (5 * doy + 2) / 153` exactly -
+`VarkaChrono.MONTH_M`/`MONTH_K` is an exact magic over dividends up to
+`5 * 365 + 2 = 1827`, which is the whole domain. Then
+
+```
+mp >= 10  <=>  (5 * doy + 2) / 153 >= 10   (integer division, non-negative)
+          <=>  5 * doy + 2 >= 1530
+          <=>  doy >= 305.6
+          <=>  doy >= 306                    (doy is an integer)
+```
+
+and the top of the domain is safe too: `mp(365) = 1827 / 153 = 11`, so the
+March-based month never exceeds 11 and `>= 10` means exactly `{10, 11}` -
+January and February. The constant is `VarkaChrono.MARCH_TO_JANUARY_DAYS = 306`,
+the count of days from 1 March through 31 December. Task 34 (PR #64) already
+declares it under that name and value for `dayofyear`'s own January test;
+whichever of the two lands second drops its copy.
+
+The proof above is three lines; it is also 366 cases, and 366 cases are
+cheaper to run than to trust. Commit 2 adds a test that evaluates both sides
+for every `doy` in `[0, 365]` through the shipped constants - the same
+"recorded as an integer identity rather than an approximation" the milestone
+asked for, with the record being a green assertion rather than this paragraph.
+`verify_chrono_tails.py` has been using `doy >= 306` as the January test since
+task 34's recipe, so the identity has also been implicitly swept over every day
+of `0001..9999` three times over; that is corroboration, not the proof.
+
+## 3. The design: a prefix that knows its consumers
+
+### 3.1 The year tail
+
+`emitChronoYear` takes `rem` instead of `marchMonth`, and its January mask
+becomes `rem >= MARCH_TO_JANUARY_DAYS` through a new
+`emitJanuaryMaskFromDayOfYear(cb, rem)`. The existing
+`emitJanuaryMask(cb, marchMonth)` stays for `emitChronoMonth`, which has `mp`
+in hand anyway and whose bytes this task has no reason to move - the milestone
+says "in the year tail only", and that is where it stays.
+
+Every caller of `emitChronoYear` passes `t[2]` where it passed `t[5]`: the
+`Year` arm in `emitChrono`, `emitAddMonths`, `emitChronoLastDay` (PR #78) and
+task 34's `DayOfYear` arm (PR #64). `rem` is intact at every one of those call
+sites: each calls `emitChronoYear` first thing after the prefix, before
+anything of its own writes a local.
+
+One byte moves per year tail: `306` needs `sipush` where `10` fit `bipush`.
+This is why section 6's first prediction is about bytes and not ops.
+
+### 3.2 The conditional month step
+
+The prefix's last five instructions - `rem * 5 + 2`, the magic multiply, the
+shift, the store to `marchMonth` - are emitted only when some consumer of this
+prefix reads `marchMonth`. Two pieces:
+
+**`tailReadsMarchMonth(node)`**, a switch over the sealed `Chrono` family plus
+`AddMonths`, the way `chronoChild` is written, so a new member is a compile
+error rather than a silent "true":
+
+| node | reads `mp`? | why |
+|---|---|---|
+| `Year` | no | this task |
+| `Month`, `DayOfMonth`, `Quarter` | yes | `emitChronoMonth`, `emitMonthStart` |
+| `AddMonths` | yes | month and day-of-month tails |
+| `LastDay` (PR #78) | yes | `emitMonthStart` twice |
+| `DayOfYear` (PR #64) | no | tests `rem >= 306` itself |
+| `TruncDate` (task 35) | `level != YEAR` | `MONTH`/`QUARTER` need the month; `YEAR` is `d - jdoy + 1` |
+
+**The consumer set.** `planSlots` already walks every node of a body and
+computes each calendar node's `FragmentKey`; it gains a
+`Set<FragmentKey> fragmentsReadingMonth` on `Slots`, adding the key whenever
+`tailReadsMarchMonth(node)`. `emitChronoPrefixOnce` then passes
+`emitMonth = shareChronoPrefix ? s.fragmentsReadingMonth.contains(key)
+: tailReadsMarchMonth(node)` down to `emitChronoPrefix`.
+
+Two granularity points, both deliberate:
+
+* **Per body, not per node and not per query.** `Slots` is planned per body
+  method, so the set is the consumers *in that method*. Under today's
+  `GROUP_BUDGET` a loop method holds one calendar output, so `year(d)`'s loop
+  method elides and `month(d)`'s keeps, while the epilogue - one method over
+  every output by task 24's decision - sees both and keeps. If step B2
+  (`PLAN_TASK_32.md` section 10) later puts several calendar outputs in one
+  loop method, the set widens with it and nothing here changes.
+* **Order-independent.** With sharing on, the *first* sibling emits the
+  prefix. If that sibling is `year(d)` and `month(d)` follows, the prefix must
+  still have emitted `mp` - which it does, because the decision is read from
+  the plan-time set over all consumers, never from whichever node happened to
+  emit first. Section 5 tests both orders for exactly this reason. With sharing
+  off, two nodes with equal keys do not share locals, so the decision is per
+  node; keying it on the fragment there would make `year(d)` pay for a
+  `month(d)` it shares nothing with.
+
+### 3.3 The switch, and the default
+
+`VarkaEmitOptions.elideChronoMonth`, default **on** once section 6's
+measurement is in, kept as a switch so the A/B is re-runnable and so the
+parity benchmark can carry both cases side by side, the way `shareChronoPrefix`
+and `FloorMod7` do. `canonical()` is unchanged for `DEFAULTS`, so no production
+shape hash moves; a non-default rendering adds the field in declaration order.
+
+Shipping the default on does not rest on the timing. It rests on the step
+being provably dead work where it is elided (section 2) and on the exhaustive
+sweep (section 5); the timing is recorded because the repo's rule is that a
+performance claim traces to a committed benchmark file, not because the change
+needs a number to justify removing instructions nobody reads.
+
+### 3.4 The scalar twin
+
+`VarkaChrono.fromEra`'s year line becomes
+`+ (dayOfYear >= MARCH_TO_JANUARY_DAYS ? 1 : 0)` so the model keeps mirroring
+the emitted arithmetic - the class's own contract is that a disagreement
+between the two is an emission bug rather than an arithmetic one, and that only
+holds while they compute the same thing the same way. `VarkaChronoSuite`'s
+exhaustive sweep is unchanged and must stay green, which is the milestone's
+first validation criterion and is exactly what the identity guarantees.
+
+## 4. Files
+
+| file | what |
+|---|---|
+| `VarkaChrono.java` | `MARCH_TO_JANUARY_DAYS` with section 2 in its javadoc (or the same constant PR #64 already has, if it lands first); `fromEra`'s year line |
+| `VarkaLoopEmitter.java` | `emitChronoYear(.., rem)` and its four call sites; `emitJanuaryMaskFromDayOfYear`; `tailReadsMarchMonth`; `Slots.fragmentsReadingMonth` filled in `planSlots`; `emitChronoPrefixOnce`/`emitChronoPrefix` taking `emitMonth`; `CHRONO_PREFIX_SLOTS` unchanged - `t[5]` is still allocated, just not always written |
+| `VarkaEmitOptions.java` | `elideChronoMonth`, its `with...`, `canonical()` |
+| `VarkaChronoSuite.scala` | the 366-case identity test |
+| `VarkaLoopEmitterSuite.scala` | section 5's tests; the ladder test's unshared boundary re-pinned |
+| `VarkaEmitterParityBenchmark.scala` + committed results | section 6 |
+| `PLAN_TASK_32.md` 7.1, `PLAN_MILESTONE_4.md` debt register | the ladder's third move |
+| `PLAN_TASK_35.md` 7.5 | one line: `tailReadsMarchMonth` is an edit site for `TruncDate` |
+| `docs/sql-varka.md` | requoted only if the `year` figure moves outside noise |
+
+Not touched: `ChronoVectorOps` in `sql/varka/engine`, the hand-written
+reference kernel, which computes all four fields and so needs `mp` regardless.
+
+## 5. Tests
+
+1. **The identity**, 366 cases through the shipped constants (section 2).
+2. **Op count, not timing**: a `year`-only dense loop method emits exactly
+   four fewer `IntVector` invocations with the switch on than off - the
+   deterministic deliverable, counted from the emitted class rather than the
+   source (`VarkaEmitterTestSupport` already reads method bodies).
+3. **Order independence**: `Seq(Year(d), Month(d))` and `Seq(Month(d), Year(d))`
+   under sharing both emit `mp` in the epilogue and agree with `LocalDate` on
+   the boundary matrix; `Seq(Year(d))` alone does not emit it.
+4. **Sharing off**: `Seq(Year(d), Month(d))` unshared elides in the year
+   node's own prefix and keeps in the month's.
+5. **The exhaustive sweep** (`-Dvarka.sweep=true`) over all 16,777,216 covered
+   days, five fields, both sharing modes, both switch positions, at both vector
+   widths. This is the gate that matters; everything above it locates a
+   failure this would only report.
+6. **"sharing the prefix leaves every loop method byte for byte as it was"**
+   stays green as written - both sides of its comparison change identically.
+7. **The ladder**: `fields(n)` is four fields per date, so under sharing every
+   fragment has a `Month` consumer and keeps `mp`; the shared boundary stays at
+   44 (plus one byte per year tail). Unshared, every `Year` node's own prefix
+   elides, so the epilogue at `fields(5).take(19)` loses about 140 bytes and
+   the "19 crosses" assertion fails. Re-measure, re-pin, retitle, and record
+   the third move of that number in `PLAN_TASK_32.md` 7.1 and the debt
+   register - sharing moved it, the guard's removal moved it, and this moves
+   it again, each for a different reason, which is exactly why task 44 should
+   measure its own baseline when picked up rather than inherit one.
+
+## 6. The measurement
+
+### 6.0 The benchmark that already exists, and the one that does not apply
+
+There is a `year` benchmark, and it is the one every later calendar task has
+been measured against: the `year: the calendar extractions against LocalDate
+(task 26)` section of `VarkaEmitterParityBenchmark`, 20M rows in 4096-row
+chunks, five iterations over two-second windows, whose committed results
+(`sql/catalyst/benchmarks/VarkaEmitterParityBenchmark-jdk25-results.txt`, AVX-512)
+are the baseline this task measures against:
+
+| committed row | Best (ms) | Rate (M rows/s) |
+|---|---|---|
+| `year, null-free` | 11 | 1823.4 |
+| `year, mixed nulls` | 12 | 1717.4 |
+| `year+month, separate (2 loop methods), null-free` | 22 | 913.7 |
+| `year+month+day, separate (3 loop methods), null-free` | 33 | 604.8 |
+| `year(d1), year(d2), two dates, shared option, null-free` | 22 | 891.4 |
+| `per-row LocalDate year (the path Spark uses today)` | 42 | 479.4 |
+
+Those five kernel rows are exactly the ones whose `year` loop method elides
+under this task, which is why they are listed and the shared-method rows are
+not. Note the granularity the file reports: `year, null-free` is 11 ms best
+time, so a 4% change is under half a millisecond and below the file's
+resolution - which is the concrete reason section 6.1 predicts "inside noise"
+as a legitimate result and why the comparison is by minimums across
+regenerations rather than by one row against another.
+
+The 128-bit baseline is not in the committed file: task 26 recorded it in
+`PLAN_TASK_26.md` section 11.2 (`year` 599 M/s, mixed nulls 566, against the
+row path's 480) when it chose the shipped lowering. This task records its
+128-bit A/B the same way, in section 9.
+
+What does **not** apply is the engine module's JMH harness
+(`DateVectorOpsBenchmarkTest` and its milestone-4 siblings under
+`sql/varka/engine`). The milestone's debt register records that it measures a
+degraded JIT state - it runs with `forks = 0` in the surefire JVM after the
+JUnit suites - and cannot be trusted for an A/B today. It also has no `year`
+case: `ChronoVectorOps` is the four-field reference kernel and always computes
+the month. The parity harness is the instrument here, and the only one.
+
+Two adjacent cases in the parity benchmark's year section - `year, month step
+elided` and `year, month step kept` - null-free and mixed-null each, at both
+vector widths, five regenerations of the file on an idle machine, compared by
+**minimums** (`SKILLS.md`: single-run comparisons carried a +/-15% band on
+this machine and turned several apparent small wins into noise). Adjacent
+cases in one `Benchmark` are the interleaving: each regeneration runs both
+back to back under the same JIT and thermal state.
+
+The committed rows that can legitimately move: `year, null-free`,
+`year, mixed nulls`, the two `separate (N loop methods)` rows (their `year`
+loop method elides), and `year(d1), year(d2), two dates`. Rows whose loop
+method holds a month consumer - every `shared (1 loop method)` row and the
+four-field cases - move by at most the one byte per year tail and should
+reproduce within noise; if one does not, the elision fired where it should
+not have, and that is a bug, not a bonus.
+
+### 6.1 Predictions, registered before the run
+
+1. A `year`-only loop body drops from 45 to 41 `IntVector` ops
+   (deterministic; test 2 asserts it).
+2. `year, null-free` by minimums: elided over kept at 1.00x to 1.06x at
+   AVX-512. Inside noise is a permitted and expected outcome - the body is
+   latency-bound on the prefix's dependent chain, and the four ops come off
+   the end of it rather than out of the middle.
+3. At 128-bit the two are indistinguishable by minimums.
+4. The unshared `HugeMethodLimit` crossing moves from 19 outputs to 20; the
+   shared one stays at 44.
+5. No pinned oracle moves: neither the IR rendering nor `DEFAULTS`' canonical
+   form changes.
+6. `dayofyear` (PR #64) inherits the same elision with no change of its own
+   beyond the `emitChronoYear` call-site rename, since it already tests
+   `rem >= 306`.
+
+## 7. Risks
+
+1. **Plan-time set against emit-time state.** `emittedFragments` is per lane
+   group and cleared in `emitLaneGroup`; `fragmentsReadingMonth` is per body
+   and planned once. That is consistent because the *slots* are per body, and
+   what the set decides is whether a slot gets written, not whether a run
+   happens. Writing the set anywhere finer would be wrong: a lane group is not
+   a scope.
+2. **A consumer that reads `mp` without saying so.** Any tail that reads
+   `t[5]` must return true from `tailReadsMarchMonth`, or it reads an
+   uninitialised local - which the JVM verifier rejects at class load, loudly,
+   rather than silently. That is the right failure mode, and the exhaustive
+   switch over the sealed family is what keeps a future tail from reaching it.
+3. **The one-byte drift.** `sipush 306` against `bipush 10` adds a byte per
+   year tail to every method containing one. Only the epilogue is near a
+   limit, and at 44 shared outputs it gains eleven bytes on a number already
+   past 8000; harmless, but it is why prediction 4 says "stays at 44" rather
+   than "unchanged".
+4. **Numbers moving under the task's own feet.** Commits 2 and 3 both touch
+   emitted bytes; regenerate the parity file once, in commit 4.
+5. **PR #64 and PR #78 in flight.** Both call `emitChronoYear`; whichever
+   lands after this task updates one argument at its call site, and #64
+   additionally drops its own `MARCH_TO_JANUARY_DAYS`. Neither is a conflict a
+   merge would resolve wrongly - the compiler refuses the old signature.
+
+## 8. Sequencing
+
+Four commits, each green on its own:
+
+1. **This plan.**
+2. **The identity**: `MARCH_TO_JANUARY_DAYS` and its javadoc, `fromEra`'s year
+   line, the 366-case test; `emitChronoYear` taking `rem` at all four call
+   sites and `emitJanuaryMaskFromDayOfYear`. No elision yet, so the only byte
+   change is the `sipush`, and the ladder does not move.
+3. **The elision** behind `elideChronoMonth`: `tailReadsMarchMonth`, the
+   per-body consumer set, the conditional step, tests 2 through 5 and 7, the
+   ladder re-pinned, `PLAN_TASK_32.md` 7.1 and the debt register updated.
+4. **The measurement**: the A/B cases, five regenerations, the results file,
+   the number recorded in section 9 with the default confirmed or reversed on
+   it, `docs/sql-varka.md` requoted only if `year` moved outside noise.
+
+## 9. Outcome
+
+Filled in when the work lands: the A/B table by minimums at both widths, the
+ladder's new unshared boundary, and which of section 6.1's predictions held.
