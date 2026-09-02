@@ -367,13 +367,13 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   }
 
   test("every node type's canonical rendering is pinned, not only the chain ops") {
-    // One key that uses all 20 IR node types (and three CompareOps), so a rendering change
+    // One key that uses all 22 IR node types (and three CompareOps), so a rendering change
     // to any of them - operand order, a token - fails here even though the chain-based
     // pinned hash above would still pass. Same update rule as above when intended. Task 20
     // added IsNotNull and re-pinned the value (recorded in PLAN_TASK_20.md); task 26 added
     // the four calendar extractions and re-pinned it again (PLAN_TASK_26.md); task 33 added
-    // NextDay and task 34 added DayOfYear, each re-pinning it again (PLAN_TASK_33.md,
-    // PLAN_TASK_34.md).
+    // NextDay, task 34 added DayOfYear and task 40 added AddMonths, each re-pinning it
+    // again (PLAN_TASK_33.md, PLAN_TASK_34.md, PLAN_TASK_40.md).
     import VarkaVectorIR._
     val cond = new And(
       new Or(
@@ -389,8 +389,9 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
       cond,
       new Greatest(new AddDays(columnRef, literal), new SubDays(columnRef, literal)),
       new Least(new DateDiff(chrono, new DayOfWeek(columnRef)),
-        new Least(new WeekDay(columnRef), new NextDay(columnRef, literal))))
-    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "6b1350154da77f7e")
+        new Least(new WeekDay(columnRef),
+          new Least(new NextDay(columnRef, literal), new AddMonths(columnRef, literal)))))
+    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "e92649526ad8000c")
   }
 
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {

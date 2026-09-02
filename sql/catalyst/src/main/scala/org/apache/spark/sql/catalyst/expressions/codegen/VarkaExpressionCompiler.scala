@@ -22,9 +22,9 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaLoopEmitter, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaLoopEmitter, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -476,6 +476,26 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRQuarter(_))
     case DayOfYear(child) =>
       compileNode(child, inputs, literals, sink).map(new IRDayOfYear(_))
+    // Month arithmetic (task 40): add_months(d, n) and d +- INTERVAL n MONTH/YEAR are the same
+    // node - AddMonthsBase's two subclasses differ only in where the month count comes from,
+    // both physically an Int. `d - INTERVAL n MONTH` arrives as DatetimeSub, already replaced
+    // by its DateAddYMInterval(l, UnaryMinus(r)) by the time a real query reaches here.
+    case AddMonths(startDate, numMonths) =>
+      for {
+        months <- foldMonths(numMonths, sink)
+        node <- compileNode(startDate, inputs, literals, sink)
+      } yield {
+        val slot = new LiteralSlot(literals.getOrElseUpdate(months, literals.size))
+        new IRAddMonths(node, slot)
+      }
+    case DateAddYMInterval(date, interval) =>
+      for {
+        months <- foldMonths(interval, sink)
+        node <- compileNode(date, inputs, literals, sink)
+      } yield {
+        val slot = new LiteralSlot(literals.getOrElseUpdate(months, literals.size))
+        new IRAddMonths(node, slot)
+      }
     // A column of any other type: eligible to be forwarded as a whole entry, never to be read
     // by the int32 lanes of a kernel.
     case br: BoundReference =>
@@ -526,6 +546,27 @@ private[sql] object VarkaExpressionCompiler {
       sink.note("day offset is not a foldable literal", days)
     }
     folded
+  }
+
+  /**
+   * The literal month count of `add_months`/`date +- INTERVAL n MONTH/YEAR` (task 40), or
+   * `None` with the reason noted: a non-foldable count is a per-row value like a non-foldable
+   * day offset above, and one outside `VarkaChrono`'s `MONTH_ARITH_MIN/MAX_MONTHS` is a value
+   * the emitter's `/ 12` magic multiply does not cover (`PLAN_TASK_40.md` section 2.2) - both
+   * expressions carry it as a plain `Int` (`AddMonths.numMonths` and `DateAddYMInterval`'s
+   * `YearMonthIntervalType` interval alike), so `foldDaysOffset` folds either one.
+   */
+  private def foldMonths(months: Expression, sink: DeclineSink): Option[Int] = {
+    DateVarkaSupport.foldDaysOffset(months) match {
+      case None =>
+        sink.note("month count is not a foldable literal", months)
+        None
+      case Some(m) if m < VarkaChrono.MONTH_ARITH_MIN_MONTHS
+          || m > VarkaChrono.MONTH_ARITH_MAX_MONTHS =>
+        sink.note("month count outside the range the emitter's magic multiply covers", months)
+        None
+      case some => some
+    }
   }
 
   /**
