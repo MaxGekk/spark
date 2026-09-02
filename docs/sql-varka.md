@@ -71,6 +71,10 @@ still declines):
   unrecognized weekday declines, since resolving it is a compile-time step
   and the row engine's ANSI-mode behavior for a bad weekday is not
   reproduced.
+* `UNIX_DATE` relabels a date column to its underlying `INT` day count with no
+  new node and no emitted code (task 41); the paired `DATE_FROM_UNIX_DATE`
+  compiles the same way but still declines today, since its child is an
+  integer column and no leaf can read one until task 38 lands.
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
 

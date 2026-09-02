@@ -412,6 +412,26 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // being provably dead work where it is elided.
         val yearMonthKept = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 802,
           VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false))
+        // add_months is the widest calendar node the emitter has - it decomposes and
+        // recomposes in one loop method - and until now it had no committed number at all,
+        // which is why the leap flag's cost was argued rather than measured. One scalar arg,
+        // the month count, so this cannot share `chunked`.
+        val addMonths = emit(Seq(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
+          1, 1, loader, 811)
+        def chunkedAddMonths(mixed: Boolean): Unit =
+          eachChunk { (dataOff, validityOff, n) =>
+            val status = if (mixed) {
+              addMonths.run(Array(mxData.address() + dataOff),
+                Array(mxValidity.address() + validityOff), Array(nullsIn(n)),
+                Array(dst.address() + dataOff),
+                Array(dstValidity.address() + validityOff), Array(13), n)
+            } else {
+              addMonths.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
+                Array(dst.address() + dataOff),
+                Array(dstValidity.address() + validityOff), Array(13), n)
+            }
+            require(status == 0, s"the kernel declined a batch: status $status")
+          }
         benchmark.addCase("year, null-free") { _ => chunked(year, false) }
         benchmark.addCase("year, month step kept (task 48 A/B), null-free") { _ =>
           chunked(yearMonthKept, false)
@@ -420,6 +440,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year, month step kept (task 48 A/B), mixed nulls") { _ =>
           chunked(yearMonthKept, true)
         }
+        benchmark.addCase("add_months(d, 13), null-free") { _ => chunkedAddMonths(false) }
+        benchmark.addCase("add_months(d, 13), mixed nulls") { _ => chunkedAddMonths(true) }
         benchmark.addCase("year+month+day+quarter, null-free") { _ =>
           chunked(four, false, outputs = 4)
         }

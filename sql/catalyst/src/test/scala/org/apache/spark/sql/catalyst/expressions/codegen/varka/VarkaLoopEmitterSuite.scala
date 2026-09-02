@@ -596,6 +596,15 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("task 41: a bare ColumnRef output root - a loop that only loads and stores") {
+    // unix_date/date_from_unix_date unwrap to their child rather than compiling to a node,
+    // so an output whose IR root is a plain column reference is a shape this task makes
+    // reachable for the first time - exercise it directly at the emitter level.
+    val root = new ColumnRef(0)
+    checkMatrix(Seq(root), 1, Array.empty[Int], Seq(0, 1, 5, 17, 64, 65, 1000),
+      nullPatterns.map(p => Seq(p._2)), ctx = "bare-columnref")
+  }
+
   test("disabling CSE changes the bytecode but never the results") {
     val shared = new AddDays(new ColumnRef(0), new LiteralSlot(0))
     val roots = Seq[VarkaVectorIR](shared, new DateDiff(shared, new ColumnRef(1)))

@@ -22,7 +22,7 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -375,7 +375,11 @@ private[sql] object VarkaExpressionCompiler {
       Some(columnRef(br, inputs))
     // A date literal's value is already an epoch-day int, so it takes a slot in the shared
     // per-distinct-value table like a folded day offset does (task 11) - what makes
-    // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all.
+    // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. `days: Int` does not
+    // match a null-valued Literal, which falls through to the catch-all below; that is a
+    // safe blind spot, not a bug, since ConstantFolding removes a null date literal from any
+    // real query before it can reach here (unix_date/date_from_unix_date add two more
+    // recursive paths into this same match, both equally covered by that guarantee).
     case Literal(days: Int, DateType) =>
       Some(new LiteralSlot(literals.getOrElseUpdate(days, literals.size)))
     // The identity cast (task 20): the corpus wraps date expressions in `CAST(... AS DATE)`
@@ -385,6 +389,18 @@ private[sql] object VarkaExpressionCompiler {
     // string lane and stays declined below.
     case c: Cast if c.dataType == DateType && c.child.dataType == DateType =>
       compileNode(c.child, inputs, literals, sink)
+    // unix_date/date_from_unix_date (task 41) are Spark's own `input.asInstanceOf[Int]` in
+    // full - a date IS a day count, so both are a pure type relabel with nothing to compute.
+    // Unwrapping to the child rather than adding an IR node means `SELECT unix_date(d)` and
+    // `SELECT d` compile to the same IR and share a shape hash - correct, since kernel
+    // identity is about lane math and theirs is identical; the entry's output type still
+    // comes from the Catalyst expression, not the IR. `date_from_unix_date`'s child is an
+    // integer column, unreadable until task 38 opens that leaf - until then this arm simply
+    // declines through the existing non-date-column path below.
+    case UnixDate(child) =>
+      compileNode(child, inputs, literals, sink)
+    case DateFromUnixDate(child) =>
+      compileNode(child, inputs, literals, sink)
     case DateAdd(child, days) =>
       // The date child compiles before the offset, matching CaseWhen's rule a few cases below:
       // ordinals and literal slots register in reading order. Before task 38 the offset was
@@ -520,7 +536,11 @@ private[sql] object VarkaExpressionCompiler {
    * The Coalesce right-fold (task 20). Every operand except the last compiles and must be a
    * bare date column: `IsNotNull` reads the per-input validity word, which only a column has
    * before value emission (the recorded milestone-3 restriction) - a computed operand
-   * declines with its own reason.
+   * declines with its own reason. The `ColumnRef` match below is a proxy for "this operand
+   * is a bare column" that is exact only because every `compileNode` arm producing a
+   * `ColumnRef` today is either an actual column read or a null-intolerant identity relabel
+   * (`unix_date`/`date_from_unix_date`, task 41, and the identity date `Cast`) - a future
+   * relabel that changes nullability or value would silently break this guard.
    */
   private def compileCoalesce(
       children: Seq[Expression],
@@ -761,7 +781,9 @@ private[sql] object VarkaExpressionCompiler {
   /**
    * Compiles the operand of a validity predicate, which must land on a bare date column: the
    * emitter reads the column's per-lane-group validity word, and only a column's word is live
-   * before value emission (the recorded milestone-3 restriction).
+   * before value emission (the recorded milestone-3 restriction). As in `compileCoalesce`
+   * above, the `ColumnRef` match is a proxy for "bare column" that depends on every relabel
+   * expression compiling to `ColumnRef` staying a null-intolerant identity.
    */
   private def compileValidity(
       child: Expression,
