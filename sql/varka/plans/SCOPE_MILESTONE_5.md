@@ -532,6 +532,67 @@ rather than as a silent 1.0x.
 * **Window functions** (9 TPC-DS queries, `rank(` 15): milestone 4's item 10.
   Nothing here changes its priority.
 
+### Item 10. The calendar as a lookup table, sized to the era
+
+**Where this came from.** Reading ClickHouse's `toYear` while milestone 4's
+calendar family was being built. It is not a milestone 5 subject by topic - it
+belongs to the calendar family - but milestone 4's catalogue has become a task
+plan, and this is not a task yet, so it lands here per `sql/varka/AGENTS.md`.
+
+**The idea.** ClickHouse's `DATE_LUT_SIZE` is `0x23AB1`: 146097, exactly one
+Gregorian era. It anchors that window at 1900 and falls back outside it, but 400
+years is the calendar's *period*, so a table indexed by **day of era** needs no
+fallback for any `int32` date at all - every day reduces into it, and the year is
+`400 * (era - bias) + table[dayOfEra]`. Varka's prefix already computes that
+index: `emitEra` is the first thing it emits. The table would replace everything
+after it.
+
+ClickHouse stores 16 bytes per day - year, month, day of month, day of week,
+days in month - so **one lookup yields every field**. That is the problem task 32
+solves with a shared prefix, solved with memory instead, and it is the version of
+this idea worth measuring rather than the year-only one.
+
+**What is already measured** (`VarkaVectorApiProbeBenchmark`, milestone 4's item
+9 and `SKILLS.md`). With the column in a `MemorySegment` the way a real kernel
+has it, `year(d) = 1998` counted: an era-indexed year table reaches 2070.8 M
+rows/s against the arithmetic's 1329.3, a **1.6x**, at 571 KB for the table and
+about 10 KB touched by a seven-year query. The gather is reachable because the
+table is on-heap and Varka owns it - the API limit that blocks item 9's
+dictionary is about gathering *from* off-heap memory, which this is not.
+
+**What has to be measured before it is a task**, and the reason this is a
+catalogue entry rather than a plan:
+
+* **The multi-field table**, which is the actual win. One gather yielding four
+  fields against task 32's shared prefix at 797.7 M rows/s - the only comparison
+  that matters, and the only one not yet run.
+* **Cache behaviour under a real query**, not a probe. 571 KB of constant data
+  competing with the scan is a different thing from 571 KB measured alone, and
+  the seven-year figure flatters it: a `DATE` column with a wide range touches
+  proportionally more.
+* **Nulls, and the emitted shape.** The probe counts; a kernel writes a column
+  and a validity word, and the gather's index spill has to live somewhere in the
+  slot plan. Whether `GROUP_BUDGET` should weigh a gather at all is open.
+* **128-bit.** The measured 1.6x is AVX-512; the scratch probe put the same
+  shape at 1853.0 M rows/s at four lanes, which is a smaller margin over a
+  smaller arithmetic cost, and a gather that loses at one width and wins at the
+  other is a `VarkaEmitOptions` variant, not a default.
+* **Whether it survives fusion with more than one thing.** Every number here is
+  one calendar node and a compare. The milestone-4 measurements have twice
+  reversed when the shape widened.
+
+**Vector API it needs**: `IntVector.fromArray(species, int[], int, int[], int)` -
+the index-map gather, currently unused by the emitter, which has no notion of a
+constant table at all. That is the real cost of this item: the emitter would gain
+a class of operand it does not have.
+
+**Why it might still lose.** The arithmetic is branch-free, needs no memory, and
+gets cheaper every time this family is optimised - task 48 took four ops off the
+year tail and the leap-flag rewrite took eighteen off `add_months`. A table's
+cost is fixed and paid in cache. The honest position is that a 1.6x on one node
+in one shape is a reason to measure the four-field case, not a reason to build
+anything.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
@@ -551,6 +612,14 @@ one this project invented:
 
 Targets fall in the order 1 (TPC-H q6), 5 (taxi, if milestone 4's items 2, 3
 and 6 have landed), 2 (TPC-H q1), then 3 and 4 (TPC-DS q9 and q41).
+
+Item 10 is deliberately absent from that table. It is gated on one measurement
+it does not yet have - the four-field lookup against task 32's shared prefix -
+and it belongs to the calendar family rather than to this milestone's decimal
+and aggregation spine. If that measurement comes back the way the single-field
+one did, it becomes a task in its own right and is scheduled then; if it does
+not, the catalogue entry is the record of why the idea was dropped, which is
+worth as much.
 
 ## 6. Explicitly out of milestone 5
 
