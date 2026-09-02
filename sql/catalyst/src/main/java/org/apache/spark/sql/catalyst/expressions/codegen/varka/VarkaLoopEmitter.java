@@ -235,7 +235,7 @@ public final class VarkaLoopEmitter {
    * constant) is deliberate: both only need to exceed {@link #GROUP_BUDGET} to force the node
    * into its own loop method, which 50 already does.
    */
-  private static final int ADD_MONTHS_TMP_COUNT = 33;
+  private static final int ADD_MONTHS_TMP_COUNT = 31;
 
   /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
@@ -2394,12 +2394,10 @@ public final class VarkaLoopEmitter {
     int yoe = t[24];
     int doy2 = t[25];
     int doe2 = t[26];
-    int leapScratch1 = t[27];
-    int leapScratch2 = t[28];
-    int leapMaskB = t[29];
+    int civilScratch1 = t[27];
+    int civilScratch2 = t[28];
+    int civilMaskB = t[29];
     int nm1 = t[30];
-    int leapRemScratch = t[31];
-    int leapCarryMask = t[32];
 
     emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
     emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
@@ -2474,8 +2472,7 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(365);
     cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
     cb.loadConstant(1);
-    emitLeapFlag(cb, ny, leapScratch1, leapScratch2, leapRemScratch, mask, leapMaskB,
-        leapCarryMask);
+    emitLeapFlag(cb, ny);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
     cb.aload(monthStart);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
@@ -2498,7 +2495,7 @@ public final class VarkaLoopEmitter {
     // era2, yoe, mp2, doy2, doe2 and mask are dead past this point (the length computation
     // above was their only use), so emitDaysFromCivil reuses their slots for its own values.
     emitDaysFromCivil(cb, ny, nm1, clampedDay, yy2, b2, era2, yoe, mp2, doy2, doe2,
-        leapScratch1, leapScratch2, mask, leapMaskB);
+        civilScratch1, civilScratch2, mask, civilMaskB);
   }
 
   /**
@@ -2606,69 +2603,35 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Leaves the mask of lanes whose reported year {@code y} is a leap year - the usual rule
-   * evaluated over a biased, non-negative year, since a magic multiply needs a non-negative
-   * operand and Varka's covered range starts below zero ({@code PLAN_TASK_34.md} section 2.1).
-   * {@code scratch1}/{@code scratch2} are int-vector locals and {@code maskA}/{@code maskB} are
-   * mask locals the caller owns.
+   * Leaves the mask of lanes whose reported year {@code y} is a leap year, as one multiply, one
+   * mask and one unsigned compare over a biased year (Falk Huffner's perfect hash; see
+   * {@link VarkaChrono#LEAP_HASH_M}, which carries the constants, the domain and the two
+   * properties that make this look wrong at a glance).
    *
-   * <p>Written here because task 40 needs it before task 34 has landed; the two are expected to
-   * converge on one copy of this helper once both merge - see {@code PLAN_TASK_40.md}'s outcome
-   * section.
+   * <p>This replaced two magic divisions with a correction carry each - 19 int-vector ops and 3
+   * mask ops, against 4 and 0 here - and with them five scratch locals and five of this
+   * method's seven parameters. Two things in it are deliberate and must survive a future
+   * reader: the multiply <b>overflows the lane</b>, which is the mechanism rather than a bug
+   * since the identity is defined modulo 2^32; and the compare is <b>unsigned</b>
+   * ({@code ULE}), because the mask keeps bits 30 and 31 and a signed compare would call every
+   * year with a negative hash leap.
+   *
+   * <p>The hash is exact over its domain and arbitrary one year past it, so the domain is the
+   * whole contract: reported years -15200..87299, which contains the roughly -14848..35181
+   * that {@code add_months} and the interval arithmetic can reach. A caller outside that range
+   * would need a different bias, not a correction.
    */
-  private static void emitLeapFlag(CodeBuilder cb, int y, int scratch1, int scratch2,
-      int remScratch, int maskA, int maskB, int carryMask) {
+  private static void emitLeapFlag(CodeBuilder cb, int y) {
     cb.aload(y);
     cb.loadConstant(VarkaChrono.YEAR_BIAS);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.astore(scratch1);
-
-    cb.aload(scratch1);
-    cb.loadConstant(3);
+    cb.loadConstant(VarkaChrono.LEAP_HASH_M);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.loadConstant(VarkaChrono.LEAP_HASH_MASK);
     cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
+    cb.getstatic(VECTOR_OPERATORS, "ULE", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.LEAP_HASH_MAX);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.astore(maskA);
-
-    // mod 100: round-down quotient plus one correction, per YEAR_CENTURY_M's javadoc.
-    cb.aload(scratch1);
-    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_CENTURY_K);
-    cb.astore(scratch2);
-    cb.aload(scratch1);
-    cb.aload(scratch2);
-    cb.loadConstant(100);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(remScratch);
-    emitCarry(cb, scratch2, remScratch, 100, carryMask);
-    cb.aload(remScratch);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
-    cb.astore(maskB);
-
-    // mod 400: same shape, one correction.
-    cb.aload(scratch1);
-    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_QUATERCENTENNIAL_K);
-    cb.astore(scratch2);
-    cb.aload(scratch1);
-    cb.aload(scratch2);
-    cb.loadConstant(400);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(remScratch);
-    emitCarry(cb, scratch2, remScratch, 400, carryMask);
-    cb.aload(remScratch);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-
-    cb.aload(maskB);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    cb.aload(maskA);
-    cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
   }
 
   /**

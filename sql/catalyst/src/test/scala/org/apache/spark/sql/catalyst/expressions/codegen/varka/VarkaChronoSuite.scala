@@ -124,6 +124,43 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(VarkaChrono.inNarrowRange(LocalDate.of(9999, 12, 31).toEpochDay.toInt))
   }
 
+  test("the leap-year hash is exact over its whole domain, and only there") {
+    // A perfect hash is exact inside its domain and arbitrary one step past it, so the domain
+    // is the whole contract and the only honest test of it is all of it: 102,500 years, which
+    // costs milliseconds. Both ends are asserted, because the bound being tight is what makes
+    // "a caller outside this range needs a different bias, not a correction" true.
+    val lo = -VarkaChrono.YEAR_BIAS
+    val hi = VarkaChrono.LEAP_HASH_MAX_BIASED_YEAR - VarkaChrono.YEAR_BIAS
+    def reference(year: Int): Boolean =
+      Math.floorMod(year, 4) == 0 &&
+        (Math.floorMod(year, 100) != 0 || Math.floorMod(year, 400) == 0)
+    var mismatches = 0
+    var year = lo
+    while (year <= hi) {
+      if (VarkaChrono.isLeapYear(year) != reference(year)) {
+        mismatches += 1
+      }
+      year += 1
+    }
+    assert(mismatches === 0, s"the hash disagreed with the Gregorian rule on $mismatches years")
+    // The first year past the domain, where it is allowed to be - and in fact is - wrong. If
+    // this ever starts agreeing, the constants moved and the domain must be re-derived.
+    assert(VarkaChrono.isLeapYear(hi + 1) !== reference(hi + 1),
+      "the hash is now correct one year past its stated domain, so the domain is stale")
+    // The range the emitter actually needs, called out so a future widening of month
+    // arithmetic trips here rather than in a differential.
+    assert(lo <= -14848 && hi >= 35181,
+      "the covered range no longer contains what add_months and the interval arithmetic reach")
+  }
+
+  test("the leap flag agrees with java.time over the calendar boundaries") {
+    for (day <- boundaryDays) {
+      val year = LocalDate.ofEpochDay(day.toLong).getYear
+      assert(VarkaChrono.isLeapYear(year) === LocalDate.of(year, 1, 1).isLeapYear,
+        s"disagreed with java.time on year $year")
+    }
+  }
+
   test("the exhaustive sweep (opt-in: -Dvarka.sweep=true)") {
     assume(System.getProperty("varka.sweep") == "true",
       "set -Dvarka.sweep=true to run the exhaustive sweep")
