@@ -26,7 +26,8 @@ import org.apache.spark.sql.vectorized.ArrowColumnVector
 /**
  * Varka plan-level fusion (Task 6). When `spark.sql.codegen.varka.enabled` is set, a
  * Varka-eligible projection sitting above a columnar source runs the SIMD kernels over the Arrow
- * `DateDayVector` buffers instead of per-row codegen. A dual-mode source that currently feeds
+ * `DateDayVector` buffers (or an `IntVector` for a day-offset column, since task 38) instead of
+ * per-row codegen. A dual-mode source that currently feeds
  * rows is switched to its columnar output; projections that are not eligible are left untouched.
  * Since task 12 eligibility is partial: a projection is eligible when at least one entry
  * compiles to the vector IR, with bare columns forwarded zero-copy and the remaining entries

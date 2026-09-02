@@ -400,7 +400,8 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /**
    * Whether the kernel can run over this batch: every referenced column must be an Arrow
-   * `DateDayVector` holding exactly the batch's rows, no more.
+   * `DateDayVector` or `IntVector` (task 38 - a day-offset column) holding exactly the batch's
+   * rows, no more.
    *
    * The row count matters because the kernel takes a null count for the rows it is given,
    * while a vector's null count covers all `valueCount` of its rows. A vector longer than the
@@ -415,7 +416,8 @@ private[sql] abstract class VarkaEvaluatorBase(
       input.column(ordinal) match {
         case acv: ArrowColumnVector =>
           acv.getValueVector() match {
-            case ddv: DateDayVector => ddv.getValueCount() == input.numRows()
+            case v: DateDayVector => v.getValueCount() == input.numRows()
+            case v: IntVector => v.getValueCount() == input.numRows()
             case _ => false
           }
         case _ => false
@@ -503,7 +505,7 @@ private[sql] abstract class VarkaEvaluatorBase(
     var i = 0
     plan.inputOrdinals.foreach { ordinal =>
       val acv = input.column(ordinal).asInstanceOf[ArrowColumnVector]
-      val morsel = extractMorsel(acv.getValueVector().asInstanceOf[DateDayVector], len)
+      val morsel = extractMorsel(acv.getValueVector().asInstanceOf[BaseFixedWidthVector], len)
       runner.srcData(i) = morsel.data.address()
       runner.srcValidity(i) = morsel.validityAddress
       runner.srcNullCount(i) = morsel.nullCount.toInt
@@ -539,21 +541,22 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * Maps a `DateDayVector` to its data and validity segments (zero-copy), mirroring the
-   * engine's `VarkaMorsel.extractDate` contract: the validity segment is null for an all-null
-   * column, and callers pass a `0L` address in that case because the kernels never
-   * dereference it then.
+   * Maps a `DateDayVector` or `IntVector` (task 38) to its data and validity segments
+   * (zero-copy), mirroring the engine's `VarkaMorsel.extractDate` contract: the validity
+   * segment is null for an all-null column, and callers pass a `0L` address in that case
+   * because the kernels never dereference it then. Both vector kinds are four bytes wide with
+   * the same buffer layout, so the body does not care which one it was handed.
    *
    * The vector must hold exactly the batch's rows, which `isArrowBacked` has already checked -
    * that is what makes the vector's null count the batch's null count, and so what makes the
    * all-null test below sound.
    */
-  private def extractMorsel(ddv: DateDayVector, len: Int): Morsel = {
-    require(len == ddv.getValueCount(),
-      s"rowCount $len does not match the vector value count ${ddv.getValueCount()}")
-    val data = ofAddress(ddv.getDataBuffer())
-    val nullCount = ddv.getNullCount()
-    val validity = if (nullCount == len) null else ofAddress(ddv.getValidityBuffer())
+  private def extractMorsel(v: BaseFixedWidthVector, len: Int): Morsel = {
+    require(len == v.getValueCount(),
+      s"rowCount $len does not match the vector value count ${v.getValueCount()}")
+    val data = ofAddress(v.getDataBuffer())
+    val nullCount = v.getNullCount()
+    val validity = if (nullCount == len) null else ofAddress(v.getValidityBuffer())
     Morsel(data, validity, nullCount)
   }
 

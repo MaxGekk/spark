@@ -121,6 +121,60 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 38: date_add/date_sub with a column offset match the row engine") {
+    // `varka_date_pairs`'s `i` column is not nullable (it comes from zipWithIndex) - the
+    // literal-offset shapes already covered that side; this exercises the new column-offset
+    // path over both spellings.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, i) AS a, d + i AS b, date_sub(d, i) AS c FROM varka_date_pairs " +
+        "ORDER BY a, b, c",
+      expectFused = true)
+  }
+
+  test("task 38: a null offset nulls out its row even when the date beside it is not null") {
+    cacheDatesNullableOffset(spark)
+    cacheDatesNullableOffset(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, off) AS a, date_sub(d, off) AS b FROM varka_dates_nullable_offset " +
+        "ORDER BY d, off",
+      expectFused = true)
+  }
+
+  test("task 38 declines: an interval column offset still does not fuse") {
+    // `d + INTERVAL n DAY` with a foldable `n` already fuses (the analyzer folds it to a
+    // DateAdd literal, unaffected by this task). A non-foldable interval *column* does not:
+    // BinaryArithmeticWithDatetimeResolver rewrites it to
+    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)), and ExtractANSIIntervalDays has no
+    // compiler arm, so it declines through the ordinary unsupported-expression path.
+    // CAST(i AS INTERVAL DAY) is DayTimeIntervalType(DAY, DAY) - a single-field ANSI interval,
+    // not the literal `INTERVAL '3' DAY` syntax the optimizer folds away.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT d + CAST(i AS INTERVAL DAY) AS a FROM varka_dates ORDER BY a",
+      expectFused = false)
+  }
+
+  test("task 38: a column-offset date_add fuses inside a filter predicate too") {
+    // The projection-side column-offset tests above never exercise the mask kernel - a
+    // WHERE clause is the shape VarkaFilterExec/VarkaFilterColumnarToRowExec compile, and
+    // compileOffset is shared code, so this proves the column-offset path works there too,
+    // not only when the offset column feeds a projected value.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    try {
+      val fused = checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c FROM varka_date_pairs WHERE date_add(d, i) > d2",
+        expectFused = true)
+      assert(!fused.toString.contains("Filter (date_add("),
+        s"the column-offset predicate should be fused, not residual:\n$fused")
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
+    }
+  }
+
   test("datediff matches the row engine in both argument orders with nulls") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)

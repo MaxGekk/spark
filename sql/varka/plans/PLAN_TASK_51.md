@@ -116,9 +116,12 @@ outside that range, and can silently produce a wrong year, month, day or
 quarter. Nothing above debug logging says so.
 
 This is a real, temporary contract violation, accepted deliberately rather
-than found and fixed. It is reachable today only through `date_add`/
-`date_sub`/`next_day` with a **column** offset (task 38) large enough to push
-a date's day count past roughly 33134 CE or before roughly -12800 CE - `year`,
+than found and fixed. It is reachable today through `date_add`/`date_sub` with a **literal**
+offset past the narrowed range's slack around the column contract (more than
+8449747 days forward or 4675410 back - nothing bounds a literal day offset;
+the first version of `PLAN_TASK_52.md` wrongly assumed the compiler did), and,
+once PR #62 lands, with a **column** offset of any size - either pushing a
+date's day count past roughly 33134 CE or before roughly -12800 CE - `year`,
 `month`, `dayofmonth`, `quarter`, `dayofyear`, `last_day` and `add_months`
 directly on a column, or on each other, cannot produce such a day on their
 own, since `add_months`'s own literal-month-count bound (task 40) keeps its

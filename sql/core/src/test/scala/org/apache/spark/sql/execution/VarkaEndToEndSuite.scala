@@ -55,9 +55,12 @@ class VarkaEndToEndSuite extends QueryTest with VarkaSharedSessions {
     assertKernelsRan(plan)
   }
 
-  test("a non-foldable offset is not fused but still returns correct results") {
+  test("a non-foldable, non-column offset is not fused but still returns correct results") {
+    // A bare int column offset fuses since task 38 (its own differential coverage lives in
+    // VarkaDifferentialSuite); `i + 1` is still a non-foldable, non-column offset expression,
+    // which stays declined.
     cacheDates(spark)
-    val query = "SELECT date_add(d, i) AS a FROM varka_dates ORDER BY a"
+    val query = "SELECT date_add(d, i + 1) AS a FROM varka_dates ORDER BY a"
     val expected = spark.sql(query)
     cacheDates(varkaSpark)
     val actual = varkaSpark.sql(query)

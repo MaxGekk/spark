@@ -487,6 +487,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("AddDays/SubDays with a column offset (task 38) match the reference evaluator") {
+    // The trap this task exists to catch: `s.wordRef` used to alias the result's validity to
+    // `days` alone, which was correct only because the offset used to always be a literal
+    // (all-valid). A null offset on a non-null date must still make the row null - checkMatrix's
+    // full combos(2) drives every (date, offset) null-pattern pair, that one included.
+    val add = new AddDays(new ColumnRef(0), new ColumnRef(1))
+    val sub = new SubDays(new ColumnRef(0), new ColumnRef(1))
+    checkMatrix(Seq(add, sub), 2, Array.emptyIntArray, Seq(1, 17, 64, 65, 1000), combos(2),
+      ctx = "column-offset")
+  }
+
   test("two outputs sharing a subchain match sequential kernel passes, types independent") {
     // a = date_add(d, off); b = datediff(date_add(d, off), d2) - the milestone's DAG example:
     // the shared subchain is computed once per lane group and stored into both outputs' math.
@@ -1368,7 +1379,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       VarkaLoopEmitter.MAX_CHAIN_DEPTH + 1), "MAX_CHAIN_DEPTH")
     rejects(emit(new AddDays(new ColumnRef(1), new LiteralSlot(0)), 1), "column ordinal")
     rejects(emit(new AddDays(new ColumnRef(0), new LiteralSlot(1)), 1), "literal slot")
-    rejects(emit(new AddDays(new ColumnRef(0), new ColumnRef(0)), 1), "literal slots")
+    // A column offset (task 38) is legal IR now - AddDays(ColumnRef, ColumnRef) no longer
+    // throws; see "AddDays/SubDays with a column offset (task 38) match the reference
+    // evaluator" above for its coverage.
     rejects(VarkaLoopEmitter.emit("t", java.util.List.of[VarkaVectorIR](), 1, 0),
       "no output chains")
     rejects(VarkaLoopEmitter.emit("t", java.util.List.of(addDays(0)), 0, 1), "numInputs")
