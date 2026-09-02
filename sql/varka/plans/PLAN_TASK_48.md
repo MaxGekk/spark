@@ -109,13 +109,26 @@ computes each calendar node's `FragmentKey`; it gains a
 
 Two granularity points, both deliberate:
 
-* **Per body, not per node and not per query.** `Slots` is planned per body
-  method, so the set is the consumers *in that method*. Under today's
-  `GROUP_BUDGET` a loop method holds one calendar output, so `year(d)`'s loop
-  method elides and `month(d)`'s keeps, while the epilogue - one method over
-  every output by task 24's decision - sees both and keeps. If step B2
-  (`PLAN_TASK_32.md` section 10) later puts several calendar outputs in one
-  loop method, the set widens with it and nothing here changes.
+* **Per lane group, not per node and not per query.** *(Corrected against the
+  code while implementing: this bullet and risk 1 originally said "per body",
+  on the belief that `Slots` is planned per body method. It is not.
+  `planSlots` receives the kernel's whole output list and walks
+  `analysis.topoOrder`, and it is the `group` argument threaded into
+  `emitBody`/`emitLaneGroup` that narrows a loop method to its own outputs. A
+  body-scoped set would therefore have kept the month step in a `year(d)` loop
+  method merely because `month(d)` is another output of the same kernel - the
+  elision this task exists for, lost. `VarkaLoopEmitterSuite`'s "sharing the
+  prefix leaves every loop method byte for byte as it was" caught it on the
+  first run.)* The set is filled by `planFragmentsReadingMonth` at the top of
+  `emitLaneGroup`, over the union of that group's outputs' subtrees, right
+  beside the `emittedFragments.clear()` that has exactly the same scope - and
+  that pairing is what makes it sound, since what has to hold is that every
+  reader of `t[5]` *in this group* is preceded by a write of it in this group.
+  Under today's `GROUP_BUDGET` a loop method holds one calendar output, so
+  `year(d)`'s loop method elides and `month(d)`'s keeps, while the epilogue -
+  one method over every output by task 24's decision - sees both and keeps. If
+  step B2 (`PLAN_TASK_32.md` section 10) later puts several calendar outputs in
+  one loop method, the set widens with it and nothing here changes.
 * **Order-independent.** With sharing on, the *first* sibling emits the
   prefix. If that sibling is `year(d)` and `month(d)` follows, the prefix must
   still have emitted `mp` - which it does, because the decision is read from
@@ -254,14 +267,21 @@ not have, and that is a bug, not a bonus.
 ### 6.1 Predictions, registered before the run
 
 1. A `year`-only loop body drops from 45 to 41 `IntVector` ops
-   (deterministic; test 2 asserts it).
+   (deterministic; test 2 asserts it). **Measured: 43 to 39.** The four-op
+   delta is exactly right and is what the test pins; the absolute pair was two
+   low in both terms, because the prediction counted the prefix's two
+   `VectorMask` invocations, which `invocationCount` does not - it counts
+   invocations whose owner is `IntVector`. An accounting miss, not a
+   behavioural one.
 2. `year, null-free` by minimums: elided over kept at 1.00x to 1.06x at
    AVX-512. Inside noise is a permitted and expected outcome - the body is
    latency-bound on the prefix's dependent chain, and the four ops come off
    the end of it rather than out of the middle.
 3. At 128-bit the two are indistinguishable by minimums.
 4. The unshared `HugeMethodLimit` crossing moves from 19 outputs to 20; the
-   shared one stays at 44.
+   shared one stays at 44. **Held**, measured directly: unshared, 19 outputs
+   are 7953 bytes and 20 are 8386; shared, 44 still crosses. The test's title
+   and its comment's three-move history were updated with it.
 5. No pinned oracle moves: neither the IR rendering nor `DEFAULTS`' canonical
    form changes.
 6. `dayofyear` (PR #64) inherits the same elision with no change of its own
@@ -270,12 +290,18 @@ not have, and that is a bug, not a bonus.
 
 ## 7. Risks
 
-1. **Plan-time set against emit-time state.** `emittedFragments` is per lane
-   group and cleared in `emitLaneGroup`; `fragmentsReadingMonth` is per body
-   and planned once. That is consistent because the *slots* are per body, and
-   what the set decides is whether a slot gets written, not whether a run
-   happens. Writing the set anywhere finer would be wrong: a lane group is not
-   a scope.
+1. **Getting the set's scope wrong.** *(This risk fired, in the opposite
+   direction to the one predicted. The original text argued that a lane group
+   "is not a scope" and that the set had to be per body; the truth is the
+   reverse - see the correction in section 3.2. The set is computed per lane
+   group, from that group's outputs, precisely because `emittedFragments` is,
+   and the two have to agree: a fragment is re-earned in each lane group, so
+   what must hold is that every reader of `t[5]` in a group is preceded by a
+   write of it in that group.)* The scope is the whole risk here, and the test
+   that catches a wrong one is "sharing the prefix leaves every loop method
+   byte for byte as it was", which compares the shared and unshared emissions
+   of the same roots and so fails the moment the two disagree about which
+   consumers count.
 2. **A consumer that reads `mp` without saying so.** Any tail that reads
    `t[5]` must return true from `tailReadsMarchMonth`, or it reads an
    uninitialised local - which the JVM verifier rejects at class load, loudly,

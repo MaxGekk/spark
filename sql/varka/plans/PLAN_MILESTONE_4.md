@@ -1365,6 +1365,11 @@ rewritten in the past tense with what the sweep found, never deleted.
   baseline for a number that has since moved twice for two independent reasons - sharing,
   then guard removal - which is worth knowing before task 44 is actually picked up: measure
   fresh against the emitter as it stands then, not against either ladder here.
+  **Task 48 moved the unshared number a third time, to 20.** Letting a year-only prefix skip
+  the March-month step (2.18) shrinks every unshared calendar prefix whose consumer is a
+  `Year`; the shared column is unmoved at 44, since the epilogue holds every output and so
+  every fragment in that shape has a month consumer. Third ladder, measured the same way, in
+  `PLAN_TASK_32.md` section 7.1's second update.
 
 * **A calendar field is computed once per output, not once per date.** **Half closed by
   task 32 step B1, the rest gated on a measurement (see 2.9 and `PLAN_TASK_32.md`)**, after

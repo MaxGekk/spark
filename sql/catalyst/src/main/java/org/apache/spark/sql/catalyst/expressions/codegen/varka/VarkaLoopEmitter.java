@@ -648,6 +648,28 @@ public final class VarkaLoopEmitter {
   }
 
   /**
+   * Whether {@code node}'s tail reads the March-based month the prefix would otherwise leave in
+   * {@code t[5]} - an exhaustive switch over the same family {@link #chronoChild} covers, so a
+   * new calendar node is a compile error here rather than a silent "yes" that quietly costs
+   * five ops, or a silent "no" that reads an uninitialised local.
+   *
+   * <p>Only {@link Year} answers no today: it takes the January turn off the day of year, which
+   * is the same test one step earlier in the chain ({@link VarkaChrono#MARCH_TO_JANUARY_DAYS}).
+   * {@link Month} and {@link Quarter} go through {@code emitChronoMonth}, {@link DayOfMonth}
+   * through {@code emitMonthStart}, and {@link AddMonths} needs both.
+   */
+  private static boolean tailReadsMarchMonth(VarkaVectorIR node) {
+    return switch (node) {
+      case Year n -> false;
+      case Month n -> true;
+      case DayOfMonth n -> true;
+      case Quarter n -> true;
+      case AddMonths n -> true;
+      default -> throw new IllegalStateException("not a calendar node: " + node);
+    };
+  }
+
+  /**
    * A run of emitted lane ops that several nodes need, that depends on one shared child, and
    * that leaves its results in scratch locals rather than on the operand stack (task 32 step
    * B). It is the sub-node counterpart of the CSE {@link #emitValue} already does between whole
@@ -674,6 +696,35 @@ public final class VarkaLoopEmitter {
    * @param word the node's validity-word reference, or null in a dense body.
    */
   private record FragmentKey(FragmentKind kind, VarkaVectorIR child, Integer word) {}
+
+  /**
+   * Which of this lane group's prefix fragments a tail in it reads the March-based month out
+   * of, over the union of the group's outputs' subtrees (task 48). The walk is the group's own
+   * because {@link Slots#fragmentsReadingMonth} is the group's own - see its doc for why the
+   * body's whole output list would be too wide - and it precedes every emission in the group,
+   * so no sibling's order can change what it decides.
+   */
+  private static void planFragmentsReadingMonth(List<VarkaVectorIR> outputs,
+      List<Integer> outputIdx, boolean dense, Slots s) {
+    s.fragmentsReadingMonth.clear();
+    Set<VarkaVectorIR> seen = new HashSet<>();
+    List<VarkaVectorIR> pending = new ArrayList<>();
+    for (int o : outputIdx) {
+      pending.add(outputs.get(o));
+    }
+    while (!pending.isEmpty()) {
+      VarkaVectorIR node = pending.remove(pending.size() - 1);
+      if (!seen.add(node)) {
+        continue;
+      }
+      if (isChrono(node) && tailReadsMarchMonth(node)) {
+        s.fragmentsReadingMonth.add(fragmentKey(node, dense, s));
+      }
+      for (VarkaVectorIR child : childrenOf(node)) {
+        pending.add(child);
+      }
+    }
+  }
 
   /** {@link FragmentKey} for {@code node}'s civil-from-days prefix; see that record's doc. */
   private static FragmentKey fragmentKey(VarkaVectorIR node, boolean dense, Slots s) {
@@ -1058,6 +1109,24 @@ public final class VarkaLoopEmitter {
      * the second one skip the run - so this is planned even when
      * {@link VarkaEmitOptions#shareChronoPrefix} is off, it is simply never hit twice. */
     final Map<FragmentKey, int[]> chronoPrefixTmp = new HashMap<>();
+    /**
+     * The prefix fragments some tail of the lane group being emitted now reads the March-based
+     * month out of (task 48). Filled by {@link #planFragmentsReadingMonth} at the top of
+     * {@link #emitLaneGroup}, from that group's outputs and no others.
+     *
+     * <p>The lane group is the right scope precisely because {@link #emittedFragments} has it:
+     * a fragment is re-earned in each lane group, so what has to be true is that every reader
+     * of {@code t[5]} <i>in this group</i> is preceded by a write of it in this group, and
+     * that is what this set decides. A wider scope - the body's whole output list, which is
+     * every output of the kernel, since {@link #planSlots} walks them all - would keep the
+     * month step in a {@code year(d)} loop method merely because {@code month(d)} is another
+     * output emitted by a different method, which is the elision this task exists for.
+     *
+     * <p>Reading the set rather than the node being emitted is what makes the decision
+     * order-independent under sharing: whichever sibling emits the prefix first, it emits the
+     * month if any sibling in the group will read it.
+     */
+    final Set<FragmentKey> fragmentsReadingMonth = new HashSet<>();
     /**
      * The prefix fragments already emitted in the lane group being emitted now. Emit-time
      * state rather than plan-time, cleared at the top of {@link #emitLaneGroup} for exactly the
@@ -1662,6 +1731,7 @@ public final class VarkaLoopEmitter {
     // slot stays untouched, per the interface contract.
     Set<VarkaVectorIR> computed = new HashSet<>();
     s.emittedFragments.clear();
+    planFragmentsReadingMonth(outputs, outputIdx, dense, s);
     for (int o : outputIdx) {
       VarkaVectorIR root = outputs.get(o);
       if (root instanceof Cond cond) {
@@ -2128,7 +2198,10 @@ public final class VarkaLoopEmitter {
    *
    * <p>The temporaries are locals rather than operand-stack juggling because six values stay
    * live across the tail - era, century, year of century, day of year, the March month, and
-   * two masks - which is past what the stack can hold legibly.
+   * two masks - which is past what the stack can hold legibly. The March month is the one of
+   * them a tail may not need: {@link Year} reads the January turn off the day of year instead,
+   * so a body whose calendar tails are all years never computes it (task 48, see
+   * {@link #tailReadsMarchMonth}).
    */
   private static void emitChrono(CodeBuilder cb, VarkaVectorIR node, boolean dense,
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
@@ -2168,8 +2241,9 @@ public final class VarkaLoopEmitter {
    */
   private static void emitChronoPrefixOnce(CodeBuilder cb, VarkaVectorIR node, boolean dense,
       Analysis analysis, Slots s, int[] t, Set<VarkaVectorIR> computed) {
-    if (analysis.options.shareChronoPrefix()
-        && !s.emittedFragments.add(fragmentKey(node, dense, s))) {
+    boolean shareChronoPrefix = analysis.options.shareChronoPrefix();
+    FragmentKey key = shareChronoPrefix ? fragmentKey(node, dense, s) : null;
+    if (shareChronoPrefix && !s.emittedFragments.add(key)) {
       // A sibling over this date already ran the prefix into these very locals earlier in this
       // lane group, so this node needs nothing but its own tail. The date itself is not loaded
       // either: emitChronoPrefix is the only consumer of it here, and a CSE'd child would
@@ -2179,7 +2253,14 @@ public final class VarkaLoopEmitter {
     }
     emitValue(cb, chronoChild(node), dense, analysis, s, computed);
     line(cb, analysis, node);
-    emitChronoPrefix(cb, node, dense, analysis, s, t);
+    // Whether the run ends with the month step. Under sharing that is a question about every
+    // consumer of this fragment, not about the node that happens to be emitting it; with
+    // sharing off two nodes with equal keys name different locals, so it is per node and
+    // year(d) does not pay for a month(d) it shares nothing with.
+    boolean emitMonth = !analysis.options.elideChronoMonth()
+        || (shareChronoPrefix ? s.fragmentsReadingMonth.contains(key)
+            : tailReadsMarchMonth(node));
+    emitChronoPrefix(cb, node, dense, analysis, s, t, emitMonth);
   }
 
   /**
@@ -2192,7 +2273,9 @@ public final class VarkaLoopEmitter {
    *
    * <p>Leaves {@code era}, {@code century}, {@code yearOfCentury} and {@code marchMonth} in
    * {@code t[1..5]} for a field's own tail to read, and the day of year in {@code t[2]}
-   * ({@code rem}, reused across the prefix the way the original method reused it).
+   * ({@code rem}, reused across the prefix the way the original method reused it). All but
+   * {@code marchMonth} unconditionally: {@code emitMonth} false drops the month step, which
+   * task 48 does exactly where no tail of this fragment reads it.
    *
    * <p>Those five locals outliving the call is what makes the run a shareable fragment, since
    * {@link #emitChronoYear}, {@link #emitChronoMonth} and {@link #emitChronoDayOfMonth} read
@@ -2202,7 +2285,7 @@ public final class VarkaLoopEmitter {
    * is done, which is sound precisely because no tail reads it.
    */
   private static void emitChronoPrefix(CodeBuilder cb, VarkaVectorIR node, boolean dense,
-      Analysis analysis, Slots s, int[] t) {
+      Analysis analysis, Slots s, int[] t, boolean emitMonth) {
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -2295,13 +2378,20 @@ public final class VarkaLoopEmitter {
     cb.astore(yearOfCentury);
 
     // mp = (5 * doy + 2) / 153: the March-based month, 0 for March through 11 for February.
-    cb.aload(rem);
-    cb.loadConstant(5);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.loadConstant(2);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
-    cb.astore(marchMonth);
+    // Skipped where no tail of this fragment reads it (task 48) - four lane ops and a store
+    // that a year-only kernel would compute and drop. t[5] stays allocated either way; an
+    // elided prefix simply never writes it, and any reader of it that did not say so through
+    // tailReadsMarchMonth is rejected by the verifier at class load rather than read as
+    // garbage.
+    if (emitMonth) {
+      cb.aload(rem);
+      cb.loadConstant(5);
+      cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+      cb.loadConstant(2);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+      emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
+      cb.astore(marchMonth);
+    }
   }
 
   /** Leaves the reported (January-based) year: {@code 400 * era + 100 * century + yoc}, plus
