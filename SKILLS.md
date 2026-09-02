@@ -381,6 +381,68 @@ trusting them, not just its ratios.
 
 ## Vector API on HotSpot, Measured (JDK 25, x86-64)
 
+- **A day-indexed lookup table beats the civil-from-days arithmetic, and a plain
+  scalar loop beats the vector gather** (`VarkaVectorApiProbeBenchmark`,
+  committed). Impala reads `year` out of a table covering 1950-2049 and computes
+  it only outside that window; priced on lanes here, over 20M dates at AVX-512:
+
+  | | whole 100-year table (143 KB) | seven-year span (~10 KB, TPC-H shaped) |
+  |---|---|---|
+  | `IntVector` gather | 3573.9 M rows/s | 3728.2 |
+  | `IntVector` arithmetic | 2379.8 | 2368.3 |
+  | scalar `int[]` loop | 3766.3 | **4630.0** |
+
+  Two expectations died here. A gather is **not** automatically slower than
+  forty lane ops on this hardware, even when the table overflows L1. And the
+  **scalar** loop is fastest of the three - 1.95x the vector arithmetic on the
+  realistic span - because the Vector API's gather takes its index map as an
+  `int[]`, so the index vector has to be stored and read back, and that spill
+  is an artifact of the API rather than of the machine.
+
+- **The gather is nonetheless unreachable for a Varka kernel**, and for an API
+  reason rather than a cost one: `IntVector`'s index-map overload exists only on
+  `fromArray`, never on `fromMemorySegment`, and every Varka input is an
+  off-heap Arrow buffer. Enumerated, not assumed - the whole `from*`/`into*`
+  surface is `fromArray(species, int[], int, int[], int)` and
+  `fromMemorySegment(species, MemorySegment, long, ByteOrder)`, with no third
+  form.
+
+- **Fusion reverses all of it, and that is the result that matters.** The table
+  above times one field into an `int[]` - the shape where Varka's advantage is
+  zero. Measured again as `year(d) = 1998`, counted, where the vector paths
+  never leave a register:
+
+  | | M rows/s | |
+  |---|---|---|
+  | gathered from the table, compared in lanes | **3999.8** | 2.8x |
+  | arithmetic in lanes, compared in lanes | 1453.0 | 1.0x |
+  | scalar lookup inside a vector kernel (spill, scalar, reload) | 1446.9 | 1.0x |
+  | scalar loop end to end, no lanes anywhere | 848.1 | 0.58x |
+
+  **The scalar loop that won the unfused test by 1.95x loses the fused one by
+  1.7x**, 4630.0 down to 848.1: once the result has to be compared and counted,
+  a per-row loop cannot keep up with lanes doing the same work sixteen at a
+  time. And the hybrid an emitter would actually have to produce - spill the
+  lane group, scalar-lookup, reload, carry on in lanes - is a **wash** with the
+  arithmetic (1446.9 against 1453.0): the spill costs exactly what the lookup
+  saves. So *emitting scalar ops with a lookup table buys nothing inside a fused
+  kernel*, which is the question this was run to answer.
+
+  What does win is the gather, by 2.8x, because it replaces forty lane ops while
+  the compare and the count stay in registers. That is the lowering blocked by
+  the missing `fromMemorySegment` index-map overload and nothing else - the one
+  place where an API gap, not the hardware and not the arithmetic, is costing a
+  measured 2.8x on the corpus shape.
+
+  One caveat on reading the vector rows: all three vector paths end in
+  `VectorMask.trueCount()`, and the arithmetic drops from 2368.3 unfused to
+  1453.0 fused, which is more than a compare should cost. Whatever that is, it
+  is paid equally by the gather and the arithmetic, so the 2.8x between them
+  stands; the scalar comparison is unaffected by it and loses anyway. Also still
+  unmeasured: writing to a `MemorySegment` rather than an `int[]`, null
+  handling, and the batch-level fallback a 1950-2049 table needs for the
+  `0001..9999` range SQL allows.
+
 - An *exact* magic multiply on int lanes exists only for dividends under roughly
   **46341**, and the bound falls straight out of the two conditions rather than
   needing a search: worst-case `e ~ d` forces `2^k > d * v`, hence `M ~ v`, hence
