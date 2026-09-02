@@ -1563,6 +1563,34 @@ reader dictionary-encodes, so this is the common case. Scatter is missing
 too, which is why grouped aggregation expects to vectorise the hash and key
 compare while keeping the probe and accumulator update scalar.
 
+**What a gather costs, now measured** (`VarkaVectorApiProbeBenchmark`, added
+because this item rested on an assumption). Reading `year` out of a day-indexed
+table - the shape Impala ships for 1950-2049 - against the civil-from-days
+arithmetic, over 20M dates at AVX-512: the `IntVector` gather runs at 3573.9 M
+rows/s over the whole 143 KB table and 3728.2 over a seven-year span, against
+2379.8 and 2368.3 for the arithmetic. **A gather is not the slow primitive this
+item assumed it was**, which makes the copy-the-dictionary-on-heap option more
+attractive than the paragraph above implies, and it is worth re-reading before
+item 9 is planned rather than inheriting the assumption.
+
+Two findings come with it. A plain **scalar** `int[]` loop over the same table
+is faster still - 4630.0 M rows/s on the seven-year span, 1.95x the vector
+arithmetic - because the Vector API takes a gather's index map as an `int[]`,
+so the index vector is stored and read back, and that spill is the API's rather
+than the machine's.
+
+**Fused, the ranking inverts.** The same three measured as `year(d) = 1998`,
+counted, where the vector paths never leave a register: the gather reaches
+3999.8 M rows/s against the arithmetic's 1453.0 - **2.8x** - while the scalar
+loop that led the unfused table falls to 848.1, and the hybrid an emitter would
+have to produce (spill the lane group, scalar-lookup, reload) is a wash with the
+arithmetic at 1446.9. So emitting scalar code for a calendar node buys nothing
+once the result is compared and counted, and the only lowering that would pay is
+the one the API forbids. That makes the missing `fromMemorySegment` index-map
+overload a measured 2.8x on the corpus shape rather than a note, and it is the
+strongest argument this milestone has for the on-heap-dictionary option in the
+paragraph above.
+
 ### Item 10. Cross-lane movement: windows, prefix sums, row indices
 
 **Deferred - after item 7 in the ladder**; it shares the not-lane-shaped
