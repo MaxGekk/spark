@@ -357,7 +357,12 @@ Best rate over the five, in M rows/s:
 
 **Inside noise, and the sign is not stable**: in two of the five AVX-512 runs
 the *kept* side won the mixed-nulls pair, and in two of the five 128-bit runs it
-won as well. Four ops off a 43-op body at a 9 ms best time is under half a
+won as well. The file this branch finally commits, regenerated once more after
+the leap-flag rewrite landed, is one of those runs - `year, mixed nulls` reads
+2131.3 elided against 2167.7 kept, which is the kept side ahead by 1.7%. That is
+not a contradiction of the table below; it is the table's own claim, visible in
+the committed artifact. A reader who compares the two should conclude the effect
+is unmeasurable here, which is what this section says. Four ops off a 43-op body at a 9 ms best time is under half a
 millisecond, which is what section 6.0 said the file cannot resolve, so this is
 the outcome that section predicted rather than a disappointment. The default
 ships on the argument section 3.3 makes - the step is provably dead work where
