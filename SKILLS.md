@@ -708,6 +708,34 @@ trusting them, not just its ratios.
   plus relative paths fabricates convincing evidence of disaster; absolute paths in
   forensics, always.
 
+## Reading a paper into the repo
+
+- **An extractor that drops things beats one that invents them.** Varka keeps
+  machine transcriptions of load-bearing third-party papers in
+  `sql/varka/papers/`, and the conversion is deliberately mechanical: the text is
+  rebuilt from `pdftotext -bbox-layout` word geometry, where a glyph smaller than
+  its line's body and off its baseline is a superscript or a subscript. A plain
+  `pdftotext` is useless for a maths paper - it flattens every script, so `2^16`
+  becomes `216` and `N_C` becomes `NC` - while the geometric pass recovered 1408
+  scripts across 35 pages with seven misses, all of them tokens the PDF had
+  already merged.
+- **`marker-pdf` was measured against that and rejected, on five pages.** It is
+  genuinely better at what the geometric pass loses: eight displayed formulas
+  came out as correct LaTeX with their tall delimiters intact, plus 95 table rows
+  including assembly listings the geometric pass drops entirely. But on the same
+  five pages it silently closed three half-open intervals (`[0, U[` to `[0, U]`,
+  twice more elsewhere) and dropped a digit from an eleven-digit validity bound
+  (`10441974239` to `1044197429`), and mangled two glyphs in prose. Every one of
+  those reads as plausible. A model-based pipeline never leaves a gap where it
+  could not read something - it produces something reasonable instead - so its
+  output cannot be trusted for the constants and ranges that are the whole reason
+  to have the paper. Note it also needs a `llama-server` binary since surya 0.22
+  dropped the torch backend, and its `pillow<11` pin does not build on Python
+  3.14.
+- The general shape: **for anything a plan will quote as a number, prefer the
+  extractor whose failure mode is a visible hole.** Then say in the file what the
+  hole is, and point at the PDF for the parts that did not survive.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
