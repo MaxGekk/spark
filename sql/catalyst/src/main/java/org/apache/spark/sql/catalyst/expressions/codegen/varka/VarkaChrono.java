@@ -207,6 +207,61 @@ public final class VarkaChrono {
   /** The shift for {@code / 400} paired with {@link #YEAR_CENTURY_M}; one correction needed. */
   public static final int YEAR_QUATERCENTENNIAL_K = 24;
 
+  // --- The leap flag, as a perfect hash rather than two divisions ---------------------------
+
+  /**
+   * Multiplier of Falk Huffner's three-instruction leap-year test, which replaces the usual
+   * pair of magic divisions ({@code % 100} and {@code % 400}, a correction carry each) with a
+   * multiply, a mask and one unsigned compare: a year is leap exactly when
+   * {@code ((y * LEAP_HASH_M) & LEAP_HASH_MASK) <= LEAP_HASH_MAX} as unsigned 32-bit
+   * arithmetic. It is a perfect hash, not an approximation - it is exact over its whole domain
+   * and arbitrary one step past it - so the domain is the whole contract, and
+   * {@link #LEAP_HASH_MAX_BIASED_YEAR} states it.
+   *
+   * <p><b>The multiply overflows a 32-bit lane, deliberately.</b> The identity is defined
+   * modulo 2^32, which is exactly what an {@code int} multiply computes, so the wrap is the
+   * mechanism rather than a bug to be fixed.
+   *
+   * <p><b>The comparison must be unsigned.</b> {@link #LEAP_HASH_MASK} keeps bits 30 and 31, so
+   * a little over half of the domain's years leave a negative {@code int}, and a signed compare
+   * would call them leap. The emitter uses {@code VectorOperators.ULE} for this reason;
+   * {@link #isLeapYear} uses {@link Integer#compareUnsigned}.
+   */
+  public static final int LEAP_HASH_M = 1073750999;
+
+  /** Mask paired with {@link #LEAP_HASH_M}: {@code 0xC001F00F}, negative as a signed
+   * {@code int}, which is why its compare is unsigned. */
+  public static final int LEAP_HASH_MASK = 0xC001F00F;
+
+  /** Threshold paired with {@link #LEAP_HASH_M}; the test is {@code <=}, unsigned. */
+  public static final int LEAP_HASH_MAX = 126976;
+
+  /**
+   * The largest biased year {@link #LEAP_HASH_M} is exact for, and the bound is tight: 102500
+   * is the first year the hash gets wrong. {@link #isLeapYear} biases by {@link #YEAR_BIAS},
+   * so the covered reported years are {@code -YEAR_BIAS ..
+   * LEAP_HASH_MAX_BIASED_YEAR - YEAR_BIAS}, that is -15200..87299 - wider than the roughly
+   * -14848..35181 that {@code add_months} and the interval arithmetic can reach, which is the
+   * range this has to cover.
+   */
+  public static final int LEAP_HASH_MAX_BIASED_YEAR = 102499;
+
+  /**
+   * Whether {@code year} is a leap year in the proleptic Gregorian calendar - the scalar twin
+   * of the emitter's leap flag, computing it the same way so that a disagreement between the
+   * two is an emission bug rather than an arithmetic one.
+   *
+   * <p>{@link #YEAR_BIAS} is a multiple of 400, so biasing changes neither leapness nor which
+   * 400-year cycle a year falls in; it is here only to make the hash's input non-negative.
+   * Defined for reported years {@code -YEAR_BIAS} through
+   * {@code LEAP_HASH_MAX_BIASED_YEAR - YEAR_BIAS} and genuinely undefined outside that - see
+   * {@link #LEAP_HASH_MAX_BIASED_YEAR}.
+   */
+  public static boolean isLeapYear(int year) {
+    int hashed = (year + YEAR_BIAS) * LEAP_HASH_M & LEAP_HASH_MASK;
+    return Integer.compareUnsigned(hashed, LEAP_HASH_MAX) <= 0;
+  }
+
   /**
    * Exact magic for {@code / 12} (task 40's month arithmetic), over the dividend
    * {@code (month - 1) + monthsOffset + MONTH_ARITH_BIAS} - kept small by construction rather
