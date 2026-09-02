@@ -18,11 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateDiff, DateSub, DayOfMonth, DayOfWeek, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, ColumnRef, CompareOp, DateDiff => IRDateDiff, LiteralSlot, SubDays}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Compare, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, WeekDay => IRWeekDay, Year => IRYear}
-import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateSub, DayOfMonth, DayOfWeek, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -181,6 +180,34 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       new IRDayOfMonth(new ColumnRef(0)),
       new IRQuarter(new AddDays(new ColumnRef(0), new LiteralSlot(0)))))
     assert(compiled.outputTypes === Seq(IntegerType, IntegerType, IntegerType, IntegerType))
+  }
+
+  test("task 40: add_months and date +- INTERVAL n MONTH/YEAR compile to the same node") {
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(AddMonths(d, Literal(3))),
+        out(DateAddYMInterval(d, Literal.create(-5, YearMonthIntervalType())))),
+      childOutput).get
+    assert(compiled.outputs === Seq(
+      new IRAddMonths(new ColumnRef(0), new LiteralSlot(0)),
+      new IRAddMonths(new ColumnRef(0), new LiteralSlot(1))))
+    assert(compiled.literals === Seq(3, -5))
+    assert(compiled.outputTypes === Seq(DateType, DateType))
+  }
+
+  test("task 40 declines: a non-foldable month count, and a literal past the magic's range") {
+    val n = AttributeReference("n", IntegerType)()
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(AddMonths(d, n))), childOutput :+ n).isEmpty)
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS + 1)))),
+      childOutput).isEmpty)
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MIN_MONTHS - 1)))),
+      childOutput).isEmpty)
+    // The bound itself still compiles - it is the largest literal covered, not the smallest
+    // one declined.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS)))), childOutput).isDefined)
   }
 
   test("task 26 declines: year over a timestamp, which the analyzer casts") {

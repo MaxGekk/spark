@@ -154,6 +154,77 @@ public final class VarkaChrono {
   /** The day of the March-based year on which January arrives, and the year number turns. */
   public static final int MARCH_YEAR_JANUARY = 10;
 
+  // --- Task 40: the inverse direction, and the month arithmetic built on it ------------------
+
+  /**
+   * A year bias making a reported year non-negative over the range {@link #emitDaysFromCivil}
+   * actually has to cover, so a division by 100 or 400 can use a magic multiply. That range is
+   * wider than task 26's narrow day range: {@code add_months}/{@code date +- INTERVAL n
+   * MONTH/YEAR} can push a year up to {@code MONTH_ARITH_MAX_MONTHS}/12 (about 2047 years)
+   * past either end of it, so the covered year range is roughly -14848..35181, and 15200 - a
+   * multiple of 400, so it changes neither leapness nor which 400-year cycle a year falls in -
+   * is the smallest such multiple that keeps the biased value non-negative throughout.
+   */
+  public static final int YEAR_BIAS = 15200;
+
+  /**
+   * {@code floor(2^24 / 400)}, which is also {@code floor(2^22 / 100)} - the two divisors are in
+   * a 1:4 ratio matching the shift, so one magic constant serves both {@link #YEAR_CENTURY_K}
+   * and {@link #YEAR_QUATERCENTENNIAL_K}.
+   *
+   * <p><b>This is a round-down magic, not an exact one - unlike task 34's leap flag, which
+   * covers only task 26's narrow day range and needs no correction.</b> The first version of
+   * this class claimed exactness "to 199728" and was wrong: that bound came from checking
+   * {@code (v * M) >> k == v / d} with arbitrary-precision arithmetic, which is the right check
+   * for the shift but silently assumes the multiply itself does not overflow. The emitter's
+   * lanes are 32-bit and {@code LSHR} is unsigned, so the multiply is safe up to {@code v * M <
+   * 2^32}, not {@code 2^31} - but the biased year here reaches about 50381, and {@code 50381 *
+   * 167773} is over four billion either way. The wrong constant produced a silently wrong
+   * {@code era} for exactly the inputs task 40's own tests reached during development (a
+   * four-digit year plus a multi-century month offset) and nothing smaller - the failure was
+   * findable only by testing the actual range this class has to cover, not a plausible-looking
+   * subrange of it. One correction step (the same shape {@link #CENTURY_M} already uses) fixes
+   * it: {@code floor(v / d)} from this magic is short by at most one for both divisors over
+   * every dividend the callers below feed it.
+   */
+  public static final int YEAR_CENTURY_M = 41943;
+
+  /** The shift for {@code / 100} paired with {@link #YEAR_CENTURY_M}; one correction needed. */
+  public static final int YEAR_CENTURY_K = 22;
+
+  /** The shift for {@code / 400} paired with {@link #YEAR_CENTURY_M}; one correction needed. */
+  public static final int YEAR_QUATERCENTENNIAL_K = 24;
+
+  /**
+   * Exact magic for {@code / 12} (task 40's month arithmetic), over the dividend
+   * {@code (month - 1) + monthsOffset + MONTH_ARITH_BIAS} - kept small by construction rather
+   * than folding the year in, which would put the dividend near 400,000: past the ~46341 bound
+   * an exact magic needs, and past the ~160,000 a round-down-plus-one-correction reaches.
+   */
+  public static final int MONTH_ARITH_M = 43691;
+
+  /** The shift paired with {@link #MONTH_ARITH_M}; exact far past what {@link #MONTH_ARITH_M}
+   * needs to stay inside {@code 2^31} for, which is the tighter of the two bounds. */
+  public static final int MONTH_ARITH_K = 19;
+
+  /** Whole years of headroom the month-arithmetic dividend is biased by, so it stays
+   * non-negative for the most negative literal {@link #MONTH_ARITH_MIN_MONTHS} allows. */
+  public static final int MONTH_ARITH_BIAS = 12 * 2048;
+
+  /**
+   * The largest {@code numMonths}/{@code interval} literal the emitter's magic multiply covers,
+   * derived from {@code v * MONTH_ARITH_M < 2^31}: the dividend is
+   * {@code (month - 1) + months + MONTH_ARITH_BIAS} with {@code month - 1} up to 11, so
+   * {@code months} up to {@code floor((2^31 - 1) / MONTH_ARITH_M) - MONTH_ARITH_BIAS - 11}.
+   * About 2000 years; a literal past this is declined rather than computed wrongly.
+   */
+  public static final int MONTH_ARITH_MAX_MONTHS = 24564;
+
+  /** The smallest {@code numMonths}/{@code interval} literal covered - the negative mirror of
+   * {@link #MONTH_ARITH_MAX_MONTHS}, bound only by {@link #MONTH_ARITH_BIAS} itself since
+   * {@code month - 1} is never negative. */
+  public static final int MONTH_ARITH_MIN_MONTHS = -MONTH_ARITH_BIAS;
+
   /**
    * The four calendar fields one decomposition yields, in the order the emitter's per-field
    * tails branch off the shared work.
@@ -222,5 +293,40 @@ public final class VarkaChrono {
         + (marchMonth >= MARCH_YEAR_JANUARY ? 1 : 0);
     int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;
     return new Fields(year, month, dayOfMonth, quarter);
+  }
+
+  /**
+   * Task 40: Hinnant's {@code days_from_civil}, the exact inverse of {@link #narrowed}, over a
+   * biased (non-negative) March-based year. {@code / 4} is a shift and {@code / 5} (inside
+   * {@code dayOfYear}) is an exact magic multiply over its small dividend, the same one
+   * {@link #narrowed}'s day tail uses; {@code / 400} and {@code / 100} are round-down magics
+   * with one correction each, {@link #YEAR_CENTURY_M}'s javadoc records why an exact one does
+   * not reach far enough here even though the dividend (up to about 50381) is smaller than
+   * task 26's forward-direction ones.
+   *
+   * <p>{@code month} must be 1-12 and {@code dayOfMonth} the already-clamped day; this method
+   * does no clamping itself; {@link VarkaLoopEmitter}'s {@code emitAddMonths} does the clamp
+   * before calling the equivalent lane-wise sequence. Round-trips with {@link #narrowed} over
+   * every day from year 1 to year 9999, and over the wider year range {@code emitAddMonths}'s
+   * month arithmetic can reach - see {@code verify_days_from_civil.py} and
+   * {@code PLAN_TASK_40.md}.
+   */
+  public static int daysFromCivil(int year, int month, int dayOfMonth) {
+    int marchYear = year - (month <= 2 ? 1 : 0);
+    int biased = marchYear + YEAR_BIAS;
+    int era = (biased * YEAR_CENTURY_M) >>> YEAR_QUATERCENTENNIAL_K;
+    int yearOfEra = biased - era * 400;
+    if (yearOfEra >= 400) {
+      era++;
+      yearOfEra -= 400;
+    }
+    int marchMonth = month + (month <= 2 ? 9 : -3);
+    int dayOfYear = (((153 * marchMonth + 2) * DAY_M) >>> DAY_K) + dayOfMonth - 1;
+    int centuryOfEra = (yearOfEra * YEAR_CENTURY_M) >>> YEAR_CENTURY_K;
+    if (yearOfEra - centuryOfEra * 100 >= 100) {
+      centuryOfEra++;
+    }
+    int dayOfEra = yearOfEra * 365 + (yearOfEra >>> 2) - centuryOfEra + dayOfYear;
+    return (era - YEAR_BIAS / 400) * ERA_DAYS + dayOfEra - MARCH_EPOCH_SHIFT;
   }
 }

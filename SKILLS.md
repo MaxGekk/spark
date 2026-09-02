@@ -305,7 +305,21 @@ apparent small wins turned out to be noise.
   loop, so a scalar calendar loop measured in a microbenchmark is far faster than
   the same code inside a query - task 26 predicted 15-30x over it and measured 3.7x.
 
-- `VectorOperators` has no multiply-high on any lane type, so full-range
+- `VectorOperators` has no multiply-high on any lane type, and there is no sign that it
+  will get one soon, so do not design around its arrival. Checked against JDK 25 (`javap`
+  on `jdk.incubator.vector.VectorOperators`: `MUL` is the only multiply) and against
+  openjdk/jdk master (code search for `MUL_HIGH` and `VECTOR_OP_MULHI`: no hits). C2 does
+  have the operation internally - `MulHiLNode`/`UMulHiLNode` in `opto/mulnode.hpp`, used by
+  `divnode.cpp` to lower scalar division by a constant and by the `Math.multiplyHigh`
+  intrinsics, plus `MulHiLoLNode` for the fused 64x64-to-128 form - it is simply not exposed
+  lanewise. The nearest request is JDK-8219881, "[vector] Optimized 32-to-64 bit vectorized
+  multiply": an Enhancement, still Open, P4, filed February 2019, last touched October 2024,
+  with `fixVersion` `repo-panama` rather than any release. The API does accept new integer
+  ops when someone drives them - JDK-8338352 delivered `SADD`/`SSUB`/`SUADD`/`SUSUB`,
+  `UMIN`/`UMAX` and the unsigned comparisons, all present in JDK 25 - so an RFE backed by a
+  concrete workload is a real option, but it is a contribution to make, not a dependency to
+  plan against.
+- Because of that, full-range
   Granlund-Montgomery magic division is not expressible on int lanes - but a
   *range-narrowed* magic is: shrink the value first until the correctness condition
   (`v * e < 2^k`) and the no-overflow condition (`v * M < 2^31`) both fit in the low
@@ -316,6 +330,67 @@ apparent small wins turned out to be noise.
   reference variant), ~9x lanewise `DIV` (no SIMD divide exists on x86; it
   effectively scalarizes), and ~57x a per-row `LocalDate` loop. The ~10-op-smaller
   method also cuts the per-task JIT warm-up above by ~28 ms per task.
+- **The vector path is worth 6.5x over good scalar code, and the project had never checked.**
+  `ChronoScalarOps` is `year(date)` as an ordinary Java loop over the same Arrow buffer, in the
+  same 4096-row chunks, writing the same outputs: 284.2 M rows/s against the emitted kernel's
+  1816.6 at AVX-512, both from the committed parity file. Until it was written, the only
+  scalar anchor in that file was a per-row `LocalDate` loop, and the headline ratio was quoted
+  against it. Keep the real
+  baseline: "faster than `java.time`" and "faster than scalar arithmetic" are different claims
+  and the second is the one that justifies the emitter.
+- **`LocalDate.ofEpochDay(d).getYear()` in a tight loop does not allocate, and is a legitimate
+  scalar baseline.** It measures 480.8 M rows/s, and C2 scalar-replaces the `LocalDate` -
+  escape analysis sees it created and consumed in the same loop. It is worth stating because the
+  opposite is the natural assumption and it was asserted out loud in this project before being
+  checked. It also beats a hand-written 64-bit civil-from-days by 1.7x (480.8 against 284.2):
+  `java.time` does the same Hinnant decomposition in 32-bit ints, and forcing everything through
+  64-bit longs to buy exactness over the whole int32 range costs more than the exactness is
+  worth in scalar code.
+- **Spelling a constant division as `(x * M) >>> k` instead of `x / d` is worth 1.38x in scalar
+  code** - 284.2 against 205.4 M rows/s for the same algorithm. C2 lowers `long / constant` to
+  `MulHiL`, one instruction but a costlier one: it keeps the high half, and on x86-64 it
+  clobbers RDX:RAX. An ordinary `imulq` plus a shift is cheaper wherever the product fits 64
+  bits, which for a 32-bit dividend and a ~30-bit magic it does.
+- **SuperWord will not auto-vectorize the calendar arithmetic, for two independent reasons,
+  and neither is the `MemorySegment`.** The `(x * M) >>> k` form uses only `MulL` and
+  `URShiftL`, both of which have vector counterparts (`MulVL`, `URShiftVL`), and the loop body
+  was written branchless for exactly this reason. C2 still does not vectorize it:
+  `-XX:-UseSuperWord` moves the number by 0.1% (284.1 against 284.4 in the A/B run). A
+  four-case bisection -
+  {`int[]`, `MemorySegment`} x {trivial body, full decomposition} - locates it: the trivial
+  `int[]` loop gains 4.84x from SuperWord, the trivial `MemorySegment` loop only 1.09x, and the
+  full body gains nothing on *either* (0.99x on `int[]`, 1.00x on the segment). The absolute
+  figures in the committed parity file say the same thing: 26996.5 M rows/s for the trivial
+  `int[]` loop against 6265.2 for the same body over a `MemorySegment`, and 287.1 for the full
+  body on `int[]` against 284.2 over the segment - identical once the arithmetic is the real
+  work. So the
+  arithmetic is the binding constraint; segment addressing hurts as well but is not what stops
+  it.
+  `-XX:+TraceSuperWord` on a fastdebug JVM gives the mechanism exactly:
+    - At the default `LoopUnrollLimit=60`, `SuperWord::transform_loop` is entered **zero
+      times**. The body is too large to unroll, and with no pre/main/post structure there is no
+      main loop for SuperWord to work on. It never gets asked.
+    - At `-XX:LoopUnrollLimit=1000` it is entered four times and succeeds none. It builds packs
+      - 8-wide `LoadI`, 8-wide `MulL` - and then
+      `SuperWord::filter_packs_for_profitable` discards all of them
+      (`WARNING: Removed pack: not profitable`), ending at `0 packs` and
+      `SLP_extract did not vectorize`. The width mismatch is visible in the pack contents:
+      eight 32-bit loads feeding 64-bit multiplies do not occupy one vector.
+  The consequence for this project: the explicit Vector API is not a convenience over
+  auto-vectorization here, it is the only route, and that is now measured rather than assumed.
+  A lowering with no int-to-long mixing would clear the second gate, but the first is a tunable
+  no shipped Spark can depend on.
+- **The A/B that needs no tools**: run the case twice, once with `-XX:-UseSuperWord`. A loop
+  SuperWord vectorized slows down; one it never touched does not move. That answers "did it
+  vectorize" in a product JVM. Answering *why not* needs a fastdebug build - see the
+  fastdebug section below.
+- **Op counts bound a speed-up; they do not estimate one.** Three predictions in one milestone,
+  all made from op ratios, all optimistic: sharing one decomposition across four calendar fields
+  was predicted at 2.0x-3.2x and measured 1.5x; a scalar `year` was predicted within 2.5x of the
+  vector kernel and came in at 6.5x; keeping fewer values live was predicted to help at narrow
+  widths and lost at both. What the op-count model leaves out - stores, validity bookkeeping,
+  loop control, dependency-chain latency - is routinely half the time or more. Predict a bound,
+  say it is a bound, and measure.
 - Masked lanewise ops and masked stores cost 2.3x-2.9x even when the mask is all-true:
   a runtime mask is opaque to C2 and a masked store never becomes a plain store. If
   masks carry no correctness (in-bounds accesses, invalid destination lanes declared
@@ -389,6 +464,66 @@ apparent small wins turned out to be noise.
   one, not a real unrolling cost - a benchmark comparing "K=1" against "K>1" has to
   keep every other structural choice, including loop-vs-straight-line shape, identical
   between the arms.
+- A hand-written kernel standing in for emitted code must not introduce a method
+  boundary the emitted code does not have, and "it is a small private helper, it will
+  inline" is not something to assume. Task 32 built a kernel to price sharing one
+  civil-from-days decomposition across `year`/`month`/`dayofmonth`/`quarter`, wrote the
+  decomposition as a `computeFields` helper returning a record of four `IntVector`s, and
+  measured it 1.9x *slower* than the four independently emitted nodes - and task 32 was
+  declined on that number. `computeFields` compiles to 376 bytecode bytes; C2's
+  `FreqInlineSize` is 325, so it never inlined, so escape analysis never saw the record's
+  allocation and its consumers in one compilation unit, so the record and its four vectors
+  were really heap-allocated once per lane group. `VarkaLoopEmitter.emitChrono` emits zero
+  call boundaries in its lane path. The kernel was measuring a Java abstraction the thing
+  it modelled does not have. **Two cheap checks that would have caught it before the
+  number was believed**: `javap -c -p` for any method holding lane arithmetic that exceeds
+  325 bytes, and `-XX:+PrintInlining` (narrowed with
+  `-XX:CompileCommand=option,Class::method,PrintInlining`) for a `failed to inline` inside
+  the loop. Rebuilt hand-inlined, the same kernel runs 1.5x *faster* than the four nodes.
+- An op-count ratio bounds a sharing win; it does not estimate one. The same task 32
+  kernel shares ~45 of each field's ~50 vector ops, so four fields cost ~200 ops separate
+  against ~65 shared - a 3x op-count ratio, which was registered as a prediction of
+  2.0x-3.2x throughput. Measured: **1.51x-1.54x** at AVX-512 across three runs, the
+  committed parity file's being 679.0 against 445.7 M rows/s. The half that went missing is
+  everything the model ignored - four stores, four validity-bitmap read-modify-writes, the
+  chunk prologue, loop control - none of which sharing touches. Predict a bound, not a number.
+- Once a lane path has no calls left in it, `-XX:CompileCommand=inline` buys nothing, and
+  it was never a fix anyway - Spark cannot require a `CompileCommand` on a user's JVM, so a
+  flag that helped would only be a diagnostic pointing at a code change. Task 32 tested it
+  properly before concluding that: `-XX:+PrintInlining` showed the two `VarkaVectorSupport`
+  validity helpers genuinely failing to inline inside the shared loop
+  (`NodeCountInliningCutoff` on one compilation, `callee is too large` on another - 212
+  bytes of a four-arm switch on the lane width that a constant lane count would fold away),
+  and forcing them in changed nothing at either vector width. Nor did forcing every Varka
+  class (`inline,*varka*::*`). This is the third time an inlining flag has moved under 1% in
+  the catalyst parity harness while the engine's JMH harness moves 50-190% on the same flag;
+  a flag worth that much in only one harness is measuring the harness.
+- A kernel can have two stable machine-code outcomes and no reachable reason. Task 32's
+  shared kernel is bimodal at 128-bit: 121 ms or 85 ms, stdev 0 ms inside a run and 42%
+  between runs, 3 fast outcomes in 14 runs. Neither forcing inlining, nor disabling
+  on-stack replacement, nor rescheduling the body to keep fewer values live made either mode
+  deterministic or shifted the distribution. **Report both modes; never average them** - the
+  mean describes a state no run is ever in - and treat "which compilation the JVM landed on"
+  as a first-class outcome rather than as noise to be smoothed away.
+- Keeping fewer values live is not automatically faster, and the intuition is worth
+  distrusting. Task 32 built a variant of the same kernel that hoisted the year assembly so
+  three intermediates died early and stored each of four outputs the moment it existed
+  instead of all four at the end. It lost at both widths (633.0 against 679.0 M rows/s in
+  the committed parity file, 156.5 against 165.6 at 128-bit). C2's scheduler did better with
+  the wider window than with the shorter live ranges - and the losing shape is the one the
+  emitter naturally produces, which is worth knowing before assuming emitted code will match
+  a hand-written ceiling.
+- The same sharing win is width-dependent, and that is where task 17's register-pressure
+  finding actually lives. At 128-bit the identical kernel is a wash: 1.06x in four runs of
+  five, 1.50x in the fifth, stdev 0 ms inside each run and 42% between them - a
+  compilation the JVM either finds or does not, so the two modes must be reported rather
+  than averaged. Five live intermediates plus four outputs fit comfortably in 32 zmm plus
+  8 dedicated mask registers and marginally in 16 xmm that must hold masks too; C1 refuses
+  the 936-byte body outright at both widths ("out of virtual registers in linear scan").
+  Task 17's `GROUP_BUDGET` result (raising it to keep two outputs' cross-output CSE in one
+  method lost 4119.9 against 2928.2 M rows/s, current committed parity file) is the same
+  effect. It sets a ceiling on how much sharing can win; it does not decide the sign, and
+  a narrow-vector measurement is not optional for anything that shares live values.
 
 ## Generated Code Can Carry Its Own Debug Info (Class-File API)
 
@@ -482,3 +617,120 @@ apparent small wins turned out to be noise.
   the actual tool (recent PRs: `Generated-by: Claude Code (Claude Fable 5)`).
 - Branch naming: `varka-<topic>` tracks `origin/master` and stays one commit ahead
   per PR.
+
+## A bimodal kernel is usually the register allocator, and here is how to prove it
+
+Task 32's shared four-field calendar kernel ran at either 165 or 236 M rows/s under
+`-XX:MaxVectorSize=16` - stdev 0 ms *inside* a run, 42% *between* runs, 4 fast outcomes in 21.
+Six hypotheses were tested and all failed: shorter live ranges, forcing the validity helpers to
+inline, forcing every Varka class to inline, disabling on-stack replacement, raising
+`LoopUnrollLimit`, and buffer alignment (which had an OpenJDK bug report behind it,
+JDK-8380195, describing the same shape and blaming alignment - it is not that here).
+
+**What it actually is.** Capture `PrintAssembly` for the method in both modes and compare the
+*standard* (non-OSR) nmethod:
+
+| | instructions | stack traffic | xmm spill moves | vpmulld | vpsrld | vpsubd |
+|---|---|---|---|---|---|---|
+| fast (240.6) | 1581 | 721 | **4** | 26 | 14 | 20 |
+| slow (164.7) | 3000 | 1567 | **74** | 26 | 14 | 20 |
+
+The vector op counts are **identical**, so it is not unrolling, not a different lowering and
+not a missing intrinsic. The entire 1581-to-3000 difference is spill and reload traffic, 18x
+more of it. C2's register allocator sometimes finds a clean allocation for this body and
+sometimes does not, from the same IR. The OSR compilations, by contrast, are the same in both
+runs to within one instruction (7303 against 7304).
+
+It is width-specific for the obvious reason: 128-bit has 16 xmm registers and this body sits at
+the edge of them - C1 refuses the same method outright with
+`COMPILE SKIPPED: out of virtual registers in linear scan` - while AVX-512's 32 zmm registers
+leave slack and show no bimodality at all.
+
+**It is a property of the measurement environment, not of the kernel.** It does not reproduce
+standalone (six runs, all 210.5 M rows/s, no spread) and does not reproduce under a fastdebug
+JVM even running the whole benchmark (six runs, all ~161). It needs the product C2 *and* the
+benchmark's accumulated JVM state. So production is not exposed to it, but a long benchmark's
+later cases are, and a ratio is only trustworthy when both arms sit in the same run - which for
+the shared-versus-four-node comparison they do, since they are adjacent cases.
+
+**The general rule.** When a kernel is bimodal across JVMs with no spread inside a run, diff
+the standard nmethod between the two modes and count spill moves before theorising. Equal op
+counts with unequal instruction counts means allocation, not transformation, and no amount of
+inlining, unrolling or alignment flags will touch it. The design answer is to reduce what must
+be live at once - and note that *scheduling* to shorten live ranges did not help here
+(`vectorFourFieldsShortLive` is bimodal too); what helps is not putting four outputs in one
+method at a narrow width, which is why the four-node baseline is stable in all 21 runs.
+
+**The effect is observable at runtime, with public API.** JFR's `jdk.Compilation` event
+carries `method`, `compileLevel`, `isOsr` and - the useful one - `codeSize`, so a
+`jdk.jfr.consumer.RecordingStream` can watch the compiled size of Varka's own generated kernel
+methods as they are compiled, with no agent and no diagnostic flags. The fast and slow
+allocations differ by roughly 2x in code size here, so the anomaly is visible in that number.
+And because every kernel is emitted into a fresh class, "recompile it" is available too: emit
+the same shape again under a new class name and the allocator gets a fresh roll.
+That makes a detect-and-resample loop *possible*; it does not make it wise. Each resample costs
+another class, another compile and another warm-up, against a shape whose kernel a short query
+may only run a handful of times, and the detection needs a per-shape expected size that will
+drift. Prefer the structural fix - do not put four outputs in one method at a width whose
+register file cannot hold them - and use the JFR signal as a *diagnostic*, so that a
+badly-allocated kernel is reportable rather than invisible, instead of as a control loop.
+
+**You do not need to run the fastdebug JVM to read product assembly.** HotSpot's fourth
+fallback for locating the disassembler is `hsdis-<arch>.so` on `LD_LIBRARY_PATH`
+(`disassembler.cpp`), so a `libhsdis.so` built once against a fastdebug tree can be copied to
+`hsdis-amd64.so` and used with the *product* JVM:
+
+```
+LD_LIBRARY_PATH=<dir with hsdis-amd64.so> java -XX:+UnlockDiagnosticVMOptions \
+    -XX:CompileCommand=print,<class>::<method> ...
+```
+
+That matters because some behaviour only appears in the product build - this bimodality among
+it - so being able to disassemble there rather than only in fastdebug is what made the
+comparison above possible at all.
+
+## Building a fastdebug JDK for HotSpot diagnostics
+
+Three questions in milestone 4 could not be answered from a product JVM - why SuperWord
+declined a loop, what C2 actually emitted, and which of two compilations a bimodal kernel had
+landed on. The flags that answer them (`TraceSuperWord`, `PrintOptoAssembly`, and a
+`PrintAssembly` that can actually disassemble) are `develop` flags or need `hsdis`, and neither
+ships in a product build. No prebuilt debug JDK exists on `jdk.java.net` for any version, so
+building one is the only route. It takes about three and a half minutes on 24 cores.
+
+```
+git clone --depth 1 --branch jdk-25-ga https://github.com/openjdk/jdk.git
+bash configure --with-debug-level=fastdebug --enable-headless-only \
+    --with-hsdis=capstone --with-boot-jdk=$JAVA_HOME \
+    --with-jobs=24 --disable-warnings-as-errors
+make images build-hsdis
+cp build/*/support/hsdis/libhsdis.so build/*/images/jdk/lib/server/
+```
+
+Four things that cost time and are not obvious:
+
+* **`--enable-headless-only` does not remove the X11 or cups build dependencies.** It affects
+  the runtime, not what configure demands. The full Ubuntu list is still needed: `autoconf`,
+  `libx11-dev`, `libxext-dev`, `libxrender-dev`, `libxrandr-dev`, `libxtst-dev`, `libxt-dev`,
+  `libcups2-dev`, `libfontconfig1-dev`, `libfreetype-dev`, `libasound2-dev`, and
+  `libcapstone-dev` for hsdis.
+* **Ubuntu 26.04 ships `uutils coreutils` as `date`, and it breaks the build.** OpenJDK's
+  configure decides GNU-ness with `date --version | grep "GNU\|BusyBox"`
+  (`make/autoconf/basic_tools.m4`). uutils names itself differently while behaving
+  GNU-compatibly, so configure falls back to the BSD `date -u -j -f` form, produces an empty
+  `SOURCE_DATE_ISO_8601`, and the build later fails packaging `jrt-fs.jar` with
+  `option --date requires an argument`. Passing `--with-source-date=<ISO string>` does not help
+  - it is rejected as unparseable by the same broken path. The fix is a shim earlier in `PATH`
+  that answers `--version` with a string containing "GNU" and `exec`s `/usr/bin/date` for
+  everything else.
+* **`make images` does not build hsdis.** It needs the separate `build-hsdis` target, and the
+  result is left in `support/hsdis/libhsdis.so`. HotSpot looks for it beside `libjvm.so`, so it
+  has to be copied to `images/jdk/lib/server/` - putting it in `images/jdk/lib/` is not enough
+  and yields `Loading hsdis library failed` with no further explanation.
+* **The flag is `TraceSuperWord`, not `TraceAutoVectorization`**, in JDK 25 - check
+  `src/hotspot/share/opto/c2_globals.hpp` rather than trusting a flag name from a newer
+  release.
+
+**Never take a number from this JVM.** fastdebug keeps the assertions, so absolute throughput
+is not comparable with the product build and nothing measured on it belongs in a committed
+results file. It is for reading what C2 did, not how fast it did it.
