@@ -1015,11 +1015,15 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("the range guard is shared with the prefix, and still declines the batch") {
-    // The guard lives inside the prefix, so sharing it means three of the four outputs no
-    // longer emit one. It is correct only because the guard reads nothing but the date and
-    // the masks - and a guard that stopped firing would leave every value right and the
-    // status wrong, which no differential above would notice.
+  test("the guard's removal reaches the shared prefix too (task 51)") {
+    // This PR predates task 51 and originally asserted the opposite: that the guard, sharing
+    // the prefix across the three outputs below, still fired and declined the batch. Task 51
+    // removed the guard from emitEra, which emitChronoPrefixOnce - the fragment-sharing entry
+    // point this PR added - calls exactly like the unshared path does. That is why removal
+    // needed no change here: there was never a second, sharing-specific copy of the guard to
+    // find and delete. This test now exists to keep it that way - if a future change gives
+    // the shared path its own inlined guard logic instead of routing through emitEra, this is
+    // where that would first show up as a mistaken STATUS_CHRONO_RANGE.
     val col = new ColumnRef(0)
     val roots = Seq[VarkaVectorIR](new Year(col), new Month(col), new Quarter(col))
     val (kernel, loader) = load(emitMulti(roots, 1, 0, sharing))
@@ -1036,10 +1040,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         }
         assert(status(64, _ => false, i => i * 97) === 0, "an in-range batch was declined")
         assert(status(64, _ => false, i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1
-          else i * 97) === VarkaFusedKernel.STATUS_CHRONO_RANGE, "the loop guard did not fire")
+          else i * 97) === 0, "a day past the range was declined through the shared prefix")
         assert(status(17, _ => false, i => if (i == 16) VarkaChrono.NARROW_MIN_DAYS - 1
-          else i * 97) === VarkaFusedKernel.STATUS_CHRONO_RANGE,
-          "the epilogue guard did not fire - and the epilogue is where sharing happens today")
+          else i * 97) === 0,
+          "a day past the range was declined in the epilogue, where sharing happens today")
         assert(status(64, i => i == 3, i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1
           else i * 97) === 0, "an out-of-range value under a null row condemned the batch")
       } finally {
@@ -1117,35 +1121,39 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 17 outputs to 40") {
+  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 19 outputs to 44") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
-    // grows with the whole projection rather than with a group: PLAN_MILESTONE_4.md's task 44
-    // measures it past the 8000-byte HugeMethodLimit at 17 calendar outputs, and past that
-    // limit HotSpot compiles the method not at all - it runs interpreted, with boxed vectors,
-    // on every batch whose length is not a lane multiple. Four fields over one date repeat the
-    // decomposition four times; sharing it is most of the method.
+    // grows with the whole projection rather than with a group. Four fields over one date
+    // repeat the decomposition four times; sharing it is most of the method.
     //
     // The outputs must be distinct nodes to count: the IR's records compare by value, so
     // year(d) twice is one node and the emitter already emits it once. Four fields per date
     // over as many dates as the width needs is the shape task 44 measured.
+    //
+    // Both boundaries below moved by task 51: removing the per-extraction range guard shrank
+    // every emitted calendar prefix, shared or not, so more outputs now fit under the 8000-byte
+    // HugeMethodLimit before HotSpot gives up on compiling the method (interpreted, boxed
+    // vectors, on every batch whose length is not a lane multiple). Unshared moved from 16
+    // fits/17 crosses (task 44's original number) to 18 fits/19 crosses; shared moved from the
+    // 40-output boundary PLAN_TASK_32.md section 7.1 recorded to 44. Re-measured directly
+    // rather than estimated - see PLAN_TASK_51.md section 4.1 for the numbers this replaced.
     def fields(dates: Int): Seq[VarkaVectorIR] = (0 until dates).flatMap { c =>
       val col = new ColumnRef(c)
       Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     }
     val limit = 8000
-    // Unshared, 16 outputs fit and 17 do not - the boundary the debt register records.
-    assert(epilogueSize(fields(4), 12, unshared) < limit)
-    assert(epilogueSize(fields(5).take(17), 12, unshared) > limit)
-    // Shared, the same 17 fit with room to spare, and the boundary moves out to 40 outputs
-    // over ten dates. That is the number tasks 43 and 44 plan against; the ladder behind it is
-    // in PLAN_TASK_32.md section 7.1.
-    assert(epilogueSize(fields(5).take(17), 12, sharing) < limit)
+    // Unshared, 18 outputs fit and 19 do not.
+    assert(epilogueSize(fields(5).take(18), 12, unshared) < limit)
+    assert(epilogueSize(fields(5).take(19), 12, unshared) > limit)
+    // Shared, the same 19 fit with room to spare, and the boundary moves out to 44 outputs
+    // over eleven dates.
+    assert(epilogueSize(fields(5).take(19), 12, sharing) < limit)
     assert(epilogueSize(fields(8), 12, sharing) < limit)
-    val past = epilogueSize(fields(10), 12, sharing)
+    val past = epilogueSize(fields(11), 12, sharing)
     assert(past > limit,
-      s"forty shared calendar outputs now fit in $past bytes - sharing reaches further than " +
-        "this test records, so the ladder in PLAN_TASK_32.md section 7.1 is stale")
+      s"forty-four shared calendar outputs now fit in $past bytes - sharing reaches further " +
+        "than this test records, so the ladder in PLAN_TASK_32.md section 7.1 is stale again")
   }
 
   test("the masked body agrees with the dense body on null-free data") {

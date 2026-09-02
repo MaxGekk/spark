@@ -689,6 +689,40 @@ nodes, which the fragment does not touch, and a wide enough projection still cro
 it now takes ten date columns instead of five. What it does is give task 44 a real
 baseline instead of a cliff four columns away.
 
+**Update: every number in this ladder moved again, and for an unrelated reason (task 51).**
+Task 51 removed the per-extraction range guard `emitEra` carried since task 26 - two
+compares, ANDed with validity and the epilogue mask, ORed into an accumulator, on *every*
+calendar node's tail, shared or not. Deleting that bytecode shrinks every row above, not
+just the shared column, since the guard was never something sharing touched one way or the
+other - it lived in `emitEra`, which both the shared and unshared paths call. Re-measured
+the same way, after task 51:
+
+| outputs | dates | unshared | shared |
+|---|---|---|---|
+| 1 | 1 | 599 | 599 |
+| 2 | 1 | 980 | 669 |
+| 4 | 1 | 1766 | 833 |
+| 8 | 2 | 3439 | 1573 |
+| 16 | 4 | 6793 | 3061 |
+| 17 | 5 | 7297 | 3565 |
+| 18 | 5 | 7680 | 3637 |
+| 19 | 5 | **8073** | 3719 |
+| 20 | 5 | 8506 | 3805 |
+| 24 | 6 | 10895 | 4549 |
+| 32 | 8 | 15675 | 6043 |
+| 40 | 10 | 20485 | 7537 |
+| 44 | 11 | 22875 | **8630** |
+| 48 | 12 | 25329 | 9765 |
+
+The crossing moves again, from 17/40 to **19/44** - two more outputs fit unshared, four
+more shared, before either crosses. `VarkaLoopEmitterSuite`'s
+`"sharing the prefix moves the epilogue's HugeMethodLimit crossing from 19 outputs to 44"`
+test carries the new numbers; this section keeps the original ladder above it rather than
+overwriting it, since both were true measurements of the emitter at the time they were
+taken, and a reader tracing why a number changed should be able to see both. The same
+caveat task 32's own note above already raised - "this does not close tasks 43 or 44" -
+applies again, with the new numbers.
+
 #### Predictions, scored
 
 6. **Nearly right, and the miss is worth recording.** Predicted `epilogueMasked` at 16

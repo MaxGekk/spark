@@ -125,6 +125,41 @@ own, since `add_months`'s own literal-month-count bound (task 40) keeps its
 output inside the range whenever its input was. It closes when task 52 lands
 a guard on the column-offset arithmetic nodes themselves.
 
+### 4.1 A side effect found while merging past PR #72: two compile-cliff numbers moved
+
+PR #72 (task 32 step B1) landed on master while this task was still open, and merging
+its result into this branch broke a test with a message that named the exact problem:
+`VarkaLoopEmitterSuite`'s `"sharing the prefix moves the epilogue's HugeMethodLimit
+crossing from 17 outputs to 40"` failed because 40 shared outputs, which used to cross
+the 8000-byte limit, now fit in 7537 bytes.
+
+The reason is structural, not a merge artifact: the guard this task removes lived in
+`emitEra`, which both the unshared and the shared (`emitChronoPrefixOnce`) paths call.
+Deleting it shrinks every calendar node's emitted bytecode regardless of which path
+reaches it, so both of task 32 step B1's own committed compile-cliff numbers - 17 outputs
+unshared, 40 shared - moved again, independently of anything task 32 did. Re-measured with
+the same harness (`VarkaEmitterTestSupport.codeSize` against `epilogueMasked`):
+
+| outputs | dates | unshared | shared |
+|---|---|---|---|
+| 16 | 4 | 6793 | 3061 |
+| 17 | 5 | 7297 | 3565 |
+| 18 | 5 | 7680 | 3637 |
+| 19 | 5 | **8073** | 3719 |
+| 40 | 10 | 20485 | 7537 |
+| 44 | 11 | 22875 | **8630** |
+
+The crossing moves from 17/40 to **19/44**. The full ladder, alongside the pre-task-51
+one it replaces, is in `PLAN_TASK_32.md` section 7.1's update; the test now asserts the
+new numbers and its title carries them. `PLAN_MILESTONE_4.md`'s debt register (the
+`GROUP_BUDGET` entry) and task 32's own status-table row both carry a pointer to this.
+
+This is exactly the "numbers moving under the task's own feet" risk the milestone
+document already names for tasks that touch emitted bytecode (see `PLAN_TASK_32.md`
+section 10, risk 6, and the milestone's own section 3 narrative) - it is being recorded
+here rather than silently absorbed because task 44, not yet built, will otherwise plan
+against a baseline two tasks have now moved out from under it for two unrelated reasons.
+
 ## 5. Explicitly out of this task
 
 * **`ChronoVectorOps`** (`sql/varka/engine`), the hand-written reference
