@@ -26,7 +26,7 @@ import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribu
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType}
+import org.apache.spark.sql.types.{BooleanType, DataType, DateType, IntegerType}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -372,7 +372,7 @@ private[sql] object VarkaExpressionCompiler {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = expr match {
     case br: BoundReference if br.dataType == DateType =>
-      Some(new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size)))
+      Some(columnRef(br, inputs))
     // A date literal's value is already an epoch-day int, so it takes a slot in the shared
     // per-distinct-value table like a folded day offset does (task 11) - what makes
     // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. `days: Int` does not
@@ -402,15 +402,22 @@ private[sql] object VarkaExpressionCompiler {
     case DateFromUnixDate(child) =>
       compileNode(child, inputs, literals, sink)
     case DateAdd(child, days) =>
+      // The date child compiles before the offset, matching CaseWhen's rule a few cases below:
+      // ordinals and literal slots register in reading order. Before task 38 the offset was
+      // always a foldable literal (no ordinal to register), so this ordering is new in an
+      // observable way now that an offset can be a column: when BOTH operands are unfusable,
+      // DeclineSink's "first note wins" rule reports the child's reason, not the offset's
+      // (pinned by VarkaExpressionCompilerSuite's "with two independently unfusable operands,
+      // the child's reason is reported" test).
       for {
-        offset <- foldOffset(days, sink)
         node <- compileNode(child, inputs, literals, sink)
-      } yield new AddDays(node, new LiteralSlot(literals.getOrElseUpdate(offset, literals.size)))
+        offsetNode <- compileOffset(days, inputs, literals, sink)
+      } yield new AddDays(node, offsetNode)
     case DateSub(child, days) =>
       for {
-        offset <- foldOffset(days, sink)
         node <- compileNode(child, inputs, literals, sink)
-      } yield new SubDays(node, new LiteralSlot(literals.getOrElseUpdate(offset, literals.size)))
+        offsetNode <- compileOffset(days, inputs, literals, sink)
+      } yield new SubDays(node, offsetNode)
     case DateDiff(end, start) =>
       for {
         endNode <- compileNode(end, inputs, literals, sink)
@@ -554,16 +561,43 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * The literal day offset of a `date_add`/`date_sub`, or `None` with the reason noted: a
-   * non-foldable offset is a per-row value, and the kernel's offsets are runtime arguments
-   * fixed for the whole batch.
+   * Interns `br`'s ordinal into `inputs` and wraps it as a `ColumnRef` - shared by
+   * `compileNode`'s `DateType` leaf and `compileOffset`'s `IntegerType` one, the two column
+   * kinds the compiler admits.
    */
-  private def foldOffset(days: Expression, sink: DeclineSink): Option[Int] = {
-    val folded = DateVarkaSupport.foldDaysOffset(days)
-    if (folded.isEmpty) {
-      sink.note("day offset is not a foldable literal", days)
+  private def columnRef(br: BoundReference, inputs: mutable.LinkedHashMap[Int, Int]): ColumnRef =
+    new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size))
+
+  /**
+   * The day offset of a `date_add`/`date_sub`: a folded literal keeps today's `LiteralSlot`
+   * shape (existing plans and their cached kernels are untouched), and a non-foldable offset
+   * (task 38) is a bare `IntegerType` column - deliberately not a general `compileNode`
+   * recursion. `compileNode`'s `BoundReference` leaf stays `DateType`-only: widening it instead
+   * of this dedicated path would let an int column reach every other position that calls
+   * `compileNode` too (`Compare`, `DateDiff`, `Coalesce`, `Greatest`...), fusing plain
+   * integer-vs-integer predicates that were never part of this task's scope (task 38 section 6:
+   * "do not open it wider").
+   */
+  private def compileOffset(
+      days: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = {
+    DateVarkaSupport.foldDaysOffset(days) match {
+      case Some(offset) =>
+        Some(new LiteralSlot(literals.getOrElseUpdate(offset, literals.size)))
+      case None =>
+        days match {
+          case br: BoundReference if br.dataType == IntegerType =>
+            Some(columnRef(br, inputs))
+          case br: BoundReference =>
+            sink.note(s"non-integer day offset column of type ${br.dataType.simpleString}", br)
+            None
+          case other =>
+            sink.note("day offset is not a foldable literal or an integer column", other)
+            None
+        }
     }
-    folded
   }
 
   /**

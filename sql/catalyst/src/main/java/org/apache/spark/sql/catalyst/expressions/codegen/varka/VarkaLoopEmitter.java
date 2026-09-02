@@ -140,9 +140,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * by pointing at one line, not by disassembling the output.
  *
  * <p>Out-of-shape IR - unknown lane types, a condition in a value position, out-of-range
- * ordinals or slots, non-literal day offsets, trees past {@link #MAX_CHAIN_DEPTH} or
- * {@link #MAX_FUSED_NODES} - is rejected with {@link IllegalArgumentException}, which the
- * evaluator wiring treats as "fall back".
+ * ordinals or slots, a day offset that is neither a literal slot nor a column, trees past
+ * {@link #MAX_CHAIN_DEPTH} or {@link #MAX_FUSED_NODES} - is rejected with
+ * {@link IllegalArgumentException}, which the evaluator wiring treats as "fall back".
  *
  * <p><b>Telemetry</b> (task 13): every emitted class carries a {@code SourceFile} attribute -
  * the caller-supplied name, meant to identify the operator and stage
@@ -626,26 +626,11 @@ public final class VarkaLoopEmitter {
     return node instanceof NextDay ? NEXT_DAY_WEIGHT : 1;
   }
 
-  /** Whether {@code node}'s subtree contains a calendar extraction, which is what decides
-   * whether a body needs a guard accumulator at all. */
-  private static boolean hasChrono(VarkaVectorIR node) {
-    if (isChrono(node)) {
-      return true;
-    }
-    for (VarkaVectorIR child : childrenOf(node)) {
-      if (hasChrono(child)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   /** Whether {@code node} runs a civil-from-days decomposition and so needs
-   * {@link #CHRONO_WEIGHT} and the range guard: one of the extractions in the IR's sealed
-   * {@link Chrono} family, whose membership makes weighing and guarding a new extraction total
-   * without touching this method - or {@link AddMonths} (task 40), which decomposes and
-   * recomposes but is not itself an extraction, so it stays outside {@link Chrono} and is
-   * checked for by hand here instead. */
+   * {@link #CHRONO_WEIGHT}: one of the extractions in the IR's sealed {@link Chrono} family,
+   * whose membership makes weighing a new extraction total without touching this method - or
+   * {@link AddMonths} (task 40), which decomposes and recomposes but is not itself an
+   * extraction, so it stays outside {@link Chrono} and is checked for by hand here instead. */
   private static boolean isChrono(VarkaVectorIR node) {
     return node instanceof Chrono || node instanceof AddMonths;
   }
@@ -910,11 +895,11 @@ public final class VarkaLoopEmitter {
           skipping.put(node, false);
         }
         case AddDays n -> {
-          requireLiteralOffset(n.offset());
+          requireOffsetShape(n.offset());
           analyzeOp(node, false, n.days(), n.offset());
         }
         case SubDays n -> {
-          requireLiteralOffset(n.offset());
+          requireOffsetShape(n.offset());
           analyzeOp(node, false, n.days(), n.offset());
         }
         case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
@@ -986,9 +971,29 @@ public final class VarkaLoopEmitter {
       skipping.put(node, skips || childSkips);
     }
 
+    // task 38 widened the offset from LiteralSlot-only to a literal or a column, but it is
+    // still not an arbitrary subtree - VarkaExpressionCompiler only ever emits one of these
+    // two shapes, and this check fails fast if a future IR producer emits anything else.
+    private static void requireOffsetShape(VarkaVectorIR offset) {
+      if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)) {
+        throw new IllegalArgumentException(
+            "day offsets must be a literal slot or a column, got " + offset);
+      }
+    }
+
+    /**
+     * The stricter check {@code next_day} needs. Task 38 widened day offsets to accept a
+     * column as well as a literal, but that widening is specific to {@code AddDays} and
+     * {@code SubDays}, whose offset is added to a lane at run time. {@code NextDay} folds its
+     * weekday into emit-time constants instead - the whole point of task 33's lowering - so a
+     * non-literal there is not merely unsupported, it is unrepresentable, and the compiler
+     * declines it before ever reaching the emitter. This keeps the guarantee that would
+     * otherwise be lost when the two tasks merged.
+     */
     private static void requireLiteralOffset(VarkaVectorIR offset) {
       if (!(offset instanceof LiteralSlot)) {
-        throw new IllegalArgumentException("day offsets must be literal slots, got " + offset);
+        throw new IllegalArgumentException(
+            "next_day's weekday must be a literal slot, got " + offset);
       }
     }
   }
@@ -1071,9 +1076,10 @@ public final class VarkaLoopEmitter {
     /** The driver's status accumulator (an int slot), where its callees' returns are ORed. */
     int status;
     /**
-     * The guard's accumulated out-of-range mask (task 26), or null when this body has no
-     * chrono node at all. Non-null is exactly the signal that the method returns something
-     * other than a constant zero.
+     * The guard's accumulated out-of-range mask, or null when nothing in this body sets one.
+     * Non-null is exactly the signal that the method returns something other than a constant
+     * zero. Task 26's calendar extractions used to set this; task 51 removed that guard, so it
+     * is always null today, pending a producer-side guard (see {@code PLAN_TASK_52.md}).
      */
     Integer guardAcc;
 
@@ -1144,14 +1150,9 @@ public final class VarkaLoopEmitter {
     slot += 2;
     s.maskTmp = slot++;
     s.status = slot++;
-    // The guard exists only where a lowering is partial - today, the narrowed calendar one.
-    // Allocated for the whole body rather than per node: one accumulator carries every guarded
-    // node's verdict, since the caller acts on the batch, not on the lane.
-    boolean guarded = mode != BodyMode.DRIVER
-        && outputs.stream().anyMatch(VarkaLoopEmitter::hasChrono);
-    if (guarded) {
-      s.guardAcc = slot++;
-    }
+    // No node emits a guard today (task 51 removed the narrowed calendar lowering's one); a
+    // future producer-side guard (PLAN_TASK_52.md) is what would set s.guardAcc non-null again,
+    // with the same one-accumulator-per-body shape - the caller acts on the batch, not the lane.
 
     if (mode == BodyMode.EPILOGUE) {
       s.epilogueMask = slot++;
@@ -1241,8 +1242,8 @@ public final class VarkaLoopEmitter {
     return switch (node) {
       case ColumnRef c -> s.word[c.ordinal()];
       case LiteralSlot l -> WORD_ALL_TRUE;
-      case AddDays n -> s.wordRef.get(n.days());
-      case SubDays n -> s.wordRef.get(n.days());
+      case AddDays n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
+      case SubDays n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
       case DayOfWeek n -> s.wordRef.get(n.days());
       case WeekDay n -> s.wordRef.get(n.days());
       case NextDay n -> s.wordRef.get(n.days());
@@ -1817,30 +1818,16 @@ public final class VarkaLoopEmitter {
         }
       }
       case AddDays n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        emitValue(cb, n.offset(), dense, analysis, s, computed);
         // The misdescribe hook: whichever body executes first must fail naming the call.
         MethodTypeDesc desc =
             analysis.options.misdescribeAdd() ? LANEWISE_VV_WRONG : LANEWISE_VV;
-        line(cb, analysis, node);
-        cb.invokevirtual(INT_VECTOR, "add", desc);
+        emitAndValidatedOp(cb, node, n.days(), n.offset(), "add", desc, dense, analysis, s,
+            computed);
       }
-      case SubDays n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        emitValue(cb, n.offset(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-      }
-      case DateDiff n -> {
-        emitValue(cb, n.end(), dense, analysis, s, computed);
-        emitValue(cb, n.start(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-        if (!dense && s.ownWord.contains(node)) {
-          emitAndWord(cb, s.wordRef.get(node),
-              s.wordRef.get(n.end()), s.wordRef.get(n.start()));
-        }
-      }
+      case SubDays n -> emitAndValidatedOp(cb, node, n.days(), n.offset(), "sub", LANEWISE_VV,
+          dense, analysis, s, computed);
+      case DateDiff n -> emitAndValidatedOp(cb, node, n.end(), n.start(), "sub", LANEWISE_VV,
+          dense, analysis, s, computed);
       case DayOfWeek n -> {
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
@@ -1934,6 +1921,25 @@ public final class VarkaLoopEmitter {
     loadWord(cb, b);
     cb.land();
     cb.lstore(own);
+  }
+
+  /**
+   * The shape shared by {@code AddDays}, {@code SubDays} and {@code DateDiff}: two children,
+   * one lanewise binary op, and - in the masked body, when the node needs its own word - the
+   * null-intolerant AND-of-validity-words rule ({@link #emitAndWord}). Factored so the AND
+   * cannot be dropped on one arm and not another the way it was once, silently, before a
+   * dedicated test caught it.
+   */
+  private static void emitAndValidatedOp(CodeBuilder cb, VarkaVectorIR node, VarkaVectorIR left,
+      VarkaVectorIR right, String op, MethodTypeDesc desc, boolean dense, Analysis analysis,
+      Slots s, Set<VarkaVectorIR> computed) {
+    emitValue(cb, left, dense, analysis, s, computed);
+    emitValue(cb, right, dense, analysis, s, computed);
+    line(cb, analysis, node);
+    cb.invokevirtual(INT_VECTOR, op, desc);
+    if (!dense && s.ownWord.contains(node)) {
+      emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(left), s.wordRef.get(right));
+    }
   }
 
   /**
@@ -2208,7 +2214,7 @@ public final class VarkaLoopEmitter {
 
     cb.astore(days);
 
-    emitEra(cb, node, dense, analysis, s, days, era, rem, mask);
+    emitEra(cb, days, era, rem, mask);
 
     // rem is now the day of era, in [0, 146096]. Everything below works on that.
     // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
@@ -2668,61 +2674,22 @@ public final class VarkaLoopEmitter {
   /**
    * The day-of-era step: one round-down division and one carry over a biased day, which is
    * defined only over {@link VarkaChrono#NARROW_MIN_DAYS}..{@link VarkaChrono#NARROW_MAX_DAYS} -
-   * so it also emits the guard, which is what makes the cheaper arithmetic safe to publish.
+   * years -12800 to 33134, which contains every date SQL can write but is reachable past by
+   * {@code date_add}.
    *
-   * <p>A variant that split the dividend instead, and so needed no guard at all over the whole
-   * int range, was built and measured against this one before being dropped: it cost 14 to 24%
-   * depending on width and null pattern, to buy a range no SQL date literal can reach. The
-   * numbers are in {@code PLAN_TASK_26.md} section 11.2.
-   *
-   * <p>The guard is two compares ORed together, then narrowed twice before it is ORed into
-   * the body's accumulator, and both narrowings are load-bearing:
-   *
-   * <ul>
-   *   <li><b>The row's validity</b>, taken from the node's own word reference. A null row's
-   *       data bytes are undefined, so an out-of-range value under one must not condemn the
-   *       batch. {@code planWordRef} aliases a chrono node's word to its child's, and the
-   *       child's word is live by the time this runs, so this covers a computed child as
-   *       well as a bare column - which an earlier version did not, and which is the shape
-   *       {@code year(date_add(d, n))} takes.</li>
-   *   <li><b>The epilogue's bounds mask</b>, where there is one. A masked load fills the
-   *       lanes past {@code length} with 0, and 0 is in range - but the guard runs on this
-   *       node's <i>input</i>, and a computed child maps 0 wherever it likes. Without this,
-   *       {@code year(date_sub(d, 5400000))} declines every batch whose length is not a lane
-   *       multiple while every real row is in range: correct answers, silent total loss of
-   *       fusion, and nothing above debug logging to say so.</li>
-   * </ul>
+   * <p><b>No guard here (task 51).</b> Every {@link Chrono} node used to carry a per-lane range
+   * check on this step's input, declining the whole batch to the row engine when a lane fell
+   * outside the range above. That guard re-verified the same fact at every calendar extraction
+   * downstream of a value, including ones CSE and task 32's fragment sharing had already proven
+   * in range together - real cost with no new information on the common path. Task 51 removed
+   * it; the range check belongs instead at the node that can actually put a day outside this
+   * range in the first place - unbounded runtime arithmetic such as {@code date_add}/{@code
+   * date_sub} with a column offset, not a literal one - which is tracked as its own task
+   * ({@code PLAN_TASK_52.md}) rather than restored here. Until that lands, a day outside the
+   * range is silently wrong rather than declined: {@code PLAN_TASK_51.md} records the trade and
+   * why the owner chose it anyway.
    */
-  private static void emitEra(CodeBuilder cb, VarkaVectorIR node, boolean dense,
-      Analysis analysis, Slots s, int days, int era, int rem, int mask) {
-    cb.aload(days);
-    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.NARROW_MIN_DAYS);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.aload(days);
-    cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.NARROW_MAX_DAYS);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    if (!dense) {
-      // The node's own word, which planWordRef has aliased to its child's - so this is the
-      // child's validity whatever shape the child has.
-      Integer word = s.wordRef.get(node);
-      if (word != null && word != WORD_ALL_TRUE) {
-        cb.aload(s.species);
-        loadWord(cb, word);
-        cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
-        cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
-      }
-    }
-    if (s.epilogueMask != null) {
-      cb.aload(s.epilogueMask);
-      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
-    }
-    cb.aload(s.guardAcc);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    cb.astore(s.guardAcc);
-
+  private static void emitEra(CodeBuilder cb, int days, int era, int rem, int mask) {
     // w = days + BIAS, non-negative throughout the range, so one round-down magic and one
     // carry give the era - and the bias's whole eras come back off in the year assembly.
     cb.aload(days);

@@ -121,6 +121,60 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 38: date_add/date_sub with a column offset match the row engine") {
+    // `varka_date_pairs`'s `i` column is not nullable (it comes from zipWithIndex) - the
+    // literal-offset shapes already covered that side; this exercises the new column-offset
+    // path over both spellings.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, i) AS a, d + i AS b, date_sub(d, i) AS c FROM varka_date_pairs " +
+        "ORDER BY a, b, c",
+      expectFused = true)
+  }
+
+  test("task 38: a null offset nulls out its row even when the date beside it is not null") {
+    cacheDatesNullableOffset(spark)
+    cacheDatesNullableOffset(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT date_add(d, off) AS a, date_sub(d, off) AS b FROM varka_dates_nullable_offset " +
+        "ORDER BY d, off",
+      expectFused = true)
+  }
+
+  test("task 38 declines: an interval column offset still does not fuse") {
+    // `d + INTERVAL n DAY` with a foldable `n` already fuses (the analyzer folds it to a
+    // DateAdd literal, unaffected by this task). A non-foldable interval *column* does not:
+    // BinaryArithmeticWithDatetimeResolver rewrites it to
+    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)), and ExtractANSIIntervalDays has no
+    // compiler arm, so it declines through the ordinary unsupported-expression path.
+    // CAST(i AS INTERVAL DAY) is DayTimeIntervalType(DAY, DAY) - a single-field ANSI interval,
+    // not the literal `INTERVAL '3' DAY` syntax the optimizer folds away.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT d + CAST(i AS INTERVAL DAY) AS a FROM varka_dates ORDER BY a",
+      expectFused = false)
+  }
+
+  test("task 38: a column-offset date_add fuses inside a filter predicate too") {
+    // The projection-side column-offset tests above never exercise the mask kernel - a
+    // WHERE clause is the shape VarkaFilterExec/VarkaFilterColumnarToRowExec compile, and
+    // compileOffset is shared code, so this proves the column-offset path works there too,
+    // not only when the offset column feeds a projected value.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    try {
+      val fused = checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c FROM varka_date_pairs WHERE date_add(d, i) > d2",
+        expectFused = true)
+      assert(!fused.toString.contains("Filter (date_add("),
+        s"the column-offset predicate should be fused, not residual:\n$fused")
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
+    }
+  }
+
   test("datediff matches the row engine in both argument orders with nulls") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
@@ -577,10 +631,10 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("a calendar node inside a fused predicate is computed and guarded like any other") {
+  test("a calendar node inside a fused predicate is computed like any other") {
     // compileCond's compare() puts no type gate on its operands, so a calendar node reaches a
-    // filter's mask kernel as readily as a projection's - and that path has its own guard
-    // accumulation and its own decline route, neither of which was exercised until this test.
+    // filter's mask kernel as readily as a projection's, which was not exercised until this
+    // test.
     //
     // The shape has to be calendar-against-calendar. `year(d) = 2020` does NOT fuse: the
     // literal is an IntegerType one and the compiler's literal arm accepts DateType only, so
@@ -605,70 +659,19 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       checkDifferential(spark, varkaSpark,
         "SELECT year(d) AS y FROM varka_date_pairs WHERE month(d) = month(d2) ORDER BY y",
         expectFused = true)
-      // And the guard on the filter side: a day past the covered range must decline the batch
-      // rather than select on an undefined value.
-      val q = "SELECT count(*) AS c FROM varka_date_pairs " +
-        "WHERE year(date_add(d, 20000000)) = year(d2)"
-      val actual = varkaSpark.sql(q)
-      checkAnswer(actual, spark.sql(q))
-      // Either filter node may serve the plan: VarkaFilterExec keeps the batch columnar,
-      // VarkaFilterColumnarToRowExec is the row-boundary form the optimizer picks here.
-      val declined = actual.queryExecution.executedPlan.collect {
-        case f: VarkaFilterExec => f.metrics
-        case f: VarkaFilterColumnarToRowExec => f.metrics
-      }.flatMap(_.get("numFallbackBatchesDeclined")).map(_.value).sum
-      assert(declined > 0L, "an out-of-range date under a filter should decline the batch")
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
     }
   }
 
-  test("a date past the shipped lowering's range falls back rather than answering wrongly") {
-    // The guard, end to end and without a hook: date_add pushes the dates past the range the
-    // narrowed civil-from-days lowering is defined over (years -12800..33134), so the kernel
-    // declines the batch and the row engine answers it. What this asserts is that the answers
-    // are the row engine's - a wrong year here would be the one failure mode task 26's guard
-    // exists to prevent - and that the batch is counted as declined, not as a kernel failure.
-    val rows = Seq("2024-01-01", "1970-01-01", "9999-12-31", null)
-    Seq(spark, varkaSpark).foreach { session =>
-      import scala.jdk.CollectionConverters._
-      val schema = org.apache.spark.sql.types.StructType(Seq(
-        org.apache.spark.sql.types.StructField("d", org.apache.spark.sql.types.DateType, true)))
-      val data = rows.map(v =>
-        org.apache.spark.sql.Row(if (v == null) null else java.sql.Date.valueOf(v)))
-      session.createDataFrame(data.asJava, schema).createOrReplaceTempView("varka_far")
-      session.catalog.cacheTable("varka_far")
-    }
-    try {
-      // 20 million days past 9999-12-31 is year ~64750, well outside the range.
-      val q = "SELECT year(date_add(d, 20000000)) AS a FROM varka_far ORDER BY a"
-      val expected = spark.sql(q)
-      val actual = varkaSpark.sql(q)
-      val plan = actual.queryExecution.executedPlan
-      assertFused(plan)
-      checkAnswer(actual, expected)
-      def metric(name: String): Long = plan.collectFirst { case v: VarkaColumnarToRowExec => v }
-        .flatMap(_.metrics.get(name)).map(_.value).getOrElse(0L)
-      assert(metric("numFallbackBatchesDeclined") > 0L,
-        "the out-of-range date should have declined the batch")
-      assert(metric("numFallbackBatchesKernel") === 0L,
-        "a declined batch is not a kernel failure")
-      // In-range dates on the same column still run on the kernel, so the guard is not
-      // condemning everything it sees.
-      val inRange = varkaSpark.sql("SELECT year(d) AS a FROM varka_far ORDER BY a")
-      checkAnswer(inRange, spark.sql("SELECT year(d) AS a FROM varka_far ORDER BY a"))
-      val inRangePlan = inRange.queryExecution.executedPlan
-      // Both halves matter: getOrElse(0L) would pass vacuously if the query stopped fusing or
-      // the metric were renamed, which is exactly the regression this is here to catch.
-      assertFused(inRangePlan)
-      val inRangeMetric = inRangePlan.collectFirst { case v: VarkaColumnarToRowExec => v }
-        .flatMap(_.metrics.get("numFallbackBatchesDeclined"))
-      assert(inRangeMetric.isDefined, "the declined metric should exist on the fused plan")
-      assert(inRangeMetric.get.value === 0L, "in-range dates must not decline")
-    } finally {
-      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_far"))
-    }
-  }
+  // Task 51 removed the calendar range guard these two tests exercised end to end (a date
+  // pushed past VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS by date_add used to decline the
+  // batch to the row engine; the "guard on the filter side" and "falls back rather than
+  // answering wrongly" assertions checked exactly that). Removed rather than rewritten to
+  // assert the new, weaker behavior: PLAN_TASK_51.md section 4 records the accepted regression
+  // window, and PLAN_TASK_52.md tracks the producer-side guard that will need an equivalent
+  // differential test once it lands, shaped around the node that manufactures the out-of-range
+  // day rather than the calendar extraction that reads it.
 
   test("a declined batch falls back with the row engine's answers, counted as its own cause") {
     // Task 26: a partial lowering (the narrowed civil-from-days one) reports a batch it cannot

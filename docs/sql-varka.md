@@ -40,7 +40,9 @@ output is the selection bitmap, and the batch is compacted - or its rows
 skipped at the row boundary - by that mask.
 
 The supported expression surface, over `DateType` columns (stored as `INT`
-days since epoch) and foldable integer day offsets:
+days since epoch) and day offsets that are either a foldable integer literal
+or an `IntegerType` column (task 38; a `ShortType`/`ByteType` offset column
+still declines):
 
 * `DATE_ADD` / `DATE_SUB` / `DATEDIFF`, nested to any depth up to the
   emitter's chain cap, including chains mixing them.
@@ -228,10 +230,14 @@ attributes alone did not answer:
 * **`EXPLAIN` says why an entry did not fuse.** Verbose `EXPLAIN` on a Varka
   projection node lists every projection entry as fused, forwarded (naming the
   child column) or residual with the compiler's decline reason - "unsupported
-  expression", "day offset is not a foldable literal", "CASE WHEN without an
-  ELSE branch", "non-date column of type ..." - in the query's own column
-  names; a Varka filter node (task 21) reports its predicate the same way,
-  one line per conjunct. The same account goes to the debug log once per
+  expression", "CASE WHEN without an ELSE branch", "non-date column of
+  type ..." - in the query's own column names. Since task 38, a `date_add`/
+  `date_sub` day offset that is neither a foldable literal nor a supported
+  column gets its own reasons: "non-integer day offset column of type ..."
+  for a `ShortType`/`ByteType` column, and "day offset is not a foldable
+  literal or an integer column" for anything else (e.g. a computed
+  expression). A Varka filter node (task 21) reports its predicate the same
+  way, one line per conjunct. The same account goes to the debug log once per
   task.
 
 Task 22 extends the account to the SQL UI and to JDK Flight Recorder:
@@ -526,8 +532,8 @@ files, which are the source of truth as the code moves):
   `--enable-native-access=ALL-UNNAMED`
 * The engine jar in the repo is a test-scoped dependency; at runtime supply it
   with `--jars` (its absence only falls back to per-row execution).
-* Arrow `DateDayVector` buffers come from Arrow-backed producers; the Arrow
-  cache serializer is the recommended source.
+* Arrow `DateDayVector` and `IntVector` buffers come from Arrow-backed
+  producers; the Arrow cache serializer is the recommended source.
 
 ## Limitations
 
@@ -535,8 +541,9 @@ The real current edges, stated with their numbers where they have one:
 
 * **Int32 lanes only.** The IR carries one lane type; every supported
   expression is `INT`-shaped (`DateType` days or integer results). No
-  `CalendarInterval`, strings, decimals, timestamps or nested types, and only
-  foldable integer day offsets.
+  `CalendarInterval`, strings, decimals, timestamps or nested types, and a
+  day offset must be a foldable integer literal or an `IntegerType` column -
+  `ShortType`/`ByteType` offset columns decline (task 38).
 * **ANSI arithmetic over `datediff` outputs is excluded by design**: an
   integer `Add` over a `datediff` result is not a date expression, and ANSI
   overflow cannot throw row-accurately from a SIMD lane, so such entries stay

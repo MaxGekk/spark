@@ -107,6 +107,26 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   }
 
   /**
+   * Builds and caches a `varka_dates_nullable_offset` temp view: a date column `d` and an int
+   * column `off`, each nullable independently of the other. `cacheDates`'s `i` column is never
+   * null (it comes from `zipWithIndex`), which is fine for a literal offset - always valid -
+   * but a day offset that is a column (task 38) can be null on its own, and that is the case
+   * this fixture exists to exercise: a null offset must still null out its row even when the
+   * date beside it is not null.
+   */
+  protected def cacheDatesNullableOffset(session: SparkSession): Unit = {
+    val rows = Seq(
+      (date("2024-01-01"), Int.box(3)),
+      (date("2024-01-02"), null: java.lang.Integer),
+      (null: java.sql.Date, Int.box(-5)),
+      (null: java.sql.Date, null: java.lang.Integer),
+      (date("1969-12-31"), Int.box(100)))
+    session.createDataFrame(rows).toDF("d", "off")
+      .createOrReplaceTempView("varka_dates_nullable_offset")
+    session.catalog.cacheTable("varka_dates_nullable_offset")
+  }
+
+  /**
    * Builds and caches a `varka_dates_big` temp view with `numRows` rows, one null every 17 rows
    * to exercise null handling, and `parts` partitions (via `repartition` when > 1) so the scan
    * fans out over several tasks (which share one cached kernel class since task 18).
