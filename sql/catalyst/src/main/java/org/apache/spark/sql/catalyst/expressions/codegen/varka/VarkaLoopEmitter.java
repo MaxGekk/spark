@@ -2142,7 +2142,7 @@ public final class VarkaLoopEmitter {
     emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
 
     switch (node) {
-      case Year n -> emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
+      case Year n -> emitChronoYear(cb, era, century, yearOfCentury, rem);
       case Month n -> emitChronoMonth(cb, marchMonth);
       case DayOfMonth n -> emitChronoDayOfMonth(cb, rem, marchMonth);
       case Quarter n -> {
@@ -2306,9 +2306,14 @@ public final class VarkaLoopEmitter {
 
   /** Leaves the reported (January-based) year: {@code 400 * era + 100 * century + yoc}, plus
    * one where the March year has turned January. The {@link Year} tail, factored out so
-   * {@link #emitAddMonths} can call it too. */
+   * {@link #emitAddMonths} can call it too.
+   *
+   * <p>The January bit is read off the day of year rather than the March-based month (task
+   * 48): the two are the same test, one step apart in the chain, so the year is the one field
+   * of the four that never needs the month step. See
+   * {@link VarkaChrono#MARCH_TO_JANUARY_DAYS}. */
   private static void emitChronoYear(CodeBuilder cb, int era, int century, int yearOfCentury,
-      int marchMonth) {
+      int dayOfYear) {
     cb.aload(era);
     cb.loadConstant(400);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
@@ -2319,7 +2324,7 @@ public final class VarkaLoopEmitter {
     cb.aload(yearOfCentury);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
     cb.loadConstant(1);
-    emitJanuaryMask(cb, marchMonth);
+    emitJanuaryMaskFromDayOfYear(cb, dayOfYear);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
   }
 
@@ -2402,7 +2407,7 @@ public final class VarkaLoopEmitter {
     int leapCarryMask = t[32];
 
     emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
-    emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
+    emitChronoYear(cb, era, century, yearOfCentury, rem);
     cb.astore(year);
     emitChronoMonth(cb, marchMonth);
     cb.astore(month);
@@ -2755,6 +2760,17 @@ public final class VarkaLoopEmitter {
     cb.aload(marchMonth);
     cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
     cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+  }
+
+  /** The same mask as {@link #emitJanuaryMask}, taken off the March-based day of year instead
+   * of the month it would otherwise be derived from - {@code (5 * doy + 2) / 153 >= 10} is
+   * {@code doy >= 306} exactly, see {@link VarkaChrono#MARCH_TO_JANUARY_DAYS}. This is what
+   * lets a year tail run without the prefix's month step (task 48). */
+  private static void emitJanuaryMaskFromDayOfYear(CodeBuilder cb, int dayOfYear) {
+    cb.aload(dayOfYear);
+    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
   }
 

@@ -124,6 +124,23 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(VarkaChrono.inNarrowRange(LocalDate.of(9999, 12, 31).toEpochDay.toInt))
   }
 
+  test("the January turn is the same test on the day of year as on the March month") {
+    // The year tail reads doy >= MARCH_TO_JANUARY_DAYS where the month and day-of-month tails
+    // read marchMonth >= MARCH_YEAR_JANUARY (task 48). The two are one integer identity apart,
+    // and 366 cases are cheaper to run than three lines of algebra are to trust. The identity
+    // rests on the month magic being exact over this whole domain, so that is asserted here
+    // too rather than taken from the constant's javadoc.
+    for (dayOfYear <- 0 to 365) {
+      val marchMonth = ((5 * dayOfYear + 2) * VarkaChrono.MONTH_M) >>> VarkaChrono.MONTH_K
+      assert(marchMonth === (5 * dayOfYear + 2) / 153,
+        s"the month magic is not exact at day of year $dayOfYear")
+      assert(marchMonth <= 11, s"the March month left its domain at day of year $dayOfYear")
+      assert((marchMonth >= VarkaChrono.MARCH_YEAR_JANUARY) ===
+        (dayOfYear >= VarkaChrono.MARCH_TO_JANUARY_DAYS),
+        s"the two January tests disagreed at day of year $dayOfYear")
+    }
+  }
+
   test("the exhaustive sweep (opt-in: -Dvarka.sweep=true)") {
     assume(System.getProperty("varka.sweep") == "true",
       "set -Dvarka.sweep=true to run the exhaustive sweep")
