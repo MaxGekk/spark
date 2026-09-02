@@ -169,3 +169,30 @@ No other step of this recipe misled: `LastDay`'s IR shape, the four routine
 emitter cases, the `blend`-based length selection and the reuse of `century`
 and `yearOfCentury` as scratch all worked as designed on the first pass once
 the leap flag itself was correct.
+
+## 8. The predicted collision, and how it actually resolved
+
+Section 7's prediction came true, but not against task 34: by the time this
+branch was rebased onto master, task 34 (`dayofyear`) still had not merged,
+but task 40 (days-from-civil and month arithmetic) had, and it shipped its
+own `emitLeapFlag(y, scratch1, scratch2, remScratch, maskA, maskB,
+carryMask)` for `emitAddMonths`'s own February case - same round-down-plus-
+carry shape, same `M = 41943` at `k = 22`/`24`, differing only in *how* the
+non-negative bias is supplied: task 40's version takes the plain reported
+year and adds its own internal `VarkaChrono.YEAR_BIAS` (15200), while this
+task's local copy expected the caller to pre-bias by +13200 before calling.
+Per section 7's own instruction ("whichever merges second should delete its
+own copy... or confirm they are identical"), this task's copy was deleted
+during the master-merge and `emitChronoLastDay` (the `emitChrono`-tail
+switch's `case LastDay` arm, factored out the way `emitChronoYear`/
+`emitChronoDayOfMonth` already were by the same merge) was rewritten to call
+task 40's shared helper directly - passing the plain year `emitChronoYear`
+leaves, with no local bias - and to reuse `emitMonthStart` (task 40's own
+factored-out `cum(m)`) for both `monthStart`/`monthStartNext`, clamping the
+second call the way `emitAddMonths` does, since `emitMonthStart`'s magic is
+only exact through `mp` 11. The formula in section 2 is unchanged; what moved
+is which method's body it lives in, exactly as section 7 anticipated for
+task 32's eventual sharing - it happened one merge earlier than expected, and
+for a different task. Re-verified by the full opt-in sweep (all 16,777,216
+days of `VarkaChrono`'s covered range against `DateTimeUtils.getLastDayOfMonth`,
+zero mismatches) rather than by inspection alone.

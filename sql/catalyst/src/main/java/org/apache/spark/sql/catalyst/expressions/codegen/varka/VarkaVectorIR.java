@@ -51,7 +51,7 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
             VarkaVectorIR.IfElse, VarkaVectorIR.Greatest, VarkaVectorIR.Least,
             VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.NextDay,
-            VarkaVectorIR.Chrono, VarkaVectorIR.Cond {
+            VarkaVectorIR.Chrono, VarkaVectorIR.AddMonths, VarkaVectorIR.Cond {
 
   /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
   enum LaneType { INT }
@@ -194,6 +194,18 @@ public sealed interface VarkaVectorIR
       permits Year, Month, DayOfMonth, Quarter, LastDay {}
 
   /**
+   * {@code date +- INTERVAL n MONTH/YEAR} and {@code add_months(date, n)} (task 40): month
+   * arithmetic over a decomposed date, then Hinnant's {@code days_from_civil} recompose -
+   * {@link VarkaChrono#daysFromCivil} is the scalar twin. {@code months} carries the (possibly
+   * negative) month count in a {@link LiteralSlot}; it must be a compile-time literal, the way
+   * {@link AddDays#offset} is. Not a member of {@link Chrono} - it decomposes a date into
+   * fields <i>and</i> recomposes one, roughly twice a {@link Chrono} node's cost - but the
+   * emitter treats it identically for weighing and guarding, since both concerns are about
+   * "does this node run a civil-from-days decomposition", which this one does.
+   */
+  record AddMonths(VarkaVectorIR days, VarkaVectorIR months) implements VarkaVectorIR {}
+
+  /**
    * Spark's {@code year} (task 26): the proleptic Gregorian year of a date, as
    * {@code LocalDate#getYear} gives it. An {@code IntegerType} output at the Spark level.
    *
@@ -265,6 +277,8 @@ public sealed interface VarkaVectorIR
       case DayOfMonth n -> "(dayOfMonth " + canonical(n.days()) + ")";
       case Quarter n -> "(quarter " + canonical(n.days()) + ")";
       case LastDay n -> "(lastDay " + canonical(n.days()) + ")";
+      case AddMonths n ->
+          "(addMonths " + canonical(n.days()) + " " + canonical(n.months()) + ")";
     };
   }
 
@@ -323,6 +337,8 @@ public sealed interface VarkaVectorIR
       case DayOfMonth n -> "(dayOfMonth " + lineOf.applyAsInt(n.days()) + ")";
       case Quarter n -> "(quarter " + lineOf.applyAsInt(n.days()) + ")";
       case LastDay n -> "(lastDay " + lineOf.applyAsInt(n.days()) + ")";
+      case AddMonths n -> "(addMonths " + lineOf.applyAsInt(n.days()) + " "
+          + lineOf.applyAsInt(n.months()) + ")";
     };
   }
 }

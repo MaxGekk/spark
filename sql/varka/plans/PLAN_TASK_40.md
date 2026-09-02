@@ -177,6 +177,81 @@ Then task 33's section 4 command block, unchanged, at both widths.
 
 ## 6. Outcome
 
-Filled in when the work lands, including which steps of this recipe misled you.
-Say in particular whether section 2.2's trap was clear enough before you hit
-it, since the planning pass hit it too.
+Landed. `AddMonths(days, months)` joins the IR (deliberately outside `Chrono`
+- it decomposes and recomposes rather than only extracting a field - but
+`isChrono` checks for it by hand so it still gets `CHRONO_WEIGHT` and the
+range guard); `emitChronoPrefix`/`emitChronoYear`/`emitChronoDayOfMonth`/
+`emitMonthStart` are `emitChrono` factored so `emitAddMonths` can reuse the
+decomposition without duplicating it (byte-identical for `Year`/`Month`/
+`DayOfMonth`/`Quarter` - confirmed no pinned value moved for them); the two
+pinned `everyNode` fixtures moved as expected, since this adds a node type.
+Compiler arms for `AddMonths` and `DateAddYMInterval` share one `foldMonths`
+helper. `add_months`/`date +- INTERVAL n MONTH/YEAR` compile and the emitted
+kernel matches `DateTimeUtils.dateAddMonths` across clamp boundaries, the
+month-arithmetic boundary in both directions, and the full narrow range
+including its own extremes.
+
+Section 2.2's trap (folding the year into a total month count) was exactly as
+clear as advertised - the small-dividend form in section 2.2's pseudocode was
+followed directly and needed no rediscovery. **Section 2.3's claim that every
+division in the recompose direction is exact did not hold, and this is the
+important finding of the task**, not the one the recipe warned about.
+
+The `/ 400` and `/ 100` magic multiply (`M = 167773`, from `YEAR_BIAS = 13200`)
+that section 2.3 and the committed `verify_days_from_civil.py` both called
+exact was verified only by checking `(v * M) >> k == v // d` with Python's
+arbitrary-precision integers - which confirms the *shift* is right but
+silently assumes the *multiply* does not overflow. The emitter's lanes are
+32-bit and the shift is `LSHR` (unsigned), so the real bound is `v * M < 2**32`,
+not the shift-exactness bound the naive check verifies, and definitely not
+`2**31`. For `M = 167773` that bound is `v < 25599` - but `add_months` feeds
+this magic a *biased year*, and folding in the month arithmetic's own swing
+(`MONTH_ARITH_MAX_MONTHS / 12`, about 2047 years past either end of task 26's
+narrow day range) pushes the year this method must cover to roughly
+-14848..35181, so the dividend reaches about 50381. Every date near the epoch
+that development was first tested against stayed comfortably under the wrong
+bound, so the bug was invisible until a four-digit year met a multi-century
+offset - exactly the combination the original recipe's own test plan did not
+name, because section 2.3 asserted there was nothing to guard against.
+
+The fix takes the shape task 26's own large divisors already use, not a new
+idea: round-down magic plus one correction step (`emitCarry`, already in the
+file), for both `/ 400` and `/ 100`, with the bias raised from 13200 to 15200
+(the smallest multiple of 400 that keeps the wider range's most negative year
+non-negative) and the shared magic constant recomputed (`M = 41943`, `K = 24`
+for `/ 400`, `K = 22` for `/ 100` - verified by simulating actual 32-bit
+wraparound multiplication in Python, not by arbitrary-precision arithmetic,
+which is the check that should have been there from the start).
+`VarkaChrono.YEAR_CENTURY_M`'s javadoc and `verify_days_from_civil.py`'s
+module docstring both record this so the mistake is legible to whoever reads
+them next, and the committed script now simulates 32-bit multiplication
+explicitly (`mul32`/`ushr32`) rather than trusting Python's unbounded
+integers - the exact gap that let the first version pass while shipping a
+bug. `PLAN_TASK_34.md` section 2.1 should be re-verified against the same
+standard before task 34 is implemented: its leap flag uses the same
+`M = 167773` shape on a biased year up to 46334, which is also past the
+`2**32` bound and likely carries the identical defect, unbuilt and untested
+so far.
+
+Two bytecode-level slot-reuse bugs surfaced while fixing the above and are
+worth naming precisely, since both are the same mistake in different spots:
+`emitCarry`'s mask argument was given a `VectorMask` local still needed later
+in the same method (the "month <= 2" test, needed again for the March-based
+month; the leap flag's own `div4` result, needed again at the final `and`),
+and `emitCarry` silently overwrites whatever local it is given. Both were
+found only by bisecting with a temporary single-case debug test directly
+against the emitted kernel (constant-broadcast inputs, one intermediate value
+left on the stack at a time) after `checkMatrix`'s failure narrowed the input
+that broke, since the wrong answer looked structurally plausible (a
+different, but real, calendar date) rather than obviously nonsensical.
+Neither would have been caught by a Python model alone, since the Python
+translation never had the slot-reuse question to get wrong in the first
+place - only the emitted bytecode did.
+
+Pinned values: `VarkaLoopEmitterSuite`'s line map moved from ending at line 25
+to line 27 (`AddMonths` grafted beside `WeekDay` in another `Least`, matching
+task 33's precedent); `VarkaShapeCacheSuite`'s pinned hash moved from
+`041e35db20d62e91` to `e8e0c5e0cc9805a1`.
+
+No committed benchmark number moves - this task adds a node type and touches
+no existing shape's emission path.

@@ -31,6 +31,7 @@ import java.lang.constant.ConstantDescs;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.reflect.AccessFlag;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -39,6 +40,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Chrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
@@ -215,6 +217,35 @@ public final class VarkaLoopEmitter {
    * changes shape rather than leaving it to drift.
    */
   private static final int CHRONO_WEIGHT = 50;
+
+  /**
+   * How many int-vector/mask locals {@link #emitChronoPrefix} leaves its results in: six
+   * vectors - the biased day, era, day of era (later day of year), century, year of century
+   * and the March-based month - and two masks the carries use as scratch. They are the
+   * fragment's, in the sense of {@link FragmentKey}: a node that shares the prefix reads these
+   * very locals instead of re-deriving them.
+   */
+  private static final int CHRONO_PREFIX_SLOTS = 8;
+
+  /**
+   * How many int-vector/mask locals {@link #emitAddMonths} needs: the
+   * {@link #CHRONO_PREFIX_SLOTS} {@link #emitChronoPrefix} already uses, three more to hold
+   * the decomposed year/month/day, and the rest for the month arithmetic and the
+   * {@code days_from_civil} recompose. Reusing
+   * {@link #CHRONO_WEIGHT} for its {@link #weightOf} cost (rather than a separate, larger
+   * constant) is deliberate: both only need to exceed {@link #GROUP_BUDGET} to force the node
+   * into its own loop method, which 50 already does.
+   */
+  private static final int ADD_MONTHS_TMP_COUNT = 33;
+
+  /**
+   * How many int-vector/mask locals {@link #emitChronoLastDay} needs: the
+   * {@link #CHRONO_PREFIX_SLOTS} {@link #emitChronoPrefix} already uses, plus the reported
+   * year, the day of month, the current month's start and the next one's (clamped, per
+   * {@link #emitMonthStart}'s own exact-range precondition), the blended length, and
+   * {@link #emitLeapFlag}'s five scratch locals for February's own branch.
+   */
+  private static final int LAST_DAY_TMP_COUNT = 19;
 
   /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
@@ -605,25 +636,60 @@ public final class VarkaLoopEmitter {
     return node instanceof NextDay ? NEXT_DAY_WEIGHT : 1;
   }
 
-  /** Whether {@code node}'s subtree contains a calendar extraction, which is what decides
-   * whether a body needs a guard accumulator at all. */
-  private static boolean hasChrono(VarkaVectorIR node) {
-    if (isChrono(node)) {
-      return true;
-    }
-    for (VarkaVectorIR child : childrenOf(node)) {
-      if (hasChrono(child)) {
-        return true;
-      }
-    }
-    return false;
+  /** Whether {@code node} runs a civil-from-days decomposition and so needs
+   * {@link #CHRONO_WEIGHT}: one of the extractions in the IR's sealed {@link Chrono} family,
+   * whose membership makes weighing a new extraction total without touching this method - or
+   * {@link AddMonths} (task 40), which decomposes and recomposes but is not itself an
+   * extraction, so it stays outside {@link Chrono} and is checked for by hand here instead. */
+  private static boolean isChrono(VarkaVectorIR node) {
+    return node instanceof Chrono || node instanceof AddMonths;
   }
 
-  /** Whether {@code node} is one of the civil-from-days extractions. The IR's sealed
-   * {@link Chrono} interface is what makes this total: a new extraction joins the family and
-   * is weighed and guarded without touching this method. */
-  private static boolean isChrono(VarkaVectorIR node) {
-    return node instanceof Chrono;
+  /** The date a calendar node decomposes - the one child its shared prefix depends on. */
+  private static VarkaVectorIR chronoChild(VarkaVectorIR node) {
+    return switch (node) {
+      case Year n -> n.days();
+      case Month n -> n.days();
+      case DayOfMonth n -> n.days();
+      case Quarter n -> n.days();
+      case AddMonths n -> n.days();
+      case LastDay n -> n.days();
+      default -> throw new IllegalStateException("not a calendar node: " + node);
+    };
+  }
+
+  /**
+   * A run of emitted lane ops that several nodes need, that depends on one shared child, and
+   * that leaves its results in scratch locals rather than on the operand stack (task 32 step
+   * B). It is the sub-node counterpart of the CSE {@link #emitValue} already does between whole
+   * nodes: what is worth sharing between {@code year(d)} and {@code month(d)} is not a node -
+   * the IR has none for it - but the forty-odd ops in the middle of both their emissions.
+   *
+   * <p>One kind so far. The key carries it so that a second one is additive rather than a
+   * rewrite of everything keyed on it.
+   */
+  private enum FragmentKind { CHRONO_PREFIX }
+
+  /**
+   * What makes two emissions of a fragment interchangeable: the kind, the child they decompose,
+   * and - because {@link #emitChronoPrefix} carries the narrow-range guard, and the guard reads
+   * the node's validity word - the reference that word resolves to.
+   *
+   * <p>The word is what stops this being keyed on the child alone. {@code planWordRef} aliases
+   * every {@link Chrono} extraction's word to its child's, so {@code year(d)} and {@code
+   * month(d)} agree and share; {@link AddMonths}'s word is the AND of the date's and the month
+   * count's, so {@code add_months(d, n)} over a nullable {@code n} does not share with {@code
+   * year(d)} - and must not, because its guard would then be ANDed with a mask that is not its
+   * own. In a dense body no word is planned at all and the child alone decides.
+   *
+   * @param word the node's validity-word reference, or null in a dense body.
+   */
+  private record FragmentKey(FragmentKind kind, VarkaVectorIR child, Integer word) {}
+
+  /** {@link FragmentKey} for {@code node}'s civil-from-days prefix; see that record's doc. */
+  private static FragmentKey fragmentKey(VarkaVectorIR node, boolean dense, Slots s) {
+    return new FragmentKey(FragmentKind.CHRONO_PREFIX, chronoChild(node),
+        dense ? null : s.wordRef.get(node));
   }
 
   private static VarkaVectorIR[] childrenOf(VarkaVectorIR node) {
@@ -641,6 +707,7 @@ public final class VarkaLoopEmitter {
       case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
       case Quarter n -> new VarkaVectorIR[] {n.days()};
       case LastDay n -> new VarkaVectorIR[] {n.days()};
+      case AddMonths n -> new VarkaVectorIR[] {n.days(), n.months()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IfElse n -> new VarkaVectorIR[] {n.cond(), n.thenNode(), n.elseNode()};
@@ -859,6 +926,10 @@ public final class VarkaLoopEmitter {
         case DayOfMonth n -> analyzeOp(node, false, n.days());
         case Quarter n -> analyzeOp(node, false, n.days());
         case LastDay n -> analyzeOp(node, false, n.days());
+        case AddMonths n -> {
+          requireLiteralOffset(n.months());
+          analyzeOp(node, false, n.days(), n.months());
+        }
         case Greatest n -> analyzeOp(node, true, n.left(), n.right());
         case Least n -> analyzeOp(node, true, n.left(), n.right());
         case IfElse n -> analyzeOp(node, true, n.cond(), n.thenNode(), n.elseNode());
@@ -971,8 +1042,24 @@ public final class VarkaLoopEmitter {
      * emitValue arm keeps that copy on the operand stack instead (dup/swap). */
     final Map<VarkaVectorIR, int[]> dowTmp = new HashMap<>();
     /** Per calendar node: the civil-from-days temporaries (task 26), six vectors and two
-     * masks - the decomposition is too long to keep on the operand stack. */
+     * masks - the decomposition is too long to keep on the operand stack. The first
+     * {@link #CHRONO_PREFIX_SLOTS} are the prefix fragment's and may be shared with a sibling
+     * (see {@link #chronoPrefixTmp}); anything past them is the node's own. */
     final Map<VarkaVectorIR, int[]> chronoTmp = new HashMap<>();
+    /** Per prefix fragment: the {@link #CHRONO_PREFIX_SLOTS} locals its run leaves its results
+     * in. Two nodes with the same {@link FragmentKey} name the same locals, which is what lets
+     * the second one skip the run - so this is planned even when
+     * {@link VarkaEmitOptions#shareChronoPrefix} is off, it is simply never hit twice. */
+    final Map<FragmentKey, int[]> chronoPrefixTmp = new HashMap<>();
+    /**
+     * The prefix fragments already emitted in the lane group being emitted now. Emit-time
+     * state rather than plan-time, cleared at the top of {@link #emitLaneGroup} for exactly the
+     * reason its {@code computed} set is a fresh local there: a local's value does not survive
+     * from one lane group to the next, so each one re-earns every fragment it uses. A body
+     * emits one lane group, so this is also per body - which is what makes a fragment shared in
+     * the epilogue independent of one shared in a loop method.
+     */
+    final Set<FragmentKey> emittedFragments = new HashSet<>();
     /**
      * The epilogue's bounds mask (task 24), or null in every other body role. Non-null is
      * exactly the signal that loads and stores take their masked overloads: the value is a
@@ -982,9 +1069,10 @@ public final class VarkaLoopEmitter {
     /** The driver's status accumulator (an int slot), where its callees' returns are ORed. */
     int status;
     /**
-     * The guard's accumulated out-of-range mask (task 26), or null when this body has no
-     * chrono node at all. Non-null is exactly the signal that the method returns something
-     * other than a constant zero.
+     * The guard's accumulated out-of-range mask, or null when nothing in this body sets one.
+     * Non-null is exactly the signal that the method returns something other than a constant
+     * zero. Task 26's calendar extractions used to set this; task 51 removed that guard, so it
+     * is always null today, pending a producer-side guard (see {@code PLAN_TASK_52.md}).
      */
     Integer guardAcc;
 
@@ -1055,14 +1143,9 @@ public final class VarkaLoopEmitter {
     slot += 2;
     s.maskTmp = slot++;
     s.status = slot++;
-    // The guard exists only where a lowering is partial - today, the narrowed calendar one.
-    // Allocated for the whole body rather than per node: one accumulator carries every guarded
-    // node's verdict, since the caller acts on the batch, not on the lane.
-    boolean guarded = mode != BodyMode.DRIVER
-        && outputs.stream().anyMatch(VarkaLoopEmitter::hasChrono);
-    if (guarded) {
-      s.guardAcc = slot++;
-    }
+    // No node emits a guard today (task 51 removed the narrowed calendar lowering's one); a
+    // future producer-side guard (PLAN_TASK_52.md) is what would set s.guardAcc non-null again,
+    // with the same one-accumulator-per-body shape - the caller acts on the batch, not the lane.
 
     if (mode == BodyMode.EPILOGUE) {
       s.epilogueMask = slot++;
@@ -1072,6 +1155,7 @@ public final class VarkaLoopEmitter {
     // the loop's slots - the word, condition, CSE and temporary locals - and none of its own.
     boolean vectorWalk = mode == BodyMode.LOOP || mode == BodyMode.EPILOGUE;
     boolean cse = analysis.options.cse();
+    boolean shareChronoPrefix = analysis.options.shareChronoPrefix();
     for (VarkaVectorIR node : analysis.topoOrder) {
       if (vectorWalk) {
         // Vector-walk slots. Children precede parents in the topo order, so a word reference
@@ -1098,9 +1182,33 @@ public final class VarkaLoopEmitter {
             s.dowTmp.put(node, new int[] {slot++, slot++});
           }
           if (isChrono(node)) {
-            // Six int-vector temporaries and two masks; see emitChrono for what stays live.
-            s.chronoTmp.put(node, new int[] {
-                slot++, slot++, slot++, slot++, slot++, slot++, slot++, slot++});
+            // Six int-vector temporaries and two masks for a plain extraction (see emitChrono
+            // for what stays live); AddMonths (task 40) needs the same eight plus the rest of
+            // emitAddMonths's own locals, since it decomposes and recomposes in one node, and
+            // LastDay (task 36) needs the same eight plus emitChronoLastDay's own month-length
+            // and leap-flag scratch. The first eight are the prefix fragment's and are
+            // allocated once per fragment when sharing is on, so siblings over one date name
+            // the same locals; the rest are the node's own, because emitAddMonths/
+            // emitChronoLastDay write them and their siblings must not see that. (Their one
+            // write into a shared slot is the prefix's carry mask, which no field's tail reads
+            // - see emitChronoPrefixOnce.)
+            int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT
+                : node instanceof LastDay ? LAST_DAY_TMP_COUNT
+                : CHRONO_PREFIX_SLOTS;
+            FragmentKey key = fragmentKey(node, dense, s);
+            int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
+            if (prefix == null) {
+              prefix = new int[CHRONO_PREFIX_SLOTS];
+              for (int i = 0; i < CHRONO_PREFIX_SLOTS; i++) {
+                prefix[i] = slot++;
+              }
+              s.chronoPrefixTmp.put(key, prefix);
+            }
+            int[] tmp = Arrays.copyOf(prefix, count);
+            for (int i = CHRONO_PREFIX_SLOTS; i < count; i++) {
+              tmp[i] = slot++;
+            }
+            s.chronoTmp.put(node, tmp);
           }
         } else if (dense) {
           s.condMask.put(node, slot++);
@@ -1141,6 +1249,7 @@ public final class VarkaLoopEmitter {
       case DayOfMonth n -> s.wordRef.get(n.days());
       case Quarter n -> s.wordRef.get(n.days());
       case LastDay n -> s.wordRef.get(n.days());
+      case AddMonths n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.months()));
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
@@ -1550,6 +1659,7 @@ public final class VarkaLoopEmitter {
     // OR-ed into dstValidity exactly where a value root ORs its validity word; the dstData
     // slot stays untouched, per the interface contract.
     Set<VarkaVectorIR> computed = new HashSet<>();
+    s.emittedFragments.clear();
     for (int o : outputIdx) {
       VarkaVectorIR root = outputs.get(o);
       if (root instanceof Cond cond) {
@@ -1766,31 +1876,17 @@ public final class VarkaLoopEmitter {
         cb.loadConstant(1);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
       }
-      case Year n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
+      case Year n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case Month n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case DayOfMonth n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case Quarter n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case AddMonths n -> {
+        emitAddMonths(cb, n, dense, analysis, s, computed);
+        if (!dense && s.ownWord.contains(node)) {
+          emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.months()));
+        }
       }
-      case Month n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
-      case DayOfMonth n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
-      case Quarter n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
-      case LastDay n -> {
-        emitValue(cb, n.days(), dense, analysis, s, computed);
-        line(cb, analysis, node);
-        emitChrono(cb, node, dense, analysis, s);
-      }
+      case LastDay n -> emitChrono(cb, node, dense, analysis, s, computed);
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
       case Least n -> emitPick(cb, n, n.left(), n.right(), "min", dense, analysis, s,
@@ -2029,8 +2125,79 @@ public final class VarkaLoopEmitter {
    * two masks - which is past what the stack can hold legibly.
    */
   private static void emitChrono(CodeBuilder cb, VarkaVectorIR node, boolean dense,
-      Analysis analysis, Slots s) {
+      Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
     int[] t = s.chronoTmp.get(node);
+    int era = t[1];
+    int rem = t[2];
+    int century = t[3];
+    int yearOfCentury = t[4];
+    int marchMonth = t[5];
+
+    emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
+
+    switch (node) {
+      case Year n -> emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
+      case Month n -> emitChronoMonth(cb, marchMonth);
+      case DayOfMonth n -> emitChronoDayOfMonth(cb, rem, marchMonth);
+      case Quarter n -> {
+        emitChronoMonth(cb, marchMonth);
+        cb.loadConstant(2);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+      }
+      case LastDay n -> emitChronoLastDay(cb, s, t);
+      default -> throw new IllegalStateException("not a calendar node: " + node);
+    }
+  }
+
+  /**
+   * The prefix, and the date it consumes, emitted unless a sibling over that same date already
+   * left the prefix in these very locals earlier in this lane group (task 32 step B). This is
+   * the only place a value node's child is emitted from anywhere but its own {@link #emitValue}
+   * arm, and it has to be: {@link #emitChronoPrefix} takes the date off the operand stack, so
+   * whether the date is emitted at all is the same decision as whether the prefix is.
+   *
+   * <p>With {@link VarkaEmitOptions#shareChronoPrefix} off this is exactly what the four
+   * extraction arms and {@link #emitAddMonths} used to do inline, in the same order and with
+   * the same line-number marker, so the bytes are unchanged for every existing shape.
+   */
+  private static void emitChronoPrefixOnce(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s, int[] t, Set<VarkaVectorIR> computed) {
+    if (analysis.options.shareChronoPrefix()
+        && !s.emittedFragments.add(fragmentKey(node, dense, s))) {
+      // A sibling over this date already ran the prefix into these very locals earlier in this
+      // lane group, so this node needs nothing but its own tail. The date itself is not loaded
+      // either: emitChronoPrefix is the only consumer of it here, and a CSE'd child would
+      // otherwise be loaded and dropped.
+      line(cb, analysis, node);
+      return;
+    }
+    emitValue(cb, chronoChild(node), dense, analysis, s, computed);
+    line(cb, analysis, node);
+    emitChronoPrefix(cb, node, dense, analysis, s, t);
+  }
+
+  /**
+   * The civil-from-days decomposition through the March-based month, shared by every field
+   * {@link #emitChrono} computes and by {@link #emitAddMonths} (task 40), which needs three of
+   * the four fields at once rather than one. Factored out of what was a single {@code
+   * emitChrono} method - the split changes no emitted instruction for {@link Year}, {@link
+   * Month}, {@link DayOfMonth} or {@link Quarter}, only where the Java source that emits them
+   * lives, so it moves no pinned value.
+   *
+   * <p>Leaves {@code era}, {@code century}, {@code yearOfCentury} and {@code marchMonth} in
+   * {@code t[1..5]} for a field's own tail to read, and the day of year in {@code t[2]}
+   * ({@code rem}, reused across the prefix the way the original method reused it).
+   *
+   * <p>Those five locals outliving the call is what makes the run a shareable fragment, since
+   * {@link #emitChronoYear}, {@link #emitChronoMonth} and {@link #emitChronoDayOfMonth} read
+   * them from there rather than from the operand stack: a later sibling finds them intact. The
+   * two masks in {@code t[6..7]} are the carries' own scratch and are deliberately not part of
+   * that contract - {@link #emitAddMonths} reuses {@code t[6]} for its compares once the prefix
+   * is done, which is sound precisely because no tail reads it.
+   */
+  private static void emitChronoPrefix(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s, int[] t) {
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -2042,7 +2209,7 @@ public final class VarkaLoopEmitter {
 
     cb.astore(days);
 
-    emitEra(cb, node, dense, analysis, s, days, era, rem, mask);
+    emitEra(cb, days, era, rem, mask);
 
     // rem is now the day of era, in [0, 146096]. Everything below works on that.
     // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
@@ -2130,256 +2297,471 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
     cb.astore(marchMonth);
+  }
 
-    switch (node) {
-      case Year n -> {
-        // 400 * era + 100 * century + yoc, plus one where the March year has turned January.
-        cb.aload(era);
-        cb.loadConstant(400);
-        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-        cb.aload(century);
-        cb.loadConstant(100);
-        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
-        cb.aload(yearOfCentury);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
-        cb.loadConstant(1);
-        emitJanuaryMask(cb, marchMonth);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
-      }
-      case Month n -> emitChronoMonth(cb, marchMonth);
-      case DayOfMonth n -> {
-        // doy - (153 * mp + 2) / 5 + 1, the inverse of the month's own linear form.
-        cb.aload(rem);
-        cb.aload(marchMonth);
-        cb.loadConstant(153);
-        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-        cb.loadConstant(2);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
-        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-        cb.loadConstant(1);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-      }
-      case Quarter n -> {
-        emitChronoMonth(cb, marchMonth);
-        cb.loadConstant(2);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
-      }
-      case LastDay n -> {
-        // last_day = d + length - dom, where length is the March-based month's own length
-        // and dom is the day of month DayOfMonth's own tail already computes (task 36).
-        //
-        // era, century, yearOfCentury and mask are all dead once the reported year below is
-        // formed, so this tail reuses their locals rather than asking planSlots for more: era
-        // becomes the leap flag's biased year, century and yearOfCentury are emitLeapFlag's
-        // own scratch and then become cumMp and dom in turn, mask is emitLeapFlag's carry
-        // scratch, and leap - unused by every other tail - holds the leap flag itself. days
-        // and marchMonth are read, never overwritten - the four existing tails need them
-        // untouched, and days is still needed for the final sum below.
+  /** Leaves the reported (January-based) year: {@code 400 * era + 100 * century + yoc}, plus
+   * one where the March year has turned January. The {@link Year} tail, factored out so
+   * {@link #emitAddMonths} can call it too. */
+  private static void emitChronoYear(CodeBuilder cb, int era, int century, int yearOfCentury,
+      int marchMonth) {
+    cb.aload(era);
+    cb.loadConstant(400);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.aload(century);
+    cb.loadConstant(100);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.aload(yearOfCentury);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.loadConstant(1);
+    emitJanuaryMask(cb, marchMonth);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+  }
 
-        // Reported year, biased by +13200 (a multiple of 400, so leapness is unchanged) here
-        // rather than inside emitLeapFlag, so no extra local is needed for the unbiased value.
-        cb.aload(era);
-        cb.loadConstant(400);
-        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-        cb.aload(century);
-        cb.loadConstant(100);
-        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
-        cb.aload(yearOfCentury);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
-        cb.loadConstant(1);
-        emitJanuaryMask(cb, marchMonth);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
-        cb.loadConstant(13200);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        cb.astore(era);
-        emitLeapFlag(cb, era, century, yearOfCentury, mask, leap);
-
-        // cumMp = (153 * mp + 2) / 5, the linear form DayOfMonth's own tail uses; then
-        // dom = doy - cumMp + 1, the same value DayOfMonth returns.
-        cb.aload(marchMonth);
-        cb.loadConstant(153);
-        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-        cb.loadConstant(2);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
-        cb.astore(century);
-        cb.aload(rem);
-        cb.aload(century);
-        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-        cb.loadConstant(1);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        cb.astore(yearOfCentury);
-
-        // last_day = days + length - dom, length = mp < 11 ? cum(mp + 1) - cum(mp) : 28 + L.
-        // The linear form only models March through January (mp 0..10); February (mp 11) is
-        // the year's last month and carries the leap day, so it is the one branch that needs
-        // the flag above rather than the formula.
-        cb.aload(days);
-        cb.aload(marchMonth);
-        cb.loadConstant(153);
-        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-        cb.loadConstant(155);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
-        cb.aload(century);
-        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-        cb.aload(s.species);
-        cb.loadConstant(28);
-        cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
-        cb.loadConstant(1);
-        cb.aload(leap);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
-        cb.aload(marchMonth);
-        cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
-        cb.loadConstant(11);
-        cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-        cb.invokevirtual(INT_VECTOR, "blend", BLEND);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
-        cb.aload(yearOfCentury);
-        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-      }
-      default -> throw new IllegalStateException("not a calendar node: " + node);
-    }
+  /** Leaves the day of month: {@code doy - monthStart(mp) + 1}, the inverse of the month's own
+   * linear form. The {@link DayOfMonth} tail, factored out so {@link #emitAddMonths} can call
+   * it too. */
+  private static void emitChronoDayOfMonth(CodeBuilder cb, int rem, int marchMonth) {
+    cb.aload(rem);
+    emitMonthStart(cb, marchMonth);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
   }
 
   /**
-   * Leaves, in {@code mask}, whether the already-biased year in {@code y} is a leap year:
-   * {@code ((y & 3) == 0) && (y % 100 != 0 || y % 400 == 0)}.
-   *
-   * <p>Each {@code %} is a round-down magic - {@code M = 41943}, {@code k = 22} for 100 and
-   * {@code k = 24} for 400 - followed by {@link #emitCarry}'s usual one-step correction, the
-   * same shape every large division in {@link #emitChronoPrefix}'s prefix already takes. An
-   * exact one-shot magic (no correction) was tried first and is wrong: over this method's
-   * range an exact pair would need {@code M} close to the divisor itself, and
-   * {@code M * (y_max)} then overflows the signed 32-bit product a vector lane multiply
-   * produces - {@code 199728 * 167773} silently wraps and gives the wrong quotient, a bug
-   * this method shipped with once and {@code ProbeLastDay}-style exhaustive sweeping over
-   * every day the covered range holds is what caught it. {@code M = 41943} keeps the largest
-   * product, {@code 46334 * 41943}, under {@code 2^31}; the pair, its correction bound and
-   * the resulting quotient and remainder were verified exhaustively over {@code y} in
-   * {@code [0, 46334]} - the covered range's full width after the bias below - before being
-   * written here, zero mismatches, correction never more than one step.
-   *
-   * <p>{@code y} must already be biased non-negative by the caller - every caller of this
-   * shares one bias, +13200, a multiple of 400 so leapness is unchanged - because the magic
-   * form requires it and callers three tasks apart biasing by three different amounts would be
-   * three chances to get one of them wrong. {@code q}, {@code r} and {@code carryMask} are
-   * int-vector (the first two) and mask locals live only inside this method and dead on
-   * return; {@code mask} is the sole output.
+   * Leaves the day of the March-based year on which March-based month {@code mp} begins:
+   * {@code (153 * mp + 2) / 5}, exact for every {@code mp} in {@code [0, 11]} - the same magic
+   * multiply {@link #emitChronoDayOfMonth} runs in reverse. Task 40's {@link #emitAddMonths}
+   * calls this twice to get a month's length by subtraction, which is what makes a twelve-entry
+   * length table unnecessary: every month but the year's last (February, here) is one
+   * subtraction between two calls to this.
    */
-  private static void emitLeapFlag(CodeBuilder cb, int y, int q, int r, int carryMask,
-      int mask) {
-    // q = (y * 41943) >>> 22, r = y - q * 100, corrected; mask = r != 0.
-    cb.aload(y);
-    emitMagic(cb, 41943, 22);
+  private static void emitMonthStart(CodeBuilder cb, int marchMonth) {
+    cb.aload(marchMonth);
+    cb.loadConstant(153);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.loadConstant(2);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
+  }
+
+  /**
+   * {@code date +- INTERVAL n MONTH/YEAR} and {@code add_months} (task 40). Decomposes
+   * {@code node.days()} via {@link #emitChronoPrefix} into year, month and day; does the month
+   * arithmetic over a small, non-negative dividend (folding the year in would put it near
+   * 400,000 - past the range any magic multiply admits, {@code PLAN_TASK_40.md} section 2.2);
+   * then recomposes with {@link #emitDaysFromCivil}.
+   *
+   * <p>The day is clamped to the new month's length before recomposing, {@code min(dom,
+   * length)}, matching {@code LocalDate#plusMonths}. The length is not a lookup table: every
+   * month but the year's last is one subtraction between two {@link #emitMonthStart} calls
+   * (see its javadoc); February - the March-based year's last month - needs the year's total
+   * length instead, which is where {@link #emitLeapFlag} comes in, the same flag three of tasks
+   * 34-37 need per {@code PLAN_TASK_34.md} section 2.1. Both branches are computed for every
+   * lane and blended, since a vector lane cannot skip work the way a scalar branch would.
+   */
+  private static void emitAddMonths(CodeBuilder cb, AddMonths node, boolean dense,
+      Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
+    int[] t = s.chronoTmp.get(node);
+    int era = t[1];
+    int rem = t[2];
+    int century = t[3];
+    int yearOfCentury = t[4];
+    int marchMonth = t[5];
+    int mask = t[6];
+    int year = t[8];
+    int month = t[9];
+    int dayOfMonth = t[10];
+    int k = t[11];
+    int q = t[12];
+    int nm = t[13];
+    int ny = t[14];
+    int mp2 = t[15];
+    int monthStart = t[16];
+    int mpNextClamped = t[17];
+    int monthStartNext = t[18];
+    int length = t[19];
+    int clampedDay = t[20];
+    int yy2 = t[21];
+    int b2 = t[22];
+    int era2 = t[23];
+    int yoe = t[24];
+    int doy2 = t[25];
+    int doe2 = t[26];
+    int leapScratch1 = t[27];
+    int leapScratch2 = t[28];
+    int leapMaskB = t[29];
+    int nm1 = t[30];
+    int leapRemScratch = t[31];
+    int leapCarryMask = t[32];
+
+    emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
+    emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
+    cb.astore(year);
+    emitChronoMonth(cb, marchMonth);
+    cb.astore(month);
+    emitChronoDayOfMonth(cb, rem, marchMonth);
+    cb.astore(dayOfMonth);
+
+    // k = (month - 1) + monthsOffset + MONTH_ARITH_BIAS: small and non-negative because the
+    // compiler bounds monthsOffset (VarkaChrono.MONTH_ARITH_MIN/MAX_MONTHS).
+    cb.aload(month);
+    cb.loadConstant(-1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    emitValue(cb, node.months(), dense, analysis, s, computed);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.loadConstant(VarkaChrono.MONTH_ARITH_BIAS);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(k);
+
+    // q = k / 12, exact; nm = k - q * 12, the new month, 0-11; ny = year + q - the bias's years.
+    cb.aload(k);
+    emitMagic(cb, VarkaChrono.MONTH_ARITH_M, VarkaChrono.MONTH_ARITH_K);
     cb.astore(q);
-    cb.aload(y);
+    cb.aload(k);
     cb.aload(q);
-    cb.loadConstant(100);
+    cb.loadConstant(12);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(r);
-    emitCarry(cb, q, r, 100, carryMask);
-    cb.aload(r);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
-    cb.astore(mask);
-
-    // q = (y * 41943) >>> 24, r = y - q * 400, corrected; mask |= r == 0.
-    cb.aload(y);
-    emitMagic(cb, 41943, 24);
-    cb.astore(q);
-    cb.aload(y);
+    cb.astore(nm);
+    cb.aload(year);
     cb.aload(q);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.loadConstant(VarkaChrono.MONTH_ARITH_BIAS / 12);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+    cb.astore(ny);
+
+    // mp2 = nm - 2 + 12 where nm <= 1 (the new month is January or February) - the March-based
+    // month for the length lookup below. emitDaysFromCivil redoes this test on its own terms
+    // for the recompose itself; the two are independent, not shared, the way task 17 found
+    // recomputing beats threading a value across an unrelated boundary.
+    cb.aload(nm);
+    cb.getstatic(VECTOR_OPERATORS, "LE", VO_COMPARISON);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.astore(mask);
+    cb.aload(nm);
+    cb.loadConstant(-2);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.loadConstant(12);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.astore(mp2);
+
+    // The new month's length: monthStartNext - monthStart, except February (the March-based
+    // year's last month), which needs the year's own total length instead.
+    emitMonthStart(cb, mp2);
+    cb.astore(monthStart);
+    cb.aload(mp2);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.invokevirtual(INT_VECTOR, "min", LANEWISE_VI);
+    cb.astore(mpNextClamped);
+    emitMonthStart(cb, mpNextClamped);
+    cb.astore(monthStartNext);
+
+    cb.aload(monthStartNext);
+    cb.aload(monthStart);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.aload(s.species);
+    cb.loadConstant(365);
+    cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+    cb.loadConstant(1);
+    emitLeapFlag(cb, ny, leapScratch1, leapScratch2, leapRemScratch, mask, leapMaskB,
+        leapCarryMask);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.aload(monthStart);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.aload(mp2);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+    cb.astore(length);
+
+    // Clamp, then recompose: days_from_civil(ny, nm + 1, clampedDay).
+    cb.aload(dayOfMonth);
+    cb.aload(length);
+    cb.invokevirtual(INT_VECTOR, "min", LANEWISE_VV);
+    cb.astore(clampedDay);
+    cb.aload(nm);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(nm1);
+    // era2, yoe, mp2, doy2, doe2 and mask are dead past this point (the length computation
+    // above was their only use), so emitDaysFromCivil reuses their slots for its own values.
+    emitDaysFromCivil(cb, ny, nm1, clampedDay, yy2, b2, era2, yoe, mp2, doy2, doe2,
+        leapScratch1, leapScratch2, mask, leapMaskB);
+  }
+
+  /**
+   * Hinnant's {@code days_from_civil} (task 40): the exact inverse of {@link #emitChronoPrefix}
+   * plus a field tail, recomposing a date from its (January-based) {@code year}, (1-12)
+   * {@code month} and already-clamped {@code day}. {@link VarkaChrono#daysFromCivil} is its
+   * scalar twin, and this redoes the {@code month <= 2} split on its own terms rather than
+   * reusing {@link #emitAddMonths}'s month-arithmetic test, so it is a real standalone helper
+   * rather than one hiding a dependency on its only caller - {@code months_between},
+   * {@code make_date} and {@code date_trunc('QUARTER')} all want to call this without doing
+   * {@link #emitAddMonths}'s own month arithmetic first. Every division here is an exact magic
+   * multiply because every dividend is small, unlike {@link #emitChronoPrefix}'s forward
+   * direction, which needs two round-down magics with carries. That turned out to be wrong for
+   * {@code / 400} and {@code / 100}: {@link VarkaChrono#YEAR_CENTURY_M}'s javadoc records why,
+   * and both now take the one-correction shape {@link #emitChronoPrefix}'s own {@code / 146097}
+   * and {@code / 36524} already use, via {@link #emitCarry}.
+   *
+   * <p>{@code yy}, {@code b}, {@code era}, {@code yoe}, {@code mp}, {@code doy}, {@code doe},
+   * {@code century} and {@code mask} are locals the caller owns and this method is free to
+   * overwrite.
+   */
+  private static void emitDaysFromCivil(CodeBuilder cb, int year, int month, int day, int yy,
+      int b, int era, int yoe, int mp, int doy, int doe, int century, int centuryRem,
+      int mask, int carryMask) {
+    // yy = year - (month <= 2 ? 1 : 0), the March-based year.
+    cb.aload(month);
+    cb.getstatic(VECTOR_OPERATORS, "LE", VO_COMPARISON);
+    cb.loadConstant(2);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.astore(mask);
+    cb.aload(year);
+    cb.loadConstant(1);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+    cb.astore(yy);
+
+    // era = (yy + YEAR_BIAS) / 400, yoe = that biased year mod 400 - round-down plus one
+    // correction, per VarkaChrono.YEAR_CENTURY_M's javadoc.
+    cb.aload(yy);
+    cb.loadConstant(VarkaChrono.YEAR_BIAS);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(b);
+    cb.aload(b);
+    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_QUATERCENTENNIAL_K);
+    cb.astore(era);
+    cb.aload(b);
+    cb.aload(era);
     cb.loadConstant(400);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(r);
-    emitCarry(cb, q, r, 400, carryMask);
-    cb.aload(r);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.aload(mask);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    cb.astore(mask);
+    cb.astore(yoe);
+    emitCarry(cb, era, yoe, 400, carryMask);
 
-    // mask &= (y & 3) == 0
+    // mp = month + (month <= 2 ? 9 : -3), the March-based month; doy = monthStart(mp)+day-1.
+    cb.aload(month);
+    cb.loadConstant(-3);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.loadConstant(12);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.astore(mp);
+    emitMonthStart(cb, mp);
+    cb.aload(day);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+    cb.astore(doy);
+
+    // century = yoe / 100, round-down plus one correction (yoe is 0..399, but the same
+    // round-down magic is used here for one shared constant rather than a second one).
+    cb.aload(yoe);
+    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_CENTURY_K);
+    cb.astore(century);
+    cb.aload(yoe);
+    cb.aload(century);
+    cb.loadConstant(100);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(centuryRem);
+    emitCarry(cb, century, centuryRem, 100, carryMask);
+
+    // doe = yoe * 365 + yoe / 4 - century + doy.
+    cb.aload(yoe);
+    cb.loadConstant(365);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.aload(yoe);
+    emitShift(cb, "LSHR", 2);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.aload(century);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.aload(doy);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.astore(doe);
+
+    // (era - YEAR_BIAS / 400) * ERA_DAYS + doe - MARCH_EPOCH_SHIFT.
+    cb.aload(era);
+    cb.loadConstant(VarkaChrono.YEAR_BIAS / 400);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+    cb.loadConstant(VarkaChrono.ERA_DAYS);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.aload(doe);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.loadConstant(VarkaChrono.MARCH_EPOCH_SHIFT);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+  }
+
+  /**
+   * Leaves the mask of lanes whose reported year {@code y} is a leap year - the usual rule
+   * evaluated over a biased, non-negative year, since a magic multiply needs a non-negative
+   * operand and Varka's covered range starts below zero ({@code PLAN_TASK_34.md} section 2.1).
+   * {@code scratch1}/{@code scratch2} are int-vector locals and {@code maskA}/{@code maskB} are
+   * mask locals the caller owns.
+   *
+   * <p>Written here because task 40 needs it before task 34 has landed; the two are expected to
+   * converge on one copy of this helper once both merge - see {@code PLAN_TASK_40.md}'s outcome
+   * section.
+   */
+  private static void emitLeapFlag(CodeBuilder cb, int y, int scratch1, int scratch2,
+      int remScratch, int maskA, int maskB, int carryMask) {
     cb.aload(y);
+    cb.loadConstant(VarkaChrono.YEAR_BIAS);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(scratch1);
+
+    cb.aload(scratch1);
     cb.loadConstant(3);
     cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
     cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
     cb.loadConstant(0);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.aload(mask);
+    cb.astore(maskA);
+
+    // mod 100: round-down quotient plus one correction, per YEAR_CENTURY_M's javadoc.
+    cb.aload(scratch1);
+    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_CENTURY_K);
+    cb.astore(scratch2);
+    cb.aload(scratch1);
+    cb.aload(scratch2);
+    cb.loadConstant(100);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(remScratch);
+    emitCarry(cb, scratch2, remScratch, 100, carryMask);
+    cb.aload(remScratch);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+    cb.astore(maskB);
+
+    // mod 400: same shape, one correction.
+    cb.aload(scratch1);
+    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_QUATERCENTENNIAL_K);
+    cb.astore(scratch2);
+    cb.aload(scratch1);
+    cb.aload(scratch2);
+    cb.loadConstant(400);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(remScratch);
+    emitCarry(cb, scratch2, remScratch, 400, carryMask);
+    cb.aload(remScratch);
+    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+
+    cb.aload(maskB);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.aload(maskA);
     cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
-    cb.astore(mask);
+  }
+
+  /**
+   * {@code last_day(date)} (task 36): {@code days + length - dayOfMonth}, where {@code length}
+   * is the current March-based month's own length and {@code dayOfMonth} is {@link
+   * #emitChronoDayOfMonth}'s own value. The length reuses {@link #emitMonthStart} the same way
+   * {@link #emitAddMonths} does for the month it lands on: every month but the March-based
+   * year's last (February) is one subtraction between two calls to it, clamping the second
+   * call's input the same way {@link #emitAddMonths} does, since {@link #emitMonthStart}'s
+   * magic is only exact up to {@code mp} 11. February needs the year's own total length
+   * instead, which is where {@link #emitLeapFlag} comes in - the same flag {@link
+   * #emitAddMonths} needs for its own February case, and the same reason this reuses it rather
+   * than a second copy of the leap test.
+   */
+  private static void emitChronoLastDay(CodeBuilder cb, Slots s, int[] t) {
+    int days = t[0];
+    int era = t[1];
+    int rem = t[2];
+    int century = t[3];
+    int yearOfCentury = t[4];
+    int marchMonth = t[5];
+    int mask = t[6];
+    int year = t[8];
+    int dayOfMonth = t[9];
+    int monthStart = t[10];
+    int mpNextClamped = t[11];
+    int monthStartNext = t[12];
+    int length = t[13];
+    int leapScratch1 = t[14];
+    int leapScratch2 = t[15];
+    int leapMaskB = t[16];
+    int leapRemScratch = t[17];
+    int leapCarryMask = t[18];
+
+    emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
+    cb.astore(year);
+    emitChronoDayOfMonth(cb, rem, marchMonth);
+    cb.astore(dayOfMonth);
+
+    // The current month's length: monthStart(mp + 1) - monthStart(mp), except February (the
+    // March-based year's last month), which needs the year's own total length instead - the
+    // same split emitAddMonths uses for the month it lands on.
+    emitMonthStart(cb, marchMonth);
+    cb.astore(monthStart);
+    cb.aload(marchMonth);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.invokevirtual(INT_VECTOR, "min", LANEWISE_VI);
+    cb.astore(mpNextClamped);
+    emitMonthStart(cb, mpNextClamped);
+    cb.astore(monthStartNext);
+
+    cb.aload(monthStartNext);
+    cb.aload(monthStart);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.aload(s.species);
+    cb.loadConstant(365);
+    cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+    cb.loadConstant(1);
+    emitLeapFlag(cb, year, leapScratch1, leapScratch2, leapRemScratch, mask, leapMaskB,
+        leapCarryMask);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.aload(monthStart);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.aload(marchMonth);
+    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+    cb.astore(length);
+
+    cb.aload(days);
+    cb.aload(length);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.aload(dayOfMonth);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
   }
 
   /**
    * The day-of-era step: one round-down division and one carry over a biased day, which is
    * defined only over {@link VarkaChrono#NARROW_MIN_DAYS}..{@link VarkaChrono#NARROW_MAX_DAYS} -
-   * so it also emits the guard, which is what makes the cheaper arithmetic safe to publish.
+   * years -12800 to 33134, which contains every date SQL can write but is reachable past by
+   * {@code date_add}.
    *
-   * <p>A variant that split the dividend instead, and so needed no guard at all over the whole
-   * int range, was built and measured against this one before being dropped: it cost 14 to 24%
-   * depending on width and null pattern, to buy a range no SQL date literal can reach. The
-   * numbers are in {@code PLAN_TASK_26.md} section 11.2.
-   *
-   * <p>The guard is two compares ORed together, then narrowed twice before it is ORed into
-   * the body's accumulator, and both narrowings are load-bearing:
-   *
-   * <ul>
-   *   <li><b>The row's validity</b>, taken from the node's own word reference. A null row's
-   *       data bytes are undefined, so an out-of-range value under one must not condemn the
-   *       batch. {@code planWordRef} aliases a chrono node's word to its child's, and the
-   *       child's word is live by the time this runs, so this covers a computed child as
-   *       well as a bare column - which an earlier version did not, and which is the shape
-   *       {@code year(date_add(d, n))} takes.</li>
-   *   <li><b>The epilogue's bounds mask</b>, where there is one. A masked load fills the
-   *       lanes past {@code length} with 0, and 0 is in range - but the guard runs on this
-   *       node's <i>input</i>, and a computed child maps 0 wherever it likes. Without this,
-   *       {@code year(date_sub(d, 5400000))} declines every batch whose length is not a lane
-   *       multiple while every real row is in range: correct answers, silent total loss of
-   *       fusion, and nothing above debug logging to say so.</li>
-   * </ul>
+   * <p><b>No guard here (task 51).</b> Every {@link Chrono} node used to carry a per-lane range
+   * check on this step's input, declining the whole batch to the row engine when a lane fell
+   * outside the range above. That guard re-verified the same fact at every calendar extraction
+   * downstream of a value, including ones CSE and task 32's fragment sharing had already proven
+   * in range together - real cost with no new information on the common path. Task 51 removed
+   * it; the range check belongs instead at the node that can actually put a day outside this
+   * range in the first place - unbounded runtime arithmetic such as {@code date_add}/{@code
+   * date_sub} with a column offset, not a literal one - which is tracked as its own task
+   * ({@code PLAN_TASK_52.md}) rather than restored here. Until that lands, a day outside the
+   * range is silently wrong rather than declined: {@code PLAN_TASK_51.md} records the trade and
+   * why the owner chose it anyway.
    */
-  private static void emitEra(CodeBuilder cb, VarkaVectorIR node, boolean dense,
-      Analysis analysis, Slots s, int days, int era, int rem, int mask) {
-    cb.aload(days);
-    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.NARROW_MIN_DAYS);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.aload(days);
-    cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.NARROW_MAX_DAYS);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    if (!dense) {
-      // The node's own word, which planWordRef has aliased to its child's - so this is the
-      // child's validity whatever shape the child has.
-      Integer word = s.wordRef.get(node);
-      if (word != null && word != WORD_ALL_TRUE) {
-        cb.aload(s.species);
-        loadWord(cb, word);
-        cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
-        cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
-      }
-    }
-    if (s.epilogueMask != null) {
-      cb.aload(s.epilogueMask);
-      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
-    }
-    cb.aload(s.guardAcc);
-    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    cb.astore(s.guardAcc);
-
+  private static void emitEra(CodeBuilder cb, int days, int era, int rem, int mask) {
     // w = days + BIAS, non-negative throughout the range, so one round-down magic and one
     // carry give the era - and the bias's whole eras come back off in the year assembly.
     cb.aload(days);
