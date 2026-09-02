@@ -6,12 +6,12 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 20971520 dates, 16 lanes:                                   Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------------------------
-gather from a 143 KB table, dates over the whole 100 years              6              6           0       3562.4           0.3       1.0X
-arithmetic, dates over the whole 100 years                              9              9           0       2355.6           0.4       0.7X
-scalar loop over the same table, whole 100 years                        6              6           0       3770.6           0.3       1.1X
-gather from a 143 KB table, dates over seven years                      6              7           0       3290.3           0.3       0.9X
-arithmetic, dates over seven years                                      9              9           0       2385.5           0.4       0.7X
-scalar loop over the same table, seven years                            4              5           0       4695.7           0.2       1.3X
+gather from a 143 KB table, dates over the whole 100 years              6              6           0       3510.5           0.3       1.0X
+arithmetic, dates over the whole 100 years                              9              9           0       2373.6           0.4       0.7X
+scalar loop over the same table, whole 100 years                        6              6           0       3667.7           0.3       1.0X
+gather from a 143 KB table, dates over seven years                      6              6           0       3733.4           0.3       1.1X
+arithmetic, dates over seven years                                      9              9           0       2373.1           0.4       0.7X
+scalar loop over the same table, seven years                            4              5           0       4662.6           0.2       1.3X
 
 
 ================================================================================================
@@ -22,9 +22,21 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 20971520 dates, 16 lanes:                                Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ---------------------------------------------------------------------------------------------------------------------------------------
-arithmetic in lanes, compared in lanes                              14             15           1       1453.0           0.7       1.0X
-gathered from the table, compared in lanes                           5              5           0       3999.8           0.3       2.8X
-scalar loop end to end, no lanes anywhere                           25             25           0        848.1           1.2       0.6X
-scalar lookup inside a vector kernel (spill and reload)             14             15           0       1446.9           0.7       1.0X
+arithmetic in lanes, compared in lanes                              15             15           1       1434.9           0.7       1.0X
+gathered from the table, compared in lanes                           5              5           0       4031.6           0.2       2.8X
+scalar loop end to end, no lanes anywhere                           25             25           1        850.0           1.2       0.6X
+scalar lookup inside a vector kernel (spill and reload)             15             15           0       1374.1           0.7       1.0X
+
+
+================================================================================================
+year(d) = 1998 over an off-heap column: an era table against the arithmetic
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+20971520 dates off-heap, 16 lanes:                       Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------
+arithmetic in lanes, off-heap column                                16             17           1       1329.3           0.8       1.0X
+era-table gather (571 KB, no fallback), off-heap column             10             10           0       2070.8           0.5       1.6X
 
 

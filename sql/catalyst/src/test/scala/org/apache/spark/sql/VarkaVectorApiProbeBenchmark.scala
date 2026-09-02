@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql
 
+import java.lang.foreign.{Arena, ValueLayout}
 import java.time.LocalDate
 import scala.concurrent.duration._
 import scala.util.Random
@@ -159,6 +160,48 @@ object VarkaVectorApiProbeBenchmark extends BenchmarkBase {
           sevenYears, target, daysScratch, yearScratch))
       }
       fused.run()
+    }
+
+    runBenchmark("year(d) = 1998 over an off-heap column: an era table against the arithmetic") {
+      // The section above gathers from a table sized to an arbitrary window (1950-2049) with the
+      // column in an int[]. Neither matches Varka. This one fixes both: the column lives in a
+      // MemorySegment, the way every Varka input does, and the table is sized to the calendar's
+      // period - 146097 entries, one Gregorian era, ClickHouse's DATE_LUT_SIZE - so it is indexed
+      // by day of era and needs no fallback for any int32 date. Varka's prefix already computes
+      // that index.
+      val sevenYears = days(LocalDate.of(1992, 1, 1).toEpochDay.toInt, 7 * 365, 9002)
+      val indexScratch = new Array[Int](VarkaGatherProbe.lanes())
+      val target = 1998
+      val arena = Arena.ofConfined()
+      try {
+        val column = arena.allocate(numRows * 4L, 64)
+        for (i <- 0 until numRows) {
+          column.set(ValueLayout.JAVA_INT, i * 4L, sevenYears(i))
+        }
+        val expected = sevenYears.count(d => LocalDate.ofEpochDay(d.toLong).getYear == target)
+        for ((got, ctx) <- Seq(
+            (VarkaGatherProbe.fusedArithmeticFromSegment(column, numRows, target), "arithmetic"),
+            (VarkaGatherProbe.fusedEraTableFromSegment(column, numRows, target, indexScratch),
+              "era table"))) {
+          require(got == expected,
+            s"$ctx over a segment counted $got rows, java.time says $expected")
+        }
+
+        val offHeap = new Benchmark(
+          s"${numRows.toLong * repeats} dates off-heap, ${VarkaGatherProbe.lanes()} lanes",
+          numRows.toLong * repeats,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        offHeap.addCase("arithmetic in lanes, off-heap column") { _ =>
+          passes(() => VarkaGatherProbe.fusedArithmeticFromSegment(column, numRows, target))
+        }
+        offHeap.addCase("era-table gather (571 KB, no fallback), off-heap column") { _ =>
+          passes(() =>
+            VarkaGatherProbe.fusedEraTableFromSegment(column, numRows, target, indexScratch))
+        }
+        offHeap.run()
+      } finally {
+        arena.close()
+      }
     }
   }
 
