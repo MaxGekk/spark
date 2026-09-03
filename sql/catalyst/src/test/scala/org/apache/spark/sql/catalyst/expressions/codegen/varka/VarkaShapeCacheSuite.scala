@@ -367,13 +367,13 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   }
 
   test("every node type's canonical rendering is pinned, not only the chain ops") {
-    // One key that uses all 20 IR node types (and three CompareOps), so a rendering change
+    // One key that uses all 21 IR node types (and three CompareOps), so a rendering change
     // to any of them - operand order, a token - fails here even though the chain-based
     // pinned hash above would still pass. Same update rule as above when intended. Task 20
     // added IsNotNull and re-pinned the value (recorded in PLAN_TASK_20.md); task 26 added
     // the four calendar extractions and re-pinned it again (PLAN_TASK_26.md); task 33 added
-    // NextDay and task 40 added AddMonths, each re-pinning it again (PLAN_TASK_33.md,
-    // PLAN_TASK_40.md).
+    // NextDay, task 40 added AddMonths and task 36 added LastDay, each re-pinning it again
+    // (PLAN_TASK_33.md, PLAN_TASK_40.md, PLAN_TASK_36.md).
     import VarkaVectorIR._
     val cond = new And(
       new Or(
@@ -382,14 +382,15 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
       new And(new Compare(CompareOp.GE, columnRef, literal), new IsNotNull(columnRef)))
     val chrono = new Least(
       new Greatest(new Year(columnRef), new Month(columnRef)),
-      new Greatest(new DayOfMonth(columnRef), new Quarter(columnRef)))
+      new Greatest(new DayOfMonth(columnRef),
+        new Least(new Quarter(columnRef), new LastDay(columnRef))))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(columnRef, literal), new SubDays(columnRef, literal)),
       new Least(new DateDiff(chrono, new DayOfWeek(columnRef)),
         new Least(new WeekDay(columnRef),
           new Least(new NextDay(columnRef, literal), new AddMonths(columnRef, literal)))))
-    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "9e0f5388c7001183")
+    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "db92b741eb3ad1c5")
   }
 
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {
