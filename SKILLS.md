@@ -961,6 +961,42 @@ took the full narrow range plus a search for where it stops holding, because a t
 to 1.34e8 and needed to 1.68e7 has eight times the headroom, and that number is the thing to write
 down, not "it works".
 
+## Validate a fixed-format string with a saturating subtraction
+
+From Daniel Lemire's `sse_date.c` (2023, "Parsing time stamps faster with SIMD instructions"), read
+for a `cast(string AS DATE)` fast path; the design it produced is under milestone 4's item 8. The
+general lesson is independent of dates.
+
+A fixed-format string is a row that is either exactly in shape or not the kernel's business, and
+the cheapest way to decide that for a whole row at once is not a compare per field but **one
+saturating unsigned subtraction against a per-position limit vector**. XOR the bytes with `0x30`
+so digits become 0..9 and every other byte becomes something large; subtract, saturating at zero,
+the largest value each position may hold (`9` for a free digit, `1` for the leading digit of a
+month, `3` for the leading digit of a day, the XORed separator for a separator). A byte in range
+leaves zero; anything else leaves a residue. Where a per-byte limit is too loose - months 13..19
+pass a leading-digit test - pair the bytes into two-digit values and subtract again against the
+field's limit. Subtract the other way against a minimum vector to reject zero, and put the
+separator's own value in that vector too, since an upper bound alone lets a digit sit where a dash
+belongs. OR the residues and
+test for all-zero: one mask for the row, no branch per field, and the failing rows go to the row
+engine. It is the same discipline as task 26's range guard applied to bytes - the kernel checks
+that the row is the shape it compiled for and declines the rest, rather than parsing.
+
+Two facts that make it expressible here. JDK 25's `VectorOperators` has the saturating operators
+(`SUSUB`, `SUADD`, `SSUB`, `SADD`, `UMIN`, `UMAX`; checked with `javap` on this machine), so the
+trick needs no compare-and-blend emulation. And the digit *combine* that follows does not need
+x86's byte multiply-add: with the digits packed into a long lane, the SWAR ladder from Lemire's
+2018 `eightchartoi.c` - multiply by `1 + (10 << 8)`, shift, mask; multiply by `1 + (100 << 16)`,
+shift, mask - leaves the two-digit fields in 16-bit slots after two steps, which for a date is
+where to stop.
+
+What the same repository does *not* have, so nobody looks twice: any SIMD date or time
+*formatter*. Its integer-to-string work (the 2026 IFMA paper, eight digits in two `vpmadd52`
+instructions) rests on a 52-bit multiply-add the Vector API does not expose; what survives for a
+future `date_format` is only the idea of producing all eight fixed-width digits with lane
+multiplies and inserting the separators with a shuffle, paired with ClickHouse's template-and-patch
+(milestone 5, section 6).
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =

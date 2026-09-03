@@ -396,6 +396,15 @@ string case does not:
 rotate and bit ops for hashing (`ROL`, `XOR`, `MUL`) - milestone 4's item 9
 list, minus everything that needs variable-length control flow.
 
+**A second consumer of the same load.** Milestone 4's item 8 now carries a
+design for `cast(string AS DATE)` over the fixed `yyyy-MM-dd` form (from Daniel
+Lemire's `sse_date.c`): a saturating-subtract shape mask, a SWAR digit combine
+in long lanes, and the existing days-from-civil. Its one open question is how a
+10-byte record reaches a long lane from offsets-plus-bytes storage - the same
+question this item has to answer for a fixed-width `CHAR(n)` compare. Whatever
+load this item settles on should be checked against that consumer before it is
+called done, so the string family gets one load path rather than two.
+
 ### Item 4. Grouped aggregation
 
 **Spark surface.** `HashAggregateExec` with grouping keys - 86 of 103 TPC-DS
