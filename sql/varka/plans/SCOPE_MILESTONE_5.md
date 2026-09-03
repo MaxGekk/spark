@@ -540,17 +540,32 @@ belongs to the calendar family - but milestone 4's catalogue has become a task
 plan, and this is not a task yet, so it lands here per `sql/varka/AGENTS.md`.
 
 **The idea.** ClickHouse's `DATE_LUT_SIZE` is `0x23AB1`: 146097, exactly one
-Gregorian era. It anchors that window at 1900 and falls back outside it, but 400
-years is the calendar's *period*, so a table indexed by **day of era** needs no
-fallback for any `int32` date at all - every day reduces into it, and the year is
-`400 * (era - bias) + table[dayOfEra]`. Varka's prefix already computes that
-index: `emitEra` is the first thing it emits. The table would replace everything
-after it.
+Gregorian era, anchored at 1900 (`src/Common/DateLUTImpl.h`). Timestamps outside
+the window go to cctz, but a *day number* outside it does not fall back:
+`shiftIntoLUTRange` moves it by whole 400-year cycles into the table and adds
+`400 * cycles` to the year, because 400 years is the calendar's *period*. A table
+indexed by **day of era** makes that the only path - every `int32` day reduces
+into it, and the year is `400 * (era - bias) + table[dayOfEra]`. Varka's prefix
+already computes that index: `emitEra` is the first thing it emits. The table
+would replace everything after it.
 
-ClickHouse stores 16 bytes per day - year, month, day of month, day of week,
-days in month - so **one lookup yields every field**. That is the problem task 32
-solves with a shared prefix, solved with memory instead, and it is the version of
-this idea worth measuring rather than the year-only one.
+ClickHouse's entry is 16 bytes, but only six of them are calendar: `year` (two
+bytes), `month`, `day_of_month`, `day_of_week` and `days_in_month`. The other ten
+are the day's start in epoch seconds and two DST bytes, which a `DATE` table does
+not need. Packed, the calendar part is 26 bits - year in era 9, month 4, day 5,
+weekday 3, days in month 5 - so **the four-field table is the same 571 KB
+`int[]` as the year-only one already measured**, and every field after the
+first is a shift and a mask. One gather yields every field: the problem task 32
+solves with a shared prefix, solved with memory instead, and the version of this
+idea worth measuring rather than the year-only one.
+
+ClickHouse also keeps the **inverse**: `years_months_lut`, the table index of
+the first day of every (year, month) in the era, 4800 entries. Days-from-civil
+is one lookup plus `day - 1`, and at 19 KB the table lives in L1. Varka's
+`emitDaysFromCivil` (task 40) is arithmetic, under `add_months`, `make_date` and
+`last_day`; with both tables `add_months` is a gather, the month arithmetic, a
+second gather, and a clamp against the `days_in_month` bits the first gather
+already returned.
 
 **What is already measured** (`VarkaVectorApiProbeBenchmark`, milestone 4's item
 9 and `SKILLS.md`). With the column in a `MemorySegment` the way a real kernel
@@ -564,8 +579,12 @@ dictionary is about gathering *from* off-heap memory, which this is not.
 catalogue entry rather than a plan:
 
 * **The multi-field table**, which is the actual win. One gather yielding four
-  fields against task 32's shared prefix at 797.7 M rows/s - the only comparison
-  that matters, and the only one not yet run.
+  fields from a packed 26-bit entry against task 32's shared prefix at 797.7 M
+  rows/s - the only comparison that matters, and the only one not yet run.
+* **The inverse table under `add_months`.** Two gathers and about fifteen ops
+  against the arithmetic round trip, which is the family's most expensive body.
+  A 4800-entry table has no cache question to answer; the forward table is the
+  one that does.
 * **Cache behaviour under a real query**, not a probe. 571 KB of constant data
   competing with the scan is a different thing from 571 KB measured alone, and
   the seven-year figure flatters it: a `DATE` column with a wide range touches
@@ -592,6 +611,26 @@ year tail and the leap-flag rewrite took eighteen off `add_months`. A table's
 cost is fixed and paid in cache. The honest position is that a 1.6x on one node
 in one shape is a reason to measure the four-field case, not a reason to build
 anything.
+
+**The rest of ClickHouse's date code, read so it need not be read again**
+(September 2026, `src/Functions` and `src/Common/DateLUTImpl.*`). Nothing else
+transfers. `GregorianDate.cpp` is a January-based decomposition with plain
+divisions and a month loop, behind Varka's arithmetic. `toYearWeek` is MySQL's
+eight-mode `WEEK()` verbatim, and Spark has only ISO week; `toISOWeek` finds the
+ISO year by the Thursday rule and then counts Mondays, which is dearer than the
+`datealgo-rs` form task 37 uses. `addMonths` clamps with
+`min(day, daysInMonth)` behind a `day <= 28` branch, which in lanes is the
+blend Varka already emits. `dateDiff` counts unit boundaries and `age` corrects
+by a lexicographic compare of the remaining components; Spark's
+`months_between` and `timestampdiff` define the units differently. No date file
+contains explicit SIMD: the per-row table loop is left to the compiler, and the
+lookup is a scalar load, so a Vector API gather here is not copying something
+ClickHouse does. The one design worth remembering outside the table is
+`formatDateTime`, which compiles the format string once into an instruction list
+and, when every formatter is fixed width, fills the whole output column with a
+template by doubling `memcpy` and lets the instructions patch bytes in place.
+That is the shape for a `date_format` kernel, a string-output expression outside
+this milestone (section 6).
 
 ## 5. Ordering
 
@@ -629,6 +668,9 @@ worth as much.
 * Decimal precision above 18: the 128-bit case has no lane at any species, and
   neither benchmark needs it.
 * The Arrow-native Parquet reader itself, per item 7.
+* String-producing date functions, `date_format` first. When one is planned,
+  start from ClickHouse's `formatDateTime` shape recorded under item 10:
+  compile the format once, fill the output with a fixed-width template, patch.
 
 ## 7. Open questions
 
