@@ -53,23 +53,33 @@ for n in "${numbers[@]}"; do
 done
 
 conflicts() {
-  # Number of conflict markers a merge of $2 into $1 would leave, from a merge
-  # base git computes itself. Zero means the merge is clean.
-  git merge-tree "$(git merge-base "$1" "$2")" "$1" "$2" | grep -c '^<<<<<<<' || true
+  # Number of files a merge of $2 into $1 would leave conflicted, from
+  # `git merge-tree --write-tree` (git 2.38+): exit 1 on a conflict, the tree id
+  # on the first line, then the conflicted paths up to a blank line. Not the
+  # legacy three-argument form: its output is a diff, so every conflict marker
+  # arrives as `+<<<<<<< .our` and a grep for `^<<<<<<<` counts zero, always -
+  # which is how the first version of this script called #107 clean against a
+  # master it conflicted with.
+  local out
+  if out="$(git merge-tree --write-tree --name-only "$1" "$2" 2>/dev/null)"; then
+    echo 0
+  else
+    printf '%s\n' "$out" | awk 'NR > 1 { if ($0 == "") exit; c++ } END { print c + 0 }'
+  fi
 }
 
 bad=0
 printf '%-8s %-8s %s\n' "PR" "vs" "result"
 for n in "${numbers[@]}"; do
   c="$(conflicts "$base" "${head[$n]}")"
-  if [ "$c" -eq 0 ]; then r="clean"; else r="CONFLICT ($c markers)"; bad=$((bad + 1)); fi
+  if [ "$c" -eq 0 ]; then r="clean"; else r="CONFLICT ($c files)"; bad=$((bad + 1)); fi
   printf '#%-7s %-8s %s  %s\n' "$n" "$base_branch" "$r" "${title[$n]}"
 done
 for ((i = 0; i < ${#numbers[@]}; i++)); do
   for ((j = i + 1; j < ${#numbers[@]}; j++)); do
     a="${numbers[$i]}"; b="${numbers[$j]}"
     c="$(conflicts "${head[$a]}" "${head[$b]}")"
-    if [ "$c" -eq 0 ]; then r="clean"; else r="CONFLICT ($c markers)"; bad=$((bad + 1)); fi
+    if [ "$c" -eq 0 ]; then r="clean"; else r="CONFLICT ($c files)"; bad=$((bad + 1)); fi
     printf '#%-7s #%-7s %s\n' "$a" "$b" "$r"
   done
 done
