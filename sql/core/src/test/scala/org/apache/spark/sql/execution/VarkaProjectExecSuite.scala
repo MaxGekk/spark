@@ -20,7 +20,8 @@ package org.apache.spark.sql.execution
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, DateAdd, DateDiff, DateSub, Literal, NamedExpression}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaFallbackEvent, VarkaJfrTestSupport}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
+  VarkaFallbackEvent, VarkaJfrTestSupport, VarkaKernelAllocationEvent}
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
@@ -403,6 +404,49 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
       .map(_.getString("cause"))
     assert(causes.contains(VarkaFallbackEvent.EMISSION_FAILURE), causes.mkString("; "))
+  }
+
+  test("the allocation sampler events every sampled batch, and the samples go clean once C2 " +
+      "has the loop") {
+    // The species-pollution check, wired: under a schedule that samples every batch, each
+    // batch produces one event, and the suspect metric agrees with the events' verdicts. The
+    // verdicts themselves show why the production schedule starts at batch 512: the first
+    // batches run the kernel interpreted, where every vector is a heap object, and only once
+    // C2 has compiled the loop do the samples read clean. So the assertion is on the tail,
+    // not on every batch. The positive case - a compiled loop that still boxes - cannot run
+    // here without making this JVM box (see VarkaAllocationSamplerSuite). The test plan puts
+    // each batch in its own partition, so every batch is its own evaluator's first: the
+    // samples are ordered by time, not by the per-evaluator batch index.
+    val batches = 1200
+    val column = (0 until 1024).map(Int.box)
+    val specs = Seq.fill(batches)(BatchSpec("arrow", Seq(column)))
+    VarkaKernelEvaluator.allocationSchedule = new VarkaAllocationSampler.Schedule(1, 1)
+    val (plan, recorded) = try {
+      VarkaJfrTestSupport.withJfrRecording(classOf[VarkaKernelAllocationEvent]) {
+        val plan = node(project(Alias(DateAdd(attrD, Literal(3)), "add")()), specs, Seq(attrD))
+        assert(values(plan).length === batches * column.length)
+        plan
+      }
+    } finally {
+      VarkaKernelEvaluator.allocationSchedule = VarkaAllocationSampler.Schedule.DEFAULT
+    }
+    val samples = recorded
+      .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaKernelAllocationEvent]))
+      .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
+      .sortBy(_.getStartTime)
+    assert(plan.metrics("numVarkaBatches").value === batches)
+    assert(samples.length === batches)
+    assert(samples.forall(_.getInt("rows") === column.length))
+    assert(samples.forall(_.getLong("batchIndex") === 1L))
+    val verdicts = samples.map(_.getBoolean("suspect"))
+    assert(plan.metrics("numSuspectAllocationSamples").value === verdicts.count(identity))
+    val lastSuspect = verdicts.lastIndexOf(true)
+    val bytes = samples.map(_.getLong("allocatedBytes"))
+    assert(lastSuspect < batches - 200,
+      s"the last 200 samples should be clean; last suspect at sample $lastSuspect; " +
+        s"bytes ${bytes.mkString(" ")}")
+    logInfo(s"allocation samples: ${verdicts.count(identity)} suspect, last at $lastSuspect, " +
+      s"tail ${bytes.takeRight(5).mkString(" ")}")
   }
 
   /** Drives the evaluator directly, so a test can control when the next batch is requested. */
