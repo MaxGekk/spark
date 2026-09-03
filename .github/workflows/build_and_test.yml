@@ -139,6 +139,28 @@ jobs:
                 esac
               done
             fi
+            # SparkR is a thin R wrapper over the same SQL engine the `sql` and `hive` shards
+            # already exercise, and this fork develops no R. It reached every Varka pull request
+            # only through the module dependency graph - sparkr depends on hive, hive on sql -
+            # so it could not fail for a reason those shards would not have caught first. Run it
+            # when SparkR's own sources change, which is what its module actually covers.
+            if ! echo "$changed_files" | grep -qE '^(R/|dev/spark-test-image/sparkr/)'; then
+              sparkr=false
+            fi
+            # The buf job lints .proto files, checks them for breaking changes against
+            # branch-4.0, and runs dev/check-protos.py over the generated Python. All three read
+            # protobuf definitions and nothing else. Gating it on the `connect` module does not
+            # work - connect depends on sql, so every catalyst change reaches it - so gate on
+            # the files themselves.
+            if ! echo "$changed_files" | grep -qE '\.proto$|_pb2\.pyi?$|_pb2_grpc\.py$'; then
+              buf=false
+            fi
+            # The UI job is an npm/Selenium suite over ui-test/ and the static resources it
+            # drives. No module covers ui-test/, so it matched nothing, fell through to `root`
+            # and ran on every pull request.
+            if ! echo "$changed_files" | grep -qE '^ui-test/|/resources/.*/static/'; then
+              ui=false
+            fi
             if [ "$static_only" = "true" ]; then
               pyspark=false
               pandas=false
@@ -166,10 +188,12 @@ jobs:
           fi
           build=`./dev/is-changed.py -m "core,unsafe,kvstore,avro,utils,utils-java,network-common,network-shuffle,repl,launcher,examples,sketch,variant,api,catalyst,hive-thriftserver,mllib-local,mllib,graphx,streaming,sql-kafka-0-10,streaming-kafka-0-10,streaming-kinesis-asl,credential-aws,kubernetes,hadoop-cloud,spark-ganglia-lgpl,profiler,protobuf,yarn,connect,sql,hive,pipelines"`
           build_core_utils=`./dev/is-changed.py -m "core,unsafe,kvstore,utils,utils-java,network-common,network-shuffle,sketch,variant,launcher"`
+          varka_engine=`./dev/is-changed.py -m varka-engine`
           precondition="
             {
               \"build\": \"$build\",
               \"build-core-utils\": \"$build_core_utils\",
+              \"varka-engine\": \"$varka_engine\",
               \"pyspark\": \"$pyspark\",
               \"pyspark-pandas\": \"$pandas\",
               \"pyspark-install\": \"$pyspark_install\",
@@ -1087,6 +1111,9 @@ jobs:
   # deployment would.
   varka-engine:
     needs: [precondition]
+    # This job had no condition, so it built and tested the kernels on two architectures for
+    # every pull request, including ones that changed only prose.
+    if: fromJson(needs.precondition.outputs.required).varka-engine == 'true'
     name: Varka engine (${{ matrix.arch }})
     strategy:
       fail-fast: false
