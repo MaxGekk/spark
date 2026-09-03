@@ -889,12 +889,31 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // Both lowerings, because task 32 step B's shared prefix re-orders nothing but does make
     // three of these four outputs read locals a fourth wrote. A transposed slot there would
     // survive every bounded test in this suite and fail here.
-    for (options <- Seq(unshared, sharing)) {
-      sweepCalendar(roots, options)
+    //
+    // Both switch positions, and a year-only kernel beside the four-field one, because task
+    // 48's elision is a claim about a local that is never written: the four-field shape keeps
+    // the month step under sharing (three of its tails read it) and only the year-only shape
+    // sweeps the elided prefix in both sharing modes. This is the gate that matters for that
+    // claim - the bounded tests locate a failure it would only report.
+    val yearOnly = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
+    for {
+      options <- Seq(unshared, sharing)
+      elide <- Seq(true, false)
+    } {
+      sweepCalendar(roots, options.withElideChronoMonth(elide))
+      sweepCalendar(yearOnly, options.withElideChronoMonth(elide), date => Seq(date.getYear))
     }
   }
 
-  private def sweepCalendar(roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Unit = {
+  /** What `LocalDate` says the four extractions are, in the order they are emitted. */
+  private val allCalendarFields: LocalDate => Seq[Int] = date =>
+    Seq(date.getYear, date.getMonthValue, date.getDayOfMonth,
+      date.get(IsoFields.QUARTER_OF_YEAR))
+
+  private def sweepCalendar(
+      roots: Seq[VarkaVectorIR],
+      options: VarkaEmitOptions,
+      expected: LocalDate => Seq[Int] = allCalendarFields): Unit = {
     val (kernel, loader) = load(emitMulti(roots, 1, 0, options))
     try {
       val arena = Arena.ofConfined()
@@ -921,13 +940,12 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           while (i < n) {
             val date = LocalDate.ofEpochDay((day + i).toLong)
             val got = outs.map(_._1.get(ValueLayout.JAVA_INT, i * 4L))
-            val want = Seq(date.getYear, date.getMonthValue, date.getDayOfMonth,
-              date.get(IsoFields.QUARTER_OF_YEAR))
+            val want = expected(date)
             if (got != want) {
               mismatches += 1
               if (mismatches < 4) {
-                fail(s"day ${day + i} ($date), shared=${options.shareChronoPrefix()}: " +
-                  s"emitted $got, LocalDate $want")
+                fail(s"day ${day + i} ($date), shared=${options.shareChronoPrefix()}, " +
+                  s"elided=${options.elideChronoMonth()}: emitted $got, LocalDate $want")
               }
             }
             i += 1
@@ -935,7 +953,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           day += n
         }
         assert(mismatches === 0, s"the emitted kernel disagreed on $mismatches days, " +
-          s"shared=${options.shareChronoPrefix()}")
+          s"shared=${options.shareChronoPrefix()}, elided=${options.elideChronoMonth()}")
       } finally {
         arena.close()
       }
@@ -1071,6 +1089,15 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
 
   private val sharing = VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(true)
   private val unshared = VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false)
+
+  /** The lane ops one emitted body method runs: its `IntVector` invocations, counted off the
+   * class file. Task 48's deliverable is a count, not a duration, so it is asserted as one. */
+  private def laneOps(bytes: Array[Byte], method: String): Int =
+    VarkaEmitterTestSupport.invocationCount(bytes, method, "jdk.incubator.vector.IntVector")
+
+  /** The `IntVector` ops the prefix's March-month step costs: two multiplies (the `* 5` and
+   * the magic), the `+ 2`, and the magic's shift. The store into t[5] is not one. */
+  private val monthStepOps = 4
 
   /** The masked epilogue's bytecode size - the one method every output shares (task 24). */
   private def epilogueSize(
@@ -1224,7 +1251,71 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 19 outputs to 44") {
+  test("task 48: a year-only body computes no month, and the switch says so") {
+    assert(VarkaEmitOptions.DEFAULTS.elideChronoMonth(),
+      "the elision is no longer the default - the case for it is in PLAN_TASK_48.md section " +
+        "3.3, so say why here if it was deliberately turned off")
+    val roots = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
+    val elided = emitMulti(roots, 1, 0, VarkaEmitOptions.DEFAULTS)._2
+    val kept = emitMulti(roots, 1, 0, VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false))._2
+    // Every body role, because every one of them runs the prefix: the two loop methods and the
+    // two epilogues each hold this single year and nothing that reads a month.
+    for (body <- Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")) {
+      assert(laneOps(elided, body) === laneOps(kept, body) - monthStepOps,
+        s"$body did not lose exactly the month step: ${laneOps(kept, body)} lane ops with the " +
+          s"step kept, ${laneOps(elided, body)} with it elided")
+    }
+    // The four ops are dead work, so removing them is not allowed to move an answer.
+    for ((options, ctx) <- Seq(
+        (VarkaEmitOptions.DEFAULTS, "elided"),
+        (VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false), "kept"))) {
+      checkMatrix(roots, 1, Array.empty[Int], remainderLengths,
+        nullPatterns.map(p => Seq(p._2)), data = calendarDays, ctx = s"month step $ctx",
+        options = options)
+    }
+  }
+
+  test("task 48: the month step follows the group's consumers, not the emission order") {
+    val col = new ColumnRef(0)
+    for ((roots, ctx) <- Seq(
+        (Seq[VarkaVectorIR](new Year(col), new Month(col)), "year first"),
+        (Seq[VarkaVectorIR](new Month(col), new Year(col)), "month first"))) {
+      val elided = emitMulti(roots, 1, 0, sharing)._2
+      val kept = emitMulti(roots, 1, 0, sharing.withElideChronoMonth(false))._2
+      // The epilogue holds both outputs, so its one shared prefix is read by the month tail
+      // and must keep the step - whichever of the two siblings happens to emit the prefix.
+      // This is the whole reason the decision is read from the group's consumer set rather
+      // than from the node being emitted.
+      assert(laneOps(elided, "epilogueMasked") === laneOps(kept, "epilogueMasked"),
+        s"the shared epilogue elided the month step with a month tail reading it ($ctx)")
+      // The loop methods hold one output each, so exactly one of them - the year's - elides.
+      val saved = Seq("loopMasked0", "loopMasked1")
+        .map(body => laneOps(kept, body) - laneOps(elided, body))
+      assert(saved.sorted === Seq(0, monthStepOps),
+        s"expected exactly one loop method to elide the month step, saved $saved ($ctx)")
+      checkMatrix(roots, 1, Array.empty[Int], remainderLengths,
+        nullPatterns.map(p => Seq(p._2)), data = calendarDays, ctx = s"shared, $ctx",
+        options = sharing)
+    }
+  }
+
+  test("task 48: with sharing off the decision is per node, not per fragment") {
+    // Unshared, year(d) and month(d) name different locals even though their fragment keys are
+    // equal, so the year's own prefix elides and the month's does not - keying the decision on
+    // the fragment there would make the year pay for a month it shares nothing with.
+    val col = new ColumnRef(0)
+    val roots = Seq[VarkaVectorIR](new Year(col), new Month(col))
+    val elided = emitMulti(roots, 1, 0, unshared)._2
+    val kept = emitMulti(roots, 1, 0, unshared.withElideChronoMonth(false))._2
+    assert(laneOps(elided, "epilogueMasked") === laneOps(kept, "epilogueMasked") - monthStepOps,
+      "the unshared epilogue holds two prefixes and exactly one of them - the year's - is " +
+        "supposed to lose its month step")
+    checkMatrix(roots, 1, Array.empty[Int], remainderLengths,
+      nullPatterns.map(p => Seq(p._2)), data = calendarDays, ctx = "unshared, per node",
+      options = unshared)
+  }
+
+  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 20 outputs to 44") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
     // grows with the whole projection rather than with a group. Four fields over one date
@@ -1234,21 +1325,26 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // year(d) twice is one node and the emitter already emits it once. Four fields per date
     // over as many dates as the width needs is the shape task 44 measured.
     //
-    // Both boundaries below moved by task 51: removing the per-extraction range guard shrank
-    // every emitted calendar prefix, shared or not, so more outputs now fit under the 8000-byte
-    // HugeMethodLimit before HotSpot gives up on compiling the method (interpreted, boxed
-    // vectors, on every batch whose length is not a lane multiple). Unshared moved from 16
-    // fits/17 crosses (task 44's original number) to 18 fits/19 crosses; shared moved from the
-    // 40-output boundary PLAN_TASK_32.md section 7.1 recorded to 44. Re-measured directly
-    // rather than estimated - see PLAN_TASK_51.md section 4.1 for the numbers this replaced.
+    // The unshared boundary has now moved three times, each for a different reason, which is
+    // why it is re-measured here rather than reasoned about: task 44 recorded 16 fits/17
+    // crosses; task 51 removed the per-extraction range guard, shrinking every emitted calendar
+    // prefix, shared or not, to 18 fits/19 crosses (see PLAN_TASK_51.md section 4.1 for the
+    // numbers that replaced); task 48 lets a Year node's own prefix skip the March-month step,
+    // and unshared every Year node has its own prefix, so the epilogue's four-fields-per-date
+    // shape loses one month step per date - 19 fits/20 crosses. Shared is unmoved at 44: the
+    // epilogue holds every output, so each date's fragment has a Month consumer and keeps the
+    // step, and the only difference is the one byte a year tail's sipush costs over a bipush.
+    // The limit itself is HotSpot's HugeMethodLimit, past which it gives up on compiling the
+    // method at all (interpreted, boxed vectors, on every batch whose length is not a lane
+    // multiple).
     def fields(dates: Int): Seq[VarkaVectorIR] = (0 until dates).flatMap { c =>
       val col = new ColumnRef(c)
       Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     }
     val limit = 8000
-    // Unshared, 18 outputs fit and 19 do not.
-    assert(epilogueSize(fields(5).take(18), 12, unshared) < limit)
-    assert(epilogueSize(fields(5).take(19), 12, unshared) > limit)
+    // Unshared, 19 outputs fit and 20 do not.
+    assert(epilogueSize(fields(5).take(19), 12, unshared) < limit)
+    assert(epilogueSize(fields(5), 12, unshared) > limit)
     // Shared, the same 19 fit with room to spare, and the boundary moves out to 44 outputs
     // over eleven dates.
     assert(epilogueSize(fields(5).take(19), 12, sharing) < limit)
