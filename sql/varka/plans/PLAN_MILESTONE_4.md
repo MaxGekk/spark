@@ -1554,6 +1554,33 @@ IANA tzdata transitions into flat `long[]` interval arrays and resolve a
 vector of timestamps against them with a SIMD binary search, rather than
 per-row `ZoneRules` lookups.
 
+What a production instance of that design looks like, from
+`NVIDIA/spark-rapids-jni` (`datetime_utils.cuh`, `timezones.cu`, read
+September 2026), so the zoned task starts from its corners rather than
+rediscovering them:
+
+* **Two sorted arrays per zone, not one.** Converting *from* UTC searches the
+  UTC instants; converting *to* UTC searches the local instants, because the
+  same transition sits at different positions on the two axes. Each entry
+  carries both instants and the offset after it.
+* **The table is finite and the rules take over past its end.** Beyond the
+  last stored transition the zone's two DST rules (month, day-of-week rule,
+  time, offsets before and after) are evaluated arithmetically for the row's
+  year - in lanes, that is the calendar family's own arithmetic, not a lookup.
+  Java's `ZoneRules` has the same shape: `getTransitions()` then
+  `getTransitionRules()`.
+* **Gaps and overlaps decide the rounding.** A UTC instant one microsecond
+  before a gap must floor-divide to seconds, or truncation snaps it onto the
+  transition and picks the post-gap offset (their issue #14861); a local
+  wall-clock inside a gap resolves to the post-gap offset to match
+  `LocalDateTime.atZone`. Both are one-line decisions that a differential
+  against Spark finds only if the fixtures straddle a transition by less than a
+  second.
+* **Scope by zone kind.** UTC and fixed-offset session zones are a constant
+  add and belong to task 29's first kernels; region zones are the design above
+  and decline until it is built. The taxi benchmark's `year(pickup_datetime)`
+  (`SCOPE_MILESTONE_5.md` 1.5) is the first query that needs the region case.
+
 ### Item 3. Float and double lanes, and the numeric function family
 
 **Deferred by the headline decision** (section 1) - the survey found zero
@@ -1691,6 +1718,31 @@ assume 1970..2106 and special-case only 2100, a narrowing Varka has no use for
 under a total decomposition; and its `HHmmSS` combine, two 64-bit magic
 multiplies over the `pmaddubsw` output, is tuned to a time part Spark dates do
 not carry and Spark timestamps do not arrive with as strings at the kernel.
+
+**The fallback's boundary, pinned from a second port of the same grammar**
+(`NVIDIA/spark-rapids-jni`, `cast_string_to_datetime.cu`, ported from Spark
+3.5's `SparkDateTimeUtils` and tested against Spark; read September 2026).
+Its kernels are scalar C++ run once per thread - digit loops, early returns -
+so nothing of their shape transfers to lanes, but the facts they pin do:
+
+* Trimming treats `c <= 32 || c == 127` as whitespace, which is
+  `UTF8String.trimAll`'s definition, not Java's `isWhitespace` alone.
+* The year takes 4 to 7 digits for a date (4 to 6 for a timestamp); a date is
+  valid only for years within +-10,000,000, so `1000000-01-01` parses and
+  `10000001-01-01` does not.
+* After the day, one space or `T` ends the parse and anything may follow:
+  `2025-01-01T`, `+2025-01-01Txxx` and `-2025-01-01 xxx` are all valid.
+* Its `castStringToDate` fixture list is the fallback test for the fixed-form
+  kernel, every row of it a shape the mask must decline and the row engine must
+  then accept: `"  2025"`, `"2025-01 "`, `"2025-1  "`, `"2025-1-1"`,
+  `"2025-1-01"`, `"2025-01-1"`, `"2025-01-01"`, `"2025-01-01T"`,
+  `"+2025-01-01Txxx"`, `"-2025-01-01 xxx"`, and the two large years above.
+* Its ANSI protocol is the status contract Varka already has: parse to a
+  nullable column, and under ANSI fail the batch if the null count grew. It
+  also documents one deliberate deviation - its pattern parser accepts
+  one-digit month and day for `yyyy/MM/dd` where Spark's strict formatter
+  rejects them - which is the kind of shortcut a differential against Spark
+  refuses by construction.
 
 ### Item 9. String keys: equality, hashing, dictionaries
 

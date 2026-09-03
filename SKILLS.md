@@ -1071,6 +1071,25 @@ Confirmed and left alone: `emitLeapFlag`'s Hueffner hash is the fastest leap tes
 leap benchmark (0.79x of the Drepper-Neri-Schneider form on x64), and his signed variant is six
 lane ops to its four; both are exact over Varka's biased year range.
 
+## A GPU port of Spark's date code is scalar code run per thread
+
+`NVIDIA/spark-rapids-jni` was read in September 2026 on the guess that a lane-per-thread engine
+with Spark's exact semantics would have solved Varka's branch-free problem for string parsing and
+time zones. It has not, and the reason is worth keeping so the guess is not made again: CUDA
+tolerates divergence, so its kernels are ordinary scalar C++ - `while (pos < end)` digit loops,
+early returns, a per-row `switch` on the format string - run once per thread. The arithmetic under
+them is Hinnant's `civil_from_days` with plain divisions and a weekday by `(days - c) mod 7`. None
+of that shape transfers to Vector API lanes, where a divergent row costs the whole vector.
+
+What it contributes is the residue of having matched Spark to the row: the trim definition
+(`c <= 32 || c == 127`), the year-digit and year-range limits, the trailing `T`/space rule and a
+fixture list for the string-to-date fallback (milestone 4, item 8); the ANSI protocol of parsing to
+a nullable column and failing the batch if nulls appeared, which is Varka's status bit; and a
+production instance of the transition-table timezone design milestone 4's item 2 already names -
+two sorted instant arrays per zone, DST rules taking over past the table's end, and the
+floor-versus-truncate decision at a gap that is wrong by an hour if made the other way. What it
+does not contain is any extraction: `year` and its family live in cuDF on `cuda::std::chrono`.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
