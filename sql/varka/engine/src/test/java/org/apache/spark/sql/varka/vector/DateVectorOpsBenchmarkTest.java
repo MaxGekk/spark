@@ -32,9 +32,12 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 import org.openjdk.jmh.runner.options.TimeValue;
 
 /**
- * Runs the {@link DateVectorOpsBenchmark} JMH harness on the surefire JVM (the same JVM that
- * carries the Vector API / native-access flags via the engine's argLine). The maven-jmh-plugin is
- * not resolvable on this environment's Maven mirror, so JMH is driven in-process from a test.
+ * Runs the {@link DateVectorOpsBenchmark} JMH harness from a test, because the maven-jmh-plugin
+ * is not resolvable on this environment's Maven mirror. JMH forks one JVM per benchmark
+ * ({@code forks(1)}); the child inherits the surefire JVM's argLine (the Vector API and
+ * native-access flags, and {@code -XX:MaxVectorSize=16} in the narrow execution), so each
+ * benchmark is measured on a JVM whose profiles nothing else has touched - the JUnit suites that
+ * ran before it, and the other benchmarks, included.
  *
  * <p>Benchmarks are gated behind {@code -Dvarka.jmh=true}: a plain {@code mvn test} executes this
  * as an instant no-op (benchmarks never run), while
@@ -51,7 +54,7 @@ public class DateVectorOpsBenchmarkTest {
         .include("org\\.apache\\.spark\\.sql\\.varka\\.vector\\.DateVectorOpsBenchmark")
         .mode(Mode.Throughput)
         .timeUnit(TimeUnit.MILLISECONDS)
-        .forks(0)
+        .forks(1)
         .warmupIterations(2)
         .warmupTime(TimeValue.milliseconds(500))
         .measurementIterations(3)

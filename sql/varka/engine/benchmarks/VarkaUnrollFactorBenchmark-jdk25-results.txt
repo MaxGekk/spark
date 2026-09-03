@@ -6,106 +6,56 @@ Two chain depths (8, the named short candidate; 20, the dayofweek-shaped long ca
 three outer-loop unroll factors (K = 1, 2, 4), each over one N=4096 row buffer (one Spark
 COLUMN_BATCH_SIZE). Every K variant is fully straight-line unrolled source (no runtime loop over
 the op index) so K=1 and K>1 differ only in how many independent lane groups are interleaved per
-outer-loop body, not in loop-control shape. See VarkaUnrollFactorBenchmark.java. Run four times
-total: twice before PR #56 (task 24) merged and twice after, with the machine's performance mode
-enabled for the second pair. All four runs agree in direction and rough magnitude on every case;
-neither the merge nor performance mode changed a conclusion.
+outer-loop body, not in loop-control shape. See VarkaUnrollFactorBenchmark.java.
+
+This file is the forked-JVM measurement that replaced four in-process (forks=0) runs, which are
+in git history at a092f66d096 with their own "Reading these numbers". The in-process harness
+measured every benchmark on a JVM the JUnit suites and the other benchmarks had already shaped
+(PLAN_MILESTONE_4.md, debt register, "measures a degraded JIT state"). Nothing in this file moved
+by more than the earlier runs' own spread: a plain add/sub chain is the one shape that harness
+measured faithfully.
 
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-30-generic
-AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M, machine otherwise idle
-JMH 1.37, throughput mode, forks=0 (in-process, on the surefire JVM), 1 thread,
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M (AVX-512 on a 256-bit datapath), machine otherwise idle
+JMH 1.37, throughput mode, forks=1 (one forked JVM per benchmark, launched from the surefire
+JVM with its argLine; the narrow run's fork inherits -XX:MaxVectorSize=16), 1 thread,
 3 x 2 s warmup, 5 x 2 s measurement. Higher is better.
 Run: ./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true
 
---- Default vector width (AVX-512, 16 int lanes), run 1 of 2 ---
+--- Default vector width (AVX-512, 16 int lanes) ---
 
 Benchmark                               Mode  Cnt     Score     Error   Units
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  4785.665 ± 241.982  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  4739.745 ±   4.144  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  4706.142 ± 210.603  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5  1634.822 ±  69.121  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5  1720.770 ± 107.399  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5  1732.223 ±   4.560  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5  1610.421 ±  69.179  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5  1709.108 ± 107.186  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5  1729.736 ±  17.157  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  4846.715 ±  34.864  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  4747.077 ± 142.436  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  4764.036 ± 308.457  ops/ms
 
---- Default vector width (AVX-512, 16 int lanes), run 2 of 2 ---
+--- Narrow vector width (-XX:MaxVectorSize=16, 128-bit: 4 int lanes) ---
 
-Benchmark                               Mode  Cnt     Score     Error   Units
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  4847.609 ±   6.269  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  4752.335 ±  40.801  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  4767.609 ±   3.675  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5  1627.856 ±  75.863  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5  1715.995 ± 116.247  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5  1722.246 ±  51.633  ops/ms
+Benchmark                               Mode  Cnt     Score    Error   Units
+VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5   717.407 ±  2.396  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5   748.210 ±  1.923  ops/ms
+VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5   743.992 ± 23.011  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  2264.197 ±  5.647  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  2255.874 ±  5.653  ops/ms
+VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  2265.902 ± 39.215  ops/ms
 
---- Narrow vector width (-XX:MaxVectorSize=16, 128-bit: 4 int lanes), run 1 of 2 ---
+--- Reading these numbers (ratios by minimum-of-5) ---
 
-Benchmark                               Mode  Cnt     Score     Error   Units
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  2239.723 ± 102.668  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  2235.873 ±   0.815  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  2244.444 ±  16.788  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5   715.166 ±   8.030  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5   739.384 ±  34.576  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5   745.569 ±   3.837  ops/ms
-
---- Narrow vector width (-XX:MaxVectorSize=16, 128-bit: 4 int lanes), run 2 of 2 ---
-
-Benchmark                               Mode  Cnt     Score     Error   Units
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  2250.912 ±   8.396  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  2202.972 ± 125.508  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  2225.156 ± 138.245  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5   712.442 ±  33.251  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5   746.426 ±   8.213  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5   737.880 ±  67.377  ops/ms
-
---- Default vector width (AVX-512), runs 3-4 (after merging PR #56, performance mode on) ---
-
-Benchmark                               Mode  Cnt     Score     Error   Units
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  4812.662 ±  89.051  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  4738.786 ±  33.639  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  4686.354 ± 251.927  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5  1644.369 ±   3.074  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5  1722.969 ±  79.454  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5  1729.428 ±  14.480  ops/ms
-
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  4850.778 ±   3.881  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  4736.043 ±  37.044  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  4766.015 ±   8.945  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5  1620.437 ± 103.335  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5  1729.999 ±  26.154  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5  1732.937 ±   1.592  ops/ms
-
---- Narrow vector width (-XX:MaxVectorSize=16, 128-bit), runs 3-4 (after merge, performance mode on) ---
-
-Benchmark                               Mode  Cnt     Score     Error   Units
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  2254.175 ±   8.156  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  2231.529 ±  43.849  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  2238.790 ±  71.282  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5   711.083 ±   6.791  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5   745.516 ±   0.836  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5   738.947 ±  11.334  ops/ms
-
-VarkaUnrollFactorBenchmark.chainD8K1   thrpt    5  2250.017 ±  47.492  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K2   thrpt    5  2218.244 ±  57.443  ops/ms
-VarkaUnrollFactorBenchmark.chainD8K4   thrpt    5  2231.220 ± 142.776  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K1  thrpt    5   717.438 ±   0.886  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K2  thrpt    5   745.038 ±   5.618  ops/ms
-VarkaUnrollFactorBenchmark.chainD20K4  thrpt    5   738.441 ±   7.977  ops/ms
-
---- Reading these numbers (ratios by minimum-of-5, across all four runs) ---
-
-* Depth 8 (short chain): flat across K = 1, 2, 4 at both widths, on every run - within 4% either
-  way, no consistent direction. The honest null hypothesis in PLAN_MILESTONE_4.md section 2.3
-  holds here: C2 plus the out-of-order engine already collect the available overlap on a body
-  this short, so unrolling buys nothing (and is not measured to cost anything either, at least at
-  K=2 or K=4 on this shape).
-* Depth 20 (dayofweek-shaped long chain): unrolling by K=2 wins reproducibly at both widths and
-  on every run - +2.6% to +9.2% at AVX-512, +1.2% to +6.2% at 128-bit. K=4 adds no further,
-  consistent benefit over K=2 on either width (the sign varies run to run, always within a few
-  percent) - the benefit saturates at K=2, which is also the cheaper choice against GROUP_BUDGET.
-* Net for task 25: "K pays only on the long chains" is confirmed, not just predicted, and the
-  planner version the task's design calls for should have a ceiling - K=2 for a chain this long,
-  not an unbounded search - since K=4 was measured to add nothing further on the one shape where
-  unrolling helped at all.
+* Depth 8 (short chain): flat across K = 1, 2, 4 at both widths - K=2 and K=4 sit 3% and 4%
+  under K=1 at AVX-512 by min (4832 / 4694 / 4621) and within 1% at 128-bit (2262 / 2253 /
+  2248), i.e. inside this file's noise and with no consistent direction. The honest null
+  hypothesis in PLAN_MILESTONE_4.md section 2.3 holds: C2 plus the out-of-order engine already
+  collect the available overlap on a body this short.
+* Depth 20 (dayofweek-shaped long chain): K=2 wins at both widths - +4.4% at AVX-512 (1596 to
+  1666 by min; +6.1% by mean) and +4.3% at 128-bit (716 to 747). K=4 adds nothing consistent
+  over K=2: +3.4% at AVX-512 by min (1723) and -1.9% at 128-bit (733), the sign changing with
+  the width. The benefit saturates at K=2, which is also the cheaper choice against
+  GROUP_BUDGET.
+* Net for task 25: unchanged from the in-process runs. "K pays only on the long chains" holds,
+  and the planner's ceiling is K=2 for a chain this long, not an unbounded search.
 * Methodology note: an earlier version of this benchmark measured K=2/K=4 through a small
   constant-bound runtime for-loop over the op index, rather than the fully unrolled straight-line
   source above. That version showed K=4 losing 30-60% at some shapes - an artifact of comparing a
