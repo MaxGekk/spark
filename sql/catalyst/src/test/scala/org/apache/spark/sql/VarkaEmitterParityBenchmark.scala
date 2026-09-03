@@ -24,6 +24,7 @@ import scala.concurrent.duration._
 import org.apache.spark.benchmark.{Benchmark, BenchmarkBase}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaFusedKernel, VarkaLoopEmitter, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestSupport
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.varka.vector.{ChronoScalarOps, ChronoVectorOps, DateVectorOps}
 
@@ -880,6 +881,58 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             s"($note)") { _ => chunked20(unshared20, chunk) }
           benchmark.addCase(s"shared (4048B epilogue, under HugeMethodLimit), chunk $chunk " +
             s"($note)") { _ => chunked20(shared20, chunk) }
+        }
+        benchmark.run()
+      }
+
+      runBenchmark("task 43: one output, widening - where a single loop method stops scaling") {
+        // GROUP_BUDGET bounds ops *between* outputs and never inside one, so a single root can
+        // emit an arbitrarily wide loop method. The budget's javadoc calls single-output loops
+        // healthy "at every width tried" and the width tried was 59 ops; this is the ladder that
+        // finds out where that stops being true (PLAN_TASK_43.md).
+        //
+        // The shape has to vary op count and nothing else, and the three obvious constructions
+        // all fail: an AddDays chain varies dependency depth (task 25's axis), repeated calendar
+        // nodes get their prefixes shared by task 32 step B1 - which is why section 2.16's own
+        // example is 61 ops today rather than the ~190 it records - and repeated identical
+        // subtrees are CSE'd away by emitValue. A greatest/least tree over independent
+        // dayofweek(d + k) subtrees with distinct literal slots avoids all three, and measures
+        // exactly linear at 19 ops per subtree.
+        val benchmark = new Benchmark(s"one output over $numRows rows, null-free", numRows,
+          minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        def dowAt(k: Int): VarkaVectorIR = new DayOfWeek(new AddDays(new ColumnRef(0),
+          new LiteralSlot(k)))
+        def wideTree(subtrees: Int): VarkaVectorIR = {
+          var node: VarkaVectorIR = dowAt(0)
+          for (i <- 1 until subtrees) {
+            node = if (i % 2 == 0) new Greatest(node, dowAt(i)) else new Least(node, dowAt(i))
+          }
+          node
+        }
+        for ((subtrees, expectedOps) <- Seq(1 -> 20, 3 -> 58, 5 -> 96, 8 -> 153, 10 -> 191,
+            13 -> 248)) {
+          val root = wideTree(subtrees)
+          val name = s"org.apache.spark.sql.varka.execution.VarkaFusedLadder$subtrees"
+          val javaRoots = new java.util.ArrayList[VarkaVectorIR]()
+          javaRoots.add(root)
+          val bytes = VarkaLoopEmitter.emit(name, javaRoots, 1, subtrees, null, null,
+            VarkaEmitOptions.DEFAULTS)
+          // Asserted rather than assumed: if a lowering change moves these, the x-axis of this
+          // ladder has silently changed and every number below is about a different shape.
+          val ops = VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0",
+            "jdk.incubator.vector.IntVector")
+          require(ops == expectedOps,
+            s"ladder point $subtrees should emit $expectedOps IntVector ops, got $ops")
+          loader.defineGeneratedClass(name, bytes)
+          val kernel = loader.loadClass(name).getConstructor().newInstance()
+            .asInstanceOf[VarkaFusedKernel]
+          val offsets = (0 until subtrees).map(k => k * 13 + 1).toArray
+          val loopBytes = VarkaEmitterTestSupport.codeSize(bytes, "loopDense0")
+          benchmark.addCase(s"$ops ops in one loop method ($loopBytes bytecode bytes)") { _ =>
+            val status = kernel.run(Array(nfData.address()), Array(0L), Array(0),
+              Array(dst.address()), Array(dstValidity.address()), offsets, numRows)
+            require(status == 0, s"the kernel declined a batch: status $status")
+          }
         }
         benchmark.run()
       }
