@@ -1163,6 +1163,13 @@ species class in `-XX:+PrintInlining` output.
   (`dev/varka_bench_canary.sh`) the regen script runs first, and the quote check
   (`dev/varka_quote_check.py`, a gate step) that holds every quoted number to a
   committed file.
+- Run `dev/varka_precommit.sh` before committing, or install it as the pre-commit hook:
+  non-ASCII outside strings, lines over 100 columns, TODO/FIXME under Varka
+  directories, and the quote check. Each of those has reached CI or a reviewer at
+  least once.
+- `VarkaIrFuzzSuite` fuzzes the emitter: random IR over random null patterns, lengths
+  and option variants against the shared reference evaluator, reproducible by seed
+  and iteration.
 - Before registering op counts in a plan, print them: `dev/varka_emit.sh "<sql>"`
   gives the IR, the shape hash and per-method `IntVector` invocation counts on the
   suite's own scale; `--asm` adds C2's assembly for the dense loop.

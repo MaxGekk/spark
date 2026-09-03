@@ -83,6 +83,17 @@ README appears in a committed results file, now or in its history; the ones
 that predate the tool are in `dev/varka_quote_allowlist.txt` with a reason
 each, and that list only shrinks. It is a step of the gate.
 
+Before committing, `dev/varka_precommit.sh` (or install it once with
+`--install-hook`) checks the staged files for the rules that slip most: a
+non-ASCII byte outside a string literal, a source line over 100 columns, a
+`TODO`/`FIXME` marker under a Varka directory, and the quote check when a
+document changed. And beside the emitter suite's curated matrices,
+`VarkaIrFuzzSuite` runs random IR trees over random columns, null patterns,
+lengths and `VarkaEmitOptions` variants against the shared
+`VarkaReferenceEvaluator`; a failure names its seed and iteration and replays
+with `-Dvarka.fuzz.seed=<seed> -Dvarka.fuzz.only=<iteration>`. A new option is
+fuzzed the day it lands, since the suite toggles every `with*` on the record.
+
 For an emitter question, `dev/varka_emit.sh "year(d)" "month(d)"` prints what
 a projection compiles to, its shape hash, and per emitted method the bytecode
 size and the `IntVector`/`VectorMask` invocation counts on the scale the
