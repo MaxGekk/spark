@@ -309,13 +309,14 @@ number asks to be believed.
 * Any change to `zero`, to the masked driver, or to the `Cond` root's selection
   write.
 
-## 8. Outcome
+## 11. Outcome
 
 The mechanism shipped as planned and the default is flipped. Both sides ran
 adjacent in one regeneration, five iterations over two-second windows, at both
-widths.
+widths, on the tree merged with task 53 (so the Neri-Schneider month block sits
+under both arms), AMD Ryzen AI 9 HX PRO 370, OpenJDK 25.0.4.
 
-### 8.1 The numbers
+### 11.1 The numbers
 
 M rows/s, higher is better. "Per group" is the older lowering, kept as the
 reference variant.
@@ -326,49 +327,51 @@ rather than committed, as this benchmark's own instructions prescribe.
 
 | row | filled once | per group | gain |
 |---|---|---|---|
-| `year`, null-free, AVX-512 | 2757.0 | 2185.6 | +26% |
-| `year`, null-free, 128-bit | 1056.3 | 749.3 | +41% |
-| four-field shared, null-free, AVX-512 | 1477.4 | 812.7 | +82% |
-| four-field shared, null-free, 128-bit | 626.4 | 274.7 | +128% |
-| `dayofweek`, null-free, AVX-512 | 8378.1 | 7768.1 | +8% |
-| `dayofweek`, null-free, 128-bit | 3966.0 | 2685.7 | +48% |
-| `year`, mixed nulls, AVX-512 | 2021.2 | 2042.0 | -1.0% |
-| `year`, mixed nulls, 128-bit | 741.2 | 748.1 | -0.9% |
-| four-field shared, mixed nulls, AVX-512 | 817.7 | 831.0 | -1.6% |
-| four-field shared, mixed nulls, 128-bit | 272.3 | 271.5 | +0.3% |
+| `year`, null-free, AVX-512 | 2769.1 | 2201.4 | +26% |
+| `year`, null-free, 128-bit | 1055.7 | 746.9 | +41% |
+| four-field shared, null-free, AVX-512 | 1531.0 | 821.3 | +86% |
+| four-field shared, null-free, 128-bit | 705.0 | 282.9 | +149% |
+| `dayofweek`, null-free, AVX-512 | 8413.0 | 7508.5 | +12% |
+| `dayofweek`, null-free, 128-bit | 3935.3 | 2687.8 | +46% |
+| `year`, mixed nulls, AVX-512 | 2206.0 | 2224.5 | -0.8% |
+| `year`, mixed nulls, 128-bit | 747.8 | 746.2 | +0.2% |
+| four-field shared, mixed nulls, AVX-512 | 841.6 | 825.4 | +2.0% |
+| four-field shared, mixed nulls, 128-bit | 280.3 | 280.6 | -0.1% |
 
-The AVX-512 figures moved by two or three points between the run that decided
-the flip and the run that committed it - 2749.4/2234.1 became 2757.0/2185.6, so
-+23% became +26% - which is the ordinary spread of two regenerations and is why
-the file rather than a remembered number is what gets quoted.
+The figures moved between the three runs this task made - the run that decided
+the flip (`year` 2749.4/2234.1, +23%), the pre-merge run that first committed it
+(2757.0/2185.6, +26%; four-field 1477.4/812.7, +82%; `dayofweek` 8378.1/7768.1,
++8%) and the merged-tree run above - which is the ordinary spread of
+regenerations plus, for the four-field shape, task 53 now sitting under both
+arms, and is why the file rather than a remembered number is what gets quoted.
 
 Every "must rise" row rose and every "must not move" row stayed inside 2%, so
 section 5's condition for flipping the default is met and `DEFAULTS` carries
 `denseValidityOnce = true`.
 
-For scale: the shared four-field kernel at 1477.4 now beats
+For scale: the shared four-field kernel at 1531.0 now beats
 `ChronoVectorOps.vectorFourFields`, the hand-written ceiling this project spent
-task 32 chasing, by **2.1x** at AVX-512.
+task 32 chasing (672.5 in the same run), by **2.3x** at AVX-512.
 
-### 8.2 Predictions, scored
+### 11.2 Predictions, scored
 
-1. **Held.** `year, null-free` reaches 2757.0, inside the predicted 2300-2900.
+1. **Held.** `year, null-free` reaches 2769.1, inside the predicted 2300-2900.
    (The band was set against 1823, a figure section 5 already flagged as stale;
-   the base at the time of this run was 2185.6, and the result lands in the band
+   the base at the time of this run was 2201.4, and the result lands in the band
    regardless.)
 2. **Beaten.** The four-field shared row was predicted at 1000-1300. It reaches
-   1477.4, past the top of the band. Removing four calls per lane group against
+   1531.0, past the top of the band. Removing four calls per lane group against
    a prefix that sharing had already collapsed leaves validity a larger share of
    what remained than the arithmetic allowed for.
 3. **Held, and it is the cleanest hit in the set.** The 128-bit gain is larger
-   for every shape - +128% against +82%, +41% against +26%, +48% against +8% -
+   for every shape - +149% against +86%, +41% against +26%, +46% against +12% -
    because a four-lane group makes four times as many calls per row as a
    sixteen-lane one and the call's cost is per call, not per lane. This is the
    argument `PLAN_MILESTONE_4.md` 2.17 makes for **task 46**, and it is now
    measured rather than reasoned.
 4. **Held at AVX-512, missed at 128-bit.** `dayofweek` was predicted to rise
-   less in ratio than `year`: it does at AVX-512 (+8% against +26%) and does not
-   at 128-bit (+48% against +41%). The plan called this "the row most likely to
+   less in ratio than `year`: it does at AVX-512 (+12% against +26%) and does not
+   at 128-bit (+46% against +41%). The plan called this "the row most likely to
    surprise in either direction" and gave it low confidence, which was right. A
    ~14-op body at four lanes is dominated by per-group overhead, so removing a
    per-group call is proportionally *more* of it, not less - the reasoning that
@@ -383,7 +386,7 @@ task 32 chasing, by **2.1x** at AVX-512.
    adds none.
 8. Task 32 B2's ratios: for that task to re-examine, not this one.
 
-### 8.3 What this leaves for 46 and 47
+### 11.3 What this leaves for 46 and 47
 
 2.17 sequenced these three "because each may shrink the next", and 45 has now
 sized what it left. The masked path is untouched by construction, so 46's and

@@ -927,12 +927,13 @@ the loop started. Setting them once in the driver, and not emitting the tail, is
 
 | shape | AVX-512 | 128-bit |
 |---|---|---|
-| shared four-field calendar | +82% | +128% |
+| shared four-field calendar | +86% | +149% |
 | `year` | +26% | +41% |
-| `dayofweek` | +8% | +48% |
+| `dayofweek` | +12% | +46% |
 
-The four-field shape then beats `ChronoVectorOps.vectorFourFields`, the hand-written ceiling task
-32 spent its time chasing, by 2.1x.
+(AMD Ryzen AI 9 HX PRO 370, OpenJDK 25.0.4, one regeneration on the tree merged with task 53.) The
+four-field shape then beats `ChronoVectorOps.vectorFourFields`, the hand-written ceiling task 32
+spent its time chasing, by 2.3x.
 
 Three things generalise beyond this one store.
 
@@ -943,10 +944,10 @@ Three things generalise beyond this one store.
   group makes four times as many calls per row as a sixteen-lane one and the call's cost is per
   call, not per lane. Any per-group fixed cost is worth four times as much to remove at 128-bit.
   This was registered as a prediction and held for all three shapes.
-* **The ratio can invert between widths.** `dayofweek` gains *least* at AVX-512 (+8%) and *most*
-  of the three at 128-bit (+48%), because a ~14-op body at four lanes is dominated by per-group
-  overhead while the same body at sixteen lanes is dominated by its stores. A ranking measured at
-  one width is not a ranking.
+* **The ratio can invert between widths.** `dayofweek` gains *less* than `year` at AVX-512 (+12%
+  against +26%) and *more* than it at 128-bit (+46% against +41%), because a ~14-op body at four
+  lanes is dominated by per-group overhead while the same body at sixteen lanes is dominated by
+  its stores. A ranking measured at one width is not a ranking.
 
 **And bit-exactness is the contract, not an implementation detail.** The old path zeroed
 `(rows + 7) / 8` bytes and OR-ed lane-masked words, leaving the bits past `rows` in the final
