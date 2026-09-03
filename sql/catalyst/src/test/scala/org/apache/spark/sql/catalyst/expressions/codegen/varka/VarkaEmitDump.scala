@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
+import java.util.Locale
 
 import scala.jdk.CollectionConverters._
 
@@ -140,7 +141,7 @@ object VarkaEmitDump {
 
   private def parseColumns(spec: String): Seq[Attribute] = spec.split(",").toSeq.map { c =>
     val Array(name, tpe) = c.trim.split(":")
-    val dt: DataType = tpe.trim.toLowerCase match {
+    val dt: DataType = tpe.trim.toLowerCase(Locale.ROOT) match {
       case "date" => DateType
       case "int" | "integer" => IntegerType
       case "short" | "smallint" => ShortType
