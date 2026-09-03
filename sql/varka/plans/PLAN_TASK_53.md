@@ -400,3 +400,74 @@ where the axis reaches inside a recomposing lowering, so it is the one most wort
 twice.
 
 129 catalyst tests with the sweeps enabled, at both widths.
+
+## 14. Commit 4's outcome: the measurement, and the predictions scored
+
+Adjacent A/B cases, interleaved by null pattern, regenerated in one run on the
+merged tree. M rows/s, higher is better.
+
+**AVX-512:**
+
+| shape | Neri-Schneider | 0-based | gain |
+|---|---|---|---|
+| `dayofmonth`, null-free | 2265.7 | 1997.1 | +13.5% |
+| `dayofmonth`, mixed nulls | 2139.3 | 1911.6 | +11.9% |
+| `month`, null-free | 2260.0 | 2167.8 | +4.3% |
+| `month`, mixed nulls | 2077.9 | 2063.0 | +0.7% |
+| four-field, null-free | 517.9 | 499.9 | +3.6% |
+
+**128-bit:**
+
+| shape | Neri-Schneider | 0-based | gain |
+|---|---|---|---|
+| `dayofmonth`, null-free | 742.4 | 659.3 | +12.6% |
+| `dayofmonth`, mixed nulls | 734.8 | 651.8 | +12.7% |
+| `month`, null-free | 748.2 | 707.7 | +5.7% |
+| `month`, mixed nulls | 735.2 | 705.8 | +4.2% |
+| four-field, null-free | 179.9 | 171.4 | +5.0% |
+
+Stdevs are 0-1 ms on 9-31 ms best times and the pairs ran adjacent under one JIT
+and thermal state, so every gap here is outside the run's resolution. Each shape
+gains slightly *more* at 128-bit than at 512, which is the mechanism showing
+itself: half the lanes is twice the loop iterations for the same rows, so a
+per-iteration saving is paid back more often.
+
+### 14.1 Predictions, scored
+
+Three held, one was beaten, two missed.
+
+1. **Held.** The op counts landed exactly (commit 3, section 13.1).
+2. **Beaten.** 4-9% was predicted for `dayofmonth` null-free at AVX-512, with
+   "inside noise is the expected outcome again" registered as the likely result.
+   It is +13.5% there and +12.6% at 128-bit, above the predicted band, and it
+   reproduces under mixed nulls at both widths (+11.9%, +12.7%). This is the
+   tail that stops running `emitMonthStart` forwards entirely, and it is the
+   most stable number in the task.
+3. **Held.** `year` does not move; the op-count test pins that it cannot.
+4. **Missed.** The four-field shape was predicted to gain more than any
+   single-field one, "because it pays the month block once and the tails three
+   times". It gains the least: +3.6% and +5.0%. The reasoning had the
+   denominator backwards - fragment sharing already collapses its four prefixes
+   into one, so it saves the block *once* spread across four outputs and a body
+   five times the size, while `dayofmonth` alone saves it on every row of a
+   small body. Paying once is why it gains little, not why it gains most.
+5. **Missed.** The unshared `HugeMethodLimit` crossing was predicted to move out
+   to 21 or 22 outputs. It stays at 19 fits / 20 crosses, **on both axes**. The
+   numerator does shrink the epilogue - 7953 bytes to 7804 at nineteen outputs -
+   but an output costs roughly 400 bytes there, and two ops saved per date's
+   fragment over five fragments is 149. A boundary measured in whole outputs
+   does not move for a saving smaller than one.
+6. **Held.** Task 48's elision shrinks from four ops to two, for both nodes that
+   take it (commit 3).
+
+### 14.2 What the default rests on
+
+The op counts, which are proven and were never in doubt, and now a timing that
+agrees with them at both widths. Prediction 2's caveat - that the default would
+have shipped on the op count even if the timing came back flat - did not need to
+be used.
+
+The 0-based lowering stays as a reference variant. It is not dead code: the
+exhaustive sweep runs both axes over all 16,777,216 covered days under both
+sharing modes and both switch positions, which is how the two check each other
+rather than only checking against `LocalDate`.
