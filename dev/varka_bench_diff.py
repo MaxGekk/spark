@@ -38,7 +38,6 @@ read. Exit status 0 always; this is a reading aid, not a gate.
 import argparse
 import re
 import subprocess
-import sys
 
 ROW = re.compile(r"^(.*?)\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)X\s*$")
 HEADER = re.compile(r"^(.*?):\s+Best Time\(ms\)")
