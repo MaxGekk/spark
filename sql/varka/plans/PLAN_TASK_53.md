@@ -401,6 +401,19 @@ twice.
 
 129 catalyst tests with the sweeps enabled, at both widths.
 
+### 13.4 One thing section 4 promised and commit 3 did not do
+
+Section 4's files table lists `PLAN_TASK_35.md` 7.3 - "`trunc(d, 'MONTH')`'s new
+form" - and commit 3 did not touch it. Corrected here rather than left for task
+35 to discover, because the staleness is the dangerous kind: 7.3 described
+`t[5]` as holding `marchMonth`, and an implementer following it would emit the
+0-based lowering against a slot that now holds a numerator. That compiles, and
+produces plausible wrong dates. 7.3 now carries the numerator's slot layout,
+both axes' `MONTH` derivations, and the single-subtraction form the new axis
+allows: `trunc(d,'MONTH') = d - dom0`, since the numerator's low half already is
+the zero-based day of month and the `+ 1` the day tail ends with is one this
+lowering would only subtract again.
+
 ## 14. Commit 4's outcome: the measurement, and the predictions scored
 
 Adjacent A/B cases, interleaved by null pattern, regenerated in one run on the
