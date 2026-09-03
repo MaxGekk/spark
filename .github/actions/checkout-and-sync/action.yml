@@ -31,18 +31,6 @@ inputs:
     description: 'Add GITHUB_WORKSPACE to git safe.directory (needed inside containers)'
     required: false
     default: 'false'
-  base-repository:
-    description: >-
-      The repository whose branch pull requests are opened against. Change
-      detection diffs against this rather than against apache/spark, so a pull
-      request is measured by its own diff instead of by the fork's entire
-      divergence from upstream. Set to '' to restore the upstream behaviour.
-    required: false
-    default: 'vecbricks/varka'
-  base-ref:
-    description: "Branch of base-repository to use as the change-detection base"
-    required: false
-    default: 'master'
 outputs:
   head_sha:
     description: 'The apache/spark HEAD SHA checked out (before the fork merge)'
@@ -64,41 +52,11 @@ runs:
       id: resolve-sha
       shell: bash
       run: echo "head_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-    # Change detection asks "what did this pull request change", and answers it with
-    # `git diff $APACHE_SPARK_REF HEAD`. On apache/spark those are the same question. On a
-    # long-lived fork they are not: apache/spark's HEAD is missing everything the fork has ever
-    # added, so every pull request looks like it changed all of it - 193 files here, 16 of which
-    # match no module and therefore select the `root` module, which means "test everything".
-    # Squash-merging the fork's own base branch first, and pointing APACHE_SPARK_REF at that,
-    # makes the diff the pull request's own.
-    - name: Establish the change-detection base
-      id: base
-      if: >-
-        github.repository != 'apache/spark' && inputs.base-repository != ''
-        && github.ref != format('refs/heads/{0}', inputs.base-ref)
-      shell: bash
-      run: |
-        git fetch --no-tags https://github.com/${{ inputs.base-repository }}.git \
-          ${{ inputs.base-ref }}
-        git \
-          -c user.name='Apache Spark Test Account' \
-          -c user.email='sparktestacc@gmail.com' \
-          merge --no-commit --progress --squash FETCH_HEAD
-        git \
-          -c user.name='Apache Spark Test Account' \
-          -c user.email='sparktestacc@gmail.com' \
-          commit -m "Base ${{ inputs.base-repository }}/${{ inputs.base-ref }}" --allow-empty
-        echo "APACHE_SPARK_REF=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        echo "base_established=true" >> $GITHUB_OUTPUT
     - name: Sync the current branch with the latest in Apache Spark
       if: github.repository != 'apache/spark'
       shell: bash
       run: |
-        # Only when the step above did not already set it: it must stay the *base* commit, not
-        # apache/spark's HEAD, or the diff widens back out to the fork's whole divergence.
-        if [ "${{ steps.base.outputs.base_established }}" != "true" ]; then
-          echo "APACHE_SPARK_REF=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        fi
+        echo "APACHE_SPARK_REF=$(git rev-parse HEAD)" >> $GITHUB_ENV
         git fetch https://github.com/$GITHUB_REPOSITORY.git ${GITHUB_REF#refs/heads/}
         git \
           -c user.name='Apache Spark Test Account' \
