@@ -66,6 +66,11 @@ on:
         description: 'Expected CPU model (e.g. "AMD EPYC 7763"). If set, the job fails early when the runner CPU does not match.'
         required: false
         default: ''
+      extra-java-options:
+        type: string
+        description: 'Extra JVM options for the benchmark driver (e.g. "-XX:MaxVectorSize=32"). Runs with and without a flag are directly comparable only on the same runner CPU, so pin expected-cpu when using this.'
+        required: false
+        default: ''
 
 jobs:
   matrix-gen:
@@ -155,6 +160,7 @@ jobs:
       SPARK_BENCHMARK_NUM_SPLITS: ${{ inputs.num-splits }}
       SPARK_BENCHMARK_CUR_SPLIT: ${{ matrix.split }}
       SPARK_GENERATE_BENCHMARK_FILES: 1
+      EXTRA_JAVA_OPTIONS: ${{ inputs.extra-java-options }}
       SPARK_LOCAL_IP: localhost
       # To prevent spark.test.home not being set. See more detail in SPARK-36007.
       SPARK_HOME: ${{ github.workspace }}
@@ -218,9 +224,25 @@ jobs:
         # Make less noisy
         cp conf/log4j2.properties.template conf/log4j2.properties
         sed -i 's/rootLogger.level = info/rootLogger.level = warn/g' conf/log4j2.properties
+        # The benchmark runs in the driver (local master), so extra JVM options go there. An
+        # array rather than string interpolation, so an option containing spaces survives.
+        EXTRA_ARGS=()
+        if [ -n "$EXTRA_JAVA_OPTIONS" ]; then
+          EXTRA_ARGS+=(--driver-java-options "$EXTRA_JAVA_OPTIONS")
+        fi
+        # Recorded because a benchmark number means little without the vector configuration that
+        # produced it: the CPU flags say which instruction set exists, MaxVectorSize says what
+        # HotSpot will actually use, and neither says how wide the execution units behind it are.
+        echo "::notice::Extra JVM options: ${EXTRA_JAVA_OPTIONS:-<none>}"
+        echo "AVX/SVE flags: $(lscpu | tr ' ' '\n' | grep -E '^avx|^sve' | sort -u | tr '\n' ' ')"
+        # Unquoted on purpose: the value is a list of JVM flags and must word-split here.
+        # shellcheck disable=SC2086
+        java $EXTRA_JAVA_OPTIONS -XX:+PrintFlagsFinal -version 2>/dev/null \
+          | grep -E ' (MaxVectorSize|UseAVX|UseSVE|UseRVV) ' || true
         # In benchmark, we use local as master so set driver memory only. Note that GitHub Actions has 7 GB memory limit.
         bin/spark-submit \
           --driver-memory 6g --class org.apache.spark.benchmark.Benchmarks \
+          "${EXTRA_ARGS[@]}" \
           --jars "`find . -name '*-SNAPSHOT-tests.jar' -o -name '*avro*-SNAPSHOT.jar' | paste -sd ',' -`,`find ~/.cache/coursier -name 'curator-test-*.jar'`" \
           "`find . -name 'spark-core*-SNAPSHOT-tests.jar'`" \
           "${{ inputs.class }}"
