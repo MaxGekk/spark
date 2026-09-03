@@ -105,7 +105,7 @@ public final class VarkaChrono {
    * calendar terms, 15 August 33134. */
   public static final int NARROW_MAX_DAYS = (1 << NARROW_ERA_K) - 1 - NARROW_BIAS;
 
-  // --- Day of era to the four fields ---------------------------------------
+  // --- Day of era to the five fields ---------------------------------------
 
   /** {@code floor(2^28 / 36524)}, round-down; one correction, dividend at most 146096. */
   public static final int CENTURY_M = 7349;
@@ -163,6 +163,10 @@ public final class VarkaChrono {
    * integers - an identity, not an approximation, and {@code VarkaChronoSuite} asserts it
    * over all 366 values of the domain. Task 48 reads the year's January bit from here so a
    * kernel computing the year alone never computes the month.
+   *
+   * <p>Task 34 reads the same threshold as a conversion rather than a bit: past it, the
+   * March-based day of year becomes the January-based one by subtracting
+   * {@code MARCH_TO_JANUARY_DAYS - 1}.
    */
   public static final int MARCH_TO_JANUARY_DAYS = 306;
 
@@ -367,15 +371,16 @@ public final class VarkaChrono {
   public static final int MONTH_ARITH_MIN_MONTHS = -MONTH_ARITH_BIAS;
 
   /**
-   * The four calendar fields one decomposition yields, in the order the emitter's per-field
+   * The five calendar fields one decomposition yields, in the order the emitter's per-field
    * tails branch off the shared work.
    *
    * @param year the proleptic Gregorian year, as {@code java.time.LocalDate#getYear} gives it.
    * @param month 1-12.
    * @param dayOfMonth 1-31.
    * @param quarter 1-4.
+   * @param dayOfYear the January-based day of year, 1-365 or 1-366.
    */
-  public record Fields(int year, int month, int dayOfMonth, int quarter) {}
+  public record Fields(int year, int month, int dayOfMonth, int quarter, int dayOfYear) {}
 
   /** Whether {@link #narrowed} is defined for {@code days} - the guard the emitted kernel
    * evaluates per lane when the narrowed lowering is in use. */
@@ -400,7 +405,7 @@ public final class VarkaChrono {
   }
 
   /**
-   * Day of era to the four fields - the half whose input domain ({@code [0, 146096]}) is small
+   * Day of era to the five fields - the half whose input domain ({@code [0, 146096]}) is small
    * enough to verify exhaustively on its own.
    *
    * <p>Two overshoot fixes earn their place here. The century magic can land on century 4,
@@ -439,8 +444,19 @@ public final class VarkaChrono {
     int year = 400 * era + 100 * century + yearOfCentury
         + (dayOfYear >= MARCH_TO_JANUARY_DAYS ? 1 : 0);
     int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;
-    return new Fields(year, month, dayOfMonth, quarter);
+    int januaryDayOfYear = dayOfYear >= MARCH_TO_JANUARY_DAYS
+        ? dayOfYear - (MARCH_TO_JANUARY_DAYS - 1)
+        : dayOfYear + MARCH_DAY_OF_YEAR + (isLeapYear(year) ? 1 : 0);
+    return new Fields(year, month, dayOfMonth, quarter, januaryDayOfYear);
   }
+
+  // --- The January-based day of year, and the leap flag it needs (task 34) ------------------
+
+  /**
+   * The January-based day of year of 1 March in a common year ({@code 31 + 28 + 1}). A leap
+   * year adds one, because its extra day (29 February) falls before March.
+   */
+  public static final int MARCH_DAY_OF_YEAR = 60;
 
   /**
    * Task 40: Hinnant's {@code days_from_civil}, the exact inverse of {@link #narrowed}, over a
