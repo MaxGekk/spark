@@ -109,7 +109,7 @@ public record VarkaEmitOptions(
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
-          VarkaLoopEmitter.GROUP_BUDGET, true, true, false, true, FloorMod7.MAGIC, false);
+          VarkaLoopEmitter.GROUP_BUDGET, true, true, true, true, FloorMod7.MAGIC, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {

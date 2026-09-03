@@ -916,6 +916,45 @@ trusting them, not just its ratios.
 - Branch naming: `varka-<topic>` tracks `origin/master` and stays one commit ahead
   per PR.
 
+## A store the loop repeats per group with a constant operand is a fill the driver should do once
+
+Task 45. The emitted dense loop ended every value output with
+`orValidityBitsAt(seg, i, -1L, lanes)` - a 212-byte helper that does not inline in a wide loop -
+once per lane group per output, ORing a word of all ones into a bitmap the driver had zeroed a
+moment earlier. On a dense batch the dispatcher has already proven every input null-free and
+task 11's invariant makes every value output valid on every row, so those bits were known before
+the loop started. Setting them once in the driver, and not emitting the tail, is worth:
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| shared four-field calendar | +82% | +128% |
+| `year` | +26% | +41% |
+| `dayofweek` | +8% | +48% |
+
+The four-field shape then beats `ChronoVectorOps.vectorFourFields`, the hand-written ceiling task
+32 spent its time chasing, by 2.1x.
+
+Three things generalise beyond this one store.
+
+* **The constant operand is the tell.** A per-iteration call whose data argument is a compile-time
+  constant is doing work whose answer the emitter already knows. Look for the loop-invariant
+  operand rather than for the expensive-looking call.
+* **The win is larger at narrow widths, and that is arithmetic rather than luck.** A four-lane
+  group makes four times as many calls per row as a sixteen-lane one and the call's cost is per
+  call, not per lane. Any per-group fixed cost is worth four times as much to remove at 128-bit.
+  This was registered as a prediction and held for all three shapes.
+* **The ratio can invert between widths.** `dayofweek` gains *least* at AVX-512 (+8%) and *most*
+  of the three at 128-bit (+48%), because a ~14-op body at four lanes is dominated by per-group
+  overhead while the same body at sixteen lanes is dominated by its stores. A ranking measured at
+  one width is not a ranking.
+
+**And bit-exactness is the contract, not an implementation detail.** The old path zeroed
+`(rows + 7) / 8` bytes and OR-ed lane-masked words, leaving the bits past `rows` in the final
+byte at zero. The replacement has to set exactly `rows` bits and not fill that last byte, because
+the differential compares dense against masked validity byte for byte - and because nothing
+promises every Arrow reader stops at `valueCount`. Producing identical bits is what lets the
+existing differential be the change's oracle rather than something to rewrite.
+
 ## A bimodal kernel is usually the register allocator, and here is how to prove it
 
 Task 32's shared four-field calendar kernel ran at either 165 or 236 M rows/s under
