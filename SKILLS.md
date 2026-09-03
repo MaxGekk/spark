@@ -937,6 +937,35 @@ That matters because some behaviour only appears in the product build - this bim
 it - so being able to disassemble there rather than only in fastdebug is what made the
 comparison above possible at all.
 
+**Four details that decide whether a disassembly-reading test works or quietly passes.** These
+came out of task 31's feasibility check, run against the system JDK 25.0.4 product build with
+the fastdebug tree's `hsdis-amd64.so` on `LD_LIBRARY_PATH`.
+
+* **Prefer `-XX:CompileCommand=print,<class>::<method>` to `-XX:+PrintAssembly`.** `print` emits
+  one method's disassembly; `PrintAssembly` emits the whole compilation log, and the difference
+  is hundreds of lines against tens of megabytes. With `print` there is nothing left for a
+  `compileonly` filter to do.
+* **Both a C1 and a C2 nmethod are printed for the same method**, headed `C1-compiled nmethod`
+  and `C2-compiled nmethod`. C1's body is scalar by construction, so anything reading the output
+  must split on those headers and keep the C2 one. Scanning the concatenated text finds scalar
+  instructions in a method that vectorized perfectly.
+* **The mnemonic and its operands are separated by tabs, not spaces** - `vpaddd\t\t0x10(%rsi,
+  %rax, 4), %zmm0, %zmm0`, confirmed with `cat -A`. A pattern written for whitespace-as-spaces
+  matches nothing, and *matching nothing looks exactly like a body with no vector instructions*.
+  Any such test needs a self-test - a deliberately scalar method asserted to contain none of the
+  family and a vector one asserted to contain one - or every case can pass vacuously.
+* **"hsdis is present" is not the same as "hsdis loaded".** Without a working disassembler
+  HotSpot prints `Loading hsdis library failed` and degrades to bytecode-level output rather than
+  erroring, so detection must look for a real `[Disassembly]` section with hex-addressed
+  instruction lines, and should distinguish "no library found" from "found and refused to load"
+  when it reports a skip.
+
+**Assert families, never mnemonics or counts.** The register class is a property of the host -
+`zmm` under AVX-512, `ymm` under AVX2, `xmm` at `-XX:MaxVectorSize=16` - so derive it from
+`IntVector.SPECIES_PREFERRED.vectorBitSize()` at runtime. And do not assert instruction *counts*:
+the bimodality section above found identical vector-op counts with a 2x difference in total
+instructions, so a count assertion goes red on a register-allocation roll with nothing wrong.
+
 ## Building a fastdebug JDK for HotSpot diagnostics
 
 Three questions in milestone 4 could not be answered from a product JVM - why SuperWord
