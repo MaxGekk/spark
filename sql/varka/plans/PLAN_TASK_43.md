@@ -160,6 +160,18 @@ ones.
 
 ### 8.1 Throughput: flat at both widths
 
+> **Correction, measured after this task landed.** The column below labelled
+> AVX-512 is a 256-bit-datapath result. Running this same ladder at
+> `-XX:MaxVectorSize=32` gives 0.0070-0.0074 ns/row/op - within noise of the
+> 512-bit column, and a 0.95x "speedup" for doubling the lanes, while 128 -> 256
+> is 2.48x. This machine has the whole AVX-512 instruction set and HotSpot picks
+> `MaxVectorSize=64`, but the execution units behind it are 256 bits wide.
+> Nothing in this section's *conclusions* moves - both arms of every comparison
+> here ran on the same hardware, and flatness is a property of the ladder rather
+> than of the width - but "at both widths" below means 4 lanes against 16 lanes
+> issued through a 256-bit datapath, not two datapath widths. `SKILLS.md` carries
+> the three-width table and the method.
+
 Per-op cost, derived from the committed results (AVX-512) and the 128-bit run
 recorded here. Rows per second is the wrong unit when every point does a
 different amount of work; nanoseconds per row per op is flat if the loop scales.
@@ -285,3 +297,12 @@ one shape family, and a ladder that stops at 248 ops because that is where the
 milestone's question stopped. A different lowering with more live values per op
 could still spill; what has been shown is that op *count* alone does not cause
 it over this range.
+
+It also does not license anything about a **full-width** 512-bit machine, which
+this one is not (see 8.1's correction). The compile-time findings should carry
+over unchanged, since C2's work is a function of the IR rather than of the
+execution units, and so should the flatness, which is about op count. What would
+change on Intel Sapphire Rapids or AMD Turin is the absolute throughput of the
+512-bit arm - and with it, whether 248 ops in one method still costs what it
+costs here. Re-running this ladder is the first thing worth doing on such a host,
+because it is cheap and it is already committed.
