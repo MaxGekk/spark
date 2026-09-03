@@ -600,7 +600,14 @@ catalogue entry rather than a plan:
   proportionally more.
 * **Nulls, and the emitted shape.** The probe counts; a kernel writes a column
   and a validity word, and the gather's index spill has to live somewhere in the
-  slot plan. Whether `GROUP_BUDGET` should weigh a gather at all is open.
+  slot plan. Whether `GROUP_BUDGET` should weigh a gather at all is open. What a
+  gather costs in instructions is not: on this CPU `IntVector.fromArray` with an
+  index map compiles to one `vpgatherdd` plus a fixed five-op index check the
+  API performs in Java (two compares, `korb`, `kortestb`, branch) and a `kxnorw`
+  for the all-ones mask - seven instructions, no call (`SKILLS.md`, "Every
+  operator the plans rely on"). A table no longer than the lane count needs none
+  of that: `selectFrom` is a single `vpermd`, where `rearrange(ix.toShuffle())`
+  spends four more on index wrapping.
 * **128-bit.** The measured 1.6x is AVX-512; the scratch probe put the same
   shape at 1853.0 M rows/s at four lanes, which is a smaller margin over a
   smaller arithmetic cost, and a gather that loses at one width and wins at the

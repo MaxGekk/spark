@@ -1090,6 +1090,54 @@ two sorted instant arrays per zone, DST rules taking over past the table's end, 
 floor-versus-truncate decision at a gap that is wrong by an hour if made the other way. What it
 does not contain is any extraction: `year` and its family live in cuDF on `cuda::std::chrono`.
 
+## Every operator the plans rely on is one instruction; two species in one JVM is a box per iteration
+
+Established in September 2026 from the product JDK 25's own C2 output on this machine (AMD Ryzen AI
+9 HX PRO 370, `UseAVX=3`, preferred int species 512 bits), with hsdis borrowed from the fastdebug
+build's `support/hsdis` directory via `LD_LIBRARY_PATH` - the product JVM loads it from there, so
+the assembly is production C2's. Probe, logs and scripts: a `Probe.java` with one loop per
+operator, `-XX:CompileCommand=print,Probe::op_*`, and a script that splits the log per nmethod and
+counts mnemonics and Java call sites.
+
+**The operator table.** Every operator the six codebase reviews put into plans is intrinsic at 256
+bits and compiles to the instruction one would hope for, with no call back into Java:
+
+| operator | instruction | for |
+|---|---|---|
+| `SUSUB` on bytes (256 and 128) | `vpsubusb`; `vpcmpneqb` to a k-mask and `kortestd` for `anyTrue` | item 8's shape mask |
+| unsigned compare, ints and longs | `vpcmpltud` / `vpcmpltuq` to a k-mask, `kmovq` for `toLong` | leap hash, shape mask |
+| `selectFrom` on 8 ints | `vpermd`, alone | eight-entry tables |
+| `rearrange(ix.toShuffle())` on 8 ints | `vpermd` plus four wrap ops (`vpcmpeqd`, `vpsubd`, `vpblendmd`, `vpand`) | use `selectFrom` instead |
+| index-map gather, 8 ints | `vpgatherdd` plus a five-op Java-side index check and `kxnorw` | item 10; the check is not removable through the API |
+| `LongVector.mul` by a constant, then shift | `vpmullq`, `vpsrlq` | task 49; native here because of AVX-512DQ+VL, a three-multiply emulation on plain AVX2 |
+| byte `rearrange` with a constant shuffle | `vpermb` | item 8's three-rows-to-long-lanes compaction; needs VBMI, present |
+| `IntVector.mul` then shift | `vpmulld`, `vpsrld` | the baseline everything else is measured against |
+
+The x86 match rules in `src/hotspot/cpu/x86/x86.ad` (`match_rule_supported_vector`) agree with all
+of it, but they say what *can* match; only the disassembly says what a given loop got.
+
+**The finding that outranks the table.** A first probe used `SPECIES_256` and `SPECIES_128` of the
+same lane types in one process, and in that JVM the byte, permute and gather loops each carried a
+heap allocation per iteration - a TLAB bump, a mark-word store, an `int[8]` payload, and the loaded
+vector written into it - while the multiply and compare loops did not. The identical methods copied
+into a class touching one species were clean, and the first probe became clean when its 128-bit
+methods were never called. `-XX:CompileCommand=PrintInlining` names the mechanism: in the polluted
+JVM the shared `ByteVector` templates inline bimorphically, "callee changed to
+`Byte128Vector::lanewise`" beside the `Byte256Vector` path at the same call sites, so the receiver
+must exist as an object for the other branch and the box survives. Same loops, same flags,
+polluted against clean: saturating subtract 2.06 against 0.32 ns per vector (6.4x), `selectFrom`
+3.06 against 0.24 (12.8x), gather 6.47 against 2.39 (2.7x), long multiply unchanged.
+
+What this means here. The emitter and every kernel use `SPECIES_PREFERRED` only, and the 128-bit
+gate is a separate JVM under `MaxVectorSize=16`, so production and the catalyst harness are safe by
+construction - keep them so: never introduce a second species of a lane type, not for a half-width
+load, not for a test, not for a benchmark that shares a JVM with anything else.
+`VarkaMilestone4MeasurementsBenchmark` did exactly that with its half-width int species in a
+`forks = 0` JVM, which is one named cause of the engine harness's degraded state (the debt register
+in `PLAN_MILESTONE_4.md`). Two tells, either sufficient: an allocation inside a kernel loop body in
+the disassembly (task 55 makes it an assertion), and a "callee changed to" line naming a second
+species class in `-XX:+PrintInlining` output.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
