@@ -997,6 +997,35 @@ future `date_format` is only the idea of producing all eight fixed-width digits 
 multiplies and inserting the separators with a shuffle, paired with ClickHouse's template-and-patch
 (milestone 5, section 6).
 
+## Velox is a semantics reference for the calendar family, not a performance one
+
+Read in September 2026 for the same question as ClickHouse, `datealgo-rs` and Lemire's repository:
+is there anything to borrow. There is not, and the reason is worth one paragraph so nobody reads it
+again for speed. Every Spark-compatible date function in `velox/functions/sparksql` converts the
+day to a `struct tm` through a full civil decomposition and reads one field, one decomposition per
+row per function with nothing shared. Since May 2026 (PR #17371, `velox/type/FastDate.h`) that
+decomposition is Neri-Schneider's reference code with era shift 82 - the same month block task 53
+shipped, the same `1461 * y / 4 - c + c / 4` and `(979 * m - 2919) / 32` inverse the `datealgo-rs`
+review recorded, and the 64-bit year multiply task 49 is waiting for. Their measured gain from the
+swap was 1.6-1.9x end to end on `month` and `day`, none on `year(date)`. ISO week goes through
+Howard Hinnant's `iso_week.h`; `yearofweek` keeps the two boundary corrections task 37 dropped for
+the Thursday rule; `next_day` is `start + 1 + floorMod(dow - 1 - start, 7)` off the day number, as
+task 33 does. No datetime file contains SIMD. The only SIMD near expressions,
+`SIMDComparisonUtil.h`, computes 64 comparison bytes and packs them into a bitmask, which the
+Vector API gives Varka as `VectorMask.toLong()`.
+
+What Velox *is* good for: its Spark-compatibility tests were written by people who had to match
+Spark exactly, and they are a second, independent list of the edge cases worth pinning.
+`sparksql/tests/DateTimeFunctionsTest.cpp` has 56 cases; task 37's row now names the `weekOfYear`
+set as fixtures to import, and the `addMonths` and `makeDate` sets are a cross-check for tasks 40
+and 42. Its string-to-date cast is a character loop over exactly the Spark grammar milestone 4's
+item 8 sends to the fallback - optional sign, at least four year digits, optional `-[m]m` and
+`-[d]d`, then end, space or `T` - which confirms that design's shape mask covers the right subset.
+Velox also ships `DateExtractBenchmark` and `FormatDateTimeBenchmark` over 1024-row vectors fuzzed
+within 67 years of the epoch; an external scalar-engine reference number is available from them at
+the cost of a Velox build, and that ~67-year range is a fair data-shape argument in milestone 5's
+item 10 cache question.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
