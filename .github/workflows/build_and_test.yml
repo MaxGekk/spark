@@ -125,6 +125,11 @@ jobs:
             transpile=false
             static_only=false
             changed_files=$(git diff --name-only "$APACHE_SPARK_REF" HEAD 2>/dev/null)
+            # Printed because its size is the tell. Against the pull request's own base this is
+            # a handful of files; if it ever jumps to the hundreds, the change-detection base has
+            # drifted back to apache/spark and every job below is about to run regardless of
+            # what changed - which is how that went unnoticed once already.
+            echo "changed files vs base: $(echo "$changed_files" | grep -c . || true)"
             if [ -n "$changed_files" ]; then
               static_only=true
               for f in $changed_files; do
