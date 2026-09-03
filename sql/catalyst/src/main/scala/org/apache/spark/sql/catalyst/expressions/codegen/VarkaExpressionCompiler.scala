@@ -22,9 +22,9 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaLoopEmitter, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, IntegerType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -497,6 +497,8 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRDayOfMonth(_))
     case Quarter(child) =>
       compileNode(child, inputs, literals, sink).map(new IRQuarter(_))
+    case DayOfYear(child) =>
+      compileNode(child, inputs, literals, sink).map(new IRDayOfYear(_))
     case LastDay(child) =>
       compileNode(child, inputs, literals, sink).map(new IRLastDay(_))
     // Month arithmetic (task 40): add_months(d, n) and d +- INTERVAL n MONTH/YEAR are the same

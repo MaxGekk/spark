@@ -531,7 +531,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     try {
       checkDifferential(spark, varkaSpark,
         "SELECT year(d) AS a, month(d) AS b, dayofmonth(d) AS c, quarter(d) AS e, " +
-          "year(date_add(d, 1)) AS f FROM varka_cal ORDER BY a, b, c, e, f",
+          "dayofyear(d) AS g, year(date_add(d, 1)) AS f FROM varka_cal " +
+          "ORDER BY a, b, c, e, g, f",
         expectFused = true)
       // EXTRACT desugars to the same nodes, so it must fuse the same way.
       checkDifferential(spark, varkaSpark,

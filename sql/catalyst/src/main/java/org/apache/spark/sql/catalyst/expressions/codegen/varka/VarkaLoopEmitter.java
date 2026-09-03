@@ -49,6 +49,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Con
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
@@ -214,9 +215,37 @@ public final class VarkaLoopEmitter {
    * exceed the budget for each calendar output to get its own loop method; the real figure is
    * used rather than a flag so that a future node of intermediate width sorts sensibly beside
    * it, which is the only reason the exact value matters - re-count it if the lowering
-   * changes shape rather than leaving it to drift.
+   * changes shape rather than leaving it to drift. Covers {@code Year}/{@code Month}/
+   * {@code DayOfMonth}/{@code Quarter} (task 26), the shared prefix (~40 ops) plus each
+   * field's own 3-6 op tail; {@code DayOfYear} is heavier and weighs
+   * {@link #DAY_OF_YEAR_WEIGHT} instead.
    */
   private static final int CHRONO_WEIGHT = 50;
+
+  /**
+   * What {@code DayOfYear} (task 34) weighs against {@link #GROUP_BUDGET}, counted the same
+   * way as {@link #CHRONO_WEIGHT}: the shared prefix, minus its month step because this tail
+   * does not read the March month (see {@link #tailReadsMarchMonth}), plus
+   * {@link #emitChronoYear} (6), plus {@link #emitLeapFlag} (4), plus the January-based blend
+   * (5) - about 51 total, counted by reading every emitted instruction rather than estimated.
+   *
+   * <p>This number has been 73, then 55, and is now 51, and the history is worth a sentence
+   * because twice out of three times the leap flag was the reason. This task first shipped its
+   * own leap test (19 ops, a two-way remainder compare) and deleted it in favour of task 40's
+   * (22 ops), which won on bias range rather than cost. Both are gone: the helper is now
+   * Huffner's perfect hash at 4 ops, so what was the dominant term here is a rounding error.
+   * The last four came off when task 48 landed and this node turned out to be the second one
+   * whose tail reads the January turn off the day of year rather than off the month.
+   *
+   * <p>Both this and {@link #CHRONO_WEIGHT} exceed {@link #GROUP_BUDGET}, so the exact value
+   * does not change today's grouping decision - a lone {@code DayOfYear} output forms its own
+   * loop method either way. What the drop does change is the compile-cliff worry the old value
+   * carried: 51 ops is inside the 59-op single-output width this file's own measurements call
+   * healthy, where 73 was past it and close to the 64-op loop task 26 measured triggering a
+   * ~10 second tier-4 compile stall. Whether a lone {@code SELECT dayofyear(d)} reaches that
+   * stall is still task 43's question, but this task no longer has a reason to expect it.
+   */
+  private static final int DAY_OF_YEAR_WEIGHT = 51;
 
   /**
    * How many int-vector/mask locals {@link #emitChronoPrefix} leaves its results in: six
@@ -633,6 +662,9 @@ public final class VarkaLoopEmitter {
     if (node instanceof ColumnRef || node instanceof LiteralSlot) {
       return 0;
     }
+    if (node instanceof DayOfYear) {
+      return DAY_OF_YEAR_WEIGHT;
+    }
     if (isChrono(node)) {
       return CHRONO_WEIGHT;
     }
@@ -655,6 +687,7 @@ public final class VarkaLoopEmitter {
       case Month n -> n.days();
       case DayOfMonth n -> n.days();
       case Quarter n -> n.days();
+      case DayOfYear n -> n.days();
       case AddMonths n -> n.days();
       case LastDay n -> n.days();
       default -> throw new IllegalStateException("not a calendar node: " + node);
@@ -678,6 +711,7 @@ public final class VarkaLoopEmitter {
       case Month n -> true;
       case DayOfMonth n -> true;
       case Quarter n -> true;
+      case DayOfYear n -> false;
       case AddMonths n -> true;
       case LastDay n -> true;
       default -> throw new IllegalStateException("not a calendar node: " + node);
@@ -761,6 +795,7 @@ public final class VarkaLoopEmitter {
       case Month n -> new VarkaVectorIR[] {n.days()};
       case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
       case Quarter n -> new VarkaVectorIR[] {n.days()};
+      case DayOfYear n -> new VarkaVectorIR[] {n.days()};
       case LastDay n -> new VarkaVectorIR[] {n.days()};
       case AddMonths n -> new VarkaVectorIR[] {n.days(), n.months()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
@@ -980,6 +1015,7 @@ public final class VarkaLoopEmitter {
         case Month n -> analyzeOp(node, false, n.days());
         case DayOfMonth n -> analyzeOp(node, false, n.days());
         case Quarter n -> analyzeOp(node, false, n.days());
+        case DayOfYear n -> analyzeOp(node, false, n.days());
         case LastDay n -> analyzeOp(node, false, n.days());
         case AddMonths n -> {
           requireLiteralOffset(n.months());
@@ -1119,7 +1155,8 @@ public final class VarkaLoopEmitter {
     /** Per calendar node: the civil-from-days temporaries (task 26), six vectors and two
      * masks - the decomposition is too long to keep on the operand stack. The first
      * {@link #CHRONO_PREFIX_SLOTS} are the prefix fragment's and may be shared with a sibling
-     * (see {@link #chronoPrefixTmp}); anything past them is the node's own. */
+     * (see {@link #chronoPrefixTmp}); anything past them is the node's own, which is where
+     * task 34's leap-flag tail for {@code DayOfYear} keeps its two extra locals. */
     final Map<VarkaVectorIR, int[]> chronoTmp = new HashMap<>();
     /** Per prefix fragment: the {@link #CHRONO_PREFIX_SLOTS} locals its run leaves its results
      * in. Two nodes with the same {@link FragmentKey} name the same locals, which is what lets
@@ -1277,16 +1314,19 @@ public final class VarkaLoopEmitter {
           if (isChrono(node)) {
             // Six int-vector temporaries and two masks for a plain extraction (see emitChrono
             // for what stays live); AddMonths (task 40) needs the same eight plus the rest of
-            // emitAddMonths's own locals, since it decomposes and recomposes in one node, and
-            // LastDay (task 36) needs the same eight plus emitChronoLastDay's own month-length
-            // and leap-flag scratch. The first eight are the prefix fragment's and are
-            // allocated once per fragment when sharing is on, so siblings over one date name
-            // the same locals; the rest are the node's own, because emitAddMonths/
-            // emitChronoLastDay write them and their siblings must not see that. (Their one
-            // write into a shared slot is the prefix's carry mask, which no field's tail reads
-            // - see emitChronoPrefixOnce.)
+            // emitAddMonths's own locals, since it decomposes and recomposes in one node;
+            // DayOfYear (task 34) needs one more, for the plain year its leap flag is computed
+            // from - t[6] and t[7] are the prefix's carry scratch and are dead by the time its
+            // tail runs, so only t[8] is genuinely extra; and LastDay (task 36) needs the same
+            // eight plus emitChronoLastDay's own month-length and leap-flag scratch.
+            // The first eight are the prefix fragment's and are allocated once per fragment
+            // when sharing is on, so siblings over one date name the same locals; the rest are
+            // the node's own, because emitAddMonths/emitChronoLastDay write them and their
+            // siblings must not see that. (Their one write into a shared slot is the prefix's
+            // carry mask, which no field's tail reads - see emitChronoPrefixOnce.)
             int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT
                 : node instanceof LastDay ? LAST_DAY_TMP_COUNT
+                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 1
                 : CHRONO_PREFIX_SLOTS;
             FragmentKey key = fragmentKey(node, dense, s);
             int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
@@ -1341,6 +1381,7 @@ public final class VarkaLoopEmitter {
       case Month n -> s.wordRef.get(n.days());
       case DayOfMonth n -> s.wordRef.get(n.days());
       case Quarter n -> s.wordRef.get(n.days());
+      case DayOfYear n -> s.wordRef.get(n.days());
       case LastDay n -> s.wordRef.get(n.days());
       case AddMonths n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.months()));
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
@@ -1960,6 +2001,7 @@ public final class VarkaLoopEmitter {
       case Month n -> emitChrono(cb, node, dense, analysis, s, computed);
       case DayOfMonth n -> emitChrono(cb, node, dense, analysis, s, computed);
       case Quarter n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case DayOfYear n -> emitChrono(cb, node, dense, analysis, s, computed);
       case AddMonths n -> {
         emitAddMonths(cb, n, dense, analysis, s, computed);
         if (!dense && s.ownWord.contains(node)) {
@@ -2206,11 +2248,11 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Consumes the child's {@code IntVector} of epoch days and leaves one of the four calendar
-   * fields (task 26). {@link VarkaChrono} is the scalar twin of everything below - it holds
-   * every constant this method loads, and its own javadoc carries the derivation - so the two
-   * cannot drift and a disagreement between them is an emission bug rather than an arithmetic
-   * one.
+   * Consumes the child's {@code IntVector} of epoch days and leaves one of the five calendar
+   * fields (task 26, plus {@code dayOfYear} from task 34). {@link VarkaChrono} is the scalar
+   * twin of everything below - it holds every constant this method loads, and its own javadoc
+   * carries the derivation - so the two cannot drift and a disagreement between them is an
+   * emission bug rather than an arithmetic one.
    *
    * <p>The shape is a civil-from-days decomposition in a March-based year, where the leap day
    * is a year's last day rather than an interior one. There is no vector divide, so every
@@ -2246,6 +2288,42 @@ public final class VarkaLoopEmitter {
         cb.loadConstant(2);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
         emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+      }
+      case DayOfYear n -> {
+        // t[6..8] are DayOfYear's own - a plain extraction's chronoTmp is only 8 long, so
+        // nothing else in this switch may read past t[5]. t[6] and t[7] are the prefix's carry
+        // scratch, dead by here, so only t[8] is genuinely extra.
+        int mask = t[6];
+        int leap = t[7];
+        int year = t[8];
+        // year - Year's own formula, recomputed here because the leap flag needs a plain
+        // year and nothing upstream keeps one around. emitLeapFlag applies its own bias.
+        // Like Year's own tail this reads the January bit off the day of year (task 48), so
+        // this node is the second one whose prefix never needs the month step.
+        emitChronoYear(cb, era, century, yearOfCentury, rem);
+        cb.astore(year);
+        emitLeapFlag(cb, year);
+        cb.astore(leap);
+
+        // dayofyear = doy >= 306 ? doy - 305 : doy + 60 + L
+        cb.aload(rem);
+        cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+        cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS);
+        cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+        cb.astore(mask);
+
+        cb.aload(rem);
+        cb.loadConstant(VarkaChrono.MARCH_DAY_OF_YEAR);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        cb.loadConstant(1);
+        cb.aload(leap);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+
+        cb.aload(rem);
+        cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS - 1);
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+        cb.aload(mask);
+        cb.invokevirtual(INT_VECTOR, "blend", BLEND);
       }
       case LastDay n -> emitChronoLastDay(cb, s, t);
       default -> throw new IllegalStateException("not a calendar node: " + node);
@@ -2934,6 +3012,7 @@ public final class VarkaLoopEmitter {
     emitJanuaryMask(cb, marchMonth);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
   }
+
 
   /**
    * Emits a condition node: in the dense body a single {@code VectorMask} local (every input

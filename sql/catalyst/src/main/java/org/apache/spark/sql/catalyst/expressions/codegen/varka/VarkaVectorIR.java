@@ -194,7 +194,7 @@ public sealed interface VarkaVectorIR
    * handled, which is the same protection {@link Cond} gives the condition nodes.
    */
   sealed interface Chrono extends VarkaVectorIR
-      permits Year, Month, DayOfMonth, Quarter, LastDay {}
+      permits Year, Month, DayOfMonth, Quarter, DayOfYear, LastDay {}
 
   /**
    * {@code date +- INTERVAL n MONTH/YEAR} and {@code add_months(date, n)} (task 40): month
@@ -212,11 +212,12 @@ public sealed interface VarkaVectorIR
    * Spark's {@code year} (task 26): the proleptic Gregorian year of a date, as
    * {@code LocalDate#getYear} gives it. An {@code IntegerType} output at the Spark level.
    *
-   * <p>The four calendar nodes below are unlike every other node here in one way worth naming:
-   * each expands to about fifty lane ops rather than one or two, because there is no vector
-   * divide and a civil-from-days decomposition is mostly division. {@link VarkaChrono} holds
-   * the arithmetic and the constants; {@link VarkaLoopEmitter} weighs these nodes accordingly
-   * when it partitions outputs into loop methods, so four of them cannot land in one method.
+   * <p>The five calendar nodes below are unlike every other node here in one way worth naming:
+   * each expands to about fifty lane ops or more rather than one or two, because there is no
+   * vector divide and a civil-from-days decomposition is mostly division. {@link VarkaChrono}
+   * holds the arithmetic and the constants; {@link VarkaLoopEmitter} weighs these nodes
+   * accordingly when it partitions outputs into loop methods, so no two of them land in one
+   * method.
    *
    * <p>Each node carries the whole decomposition rather than sharing it: two calendar fields of
    * the same date compute it twice, in two sibling methods, which is the trade task 17 measured
@@ -232,6 +233,13 @@ public sealed interface VarkaVectorIR
 
   /** Spark's {@code quarter}, 1-4 - the month's own division by three; see {@link Year}. */
   record Quarter(VarkaVectorIR days) implements Chrono {}
+
+  /**
+   * Spark's {@code dayofyear}, 1-365 or 1-366: the January-based day of year, one comparison
+   * away from the March-based {@code doy} {@link VarkaChrono} already computes; see
+   * {@link Year} for what the node costs and why.
+   */
+  record DayOfYear(VarkaVectorIR days) implements Chrono {}
 
   /**
    * Spark's {@code last_day} (task 36): the last date of the month {@code days} falls in - a
@@ -279,6 +287,7 @@ public sealed interface VarkaVectorIR
       case Month n -> "(month " + canonical(n.days()) + ")";
       case DayOfMonth n -> "(dayOfMonth " + canonical(n.days()) + ")";
       case Quarter n -> "(quarter " + canonical(n.days()) + ")";
+      case DayOfYear n -> "(dayOfYear " + canonical(n.days()) + ")";
       case LastDay n -> "(lastDay " + canonical(n.days()) + ")";
       case AddMonths n ->
           "(addMonths " + canonical(n.days()) + " " + canonical(n.months()) + ")";
@@ -339,6 +348,7 @@ public sealed interface VarkaVectorIR
       case Month n -> "(month " + lineOf.applyAsInt(n.days()) + ")";
       case DayOfMonth n -> "(dayOfMonth " + lineOf.applyAsInt(n.days()) + ")";
       case Quarter n -> "(quarter " + lineOf.applyAsInt(n.days()) + ")";
+      case DayOfYear n -> "(dayOfYear " + lineOf.applyAsInt(n.days()) + ")";
       case LastDay n -> "(lastDay " + lineOf.applyAsInt(n.days()) + ")";
       case AddMonths n -> "(addMonths " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.months()) + ")";

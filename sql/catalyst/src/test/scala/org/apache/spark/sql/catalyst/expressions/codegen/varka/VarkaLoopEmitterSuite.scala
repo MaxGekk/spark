@@ -231,6 +231,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       // implementation is not an oracle.
       evalValue(n.days(), row, lits)
         .map(v => LocalDate.ofEpochDay(v.toLong).get(IsoFields.QUARTER_OF_YEAR))
+    case n: DayOfYear =>
+      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getDayOfYear)
     case n: LastDay =>
       // The definition, not the linear-form-plus-leap-flag this task's lowering computes.
       evalValue(n.days(), row, lits).map(DateTimeUtils.getLastDayOfMonth)
@@ -794,18 +796,80 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("the calendar extractions match LocalDate over the range they cover") {
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
-      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
     val inRange = Array(
       VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
       VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1,
       -1, 0, 1, -719468, -719162,
       LocalDate.of(1600, 2, 29).toEpochDay.toInt, LocalDate.of(1900, 3, 1).toEpochDay.toInt,
       LocalDate.of(2000, 2, 29).toEpochDay.toInt, LocalDate.of(1, 1, 1).toEpochDay.toInt,
-      LocalDate.of(9999, 12, 31).toEpochDay.toInt)
+      LocalDate.of(9999, 12, 31).toEpochDay.toInt
+    ) ++ Array(
+      // dayofyear's own boundary set (task 34): every year-end/year-start pair a leap flag
+      // could get wrong, plus February's own boundary in a leap and a century-non-leap year.
+      LocalDate.of(2000, 1, 1), LocalDate.of(2000, 12, 31), // leap
+      LocalDate.of(2024, 1, 1), LocalDate.of(2024, 12, 31), // leap
+      LocalDate.of(2023, 1, 1), LocalDate.of(2023, 12, 31), // common
+      LocalDate.of(1900, 1, 1), LocalDate.of(1900, 12, 31), // century, not leap
+      LocalDate.of(2000, 2, 28), LocalDate.of(1900, 2, 28)
+    ).map(_.toEpochDay.toInt)
     def days(c: Int, i: Int): Int =
       if (i < inRange.length) inRange(i) else i * 9973 - 400000
     checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
       nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed")
+  }
+
+  test("the emitted kernel agrees with VarkaChrono's scalar twin, not only with LocalDate") {
+    // Every other test in this file checks the emitted kernel against LocalDate and
+    // VarkaChronoSuite checks VarkaChrono against LocalDate separately - each a genuine
+    // definition-level oracle, deliberately not each other (see evalValue's comment above).
+    // That leaves a gap this test closes: nothing committed (the direct comparison only runs
+    // opt-in, in the exhaustive sweep below) ever compares the emitted bytecode against
+    // VarkaChrono directly, so a future edit that moved both the same wrong way could agree
+    // with LocalDate on every curated/pseudo-random day above and still have silently
+    // diverged from VarkaChrono - contradicting VarkaChrono's own class-doc promise that "any
+    // disagreement with the emitted kernel is an emission bug". A committed, non-exhaustive
+    // sample is enough to catch that: it does not need to be exhaustive, since the exhaustive
+    // sweep already exists for the LocalDate side and opting into it is what full coverage
+    // means here.
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
+    val days = Array(
+      VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
+      VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1, -1, 0, 1,
+      LocalDate.of(1600, 2, 29).toEpochDay.toInt, LocalDate.of(1900, 3, 1).toEpochDay.toInt,
+      LocalDate.of(2000, 2, 29).toEpochDay.toInt
+    ) ++ Array.tabulate(2000)(i => i * 9973 - 400000)
+      .filter(VarkaChrono.inNarrowRange)
+    val (kernel, loader) = load(emitMulti(roots, 1, 0))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val data = alloc(arena, days.length * 4L)
+        val validity = alloc(arena, (days.length + 7) / 8L)
+        validity.fill(0xFF.toByte)
+        days.zipWithIndex.foreach { case (d, i) => data.set(ValueLayout.JAVA_INT, i * 4L, d) }
+        val outs = roots.map(_ => makeOutput(arena, days.length))
+        val status = kernel.run(Array(data.address()), Array(validity.address()), Array(0),
+          outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
+          Array.empty[Int], days.length)
+        assert(status === 0, "the kernel declined an in-range batch")
+        days.indices.foreach { i =>
+          val fields = VarkaChrono.narrowed(days(i))
+          val want = Seq(fields.year, fields.month, fields.dayOfMonth, fields.quarter,
+            fields.dayOfYear)
+          val got = outs.map(_._1.get(ValueLayout.JAVA_INT, i * 4L))
+          assert(got === want, s"day ${days(i)}: emitted $got, VarkaChrono $want")
+        }
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
   }
 
   test("last_day matches DateTimeUtils.getLastDayOfMonth over the range it covers " +
@@ -885,9 +949,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "set -Dvarka.sweep=true to sweep the emitted kernel")
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
-      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)))
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
     // Both lowerings, because task 32 step B's shared prefix re-orders nothing but does make
-    // three of these four outputs read locals a fourth wrote. A transposed slot there would
+    // four of these five outputs read locals a fifth wrote. A transposed slot there would
     // survive every bounded test in this suite and fail here.
     //
     // Both switch positions, and a year-only kernel beside the four-field one, because task
@@ -895,20 +960,28 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // the month step under sharing (three of its tails read it) and only the year-only shape
     // sweeps the elided prefix in both sharing modes. This is the gate that matters for that
     // claim - the bounded tests locate a failure it would only report.
+    //
+    // `dayofyear` alone for the same reason: task 34's tail is the second one that reads the
+    // January turn off the day of year rather than off the month, so its prefix elides the
+    // step too - and a tail reading an unwritten local returns a plausible wrong day, not a
+    // crash. This is the only test that would notice.
     val yearOnly = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
+    val dayOfYearOnly = Seq[VarkaVectorIR](new DayOfYear(new ColumnRef(0)))
     for {
       options <- Seq(unshared, sharing)
       elide <- Seq(true, false)
     } {
       sweepCalendar(roots, options.withElideChronoMonth(elide))
       sweepCalendar(yearOnly, options.withElideChronoMonth(elide), date => Seq(date.getYear))
+      sweepCalendar(dayOfYearOnly, options.withElideChronoMonth(elide),
+        date => Seq(date.getDayOfYear))
     }
   }
 
-  /** What `LocalDate` says the four extractions are, in the order they are emitted. */
+  /** What `LocalDate` says the five extractions are, in the order they are emitted. */
   private val allCalendarFields: LocalDate => Seq[Int] = date =>
     Seq(date.getYear, date.getMonthValue, date.getDayOfMonth,
-      date.get(IsoFields.QUARTER_OF_YEAR))
+      date.get(IsoFields.QUARTER_OF_YEAR), date.getDayOfYear)
 
   private def sweepCalendar(
       roots: Seq[VarkaVectorIR],
@@ -1315,6 +1388,34 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       options = unshared)
   }
 
+  test("task 34: dayofyear elides the month step too, and month(d) beside it does not") {
+    // The bounded counterpart of the sweep: dayofyear's tail reads the January turn off the
+    // day of year (like Year's, task 48), so its prefix has no reason to run the month step.
+    // A regression here is silent - the tail would read a local nothing wrote - so the count
+    // is pinned rather than left to the sweep, which is opt-in.
+    val col = new ColumnRef(0)
+    val alone = Seq[VarkaVectorIR](new DayOfYear(col))
+    val elided = emitMulti(alone, 1, 0, VarkaEmitOptions.DEFAULTS)._2
+    val kept = emitMulti(alone, 1, 0, VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false))._2
+    for (body <- Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")) {
+      assert(laneOps(elided, body) === laneOps(kept, body) - monthStepOps,
+        s"$body did not lose exactly the month step: ${laneOps(kept, body)} lane ops with the " +
+          s"step kept, ${laneOps(elided, body)} with it elided")
+    }
+    // Shared with a month tail, the fragment keeps the step for both - the decision is the
+    // group's consumer set, not the node's, and dayofyear must not elide out from under it.
+    val withMonth = Seq[VarkaVectorIR](new DayOfYear(col), new Month(col))
+    val sharedElided = emitMulti(withMonth, 1, 0, sharing)._2
+    val sharedKept = emitMulti(withMonth, 1, 0, sharing.withElideChronoMonth(false))._2
+    assert(laneOps(sharedElided, "epilogueMasked") === laneOps(sharedKept, "epilogueMasked"),
+      "the shared epilogue elided the month step with a month tail reading it")
+    for ((options, ctx) <- Seq((VarkaEmitOptions.DEFAULTS, "alone"), (sharing, "shared"))) {
+      checkMatrix(if (ctx == "alone") alone else withMonth, 1, Array.empty[Int],
+        remainderLengths, nullPatterns.map(p => Seq(p._2)), data = calendarDays,
+        ctx = s"dayofyear month step, $ctx", options = options)
+    }
+  }
+
   test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 20 outputs to 44") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
@@ -1580,15 +1681,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "20=(least 18 19)",
     "21=(greatest 17 20)",
     "22=(least 16 21)",
-    "23=(dayOfWeek 1)",
-    "24=(dateDiff 22 23)",
-    "25=(weekDay 1)",
-    "26=(nextDay 1 2)",
-    "27=(addMonths 1 2)",
-    "28=(least 26 27)",
-    "29=(least 25 28)",
-    "30=(least 24 29)",
-    "31=(if 10 13 30)").mkString("\n")
+    "23=(dayOfYear 1)",
+    "24=(greatest 22 23)",
+    "25=(dayOfWeek 1)",
+    "26=(dateDiff 24 25)",
+    "27=(weekDay 1)",
+    "28=(nextDay 1 2)",
+    "29=(addMonths 1 2)",
+    "30=(least 28 29)",
+    "31=(least 27 30)",
+    "32=(least 26 31)",
+    "33=(if 10 13 32)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -1612,14 +1715,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to
-    // ride Record.toString, whose format no JDK promises. One key using all 21 node types (and
+    // ride Record.toString, whose format no JDK promises. One key using all 23 node types (and
     // three CompareOps), so a change to any rendering, to the operand order, or to the
     // topological schedule fails here. If it does: make sure the change is intended, then
     // update the literal and say so in the task plan - the same rule as the pinned shape
     // hashes in VarkaShapeCacheSuite. Task 26 added the four calendar extractions and
-    // re-pinned it (PLAN_TASK_26.md); task 33 added NextDay, task 40 added AddMonths and task
-    // 36 added LastDay, each re-pinning it again (PLAN_TASK_33.md, PLAN_TASK_40.md,
-    // PLAN_TASK_36.md).
+    // re-pinned it (PLAN_TASK_26.md); task 33 added NextDay, task 40 added AddMonths, task 36
+    // added LastDay and task 34 added DayOfYear, each re-pinning it again (PLAN_TASK_33.md,
+    // PLAN_TASK_40.md, PLAN_TASK_36.md, PLAN_TASK_34.md). Re-pinned from the failing
+    // assertion's own output, never carried over from one side of a merge: a line map that is
+    // right for one node set is wrong for the union of two.
     val col = new ColumnRef(0)
     val lit = new LiteralSlot(0)
     val cond = new And(
@@ -1627,9 +1732,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         new Compare(CompareOp.LT, col, lit),
         new Not(new Compare(CompareOp.EQ, col, lit))),
       new And(new Compare(CompareOp.GE, col, lit), new IsNotNull(col)))
-    val chrono = new Least(
-      new Greatest(new Year(col), new Month(col)),
-      new Greatest(new DayOfMonth(col), new Least(new Quarter(col), new LastDay(col))))
+    val chrono = new Greatest(
+      new Least(
+        new Greatest(new Year(col), new Month(col)),
+        new Greatest(new DayOfMonth(col), new Least(new Quarter(col), new LastDay(col)))),
+      new DayOfYear(col))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
