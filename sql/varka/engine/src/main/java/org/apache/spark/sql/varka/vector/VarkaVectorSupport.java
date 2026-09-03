@@ -188,6 +188,37 @@ public final class VarkaVectorSupport {
   }
 
   /**
+   * Sets exactly the low {@code rows} bits of a destination validity bitmap and nothing past
+   * them: whole {@code 0xFF} bytes for {@code rows / 8}, then the low {@code rows % 8} bits of
+   * the byte after those.
+   *
+   * <p>Task 45's counterpart to {@link #zero}. On a dense batch the dispatcher has already
+   * proven every referenced input null-free, and task 11's invariant - every node maps valid
+   * inputs to valid outputs, and there is no null-literal node - makes every value output valid
+   * on every row. So the bits are known before the loop starts, and the loop's per-lane-group
+   * {@code orValidityBitsAt} call is ORing a word of all ones into a bitmap the driver zeroed a
+   * moment earlier.
+   *
+   * <p><b>Exactly {@code rows} bits, not the whole last byte.</b> Today's dense path zeroes
+   * {@code (rows + 7) / 8} bytes and then ORs lane-masked words, so the bits past {@code rows}
+   * in the final byte are left zero. {@code VarkaLoopEmitterSuite}'s {@code assertSameOutput}
+   * compares dense and masked validity byte for byte, and while Arrow's {@code getNullCount}
+   * stops at {@code valueCount}, nothing promises every reader does. Producing bit-identical
+   * output to the loop is the contract here, and it is what lets the existing differential be
+   * this change's oracle rather than something to rewrite.
+   */
+  public static void setValid(MemorySegment seg, int rows) {
+    int wholeBytes = rows >>> 3;
+    if (wholeBytes > 0) {
+      seg.asSlice(0L, wholeBytes).fill((byte) 0xFF);
+    }
+    int tail = rows & 7;
+    if (tail != 0) {
+      seg.set(ValueLayout.JAVA_BYTE, wholeBytes, (byte) ((1 << tail) - 1));
+    }
+  }
+
+  /**
    * Maps a raw address as a segment of exactly {@code bytes} bytes. The size is the whole point:
    * the caller passes a bare {@code long}, so this is where a kernel says how far it is entitled
    * to read, and the {@link MemorySegment} bounds check enforces it from there on.

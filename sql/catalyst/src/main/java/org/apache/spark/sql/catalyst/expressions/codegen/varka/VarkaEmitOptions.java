@@ -67,12 +67,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *                          <i>inside</i> a node's emitted run rather than between whole nodes,
  *                          which is why the emitter needs a separate notion of a fragment for
  *                          it. See {@code VarkaLoopEmitter.FragmentKey}.
- * @param neriSchneiderMonth whether the month index and the day of month come out of one
- *        affine numerator (Neri-Schneider 2022, task 53) or from the magic multiply plus
- *        forward month-start this project shipped first. The two compute the same fields on
- *        two different month axes - March = 3 against March = 0 - and are differentially
- *        checked against each other, so the older one stays a live reference variant rather
- *        than dead code, on {@link FloorMod7}'s precedent.
+ * @param denseValidityOnce whether a dense batch's value outputs have their validity bits set
+ *        once by the driver rather than OR-ed in per lane group by the loop (task 45). On a
+ *        dense batch the dispatcher has proven every referenced input null-free and task 11's
+ *        invariant makes every value output valid on every row, so the loop's per-group call
+ *        writes ones over ones. `false` reproduces the older bytes exactly and stays a
+ *        reference variant the differential checks against, on {@link FloorMod7}'s precedent.
  * @param elideChronoMonth whether the civil-from-days prefix skips its March-month step in a
  *                         body where no tail reads the month (task 48). The year tail is the
  *                         one of the four fields that does not: it reads the January turn off
@@ -80,6 +80,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *                         the chain. Like {@link #cse} it is an optimization and never a
  *                         semantics change - the step it removes is dead work where it is
  *                         removed - and it is a switch only so the A/B stays re-runnable.
+ * @param neriSchneiderMonth whether the month index and the day of month come out of one
+ *        affine numerator (Neri-Schneider 2022, task 53) or from the magic multiply plus
+ *        forward month-start this project shipped first. The two compute the same fields on
+ *        two different month axes - March = 3 against March = 0 - and are differentially
+ *        checked against each other, so the older one stays a live reference variant rather
+ *        than dead code, on {@link FloorMod7}'s precedent.
  * @param floorMod7 which lowering {@code dayofweek}/{@code weekday} use for their mod-7.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
@@ -92,6 +98,7 @@ public record VarkaEmitOptions(
     int groupBudget,
     boolean cse,
     boolean shareChronoPrefix,
+    boolean denseValidityOnce,
     boolean elideChronoMonth,
     boolean neriSchneiderMonth,
     FloorMod7 floorMod7,
@@ -109,7 +116,7 @@ public record VarkaEmitOptions(
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
-          VarkaLoopEmitter.GROUP_BUDGET, true, true, true, true, FloorMod7.MAGIC, false);
+          VarkaLoopEmitter.GROUP_BUDGET, true, true, true, true, true, FloorMod7.MAGIC, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -122,38 +129,43 @@ public record VarkaEmitOptions(
 
   /** {@link #DEFAULTS} with one field changed, for the suites and benchmarks that vary one. */
   public VarkaEmitOptions withGroupBudget(int budget) {
-    return new VarkaEmitOptions(budget, cse, shareChronoPrefix, elideChronoMonth,
-        neriSchneiderMonth, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(budget, cse, shareChronoPrefix, denseValidityOnce,
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withCse(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, enabled, shareChronoPrefix, elideChronoMonth,
-        neriSchneiderMonth, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, enabled, shareChronoPrefix, denseValidityOnce,
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withShareChronoPrefix(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, cse, enabled, elideChronoMonth,
-        neriSchneiderMonth, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, cse, enabled, denseValidityOnce,
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
+  }
+
+  public VarkaEmitOptions withDenseValidityOnce(boolean enabled) {
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, enabled,
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withElideChronoMonth(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, enabled,
-        neriSchneiderMonth, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
+        enabled, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withNeriSchneiderMonth(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, elideChronoMonth,
-        enabled, floorMod7, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
+        elideChronoMonth, enabled, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withFloorMod7(FloorMod7 lowering) {
-    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, elideChronoMonth,
-        neriSchneiderMonth, lowering, misdescribeAdd);
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
+        elideChronoMonth, neriSchneiderMonth, lowering, misdescribeAdd);
   }
 
   public VarkaEmitOptions withMisdescribeAdd(boolean misdescribe) {
-    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, elideChronoMonth,
-        neriSchneiderMonth, floorMod7, misdescribe);
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribe);
   }
 
   public boolean isDefault() {
@@ -170,7 +182,8 @@ public record VarkaEmitOptions(
     if (isDefault()) {
       return "";
     }
-    return "opts(" + groupBudget + '|' + cse + '|' + shareChronoPrefix + '|' + elideChronoMonth
-        + '|' + neriSchneiderMonth + '|' + floorMod7 + '|' + misdescribeAdd + ')';
+    return "opts(" + groupBudget + '|' + cse + '|' + shareChronoPrefix + '|' + denseValidityOnce
+        + '|' + elideChronoMonth + '|' + neriSchneiderMonth + '|' + floorMod7 + '|'
+        + misdescribeAdd + ')';
   }
 }

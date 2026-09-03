@@ -401,6 +401,14 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           new Quarter(new ColumnRef(0)))
         val four = emit(fourFields, 1, 0, loader, 803)
         val dow = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804)
+        // Task 45's A/B, on shapes that already exist rather than new ones: the point is what
+        // the dense validity fill does to kernels that ship today. Each pair is adjacent, so
+        // both sides run back to back under one JIT and thermal state, and the mixed-null rows
+        // are the control - the masked bodies are asserted byte for byte identical under the
+        // option, so movement there is run noise rather than an effect.
+        val perGroup = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false)
+        val yearPerGroup = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 830, perGroup)
+        val dowPerGroup = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 832, perGroup)
         // Task 48's A/B. The shipped year kernel skips the prefix's March-month step - four
         // lane ops a year tail never reads, since it takes the January turn off the day of
         // year instead (PLAN_TASK_48.md section 2) - and this is the same kernel with the
@@ -451,6 +459,12 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             require(status == 0, s"the kernel declined a batch: status $status")
           }
         benchmark.addCase("year, null-free") { _ => chunked(year, false) }
+        benchmark.addCase("year, validity OR-ed per group (task 45 A/B), null-free") { _ =>
+          chunked(yearPerGroup, false)
+        }
+        benchmark.addCase("year, validity OR-ed per group (task 45 A/B), mixed nulls") { _ =>
+          chunked(yearPerGroup, true)
+        }
         benchmark.addCase("year, month step kept (task 48 A/B), null-free") { _ =>
           chunked(yearMonthKept, false)
         }
@@ -509,6 +523,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val yearMonthDaySeparate = emit(yearMonthDay, 1, 0, loader, 807)
         val yearMonthDayShared = emit(yearMonthDay, 1, 0, loader, 808, wideBudget)
         val fourShared = emit(fourFields, 1, 0, loader, 809, wideBudget)
+        val fourSharedPerGroup = emit(fourFields, 1, 0, loader, 831,
+          wideBudget.withDenseValidityOnce(false))
         benchmark.addCase("year+month, separate (2 loop methods), null-free") { _ =>
           chunked(yearMonthSeparate, false, outputs = 2)
         }
@@ -520,6 +536,17 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         benchmark.addCase("year+month+day, shared (1 loop method), null-free") { _ =>
           chunked(yearMonthDayShared, false, outputs = 3)
+        }
+        benchmark.addCase("dayofweek, validity OR-ed per group (task 45 A/B), null-free") {
+          _ => chunked(dowPerGroup, false)
+        }
+        benchmark.addCase(
+          "year+month+day+quarter, shared, validity OR-ed per group (task 45 A/B), null-free") {
+          _ => chunked(fourSharedPerGroup, false, outputs = 4)
+        }
+        benchmark.addCase(
+          "year+month+day+quarter, shared, validity OR-ed per group (task 45 A/B), mixed nulls") {
+          _ => chunked(fourSharedPerGroup, true, outputs = 4)
         }
         benchmark.addCase("year+month+day+quarter, shared (1 loop method), null-free") { _ =>
           chunked(fourShared, false, outputs = 4)
