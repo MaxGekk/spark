@@ -216,11 +216,16 @@ public final class VarkaLoopEmitter {
    * used rather than a flag so that a future node of intermediate width sorts sensibly beside
    * it, which is the only reason the exact value matters - re-count it if the lowering
    * changes shape rather than leaving it to drift. Covers {@code Year}/{@code Month}/
-   * {@code DayOfMonth}/{@code Quarter} (task 26), the shared prefix (~40 ops) plus each
-   * field's own 3-6 op tail; {@code DayOfYear} is heavier and weighs
-   * {@link #DAY_OF_YEAR_WEIGHT} instead.
+   * {@code DayOfMonth}/{@code Quarter} (task 26), the shared prefix plus each field's own
+   * short tail; {@code DayOfYear} is heavier and weighs {@link #DAY_OF_YEAR_WEIGHT} instead.
+   *
+   * <p>Re-counted for task 53's numerator, which is exactly what that instruction asks for.
+   * The four extractions measure 39, 38, 39 and 41 emitted {@code IntVector} ops on the
+   * 3-based axis against 39, 40, 43 and 43 on the 0-based one, so the rounded figure moves
+   * from 50 to 40. It still exceeds {@link #GROUP_BUDGET} several times over, so no grouping
+   * decision changes - which is the property the paragraph above says the value is for.
    */
-  private static final int CHRONO_WEIGHT = 50;
+  private static final int CHRONO_WEIGHT = 40;
 
   /**
    * What {@code DayOfYear} (task 34) weighs against {@link #GROUP_BUDGET}, counted the same
@@ -2275,16 +2280,19 @@ public final class VarkaLoopEmitter {
     int rem = t[2];
     int century = t[3];
     int yearOfCentury = t[4];
+    // t[5] under task 53's switch is the affine numerator, not the March month; every reader
+    // below takes the axis from here rather than deciding for itself.
     int marchMonth = t[5];
+    boolean neri = analysis.options.neriSchneiderMonth();
 
     emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
 
     switch (node) {
       case Year n -> emitChronoYear(cb, era, century, yearOfCentury, rem);
-      case Month n -> emitChronoMonth(cb, marchMonth);
-      case DayOfMonth n -> emitChronoDayOfMonth(cb, rem, marchMonth);
+      case Month n -> emitChronoMonth(cb, marchMonth, neri);
+      case DayOfMonth n -> emitChronoDayOfMonth(cb, rem, marchMonth, neri);
       case Quarter n -> {
-        emitChronoMonth(cb, marchMonth);
+        emitChronoMonth(cb, marchMonth, neri);
         cb.loadConstant(2);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
         emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
@@ -2325,7 +2333,7 @@ public final class VarkaLoopEmitter {
         cb.aload(mask);
         cb.invokevirtual(INT_VECTOR, "blend", BLEND);
       }
-      case LastDay n -> emitChronoLastDay(cb, s, t);
+      case LastDay n -> emitChronoLastDay(cb, s, t, neri);
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
   }
@@ -2486,13 +2494,26 @@ public final class VarkaLoopEmitter {
     // tailReadsMarchMonth is rejected by the verifier at class load rather than read as
     // garbage.
     if (emitMonth) {
-      cb.aload(rem);
-      cb.loadConstant(5);
-      cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-      cb.loadConstant(2);
-      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-      emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
-      cb.astore(marchMonth);
+      if (analysis.options.neriSchneiderMonth()) {
+        // num = 2141 * doy + 197913 (task 53). Two ops where the 0-based form takes four, and
+        // what it leaves in t[5] is not a month but a numerator carrying both the month index
+        // in its high half and the day of month in its low half - which is why the day tail
+        // stops needing emitMonthStart run forwards.
+        cb.aload(rem);
+        cb.loadConstant(VarkaChrono.MONTH_NUM_M);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.loadConstant(VarkaChrono.MONTH_NUM_ADD);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        cb.astore(marchMonth);
+      } else {
+        cb.aload(rem);
+        cb.loadConstant(5);
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        cb.loadConstant(2);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+        emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
+        cb.astore(marchMonth);
+      }
     }
   }
 
@@ -2523,12 +2544,24 @@ public final class VarkaLoopEmitter {
   /** Leaves the day of month: {@code doy - monthStart(mp) + 1}, the inverse of the month's own
    * linear form. The {@link DayOfMonth} tail, factored out so {@link #emitAddMonths} can call
    * it too. */
-  private static void emitChronoDayOfMonth(CodeBuilder cb, int rem, int marchMonth) {
-    cb.aload(rem);
-    emitMonthStart(cb, marchMonth);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.loadConstant(1);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+  private static void emitChronoDayOfMonth(CodeBuilder cb, int rem, int monthSlot,
+      boolean neri) {
+    if (neri) {
+      // The numerator's low half divided by 2141 is the zero-based day of month, so this tail
+      // never runs the month start forwards and never touches the day of year at all.
+      cb.aload(monthSlot);
+      cb.loadConstant(0xFFFF);
+      cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
+      emitMagic(cb, VarkaChrono.DOM_M, VarkaChrono.DOM_K);
+      cb.loadConstant(1);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    } else {
+      cb.aload(rem);
+      emitMonthStart(cb, monthSlot);
+      cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+      cb.loadConstant(1);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    }
   }
 
   /**
@@ -2599,9 +2632,9 @@ public final class VarkaLoopEmitter {
     emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
     emitChronoYear(cb, era, century, yearOfCentury, rem);
     cb.astore(year);
-    emitChronoMonth(cb, marchMonth);
+    emitChronoMonth(cb, marchMonth, analysis.options.neriSchneiderMonth());
     cb.astore(month);
-    emitChronoDayOfMonth(cb, rem, marchMonth);
+    emitChronoDayOfMonth(cb, rem, marchMonth, analysis.options.neriSchneiderMonth());
     cb.astore(dayOfMonth);
 
     // k = (month - 1) + monthsOffset + MONTH_ARITH_BIAS: small and non-negative because the
@@ -2843,7 +2876,7 @@ public final class VarkaLoopEmitter {
    * #emitAddMonths} needs for its own February case, and the same reason this reuses it rather
    * than a second copy of the leap test.
    */
-  private static void emitChronoLastDay(CodeBuilder cb, Slots s, int[] t) {
+  private static void emitChronoLastDay(CodeBuilder cb, Slots s, int[] t, boolean neri) {
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -2863,21 +2896,42 @@ public final class VarkaLoopEmitter {
     // still runs for this node - the month-length arithmetic below is what needs it.
     emitChronoYear(cb, era, century, yearOfCentury, rem);
     cb.astore(year);
-    emitChronoDayOfMonth(cb, rem, marchMonth);
+    emitChronoDayOfMonth(cb, rem, marchMonth, neri);
     cb.astore(dayOfMonth);
 
     // The current month's length: monthStart(mp + 1) - monthStart(mp), except February (the
     // March-based year's last month), which needs the year's own total length instead - the
     // same split emitAddMonths uses for the month it lands on.
-    emitMonthStart(cb, marchMonth);
+    //
+    // This is the one node whose month-length arithmetic reads the prefix slot directly rather
+    // than through a tail, so it is the one place task 53's axis has to be handled here: under
+    // the numerator, mpNextClamped holds a 3-based index and the February test is against
+    // MONTH3_JANUARY + 1 rather than MARCH_YEAR_JANUARY + 1. Both are "one past the year's
+    // last month" on their own axis.
+    int lastMonth = neri ? VarkaChrono.MONTH3_JANUARY + 1 : VarkaChrono.MARCH_YEAR_JANUARY + 1;
+    if (neri) {
+      emitMonthIndex3(cb, marchMonth);
+      emitMonthStart3FromStack(cb);
+    } else {
+      emitMonthStart(cb, marchMonth);
+    }
     cb.astore(monthStart);
-    cb.aload(marchMonth);
+    if (neri) {
+      emitMonthIndex3(cb, marchMonth);
+    } else {
+      cb.aload(marchMonth);
+    }
     cb.loadConstant(1);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.loadConstant(lastMonth);
     cb.invokevirtual(INT_VECTOR, "min", LANEWISE_VI);
     cb.astore(mpNextClamped);
-    emitMonthStart(cb, mpNextClamped);
+    if (neri) {
+      cb.aload(mpNextClamped);
+      emitMonthStart3FromStack(cb);
+    } else {
+      emitMonthStart(cb, mpNextClamped);
+    }
     cb.astore(monthStartNext);
 
     cb.aload(monthStartNext);
@@ -2891,9 +2945,13 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
     cb.aload(monthStart);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.aload(marchMonth);
+    if (neri) {
+      emitMonthIndex3(cb, marchMonth);
+    } else {
+      cb.aload(marchMonth);
+    }
     cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.loadConstant(lastMonth);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
     cb.invokevirtual(INT_VECTOR, "blend", BLEND);
     cb.astore(length);
@@ -2984,12 +3042,43 @@ public final class VarkaLoopEmitter {
     cb.astore(remainder);
   }
 
-  /** Leaves the mask of lanes whose March-based year has already turned into January. */
-  private static void emitJanuaryMask(CodeBuilder cb, int marchMonth) {
-    cb.aload(marchMonth);
-    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY);
+  /**
+   * Leaves the mask of lanes whose March-based year has already turned into January, read off
+   * whichever axis {@code t[5]} carries: {@code monthIndex3 >= 13} under task 53's numerator,
+   * {@code marchMonth >= 10} under the 0-based form. The two are the same test, and
+   * {@code VarkaChronoSuite} asserts that on all 366 days rather than leaving it here.
+   */
+  private static void emitJanuaryMask(CodeBuilder cb, int monthSlot, boolean neri) {
+    if (neri) {
+      emitMonthIndex3(cb, monthSlot);
+      cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+      cb.loadConstant(VarkaChrono.MONTH3_JANUARY);
+    } else {
+      cb.aload(monthSlot);
+      cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+      cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY);
+    }
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+  }
+
+  /** The month index on Neri-Schneider's 3-based axis, out of the numerator's high half. */
+  private static void emitMonthIndex3(CodeBuilder cb, int monthSlot) {
+    cb.aload(monthSlot);
+    emitShift(cb, "LSHR", VarkaChrono.MONTH_NUM_K);
+  }
+
+  /**
+   * Leaves the day of the March-based year on which the month begins, from a 3-based index
+   * already on the stack: {@code (979 * m3 - 2919) >>> 5}. A shift where the 0-based form needs
+   * a magic multiply, and its numerator never goes negative (18 to 10787 over the twelve
+   * months), which is what lets the shift be logical.
+   */
+  private static void emitMonthStart3FromStack(CodeBuilder cb) {
+    cb.loadConstant(VarkaChrono.MONTH_START_M);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.loadConstant(-VarkaChrono.MONTH_START_SUB);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    emitShift(cb, "LSHR", VarkaChrono.MONTH_START_K);
   }
 
   /** The same mask as {@link #emitJanuaryMask}, taken off the March-based day of year instead
@@ -3003,14 +3092,34 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
   }
 
-  /** Leaves the January-based month: {@code mp + 3}, less 12 once the year has turned. */
-  private static void emitChronoMonth(CodeBuilder cb, int marchMonth) {
-    cb.aload(marchMonth);
-    cb.loadConstant(3);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    cb.loadConstant(12);
-    emitJanuaryMask(cb, marchMonth);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+  /**
+   * Leaves the January-based month. On the 0-based axis that is {@code mp + 3}, less 12 once
+   * the year has turned; on task 53's 3-based axis it is {@code m3} itself, less 12 - one
+   * operation fewer, which is the whole reason the axis changes rather than being converted
+   * back.
+   *
+   * <p>The 3-based path computes {@code m3} once and reaches it twice with {@code dup}/
+   * {@code swap} rather than a scratch local: the mask needs the same vector the result is
+   * built from, and a second shift would put this tail back where the 0-based one was.
+   */
+  private static void emitChronoMonth(CodeBuilder cb, int monthSlot, boolean neri) {
+    if (neri) {
+      emitMonthIndex3(cb, monthSlot);
+      cb.dup();
+      cb.loadConstant(12);
+      cb.swap();
+      cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+      cb.loadConstant(VarkaChrono.MONTH3_JANUARY);
+      cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+      cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+    } else {
+      cb.aload(monthSlot);
+      cb.loadConstant(3);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+      cb.loadConstant(12);
+      emitJanuaryMask(cb, monthSlot, false);
+      cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+    }
   }
 
 

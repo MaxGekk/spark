@@ -965,16 +965,24 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // January turn off the day of year rather than off the month, so its prefix elides the
     // step too - and a tail reading an unwritten local returns a plausible wrong day, not a
     // crash. This is the only test that would notice.
+    //
+    // Both month axes (task 53), which is what makes the older lowering a live reference
+    // variant rather than dead code: the two compute the same fields through different
+    // constants on differently-based month indices, so agreeing with LocalDate over the whole
+    // range is also them agreeing with each other over it. This is the gate that matters for
+    // the axis change - `add_months` and `last_day` recompose through these constants, and a
+    // month-axis mistake in either is exactly what a boundary set misses and a sweep cannot.
     val yearOnly = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
     val dayOfYearOnly = Seq[VarkaVectorIR](new DayOfYear(new ColumnRef(0)))
     for {
       options <- Seq(unshared, sharing)
       elide <- Seq(true, false)
+      neri <- Seq(true, false)
     } {
-      sweepCalendar(roots, options.withElideChronoMonth(elide))
-      sweepCalendar(yearOnly, options.withElideChronoMonth(elide), date => Seq(date.getYear))
-      sweepCalendar(dayOfYearOnly, options.withElideChronoMonth(elide),
-        date => Seq(date.getDayOfYear))
+      val axis = options.withElideChronoMonth(elide).withNeriSchneiderMonth(neri)
+      sweepCalendar(roots, axis)
+      sweepCalendar(yearOnly, axis, date => Seq(date.getYear))
+      sweepCalendar(dayOfYearOnly, axis, date => Seq(date.getDayOfYear))
     }
   }
 
@@ -1044,7 +1052,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // happened to land under that threshold. Guard against that class of bug reappearing.
     assume(System.getProperty("varka.sweep") == "true",
       "set -Dvarka.sweep=true to sweep the emitted kernel")
-    val (kernel, loader) = load(emitMulti(Seq(new LastDay(new ColumnRef(0))), 1, 0))
+    // Both month axes (task 53). This node is the one whose month-length arithmetic reads the
+    // prefix slot directly rather than through a tail, so it is the only place the axis had to
+    // be handled inside a recomposing node - which makes it the one most worth sweeping twice.
+    for (neri <- Seq(true, false)) {
+      sweepLastDay(VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(neri))
+    }
+  }
+
+  private def sweepLastDay(options: VarkaEmitOptions): Unit = {
+    val (kernel, loader) = load(emitMulti(Seq(new LastDay(new ColumnRef(0))), 1, 0, options))
     try {
       val arena = Arena.ofConfined()
       try {
@@ -1170,7 +1187,14 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
 
   /** The `IntVector` ops the prefix's March-month step costs: two multiplies (the `* 5` and
    * the magic), the `+ 2`, and the magic's shift. The store into t[5] is not one. */
-  private val monthStepOps = 4
+  /**
+   * What the prefix's month step costs, which depends on the axis: four ops on the 0-based one
+   * (the `* 5`, the `+ 2`, the magic multiply and its shift) and two on task 53's 3-based one
+   * (the `* 2141` and the `+ 197913`). Task 48's elision saves whichever of the two the shape
+   * was going to pay, which is the sense in which that task's win shrank rather than went away.
+   */
+  private def monthStepOps(options: VarkaEmitOptions): Int =
+    if (options.neriSchneiderMonth()) 2 else 4
 
   /** The masked epilogue's bytecode size - the one method every output shares (task 24). */
   private def epilogueSize(
@@ -1324,19 +1348,51 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("task 53: the numerator costs what PLAN_TASK_53.md 3.4 registered, per tail") {
+    // Registered before the work and asserted after, off the class file rather than reasoned
+    // from the helpers. A miss here is a bug in the lowering, not a surprise about it: the
+    // deltas are arithmetic on ops that either are or are not emitted.
+    val col = new ColumnRef(0)
+    def ops(root: VarkaVectorIR, lits: Int, neri: Boolean): Int =
+      laneOps(emitMulti(Seq(root), 1, lits,
+        VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(neri))._2, "loopDense0")
+    for ((name, root, lits, delta) <- Seq(
+        ("year", new Year(col), 0, 0),
+        ("month", new Month(col), 0, -2),
+        ("dayofmonth", new DayOfMonth(col), 0, -4),
+        ("quarter", new Quarter(col), 0, -2),
+        ("last_day", new LastDay(col), 0, -3),
+        ("add_months", new AddMonths(col, new LiteralSlot(0)), 1, -4))) {
+      assert(ops(root, lits, neri = true) - ops(root, lits, neri = false) === delta,
+        s"$name moved by ${ops(root, lits, neri = true) - ops(root, lits, neri = false)} ops, " +
+          s"not $delta - PLAN_TASK_53.md 3.4 needs updating with the reason")
+    }
+    // `year` is the control: it reads neither axis, so if it ever moves the numerator has
+    // leaked into a tail that has no business seeing it.
+    assert(ops(new Year(col), 0, neri = true) === ops(new Year(col), 0, neri = false),
+      "the year tail must not change when only the month axis does")
+  }
+
   test("task 48: a year-only body computes no month, and the switch says so") {
     assert(VarkaEmitOptions.DEFAULTS.elideChronoMonth(),
       "the elision is no longer the default - the case for it is in PLAN_TASK_48.md section " +
         "3.3, so say why here if it was deliberately turned off")
     val roots = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
-    val elided = emitMulti(roots, 1, 0, VarkaEmitOptions.DEFAULTS)._2
-    val kept = emitMulti(roots, 1, 0, VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false))._2
-    // Every body role, because every one of them runs the prefix: the two loop methods and the
-    // two epilogues each hold this single year and nothing that reads a month.
-    for (body <- Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")) {
-      assert(laneOps(elided, body) === laneOps(kept, body) - monthStepOps,
-        s"$body did not lose exactly the month step: ${laneOps(kept, body)} lane ops with the " +
-          s"step kept, ${laneOps(elided, body)} with it elided")
+    // Both axes, because task 53 changed what the step costs without changing whether it is
+    // elided: four ops on the 0-based month, two on the numerator. The elision has to hold on
+    // each, and asserting it on only the shipped one would let the reference variant rot.
+    for (axis <- Seq(VarkaEmitOptions.DEFAULTS,
+        VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false))) {
+      val elided = emitMulti(roots, 1, 0, axis)._2
+      val kept = emitMulti(roots, 1, 0, axis.withElideChronoMonth(false))._2
+      // Every body role, because every one of them runs the prefix: the two loop methods and
+      // the two epilogues each hold this single year and nothing that reads a month.
+      for (body <- Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")) {
+        assert(laneOps(elided, body) === laneOps(kept, body) - monthStepOps(axis),
+          s"$body did not lose exactly the month step at neri=${axis.neriSchneiderMonth()}: " +
+            s"${laneOps(kept, body)} lane ops with the step kept, ${laneOps(elided, body)} " +
+            "with it elided")
+      }
     }
     // The four ops are dead work, so removing them is not allowed to move an answer.
     for ((options, ctx) <- Seq(
@@ -1364,7 +1420,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       // The loop methods hold one output each, so exactly one of them - the year's - elides.
       val saved = Seq("loopMasked0", "loopMasked1")
         .map(body => laneOps(kept, body) - laneOps(elided, body))
-      assert(saved.sorted === Seq(0, monthStepOps),
+      assert(saved.sorted === Seq(0, monthStepOps(sharing)),
         s"expected exactly one loop method to elide the month step, saved $saved ($ctx)")
       checkMatrix(roots, 1, Array.empty[Int], remainderLengths,
         nullPatterns.map(p => Seq(p._2)), data = calendarDays, ctx = s"shared, $ctx",
@@ -1380,7 +1436,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val roots = Seq[VarkaVectorIR](new Year(col), new Month(col))
     val elided = emitMulti(roots, 1, 0, unshared)._2
     val kept = emitMulti(roots, 1, 0, unshared.withElideChronoMonth(false))._2
-    assert(laneOps(elided, "epilogueMasked") === laneOps(kept, "epilogueMasked") - monthStepOps,
+    assert(laneOps(elided, "epilogueMasked") ===
+      laneOps(kept, "epilogueMasked") - monthStepOps(unshared),
       "the unshared epilogue holds two prefixes and exactly one of them - the year's - is " +
         "supposed to lose its month step")
     checkMatrix(roots, 1, Array.empty[Int], remainderLengths,
@@ -1395,12 +1452,19 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // is pinned rather than left to the sweep, which is opt-in.
     val col = new ColumnRef(0)
     val alone = Seq[VarkaVectorIR](new DayOfYear(col))
-    val elided = emitMulti(alone, 1, 0, VarkaEmitOptions.DEFAULTS)._2
-    val kept = emitMulti(alone, 1, 0, VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false))._2
-    for (body <- Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")) {
-      assert(laneOps(elided, body) === laneOps(kept, body) - monthStepOps,
-        s"$body did not lose exactly the month step: ${laneOps(kept, body)} lane ops with the " +
-          s"step kept, ${laneOps(elided, body)} with it elided")
+    // Both axes (task 53). What this node elides is whatever the prefix's month step costs on
+    // the axis in force - four ops on the 0-based one, two on the numerator - so the assertion
+    // is about the elision holding, not about a particular number.
+    for (axis <- Seq(VarkaEmitOptions.DEFAULTS,
+        VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false))) {
+      val elided = emitMulti(alone, 1, 0, axis)._2
+      val kept = emitMulti(alone, 1, 0, axis.withElideChronoMonth(false))._2
+      for (body <- Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")) {
+        assert(laneOps(elided, body) === laneOps(kept, body) - monthStepOps(axis),
+          s"$body did not lose exactly the month step at neri=${axis.neriSchneiderMonth()}: " +
+            s"${laneOps(kept, body)} lane ops with the step kept, ${laneOps(elided, body)} " +
+            "with it elided")
+      }
     }
     // Shared with a month tail, the fragment keeps the step for both - the decision is the
     // group's consumer set, not the node's, and dayofyear must not elide out from under it.
