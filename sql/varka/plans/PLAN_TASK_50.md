@@ -86,6 +86,30 @@ a JVM doing nothing pathological. The threshold ships as a constant with that
 measurement quoted beside it in section 9, and the default is deliberately
 generous - a diagnostic that cries wolf gets turned off.
 
+**Measured (commit 3).** One `year` kernel, emitted under a production-shaped
+class name and run hot, in three separate JVMs:
+
+| key | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| `run#3` / `run#4` | 728 / 2760 | 728 / 2760 | 728 / 2760 |
+| `runDense#3` / `#4` | 30160 / 2456 | 30160 / 2456 | 30160 / 2456 |
+| `loopDense0#3` / `#4` | 68936 / 3656 | 68936 / 3656 | 68936 / 3656 |
+| `epilogueDense#3` / `#4` | 165728 / 1888 | 165728 / 1888 | 165728 / 1888 |
+
+**Byte-identical, everywhere.** The healthy spread is zero, so
+`DIVERGENCE_RATIO` sits four times above anything observed and four times below
+the 2x failure it hunts. It stays at 0.25 rather than tightening, because three
+runs on one host is not proof that the spread is universally zero - a different
+JVM version, a different host, or a deoptimised recompilation could all differ
+legitimately - and the failure being hunted is nowhere near the boundary.
+
+The table also settles section 2.1's argument far more sharply than the probe
+that motivated it: **tier 3 is 20 to 90 times larger than tier 4 for the same
+method** (`epilogueDense` 165728 against 1888 - profiled C1 code against
+optimised C2). Without the compile level in the key, the first tier-4
+compilation after a tier-3 one would be reported as a 98% divergence, on every
+method, in every JVM.
+
 ## 4. Configuration
 
 One new static conf, following the three Varka keys already in place:
@@ -188,3 +212,67 @@ produces, so no committed benchmark number can move and no pinned fixture can.
    emits no bytecode.
 4. The most likely defect found in review is the one in 2.1 - keying too
    coarsely - because it is the thing the milestone text says to do.
+
+## 10. Commit 3's outcome: when this can fire at all
+
+The measurement answered the threshold question and raised a better one.
+
+**Every key was compiled exactly once per JVM.** Across the three runs above,
+each of the eight (shape, method, tier) keys appeared once and never again. A
+baseline that only ever sees one compilation has nothing to compare, so on that
+workload the watch could not have reported anything however badly C2 had
+allocated.
+
+That matters because of what task 32 actually measured: the bimodality was
+**between** JVM runs - "stdev 0 inside a run, 42% between runs". A per-JVM
+baseline cannot see a difference that only appears across JVMs. Section 2.20's
+risk list says "a shape whose kernel is only ever compiled once in a JVM
+produces no comparison at all", which is true but reads as an edge case. It is
+the normal case.
+
+**What does produce two compilations of one key is re-emission**, and this is
+the finding worth keeping. The same shape emitted into a fresh class of the
+*same name* under a different loader compiles again from scratch, and since the
+class name is what JFR reports, both compilations land on the same key. Varka
+does exactly that in two situations it already supports: `maxEntries = 0`, the
+pre-cache per-task class lifecycle, and any eviction under a full cache. It is
+also precisely the "resample" the debt register parks - which means the watch is
+the instrument that would tell anyone building that whether a resample had
+helped.
+
+Measured directly: emitting one shape twice in a single JVM and running both
+hot produced **16 compilations across 8 keys** - each key compiled twice, as
+predicted - with **zero divergences**, the two compilations being byte-identical.
+So the detector has something to compare exactly when re-emission happens, and
+C2 allocated identically on this shape both times.
+
+The honest summary of the feature's reach, which belongs in its documentation
+rather than being discovered by a user: it reports when a *re-emitted* kernel
+compiles differently than the same kernel did earlier in the same JVM. It does
+not, and cannot, report that this JVM's allocation is worse than another JVM's.
+
+### Predictions, scored
+
+1. **Held.** Zero spread, byte-identical across three JVMs and across two
+   emissions within one JVM. The threshold choice is uncritical, and 0.25 is
+   kept for the reason section 3 now gives.
+2. **Held.** Both tiers were seen well inside the 30-second budget, tier 3
+   first. Opt-in remains right: it still waits on a compiler.
+3. **Held.** No emitted byte, no pinned fixture and no committed benchmark
+   number moves; the 130-test Varka suite is unchanged.
+4. **Missed, in an interesting direction.** The predicted defect was keying too
+   coarsely, and that was indeed the plan's first correction - but it was caught
+   at planning time, before any code. The defect that survived into code was the
+   opposite kind: `compilationWatch` was a `lazy val` touched only by the
+   reporting calls, so in production nothing would ever have started the watch.
+   It would have run only for a caller already asking what it had seen.
+
+## 11. Sequencing
+
+Three commits, each green on its own:
+
+1. **This plan**, with section 2.1's correction to the milestone's design.
+2. **The watch**: `VarkaCompilationWatch`, the JFR event, the static conf, the
+   hook on the emission path, and the tests that need no compiler running.
+3. **The measurement**: section 3's table, the two opt-in end-to-end cases, the
+   threshold confirmed, and sections 10 and 11.

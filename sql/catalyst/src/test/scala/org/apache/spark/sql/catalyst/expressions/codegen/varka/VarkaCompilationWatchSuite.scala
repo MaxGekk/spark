@@ -17,7 +17,12 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import java.lang.foreign.{Arena, ValueLayout}
+
+import scala.jdk.CollectionConverters._
+
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 
 /**
  * Task 50: the compiled-size watch.
@@ -142,5 +147,115 @@ class VarkaCompilationWatchSuite extends SparkFunSuite {
     assert(!VarkaShapeCache.compilationWatchRunning(),
       "spark.sql.codegen.varka.compilationWatch.enabled defaults to false")
     assert(VarkaShapeCache.compilationDivergences() === 0)
+  }
+
+  // --- The end-to-end case, and the measurement behind the threshold ---------------------------
+
+  /**
+   * Emits one kernel under a production-shaped class name, loads it, and runs it hot enough for
+   * C2 to compile its methods, with `watch` subscribed throughout. Returns what the watch saw.
+   *
+   * The class name matters: the watch's filter is the generated-class prefix, so a kernel named
+   * anything else is invisible to it and this test would pass by seeing nothing. It is built
+   * through `VarkaShapeCacheImpl.classNameFor`, the same call production uses.
+   */
+  private def runKernelHot(watch: VarkaCompilationWatch, shapeHash: String): Unit = {
+    val className = VarkaShapeCacheImpl.classNameFor(shapeHash)
+    val col = new VarkaVectorIR.ColumnRef(0)
+    val outputs = java.util.List.of[VarkaVectorIR](new VarkaVectorIR.Year(col))
+    val bytes = VarkaLoopEmitter.emit(
+      className, outputs, 1, 0, null, null, VarkaEmitOptions.DEFAULTS)
+    val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
+    loader.defineGeneratedClass(className, bytes)
+    val kernel = loader.loadClass(className).getConstructor().newInstance()
+      .asInstanceOf[VarkaFusedKernel]
+
+    val rows = 1024
+    val arena = Arena.ofConfined()
+    try {
+      val src = arena.allocate(rows * 4L, 64)
+      var i = 0
+      while (i < rows) {
+        src.set(ValueLayout.JAVA_INT, i * 4L, 18000 + i)
+        i += 1
+      }
+      val srcValidity = arena.allocate((rows + 7) / 8L, 8)
+      srcValidity.fill(0xFF.toByte)
+      val dstData = arena.allocate(rows * 4L, 64)
+      val dstValidity = arena.allocate((rows + 7) / 8L, 8)
+      var r = 0
+      while (r < 50000) {
+        kernel.run(Array(src.address()), Array(srcValidity.address()), Array(0),
+          Array(dstData.address()), Array(dstValidity.address()), Array.empty[Int], rows)
+        r += 1
+      }
+    } finally {
+      arena.close()
+    }
+  }
+
+  test("a real recording stream sees Varka kernel compilations " +
+      "(opt-in: -Dvarka.jfr=true)") {
+    // Opt-in because it waits for C2, and a test that waits for a compiler is exactly the kind
+    // that goes flaky on a loaded runner. Everything this suite actually decides is checked
+    // above without JFR; this case checks the wiring between the two.
+    assume(System.getProperty("varka.jfr") == "true",
+      "set -Dvarka.jfr=true to run the end-to-end JFR case")
+    val watch = VarkaCompilationWatch.start()
+    try {
+      assert(watch.isRunning(), "the stream did not open; JFR may be disabled in this JVM")
+      runKernelHot(watch, "00000000deadbeef")
+      val deadline = System.nanoTime() + 30L * 1000 * 1000 * 1000
+      while (watch.observedCount() == 0 && System.nanoTime() < deadline) {
+        Thread.sleep(200)
+      }
+      assert(watch.observedCount() > 0,
+        "no Varka kernel compilation reached the watch within 30s - either the class-name " +
+          "filter no longer matches what the emitter names its classes, or nothing compiled")
+      // The measurement behind DIVERGENCE_RATIO: these are the sizes a healthy JVM produces for
+      // this shape. PLAN_TASK_50.md section 3 compares them across runs.
+      watch.baselines().asScala.toSeq.sortBy(_._1).foreach { case (key, size) =>
+        logInfo(s"VARKA_CODESIZE $key = $size")
+      }
+      assert(watch.divergenceCount() === 0,
+        "a healthy JVM compiling one shape must not report a divergence")
+    } finally {
+      watch.close()
+    }
+  }
+
+  test("a re-emitted shape compiles twice under one key " +
+      "(opt-in: -Dvarka.jfr=true)") {
+    // The case that decides whether this feature can ever fire, and it is not the obvious one.
+    // Task 32's bimodality was *between* JVM runs - "stdev 0 inside a run, 42% between runs" -
+    // and a per-JVM baseline cannot see that: measured over three JVMs, every key was compiled
+    // exactly once and the sizes were byte-identical, so there was nothing to compare.
+    //
+    // What produces two compilations of one key inside a JVM is re-emission: the same shape
+    // emitted into a fresh class of the *same name* under a different loader, which is what the
+    // shape cache does at maxEntries = 0 and after an eviction. The class name is what JFR
+    // reports, so both compilations land on the same key - and the allocator gets a fresh roll
+    // for the second, which is precisely the event worth noticing.
+    assume(System.getProperty("varka.jfr") == "true",
+      "set -Dvarka.jfr=true to run the end-to-end JFR case")
+    val watch = VarkaCompilationWatch.start()
+    try {
+      assert(watch.isRunning())
+      runKernelHot(watch, "00000000cafebabe")
+      runKernelHot(watch, "00000000cafebabe")
+      val deadline = System.nanoTime() + 30L * 1000 * 1000 * 1000
+      while (watch.observedCount() < 2 && System.nanoTime() < deadline) {
+        Thread.sleep(200)
+      }
+      logInfo(s"VARKA_REEMIT observed=${watch.observedCount()} " +
+        s"divergences=${watch.divergenceCount()} keys=${watch.baselines().size()}")
+      watch.baselines().asScala.toSeq.sortBy(_._1).foreach { case (key, size) =>
+        logInfo(s"VARKA_REEMIT_SIZE $key = $size")
+      }
+      assert(watch.observedCount() >= 2,
+        "two emissions of one shape should produce at least two kernel compilations")
+    } finally {
+      watch.close()
+    }
   }
 }

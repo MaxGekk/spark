@@ -66,6 +66,16 @@ import org.apache.spark.internal.SparkLoggerFactory;
  * records why that is not built: each resample costs another class, another compile and another
  * warm-up, against a shape a short query may run a handful of times.
  *
+ * <p><b>What it can and cannot see.</b> A baseline needs two compilations of one key, and
+ * measurement showed every key is normally compiled exactly once per JVM - so on a steady
+ * workload there is nothing to compare, however badly C2 allocated. What produces a second
+ * compilation is <i>re-emission</i>: the same shape emitted into a fresh class of the same name
+ * under a different loader, which is what {@code maxEntries = 0} and any cache eviction already
+ * do. Measured, emitting one shape twice in a JVM produced 16 compilations across 8 keys, each
+ * compiled twice. So this reports that a re-emitted kernel compiled differently than the same
+ * kernel did earlier in the same JVM; it cannot report that this JVM's allocation is worse than
+ * another JVM's, which is the form task 32's bimodality actually took.
+ *
  * <p>Off unless {@code spark.sql.codegen.varka.compilationWatch.enabled} is set. When off, no
  * instance exists, so there is no stream, no thread and no map.
  */
@@ -80,10 +90,13 @@ public final class VarkaCompilationWatch implements AutoCloseable {
    *
    * <p>Two facts bound this and neither leaves much room for taste: healthy recompilations of the
    * same method at the same tier are compiling identical bytecode and should differ by nothing,
-   * while the allocation failure this exists to catch is about 2x. The value is deliberately
-   * generous inside that gap - a diagnostic that cries wolf gets turned off, and the failure
-   * being hunted is nowhere near the boundary. {@code PLAN_TASK_50.md} section 3 records the
-   * measurement behind it.
+   * while the allocation failure this exists to catch is about 2x. Measured rather than assumed
+   * ({@code PLAN_TASK_50.md} section 3): one {@code year} kernel across three JVMs, and across
+   * two emissions inside one JVM, produced byte-identical sizes for every key - the healthy
+   * spread is zero. So this sits four times above anything observed and four times below the
+   * failure it hunts. It is not tightened, because three runs on one host does not prove the
+   * spread is universally zero and the failure is nowhere near the boundary; a diagnostic that
+   * cries wolf gets turned off.
    */
   public static final double DIVERGENCE_RATIO = 0.25;
 
@@ -161,6 +174,18 @@ public final class VarkaCompilationWatch implements AutoCloseable {
   /** Non-OSR kernel compilations this watch has seen; see {@link #observed}. */
   long observedCount() {
     return observed.sum();
+  }
+
+  /**
+   * The baseline size recorded for each (shape, method, tier) key so far, read-only.
+   *
+   * <p>Package-private, and it exists for the measurement rather than for the feature: section 3
+   * of {@code PLAN_TASK_50.md} has to establish what the *healthy* spread of these sizes is
+   * before {@link #DIVERGENCE_RATIO} can be defended, and that means reading them out of real
+   * JVMs rather than reasoning about them.
+   */
+  Map<String, Long> baselines() {
+    return java.util.Collections.unmodifiableMap(baselines);
   }
 
   @Override
