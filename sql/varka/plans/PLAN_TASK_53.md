@@ -336,3 +336,67 @@ days. That is the whole value of doing this before the emitter: the new constant
 against the same oracle the old ones were, with no emitted bytecode depending on them yet.
 
 128 catalyst tests pass with the sweeps enabled.
+
+## 13. Commit 3's outcome
+
+The emitter carries both axes behind `VarkaEmitOptions.neriSchneiderMonth`, default on, with
+the 0-based lowering kept as a live reference variant on `FloorMod7`'s precedent.
+
+### 13.1 The op counts, against 3.4
+
+Measured off the class file, not reasoned from the helpers:
+
+| tail | 0-based | 3-based | delta | 3.4 predicted |
+|---|---|---|---|---|
+| `year` | 39 | 39 | 0 | 0 |
+| `month` | 40 | 38 | -2 | -2 |
+| `dayofmonth` | 43 | 39 | -4 | -4 |
+| `quarter` | 43 | 41 | -2 | -2 |
+| `last_day` | 71 | 68 | -3 | "largest absolute saving" |
+| `add_months` | 121 | 117 | -4 | "largest absolute saving" |
+
+**Prediction 1 holds exactly** for the four registered per-tail figures. The two recomposing
+nodes were predicted to "take the largest absolute saving"; they take -3 and -4, and
+`dayofmonth` ties `add_months` at -4, so that half of the sentence is wrong - they take a
+large saving, not the largest. The reason is that they were expected to save twice on
+`emitMonthStart` and only one of their two calls reads the prefix slot; the other operates on
+a locally computed month in the inverse direction, which section 2.2 leaves alone.
+
+`CHRONO_WEIGHT` is re-counted from 50 to 40, which is what its javadoc's "re-count it if the
+lowering changes shape" asks for. It still exceeds `GROUP_BUDGET` several times over, so no
+grouping decision changes. `ADD_MONTHS_TMP_COUNT` and `LAST_DAY_TMP_COUNT` do not move: the
+3-based paths reuse the same scratch slots and add none.
+
+### 13.2 Two corrections to the plan
+
+**The scope is smaller than 3.2 implies.** That section lists seven call sites that "move at
+once", including `emitAddMonths`. Measured against the code: `emitAddMonths` reads the prefix's
+month slot *only* through `emitChronoMonth` and `emitChronoDayOfMonth`. Its own `mp`
+arithmetic - `mp2`, the clamp, `emitMonthStart` - is the inverse direction, computed from a
+reported month rather than from the prefix, and section 2.2 leaves that alone. So it needed no
+change beyond the two tails it already called. `emitChronoLastDay` is the one node whose
+month-length arithmetic reads the prefix slot directly, and it is therefore the only place the
+axis had to be handled inside a recomposing node.
+
+**Test 5's expectation is wrong: the pinned fixtures do not move.** Section 5 says "every
+calendar node's emitted bytes change, so the line map and the ladder both re-pin". The emitted
+bytes do change; the fixtures do not, because neither is taken over emitted bytes. The shape
+hash is over the IR's canonical rendering, the input counts and `VarkaEmitOptions.canonical()`,
+which is empty for `DEFAULTS`; the line map is over the IR's topological schedule. Task 24
+recorded exactly this property and task 26 is the only task so far that legitimately moved
+them, by adding IR node types. Task 53 adds none. Both fixtures were left untouched and both
+still pass, which is the proof rather than the claim.
+
+### 13.3 What certifies it
+
+The exhaustive sweep, run over all 16,777,216 covered days under **both axes**, both sharing
+modes and both switch positions - eight combinations - at 512-bit and at 128-bit. That is what
+makes the older lowering a reference variant rather than dead code: the two compute the same
+four fields through different constants on differently-based month indices, so agreeing with
+`LocalDate` over the whole range is also them agreeing with each other over it.
+
+`last_day` is swept separately on both axes for the reason 13.2 gives: it is the one node
+where the axis reaches inside a recomposing lowering, so it is the one most worth sweeping
+twice.
+
+129 catalyst tests with the sweeps enabled, at both widths.
