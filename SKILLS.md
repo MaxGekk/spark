@@ -246,6 +246,23 @@ apparent small wins turned out to be noise.
   longer the one in use, and anything resting on it (`GROUP_BUDGET`'s javadoc, among others)
   needs re-deriving rather than re-citing.
 
+  **And it disagreed with another number this repository already carried.** `PLAN_MILESTONE_4.md`
+  section 2.3 and its debt register both price a wide loop's compile at "~1 ms per vector op",
+  which at 64 ops is 64 ms rather than 10 s - a 150x disagreement that sat unremarked. The
+  ladder agrees with the per-op figure. So the honest reading of the ~10 s is that it was
+  probably never ten seconds of compiler *work*: the bullet above says fresh JVMs got the
+  compile in during warmup and busy ones did not, which describes a compile task **queueing**
+  behind others under load. That keeps the observation - a loop running C1-boxed at ~1% until
+  its compile lands - and drops the inference that op count caused it. A queued compile can
+  bite at any width, which is a scheduling property and not something a per-method op budget
+  can bound.
+
+  **Stamp measured numbers with the host and JDK that produced them.** The ~10 s entry did not,
+  which is why nobody could tell staleness from disagreement for as long as both numbers sat
+  in the tree. Everything above was measured on an AMD Ryzen AI 9 HX PRO 370 under OpenJDK
+  25.0.4+7 on Linux, via `-XX:+PrintCompilation` over the committed
+  `VarkaEmitterParityBenchmark` ladder.
+
   **Throughput does not fall off either, at either width.** Nanoseconds per row per op over
   the same ladder: 0.0078, 0.0073, 0.0072, 0.0077, 0.0075 from 58 ops up at AVX-512, and
   0.0212, 0.0179, 0.0163, 0.0163, 0.0168 at 128-bit - flat, and at 128-bit *improving* with

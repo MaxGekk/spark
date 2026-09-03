@@ -207,6 +207,16 @@ The OSR compile is *faster* than the standard one at every ladder point: **186
 ms at 248 ops** against "~10 seconds at 64 ops". Four times the op count, and
 roughly fifty times less compile time.
 
+**The repository already contained the contradiction.** Section 2.3 of
+`PLAN_MILESTONE_4.md` and its debt register price the same thing at "~1 ms per
+vector op", which at 64 ops is 64 ms - so two numbers 150x apart had coexisted
+unremarked, and the ladder agrees with the per-op one. That makes the likeliest
+reading of the ~10 s that it was never ten seconds of compiler *work*:
+`SKILLS.md` says fresh JVMs got the compile in during warmup and busy ones did
+not, which describes a compile task **queueing** behind others under load. That
+keeps what was observed and drops the inference that op count caused it - and a
+queued compile can bite at any width, which no per-method op budget can bound.
+
 Stated carefully, because this is a different machine and a different JDK from
 the one that produced the original number: **the ~10-second OSR compile does not
 reproduce here, on the same path, at four times the width.** That is not a claim

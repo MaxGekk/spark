@@ -155,7 +155,9 @@ body, so K pays only on the long chains. The three confounders move together,
 never one at a time: K, the broadcast strategy (pinned locals collapsed
 throughput 7x at ~32 broadcasts, so unrolling and pre-broadcasting *compete*),
 and `GROUP_BUDGET`, which unrolling multiplies against a ~1 ms-per-vector-op
-C2 compile. The candidates are the shapes that are compute-bound and already
+C2 compile (**confirmed by task 43**: 1.1 ms per op at AVX-512 and 2.0 at
+128-bit, measured across a 20-to-248-op ladder - see `PLAN_TASK_43.md` 8.2, and
+the reconciliation note in 2.16). The candidates are the shapes that are compute-bound and already
 carry a committed number to beat: `dayofweek` (a 20-op fold), `CASE WHEN` on
 an unpredictable condition, and the depth-8 chain. Row-consumer shapes are
 bounded by the ~25 ns/row read-back floor and the filter path by compaction;
@@ -710,6 +712,34 @@ nodes under one root. Measured on the emitter as it stands:
 greatest(dayofmonth, quarter))` is one root and emits **one** method of 1672
 bytes, roughly 190 vector ops. The budget's own javadoc records single-output
 loops as healthy "at every width tried", and the width tried was 59 ops.
+
+**Reconciling two numbers this file already carried.** Before task 43 measured
+anything, the project stated the cost of compiling a wide vector loop in two
+incompatible ways. `VarkaLoopEmitter`'s `GROUP_BUDGET` javadoc and `SKILLS.md`
+say a 64-op loop's tier-4 compile took **~10 seconds**. Section 2.3 and the debt
+register's item 13 say **~1 ms per vector op**, which at 64 ops is 64 ms. The two
+differ by about 150x and had coexisted unremarked.
+
+Task 43's ladder adjudicates: 1.1 ms per op at AVX-512 and 2.0 at 128-bit,
+linear from 20 to 248 ops, which agrees with the per-op figure and not with the
+ten seconds. And the ten seconds is most plausibly not ten seconds of compiler
+*work*: `SKILLS.md`'s own account of it is that "fresh JVMs got it in during
+warmup, busy ones did not", which describes a compile task **queueing** behind
+others under load rather than one taking ten seconds to run. That reading keeps
+what was actually observed - a loop running the C1 version with boxed vectors at
+~1% speed until its compile lands, with the rate jumping 9 to ~1000 M rows/s at
+t=12s - while dropping the inference that op count caused it. Under load, a
+queued compile can bite at any op count, which is a scheduling property and not
+something `GROUP_BUDGET` can bound.
+
+The practical consequence is that `GROUP_BUDGET = 16` has no surviving
+compile-time justification, and task 43's second half is therefore not 2.16's
+"split, decline or accept" - all three assume a cliff to steer around - but
+whether 16 is far too low. Task 32 step B2 already measured fusing calendar
+fields as a win (1.29x, 1.57x, 1.80x at two, three and four fields), and at 1.1
+ms per op a 200-op method costs about 220 ms once per shape per JVM. If the
+budget rises, `CHRONO_WEIGHT` and `DAY_OF_YEAR_WEIGHT` are deleted rather than
+re-tuned: they exist only to force calendar outputs apart under a 16-op budget.
 
 **Two corrections, measured while planning task 43 (`PLAN_TASK_43.md` 1.1).**
 The second example no longer demonstrates the problem: on today's emitter
@@ -1684,7 +1714,9 @@ Recorded so they are not re-proposed:
 
 Adopted as task 25 (see 2.3). The full three-constraint pricing - the 7x
 pinned-broadcast collapse, the ~1 ms-per-vector-op compile cliff against
-`GROUP_BUDGET`, and `DIV` scalarization that unrolling cannot rescue - lives
+`GROUP_BUDGET` (the per-op rate confirmed at 1.1 ms by task 43, though "cliff"
+is the wrong word for something linear - see 2.16's reconciliation note), and
+`DIV` scalarization that unrolling cannot rescue - lives
 in `SKILLS.md`'s "Vector API on HotSpot, Measured", whose unrolling bullet
 task 25 rewrites with the numbers. The morsel-locality half was satisfied by
 construction (a 4096-row int32 batch is 16 KB, L1-resident); the wide-shape
