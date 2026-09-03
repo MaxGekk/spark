@@ -61,6 +61,17 @@ before it is written down. When a change moves committed numbers, regenerate the
 affected results files in one run rather than patching quoted figures case by
 case, and requote the docs from that run.
 
+The tooling for that lives in `dev/`. `dev/varka_bench_regen.sh <module> <Class>`
+regenerates one benchmark at both vector widths, refuses a busy machine, writes
+the narrow run to a committed `-128bit-results.txt` companion and a provenance
+sidecar (commit, JDK, kernel, CPU, load), and ends by diffing the wide file
+against the committed one. `dev/varka_bench_diff.py` is that diff on its own:
+before/after between two files or against a git revision, or A/B pairs inside
+one file (`--within FILE --ab "label A" "label B"`), controls listed first.
+Read the controls before anything else: a run whose scalar anchors are flat but
+whose earliest sections all dropped was started on a machine still hot from a
+test suite, and its numbers are the machine's, not the code's.
+
 `SKILLS.md` at the repository root is where a lesson goes when it will outlive
 the task that learned it - especially the negative results, which are what stop
 the next person re-litigating a settled question.

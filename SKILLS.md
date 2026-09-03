@@ -1148,6 +1148,18 @@ species class in `-XX:+PrintInlining` output.
   the actual tool (recent PRs: `Generated-by: Claude Code (Claude Fable 5)`).
 - Branch naming: `varka-<topic>` tracks `origin/master` and stays one commit ahead
   per PR.
+- The standing gate is one command, `dev/varka_gate.sh`: compile, the Varka suites
+  at both widths, the opt-in exhaustive sweeps, `catalyst/doc`, both linters, each
+  step logged under `target/varka-gate/`, one summary table, non-zero exit on any
+  failure. `--only`/`--skip` take step names, `--list` shows them. It finds
+  `hsdis-<arch>.so` for the assembly suite in the usual local places and says
+  whether it did, so a run whose instruction assertions cancelled is visible.
+- After every merge to master, `dev/varka_pr_sweep.sh` dry-merges every open PR
+  against master and against each other through GitHub's `refs/pull/<n>/head`,
+  and exits with the number of conflicts.
+- Benchmark files are regenerated with `dev/varka_bench_regen.sh` and read with
+  `dev/varka_bench_diff.py`; `sql/varka/AGENTS.md`'s "Measurements" section says
+  how and why, including the committed 128-bit companion file.
 
 ## A store the loop repeats per group with a constant operand is a fill the driver should do once
 
