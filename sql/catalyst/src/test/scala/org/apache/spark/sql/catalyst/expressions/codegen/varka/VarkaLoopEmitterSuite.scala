@@ -1539,7 +1539,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 20 outputs to 44") {
+  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 21 outputs to 44") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
     // grows with the whole projection rather than with a group. Four fields over one date
@@ -1555,24 +1555,26 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // prefix, shared or not, to 18 fits/19 crosses (see PLAN_TASK_51.md section 4.1 for the
     // numbers that replaced); task 48 lets a Year node's own prefix skip the March-month step,
     // and unshared every Year node has its own prefix, so the epilogue's four-fields-per-date
-    // shape loses one month step per date - 19 fits/20 crosses. Shared is unmoved at 44: the
-    // epilogue holds every output, so each date's fragment has a Month consumer and keeps the
-    // step, and the only difference is the one byte a year tail's sipush costs over a bipush.
-    // The limit itself is HotSpot's HugeMethodLimit, past which it gives up on compiling the
-    // method at all (interpreted, boxed vectors, on every batch whose length is not a lane
-    // multiple).
+    // shape loses one month step per date - 19 fits/20 crosses; task 54's Julian map takes a
+    // division stage out of every prefix, shared or not, so unshared 20 fits (7675 bytes) and
+    // 21 crosses (8336). Shared is still at 44 - 40 outputs fit in 7087 bytes and 44 cross at
+    // 8063, down from 8630 - because the epilogue holds every output, so each date's fragment
+    // has a Month consumer and keeps the month step, and the prefix it shares got shorter by
+    // the same amount for every date. The ladder is in PLAN_TASK_54.md section 9. The limit
+    // itself is HotSpot's HugeMethodLimit, past which it gives up on compiling the method at
+    // all (interpreted, boxed vectors, on every batch whose length is not a lane multiple).
     def fields(dates: Int): Seq[VarkaVectorIR] = (0 until dates).flatMap { c =>
       val col = new ColumnRef(c)
       Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     }
     val limit = 8000
-    // Unshared, 19 outputs fit and 20 do not.
-    assert(epilogueSize(fields(5).take(19), 12, unshared) < limit)
-    assert(epilogueSize(fields(5), 12, unshared) > limit)
-    // Shared, the same 19 fit with room to spare, and the boundary moves out to 44 outputs
+    // Unshared, 20 outputs fit and 21 do not.
+    assert(epilogueSize(fields(5), 12, unshared) < limit)
+    assert(epilogueSize(fields(6).take(21), 12, unshared) > limit)
+    // Shared, the same 20 fit with room to spare, and the boundary moves out to 44 outputs
     // over eleven dates.
-    assert(epilogueSize(fields(5).take(19), 12, sharing) < limit)
-    assert(epilogueSize(fields(8), 12, sharing) < limit)
+    assert(epilogueSize(fields(5), 12, sharing) < limit)
+    assert(epilogueSize(fields(10), 12, sharing) < limit)
     val past = epilogueSize(fields(11), 12, sharing)
     assert(past > limit,
       s"forty-four shared calendar outputs now fit in $past bytes - sharing reaches further " +

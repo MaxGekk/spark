@@ -185,4 +185,87 @@ machine moved.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Shipped, default flipped to the map. Two regenerations of the parity file:
+the A/B under the old default (the pairs below are from it, and the second
+run reproduced them within 1%), then the committed file under the new one.
+The `per-row LocalDate year` control read 481.8 against the committed 481.7.
+
+### 9.1 The A/B, Julian map against century-then-year, same run
+
+| shape | 256-bit | 128-bit |
+|---|---|---|
+| `year`, null-free | 3443.2 vs 2741.6, **+26%** | 1332.1 vs 1054.4, **+26%** |
+| `year`, mixed nulls | 2402.1 vs 2099.9, +14% | 804.3 vs 756.7, +6% |
+| four fields, unshared, null-free | 823.3 vs 694.6, +19% | 315.0 vs 262.1, +20% |
+| `add_months(d, 13)`, null-free | 732.8 vs 712.1, +3% | 254.7 vs 245.2, +4% |
+
+### 9.2 The shipped rows, previous commit against the regenerated file (256-bit)
+
+| row | before | after |
+|---|---|---|
+| `year`, null-free | 2769.1 | 3441.8 (+24%) |
+| `year`, mixed nulls | 2206.0 | 2329.9 (+6%) |
+| `month`, null-free | 3010.8 | 3501.0 (+16%) |
+| `dayofmonth`, null-free | 2863.2 | 3382.3 (+18%) |
+| four fields, unshared, null-free | 694.3 | 815.0 (+17%) |
+| four fields, shared, null-free | 1531.0 | 1656.3 (+8%) |
+| four fields, shared, mixed nulls | 841.6 | 841.0 (0%) |
+| `add_months(d, 13)`, null-free | 713.0 | 732.8 (+3%) |
+
+Every calendar tail sits on the prefix, so task 53's rows moved with it. The
+shared four-field kernel gains 8% null-free and nothing mixed-null: its one
+prefix is a small share of a body that then runs three tails, and the masked
+path is bound elsewhere - task 46 and 47's territory, not this task's.
+
+### 9.3 Predictions, scored
+
+1. *`year` gains 8-12%.* **Under by half**: 26% at both widths. Five ops off
+   about forty bought a quarter of the time because what went was a serial
+   stage - a compare, a leap-flag mask, and three masked fixes, each waiting
+   on the last - not five ops from anywhere. Op count predicts throughput on
+   a throughput-bound body; this body is latency-bound on its chain, as task
+   48's outcome already said, and a stage off the chain is worth its depth.
+2. *Four fields unshared gains 3-6%.* **Under**: 19%. Unshared, the shape is
+   four loop methods each running its own prefix, so it is four `year`-like
+   bodies, not one prefix amortised over four tails. The shared shape, which
+   is that, gained 8%.
+3. *`add_months` gains 2-5%.* Right: 3% and 4%.
+4. *128-bit ratios at least as large.* Right for null-free (26%, 20%), wrong
+   for mixed nulls (6% against 14%): the masked body's cost at four lanes is
+   in the validity handling, not the prefix.
+5. *The default flips at 3%.* Flipped at 26%.
+6. *No pinned fixture moves.* Right for the shape hash and the line map.
+   **The epilogue ladder moved**, which the plan did not list as a fixture
+   and should have, since task 51's outcome (its section 4.1) had already
+   shown the prefix's size reaching it: unshared now fits 20 outputs (7675
+   bytes) and crosses at 21 (8336); shared still fits 40 (7087) and crosses
+   at 44 (8063, down from 8630). The suite's test title and `PLAN_TASK_32.md`
+   7.1's pointer carry the new numbers.
+
+### 9.4 The ladder, re-measured
+
+| outputs | unshared | shared (dates x 4) |
+|---|---|---|
+| 16 | 6133 | |
+| 19 | 7279 | |
+| 20 | 7675 | |
+| 21 | **8336** | |
+| 40 | | 7087 |
+| 44 | | **8063** |
+| 48 | | 9113 |
+
+Fourth move of the same boundary for a fourth unrelated reason (sharing, the
+guard, the month elision, the map). Task 44 should measure its own baseline
+when it starts, as `PLAN_TASK_32.md` 7.1 already says.
+
+### 9.5 What the map leaves for later
+
+* **Task 49** now has a measured reason to prefer the two-division form: the
+  gain here came from removing a correction stage, and the long-lane form
+  removes both.
+* **`ChronoVectorOps`**, the hand-written reference kernel, is still on the
+  century-then-year form. Its parity against the emitted four-field kernel
+  (the "hand-written ceiling" row) is now a comparison across two algorithms;
+  whoever next reads that row should know why it moved the other way.
+* **The masked path did not move.** Every gain above is null-free or small;
+  tasks 46 and 47 are where the mixed-null rows go.
