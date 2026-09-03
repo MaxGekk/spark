@@ -1612,10 +1612,50 @@ item 9's 275 key references.
 **Design input.** Variable width is the whole problem: Arrow strings are
 offsets plus bytes, every operation is data-dependent in length, and the
 fixed-lane-count loop stops being the right shape - which is why SWAR date
-parsing stays in its own design pass. The SWAR sketch, kept: load the digit
-bytes as one word, subtract `0x30303030`, collapse with a multiply-add, and
-validate the separators with one vector compare whose failing lanes send the
-batch to the existing parser - the ghost-fallback discipline again.
+parsing stays in its own design pass.
+
+**`cast(string AS DATE)`, designed** (September 2026, from Daniel Lemire's
+`sse_date.c`, the 2023 "Parsing time stamps faster with SIMD instructions"
+post, and his 2018 `eightchartoi.c`; `SKILLS.md`, "Validate a fixed-format
+string with a saturating subtraction"). Spark's `stringToDate` grammar is wide:
+trimming, an optional sign, a 4-to-7-digit year, 1-or-2-digit month and day,
+and an optional `T` or space tail. The corpus writes `yyyy-MM-dd`. The kernel
+accepts exactly that 10-byte form and sends every other row to the row engine,
+the way task 26's guard does - it is a shape mask, not a parser.
+
+* **Validation, branch-free.** XOR the bytes with `0x30`, so digits become
+  0..9 and the dashes become `0x1D`. One saturating unsigned subtraction
+  (`SUSUB`, in JDK 25's `VectorOperators`) against a per-position limit vector,
+  `9 9 9 9 1D 1 9 1D 3 9`, leaves a nonzero residue for any non-digit, a
+  wrong separator, a leading month digit above 1 or a leading day digit above
+  3. Pair the digits into two-digit values and subtract again against `12` and
+  `31` to catch 13..19 and 32..39. Subtract the other way against a minimum
+  vector - `1` under the month and day pairs, `1D` under each separator, so a
+  separator must equal `0x1D` exactly rather than merely fall below it - to
+  reject month and day zero and a digit where a dash belongs. OR the residues;
+  the row is in shape iff the OR is zero.
+  The row's length must be 10 as well, which the offsets say before any byte is
+  read. Day-in-month and the leap rule are not checked here: they fall out of
+  `emitDaysFromCivil`'s month-length compare, which is already emitted.
+* **Digits to fields, without `maddubs`.** The Vector API has no byte
+  multiply-add, and does not need one. With the eight digits `yyyyMMdd` packed
+  into one long lane, `eightchartoi.c`'s SWAR ladder - multiply by
+  `1 + (10 << 8)`, shift 8, mask `0x00FF..`; multiply by `1 + (100 << 16)`,
+  shift 16, mask `0x0000FFFF..` - stops after two steps with the four two-digit
+  fields `yy yy MM dd` in 16-bit slots, which is what `emitDaysFromCivil`
+  (task 40) takes after `year = 100 * hi + lo`. Four rows per 256-bit vector,
+  in `long` lanes.
+* **The load is the open question, and it is item 3's of milestone 5.** A
+  10-byte record does not align to a long lane. The candidates are the
+  index-spill path the gather probe used (per-row scalar loads into a `long[]`,
+  then `fromArray`) or a `ByteVector.rearrange` compacting three rows out of a
+  32-byte load when the column is known fixed-width. Neither is measured.
+
+Not taken from the same source: its `is_leap_year_fast` and `leap_days_fast`
+assume 1970..2106 and special-case only 2100, a narrowing Varka has no use for
+under a total decomposition; and its `HHmmSS` combine, two 64-bit magic
+multiplies over the `pmaddubsw` output, is tuned to a time part Spark dates do
+not carry and Spark timestamps do not arrive with as strings at the kernel.
 
 ### Item 9. String keys: equality, hashing, dictionaries
 
