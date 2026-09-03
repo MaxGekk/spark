@@ -333,6 +333,9 @@ public final class VarkaLoopEmitter {
   /** {@code void VarkaVectorSupport.zero(MemorySegment)}. */
   private static final MethodTypeDesc ZERO =
       MethodTypeDesc.of(ConstantDescs.CD_void, MEMORY_SEGMENT);
+  /** {@code void VarkaVectorSupport.setValid(MemorySegment, int)}. */
+  private static final MethodTypeDesc SET_VALID =
+      MethodTypeDesc.of(ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_int);
   /** {@code long VarkaVectorSupport.validityBitsAt(MemorySegment, long, int)}. */
   private static final MethodTypeDesc VALIDITY_BITS_AT = MethodTypeDesc.of(
       ConstantDescs.CD_long, MEMORY_SEGMENT, ConstantDescs.CD_long, ConstantDescs.CD_int);
@@ -1455,7 +1458,15 @@ public final class VarkaLoopEmitter {
       loadSegment(cb, P_DST_VALIDITY, o, s.validityBytes, s.dstValSeg[o]);
       if (mode == BodyMode.DRIVER) {
         cb.aload(s.dstValSeg[o]);
-        cb.invokestatic(SUPPORT, "zero", ZERO);
+        if (fillsValidityOnce(analysis, dense, outputs.get(o))) {
+          // Task 45: on a dense batch every value output is valid on every row, so the bits are
+          // known here and the loop's per-lane-group OR is writing ones over ones. Setting them
+          // once costs a fill of the same bytes this zero would have touched.
+          cb.iload(P_LENGTH);
+          cb.invokestatic(SUPPORT, "setValid", SET_VALID);
+        } else {
+          cb.invokestatic(SUPPORT, "zero", ZERO);
+        }
       }
     }
 
@@ -1822,17 +1833,38 @@ public final class VarkaLoopEmitter {
       } else {
         cb.invokevirtual(INT_VECTOR, "intoMemorySegment", INTO_MEMORY_SEGMENT_DENSE);
       }
-      cb.aload(s.dstValSeg[o]);
-      cb.iload(s.iVar);
-      cb.i2l();
-      if (dense) {
-        cb.loadConstant(-1L);
-      } else {
-        loadWord(cb, s.wordRef.get(root));
+      if (!fillsValidityOnce(analysis, dense, root)) {
+        cb.aload(s.dstValSeg[o]);
+        cb.iload(s.iVar);
+        cb.i2l();
+        if (dense) {
+          cb.loadConstant(-1L);
+        } else {
+          loadWord(cb, s.wordRef.get(root));
+        }
+        cb.iload(s.lanes);
+        cb.invokestatic(SUPPORT, orValidityBits(s), OR_VALIDITY_BITS_AT);
       }
-      cb.iload(s.lanes);
-      cb.invokestatic(SUPPORT, orValidityBits(s), OR_VALIDITY_BITS_AT);
     }
+  }
+
+  /**
+   * Whether this output's validity is written once by the driver rather than per lane group by
+   * the loop (task 45).
+   *
+   * <p>Three conditions, and each is load-bearing. The option, because this is a lowering change
+   * and the older form stays a reference variant the differential checks against. Dense, because
+   * a masked batch is exactly the case where which rows of which output are valid is what the
+   * loop computes. And not a {@link Cond}, because a condition root's validity slot is the
+   * <i>selection bitmap</i> - its bits mean "known true", not "valid" - so the per-group OR
+   * there is real work and stays in both bodies.
+   *
+   * <p>Called from the driver and from {@link #emitLaneGroup} with the same arguments, so the
+   * fill and the elided OR cannot disagree: one of them writing without the other is the failure
+   * that would produce an all-null column or an unzeroed one.
+   */
+  private static boolean fillsValidityOnce(Analysis analysis, boolean dense, VarkaVectorIR root) {
+    return analysis.options.denseValidityOnce() && dense && !(root instanceof Cond);
   }
 
   /** {@code local = VarkaVectorSupport.ofAddress(param[index], lload(bytes))}. */

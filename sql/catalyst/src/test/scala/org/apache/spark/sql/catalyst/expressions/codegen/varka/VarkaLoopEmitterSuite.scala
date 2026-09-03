@@ -1468,6 +1468,65 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       forceMasked = true, ctx = "forced-masked")
   }
 
+  test("task 45: the driver's fill writes the bits the loop used to OR, exactly") {
+    // The narrow claim: the dense path writes the same bits from a different place. So the
+    // check is byte-for-byte identity against today's path, at every length where the last
+    // byte is partial - which is the byte that fails if setValid fills whole bytes rather than
+    // exactly `length` bits. assertSameOutput inside checkMatrix already compares validity byte
+    // for byte, so driving both option values through it is the assertion.
+    val roots = Seq[VarkaVectorIR](new Year(new ColumnRef(0)), new DayOfWeek(new ColumnRef(0)))
+    val nullFree = Seq(Seq[Int => Boolean](_ => false))
+    val lengths = Seq(1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095)
+    // Days that stay inside the narrowed range at every index these lengths reach.
+    // `calendarDays` walks out of it past about index 1180 (i * 9973 - 400000), and since task
+    // 51 removed the per-extraction guard an out-of-range day no longer declines - it returns a
+    // plausible wrong year. That is a real hazard, but it is task 52's, and a validity test
+    // that trips over it is testing the wrong thing.
+    def inRangeDays(c: Int, i: Int): Int = 19000 + (i % 9973)
+    for (once <- Seq(true, false)) {
+      checkMatrix(roots, 1, Array.empty[Int], lengths, nullFree, data = inRangeDays,
+        ctx = s"denseValidityOnce=$once",
+        options = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(once))
+    }
+  }
+
+  test("task 45: a Cond root keeps its per-group OR under both option values") {
+    // The selection bitmap's bits mean "known true", not "valid", so the driver must not fill
+    // it - a filled selection bitmap selects every row. This is the test that fails if the
+    // fill is applied to a Cond root, and it is why fillsValidityOnce excludes them rather
+    // than the driver and the loop each deciding separately.
+    val root = new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1))
+    for (once <- Seq(true, false)) {
+      checkMatrix(Seq(root), 2, Array.empty[Int], Seq(17, 64, 65, 1000),
+        nullPatterns.map(p => Seq(p._2, p._2)), ctx = s"cond, denseValidityOnce=$once",
+        options = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(once))
+    }
+  }
+
+  test("task 45: the masked path's bytes do not move, and the dense path's shrink") {
+    // The guard that keeps this task off the masked path, asserted the way task 32 asserted
+    // its own: the masked bodies are byte for byte as they were, so no masked case can have
+    // changed, and only the dense loop is allowed to have lost anything.
+    val col = new ColumnRef(0)
+    for ((roots, name) <- Seq(
+        (Seq[VarkaVectorIR](new Year(col)), "year"),
+        (Seq[VarkaVectorIR](new Year(col), new Month(col)), "year+month"),
+        (Seq[VarkaVectorIR](chain(4)), "chain4"))) {
+      val off = emitMulti(roots, 1, 4, VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false))._2
+      val on = emitMulti(roots, 1, 4, VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(true))._2
+      for (body <- Seq("loopMasked0", "epilogueMasked")) {
+        assert(VarkaEmitterTestSupport.codeSize(off, body) ===
+          VarkaEmitterTestSupport.codeSize(on, body),
+          s"$name: $body moved, so this task reached the masked path")
+      }
+      for (body <- Seq("loopDense0", "epilogueDense")) {
+        assert(VarkaEmitterTestSupport.codeSize(on, body) <
+          VarkaEmitterTestSupport.codeSize(off, body),
+          s"$name: $body did not shrink, so the per-group OR is still being emitted")
+      }
+    }
+  }
+
   test("the lanewise-DIV floorMod reference variant agrees with the shipped magic multiply") {
     val roots = Seq[VarkaVectorIR](new DayOfWeek(new ColumnRef(0)))
     val extremes = Array(Int.MinValue, Int.MaxValue, -1, 0, -7, 7)
