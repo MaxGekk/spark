@@ -174,10 +174,12 @@ Two kinds of target, and the kernels come first so a regression is attributable:
   (`VarkaShapeCacheImpl.classNameFor`) - with method names task 24 made stable
   (`loopDense0`, `loopMasked0`, `epilogueDense`, `epilogueMasked`). The
   `CompileCommand` pattern therefore wildcards the class and names the method
-  exactly:
-  `print,org/apache/spark/sql/varka/execution/VarkaFusedProjection_*::loopDense0`.
-  The probe prints the hash it actually emitted so a failure can be tied to a
-  shape.
+  exactly. **Corrected in commit 2:** HotSpot rejects `/` and `::` in the same
+  pattern - `Method pattern uses '/' together with '::'`, and the VM refuses to
+  start - so the spelling is
+  `print,org.apache.spark.sql.varka.execution.VarkaFusedProjection_*::loopDense0`,
+  dots throughout. The probe prints the hash it actually emitted so a failure can
+  be tied to a shape.
 
 ## 5. Tests
 
@@ -287,3 +289,42 @@ the documentation out of that task once chosen does not.
    rather than "missing vpaddd".
 5. **Reading the wrong nmethod.** C1's body is scalar by construction. Splitting
    on the nmethod headers and keeping only the C2 one is not optional.
+
+## 11. Commit 2's outcome: what the self-test caught
+
+Section 5 argued for building the instrument and proving it before pointing it
+at anything Varka-specific. It found three defects, and the point worth
+recording is that **not one of them was an error** - each produced a plausible
+result that a suite without a self-test would have shipped.
+
+1. **The `CompileCommand` pattern was malformed** (section 4.3, now corrected).
+   `/` and `::` cannot be mixed; the child JVM refused to start. Because the
+   suite checked only for disassembly, it reported "no disassembly in the child's
+   output" - which reads as missing tooling. A child that dies is a bug, not a
+   missing disassembler, so `requireHealthyChild` now checks the exit code first
+   and fails rather than cancels.
+2. **A hex dump parsed as instructions.** With no usable disassembler HotSpot
+   prints the nmethod under `[MachCode]` as raw hex words, and those lines carry
+   the same `0x<addr>:` prefix an instruction line does. 68 of them parsed as
+   instructions, and all three cases reported "expected at least one packed
+   integer add ... and found none. The intrinsic did not fire" - a confident,
+   specific, entirely false diagnosis. Requiring the mnemonic to begin with a
+   letter does *not* fix it, since hex words often do (`ff1f`, `e929`, `c349`);
+   the fix is to collect instructions only inside a `[Disassembly]` block.
+3. **The skip message contradicted itself.** `Loading hsdis library failed` is
+   printed both when HotSpot found nothing and when it found something
+   unloadable, so keying off it produced "a disassembler was found but HotSpot
+   refused to load it (hsdis: NoHsdis)". The discrimination now uses this suite's
+   own search result.
+
+Defect 2 is the one that justifies the whole approach. Without the pair, the
+scalar case would have passed (it found no packed add in garbage) while the
+vector case failed, and the natural reading of that pattern is "the detector
+works and the Vector API did not intrinsify" - a conclusion about HotSpot drawn
+from a parser bug.
+
+Both paths are now exercised: with `-Dvarka.hsdis.dir` pointed at a built
+`hsdis-amd64.so` all three cases pass, and with nothing configured all three
+cancel with a message naming what was searched. The instruction counts behind
+the assertions were checked by hand against the same runs - `vectorAdd` carries
+7 `vpaddd` and 24 `%zmm` operands, `scalarChain` carries none of either.

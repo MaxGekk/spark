@@ -960,6 +960,28 @@ the fastdebug tree's `hsdis-amd64.so` on `LD_LIBRARY_PATH`.
   instruction lines, and should distinguish "no library found" from "found and refused to load"
   when it reports a skip.
 
+**Three ways this went wrong in practice, all caught by the self-test before any real kernel was
+looked at.** Each produced a *plausible* result rather than an error, which is why the
+scalar/vector pair is built and run before anything else.
+
+* **`-XX:CompileCommand`'s method pattern cannot mix `/` with `::`.**
+  `print,org/apache/spark/.../Probe::method` fails VM startup outright -
+  `Method pattern uses '/' together with '::'`. Use `package.Class::method` or
+  `package/Class.method`, not a mix. The child then never starts, and a suite that only checks
+  for disassembly reports "no disassembler" for what is really a malformed flag - so check the
+  child's exit code first, and fail rather than skip on it.
+* **Gate instruction parsing on the `[Disassembly]` marker, not on the shape of a line.** With no
+  usable disassembler HotSpot prints the nmethod under `[MachCode]` as raw hex words -
+  `0x...: ff1f 0045 | 85c9 0f84 | ...` - and those lines have exactly the `0x<addr>:` shape an
+  instruction line has. Requiring the mnemonic to start with a letter does not separate them
+  either, since hex words routinely do (`ff1f`, `e929`, `c349`). Measured: 68 such lines parsed
+  as instructions, and the suite reported "the intrinsic did not fire" about a body it had never
+  read.
+* **`Loading hsdis library failed` does not mean a library was found.** HotSpot prints it both
+  when it looked and found nothing and when it found something it could not load, so a skip
+  message keyed off that line says "a disassembler was found but HotSpot refused to load it"
+  when none exists. Discriminate on your own search result instead.
+
 **Assert families, never mnemonics or counts.** The register class is a property of the host -
 `zmm` under AVX-512, `ymm` under AVX2, `xmm` at `-XX:MaxVectorSize=16` - so derive it from
 `IntVector.SPECIES_PREFERRED.vectorBitSize()` at runtime. And do not assert instruction *counts*:
