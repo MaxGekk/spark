@@ -463,19 +463,26 @@ trusting them, not just its ratios.
   two different situations, and reading them as one cost a real option.
 
 - **Size a lookup table to the calendar's period and it needs no fallback.**
-  ClickHouse's `DATE_LUT_SIZE` is `0x23AB1` - 146097, exactly one Gregorian era.
-  It anchors that window at 1900 and falls back outside, but 400 years is the
-  calendar's period, so a table indexed by **day of era** covers every `int32`
-  date with no fallback at all, and the reported year is
+  ClickHouse's `DATE_LUT_SIZE` is `0x23AB1` - 146097, exactly one Gregorian era,
+  anchored at 1900. Timestamps outside the window fall back to cctz, but day
+  numbers do not: `shiftIntoLUTRange` moves them by whole 400-year cycles and
+  adds `400 * cycles` to the year, because 400 years is the calendar's period. A
+  table indexed by **day of era** makes that the only path - it covers every
+  `int32` date with no fallback at all, and the reported year is
   `400 * (era - bias) + table[dayOfEra]`. Varka's prefix already computes that
   index - `emitEra` is the first thing it emits - so the table replaces
   everything after it. 571 KB as an `int[]`; a seven-year query touches 10 KB of
   it. This is the shape behind the 1.6x above.
 
-  ClickHouse also stores 16 bytes per day - year, month, day, day of week, days
-  in month - so one lookup yields every field, which is the problem task 32
-  solves with a shared prefix, solved with memory instead. That variant is not
-  measured here.
+  ClickHouse's 16-byte entry is six bytes of calendar - year, month, day, day of
+  week, days in month - and ten of time zone. The calendar part packs into 26
+  bits, so a four-field table is the same `int[]` as the year-only one and each
+  further field is a shift and a mask after the one gather: the problem task 32
+  solves with a shared prefix, solved with memory instead. ClickHouse also keeps
+  the inverse, a 4800-entry first-day-of-month table that makes days-from-civil
+  one lookup plus `day - 1`. Neither variant is measured here; both are listed
+  under milestone 5's item 10, which also records what the rest of ClickHouse's
+  date code was checked for and why none of it transfers.
 
 - **Fusion reverses all of it, and that is the result that matters.** The table
   above times one field into an `int[]` - the shape where Varka's advantage is
