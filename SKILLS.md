@@ -905,6 +905,55 @@ trusting them, not just its ratios.
   extractor whose failure mode is a visible hole.** Then say in the file what the
   hole is, and point at the PDF for the parts that did not survive.
 
+## A reciprocal's top bits are a remainder, and other things a neighbouring codebase had
+
+A review of `datealgo-rs` (Nuutti Kotivuori's Rust port of Neri-Schneider, with Cassio Neri as a
+contributor), done after task 53 had shipped the same month block. The papers in `sql/varka/papers`
+give the algorithms; a production port by people who have already fought the constants is a second
+source worth an hour, because it shows which corners the paper leaves to the reader. Four things
+came out of it, each checked exhaustively over Varka's day range rather than taken on trust.
+
+**Weekday from the top bits of a truncated reciprocal.** `((m + k) * floor(2^32 / 7)) >>> 29` is
+`(m + k - 1) mod 7 + 1` for every `m` up to about 1.34e8 (checked to that bound at a 2^16 step, and
+over all 16,777,216 days of the narrow range with zero mismatches). The multiply wraps modulo 2^32
+on purpose: the top three bits of the wrapped product are the fractional part of `m / 7` to three
+bits, which is the remainder. Three ops. Today's `dayofweek(col)` body is 19 IntVector ops, of
+which the two-fold mod-7 is about 16; `weekday` and `next_day` carry the same fold. This is the
+largest single saving found since the calendar family started, and it is **range-bounded**: the
+fold is exact for every int32 day, the reciprocal only inside the narrow range, so it belongs
+behind task 26's guard, as a fourth `FloorMod7` variant with the fold kept as the total-range
+reference. It is a task of its own after the emitter settles, not a rider on another PR.
+
+**The Thursday rule for the ISO week.** `weekofyear` planned as "provisional week, then two
+year-boundary corrections and a weeks-in-year helper". `datealgo-rs` does it as: move to the
+Thursday of the same week, `t = d + 3 - weekday0(d)`; the ISO week-year is that Thursday's year
+and the week is `(ordinal(t) - 1) / 7 + 1`. Varka already has the January ordinal from task 34, so
+the whole rule is the weekday, a shift, the day-of-year over `t`, and one exact division. Same op
+count as the planned design, but both boundary corrections and the helper vanish by construction,
+and the test burden with them. Row 37 in `PLAN_MILESTONE_4.md` now says so.
+
+**Days-from-civil without the era split.** `emitDaysFromCivil` (task 40, used by `add_months`)
+does `era = y / 400` with a carry, then `century = yoe / 100` with a carry. `datealgo-rs` writes the
+year part as `1461 * y / 4 - c + c / 4` with `c = y / 100`: equal to the era/yoe/century form over
+all 102,500 biased years, `1461 * y` fits int32, and the `/400` division and its carry step are
+gone. Worth about six ops off `add_months`'s 117. The `/100` still needs its correction step: no
+exact magic exists on that domain with the product under 2^31 (re-checked, k = 16..31).
+
+**A closed-form month length.** `30 | (m ^ (m >> 3))` is the length of every month except
+February, for the January-based `m` in 1..12. Three ops against `last_day`'s two `emitMonthStart`
+calls and a subtract, but the January month costs two ops from the March axis and February still
+needs its blend, so the net is a few ops. Recorded; not worth a task on its own.
+
+**Not taken.** `is_leap_year` there is the branchy `y % 25` form; Varka's Hueffner hash is four
+branchless ops and stays. The century and year steps of `rd_to_date` use a 64-bit multiply-high,
+which int lanes cannot express; they become borrowable verbatim when task 49 brings int64 lanes.
+
+The general lesson is the admission check: every one of these was a claim about a constant over a
+range until the range was swept. The month-length identity took twelve cases; the weekday trick
+took the full narrow range plus a search for where it stops holding, because a trick that is exact
+to 1.34e8 and needed to 1.68e7 has eight times the headroom, and that number is the thing to write
+down, not "it works".
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
