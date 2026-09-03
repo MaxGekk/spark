@@ -988,6 +988,22 @@ scalar/vector pair is built and run before anything else.
 the bimodality section above found identical vector-op counts with a 2x difference in total
 instructions, so a count assertion goes red on a register-allocation roll with nothing wrong.
 
+**And derive the family from output you actually read, not from a mnemonic list written from
+memory.** The obvious list for an integer comparison - `vpcmpd`, `vpcmpeqd`, `vpcmpgtd` - matches
+nothing on AVX-512, because the predicate is folded into the mnemonic: `a > b` on int lanes comes
+out as `vpcmpnled`, not-less-or-equal. The full set runs to a dozen suffixes and varies with how
+C2 chose to spell the comparison, so the durable rule is the shape `[v]pcmp<predicate>d` rather
+than an enumeration that goes stale on the next lowering change.
+
+**What the kernels actually compile to**, read this way rather than inferred from a ratio, on a
+Zen 5 host at AVX-512 (JDK 25 product build). `DateVectorOps.vectorAddDays`: 5 `vpaddd`, 23 `%zmm`
+operands. `ChronoVectorOps.vectorFourFields`: 15 `vpaddd`, 13 `vpmulld`, 7 `vpsrld`. The emitted
+`year` loop body: 10 `vpaddd`, 8 `vpmulld`, 4 `vpsrld`, 63 `%zmm` operands. The emitted
+`dayofweek` body: 65 `vpaddd`, 26 `vpmulld`, 39 `vpsrld` - task 14's range-narrowed magic is
+packed, which is the whole reason that lowering exists. An emitted comparison: 15 `vpcmpnled` and
+15 `vpblendmd`, no branch. Everything Varka emits or hand-writes for date work vectorizes; that
+was an assumption until task 31.
+
 ## Building a fastdebug JDK for HotSpot diagnostics
 
 Three questions in milestone 4 could not be answered from a product JVM - why SuperWord

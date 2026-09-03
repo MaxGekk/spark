@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.matching.Regex
 
 import org.apache.spark.SparkFunSuite
 
@@ -59,11 +60,32 @@ class VarkaAssemblySuite extends SparkFunSuite {
    * found identical vector-op counts with a 2x difference in total instructions, so a count
    * assertion would go red on a register-allocation roll with nothing actually wrong.
    */
-  private case class Family(description: String, mnemonics: Set[String])
+  private case class Family(
+      description: String, mnemonics: Set[String], pattern: Option[Regex] = None) {
+    def matches(mnemonic: String): Boolean =
+      mnemonics.contains(mnemonic) || pattern.exists(_.matches(mnemonic))
+  }
 
   private val packedIntAdd = Family("packed integer add", Set("vpaddd", "paddd"))
+  private val packedIntSub = Family("packed integer subtract", Set("vpsubd", "psubd"))
+  private val packedIntMul = Family("packed integer multiply", Set("vpmulld", "pmulld"))
+  private val packedIntShift = Family("packed integer shift",
+    Set("vpsrld", "vpsrad", "vpslld", "psrld", "psrad", "pslld"))
   private val packedLoadStore = Family("packed load/store",
-    Set("vmovdqu32", "vmovdqu", "vmovdqa32", "vmovdqa", "movdqu", "movdqa"))
+    Set("vmovdqu32", "vmovdqu64", "vmovdqu", "vmovdqa32", "vmovdqa", "movdqu", "movdqa"))
+
+  /**
+   * Packed integer compare, as a pattern rather than a list.
+   *
+   * <p>The list this suite was written with - vpcmpd, vpcmpeqd, vpcmpgtd - matched nothing.
+   * AVX-512 folds the predicate into the mnemonic, so {@code a > b} on int lanes comes out as
+   * {@code vpcmpnled} (not-less-or-equal), and the full set runs to a dozen suffixes that vary
+   * with how C2 chose to spell the comparison. Enumerating them would be a list that goes stale
+   * on the next lowering change; the shape {@code [v]pcmp<predicate>d} is the actual family.
+   * This is PLAN_TASK_31.md prediction 3 landing early, and on a different case than expected.
+   */
+  private val packedCompare = Family("packed integer compare", Set.empty,
+    Some("""^v?pcmp[a-z]*d$""".r))
 
   /**
    * What a body looks like when the intrinsic did not fire. Reported alongside a miss, because
@@ -136,6 +158,9 @@ class VarkaAssemblySuite extends SparkFunSuite {
     command.add(javaBin.getAbsolutePath)
     command.add("--add-modules")
     command.add("jdk.incubator.vector")
+    // The kernels and the emitted loops read off-heap memory through MemorySegment.reinterpret,
+    // which is a restricted method: without this the child prints a warning per call site.
+    command.add("--enable-native-access=ALL-UNNAMED")
     command.add("-XX:+UnlockDiagnosticVMOptions")
     command.add(s"-XX:CompileCommand=print,$printPattern")
     extraFlags.foreach(command.add)
@@ -286,7 +311,7 @@ class VarkaAssemblySuite extends SparkFunSuite {
 
   private def countIn(nmethod: Nmethod, family: Family, regClass: Option[String]): Int =
     nmethod.insns.count { insn =>
-      family.mnemonics.contains(insn.mnemonic) &&
+      family.matches(insn.mnemonic) &&
         regClass.forall(cls => insn.operands.contains(s"%$cls"))
     }
 
@@ -416,5 +441,90 @@ class VarkaAssemblySuite extends SparkFunSuite {
       s"-XX:MaxVectorSize=16 should give a 128-bit preferred species, got $bits")
     val nmethod = standardC2(run, "VarkaAssemblyProbe::vectorAdd")
     assertHasFamily(nmethod, packedIntAdd, registerClass(bits))
+  }
+
+  // --- The kernels ---------------------------------------------------------------------------
+
+  // These come before the emitted loops on purpose. DateVectorOps and ChronoVectorOps are the
+  // hand-written references the emitter is measured against, and their shapes are fixed; if one
+  // of them stops vectorizing, an emitted loop's regression is not attributable to the emitter.
+
+  /** One case, end to end: fork, require a healthy child and a disassembler, take the standard
+   *  C2 nmethod for `method`, and assert every family on the host's register class. */
+  private def assertFamilies(
+      probeCase: String,
+      pattern: String,
+      method: String,
+      families: Seq[Family],
+      extraFlags: Seq[String] = Seq.empty): Unit = {
+    requireSupportedArch()
+    val run = runProbe(probeCase, pattern, extraFlags)
+    requireHealthyChild(run)
+    requireDisassembler(run)
+    val nmethod = standardC2(run, method)
+    val cls = registerClass(run.preferredBits)
+    families.foreach(family => assertHasFamily(nmethod, family, cls))
+  }
+
+  private val dateVectorOps = "org.apache.spark.sql.varka.vector.DateVectorOps"
+  private val chronoVectorOps = "org.apache.spark.sql.varka.vector.ChronoVectorOps"
+
+  /** Production names a generated class `VarkaFusedProjection_<shape hash>`, so the pattern
+   *  wildcards exactly where it has to in production. */
+  private val emittedLoop = "org.apache.spark.sql.varka.execution.VarkaFusedProjection_*"
+
+  test("DateVectorOps.vectorAddDays is packed") {
+    assertFamilies("dateAddDays", s"$dateVectorOps::vectorAddDays",
+      "DateVectorOps::vectorAddDays", Seq(packedLoadStore, packedIntAdd))
+  }
+
+  test("ChronoVectorOps.vectorFourFields is packed, magic multiplies and all") {
+    // The whole civil-from-days decomposition: if the multiplies or the shifts came out scalar,
+    // the calendar lowering's entire case would be resting on a throughput coincidence.
+    assertFamilies("chronoFourFields", s"$chronoVectorOps::vectorFourFields",
+      "ChronoVectorOps::vectorFourFields",
+      Seq(packedLoadStore, packedIntAdd, packedIntSub, packedIntMul, packedIntShift))
+  }
+
+  // --- The emitted loops ---------------------------------------------------------------------
+
+  test("the emitted year loop is packed") {
+    assertFamilies("emittedYear", s"$emittedLoop::loopDense0",
+      "VarkaFusedProjection_emittedYear::loopDense0",
+      Seq(packedLoadStore, packedIntAdd, packedIntMul, packedIntShift))
+  }
+
+  test("the emitted dayofweek loop is packed") {
+    // Task 14's range-narrowed magic: a multiply and a shift standing in for a division. This is
+    // the shape whose whole point is that it avoids a scalar remainder, so a scalar body here
+    // would mean the lowering bought nothing.
+    assertFamilies("emittedDayOfWeek", s"$emittedLoop::loopDense0",
+      "VarkaFusedProjection_emittedDayOfWeek::loopDense0",
+      Seq(packedLoadStore, packedIntAdd, packedIntMul, packedIntShift))
+  }
+
+  test("the emitted comparison loop produces packed compares, not branches") {
+    // The one shape where a scalar fallback would be invisible in a throughput ratio: a
+    // per-lane branch on a predictable comparison can run at a speed that looks fine.
+    assertFamilies("emittedCompare", s"$emittedLoop::loopDense0",
+      "VarkaFusedProjection_emittedCompare::loopDense0",
+      Seq(packedLoadStore, packedCompare))
+  }
+
+  // --- Both widths ----------------------------------------------------------------------------
+
+  test("every shape is still packed at 128-bit lanes") {
+    // The case that catches a hard-coded zmm, and the one PLAN_TASK_31.md prediction 3 expects
+    // to break first: xmm is also what scalar SSE uses for some operations, so a family table
+    // that works by symmetry from the wide run is not good enough.
+    val narrow = Seq("-XX:MaxVectorSize=16")
+    assertFamilies("dateAddDays", s"$dateVectorOps::vectorAddDays",
+      "DateVectorOps::vectorAddDays", Seq(packedLoadStore, packedIntAdd), narrow)
+    assertFamilies("emittedYear", s"$emittedLoop::loopDense0",
+      "VarkaFusedProjection_emittedYear::loopDense0",
+      Seq(packedLoadStore, packedIntAdd, packedIntMul, packedIntShift), narrow)
+    assertFamilies("emittedCompare", s"$emittedLoop::loopDense0",
+      "VarkaFusedProjection_emittedCompare::loopDense0",
+      Seq(packedLoadStore, packedCompare), narrow)
   }
 }

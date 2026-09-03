@@ -328,3 +328,47 @@ Both paths are now exercised: with `-Dvarka.hsdis.dir` pointed at a built
 cancel with a message naming what was searched. The instruction counts behind
 the assertions were checked by hand against the same runs - `vectorAdd` carries
 7 `vpaddd` and 24 `%zmm` operands, `scalarChain` carries none of either.
+
+## 12. Commit 3's outcome: the cases, and the predictions scored
+
+Nine cases, all green at both widths: the three self-tests, `vectorAddDays` and
+`vectorFourFields` over the hand-written kernels, three emitted loops (`year`,
+`dayofweek`, and a comparison), and a 128-bit run over three of them.
+
+**The kernels and the emitted loops all vectorize**, which is the answer this
+project has been assuming without evidence. Counts from the wide run, for the
+record - the suite asserts presence, never these numbers:
+
+| body | packed add | multiply | shift | compare | `%zmm` operands |
+|---|---|---|---|---|---|
+| `DateVectorOps::vectorAddDays` | 5 | 0 | 0 | 0 | 23 |
+| `ChronoVectorOps::vectorFourFields` | 15 | 13 | 7 | 0 | many |
+| emitted `year` `loopDense0` | 10 | 8 | 4 | 0 | 63 |
+| emitted `dayofweek` `loopDense0` | 65 | 26 | 39 | 0 | many |
+| emitted comparison `loopDense0` | 0 | 0 | 0 | 15 | many |
+
+The `dayofweek` row is the one worth reading twice: task 14's range-narrowed
+magic exists precisely to avoid a scalar remainder, and its multiply and shift
+are packed, so the lowering bought what it was supposed to buy.
+
+### Predictions, scored
+
+1. **Held.** Both kernels passed on the first run, at both widths.
+2. **Held in substance, missed in place.** A `CompileCommand` pattern did need
+   adjusting, but not for an emitted loop - the shape-hash wildcard worked the
+   first time. It was the *probe's own* pattern, in commit 2, mixing `/` with
+   `::` (section 11). The emitted-loop wildcard, the part with no precedent in
+   this repo and the reason the prediction was written, was the part that worked.
+3. **Missed.** The narrow-width run passed first try. The family-table bug
+   appeared in the *wide* run instead, and on the case the prediction did not
+   name: the comparison. `vpcmpd`/`vpcmpeqd`/`vpcmpgtd` matched nothing, because
+   AVX-512 folds the predicate into the mnemonic and `a > b` on int lanes comes
+   out `vpcmpnled`. The fix is a pattern rather than a longer list - enumerating
+   a dozen predicate suffixes is a list that goes stale on the next lowering
+   change. The prediction's *reasoning* was right (a family table written from
+   one host's output is where this breaks) and its target was wrong.
+4. Commit 4's question; not yet answered.
+
+The rule that survives all three: derive the family from output actually read on
+the host, never from a mnemonic list written from memory. That is now in
+`SKILLS.md` beside the rest.

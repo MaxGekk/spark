@@ -17,8 +17,17 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.util.List;
+
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.VectorSpecies;
+
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
+import org.apache.spark.sql.varka.vector.ChronoVectorOps;
+import org.apache.spark.sql.varka.vector.DateVectorOps;
 
 /**
  * The child process behind {@code VarkaAssemblySuite} (task 31). It is launched in a forked JVM
@@ -88,6 +97,20 @@ public final class VarkaAssemblyProbe {
           sink += vectorAdd(a, b, o);
         }
       }
+      case "chronoFourFields" -> sink += chronoFourFields();
+      case "dateAddDays" -> sink += dateAddDays();
+      case "emittedYear" -> sink += emittedProjection(
+          "emittedYear", List.of(new VarkaVectorIR.Year(COLUMN_0)), 1, 0);
+      case "emittedDayOfWeek" -> sink += emittedProjection(
+          "emittedDayOfWeek", List.of(new VarkaVectorIR.DayOfWeek(COLUMN_0)), 1, 0);
+      case "emittedCompare" -> sink += emittedProjection(
+          "emittedCompare",
+          List.of(new VarkaVectorIR.IfElse(
+              new VarkaVectorIR.Compare(
+                  VarkaVectorIR.CompareOp.GT, COLUMN_0, new VarkaVectorIR.LiteralSlot(0)),
+              COLUMN_0,
+              new VarkaVectorIR.LiteralSlot(0))),
+          1, 1);
       default -> {
         System.err.println("unknown case: " + name);
         System.exit(2);
@@ -132,5 +155,124 @@ public final class VarkaAssemblyProbe {
       o[i] = a[i] + b[i];
     }
     return o[0];
+  }
+
+  // --- The kernels and the emitted loops --------------------------------------------------------
+
+  private static final VarkaVectorIR COLUMN_0 = new VarkaVectorIR.ColumnRef(0);
+
+  /**
+   * The prefix every emitted case's class name carries. Production names a generated class
+   * {@code VarkaFusedProjection_<shape hash>} ({@code VarkaShapeCacheImpl.classNameFor}), so the
+   * probe's classes are named the same way with a readable suffix in place of the hash: the
+   * suite's {@code CompileCommand} pattern then wildcards exactly where it would in production,
+   * rather than exercising a pattern shape that never occurs.
+   */
+  private static final String EMITTED_PREFIX =
+      "org.apache.spark.sql.varka.execution.VarkaFusedProjection_";
+
+  /** Rows per call. A multiple of every supported lane count, so the dense loop does the work
+   *  and the epilogue handles nothing. */
+  private static final int ROWS = 1024;
+
+  /** Calls for the off-heap cases. Lower than {@link #ROUNDS} because each call does 1024 rows
+   *  of real work rather than one add, and still far past the tier-4 threshold. */
+  private static final int KERNEL_ROUNDS = 50_000;
+
+  /** Days around 2020, so the calendar lowering runs on realistic values. */
+  private static void fillDays(MemorySegment data, int rows) {
+    for (int i = 0; i < rows; i++) {
+      data.set(ValueLayout.JAVA_INT, i * 4L, 18000 + i);
+    }
+  }
+
+  private static MemorySegment allValid(Arena arena, int rows) {
+    MemorySegment validity = arena.allocate((rows + 7) / 8L, 8);
+    validity.fill((byte) 0xFF);
+    return validity;
+  }
+
+  /** {@code ChronoVectorOps.vectorFourFields} - the hand-written reference the emitted calendar
+   *  lowering is measured against, and the first thing this suite should be able to vouch for. */
+  private static int chronoFourFields() {
+    try (Arena arena = Arena.ofConfined()) {
+      MemorySegment src = arena.allocate(ROWS * 4L, 64);
+      fillDays(src, ROWS);
+      MemorySegment srcValidity = allValid(arena, ROWS);
+      long[] dstData = new long[4];
+      long[] dstValidity = new long[4];
+      for (int f = 0; f < 4; f++) {
+        dstData[f] = arena.allocate(ROWS * 4L, 64).address();
+        dstValidity[f] = arena.allocate((ROWS + 7) / 8L, 8).address();
+      }
+      int status = 0;
+      for (int r = 0; r < KERNEL_ROUNDS; r++) {
+        status |= ChronoVectorOps.vectorFourFields(
+            src.address(), srcValidity.address(), 0, dstData, dstValidity, ROWS);
+      }
+      return status;
+    }
+  }
+
+  /** {@code DateVectorOps.vectorAddDays} - the simplest kernel, and the one whose body should be
+   *  packed loads, one packed add and packed stores with nothing else in it. */
+  private static int dateAddDays() {
+    try (Arena arena = Arena.ofConfined()) {
+      MemorySegment src = arena.allocate(ROWS * 4L, 64);
+      fillDays(src, ROWS);
+      MemorySegment srcValidity = allValid(arena, ROWS);
+      MemorySegment dst = arena.allocate(ROWS * 4L, 64);
+      MemorySegment dstValidity = arena.allocate((ROWS + 7) / 8L, 8);
+      for (int r = 0; r < KERNEL_ROUNDS; r++) {
+        DateVectorOps.vectorAddDays(src.address(), srcValidity.address(), 0,
+            dst.address(), dstValidity.address(), ROWS, 7);
+      }
+      return dst.get(ValueLayout.JAVA_INT, 0);
+    }
+  }
+
+  /**
+   * Emits one projection, loads it, and runs it hot.
+   *
+   * <p>The driver calls {@code loopDense0} once per {@code run}, so the loop method's own
+   * invocation counter trips at the same rate the kernel's does and HotSpot compiles it
+   * standalone - which is what lets the assertion name a loop method rather than the whole
+   * kernel, and is why {@code KERNEL_ROUNDS} calls rather than one long loop.
+   */
+  private static int emittedProjection(
+      String suffix, List<VarkaVectorIR> outputs, int numInputs, int numLiterals) {
+    String className = EMITTED_PREFIX + suffix;
+    byte[] bytes = VarkaLoopEmitter.emit(
+        className, outputs, numInputs, numLiterals, null, null, VarkaEmitOptions.DEFAULTS);
+    VarkaFusedKernel kernel;
+    try {
+      VarkaGeneratedClassLoader loader =
+          new VarkaGeneratedClassLoader(VarkaAssemblyProbe.class.getClassLoader());
+      loader.defineGeneratedClass(className, bytes);
+      kernel = (VarkaFusedKernel) loader.loadClass(className).getConstructor().newInstance();
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalStateException("could not load the emitted kernel " + className, e);
+    }
+    try (Arena arena = Arena.ofConfined()) {
+      MemorySegment src = arena.allocate(ROWS * 4L, 64);
+      fillDays(src, ROWS);
+      MemorySegment srcValidity = allValid(arena, ROWS);
+      long[] dstData = new long[outputs.size()];
+      long[] dstValidity = new long[outputs.size()];
+      for (int i = 0; i < outputs.size(); i++) {
+        dstData[i] = arena.allocate(ROWS * 4L, 64).address();
+        dstValidity[i] = arena.allocate((ROWS + 7) / 8L, 8).address();
+      }
+      int[] scalarArgs = new int[numLiterals];
+      for (int i = 0; i < numLiterals; i++) {
+        scalarArgs[i] = 18500;
+      }
+      int status = 0;
+      for (int r = 0; r < KERNEL_ROUNDS; r++) {
+        status |= kernel.run(new long[] {src.address()}, new long[] {srcValidity.address()},
+            new int[] {0}, dstData, dstValidity, scalarArgs, ROWS);
+      }
+      return status;
+    }
   }
 }
