@@ -1026,6 +1026,51 @@ within 67 years of the epoch; an external scalar-engine reference number is avai
 the cost of a Velox build, and that ~67-year range is a fair data-shape argument in milestone 5's
 item 10 cache question.
 
+## The Julian map: one division stage fewer in civil-from-days
+
+From `benjoffe/fast-date-benchmarks` (Ben Joffe's fork of Neri and Schneider's harness, with his
+own algorithms from four posts, 2025-2026), read in September 2026. The fifth codebase read for the
+calendar family and the first that changes Varka's arithmetic.
+
+Neri-Schneider, and Varka's prefix after it, take the day of era to a century, then a year of
+century, then a day of year, and pay for the leap day at the year step with an underflow
+correction. Joffe removes the middle stage. Scale the day by four first, `qds = 4 * doe + 3`; the
+century is `qds / 146097` (146097 / 4 is 36524.25, the mean century). Then add four back per
+century, `jul = qds + 4 * cen` within an era (the general form subtracts `cen & ~3` as well, which
+is zero inside one era): that maps the Gregorian count onto a calendar in which every fourth year
+is leap without exception, and in that calendar `jul / 1461` is the year and `(jul mod 1461) >>> 2`
+the day of year, Feb 29 included, with no leap test at all. The `+ 3` also puts the era's last day
+in century 3, so the `cen == 4` fold goes too.
+
+Checked here in Varka's terms - 32-bit low products, round-down magic, one carry per division -
+over all 146097 days of an era against Python's calendar: zero mismatches with
+`cen = (qds * 1837) >>> 28` and `yrs = (jul * 2870) >>> 22`, largest product 1677225130, one carry
+sufficient for each (46 and 8627 of the 146097 days take it). Against `emitChronoPrefix` today
+that is century 10 ops to 7, year 13 to 10, year assembly 5 to 3, and one correction stage fewer
+on the dependent chain. It is task 54, run as task 53 was: a variant, an A/B, both widths.
+
+Three neighbours of the idea, for the record:
+
+- **Blend the constant, not the result.** Joffe picks the numerator's offset before the multiply
+  rather than fixing the quotient after the shift. A January offset of `197913 - 12 * 65536` on
+  task 53's month numerator makes `num >>> 16` the final month, and the low half is untouched so
+  the day formula still holds (checked over all 366 days); `979 * 12 - 2919 = 8829` does the same
+  for the month-start formula. The op count does not move; the blend leaves the critical path.
+  That is a change for the instruction harness of task 31 to see, not for a ratio.
+- **The rest of `fast64` needs a multiply-high.** The year multiply's low bits feed the month step
+  directly, and `(yrs % 4) * constant` absorbs the leap day; four multiplies for the whole date
+  where Neri-Schneider takes seven, about 40% faster in his scalar measurements. The Vector API has
+  no multiply-high on any lane, so these wait for task 49's long lanes and its exact low products,
+  where the admission check should now try the two-division form beside the three-division one.
+- **The bucket technique** is the guard-free int-lane total if task 49 fails its gate: choose an
+  approximate era by a shift, reduce the day into a window, fix the year up by `bucket * 2800`.
+  About 14 ops against task 26's `TOTAL` at 16, without the deliberate wrap; the eight-entry offset
+  table in his `article_2_l1` is one lane permute on a 256-bit int species.
+
+Confirmed and left alone: `emitLeapFlag`'s Hueffner hash is the fastest leap test in Joffe's own
+leap benchmark (0.79x of the Drepper-Neri-Schneider form on x64), and his signed variant is six
+lane ops to its four; both are exact over Varka's biased year range.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
