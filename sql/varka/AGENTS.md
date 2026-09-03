@@ -114,7 +114,15 @@ size and the `IntVector`/`VectorMask` invocation counts on the scale the
 emitter suite's op-count tests use - so a plan's registered op counts come
 from the tool, not from reading the emitter. `--asm` adds C2's assembly for the
 dense loop and its mnemonic frequencies; `--options k=v` selects any
-`VarkaEmitOptions` variant by name.
+`VarkaEmitOptions` variant by name. `--table --variant k=v` prints the
+op-count table a plan registers instead - one row per expression, one column
+per variant, deltas against the defaults - ready to paste.
+
+`-XX:+PrintAssembly`, and so `--asm` and the assembly suite, need the hsdis
+disassembler plugin, which no JDK ships. `dev/varka_hsdis_build.sh` builds it
+in seconds from the JDK's one source file and the distribution's capstone
+library, without a JDK build, and checks HotSpot loads it. Worktrees are
+listed and the merged ones removed with `dev/varka_worktree.sh list|gc`.
 
 `SKILLS.md` at the repository root is where a lesson goes when it will outlive
 the task that learned it - especially the negative results, which are what stop

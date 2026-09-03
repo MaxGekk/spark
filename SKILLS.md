@@ -1176,7 +1176,11 @@ species class in `-XX:+PrintInlining` output.
   `dev/varka_nightly.sh`.
 - Before registering op counts in a plan, print them: `dev/varka_emit.sh "<sql>"`
   gives the IR, the shape hash and per-method `IntVector` invocation counts on the
-  suite's own scale; `--asm` adds C2's assembly for the dense loop.
+  suite's own scale; `--asm` adds C2's assembly for the dense loop; `--table
+  --variant k=v` prints the plan's op-count table with deltas against the defaults.
+- `dev/varka_hsdis_build.sh` builds `hsdis-<arch>.so` from the JDK's single source
+  file against the distribution's libcapstone, no JDK build needed;
+  `dev/varka_worktree.sh gc` removes the worktrees whose PRs merged.
 
 ## A store the loop repeats per group with a constant operand is a fill the driver should do once
 
@@ -1361,7 +1365,10 @@ fastdebug build and `PrintAssembly` to see. Task 50 builds this; four things it 
 **You do not need to run the fastdebug JVM to read product assembly.** HotSpot's fourth
 fallback for locating the disassembler is `hsdis-<arch>.so` on `LD_LIBRARY_PATH`
 (`disassembler.cpp`), so a `libhsdis.so` built once against a fastdebug tree can be copied to
-`hsdis-amd64.so` and used with the *product* JVM:
+`hsdis-amd64.so` and used with the *product* JVM (and you do not need the fastdebug tree
+either: `dev/varka_hsdis_build.sh` compiles `src/utils/hsdis/capstone/hsdis-capstone.c`
+against the distribution's `libcapstone-dev` with `make/Hsdis.gmk`'s flags - a 16 KB shared
+object in under a second, the JDK headers only for `jni.h`):
 
 ```
 LD_LIBRARY_PATH=<dir with hsdis-amd64.so> java -XX:+UnlockDiagnosticVMOptions \
