@@ -52,7 +52,7 @@ import org.openjdk.jmh.infra.Blackhole;
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
-@Fork(1) // Driven in-process (forks=0) by DateVectorOpsBenchmarkTest on the surefire JVM.
+@Fork(1) // One JVM per benchmark, forked by DateVectorOpsBenchmarkTest with the surefire argLine.
 @Warmup(iterations = 2, time = 1)
 @Measurement(iterations = 3, time = 1)
 @State(Scope.Benchmark)

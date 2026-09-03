@@ -32,9 +32,10 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 import org.openjdk.jmh.runner.options.TimeValue;
 
 /**
- * Runs {@link VarkaMilestone4MeasurementsBenchmark} in-process, same mechanism as
+ * Runs {@link VarkaMilestone4MeasurementsBenchmark}, same mechanism as
  * {@link DateVectorOpsBenchmarkTest} and for the same reason (maven-jmh-plugin does not resolve
- * on this environment's Maven mirror).
+ * on this environment's Maven mirror): one forked JVM per benchmark, inheriting the surefire
+ * JVM's argLine.
  *
  * <p>Gated behind {@code -Dvarka.jmh=true}: {@code ./build/mvn -f sql/varka/engine/pom.xml test
  * -Dvarka.jmh=true} runs both this and {@link DateVectorOpsBenchmarkTest}; a plain {@code mvn
@@ -52,7 +53,7 @@ public class VarkaMilestone4MeasurementsBenchmarkTest {
         .include(pkg + "VarkaMilestone4MeasurementsBenchmark")
         .mode(Mode.Throughput)
         .timeUnit(TimeUnit.MILLISECONDS)
-        .forks(0)
+        .forks(1)
         .warmupIterations(3)
         .warmupTime(TimeValue.seconds(2))
         .measurementIterations(5)

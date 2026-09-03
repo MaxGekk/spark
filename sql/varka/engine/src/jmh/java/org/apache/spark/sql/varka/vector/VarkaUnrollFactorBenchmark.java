@@ -60,12 +60,12 @@ import org.openjdk.jmh.infra.Blackhole;
  * not the actual mod-7 magic multiply, to isolate the unroll question from that algorithm choice).
  *
  * <p>Run: {@code ./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true}. As with
- * {@link DateVectorOpsBenchmark}, {@code forks=0} - JMH runs in-process on the surefire JVM
- * because maven-jmh-plugin does not resolve on this environment's Maven mirror.
+ * {@link DateVectorOpsBenchmark}, JMH is driven from a test because maven-jmh-plugin does not
+ * resolve on this environment's Maven mirror, and forks one JVM per benchmark.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
-// Driven in-process (forks=0) by VarkaUnrollFactorBenchmarkTest on the surefire JVM.
+// One JVM per benchmark, forked by VarkaUnrollFactorBenchmarkTest with the surefire argLine.
 @Fork(1)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 2)
