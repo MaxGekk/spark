@@ -185,41 +185,57 @@ machine moved.
 
 ## 9. Outcome
 
-Shipped, default flipped to the map. Two regenerations of the parity file:
-the A/B under the old default (the pairs below are from it, and the second
-run reproduced them within 1%), then the committed file under the new one.
-The `per-row LocalDate year` control read 481.8 against the committed 481.7.
+Shipped, default flipped to the map. Three regenerations of the parity file:
+the A/B under the old default, a first run under the new one, and the
+committed run under the new one on a cold, idle machine through
+`dev/varka_bench_regen.sh` (the pairs below are from the committed run and its
+128-bit companion, `VarkaEmitterParityBenchmark-jdk25-128bit-results.txt`;
+the two earlier runs agreed with them within 2%). The `per-row LocalDate year`
+control read 481.4 against the committed 481.7.
 
 ### 9.1 The A/B, Julian map against century-then-year, same run
 
 | shape | 256-bit | 128-bit |
 |---|---|---|
-| `year`, null-free | 3443.2 vs 2741.6, **+26%** | 1332.1 vs 1054.4, **+26%** |
-| `year`, mixed nulls | 2402.1 vs 2099.9, +14% | 804.3 vs 756.7, +6% |
-| four fields, unshared, null-free | 823.3 vs 694.6, +19% | 315.0 vs 262.1, +20% |
-| `add_months(d, 13)`, null-free | 732.8 vs 712.1, +3% | 254.7 vs 245.2, +4% |
+| `year`, null-free | 3444.2 vs 2746.4, **+25%** | 1333.0 vs 1054.5, **+26%** |
+| `year`, mixed nulls | 2318.3 vs 2031.7, +14% | 810.7 vs 747.3, +8% |
+| four fields, unshared, null-free | 821.5 vs 692.7, +19% | 316.0 vs 262.8, +20% |
+| `add_months(d, 13)`, null-free | 733.4 vs 712.8, +3% | 255.6 vs 245.1, +4% |
 
 ### 9.2 The shipped rows, previous commit against the regenerated file (256-bit)
 
 | row | before | after |
 |---|---|---|
-| `year`, null-free | 2769.1 | 3441.8 (+24%) |
-| `year`, mixed nulls | 2206.0 | 2329.9 (+6%) |
-| `month`, null-free | 3010.8 | 3501.0 (+16%) |
-| `dayofmonth`, null-free | 2863.2 | 3382.3 (+18%) |
-| four fields, unshared, null-free | 694.3 | 815.0 (+17%) |
-| four fields, shared, null-free | 1531.0 | 1656.3 (+8%) |
-| four fields, shared, mixed nulls | 841.6 | 841.0 (0%) |
-| `add_months(d, 13)`, null-free | 713.0 | 732.8 (+3%) |
+| `year`, null-free | 2769.1 | 3452.2 (+25%) |
+| `year`, mixed nulls | 2206.0 | 2316.4 (+5%) |
+| `month`, null-free | 3010.8 | 3501.3 (+16%) |
+| `dayofmonth`, null-free | 2863.2 | 3379.9 (+18%) |
+| four fields, unshared, null-free | 694.3 | 809.2 (+17%) |
+| four fields, shared, null-free | 1531.0 | 1694.3 (+11%) |
+| four fields, shared, mixed nulls | 841.6 | 844.5 (0%) |
+| `add_months(d, 13)`, null-free | 713.0 | 733.6 (+3%) |
 
 Every calendar tail sits on the prefix, so task 53's rows moved with it. The
-shared four-field kernel gains 8% null-free and nothing mixed-null: its one
+shared four-field kernel gains 11% null-free and nothing mixed-null: its one
 prefix is a small share of a body that then runs three tails, and the masked
 path is bound elsewhere - task 46 and 47's territory, not this task's.
 
+**Read the previous-commit column with care.** The same file's fastest
+*non-calendar* rows - the emitted `date_add` loop, the hand-written `datediff`
+kernel, the chain kernels - are 20-27% under the previous commit's, and task
+54 does not touch them. A same-day run of master's own code reproduced those
+drops exactly (`date_add` mixed-null 17091 to 12527, `datediff` hand-written
+4724 to 3421, controls within 0.1%), and master against this branch on the
+same day puts them within about 7%. The machine's memory-bound throughput
+differs between the day master's file was generated and this one, under the
+same `performance` governor; the compute-bound rows and every control do not.
+The provenance sidecar the regen script now writes records the power state so
+the next such gap can be traced; `dev/varka_bench_regen.sh`'s header says to
+re-run master the same day before reading a cross-day drop as a regression.
+
 ### 9.3 Predictions, scored
 
-1. *`year` gains 8-12%.* **Under by half**: 26% at both widths. Five ops off
+1. *`year` gains 8-12%.* **Under by half**: 25% and 26% at the two widths. Five ops off
    about forty bought a quarter of the time because what went was a serial
    stage - a compare, a leap-flag mask, and three masked fixes, each waiting
    on the last - not five ops from anywhere. Op count predicts throughput on
@@ -228,12 +244,12 @@ path is bound elsewhere - task 46 and 47's territory, not this task's.
 2. *Four fields unshared gains 3-6%.* **Under**: 19%. Unshared, the shape is
    four loop methods each running its own prefix, so it is four `year`-like
    bodies, not one prefix amortised over four tails. The shared shape, which
-   is that, gained 8%.
+   is that, gained 11%.
 3. *`add_months` gains 2-5%.* Right: 3% and 4%.
 4. *128-bit ratios at least as large.* Right for null-free (26%, 20%), wrong
-   for mixed nulls (6% against 14%): the masked body's cost at four lanes is
+   for mixed nulls (8% against 14%): the masked body's cost at four lanes is
    in the validity handling, not the prefix.
-5. *The default flips at 3%.* Flipped at 26%.
+5. *The default flips at 3%.* Flipped at 25%.
 6. *No pinned fixture moves.* Right for the shape hash and the line map.
    **The epilogue ladder moved**, which the plan did not list as a fixture
    and should have, since task 51's outcome (its section 4.1) had already

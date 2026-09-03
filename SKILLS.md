@@ -1050,9 +1050,9 @@ that is century 10 ops to 7, year 13 to 10, year assembly 5 to 3, and one correc
 on the dependent chain. It is task 54, run as task 53 was: a variant, an A/B, both widths.
 
 **Measured, task 54 (`PLAN_TASK_54.md` 9).** Shipped as the default. The A/B in one run, Julian map
-against century-then-year: `year` null-free 3443.2 against 2741.6 M rows/s at AVX-512 (+26%) and
-1332.1 against 1054.4 at 128-bit (+26%); four fields unshared +19% and +20%; `add_months` +3% and
-+4%; the mixed-null rows +14% and +6%. The op-count prediction was 8-12% and the reason it was under
+against century-then-year: `year` null-free 3444.2 against 2746.4 M rows/s at AVX-512 (+25%) and
+1333.0 against 1054.5 at 128-bit (+26%, from the committed 128-bit companion file); four fields
+unshared +19% and +20%; `add_months` +3% and +4%; the mixed-null rows +14% and +8%. The op-count prediction was 8-12% and the reason it was under
 by half is the lesson: the five ops that went were a serial stage - a compare, a leap-flag mask,
 three masked fixes, each waiting on the last - on a body that is latency-bound on its chain, so
 they were worth their depth, not their count. Count ops to predict a throughput-bound body; count
