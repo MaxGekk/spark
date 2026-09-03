@@ -237,18 +237,53 @@ class VarkaChronoSuite extends SparkFunSuite {
     }
   }
 
+  test("task 54: the Julian map agrees with LocalDate and with the century-then-year form " +
+      "over a whole era") {
+    // The map's two divisions have a bounded input - the day of era, 146097 values - so the
+    // new part of the prefix is verified over its entire domain here, committed rather than
+    // opt-in, and against both oracles at once: LocalDate, and the form this replaces. The era
+    // starting 1 March 2000 is as good as any; the era step in front of both forms is shared
+    // and unchanged, so one era is the whole domain.
+    val start = LocalDate.of(2000, 3, 1).toEpochDay.toInt
+    for (dayOfEra <- 0 until VarkaChrono.ERA_DAYS) {
+      val day = start + dayOfEra
+      val julian = VarkaChrono.narrowedJulian(day)
+      assert(julian === reference(day), s"the Julian map disagreed with LocalDate on day $day")
+      assert(julian === VarkaChrono.narrowedCenturyYear(day),
+        s"the two prefix forms disagreed on day $day")
+    }
+    // The no-overflow conditions the constants' javadoc states, checked at the extreme rather
+    // than trusted: the largest scaled day and the largest mapped count times their magics.
+    val quadMax = 4 * (VarkaChrono.ERA_DAYS - 1) + VarkaChrono.QUAD_DAY_ADD
+    assert(quadMax.toLong * VarkaChrono.JULIAN_CENTURY_M < (1L << 31))
+    assert((quadMax + 4 * 3).toLong * VarkaChrono.JULIAN_YEAR_M < (1L << 31))
+    // And that the shipped twin is one of the two, whichever the default says.
+    val probe = LocalDate.of(2024, 2, 29).toEpochDay.toInt
+    assert(VarkaChrono.narrowed(probe) === reference(probe))
+  }
+
   test("the exhaustive sweep (opt-in: -Dvarka.sweep=true)") {
     assume(System.getProperty("varka.sweep") == "true",
       "set -Dvarka.sweep=true to run the exhaustive sweep")
 
+    // Both prefix forms (task 54): the era step in front of them is shared, but the sweep is
+    // the one place the whole chain is held to LocalDate over every covered day, and the
+    // reference variant is kept live by being held to the same standard.
     var mismatches = 0
+    var julianMismatches = 0
     var day = VarkaChrono.NARROW_MIN_DAYS
     while (day <= VarkaChrono.NARROW_MAX_DAYS) {
-      if (VarkaChrono.narrowed(day) != reference(day)) {
+      val want = reference(day)
+      if (VarkaChrono.narrowedCenturyYear(day) != want) {
         mismatches += 1
+      }
+      if (VarkaChrono.narrowedJulian(day) != want) {
+        julianMismatches += 1
       }
       day += 1
     }
     assert(mismatches === 0, s"the model disagreed with LocalDate on $mismatches days")
+    assert(julianMismatches === 0,
+      s"the Julian map disagreed with LocalDate on $julianMismatches days")
   }
 }

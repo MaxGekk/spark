@@ -244,6 +244,48 @@ public final class VarkaChrono {
    */
   public static final int MONTH3_JANUARY = 13;
 
+  // --- Task 54: the Julian map, one division stage fewer ------------------------------------
+
+  /**
+   * The constant term of the scaled day of era, {@code 4 * dayOfEra + 3} (Ben Joffe, after
+   * Neri-Schneider's {@code 4 * N + 3}; the review is in {@code SKILLS.md}, "The Julian map").
+   * Scaling by four makes {@code / 146097} the century (146097 / 4 is 36524.25, the mean
+   * century) and puts the era's last day, 29 February of its 400th year, in century 3 rather
+   * than 4 - the {@code + 3} is what does that - so the {@code century == 4} fold of the
+   * century-then-year form has nothing left to fold.
+   */
+  public static final int QUAD_DAY_ADD = 3;
+
+  /**
+   * {@code floor(2^28 / 146097)}, round-down, for the century out of the scaled day of era.
+   * The dividend is at most {@code 4 * 146096 + 3 = 584387}, and {@code 584387 * 1837} is
+   * 1073518919, inside {@code 2^31}; the shortfall is under one for every dividend in range,
+   * so one carry recovers the exact quotient. Checked over all 146097 days of an era rather
+   * than argued: 46 of them need the carry, none needs two.
+   */
+  public static final int JULIAN_CENTURY_M = 1837;
+  /** The shift paired with {@link #JULIAN_CENTURY_M}. */
+  public static final int JULIAN_CENTURY_K = 28;
+
+  /** Days in four Julian years, the cycle the map turns the Gregorian count into. */
+  public static final int JULIAN_CYCLE_DAYS = 1461;
+
+  /**
+   * {@code floor(2^22 / 1461)}, round-down, for the year of era out of the mapped count. The
+   * mapped count is at most {@code 584387 + 4 * 3 = 584399}, and {@code 584399 * 2870} is
+   * 1677225130, inside {@code 2^31}; the shortfall is under one over the whole range, so one
+   * carry recovers the exact quotient. Checked over all 146097 days of an era: 8627 of them
+   * need the carry, none needs two.
+   *
+   * <p>Why this replaces two steps rather than one. In the mapped count every fourth year is
+   * leap without exception, so the remainder of this division, shifted right by two, is the
+   * March-based day of year with 29 February right by construction: no {@code / 365}, no
+   * underflow correction, no leap test in the prefix at all.
+   */
+  public static final int JULIAN_YEAR_M = 2870;
+  /** The shift paired with {@link #JULIAN_YEAR_M}. */
+  public static final int JULIAN_YEAR_K = 22;
+
   // --- Task 40: the inverse direction, and the month arithmetic built on it ------------------
 
   /**
@@ -389,19 +431,44 @@ public final class VarkaChrono {
   }
 
   /**
-   * The narrowed decomposition. Undefined - not merely inaccurate - outside
+   * The narrowed decomposition, through the prefix form the emitter ships by default
+   * ({@link VarkaEmitOptions#DEFAULTS}). Undefined - not merely inaccurate - outside
    * {@link #inNarrowRange}, which is why the emitted form carries a guard and the batch falls
    * back to the row engine rather than publishing whatever this returns.
    */
   public static Fields narrowed(int days) {
+    return VarkaEmitOptions.DEFAULTS.julianMap() ? narrowedJulian(days)
+        : narrowedCenturyYear(days);
+  }
+
+  /** {@link #narrowed} through the century-then-year split (task 26). */
+  public static Fields narrowedCenturyYear(int days) {
+    return fromEra(eraOf(days), dayOfEraOf(days));
+  }
+
+  /** {@link #narrowed} through the Julian map (task 54). */
+  public static Fields narrowedJulian(int days) {
+    return fromEraJulian(eraOf(days), dayOfEraOf(days));
+  }
+
+  private static int eraOf(int days) {
     int w = days + NARROW_BIAS;
     int era = (w * NARROW_ERA_M) >>> NARROW_ERA_K;
     int rem = w - era * ERA_DAYS;
     if (rem >= ERA_DAYS) {
       era++;
+    }
+    return era - NARROW_ERA_BIAS;
+  }
+
+  private static int dayOfEraOf(int days) {
+    int w = days + NARROW_BIAS;
+    int era = (w * NARROW_ERA_M) >>> NARROW_ERA_K;
+    int rem = w - era * ERA_DAYS;
+    if (rem >= ERA_DAYS) {
       rem -= ERA_DAYS;
     }
-    return fromEra(era - NARROW_ERA_BIAS, rem);
+    return rem;
   }
 
   /**
@@ -432,17 +499,49 @@ public final class VarkaChrono {
       dayOfYear += 365 + ((yearOfCentury & 3) == 0 ? 1 : 0);
       yearOfCentury--;
     }
-    // Task 53: one affine numerator carries both the month and the day of month, where the
-    // 0-based form needed a magic multiply for the month and then DAY_M's magic run forwards
-    // to recover the day. The emitter still ships the old form; this is the scalar twin
-    // moving first, so the exhaustive sweep below checks the new block against the same
-    // oracle before any bytecode depends on it.
+    return fields(era, 100 * century + yearOfCentury, dayOfYear);
+  }
+
+  /**
+   * Day of era to the five fields through the Julian map (task 54): the same input domain as
+   * {@link #fromEra}, one division stage fewer, and the exact lane arithmetic the emitter
+   * emits under {@link VarkaEmitOptions#julianMap}. Scale the day by four, take the century by
+   * one round-down magic and a carry, add four back per century, and the count now lives in a
+   * calendar where every fourth year is leap without exception - so one more magic and carry
+   * gives the year of era, and the remainder shifted right by two is the day of year with the
+   * leap day in the right place. Neither the {@code century == 4} fold nor the year-step
+   * underflow correction of {@link #fromEra} exists here; see {@link #QUAD_DAY_ADD} and
+   * {@link #JULIAN_YEAR_M} for why.
+   */
+  private static Fields fromEraJulian(int era, int dayOfEra) {
+    int quadDays = 4 * dayOfEra + QUAD_DAY_ADD;
+    int century = (quadDays * JULIAN_CENTURY_M) >>> JULIAN_CENTURY_K;
+    int quadRem = quadDays - century * ERA_DAYS;
+    if (quadRem >= ERA_DAYS) {
+      century++;
+    }
+    int julian = quadDays + 4 * century;
+    int yearOfEra = (julian * JULIAN_YEAR_M) >>> JULIAN_YEAR_K;
+    int rem = julian - yearOfEra * JULIAN_CYCLE_DAYS;
+    if (rem >= JULIAN_CYCLE_DAYS) {
+      yearOfEra++;
+      rem -= JULIAN_CYCLE_DAYS;
+    }
+    return fields(era, yearOfEra, rem >>> 2);
+  }
+
+  /**
+   * The tail both prefix forms share, from the year of era and the March-based day of year.
+   * Task 53: one affine numerator carries both the month and the day of month, where the
+   * 0-based form needed a magic multiply for the month and then DAY_M's magic run forwards to
+   * recover the day.
+   */
+  private static Fields fields(int era, int yearOfEra, int dayOfYear) {
     int monthNumerator = MONTH_NUM_M * dayOfYear + MONTH_NUM_ADD;
     int monthIndex3 = monthNumerator >>> MONTH_NUM_K;
     int dayOfMonth = ((((monthNumerator & 0xFFFF) * DOM_M) >>> DOM_K)) + 1;
     int month = monthIndex3 < MONTH3_JANUARY ? monthIndex3 : monthIndex3 - 12;
-    int year = 400 * era + 100 * century + yearOfCentury
-        + (dayOfYear >= MARCH_TO_JANUARY_DAYS ? 1 : 0);
+    int year = 400 * era + yearOfEra + (dayOfYear >= MARCH_TO_JANUARY_DAYS ? 1 : 0);
     int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;
     int januaryDayOfYear = dayOfYear >= MARCH_TO_JANUARY_DAYS
         ? dayOfYear - (MARCH_TO_JANUARY_DAYS - 1)
