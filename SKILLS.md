@@ -232,6 +232,51 @@ apparent small wins turned out to be noise.
   vectors. A 30-second window showed the rate jump 9 -> ~1000 M rows/s at t=12s.
   "JVM history" only shifted when the compile started relative to the measurement
   window - fresh JVMs got it in during warmup, busy ones did not.
+
+  **Update, task 43: this no longer reproduces, on the same path, at four times the width.**
+  A ladder of single-output loops from 20 to 248 `IntVector` ops - a `greatest`/`least` tree
+  over independent `dayofweek(d + k)` subtrees, which is linear at 19 ops per step - was
+  measured with `-XX:+PrintCompilation` at both widths on JDK 25. Tier-4 **OSR** compile of
+  `loopDense0`, which is the path the paragraph above describes: 15, 52, 100, 163, 165 and
+  186 ms across the ladder at AVX-512, and 12 to 140 ms at 128-bit. The standard, non-OSR
+  compile is slower and still small: 30 to 271 ms at AVX-512, 58 to 501 ms at 128-bit, linear
+  at roughly 1.1 and 2.0 ms per op. So a 248-op loop compiles in 186 ms where a 64-op loop
+  once took ~10 s. The old observation is not being called a mismeasurement - a rate jumping
+  9 to ~1000 M rows/s at t=12s is not subtle - but the number describes a JDK that is no
+  longer the one in use, and anything resting on it (`GROUP_BUDGET`'s javadoc, among others)
+  needs re-deriving rather than re-citing.
+
+  **And it disagreed with another number this repository already carried.** `PLAN_MILESTONE_4.md`
+  section 2.3 and its debt register both price a wide loop's compile at "~1 ms per vector op",
+  which at 64 ops is 64 ms rather than 10 s - a 150x disagreement that sat unremarked. The
+  ladder agrees with the per-op figure. So the honest reading of the ~10 s is that it was
+  probably never ten seconds of compiler *work*: the bullet above says fresh JVMs got the
+  compile in during warmup and busy ones did not, which describes a compile task **queueing**
+  behind others under load. That keeps the observation - a loop running C1-boxed at ~1% until
+  its compile lands - and drops the inference that op count caused it. A queued compile can
+  bite at any width, which is a scheduling property and not something a per-method op budget
+  can bound.
+
+  **Stamp measured numbers with the host and JDK that produced them.** The ~10 s entry did not,
+  which is why nobody could tell staleness from disagreement for as long as both numbers sat
+  in the tree. Everything above was measured on an AMD Ryzen AI 9 HX PRO 370 under OpenJDK
+  25.0.4+7 on Linux, via `-XX:+PrintCompilation` over the committed
+  `VarkaEmitterParityBenchmark` ladder.
+
+  **Throughput does not fall off either, at either width.** Nanoseconds per row per op over
+  the same ladder: 0.0078, 0.0073, 0.0072, 0.0077, 0.0075 from 58 ops up at AVX-512, and
+  0.0212, 0.0179, 0.0163, 0.0163, 0.0168 at 128-bit - flat, and at 128-bit *improving* with
+  width, since the narrowest body spreads the loop's fixed costs over the fewest ops. There
+  is no register-pressure cliff for an emitted single-output loop up to 248 ops.
+
+  **And C1's `out of virtual registers in linear scan` is not about the machine register
+  file.** The bimodality section below attributes that refusal to 128-bit and its sixteen
+  `xmm` registers. Measured, it happens identically at 512-bit with thirty-two `zmm`
+  available, on exactly the same two methods - `ChronoVectorOps::vectorFourFields` (936
+  bytes) and the widest ladder point's `epilogueDense` (1954 bytes), never any
+  `loopDense0`. It is C1's own linear-scan allocator running out of *virtual* registers on a
+  large body, and it ends in "retry at different tier", so the method goes to C2 rather than
+  failing to compile - which is why it was never visibly slow.
 - The structural fix stands regardless: keep every hot loop method small by
   construction (the emitter splits outputs across sibling loop methods of at most
   `GROUP_BUDGET = 16` ops, called from a driver). Small methods compile in
@@ -479,6 +524,28 @@ trusting them, not just its ratios.
   made the rest exact was *restructuring* - splitting an era into centuries first
   drops the `/365` dividend from 146096 to 36524, under the bound. Reach for a
   different decomposition before reaching for more carries.
+- **The `v * M < 2^31` bound is easy to check for the wrong variable and still
+  ship.** Both `PLAN_TASK_34.md`'s leap-flag derivation and, independently,
+  task 36's own local copy of it picked `M = 167773` for `/100` and `/400` by
+  reasoning about the divisor rather than checking the bound against the actual
+  dividend range: the biased year climbs to 46334 over the covered range, and
+  `46334 * 167773` is over three and a half times past `2^31`, so a lane's
+  signed 32-bit multiply wraps and the shifted quotient is silently wrong past
+  roughly year 12400. No boundary list either task's differential used - 1900,
+  2000, 2100, 2400, the usual century years - reaches that far, so the bug
+  shipped past every targeted test both times; only an **exhaustive sweep of
+  the real emitted kernel over the whole covered range** (16,777,216 days,
+  seconds of wall time at these widths) found it, on the first and only day it
+  could show up. The fix both times was the same round-down-plus-one-carry
+  shape the paragraph above already prescribes for a large divisor
+  (`M = 41943` at `k = 22`/`24`, the largest product `46334 * 41943` safely
+  under `2^31`). The generalizable lesson: when a magic pair is *derived* by
+  hand rather than found by the kind of exhaustive search
+  `verify_long_lane_magic.py` runs, checking `M * dividend_max < 2^31` is a
+  five-second arithmetic check worth doing explicitly before trusting the
+  derivation's own prose - and an opt-in exhaustive sweep against the emitted
+  kernel, not a curated boundary list, is what actually catches it if that
+  check is skipped or miscounted.
 - Those carries are not free, and the reason is the masked ops in them. Task 26
   predicted that its full-range variant would cost 5-12% over its narrowed one on
   op count alone (five ops on forty) and measured 14-24%: the five extra ops are
