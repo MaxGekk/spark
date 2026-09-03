@@ -226,6 +226,12 @@ shape, not of unrolling. Rewriting K > 1 as straight-line interleaved code,
 matching K = 1's shape exactly, is what produced the numbers above (`SKILLS.md`
 carries the general lesson).
 
+Re-measured in forked JVMs after the harness debt closed (the results file's
+header says how): the same picture. Depth 8 flat at both widths; depth 20
+gains +4.4% from K = 2 at AVX-512 and +4.3% at 128-bit by min, and K = 4 over
+K = 2 is +3.4% at one width and -1.9% at the other. The conclusion did not
+depend on the harness, which is what a plain add/sub chain should show.
+
 If a factor above 1 pays, the deliverable is the planner version: the emitter
 already knows the DAG's live-temporary count per lane group, so K is chosen
 per shape, and a shape whose live set fills the register file declines to
@@ -273,22 +279,24 @@ The cheapest item and the only pure continuation of milestone 3: comparisons
 and `And`/`Or`/`Not` as projection *results*, built on task 21's mask-as-value
 machinery. `VectorMask.toVector` against a `blend` of one and zero was
 pre-registered as a measurement, not a debate, and it is now measured
-(`VarkaMilestone4MeasurementsBenchmark`, committed run in
+(`VarkaMilestone4MeasurementsBenchmark`, committed forked-JVM run in
 `sql/varka/engine/benchmarks/VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt`,
-four runs total, including two after merging task 24's PR with the machine's
-performance mode on): the two are statistically tied at both vector widths,
-on every run - neither wins the way the pre-registration expected. The real,
+which superseded four in-process runs; their reading is in git history and
+the file lists what moved): `toVector` is ahead by 1.12x at AVX-512 and
+`blend` by 1.04x at 128-bit - a small, width-dependent gap where the
+in-process runs had reported a tie, and not the clear winner the
+pre-registration expected either way. The real,
 width-dependent finding is a different question the pre-registration did not
 ask: whether to materialize an int column at all. Skipping it - packing
-`VectorMask.toLong()` straight into the output bitmap - wins by 1.10-1.18x at
-AVX-512 but *loses* by 1.40-1.60x at 128-bit, reproduced on every run. A
+`VectorMask.toLong()` straight into the output bitmap - wins by 1.18x at
+AVX-512 but *loses* by 1.34x-1.39x at 128-bit. A
 compound predicate, `(a > b) AND (c < d)` kept in mask space the whole way
-through versus materialized as an int column at every node, shows a related
-split: the winner flips at AVX-512 (by up to 1.07x either way), but
-mask-space wins reproducibly at 128-bit on every run, by 1.24x-1.37x - never
-worse, sometimes decisively better. Two consequences for the task: walk
+through versus materialized as an int column at every node, shows the same direction with a smaller margin than the in-process runs
+claimed: mask-space is ahead at both widths, by 1.02x at AVX-512 and 1.07x
+at 128-bit - never worse; the 1.24x-1.37x the earlier runs reported at
+128-bit was the harness. Two consequences for the task: walk
 boolean sub-expressions in mask space and materialize only once at the output
-boundary (never worse, and the compound case argues for it directly), and the
+boundary (never worse, at either width), and the
 single-comparison bits-only shortcut needs a width check rather than a single
 committed choice, since its sign flips between the two vector widths this
 project already tests at. The two real questions the pre-registration also
@@ -1516,7 +1524,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   kernel long-lived enough that one extra compilation amortises, and only with task 50's
   numbers in hand to say how often the bad roll actually happens.
 
-* **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
+* **`DateVectorOpsBenchmark` measures a degraded JIT state. CLOSED.** The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
   exercised the same kernels - so every committed figure in
   `DateVectorOpsBenchmark-jdk25-results.txt` is measured against profiles those
@@ -1545,7 +1553,14 @@ rewritten in the past tense with what the sweep found, never deleted.
   already prescribes, `forks = 1`, which the runner can do (a forked JMH child inherits the
   parent's `-XX:MaxVectorSize` and module flags, verified), plus a `@State` of its own for
   the lane-width pair so only `laneWidthNarrowestDrive`'s fork ever sees the second species;
-  it lands as its own change with the results files regenerated.
+  Closed: the three engine runners now fork one JVM per benchmark (the child
+  inherits the surefire argLine, `-XX:MaxVectorSize=16` included), the lane-width
+  pair has a `@State` of its own so only `laneWidthNarrowestDrive`'s fork sees the
+  second species, and all three results files were regenerated with what moved
+  listed at the end of each. The number task 24 could only reach by forcing C2 to
+  inline the Vector API - `vectorDateDiff` null-free at 10000 rows, 1276 against
+  the in-process 435 - is what a plain forked JVM measures (1211): the flag was
+  measuring the harness, as the entry above suspected.
 
 ## 10. Scope catalogue
 
