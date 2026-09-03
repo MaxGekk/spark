@@ -49,7 +49,6 @@ import glob
 import os
 import re
 import subprocess
-import sys
 
 DOCS = ["SKILLS.md", "README.md", "docs/sql-varka.md", "sql/varka/AGENTS.md"]
 DOC_GLOBS = ["sql/varka/plans/*.md"]
