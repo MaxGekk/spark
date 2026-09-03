@@ -68,6 +68,30 @@ public final class VarkaEmitterTestSupport {
   }
 
   /**
+   * How many instructions in the named method invoke a method on {@code owner} (a binary class
+   * name, e.g. {@code jdk.incubator.vector.IntVector}) - the emitted lane-op count, read off
+   * the class file rather than counted in the emitter's source. It is the deterministic half
+   * of an optimization's deliverable: a test can pin exactly how many lane ops a lowering
+   * costs, where a timing can only say that it did not get slower. Zero when the method does
+   * not exist.
+   */
+  public static int invocationCount(byte[] bytes, String methodName, String owner) {
+    int count = 0;
+    for (java.lang.classfile.MethodModel method : ClassFile.of().parse(bytes).methods()) {
+      if (!method.methodName().equalsString(methodName) || method.code().isEmpty()) {
+        continue;
+      }
+      for (java.lang.classfile.CodeElement element : method.code().get()) {
+        if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+            && invoke.owner().asInternalName().equals(owner.replace('.', '/'))) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  /**
    * The line numbers the named method's {@code LineNumberTable} attributes its instructions to,
    * in ascending order and without duplicates - the task 16 mapping, read the way a debugger or
    * a stack trace reads it. Empty when the method carries no table (or does not exist).
