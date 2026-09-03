@@ -1128,6 +1128,17 @@ must exist as an object for the other branch and the box survives. Same loops, s
 polluted against clean: saturating subtract 2.06 against 0.32 ns per vector (6.4x), `selectFrom`
 3.06 against 0.24 (12.8x), gather 6.47 against 2.39 (2.7x), long multiply unchanged.
 
+**Assert it as a rate, not as sites** (task 55, `PLAN_TASK_55.md`). A count of allocation sites
+in the disassembly cannot separate a per-call setup object from a per-iteration box:
+`ChronoVectorOps.vectorFourFields` carries four `NativeMemorySegmentImpl` views C2 never
+scalar-replaces, one allocation per call, and an allocation's slow path jumps backwards to its
+retry point, so a backward-branch range is not a loop. The assembly suite therefore measures
+`ThreadMXBean.getThreadAllocatedBytes` around a thousand calls at steady state and allows one byte
+per row; a box is at least 5 per row, a per-call view under 0.25. And whether a bimorphic template
+boxes depends on the shape *and the order the profiles filled in*: a `selectFrom` lookup boxes
+only when the second species ran hot first, an index-map gather boxes under either order at both
+widths. The suite's positive self-test is the gather for that reason.
+
 What this means here. The emitter and every kernel use `SPECIES_PREFERRED` only, and the 128-bit
 gate is a separate JVM under `MaxVectorSize=16`, so production and the catalyst harness are safe by
 construction - keep them so: never introduce a second species of a lane type, not for a half-width
