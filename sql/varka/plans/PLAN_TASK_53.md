@@ -285,6 +285,16 @@ Commit 2 waits on PR #78. Section 7's risk 1 says why: `emitChronoLastDay` is
 the worst of the seven month-axis call sites, and editing it directly on master
 is a different job from hand-resolving it inside a merge.
 
+**Correction to commit 2's scope, found while writing it.** The list below says commit 2
+carries "the 3-based axis", and it cannot: `MARCH_YEAR_JANUARY` is read by the *emitter* in
+five places (`emitChronoMonth`, `emitChronoDayOfMonth`, `emitMonthStart` twice, and the
+`Quarter` arm), so moving it to 13 would break every calendar shape before the emitter commit
+lands. The axis therefore arrives as a **parallel** constant, `MONTH3_JANUARY`, with
+`MARCH_YEAR_JANUARY` left in place; commit 3 moves the emitter onto the new axis and deletes
+the old one. What commit 2 does move is the scalar twin's own month block, whose outputs are
+unchanged and are checked against the same exhaustive oracle - which is the point of doing it
+first.
+
 1. **This plan**, with section 2's admission check. **DONE** (PR #80).
 2. **The constants and the scalar twin**: `VarkaChrono`'s new constants, the
    3-based axis, `fromEra`'s month block, and the three identity tests. No
@@ -299,3 +309,30 @@ is a different job from hand-resolving it inside a merge.
 Filled in when the work lands: the op counts against 3.4, the A/B by minimums
 at both widths, the ladder's fourth boundary, and which of 6.1's predictions
 held.
+
+## 12. Commit 2's outcome
+
+Every constant in section 2.1 was re-verified over its exact domain before being committed,
+rather than transcribed from the plan:
+
+| identity | domain | result |
+|---|---|---|
+| `(num >>> 16) - 3` equals `(5 * doy + 2) / 153` | all 366 days | exact |
+| `(num & 0xFFFF) / 2141` equals `doy - (153 * mp + 2) / 5` | all 366 days | exact |
+| numerator `2141 * doy + 197913` | all 366 days | peaks at 979378, inside int32 |
+| `(x * 31345) >>> 26` equals `x / 2141` | all 65536 values | exact, max product 2054194575 |
+| `(979 * m3 - 2919) >>> 5` equals `(153 * (m3 - 3) + 2) / 5` | all 12 months | exact, numerator 18..10787, never negative |
+
+One relationship worth naming because it is load-bearing for task 48 and was not obvious from
+the paper: **`monthIndex3 >= 13` and `dayOfYear >= 306` are the same test.** Over the whole
+domain the month indices at or after day 306 are exactly 13 and 14, and those before it are 3
+through 12. So `MONTH3_JANUARY` and `MARCH_TO_JANUARY_DAYS` have to move together or a year
+computed on one axis and a month on the other disagree by a year - which the identity test
+asserts on every one of the 366 days rather than leaving to this paragraph.
+
+The scalar twin's month block is now the Neri-Schneider form and its outputs are unchanged,
+which the opt-in exhaustive sweep confirms against `LocalDate` over all 16,777,216 covered
+days. That is the whole value of doing this before the emitter: the new constants are checked
+against the same oracle the old ones were, with no emitted bytecode depending on them yet.
+
+128 catalyst tests pass with the sweeps enabled.

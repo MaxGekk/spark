@@ -141,6 +141,65 @@ class VarkaChronoSuite extends SparkFunSuite {
     }
   }
 
+  test("task 53: one affine numerator carries both the month and the day of month") {
+    // The whole domain, for the reason the January-turn test above gives: 366 cases are
+    // cheaper to run than three lines of algebra are to trust. What is asserted is not that
+    // the new block is plausible but that it is *the same function* as the two forms this file
+    // ships today - the month's magic multiply, and the day recovered by running the month
+    // start forwards and subtracting. If they ever disagree, the emitter's lowering and its
+    // scalar twin have diverged, which is the failure VarkaChrono exists to make impossible.
+    var maxNumerator = 0
+    for (dayOfYear <- 0 to 365) {
+      val num = VarkaChrono.MONTH_NUM_M * dayOfYear + VarkaChrono.MONTH_NUM_ADD
+      maxNumerator = math.max(maxNumerator, num)
+      val monthIndex3 = num >>> VarkaChrono.MONTH_NUM_K
+      val dayOfMonth0 = ((num & 0xFFFF) * VarkaChrono.DOM_M) >>> VarkaChrono.DOM_K
+      val marchMonth = (5 * dayOfYear + 2) / 153
+      assert(monthIndex3 - 3 === marchMonth,
+        s"the 3-based month index disagreed with the shipped form at day of year $dayOfYear")
+      assert(dayOfMonth0 === dayOfYear - (153 * marchMonth + 2) / 5,
+        s"the day of month disagreed with the shipped form at day of year $dayOfYear")
+      assert(monthIndex3 >= 3 && monthIndex3 <= 14,
+        s"the month index left its domain at day of year $dayOfYear")
+      // The same January turn as task 48's, restated on the new axis. Both must move together
+      // or a year computed on one axis and a month on the other disagree by a year.
+      assert((monthIndex3 >= VarkaChrono.MONTH3_JANUARY) ===
+        (dayOfYear >= VarkaChrono.MARCH_TO_JANUARY_DAYS),
+        s"the two January tests disagreed at day of year $dayOfYear")
+    }
+    // The bound that makes this expressible on an int lane at all, where the paper's era and
+    // year steps are not: see PLAN_TASK_53.md 2.2.
+    assert(maxNumerator === 979378)
+    assert(maxNumerator < Int.MaxValue)
+  }
+
+  test("task 53: the day-of-month magic is exact over every value a 16-bit remainder can take") {
+    // Not sampled. The remainder is whatever the numerator's low half happens to be, so the
+    // domain is all 65536 values and checking all of them costs milliseconds. The product
+    // bound is asserted with it, because exactness is worthless if the multiply overflows.
+    var maxProduct = 0L
+    for (x <- 0 to 65535) {
+      assert(((x * VarkaChrono.DOM_M) >>> VarkaChrono.DOM_K) === x / VarkaChrono.MONTH_NUM_M,
+        s"the /2141 magic is not exact at $x")
+      maxProduct = math.max(maxProduct, x.toLong * VarkaChrono.DOM_M)
+    }
+    assert(maxProduct === 2054194575L)
+    assert(maxProduct < Int.MaxValue.toLong, "the magic multiply must fit a signed int lane")
+  }
+
+  test("task 53: the month-start map is a shift, and agrees with the magic it replaces") {
+    // Twelve cases, and the numerator's sign matters as much as the values: it never goes
+    // negative, which is what lets the emitter use a logical shift rather than an arithmetic
+    // one and stops the choice being a silent correctness question.
+    for (monthIndex3 <- 3 to 14) {
+      val numerator = VarkaChrono.MONTH_START_M * monthIndex3 - VarkaChrono.MONTH_START_SUB
+      assert(numerator >= 0, s"the month-start numerator went negative at $monthIndex3")
+      assert((numerator >>> VarkaChrono.MONTH_START_K) ===
+        (153 * (monthIndex3 - 3) + 2) / 5,
+        s"the month-start shift disagreed with the shipped magic at $monthIndex3")
+    }
+  }
+
   test("the leap-year hash is exact over its whole domain, and only there") {
     // A perfect hash is exact inside its domain and arbitrary one step past it, so the domain
     // is the whole contract and the only honest test of it is all of it: 102,500 years, which
