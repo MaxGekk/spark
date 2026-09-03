@@ -146,6 +146,19 @@ the shipped answer - it would have to be set on every executor - so the outcome
 is either a documented recommendation in `docs/sql-varka.md` or a recorded
 decline.
 
+**Answered, and declined (`PLAN_TASK_31.md` section 13).** The directive leaves
+every loop body byte-identical - the emitted `year` body stays at 327
+instructions with the same 10/8/4/8 vector mix over three runs each, zero
+variance - so nothing about vectorization improves. What it changes is the
+method boundary: the emitted `run` grows from 271 instructions with no vector
+ops to 471 carrying the whole year lowering, and `runDense` stops being compiled
+standalone. That is the sibling-method structure task 24 built and
+`GROUP_BUDGET` exists to control, so the flag works *against* the emitter's
+design, and it would have to be set on every executor to do so. No
+recommendation goes into `docs/sql-varka.md`. If method fusion is ever worth
+measuring, the emitter produces it directly through `GROUP_BUDGET`, per-shape
+and with no flag.
+
 **Update, planning (`PLAN_TASK_31.md` section 2).** The feasibility question this
 section leaves implicit - can the *product* JVM disassemble at all - was answered
 by running it rather than by reasoning about it, and the answer is yes: an
@@ -1195,7 +1208,7 @@ only, and nothing currently blocks it from being picked up next.
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
 | 24 | The scalar tail, interrogation, compaction. **DONE** (`PLAN_TASK_24.md`) | The tail-cost measurement (open question 3) recorded first; the unmasked-body-plus-masked-epilogue loop via `indexInRange`, deleting the emitter's second scalar IR walk; `compress(mask)` compaction in `VarkaFilterExec` against the committed ~1-3 ns/row ceiling, with the non-AVX-512 verdict; per-lane-group `anyTrue`/`allTrue` fast paths | Differential green at both vector widths, all null patterns, all-selected and none-selected; the pinned hashes and line map unchanged, which is the proof the refactor preserved behaviour (they were expected to move; see `PLAN_TASK_24.md` section 5); filter ladder re-run and committed; emitter per-node surface reduction stated as a number |
-| 31 | Assert the instructions, not the ratio. **Planned** (`PLAN_TASK_31.md`) | A forked-JVM disassembly harness on `-XX:CompileCommand=print` rather than `-XX:+PrintAssembly` (see 2.2's update note); host-derived instruction-family assertions over the `DateVectorOps` kernels and one emitted loop per gating shape; a scalar/vector self-test first, so a detector that matches nothing cannot pass the rest vacuously; no count or code-size assertions, since task 32's bimodality found identical vector-op counts with a 2x instruction count; a clean skip where `hsdis` is absent, distinguishing "not found" from "found and refused to load" | The suite fails on a scalar body where a vector one is expected, and says which method and which family; green at both vector widths; skipped-not-failed on a runner without a disassembler |
+| 31 | Assert the instructions, not the ratio. **DONE** (`PLAN_TASK_31.md`) - eleven cases at both widths; every hand-written kernel and every emitted loop measured genuinely packed, which the project had been assuming from throughput ratios; the inline-directive question answered and declined (2.2's update note) | A forked-JVM disassembly harness on `-XX:CompileCommand=print` rather than `-XX:+PrintAssembly` (see 2.2's update note); host-derived instruction-family assertions over the `DateVectorOps` kernels and one emitted loop per gating shape; a scalar/vector self-test first, so a detector that matches nothing cannot pass the rest vacuously; no count or code-size assertions, since task 32's bimodality found identical vector-op counts with a 2x instruction count; a clean skip where `hsdis` is absent, distinguishing "not found" from "found and refused to load" | The suite fails on a scalar body where a vector one is expected, and says which method and which family; green at both vector widths; skipped-not-failed on a runner without a disassembler |
 | 25 | ILP: the unroll factor as a plan decision | The registered prediction, then the three-confounder matrix (K x broadcast strategy x `GROUP_BUDGET`) on `dayofweek`, unpredictable `CASE WHEN`, and the depth-8 chain; if K > 1 pays, per-shape K chosen from the live-temporary count the emitter already computes; the `SKILLS.md` bullet rewritten with the numbers; the batch-size knee sweep (question 6) on a wide fused shape | A committed number per candidate shape against its existing baseline; prediction scored honestly; no committed number regresses on shapes where K stays 1 |
 | 26 | Calendar extraction, `year` first. **DONE** (`PLAN_TASK_26.md`) | The four-constant range-narrowing admission check, recorded before emitter work; `year`, `month` and `dayofmonth` committed - one civil-from-days decomposition yields all three - with `quarter` riding `month` and `dayofyear`/date-level `date_trunc` as the algebra yields them; fields whose constants will not narrow declined with a task-16 reason | Differential across the Gregorian range including pre-1970, leap years, month-length boundaries and the 400-year cycle edges, at both widths; parity numbers committed; `year` demonstrably compiling on the TPC-H q7/q8/q9 shape |
 | 27 | Boolean outputs | Mask-to-column materialisation (`toVector` against `blend`, measured); the bit-packed format decision at the Spark/Arrow boundary; three-valued rules holding at the output boundary | Differential over every null pattern - a null input never becomes false; `SELECT d > DATE '2000-01-01' AS flag` and filter-leftover boolean columns compile; committed number on one boolean-output shape |

@@ -372,3 +372,75 @@ are packed, so the lowering bought what it was supposed to buy.
 The rule that survives all three: derive the family from output actually read on
 the host, never from a mnemonic list written from memory. That is now in
 `SKILLS.md` beside the rest.
+
+## 13. Commit 4's outcome: the inline question, and the decline
+
+Section 7's question - whether forcing C2 to inline Varka's own packages
+changes anything - is answered, and the answer is a **recorded decline**, but
+not for the reason prediction 4 gave. The flag is not a no-op. It changes the
+compiled shape, and the change is one this project would not want.
+
+The directive is
+`-XX:CompileCommand=inline,org.apache.spark.sql.varka.*::*` plus the same for
+`org.apache.spark.sql.catalyst.expressions.codegen.varka.*::*`.
+
+**The loop bodies do not move at all.** The standard C2 nmethod for the emitted
+`year` loop is 327 instructions with 10 `vpaddd`, 8 `vpmulld`, 4 `vpsrld` and 8
+`vpsubd` - identical under both configurations, over three runs each, with zero
+variance between runs. `ChronoVectorOps.vectorFourFields` is likewise identical
+at 1174 instructions, and the emitted `dayofweek` body at 532. So nothing about
+vectorization improves, which is what prediction 4 anticipated.
+
+**What does move is the method boundary, and it moves the wrong way.**
+
+| method | baseline | with the directive |
+|---|---|---|
+| emitted `loopDense0` | 327 insns, 10/8/4/8 | 327 insns, 10/8/4/8 |
+| emitted `runDense` | 243 insns | no standard nmethod at all |
+| emitted `run` | 271 insns, **no vector ops** | 471 insns, **10/8/4/8** |
+
+The driver absorbs the loop. `run` grows by 200 instructions and acquires the
+entire year lowering's vector mix, `runDense` stops being compiled separately,
+and the emitted code now exists in two places rather than one.
+
+That is precisely the structure task 24 built and `GROUP_BUDGET` exists to
+control. The emitter splits bodies into sibling methods on purpose - to keep any
+one method off C2's compile cliff and out of the register pressure that
+`SKILLS.md`'s bimodality section traces to a 936-byte hand-written body at
+128-bit lanes. A JVM flag that re-fuses them is working against the emitter's own
+design, and it would have to be set on **every executor** to do so.
+
+`-XX:+PrintInlining` says why the bodies themselves survive: forcing the
+directive overrides the size heuristic but lands on a harder limit.
+`VarkaVectorSupport::orValidityBitsAt` (212 bytes) goes from
+`failed to inline: callee is too large` to
+`failed to inline: NodeCountInliningCutoff`, and `epilogueDense` (490 bytes)
+does the same. The reason changes; the outcome does not. Worth noting in
+passing that `orValidityBitsAt` declining to inline is **task 46's subject**,
+observed here as a side effect rather than as this task's business - and this
+run is evidence that task 46 cannot fix it with a flag either.
+
+**The decline, stated plainly.** No recommendation goes into
+`docs/sql-varka.md`. The directive does not improve the instructions, it fuses
+methods the emitter deliberately separates, and it would need setting on every
+executor to have even that effect. If method-boundary fusion is ever worth
+measuring, the emitter can produce it directly through `GROUP_BUDGET` - task 32
+step B2 already did exactly that with `withGroupBudget(200)` - which is
+measurable, per-shape, and needs no JVM flag.
+
+Two committed cases keep the finding from rotting: the emitted loop body and the
+hand-written kernel are both asserted still vectorized *under* the directive. The
+assertions are the weak ones - the families are present - deliberately, because
+an equality assertion over instruction counts across two configurations is the
+brittle shape this suite refuses everywhere else.
+
+### Prediction 4, scored
+
+**Half right, and wrong in the interesting half.** "Section 7's inline flag
+changes nothing at the instruction level for the emitted classes, and the
+outcome is a recorded decline." The outcome is a decline and the loop bodies are
+untouched, so the visible half held. But "changes nothing" is false: the flag
+inlines the driver into `run` and duplicates 200 instructions of vectorized body
+with it. Had the measurement stopped at `loopDense0` - which is where it started,
+and which is the method this suite was built to read - the conclusion would have
+been right by accident, for a reason that is not true.

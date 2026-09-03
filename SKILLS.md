@@ -995,6 +995,29 @@ out as `vpcmpnled`, not-less-or-equal. The full set runs to a dozen suffixes and
 C2 chose to spell the comparison, so the durable rule is the shape `[v]pcmp<predicate>d` rather
 than an enumeration that goes stale on the next lowering change.
 
+**Forcing C2 to inline Varka's own packages is a decline, and not because it does nothing.**
+`-XX:CompileCommand=inline,org.apache.spark.sql.varka.*::*` (plus the catalyst varka package)
+leaves every loop body byte-identical - the emitted `year` body stays at 327 instructions with
+10 `vpaddd`, 8 `vpmulld`, 4 `vpsrld`, over three runs each with zero variance, and
+`ChronoVectorOps.vectorFourFields` stays at 1174. What it changes is the method boundary: the
+emitted `run` grows from 271 instructions with no vector ops to 471 carrying the whole year
+lowering, `runDense` stops being compiled standalone, and the vectorized body then exists in two
+places. That is exactly the sibling-method structure task 24 built and `GROUP_BUDGET` exists to
+control, so the flag works against the emitter's design - and it would have to be set on every
+executor to do so. If method fusion is ever worth measuring, produce it from the emitter with
+`withGroupBudget`, which is per-shape and needs no flag.
+
+`-XX:+PrintInlining` explains why the bodies survive: the directive overrides the size heuristic
+and lands on a harder limit. `VarkaVectorSupport::orValidityBitsAt` (212 bytes) goes from
+`failed to inline: callee is too large` to `failed to inline: NodeCountInliningCutoff`. The
+reason changes, the outcome does not - which is also evidence that task 46's inlining problem
+cannot be solved with a flag.
+
+**Measure the caller, not only the method you are interested in.** The finding above was nearly
+missed: the A/B started on `loopDense0`, found it identical under both configurations, and would
+have concluded "the flag changes nothing". It changes the *caller*. When a flag affects inlining,
+the method whose body moves is the one doing the calling.
+
 **What the kernels actually compile to**, read this way rather than inferred from a ratio, on a
 Zen 5 host at AVX-512 (JDK 25 product build). `DateVectorOps.vectorAddDays`: 5 `vpaddd`, 23 `%zmm`
 operands. `ChronoVectorOps.vectorFourFields`: 15 `vpaddd`, 13 `vpmulld`, 7 `vpsrld`. The emitted

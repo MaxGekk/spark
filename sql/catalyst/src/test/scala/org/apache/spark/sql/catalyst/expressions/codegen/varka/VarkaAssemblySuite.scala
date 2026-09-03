@@ -527,4 +527,34 @@ class VarkaAssemblySuite extends SparkFunSuite {
       "VarkaFusedProjection_emittedCompare::loopDense0",
       Seq(packedLoadStore, packedCompare), narrow)
   }
+
+  // --- Forcing C2 to inline Varka's own packages (PLAN_TASK_31.md 7) --------------------------
+
+  /**
+   * Task 24 measured the JDK half of this question - an inline directive aimed at the incubating
+   * Vector API - and found a 50-190% swing in the engine's JMH harness against under 1% in the
+   * catalyst one, which turned out to be a fact about JMH rather than about Varka. This is the
+   * other half: the same directive aimed at Varka's own packages and at the emitted classes'.
+   */
+  private val inlineVarka = Seq(
+    "-XX:CompileCommand=inline,org.apache.spark.sql.varka.*::*",
+    "-XX:CompileCommand=inline,org.apache.spark.sql.catalyst.expressions.codegen.varka.*::*")
+
+  test("forcing C2 to inline Varka's packages leaves the emitted loop body vectorized") {
+    // The assertion is deliberately the weak one - the families are still there - because what
+    // this pair is really for is the finding recorded in PLAN_TASK_31.md 13, and an equality
+    // assertion over instruction counts across two configurations is exactly the brittle shape
+    // this suite refuses elsewhere: a register-allocation roll would fail it with nothing wrong.
+    val families = Seq(packedLoadStore, packedIntAdd, packedIntMul, packedIntShift)
+    assertFamilies("emittedYear", s"$emittedLoop::loopDense0",
+      "VarkaFusedProjection_emittedYear::loopDense0", families)
+    assertFamilies("emittedYear", s"$emittedLoop::loopDense0",
+      "VarkaFusedProjection_emittedYear::loopDense0", families, inlineVarka)
+  }
+
+  test("forcing C2 to inline Varka's packages leaves the hand-written kernel vectorized") {
+    val families = Seq(packedLoadStore, packedIntAdd, packedIntSub, packedIntMul, packedIntShift)
+    assertFamilies("chronoFourFields", s"$chronoVectorOps::vectorFourFields",
+      "ChronoVectorOps::vectorFourFields", families, inlineVarka)
+  }
 }
