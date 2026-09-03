@@ -289,15 +289,15 @@ pre-registration expected either way. The real,
 width-dependent finding is a different question the pre-registration did not
 ask: whether to materialize an int column at all. Skipping it - packing
 `VectorMask.toLong()` straight into the output bitmap - wins by 1.18x at
-AVX-512 but *loses* by 1.34x-1.39x at 128-bit. A
-compound predicate, `(a > b) AND (c < d)` kept in mask space the whole way
-through versus materialized as an int column at every node, shows the same direction with a smaller margin than the in-process runs
-claimed: mask-space is ahead at both widths, by 1.02x at AVX-512 and 1.07x
-at 128-bit - never worse; the 1.24x-1.37x the earlier runs reported at
-128-bit was the harness. Two consequences for the task: walk
+AVX-512 but *loses* by 1.34x-1.39x at 128-bit. A compound predicate, `(a > b)
+AND (c < d)` kept in mask space the whole way through versus materialized as
+an int column at every node, shows the same direction with a smaller margin
+than the in-process runs claimed: mask-space is ahead at both widths, by 1.02x
+at AVX-512 and 1.07x at 128-bit - never worse; the 1.24x-1.37x the earlier
+runs reported at 128-bit was the harness. Two consequences for the task: walk
 boolean sub-expressions in mask space and materialize only once at the output
-boundary (never worse, at either width), and the
-single-comparison bits-only shortcut needs a width check rather than a single
+boundary (never worse, at either width), and the single-comparison bits-only
+shortcut needs a width check rather than a single
 committed choice, since its sign flips between the two vector widths this
 project already tests at. The two real questions the pre-registration also
 named are format and nulls: Spark's bit-packed boolean vector against
@@ -1524,7 +1524,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   kernel long-lived enough that one extra compilation amortises, and only with task 50's
   numbers in hand to say how often the bad roll actually happens.
 
-* **`DateVectorOpsBenchmark` measures a degraded JIT state. CLOSED.** The engine's JMH
+* **`DateVectorOpsBenchmark` measures a degraded JIT state.** CLOSED. The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
   exercised the same kernels - so every committed figure in
   `DateVectorOpsBenchmark-jdk25-results.txt` is measured against profiles those
