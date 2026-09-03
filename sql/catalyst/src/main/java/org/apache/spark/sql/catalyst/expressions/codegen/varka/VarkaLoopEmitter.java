@@ -679,6 +679,7 @@ public final class VarkaLoopEmitter {
       case DayOfMonth n -> true;
       case Quarter n -> true;
       case AddMonths n -> true;
+      case LastDay n -> true;
       default -> throw new IllegalStateException("not a calendar node: " + node);
     };
   }
@@ -2779,7 +2780,10 @@ public final class VarkaLoopEmitter {
     int monthStartNext = t[12];
     int length = t[13];
 
-    emitChronoYear(cb, era, century, yearOfCentury, marchMonth);
+    // The year is only wanted for the leap flag; task 48 made emitChronoYear read the January
+    // turn off the day of year rather than off the month, so this passes `rem`. The month step
+    // still runs for this node - the month-length arithmetic below is what needs it.
+    emitChronoYear(cb, era, century, yearOfCentury, rem);
     cb.astore(year);
     emitChronoDayOfMonth(cb, rem, marchMonth);
     cb.astore(dayOfMonth);

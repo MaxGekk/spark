@@ -196,3 +196,33 @@ task 32's eventual sharing - it happened one merge earlier than expected, and
 for a different task. Re-verified by the full opt-in sweep (all 16,777,216
 days of `VarkaChrono`'s covered range against `DateTimeUtils.getLastDayOfMonth`,
 zero mismatches) rather than by inspection alone.
+
+## 9. What task 48 changed here
+
+Task 48 (PR #80) merged while this branch was open. It observed that
+`marchMonth >= 10` and `dayOfYear >= 306` are the same test one step apart in
+the chain, so a tail that only needs the January turn can read it off the day
+of year and let the prefix skip the month step entirely. The visible
+consequence for every other task is that **`emitChronoYear`'s last parameter
+changed meaning**, from the March-based month to the March-based day of year,
+without changing its type - so a textual merge compiles and is wrong.
+
+`emitChronoLastDay` calls it, and the call site was corrected to pass `rem`.
+This was not caught by reading the diff; it was caught by running the tests,
+and it is worth recording exactly how loudly it failed, because the two
+symptoms were very different:
+
+- The missing `tailReadsMarchMonth` arm for `LastDay` throws
+  `IllegalStateException` on the first `last_day` compile - the exhaustive
+  switch is doing its job, and nothing subtle happens.
+- The wrong `emitChronoYear` argument is silent. `mp >= 306` is never true,
+  so the reported year is short by one for every date on or after 1 January,
+  the leap flag is then computed for the wrong year, and February's length is
+  wrong in exactly the years where the two disagree about leapness. Reverting
+  the fix to check: `day -5394235: emitted -5394207, DateTimeUtils
+  .getLastDayOfMonth -5394208`. Both the bounded test and the opt-in sweep
+  fail; neither the compiler nor any type would have.
+
+`last_day` keeps the month step - `tailReadsMarchMonth` is `true` for it,
+since the month-length arithmetic is the whole lowering - so no emitted op
+count moves and no weight is re-counted here.
