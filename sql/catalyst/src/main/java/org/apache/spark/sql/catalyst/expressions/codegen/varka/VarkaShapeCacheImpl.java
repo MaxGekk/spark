@@ -341,9 +341,17 @@ public final class VarkaShapeCacheImpl {
     executions.invalidateAll();
   }
 
+  /**
+   * Everything before the shape hash in a generated class name. Task 50 matches on it to tell a
+   * Varka kernel's compilation from every other method the JVM compiles, so it is a constant
+   * here rather than a literal repeated there.
+   */
+  public static final String CLASS_NAME_PREFIX =
+      "org.apache.spark.sql.varka.execution.VarkaFusedProjection_";
+
   /** The one rendering of the shape-named class name; every caller derives it here. */
   public static String classNameFor(String shapeHash) {
-    return "org.apache.spark.sql.varka.execution.VarkaFusedProjection_" + shapeHash;
+    return CLASS_NAME_PREFIX + shapeHash;
   }
 
   /** The one rendering of the shape-named {@code SourceFile}; every caller derives it here. */

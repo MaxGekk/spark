@@ -67,6 +67,36 @@ private[sql] object VarkaShapeCache {
     if (env != null) env.conf.get(entry) else SQLConf.get.getConf(entry)
   }
 
+  /**
+   * Task 50's compiled-size watch, started once per JVM and only when asked for. It hangs here
+   * rather than anywhere else because this object is already the JVM-wide singleton on the
+   * emission path, already reads a static conf the same way, and already owns the shape hashes
+   * the watch keys on - and because a `RecordingStream` owns a thread, so starting one per
+   * session or per query would be a bug rather than an inefficiency.
+   *
+   * `lazy val` gives the once-per-JVM guarantee. When the flag is off this stays `None`, so no
+   * stream is opened, no thread is started and no map is allocated: the cost of the feature to
+   * anyone who has not asked for it is the null check that reads this.
+   */
+  private lazy val compilationWatch: Option[VarkaCompilationWatch] =
+    if (compilationWatchEnabled()) Some(VarkaCompilationWatch.start()) else None
+
+  private def compilationWatchEnabled(): Boolean = {
+    val entry = StaticSQLConf.VARKA_COMPILATION_WATCH_ENABLED
+    val env = SparkEnv.get
+    if (env != null) env.conf.get(entry) else SQLConf.get.getConf(entry)
+  }
+
+  /**
+   * How many distinct (shape, method, tier) keys have compiled to a materially different size
+   * than they did earlier in this JVM; 0 when the watch is off, which is the default.
+   */
+  def compilationDivergences(): Long = compilationWatch.map(_.divergenceCount()).getOrElse(0L)
+
+  /** Whether the watch is running - off by configuration and unavailable JFR both read false. */
+  private[sql] def compilationWatchRunning(): Boolean =
+    compilationWatch.exists(_.isRunning())
+
   /** The one rendering of the shape-named class name; every caller derives it here. */
   def classNameFor(shapeHash: String): String = VarkaShapeCacheImpl.classNameFor(shapeHash)
 
@@ -80,8 +110,16 @@ private[sql] object VarkaShapeCache {
    * Resolves the shape under the caller's context class loader - the loader the emitted bytes
    * link the engine's support classes through, and so an input to the entry's identity.
    */
-  def getOrEmit(key: VarkaShapeKey, execution: String): VarkaShapeLookup =
+  def getOrEmit(key: VarkaShapeKey, execution: String): VarkaShapeLookup = {
+    // Task 50's watch has to be subscribed before the kernels it watches are compiled, and
+    // nothing on the hot path would otherwise touch it: `compilationDivergences` is a reporting
+    // call, so making the lazy val's first force happen there would mean the watch only ever
+    // started for a caller already asking what it had seen. Forcing it here costs one volatile
+    // read per lookup after the first, and none of the rest when the flag is off, since a `None`
+    // is what gets memoised.
+    compilationWatch
     instance.getOrEmit(Utils.getContextOrSparkClassLoader, key, execution)
+  }
 
   def executionsFor(shapeHash: String): Seq[String] =
     instance.executionsFor(shapeHash).asScala.toSeq
