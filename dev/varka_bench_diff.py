@@ -24,6 +24,9 @@ Two modes:
   dev/varka_bench_diff.py --within FILE --ab "Julian map" "century-then-year"
                                                # A/B: pairs of rows in one file whose
                                                # names differ only by those two labels
+  dev/varka_bench_diff.py --git REV FILE --requote
+                                               # under each moved row, every document
+                                               # line that quotes its old number
 
 Rows are matched by (table, case name), where the table is the name on each
 results table's header line ("date_add over 1000000 rows:  Best Time(ms) ...") -
@@ -34,11 +37,22 @@ that is what every plan quotes. Rows moving by at least --threshold percent
 are marked; rows matching --control (the scalar anchors) are listed first,
 because if they moved the machine moved and nothing else in the file can be
 read. Exit status 0 always; this is a reading aid, not a gate.
+
+--requote turns a regeneration's diff into the requoting list: for every moved
+row it searches the documents the quote checker covers (the plans, SKILLS.md,
+the docs, the README) for the old number and prints each line that quotes it.
+A regeneration is not finished until that list is empty or every remaining
+line says on purpose that it quotes the number a change moved away from.
 """
 import argparse
+import glob
+import os
 import re
 import subprocess
 import sys
+
+DOCS = ["SKILLS.md", "README.md", "docs/sql-varka.md", "sql/varka/AGENTS.md"]
+DOC_GLOBS = ["sql/varka/plans/*.md"]
 
 ROW = re.compile(r"^(.*?)\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)X\s*$")
 HEADER = re.compile(r"^(.*?):\s+Best Time\(ms\)")
@@ -71,6 +85,41 @@ def read(path, rev=None):
 
 def pct(before, after):
     return (after / before - 1.0) * 100.0 if before else float("nan")
+
+
+def repo_root():
+    return subprocess.run(["git", "rev-parse", "--show-toplevel"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def quotes_of(number):
+    """Every document line quoting `number` (as a whole token), as path:line: text."""
+    top = repo_root()
+    docs = DOCS + [os.path.relpath(x, top) for g in DOC_GLOBS
+                   for x in sorted(glob.glob(os.path.join(top, g)))]
+    token = re.compile(r"(?<![\d.])" + re.escape(number) + r"(?![\d])")
+    hits = []
+    for doc in docs:
+        path = os.path.join(top, doc)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for i, line in enumerate(f, 1):
+                if token.search(line):
+                    hits.append(f"{doc}:{i}: {line.strip()[:100]}")
+    return hits
+
+
+def print_requotes(rows):
+    total = 0
+    for table, case, before, _ in rows:
+        hits = quotes_of(f"{before:.1f}")
+        if hits:
+            total += len(hits)
+            print(f"  {case} [{table}]: {before:.1f} is quoted in")
+            for h in hits:
+                print(f"    {h}")
+    print(f"  {total} document line(s) quote a moved row's old number")
 
 
 def print_rows(rows, threshold):
@@ -116,6 +165,10 @@ def before_after(old_text, new_text, args):
         print()
         print("-- within the threshold --")
         print_rows(same, args.threshold)
+    if args.requote:
+        print()
+        print("-- requote: document lines quoting the old numbers of the moved rows --")
+        print_requotes(moved)
     gone = [k for k in old if k not in new]
     if missing or gone:
         print()
@@ -151,6 +204,8 @@ def main():
     p.add_argument("--control", default=r"per-row|scalar|LocalDate|row engine",
                    help="regex naming the control rows (default: the scalar anchors)")
     p.add_argument("--all", action="store_true", help="also list rows within the threshold")
+    p.add_argument("--requote", action="store_true",
+                   help="list every document line quoting a moved row's old number")
     args = p.parse_args()
 
     if args.within:

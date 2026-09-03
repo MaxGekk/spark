@@ -1170,6 +1170,10 @@ species class in `-XX:+PrintInlining` output.
 - `VarkaIrFuzzSuite` fuzzes the emitter: random IR over random null patterns, lengths
   and option variants against the shared reference evaluator, reproducible by seed
   and iteration.
+- A task starts with `dev/varka_task_new.sh <n> "<title>"` (worktree, branch, plan from
+  `sql/varka/plans/TEMPLATE_TASK.md`, hook); a regeneration ends with
+  `dev/varka_bench_diff.py --git HEAD <file> --requote`; the volume checks run from
+  `dev/varka_nightly.sh`.
 - Before registering op counts in a plan, print them: `dev/varka_emit.sh "<sql>"`
   gives the IR, the shape hash and per-method `IntVector` invocation counts on the
   suite's own scale; `--asm` adds C2's assembly for the dense loop.
