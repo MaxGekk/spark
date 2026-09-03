@@ -548,6 +548,43 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("last_day matches the row engine across the Gregorian range (task 36)") {
+    // The same boundary set task 26's own test uses, since last_day shares emitChrono's
+    // prefix and can get the same things wrong, plus two far-future century years a DATE
+    // literal cannot name (the SQL parser's year field is 4 digits): 14500, not divisible by
+    // 400, and 14400, which is. emitLeapFlag's magic constants once overflowed a 32-bit lane's
+    // signed product past roughly year 12400 - silently, with no narrow boundary list catching
+    // it - so these two rows are the end-to-end companion to the exhaustive unit-level sweep
+    // in VarkaLoopEmitterSuite, over the same class of failure through actual SQL. They go
+    // through the column, not a literal expression: a literal-only date_add(DATE '...', n)
+    // constant-folds away before Varka ever sees it, which is a shape this test does not
+    // want to depend on the optimizer leaving alone.
+    val rows = Seq("2024-01-01", "2024-02-29", "2024-03-01", "2024-12-31", "1969-12-31",
+      "1970-01-01", "1900-02-28", "1900-03-01", "2000-02-29", "2000-03-01", "1600-02-29",
+      "1600-03-01", "0001-01-01", "9999-12-31", "2025-07-04", null)
+    val farFuture = Seq(
+      java.sql.Date.valueOf(java.time.LocalDate.of(14500, 2, 8)),
+      java.sql.Date.valueOf(java.time.LocalDate.of(14400, 2, 29)))
+    Seq(spark, varkaSpark).foreach { session =>
+      import scala.jdk.CollectionConverters._
+      val schema = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("d", org.apache.spark.sql.types.DateType, true)))
+      val data = rows.map(v =>
+        org.apache.spark.sql.Row(if (v == null) null else java.sql.Date.valueOf(v))) ++
+        farFuture.map(org.apache.spark.sql.Row(_))
+      session.createDataFrame(data.asJava, schema).createOrReplaceTempView("varka_last_day")
+      session.catalog.cacheTable("varka_last_day")
+    }
+    try {
+      checkDifferential(spark, varkaSpark,
+        "SELECT last_day(d) AS a, date_add(last_day(d), 1) AS b " +
+          "FROM varka_last_day ORDER BY a, b",
+        expectFused = true)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_last_day"))
+    }
+  }
+
   test("dayofweek and weekday match the row engine across 1970 and nulls") {
     val rows = Seq("2024-01-01", "1969-12-31", "1969-01-05", "1900-02-28", "2100-07-04", null)
     Seq(spark, varkaSpark).foreach { session =>

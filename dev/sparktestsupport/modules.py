@@ -41,6 +41,7 @@ ignored_file_patterns = (
     "AGENTS.md",
     "CONTRIBUTING.md",
     "README.md",
+    "SKILLS.md",
     "/LICENSE-binary",
     "/NOTICE-binary",
     "/scalastyle-config.xml",
@@ -60,6 +61,14 @@ ignored_file_patterns = (
     "/dev/spark_merge_footer.py",
     "/dev/spark-test-image/lint/Dockerfile",
     "/dev/structured_logging_style.py",
+    # Varka's prose: milestone and task plans, and transcribed source papers. These are
+    # documentation only - nothing compiles them and no test reads them - but until they were
+    # listed here they matched no module, which sends `determine_modules_for_files` to the
+    # `root` module and makes a plan-only pull request run the entire CI matrix, Kubernetes and
+    # YARN included. `sql/varka/AGENTS.md` was already covered by the bare `AGENTS.md` pattern
+    # above; these are the rest of it.
+    "/sql/varka/plans/",
+    "/sql/varka/papers/",
     "/ui-test/package-lock.json",
     "/ui-test/package.json",
 )
@@ -83,6 +92,14 @@ def is_ignored_file(filename: str) -> bool:
     A trailing slash ignores a directory subtree:
     >>> is_ignored_file("dev/create-release/spark-rm/Dockerfile")
     True
+    >>> is_ignored_file("sql/varka/plans/PLAN_TASK_31.md")
+    True
+    >>> is_ignored_file("sql/varka/papers/neri-schneider-2022.md")
+    True
+
+    Varka's code is not prose, and is not ignored:
+    >>> is_ignored_file("sql/varka/engine/src/main/java/X.java")
+    False
 
     Non-matches fall through:
     >>> is_ignored_file("xasfZyaml")
@@ -333,9 +350,24 @@ api = Module(
     ],
 )
 
+# The Varka engine: hand-written Vector API kernels, built by Maven as its own artifact and
+# depended on at *test* scope by catalyst and sql. It had no module, so a change to a kernel -
+# production code - matched nothing and fell through to `root`, running every job in the matrix.
+# It declares no sbt goals because its own tests run under Maven, in the `varka-engine` CI job;
+# what this entry buys is that catalyst and sql are its dependents, so changing a kernel tests
+# the code that calls it and nothing else.
+varka_engine = Module(
+    name="varka-engine",
+    dependencies=[],
+    source_file_regexes=[
+        "sql/varka/engine/",
+    ],
+    sbt_test_goals=[],
+)
+
 catalyst = Module(
     name="catalyst",
-    dependencies=[tags, sketch, variant, core, api],
+    dependencies=[tags, sketch, variant, core, api, varka_engine],
     source_file_regexes=[
         "sql/catalyst/",
     ],

@@ -233,6 +233,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         .map(v => LocalDate.ofEpochDay(v.toLong).get(IsoFields.QUARTER_OF_YEAR))
     case n: DayOfYear =>
       evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getDayOfYear)
+    case n: LastDay =>
+      // The definition, not the linear-form-plus-leap-flag this task's lowering computes.
+      evalValue(n.days(), row, lits).map(DateTimeUtils.getLastDayOfMonth)
     // The oracle is DateTimeUtils.dateAddMonths - the definition AddMonthsBase's nullSafeEval
     // calls - not VarkaChrono.daysFromCivil, which is the model this node's own arithmetic was
     // derived from and checked against; using it here would test the lowering against itself.
@@ -869,6 +872,32 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("last_day matches DateTimeUtils.getLastDayOfMonth over the range it covers " +
+      "(task 36)") {
+    val root = new LastDay(new ColumnRef(0))
+    val inRange = Array(
+      VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
+      VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1,
+      -1, 0, 1, -719468, -719162,
+      LocalDate.of(1900, 2, 15).toEpochDay.toInt, LocalDate.of(1900, 2, 28).toEpochDay.toInt,
+      LocalDate.of(1900, 3, 1).toEpochDay.toInt,
+      LocalDate.of(2000, 2, 15).toEpochDay.toInt, LocalDate.of(2000, 2, 29).toEpochDay.toInt,
+      LocalDate.of(2000, 3, 1).toEpochDay.toInt,
+      LocalDate.of(2023, 2, 28).toEpochDay.toInt, LocalDate.of(2023, 3, 1).toEpochDay.toInt,
+      LocalDate.of(2024, 2, 29).toEpochDay.toInt, LocalDate.of(2024, 3, 1).toEpochDay.toInt,
+      LocalDate.of(1, 1, 1).toEpochDay.toInt, LocalDate.of(9999, 12, 31).toEpochDay.toInt)
+    // Every month of a leap year (2024) and of a common year (2023), so all twelve linear-form
+    // lengths are exercised twice and February is exercised under both leap rules.
+    val everyMonth = (2023 to 2024).flatMap { y =>
+      (1 to 12).map(m => LocalDate.of(y, m, 15).toEpochDay.toInt)
+    }.toArray
+    val boundary = inRange ++ everyMonth
+    def days(c: Int, i: Int): Int =
+      if (i < boundary.length) boundary(i) else i * 9973 - 400000
+    checkMatrix(Seq(root), 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "last_day narrowed")
+  }
+
   test("task 40: add_months matches DateTimeUtils across clamp boundaries and month offsets") {
     val root = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
     // Every one of these has a different day-of-month than the month it lands in, at both
@@ -998,6 +1027,60 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         }
         assert(mismatches === 0, s"the emitted kernel disagreed on $mismatches days, " +
           s"shared=${options.shareChronoPrefix()}, elided=${options.elideChronoMonth()}")
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
+  test("the emitted last_day kernel matches DateTimeUtils over its whole range " +
+      "(opt-in: -Dvarka.sweep=true; task 36)") {
+    // The same discipline the four-field sweep above holds the emitter to, for last_day's
+    // own tail: emitLeapFlag's magic constants were first written as an exact one-shot magic
+    // that overflows a 32-bit lane's signed product past y ~ 25600 (roughly year 12400), which
+    // no test narrower than this sweep caught - every boundary list in this file's other tests
+    // happened to land under that threshold. Guard against that class of bug reappearing.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to sweep the emitted kernel")
+    val (kernel, loader) = load(emitMulti(Seq(new LastDay(new ColumnRef(0))), 1, 0))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val chunk = 1 << 16
+        val data = alloc(arena, chunk * 4L)
+        val validity = alloc(arena, (chunk + 7) / 8L)
+        validity.fill(0xFF.toByte)
+        val out = makeOutput(arena, chunk)
+        var day = VarkaChrono.NARROW_MIN_DAYS
+        var mismatches = 0
+        while (day <= VarkaChrono.NARROW_MAX_DAYS) {
+          val n = math.min(chunk, VarkaChrono.NARROW_MAX_DAYS - day + 1)
+          var i = 0
+          while (i < n) {
+            data.set(ValueLayout.JAVA_INT, i * 4L, day + i)
+            i += 1
+          }
+          val status = kernel.run(Array(data.address()), Array(validity.address()), Array(0),
+            Array(out._1.address()), Array(out._2.address()), Array.empty[Int], n)
+          assert(status === 0, s"the kernel declined an in-range batch at day $day")
+          i = 0
+          while (i < n) {
+            val d = day + i
+            val got = out._1.get(ValueLayout.JAVA_INT, i * 4L)
+            val want = DateTimeUtils.getLastDayOfMonth(d)
+            if (got != want) {
+              mismatches += 1
+              if (mismatches < 4) {
+                fail(s"day $d: emitted $got, DateTimeUtils.getLastDayOfMonth $want")
+              }
+            }
+            i += 1
+          }
+          day += n
+        }
+        assert(mismatches === 0, s"the emitted kernel disagreed on $mismatches days")
       } finally {
         arena.close()
       }
@@ -1594,19 +1677,21 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "16=(greatest 14 15)",
     "17=(dayOfMonth 1)",
     "18=(quarter 1)",
-    "19=(greatest 17 18)",
-    "20=(least 16 19)",
-    "21=(dayOfYear 1)",
-    "22=(greatest 20 21)",
-    "23=(dayOfWeek 1)",
-    "24=(dateDiff 22 23)",
-    "25=(weekDay 1)",
-    "26=(nextDay 1 2)",
-    "27=(addMonths 1 2)",
-    "28=(least 26 27)",
-    "29=(least 25 28)",
-    "30=(least 24 29)",
-    "31=(if 10 13 30)").mkString("\n")
+    "19=(lastDay 1)",
+    "20=(least 18 19)",
+    "21=(greatest 17 20)",
+    "22=(least 16 21)",
+    "23=(dayOfYear 1)",
+    "24=(greatest 22 23)",
+    "25=(dayOfWeek 1)",
+    "26=(dateDiff 24 25)",
+    "27=(weekDay 1)",
+    "28=(nextDay 1 2)",
+    "29=(addMonths 1 2)",
+    "30=(least 28 29)",
+    "31=(least 27 30)",
+    "32=(least 26 31)",
+    "33=(if 10 13 32)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -1630,14 +1715,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to
-    // ride Record.toString, whose format no JDK promises. One key using all 22 node types (and
+    // ride Record.toString, whose format no JDK promises. One key using all 23 node types (and
     // three CompareOps), so a change to any rendering, to the operand order, or to the
     // topological schedule fails here. If it does: make sure the change is intended, then
     // update the literal and say so in the task plan - the same rule as the pinned shape
     // hashes in VarkaShapeCacheSuite. Task 26 added the four calendar extractions and
-    // re-pinned it (PLAN_TASK_26.md); task 33 added NextDay, task 34 added DayOfYear and
-    // task 40 added AddMonths, each re-pinning it again (PLAN_TASK_33.md, PLAN_TASK_34.md,
-    // PLAN_TASK_40.md).
+    // re-pinned it (PLAN_TASK_26.md); task 33 added NextDay, task 40 added AddMonths, task 36
+    // added LastDay and task 34 added DayOfYear, each re-pinning it again (PLAN_TASK_33.md,
+    // PLAN_TASK_40.md, PLAN_TASK_36.md, PLAN_TASK_34.md). Re-pinned from the failing
+    // assertion's own output, never carried over from one side of a merge: a line map that is
+    // right for one node set is wrong for the union of two.
     val col = new ColumnRef(0)
     val lit = new LiteralSlot(0)
     val cond = new And(
@@ -1648,7 +1735,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val chrono = new Greatest(
       new Least(
         new Greatest(new Year(col), new Month(col)),
-        new Greatest(new DayOfMonth(col), new Quarter(col))),
+        new Greatest(new DayOfMonth(col), new Least(new Quarter(col), new LastDay(col)))),
       new DayOfYear(col))
     val everyNode = new IfElse(
       cond,
@@ -1658,7 +1745,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           new Least(new NextDay(col, lit), new AddMonths(col, lit)))))
     val (_, bytes) = emitMulti(Seq(everyNode), 1, 1)
     assert(VarkaDebugInfoReader.lineMap(bytes) === pinnedLineMap)
-    // The DAG, not a tree: col:0 is written once as line 1 and pointed at fifteen times. The
+    // The DAG, not a tree: col:0 is written once as line 1 and pointed at sixteen times. The
     // Record.toString rendering this replaced inlined every subtree, so line 25 alone carried
     // the whole IR and the key grew quadratically in exactly the sharing the emitter exploits.
     assert(pinnedLineMap.linesIterator.count(_.contains("col:0")) === 1)

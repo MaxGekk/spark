@@ -193,8 +193,8 @@ public sealed interface VarkaVectorIR
    * makes every exhaustive switch in {@link VarkaLoopEmitter} a compile error until it is
    * handled, which is the same protection {@link Cond} gives the condition nodes.
    */
-  sealed interface Chrono
-      extends VarkaVectorIR permits Year, Month, DayOfMonth, Quarter, DayOfYear {}
+  sealed interface Chrono extends VarkaVectorIR
+      permits Year, Month, DayOfMonth, Quarter, DayOfYear, LastDay {}
 
   /**
    * {@code date +- INTERVAL n MONTH/YEAR} and {@code add_months(date, n)} (task 40): month
@@ -242,6 +242,13 @@ public sealed interface VarkaVectorIR
   record DayOfYear(VarkaVectorIR days) implements Chrono {}
 
   /**
+   * Spark's {@code last_day} (task 36): the last date of the month {@code days} falls in - a
+   * {@link org.apache.spark.sql.types.DateType} output, unlike {@link Year}'s three siblings,
+   * which all return an int. See {@link Year} for what a chrono node costs and why.
+   */
+  record LastDay(VarkaVectorIR days) implements Chrono {}
+
+  /**
    * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is
    * derived from it and must be stable across JVMs, restarts and JDK releases - one shape,
    * one {@code VarkaFusedProjection_<hash>} name, everywhere. {@link Record#toString} makes
@@ -281,6 +288,7 @@ public sealed interface VarkaVectorIR
       case DayOfMonth n -> "(dayOfMonth " + canonical(n.days()) + ")";
       case Quarter n -> "(quarter " + canonical(n.days()) + ")";
       case DayOfYear n -> "(dayOfYear " + canonical(n.days()) + ")";
+      case LastDay n -> "(lastDay " + canonical(n.days()) + ")";
       case AddMonths n ->
           "(addMonths " + canonical(n.days()) + " " + canonical(n.months()) + ")";
     };
@@ -341,6 +349,7 @@ public sealed interface VarkaVectorIR
       case DayOfMonth n -> "(dayOfMonth " + lineOf.applyAsInt(n.days()) + ")";
       case Quarter n -> "(quarter " + lineOf.applyAsInt(n.days()) + ")";
       case DayOfYear n -> "(dayOfYear " + lineOf.applyAsInt(n.days()) + ")";
+      case LastDay n -> "(lastDay " + lineOf.applyAsInt(n.days()) + ")";
       case AddMonths n -> "(addMonths " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.months()) + ")";
     };

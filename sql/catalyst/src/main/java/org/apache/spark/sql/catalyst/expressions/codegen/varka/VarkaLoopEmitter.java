@@ -54,6 +54,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Gre
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LastDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
@@ -265,6 +266,18 @@ public final class VarkaLoopEmitter {
    * into its own loop method, which 50 already does.
    */
   private static final int ADD_MONTHS_TMP_COUNT = 31;
+
+  /**
+   * How many int-vector/mask locals {@link #emitChronoLastDay} needs: the
+   * {@link #CHRONO_PREFIX_SLOTS} {@link #emitChronoPrefix} already uses, plus the reported
+   * year, the day of month, the current month's start and the next one's (clamped, per
+   * {@link #emitMonthStart}'s own exact-range precondition), and the blended length.
+   *
+   * <p>This was 19 while {@link #emitLeapFlag} needed five scratch locals threaded in for
+   * February's own branch. It is now a perfect hash taking only the year, so those five are
+   * gone along with the parameters that carried them.
+   */
+  private static final int LAST_DAY_TMP_COUNT = 14;
 
   /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
@@ -676,6 +689,7 @@ public final class VarkaLoopEmitter {
       case Quarter n -> n.days();
       case DayOfYear n -> n.days();
       case AddMonths n -> n.days();
+      case LastDay n -> n.days();
       default -> throw new IllegalStateException("not a calendar node: " + node);
     };
   }
@@ -699,6 +713,7 @@ public final class VarkaLoopEmitter {
       case Quarter n -> true;
       case DayOfYear n -> false;
       case AddMonths n -> true;
+      case LastDay n -> true;
       default -> throw new IllegalStateException("not a calendar node: " + node);
     };
   }
@@ -781,6 +796,7 @@ public final class VarkaLoopEmitter {
       case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
       case Quarter n -> new VarkaVectorIR[] {n.days()};
       case DayOfYear n -> new VarkaVectorIR[] {n.days()};
+      case LastDay n -> new VarkaVectorIR[] {n.days()};
       case AddMonths n -> new VarkaVectorIR[] {n.days(), n.months()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
@@ -1000,6 +1016,7 @@ public final class VarkaLoopEmitter {
         case DayOfMonth n -> analyzeOp(node, false, n.days());
         case Quarter n -> analyzeOp(node, false, n.days());
         case DayOfYear n -> analyzeOp(node, false, n.days());
+        case LastDay n -> analyzeOp(node, false, n.days());
         case AddMonths n -> {
           requireLiteralOffset(n.months());
           analyzeOp(node, false, n.days(), n.months());
@@ -1298,16 +1315,19 @@ public final class VarkaLoopEmitter {
             // Six int-vector temporaries and two masks for a plain extraction (see emitChrono
             // for what stays live); AddMonths (task 40) needs the same eight plus the rest of
             // emitAddMonths's own locals, since it decomposes and recomposes in one node;
-            // DayOfYear (task 34) needs two more for its leap-flag tail (the biased year and a
-            // remainder scratch), never written by the shared prefix's own tail so a sibling
-            // sharing the fragment never sees them change.
+            // DayOfYear (task 34) needs one more, for the plain year its leap flag is computed
+            // from - t[6] and t[7] are the prefix's carry scratch and are dead by the time its
+            // tail runs, so only t[8] is genuinely extra; and LastDay (task 36) needs the same
+            // eight plus emitChronoLastDay's own month-length and leap-flag scratch.
             // The first eight are the prefix fragment's and are allocated once per fragment
             // when sharing is on, so siblings over one date name the same locals; the rest are
-            // the node's own, because emitAddMonths writes them and its siblings must not see
-            // that. (Its one write into a shared slot is the prefix's carry mask, which no
-            // field's tail reads - see emitChronoPrefixOnce.)
+            // the node's own, because emitAddMonths/emitChronoLastDay write them and their
+            // siblings must not see that. (Their one write into a shared slot is the prefix's
+            // carry mask, which no field's tail reads - see emitChronoPrefixOnce.)
             int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT
-                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 1 : CHRONO_PREFIX_SLOTS;
+                : node instanceof LastDay ? LAST_DAY_TMP_COUNT
+                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 1
+                : CHRONO_PREFIX_SLOTS;
             FragmentKey key = fragmentKey(node, dense, s);
             int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
             if (prefix == null) {
@@ -1362,6 +1382,7 @@ public final class VarkaLoopEmitter {
       case DayOfMonth n -> s.wordRef.get(n.days());
       case Quarter n -> s.wordRef.get(n.days());
       case DayOfYear n -> s.wordRef.get(n.days());
+      case LastDay n -> s.wordRef.get(n.days());
       case AddMonths n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.months()));
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
@@ -1987,6 +2008,7 @@ public final class VarkaLoopEmitter {
           emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.months()));
         }
       }
+      case LastDay n -> emitChrono(cb, node, dense, analysis, s, computed);
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
       case Least n -> emitPick(cb, n, n.left(), n.right(), "min", dense, analysis, s,
@@ -2303,6 +2325,7 @@ public final class VarkaLoopEmitter {
         cb.aload(mask);
         cb.invokevirtual(INT_VECTOR, "blend", BLEND);
       }
+      case LastDay n -> emitChronoLastDay(cb, s, t);
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
   }
@@ -2806,6 +2829,80 @@ public final class VarkaLoopEmitter {
     cb.getstatic(VECTOR_OPERATORS, "ULE", VO_COMPARISON);
     cb.loadConstant(VarkaChrono.LEAP_HASH_MAX);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+  }
+
+  /**
+   * {@code last_day(date)} (task 36): {@code days + length - dayOfMonth}, where {@code length}
+   * is the current March-based month's own length and {@code dayOfMonth} is {@link
+   * #emitChronoDayOfMonth}'s own value. The length reuses {@link #emitMonthStart} the same way
+   * {@link #emitAddMonths} does for the month it lands on: every month but the March-based
+   * year's last (February) is one subtraction between two calls to it, clamping the second
+   * call's input the same way {@link #emitAddMonths} does, since {@link #emitMonthStart}'s
+   * magic is only exact up to {@code mp} 11. February needs the year's own total length
+   * instead, which is where {@link #emitLeapFlag} comes in - the same flag {@link
+   * #emitAddMonths} needs for its own February case, and the same reason this reuses it rather
+   * than a second copy of the leap test.
+   */
+  private static void emitChronoLastDay(CodeBuilder cb, Slots s, int[] t) {
+    int days = t[0];
+    int era = t[1];
+    int rem = t[2];
+    int century = t[3];
+    int yearOfCentury = t[4];
+    int marchMonth = t[5];
+    int mask = t[6];
+    int year = t[8];
+    int dayOfMonth = t[9];
+    int monthStart = t[10];
+    int mpNextClamped = t[11];
+    int monthStartNext = t[12];
+    int length = t[13];
+
+    // The year is only wanted for the leap flag; task 48 made emitChronoYear read the January
+    // turn off the day of year rather than off the month, so this passes `rem`. The month step
+    // still runs for this node - the month-length arithmetic below is what needs it.
+    emitChronoYear(cb, era, century, yearOfCentury, rem);
+    cb.astore(year);
+    emitChronoDayOfMonth(cb, rem, marchMonth);
+    cb.astore(dayOfMonth);
+
+    // The current month's length: monthStart(mp + 1) - monthStart(mp), except February (the
+    // March-based year's last month), which needs the year's own total length instead - the
+    // same split emitAddMonths uses for the month it lands on.
+    emitMonthStart(cb, marchMonth);
+    cb.astore(monthStart);
+    cb.aload(marchMonth);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.invokevirtual(INT_VECTOR, "min", LANEWISE_VI);
+    cb.astore(mpNextClamped);
+    emitMonthStart(cb, mpNextClamped);
+    cb.astore(monthStartNext);
+
+    cb.aload(monthStartNext);
+    cb.aload(monthStart);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.aload(s.species);
+    cb.loadConstant(365);
+    cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+    cb.loadConstant(1);
+    emitLeapFlag(cb, year);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+    cb.aload(monthStart);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.aload(marchMonth);
+    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+    cb.astore(length);
+
+    cb.aload(days);
+    cb.aload(length);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.aload(dayOfMonth);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
   }
 
   /**
