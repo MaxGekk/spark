@@ -1156,7 +1156,10 @@ species class in `-XX:+PrintInlining` output.
   whether it did, so a run whose instruction assertions cancelled is visible.
 - After every merge to master, `dev/varka_pr_sweep.sh` dry-merges every open PR
   against master and against each other through GitHub's `refs/pull/<n>/head`,
-  and exits with the number of conflicts.
+  and exits with the number of conflicts. It uses `git merge-tree --write-tree`;
+  the legacy three-argument `merge-tree` prints a diff, so its conflict markers
+  carry a leading `+` and a grep for `^<<<<<<<` sees none - the script's first
+  version passed a conflicting PR that way.
 - Benchmark files are regenerated with `dev/varka_bench_regen.sh` and read with
   `dev/varka_bench_diff.py`; `sql/varka/AGENTS.md`'s "Measurements" section says
   how and why, including the committed 128-bit companion file, the machine canary
