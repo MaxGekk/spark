@@ -1153,6 +1153,96 @@ That matters because some behaviour only appears in the product build - this bim
 it - so being able to disassemble there rather than only in fastdebug is what made the
 comparison above possible at all.
 
+**Four details that decide whether a disassembly-reading test works or quietly passes.** These
+came out of task 31's feasibility check, run against the system JDK 25.0.4 product build with
+the fastdebug tree's `hsdis-amd64.so` on `LD_LIBRARY_PATH`.
+
+* **Prefer `-XX:CompileCommand=print,<class>::<method>` to `-XX:+PrintAssembly`.** `print` emits
+  one method's disassembly; `PrintAssembly` emits the whole compilation log, and the difference
+  is hundreds of lines against tens of megabytes. With `print` there is nothing left for a
+  `compileonly` filter to do.
+* **Both a C1 and a C2 nmethod are printed for the same method**, headed `C1-compiled nmethod`
+  and `C2-compiled nmethod`. C1's body is scalar by construction, so anything reading the output
+  must split on those headers and keep the C2 one. Scanning the concatenated text finds scalar
+  instructions in a method that vectorized perfectly.
+* **The mnemonic and its operands are separated by tabs, not spaces** - `vpaddd\t\t0x10(%rsi,
+  %rax, 4), %zmm0, %zmm0`, confirmed with `cat -A`. A pattern written for whitespace-as-spaces
+  matches nothing, and *matching nothing looks exactly like a body with no vector instructions*.
+  Any such test needs a self-test - a deliberately scalar method asserted to contain none of the
+  family and a vector one asserted to contain one - or every case can pass vacuously.
+* **"hsdis is present" is not the same as "hsdis loaded".** Without a working disassembler
+  HotSpot prints `Loading hsdis library failed` and degrades to bytecode-level output rather than
+  erroring, so detection must look for a real `[Disassembly]` section with hex-addressed
+  instruction lines, and should distinguish "no library found" from "found and refused to load"
+  when it reports a skip.
+
+**Three ways this went wrong in practice, all caught by the self-test before any real kernel was
+looked at.** Each produced a *plausible* result rather than an error, which is why the
+scalar/vector pair is built and run before anything else.
+
+* **`-XX:CompileCommand`'s method pattern cannot mix `/` with `::`.**
+  `print,org/apache/spark/.../Probe::method` fails VM startup outright -
+  `Method pattern uses '/' together with '::'`. Use `package.Class::method` or
+  `package/Class.method`, not a mix. The child then never starts, and a suite that only checks
+  for disassembly reports "no disassembler" for what is really a malformed flag - so check the
+  child's exit code first, and fail rather than skip on it.
+* **Gate instruction parsing on the `[Disassembly]` marker, not on the shape of a line.** With no
+  usable disassembler HotSpot prints the nmethod under `[MachCode]` as raw hex words -
+  `0x...: ff1f 0045 | 85c9 0f84 | ...` - and those lines have exactly the `0x<addr>:` shape an
+  instruction line has. Requiring the mnemonic to start with a letter does not separate them
+  either, since hex words routinely do (`ff1f`, `e929`, `c349`). Measured: 68 such lines parsed
+  as instructions, and the suite reported "the intrinsic did not fire" about a body it had never
+  read.
+* **`Loading hsdis library failed` does not mean a library was found.** HotSpot prints it both
+  when it looked and found nothing and when it found something it could not load, so a skip
+  message keyed off that line says "a disassembler was found but HotSpot refused to load it"
+  when none exists. Discriminate on your own search result instead.
+
+**Assert families, never mnemonics or counts.** The register class is a property of the host -
+`zmm` under AVX-512, `ymm` under AVX2, `xmm` at `-XX:MaxVectorSize=16` - so derive it from
+`IntVector.SPECIES_PREFERRED.vectorBitSize()` at runtime. And do not assert instruction *counts*:
+the bimodality section above found identical vector-op counts with a 2x difference in total
+instructions, so a count assertion goes red on a register-allocation roll with nothing wrong.
+
+**And derive the family from output you actually read, not from a mnemonic list written from
+memory.** The obvious list for an integer comparison - `vpcmpd`, `vpcmpeqd`, `vpcmpgtd` - matches
+nothing on AVX-512, because the predicate is folded into the mnemonic: `a > b` on int lanes comes
+out as `vpcmpnled`, not-less-or-equal. The full set runs to a dozen suffixes and varies with how
+C2 chose to spell the comparison, so the durable rule is the shape `[v]pcmp<predicate>d` rather
+than an enumeration that goes stale on the next lowering change.
+
+**Forcing C2 to inline Varka's own packages is a decline, and not because it does nothing.**
+`-XX:CompileCommand=inline,org.apache.spark.sql.varka.*::*` (plus the catalyst varka package)
+leaves every loop body byte-identical - the emitted `year` body stays at 327 instructions with
+10 `vpaddd`, 8 `vpmulld`, 4 `vpsrld`, over three runs each with zero variance, and
+`ChronoVectorOps.vectorFourFields` stays at 1174. What it changes is the method boundary: the
+emitted `run` grows from 271 instructions with no vector ops to 471 carrying the whole year
+lowering, `runDense` stops being compiled standalone, and the vectorized body then exists in two
+places. That is exactly the sibling-method structure task 24 built and `GROUP_BUDGET` exists to
+control, so the flag works against the emitter's design - and it would have to be set on every
+executor to do so. If method fusion is ever worth measuring, produce it from the emitter with
+`withGroupBudget`, which is per-shape and needs no flag.
+
+`-XX:+PrintInlining` explains why the bodies survive: the directive overrides the size heuristic
+and lands on a harder limit. `VarkaVectorSupport::orValidityBitsAt` (212 bytes) goes from
+`failed to inline: callee is too large` to `failed to inline: NodeCountInliningCutoff`. The
+reason changes, the outcome does not - which is also evidence that task 46's inlining problem
+cannot be solved with a flag.
+
+**Measure the caller, not only the method you are interested in.** The finding above was nearly
+missed: the A/B started on `loopDense0`, found it identical under both configurations, and would
+have concluded "the flag changes nothing". It changes the *caller*. When a flag affects inlining,
+the method whose body moves is the one doing the calling.
+
+**What the kernels actually compile to**, read this way rather than inferred from a ratio, on a
+Zen 5 host at AVX-512 (JDK 25 product build). `DateVectorOps.vectorAddDays`: 5 `vpaddd`, 23 `%zmm`
+operands. `ChronoVectorOps.vectorFourFields`: 15 `vpaddd`, 13 `vpmulld`, 7 `vpsrld`. The emitted
+`year` loop body: 10 `vpaddd`, 8 `vpmulld`, 4 `vpsrld`, 63 `%zmm` operands. The emitted
+`dayofweek` body: 65 `vpaddd`, 26 `vpmulld`, 39 `vpsrld` - task 14's range-narrowed magic is
+packed, which is the whole reason that lowering exists. An emitted comparison: 15 `vpcmpnled` and
+15 `vpblendmd`, no branch. Everything Varka emits or hand-writes for date work vectorizes; that
+was an assumption until task 31.
+
 ## This machine's AVX-512 is 256 bits wide, and every "512-bit" number in this repo is really a 256-bit one
 
 Measured, not read off a spec sheet. Task 43's committed op-count ladder - a single-output loop
