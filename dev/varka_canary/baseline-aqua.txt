@@ -1,0 +1,9 @@
+# Canary baseline for aqua, 2026-09-03T20:53:33Z, 7.0.0-30-generic,
+# AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M,
+# governor=performance.
+# Rates in M elements/s, best of five 2 s windows. Re-record only on a day whose
+# benchmark regenerations you are prepared to call the new normal.
+preferred_bits=512
+compute=854.4
+cache=11113.7
+memory=3568.5

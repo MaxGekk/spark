@@ -1159,7 +1159,13 @@ species class in `-XX:+PrintInlining` output.
   and exits with the number of conflicts.
 - Benchmark files are regenerated with `dev/varka_bench_regen.sh` and read with
   `dev/varka_bench_diff.py`; `sql/varka/AGENTS.md`'s "Measurements" section says
-  how and why, including the committed 128-bit companion file.
+  how and why, including the committed 128-bit companion file, the machine canary
+  (`dev/varka_bench_canary.sh`) the regen script runs first, and the quote check
+  (`dev/varka_quote_check.py`, a gate step) that holds every quoted number to a
+  committed file.
+- Before registering op counts in a plan, print them: `dev/varka_emit.sh "<sql>"`
+  gives the IR, the shape hash and per-method `IntVector` invocation counts on the
+  suite's own scale; `--asm` adds C2's assembly for the dense loop.
 
 ## A store the loop repeats per group with a constant operand is a fill the driver should do once
 

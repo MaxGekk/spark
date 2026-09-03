@@ -76,6 +76,21 @@ if [ "$force" -eq 0 ] && awk -v l="$load" 'BEGIN { exit !(l > 1.0) }'; then
   echo "load average is $load: the machine is not idle. Wait, or pass --force." >&2
   exit 1
 fi
+# The canary: is the machine in the state the committed files were measured in? It says
+# so in 35 seconds; the run it protects takes ten minutes per width.
+canary_log="$(mktemp)"
+if "$(dirname "$0")/varka_bench_canary.sh" > "$canary_log" 2>&1; then
+  canary="ok ($(grep -E '^(compute|cache|memory) ' "$canary_log" \
+    | awk '{ printf "%s %s ", $1, $4 }'))"
+else
+  cat "$canary_log" >&2
+  canary="OFF"
+  if [ "$force" -eq 0 ]; then
+    echo "the canary says the machine is not in its baseline state; pass --force to run anyway" >&2
+    rm -f "$canary_log"; exit 1
+  fi
+fi
+rm -f "$canary_log"
 
 sha="$(git rev-parse --short=11 HEAD)"
 dirty=""
@@ -95,6 +110,7 @@ cpu="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
     "epp=$(cat $cpufreq/energy_performance_preference 2>/dev/null || echo n/a)" \
     "profile=$(powerprofilesctl get 2>/dev/null || echo n/a)"
   echo "load at start: $load"
+  echo "canary:      $canary"
   echo "wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt $module/Test/runMain $fqcn"
   if [ "$narrow" -eq 1 ]; then
     echo "narrow run:  build/sbt \"project $module\"" \

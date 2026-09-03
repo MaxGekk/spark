@@ -72,6 +72,25 @@ Read the controls before anything else: a run whose scalar anchors are flat but
 whose earliest sections all dropped was started on a machine still hot from a
 test suite, and its numbers are the machine's, not the code's.
 
+Two more guards. `dev/varka_bench_canary.sh` runs three fixed loops - a
+compute-bound control, a cache-resident vector add, a memory-bound one - and
+compares them with the committed baseline for this host; the regen script runs
+it first and stops when the machine is not in its baseline state, because the
+same code has measured its memory-bound kernels 20-27% apart on different days
+with every compute-bound row flat. And `dev/varka_quote_check.py` checks that
+every number with decimals quoted in the plans, `SKILLS.md`, the docs and the
+README appears in a committed results file, now or in its history; the ones
+that predate the tool are in `dev/varka_quote_allowlist.txt` with a reason
+each, and that list only shrinks. It is a step of the gate.
+
+For an emitter question, `dev/varka_emit.sh "year(d)" "month(d)"` prints what
+a projection compiles to, its shape hash, and per emitted method the bytecode
+size and the `IntVector`/`VectorMask` invocation counts on the scale the
+emitter suite's op-count tests use - so a plan's registered op counts come
+from the tool, not from reading the emitter. `--asm` adds C2's assembly for the
+dense loop and its mnemonic frequencies; `--options k=v` selects any
+`VarkaEmitOptions` variant by name.
+
 `SKILLS.md` at the repository root is where a lesson goes when it will outlive
 the task that learned it - especially the negative results, which are what stop
 the next person re-litigating a settled question.
