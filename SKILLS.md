@@ -1032,6 +1032,50 @@ That matters because some behaviour only appears in the product build - this bim
 it - so being able to disassemble there rather than only in fastdebug is what made the
 comparison above possible at all.
 
+## This machine's AVX-512 is 256 bits wide, and every "512-bit" number in this repo is really a 256-bit one
+
+Measured, not read off a spec sheet. Task 43's committed op-count ladder - a single-output loop
+from 20 to 248 `IntVector` ops - was run at three widths on the development machine (AMD Ryzen
+AI 9 HX PRO 370, Zen 5 mobile, JDK 25.0.4), by setting `Test / javaOptions +=
+"-XX:MaxVectorSize=N"` to 16, 32 and 64:
+
+| ops | 128-bit | 256-bit | 512-bit |
+|---|---|---|---|
+| ns/row/op | 0.0163-0.0212 | 0.0070-0.0074 | 0.0072-0.0078 |
+
+| step | lanes | speedup |
+|---|---|---|
+| 128 -> 256 | doubled | **2.48x** |
+| 256 -> 512 | doubled | **0.95x** |
+
+**Doubling the vector width from 256 to 512 bits buys nothing here - it is very slightly
+negative.** The chip has the whole AVX-512 instruction set (`lscpu` lists `avx512f` through
+`avx512_vp2intersect`) and HotSpot picks `MaxVectorSize=64`, so everything *looks* 512-bit; the
+execution units behind it are 256 bits wide and 512-bit operations are issued as two halves.
+128 -> 256 is even superlinear at 2.48x, which is the per-lane-group fixed costs amortising over
+twice the rows on top of the real datapath widening.
+
+**What this means for numbers already committed.** Every result in milestone 4 labelled AVX-512
+is a 256-bit-datapath result. None of the *decisions* move, because each is a comparison between
+two lowerings at one fixed width - task 45's validity fill, task 53's month numerator, task 48's
+elision, task 43's own flatness - and both arms of every comparison ran on the same hardware.
+What is overstated is the label: "at both widths" has meant "at 4 lanes and at 16 lanes issued
+through a 256-bit datapath", not "at two datapath widths".
+
+**And it means there is unmeasured headroom on other hardware.** A host with a full-width 512-bit
+datapath - Intel Sapphire Rapids and Emerald Rapids, or AMD EPYC Turin - should turn that 0.95x
+into something near 2x on unmodified code. That is the cheapest performance work available to
+this project and it requires no port: the same jar, a different instance type.
+
+**The method generalises: to find out whether a machine's widest vector is real, measure three
+widths, not two.** Two points cannot distinguish "the wide path is not helping" from "the wide
+path does not exist", and `lscpu` and `MaxVectorSize` both report the instruction set rather than
+the datapath. A committed op-count ladder is the right instrument because its x-axis is asserted
+off the class file, so the same shapes are being compared at each width.
+
+**`-XX:MaxVectorSize=32` is arguably the honest "wide" setting on this laptop**: identical
+throughput, smaller emitted bodies, shorter compiles.
+
 ## Building a fastdebug JDK for HotSpot diagnostics
 
 Three questions in milestone 4 could not be answered from a product JVM - why SuperWord
