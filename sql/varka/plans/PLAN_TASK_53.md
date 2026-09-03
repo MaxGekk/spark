@@ -285,6 +285,16 @@ Commit 2 waits on PR #78. Section 7's risk 1 says why: `emitChronoLastDay` is
 the worst of the seven month-axis call sites, and editing it directly on master
 is a different job from hand-resolving it inside a merge.
 
+**Correction to commit 2's scope, found while writing it.** The list below says commit 2
+carries "the 3-based axis", and it cannot: `MARCH_YEAR_JANUARY` is read by the *emitter* in
+five places (`emitChronoMonth`, `emitChronoDayOfMonth`, `emitMonthStart` twice, and the
+`Quarter` arm), so moving it to 13 would break every calendar shape before the emitter commit
+lands. The axis therefore arrives as a **parallel** constant, `MONTH3_JANUARY`, with
+`MARCH_YEAR_JANUARY` left in place; commit 3 moves the emitter onto the new axis and deletes
+the old one. What commit 2 does move is the scalar twin's own month block, whose outputs are
+unchanged and are checked against the same exhaustive oracle - which is the point of doing it
+first.
+
 1. **This plan**, with section 2's admission check. **DONE** (PR #80).
 2. **The constants and the scalar twin**: `VarkaChrono`'s new constants, the
    3-based axis, `fromEra`'s month block, and the three identity tests. No
@@ -299,3 +309,178 @@ is a different job from hand-resolving it inside a merge.
 Filled in when the work lands: the op counts against 3.4, the A/B by minimums
 at both widths, the ladder's fourth boundary, and which of 6.1's predictions
 held.
+
+## 12. Commit 2's outcome
+
+Every constant in section 2.1 was re-verified over its exact domain before being committed,
+rather than transcribed from the plan:
+
+| identity | domain | result |
+|---|---|---|
+| `(num >>> 16) - 3` equals `(5 * doy + 2) / 153` | all 366 days | exact |
+| `(num & 0xFFFF) / 2141` equals `doy - (153 * mp + 2) / 5` | all 366 days | exact |
+| numerator `2141 * doy + 197913` | all 366 days | peaks at 979378, inside int32 |
+| `(x * 31345) >>> 26` equals `x / 2141` | all 65536 values | exact, max product 2054194575 |
+| `(979 * m3 - 2919) >>> 5` equals `(153 * (m3 - 3) + 2) / 5` | all 12 months | exact, numerator 18..10787, never negative |
+
+One relationship worth naming because it is load-bearing for task 48 and was not obvious from
+the paper: **`monthIndex3 >= 13` and `dayOfYear >= 306` are the same test.** Over the whole
+domain the month indices at or after day 306 are exactly 13 and 14, and those before it are 3
+through 12. So `MONTH3_JANUARY` and `MARCH_TO_JANUARY_DAYS` have to move together or a year
+computed on one axis and a month on the other disagree by a year - which the identity test
+asserts on every one of the 366 days rather than leaving to this paragraph.
+
+The scalar twin's month block is now the Neri-Schneider form and its outputs are unchanged,
+which the opt-in exhaustive sweep confirms against `LocalDate` over all 16,777,216 covered
+days. That is the whole value of doing this before the emitter: the new constants are checked
+against the same oracle the old ones were, with no emitted bytecode depending on them yet.
+
+128 catalyst tests pass with the sweeps enabled.
+
+## 13. Commit 3's outcome
+
+The emitter carries both axes behind `VarkaEmitOptions.neriSchneiderMonth`, default on, with
+the 0-based lowering kept as a live reference variant on `FloorMod7`'s precedent.
+
+### 13.1 The op counts, against 3.4
+
+Measured off the class file, not reasoned from the helpers:
+
+| tail | 0-based | 3-based | delta | 3.4 predicted |
+|---|---|---|---|---|
+| `year` | 39 | 39 | 0 | 0 |
+| `month` | 40 | 38 | -2 | -2 |
+| `dayofmonth` | 43 | 39 | -4 | -4 |
+| `quarter` | 43 | 41 | -2 | -2 |
+| `last_day` | 71 | 68 | -3 | "largest absolute saving" |
+| `add_months` | 121 | 117 | -4 | "largest absolute saving" |
+
+**Prediction 1 holds exactly** for the four registered per-tail figures. The two recomposing
+nodes were predicted to "take the largest absolute saving"; they take -3 and -4, and
+`dayofmonth` ties `add_months` at -4, so that half of the sentence is wrong - they take a
+large saving, not the largest. The reason is that they were expected to save twice on
+`emitMonthStart` and only one of their two calls reads the prefix slot; the other operates on
+a locally computed month in the inverse direction, which section 2.2 leaves alone.
+
+`CHRONO_WEIGHT` is re-counted from 50 to 40, which is what its javadoc's "re-count it if the
+lowering changes shape" asks for. It still exceeds `GROUP_BUDGET` several times over, so no
+grouping decision changes. `ADD_MONTHS_TMP_COUNT` and `LAST_DAY_TMP_COUNT` do not move: the
+3-based paths reuse the same scratch slots and add none.
+
+### 13.2 Two corrections to the plan
+
+**The scope is smaller than 3.2 implies.** That section lists seven call sites that "move at
+once", including `emitAddMonths`. Measured against the code: `emitAddMonths` reads the prefix's
+month slot *only* through `emitChronoMonth` and `emitChronoDayOfMonth`. Its own `mp`
+arithmetic - `mp2`, the clamp, `emitMonthStart` - is the inverse direction, computed from a
+reported month rather than from the prefix, and section 2.2 leaves that alone. So it needed no
+change beyond the two tails it already called. `emitChronoLastDay` is the one node whose
+month-length arithmetic reads the prefix slot directly, and it is therefore the only place the
+axis had to be handled inside a recomposing node.
+
+**Test 5's expectation is wrong: the pinned fixtures do not move.** Section 5 says "every
+calendar node's emitted bytes change, so the line map and the ladder both re-pin". The emitted
+bytes do change; the fixtures do not, because neither is taken over emitted bytes. The shape
+hash is over the IR's canonical rendering, the input counts and `VarkaEmitOptions.canonical()`,
+which is empty for `DEFAULTS`; the line map is over the IR's topological schedule. Task 24
+recorded exactly this property and task 26 is the only task so far that legitimately moved
+them, by adding IR node types. Task 53 adds none. Both fixtures were left untouched and both
+still pass, which is the proof rather than the claim.
+
+### 13.3 What certifies it
+
+The exhaustive sweep, run over all 16,777,216 covered days under **both axes**, both sharing
+modes and both switch positions - eight combinations - at 512-bit and at 128-bit. That is what
+makes the older lowering a reference variant rather than dead code: the two compute the same
+four fields through different constants on differently-based month indices, so agreeing with
+`LocalDate` over the whole range is also them agreeing with each other over it.
+
+`last_day` is swept separately on both axes for the reason 13.2 gives: it is the one node
+where the axis reaches inside a recomposing lowering, so it is the one most worth sweeping
+twice.
+
+129 catalyst tests with the sweeps enabled, at both widths.
+
+### 13.4 One thing section 4 promised and commit 3 did not do
+
+Section 4's files table lists `PLAN_TASK_35.md` 7.3 - "`trunc(d, 'MONTH')`'s new
+form" - and commit 3 did not touch it. Corrected here rather than left for task
+35 to discover, because the staleness is the dangerous kind: 7.3 described
+`t[5]` as holding `marchMonth`, and an implementer following it would emit the
+0-based lowering against a slot that now holds a numerator. That compiles, and
+produces plausible wrong dates. 7.3 now carries the numerator's slot layout,
+both axes' `MONTH` derivations, and the single-subtraction form the new axis
+allows: `trunc(d,'MONTH') = d - dom0`, since the numerator's low half already is
+the zero-based day of month and the `+ 1` the day tail ends with is one this
+lowering would only subtract again.
+
+## 14. Commit 4's outcome: the measurement, and the predictions scored
+
+Adjacent A/B cases, interleaved by null pattern, regenerated in one run on the
+merged tree. M rows/s, higher is better.
+
+**AVX-512:**
+
+| shape | Neri-Schneider | 0-based | gain |
+|---|---|---|---|
+| `dayofmonth`, null-free | 2265.7 | 1997.1 | +13.5% |
+| `dayofmonth`, mixed nulls | 2139.3 | 1911.6 | +11.9% |
+| `month`, null-free | 2260.0 | 2167.8 | +4.3% |
+| `month`, mixed nulls | 2077.9 | 2063.0 | +0.7% |
+| four-field, null-free | 517.9 | 499.9 | +3.6% |
+
+**128-bit:**
+
+| shape | Neri-Schneider | 0-based | gain |
+|---|---|---|---|
+| `dayofmonth`, null-free | 742.4 | 659.3 | +12.6% |
+| `dayofmonth`, mixed nulls | 734.8 | 651.8 | +12.7% |
+| `month`, null-free | 748.2 | 707.7 | +5.7% |
+| `month`, mixed nulls | 735.2 | 705.8 | +4.2% |
+| four-field, null-free | 179.9 | 171.4 | +5.0% |
+
+Stdevs are 0-1 ms on 9-31 ms best times and the pairs ran adjacent under one JIT
+and thermal state, so every gap here is outside the run's resolution. Each shape
+gains slightly *more* at 128-bit than at 512, which is the mechanism showing
+itself: half the lanes is twice the loop iterations for the same rows, so a
+per-iteration saving is paid back more often.
+
+### 14.1 Predictions, scored
+
+Three held, one was beaten, two missed.
+
+1. **Held.** The op counts landed exactly (commit 3, section 13.1).
+2. **Beaten.** 4-9% was predicted for `dayofmonth` null-free at AVX-512, with
+   "inside noise is the expected outcome again" registered as the likely result.
+   It is +13.5% there and +12.6% at 128-bit, above the predicted band, and it
+   reproduces under mixed nulls at both widths (+11.9%, +12.7%). This is the
+   tail that stops running `emitMonthStart` forwards entirely, and it is the
+   most stable number in the task.
+3. **Held.** `year` does not move; the op-count test pins that it cannot.
+4. **Missed.** The four-field shape was predicted to gain more than any
+   single-field one, "because it pays the month block once and the tails three
+   times". It gains the least: +3.6% and +5.0%. The reasoning had the
+   denominator backwards - fragment sharing already collapses its four prefixes
+   into one, so it saves the block *once* spread across four outputs and a body
+   five times the size, while `dayofmonth` alone saves it on every row of a
+   small body. Paying once is why it gains little, not why it gains most.
+5. **Missed.** The unshared `HugeMethodLimit` crossing was predicted to move out
+   to 21 or 22 outputs. It stays at 19 fits / 20 crosses, **on both axes**. The
+   numerator does shrink the epilogue - 7953 bytes to 7804 at nineteen outputs -
+   but an output costs roughly 400 bytes there, and two ops saved per date's
+   fragment over five fragments is 149. A boundary measured in whole outputs
+   does not move for a saving smaller than one.
+6. **Held.** Task 48's elision shrinks from four ops to two, for both nodes that
+   take it (commit 3).
+
+### 14.2 What the default rests on
+
+The op counts, which are proven and were never in doubt, and now a timing that
+agrees with them at both widths. Prediction 2's caveat - that the default would
+have shipped on the op count even if the timing came back flat - did not need to
+be used.
+
+The 0-based lowering stays as a reference variant. It is not dead code: the
+exhaustive sweep runs both axes over all 16,777,216 covered days under both
+sharing modes and both switch positions, which is how the two check each other
+rather than only checking against `LocalDate`.

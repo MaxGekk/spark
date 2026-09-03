@@ -80,6 +80,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *                         the chain. Like {@link #cse} it is an optimization and never a
  *                         semantics change - the step it removes is dead work where it is
  *                         removed - and it is a switch only so the A/B stays re-runnable.
+ * @param neriSchneiderMonth whether the month index and the day of month come out of one
+ *        affine numerator (Neri-Schneider 2022, task 53) or from the magic multiply plus
+ *        forward month-start this project shipped first. The two compute the same fields on
+ *        two different month axes - March = 3 against March = 0 - and are differentially
+ *        checked against each other, so the older one stays a live reference variant rather
+ *        than dead code, on {@link FloorMod7}'s precedent.
  * @param floorMod7 which lowering {@code dayofweek}/{@code weekday} use for their mod-7.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
@@ -94,6 +100,7 @@ public record VarkaEmitOptions(
     boolean shareChronoPrefix,
     boolean denseValidityOnce,
     boolean elideChronoMonth,
+    boolean neriSchneiderMonth,
     FloorMod7 floorMod7,
     boolean misdescribeAdd) {
 
@@ -109,7 +116,7 @@ public record VarkaEmitOptions(
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
-          VarkaLoopEmitter.GROUP_BUDGET, true, true, true, true, FloorMod7.MAGIC, false);
+          VarkaLoopEmitter.GROUP_BUDGET, true, true, true, true, true, FloorMod7.MAGIC, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -123,37 +130,42 @@ public record VarkaEmitOptions(
   /** {@link #DEFAULTS} with one field changed, for the suites and benchmarks that vary one. */
   public VarkaEmitOptions withGroupBudget(int budget) {
     return new VarkaEmitOptions(budget, cse, shareChronoPrefix, denseValidityOnce,
-        elideChronoMonth, floorMod7, misdescribeAdd);
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withCse(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, enabled, shareChronoPrefix, denseValidityOnce,
-        elideChronoMonth, floorMod7, misdescribeAdd);
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withShareChronoPrefix(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, enabled, denseValidityOnce,
-        elideChronoMonth, floorMod7, misdescribeAdd);
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withDenseValidityOnce(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, enabled,
-        elideChronoMonth, floorMod7, misdescribeAdd);
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withElideChronoMonth(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
-        enabled, floorMod7, misdescribeAdd);
+        enabled, neriSchneiderMonth, floorMod7, misdescribeAdd);
+  }
+
+  public VarkaEmitOptions withNeriSchneiderMonth(boolean enabled) {
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
+        elideChronoMonth, enabled, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withFloorMod7(FloorMod7 lowering) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
-        elideChronoMonth, lowering, misdescribeAdd);
+        elideChronoMonth, neriSchneiderMonth, lowering, misdescribeAdd);
   }
 
   public VarkaEmitOptions withMisdescribeAdd(boolean misdescribe) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
-        elideChronoMonth, floorMod7, misdescribe);
+        elideChronoMonth, neriSchneiderMonth, floorMod7, misdescribe);
   }
 
   public boolean isDefault() {
@@ -171,6 +183,7 @@ public record VarkaEmitOptions(
       return "";
     }
     return "opts(" + groupBudget + '|' + cse + '|' + shareChronoPrefix + '|' + denseValidityOnce
-        + '|' + elideChronoMonth + '|' + floorMod7 + '|' + misdescribeAdd + ')';
+        + '|' + elideChronoMonth + '|' + neriSchneiderMonth + '|' + floorMod7 + '|'
+        + misdescribeAdd + ')';
   }
 }

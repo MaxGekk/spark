@@ -241,21 +241,41 @@ emitted ops - that arguing it would be guessing.
 
 ### 7.3 The lowerings, restated for today's emitter
 
+> **Updated by task 53.** This section described the emitter before the
+> Neri-Schneider month block landed, and following it as written would emit the
+> 0-based form against a slot that no longer holds a month - which compiles, and
+> produces plausible wrong dates. Both the slot layout and the `MONTH` lowering
+> below are the corrected ones; `PLAN_TASK_53.md` 3.1 and 3.3 are the source.
+
 The prefix leaves `days` in `t[0]`, `era` `t[1]`, `rem` (the March-based day
-of year) `t[2]`, `century` `t[3]`, `yearOfCentury` `t[4]`, `marchMonth` (`mp`)
-`t[5]`, and two carry-scratch masks in `t[6..7]` that no tail reads, so a tail
-may reuse them.
+of year) `t[2]`, `century` `t[3]`, `yearOfCentury` `t[4]`, and two carry-scratch
+masks in `t[6..7]` that no tail reads, so a tail may reuse them.
 
-**`MONTH`, one form only.** The recipe writes `d - dom + 1`. Since
-`emitChronoDayOfMonth` is `rem - monthStart(mp) + 1`, that is identically
+`t[5]` holds the **month numerator**, not a month: `num = 2141 * rem + 197913`,
+whose high half is the month index on Neri-Schneider's 3-based axis (March = 3,
+February = 14) and whose low half divided by 2141 is the *zero-based* day of
+month. Under `VarkaEmitOptions.neriSchneiderMonth(false)` - the reference
+variant - it holds `marchMonth` (`mp`) on the 0-based axis instead, so a tail
+that reads it has to take the axis from the option rather than assuming one.
+
+**`MONTH`, one form only, and it is now a single subtraction.** The recipe
+writes `d - dom + 1`. The numerator's low half already *is* the zero-based day
+of month, `dom0 = dom - 1`, so
 
 ```
-trunc(d,'MONTH') = d - rem + monthStart(mp)
+trunc(d,'MONTH') = d - dom0
 ```
 
-which is the same number with two fewer ops, and is exact wherever
-`emitMonthStart` is - every `mp` in `[0, 11]`, which is all of them. Three ops
-on top of the prefix, no leap flag, no variant.
+with no `+ 1` to undo and no month start to run forwards. That is the whole
+tail: the day-of-month extraction this shares with `DayOfMonth` ends with a
+`+ 1` that this lowering would only subtract again, so `trunc` reads the
+numerator one step earlier and stops. Two ops on top of the prefix, no leap
+flag, no variant.
+
+On the 0-based reference axis the old derivation still holds and is worth
+keeping, because the differential runs both: `emitChronoDayOfMonth` is
+`rem - monthStart(mp) + 1` there, so `d - dom + 1` is identically
+`d - rem + monthStart(mp)` - three ops, exact for every `mp` in `[0, 11]`.
 
 **`SUBTRACT` variant (`YEAR`, `QUARTER`).** Section 2's forms:
 
@@ -268,7 +288,9 @@ QUARTER = d - jdoy + qstart,   qstart = [1, 91+L, 182+L, 274+L][quarter - 1]
 
 `quarter` comes from the existing `Quarter` tail (`(month + 2) / 3` through
 `QUARTER_M`/`QUARTER_K`) over `emitChronoMonth`'s January-based month - see
-risk 1. The four-way select is three compares and three masked adds over a
+risk 1. That tail is unchanged by task 53: `emitChronoMonth` produces the same
+January-based month on either axis, so everything downstream of it is axis-blind
+and this variant needs no rework. The four-way select is three compares and three masked adds over a
 starting value of 1, or a blend chain; they are the same op count. (A closed
 form exists if the chain reads badly: with `q0 = quarter - 1`, the offsets
 `{0, 90, 181, 273}` are `q0 * (179 + q0) / 2`, whose product is always even so

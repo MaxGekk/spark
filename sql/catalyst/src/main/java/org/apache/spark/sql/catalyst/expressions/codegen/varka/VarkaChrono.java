@@ -170,6 +170,80 @@ public final class VarkaChrono {
    */
   public static final int MARCH_TO_JANUARY_DAYS = 306;
 
+  // --- Task 53: the Neri-Schneider month block ----------------------------------------------
+
+  /**
+   * Multiplier of the single affine numerator the month index and the day of month both come
+   * out of (Neri-Schneider 2022, Example 10 and Equation 20; the transcription is in
+   * {@code sql/varka/papers/}).
+   *
+   * <p>Where {@link #MONTH_M} computes the month with a magic multiply and the day of month is
+   * then recovered by running {@link #DAY_M}'s magic <i>forwards</i> and subtracting, this
+   * computes {@code num = 2141 * dayOfYear + 197913} once and takes the month out of its high
+   * half and the day of month out of its low half. Same answers, fewer operations, and the
+   * intermediate that survives is one the day tail can use directly rather than one it has to
+   * invert.
+   *
+   * <p>Verified over the whole domain rather than cited: for all 366 values of the March-based
+   * day of year, {@code (num >>> 16) - 3} equals {@code (5 * dayOfYear + 2) / 153} and
+   * {@code (num & 0xFFFF) / 2141} equals {@code dayOfYear - (153 * marchMonth + 2) / 5} - the
+   * two forms this file ships today. The numerator peaks at 979378, comfortably inside a
+   * signed 32-bit lane, which is what makes the block expressible on {@code IntVector} where
+   * the paper's era and year steps are not (see {@code PLAN_TASK_53.md} 2.2).
+   */
+  public static final int MONTH_NUM_M = 2141;
+
+  /** The addend paired with {@link #MONTH_NUM_M}. */
+  public static final int MONTH_NUM_ADD = 197913;
+
+  /** The shift that takes the month index out of {@link #MONTH_NUM_M}'s numerator. */
+  public static final int MONTH_NUM_K = 16;
+
+  /**
+   * Exact magic for {@code / 2141} over the numerator's low half, which turns the remainder
+   * into the zero-based day of month. Exact at every one of the 65536 values a 16-bit
+   * remainder can take - checked at all of them, not sampled - with a maximum product of
+   * 2054194575, under {@code 2^31 - 1} with room to spare.
+   */
+  public static final int DOM_M = 31345;
+
+  /** The shift paired with {@link #DOM_M}. */
+  public static final int DOM_K = 26;
+
+  /**
+   * The month-start map on the 3-based axis: {@code (979 * monthIndex3 - 2919) >>> 5}, equal to
+   * {@link #DAY_M}'s {@code (153 * marchMonth + 2) / 5} at all twelve months. A shift rather
+   * than a magic multiply, and its numerator runs from 18 to 10787 - never negative, so the
+   * shift may be arithmetic or logical.
+   */
+  public static final int MONTH_START_M = 979;
+
+  /** The subtrahend paired with {@link #MONTH_START_M}. */
+  public static final int MONTH_START_SUB = 2919;
+
+  /** The shift paired with {@link #MONTH_START_M}. */
+  public static final int MONTH_START_K = 5;
+
+  /**
+   * The month index at which the March-based year has turned January, on Neri-Schneider's
+   * 3-based axis where March is 3 and February is 14 - the counterpart of
+   * {@link #MARCH_YEAR_JANUARY} on the 0-based axis this file ships today.
+   *
+   * <p>13 rather than 10 because the axis is offset by three, and the reported month is then
+   * {@code monthIndex3} itself below the turn and {@code monthIndex3 - 12} at or above it -
+   * one operation fewer than the 0-based form's {@code + 3} / {@code - 9}, which is why the
+   * convention changes rather than being converted back.
+   *
+   * <p>It agrees with {@link #MARCH_TO_JANUARY_DAYS}, which is the reassuring part: over the
+   * whole domain the values of {@code monthIndex3} at or after day 306 are exactly 13 and 14
+   * and those before it are 3 through 12, so {@code monthIndex3 >= 13} and
+   * {@code dayOfYear >= 306} are the same test on two axes - task 48's identity, restated.
+   *
+   * <p>Both axes exist at once until task 53's emitter commit: the emitter still reads
+   * {@link #MARCH_YEAR_JANUARY} in five places, so it cannot move until they move with it.
+   */
+  public static final int MONTH3_JANUARY = 13;
+
   // --- Task 40: the inverse direction, and the month arithmetic built on it ------------------
 
   /**
@@ -358,9 +432,15 @@ public final class VarkaChrono {
       dayOfYear += 365 + ((yearOfCentury & 3) == 0 ? 1 : 0);
       yearOfCentury--;
     }
-    int marchMonth = ((5 * dayOfYear + 2) * MONTH_M) >>> MONTH_K;
-    int dayOfMonth = dayOfYear - (((153 * marchMonth + 2) * DAY_M) >>> DAY_K) + 1;
-    int month = marchMonth < MARCH_YEAR_JANUARY ? marchMonth + 3 : marchMonth - 9;
+    // Task 53: one affine numerator carries both the month and the day of month, where the
+    // 0-based form needed a magic multiply for the month and then DAY_M's magic run forwards
+    // to recover the day. The emitter still ships the old form; this is the scalar twin
+    // moving first, so the exhaustive sweep below checks the new block against the same
+    // oracle before any bytecode depends on it.
+    int monthNumerator = MONTH_NUM_M * dayOfYear + MONTH_NUM_ADD;
+    int monthIndex3 = monthNumerator >>> MONTH_NUM_K;
+    int dayOfMonth = ((((monthNumerator & 0xFFFF) * DOM_M) >>> DOM_K)) + 1;
+    int month = monthIndex3 < MONTH3_JANUARY ? monthIndex3 : monthIndex3 - 12;
     int year = 400 * era + 100 * century + yearOfCentury
         + (dayOfYear >= MARCH_TO_JANUARY_DAYS ? 1 : 0);
     int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;

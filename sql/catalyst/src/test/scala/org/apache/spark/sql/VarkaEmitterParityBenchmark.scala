@@ -425,6 +425,23 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // recomposes in one loop method - and until now it had no committed number at all,
         // which is why the leap flag's cost was argued rather than measured. One scalar arg,
         // the month count, so this cannot share `chunked`.
+        // Task 53's A/B, built the same way and for the same reason: adjacent cases, both
+        // null patterns, so the two axes are measured back to back under one JIT and thermal
+        // state. `dayofmonth` is the one with the largest op-count win (-4 of 43, the tail
+        // stops running emitMonthStart forwards entirely) and `month` the smallest (-2 of 40),
+        // so the pair brackets what the numerator can be worth; the four-field shape is here
+        // because it pays the block once and the tails three times, which is where a win
+        // should compound if it is real. `year` is deliberately absent: it reads neither axis,
+        // and PLAN_TASK_53.md 6.1 prediction 3 is that it does not move - a case that cannot
+        // move is a case that only adds runtime to this section.
+        val monthNeri = emit(Seq(new Month(new ColumnRef(0))), 1, 0, loader, 820)
+        val monthOld = emit(Seq(new Month(new ColumnRef(0))), 1, 0, loader, 821,
+          VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false))
+        val domNeri = emit(Seq(new DayOfMonth(new ColumnRef(0))), 1, 0, loader, 822)
+        val domOld = emit(Seq(new DayOfMonth(new ColumnRef(0))), 1, 0, loader, 823,
+          VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false))
+        val fourOld = emit(fourFields, 1, 0, loader, 824,
+          VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false))
         val addMonths = emit(Seq(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
           1, 1, loader, 811)
         def chunkedAddMonths(mixed: Boolean): Unit =
@@ -457,6 +474,33 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         benchmark.addCase("add_months(d, 13), null-free") { _ => chunkedAddMonths(false) }
         benchmark.addCase("add_months(d, 13), mixed nulls") { _ => chunkedAddMonths(true) }
+        benchmark.addCase("month, Neri-Schneider (task 53 A/B), null-free") { _ =>
+          chunked(monthNeri, false)
+        }
+        benchmark.addCase("month, 0-based axis (task 53 A/B), null-free") { _ =>
+          chunked(monthOld, false)
+        }
+        benchmark.addCase("month, Neri-Schneider (task 53 A/B), mixed nulls") { _ =>
+          chunked(monthNeri, true)
+        }
+        benchmark.addCase("month, 0-based axis (task 53 A/B), mixed nulls") { _ =>
+          chunked(monthOld, true)
+        }
+        benchmark.addCase("dayofmonth, Neri-Schneider (task 53 A/B), null-free") { _ =>
+          chunked(domNeri, false)
+        }
+        benchmark.addCase("dayofmonth, 0-based axis (task 53 A/B), null-free") { _ =>
+          chunked(domOld, false)
+        }
+        benchmark.addCase("dayofmonth, Neri-Schneider (task 53 A/B), mixed nulls") { _ =>
+          chunked(domNeri, true)
+        }
+        benchmark.addCase("dayofmonth, 0-based axis (task 53 A/B), mixed nulls") { _ =>
+          chunked(domOld, true)
+        }
+        benchmark.addCase("year+month+day+quarter, 0-based axis (task 53 A/B), null-free") { _ =>
+          chunked(fourOld, false, outputs = 4)
+        }
         benchmark.addCase("year+month+day+quarter, null-free") { _ =>
           chunked(four, false, outputs = 4)
         }

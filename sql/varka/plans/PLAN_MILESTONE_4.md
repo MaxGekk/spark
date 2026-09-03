@@ -741,6 +741,16 @@ ms per op a 200-op method costs about 220 ms once per shape per JVM. If the
 budget rises, `CHRONO_WEIGHT` and `DAY_OF_YEAR_WEIGHT` are deleted rather than
 re-tuned: they exist only to force calendar outputs apart under a 16-op budget.
 
+**The development machine's AVX-512 is 256 bits wide**, measured after task 43
+landed by running its own ladder at three widths: 128 -> 256 is 2.48x and
+256 -> 512 is 0.95x, so doubling the lanes from 256 to 512 buys nothing here.
+Every number in this milestone labelled AVX-512 is therefore a
+256-bit-datapath number. No decision in it moves - each is a comparison between
+two lowerings at one fixed width, with both arms on the same hardware - but the
+label overstates what was tested, and a host with a full-width datapath (Intel
+Sapphire Rapids or Emerald Rapids, AMD EPYC Turin) has roughly a factor of two
+available on unmodified code. `SKILLS.md` carries the table and the method.
+
 **Two corrections, measured while planning task 43 (`PLAN_TASK_43.md` 1.1).**
 The second example no longer demonstrates the problem: on today's emitter
 `least(greatest(year, month), greatest(dayofmonth, quarter))` is **61**
