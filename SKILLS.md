@@ -955,6 +955,44 @@ the differential compares dense against masked validity byte for byte - and beca
 promises every Arrow reader stops at `valueCount`. Producing identical bits is what lets the
 existing differential be the change's oracle rather than something to rewrite.
 
+## Read two fields out of one product, and put the axis where the formula wants it
+
+Task 53. The civil-from-days prefix used to find the month with a magic multiply on the March
+day-of-year and then run `emitMonthStart` *forwards* to recover the day of month, on a March = 0
+axis that needed an add in front of every reported month. Neri and Schneider (2022) show that one
+affine numerator does both jobs at once: with `num = 2141 * doy + 197913`, the month index is
+`num >>> 16` and the day of month is `((num & 0xFFFF) * 31345 >>> 26) + 1`. The high half and the
+low half of one product are two fields, and the constants only work on the March = 3 axis, which
+is exactly the axis that makes the reported month `m3 < 13 ? m3 : m3 - 12` with no add. The
+identities are exact over their domains (366, 65536 and 12 cases) and the exhaustive sweep runs
+both axes over all 16,777,216 covered days, so the older lowering stays as the reference variant
+the new one is checked against rather than dead code.
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `dayofmonth` (null-free / mixed nulls) | +13.5% / +11.9% | +12.6% / +12.7% |
+| `month` (null-free / mixed nulls) | +4.3% / +0.7% | +5.7% / +4.2% |
+| shared four-field calendar | +3.6% | +5.0% |
+
+Three lessons that outlive the constants.
+
+* **When a formula wants a different origin, move the origin rather than correcting for it.**
+  The March = 3 axis looks like churn - every slot comment, every helper and every test moved -
+  but the alternative was a permanent add on the hot path to translate between the paper's axis
+  and ours. The prefix slot `t[5]` now holds the numerator, not a month, and the tails that read
+  it (`tailReadsMarchMonth`) are an exhaustive switch so a new tail cannot silently assume the
+  old contents.
+* **A shared shape gains least from a cheaper shared step, and that is the denominator, not a
+  surprise.** The four-field shape was predicted to gain most "because it pays the month block
+  once and the tails three times". Fragment sharing already collapses its four prefixes into one,
+  so it saves the block once spread across four outputs and a body five times the size, while
+  `dayofmonth` alone saves it on every row of a small body. Prediction 4 missed for exactly this
+  reason; write the denominator down before predicting a ratio.
+* **A boundary measured in whole outputs does not move for a saving smaller than one output.**
+  The unshared `HugeMethodLimit` crossing was predicted to move from 19/20 outputs to 21 or 22.
+  It did not move on either axis: an output costs roughly 400 bytes of epilogue and the saving
+  was 149. Count the units the boundary is measured in before predicting it will shift.
+
 ## A bimodal kernel is usually the register allocator, and here is how to prove it
 
 Task 32's shared four-field calendar kernel ran at either 165 or 236 M rows/s under
