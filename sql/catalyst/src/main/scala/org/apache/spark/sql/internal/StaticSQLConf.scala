@@ -111,6 +111,23 @@ object StaticSQLConf {
       .checkValue(maxEntries => maxEntries >= 0, "The maximum must not be negative")
       .createWithDefault(100)
 
+  val VARKA_COMPILATION_WATCH_ENABLED =
+    buildStaticConf("spark.sql.codegen.varka.compilationWatch.enabled")
+      .internal()
+      .doc("When true, subscribes to JFR's jdk.Compilation event and reports when C2 compiles " +
+        "the same generated Varka kernel method to a materially different size than it did " +
+        "earlier in this JVM. The bytecode behind a shape hash is byte-identical by " +
+        "construction, so two compilations of the same method at the same tier are compiling " +
+        "the same input and a size difference is a register allocation difference - which has " +
+        "been measured at roughly 2x in size and 30-40% in throughput, with nothing otherwise " +
+        "reporting it. This is a diagnostic and never a control loop: nothing is re-emitted on " +
+        "detection. It costs a thread and a JFR subscription, so it is off by default, and it " +
+        "degrades silently where JFR is unavailable.")
+      .version("5.0.0")
+      .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+      .booleanConf
+      .createWithDefault(false)
+
   val CODEGEN_COMMENTS = buildStaticConf("spark.sql.codegen.comments")
     .internal()
     .doc("When true, put comment in the generated code. Since computing huge comments " +
