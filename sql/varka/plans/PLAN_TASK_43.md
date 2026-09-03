@@ -151,3 +151,127 @@ Nothing under `src/main`. This task measures the emitter; it does not change it.
 Filled in when the measurement lands: the per-op timing at both widths, the
 tier-4 compile times, whether C1 refused anywhere, and which of section 4's
 predictions held.
+
+## 8. Outcome
+
+The ladder ran at both widths, with a `-XX:+PrintCompilation` pass at each. Four
+predictions, two held, two missed - and the two that missed are the informative
+ones.
+
+### 8.1 Throughput: flat at both widths
+
+Per-op cost, derived from the committed results (AVX-512) and the 128-bit run
+recorded here. Rows per second is the wrong unit when every point does a
+different amount of work; nanoseconds per row per op is flat if the loop scales.
+
+| ops | 20 | 58 | 96 | 153 | 191 | 248 |
+|---|---|---|---|---|---|---|
+| AVX-512 ns/row | 0.125 | 0.453 | 0.698 | 1.107 | 1.468 | 1.858 |
+| AVX-512 ns/row/op | 0.0063 | 0.0078 | 0.0073 | 0.0072 | 0.0077 | 0.0075 |
+| 128-bit ns/row | 0.274 | 1.231 | 1.721 | 2.492 | 3.113 | 4.156 |
+| 128-bit ns/row/op | 0.0137 | 0.0212 | 0.0179 | 0.0163 | 0.0163 | 0.0168 |
+
+**There is no cliff at either width up to 248 ops in one loop method.** At
+AVX-512 the per-op cost sits in 0.0072-0.0078 from 58 ops onward, about +-4%. At
+128-bit it *improves* from 58 to 153 and then goes flat. At both widths the
+worst point on the ladder is the narrowest one, where the loop's fixed costs are
+spread over the fewest ops.
+
+### 8.2 Compile time: linear, and two orders of magnitude below the folklore
+
+Wall time from the tier-3 compilation of `loopDense0` to its tier-4
+compilation, non-OSR, read from `-XX:+PrintCompilation`:
+
+| ops | 20 | 58 | 96 | 153 | 191 | 248 |
+|---|---|---|---|---|---|---|
+| AVX-512 (ms) | 30 | 82 | 131 | 206 | 228 | 271 |
+| 128-bit (ms) | 58 | 110 | 240 | 321 | 403 | 501 |
+
+Linear, at roughly 1.1 ms per op at AVX-512 and 2.0 at 128-bit. The AVX-512
+figure lands within 1 ms of `PLAN_TASK_32.md` 7.5's independent reading (272 ms
+for a 200-op method), from a different shape and a different run, which is about
+as much corroboration as two measurements can give each other.
+
+**The comparison against the folklore needs the OSR path, not this one.** The
+"~10 seconds" in `VarkaLoopEmitter`'s `GROUP_BUDGET` javadoc, and in
+`SKILLS.md`, describes a tier-4 **OSR** compile of a 64-op loop - and the table
+above deliberately excludes OSR compilations, so it does not measure the same
+thing. Measured on the path the folklore actually describes:
+
+| ops | 20 | 58 | 96 | 153 | 191 | 248 |
+|---|---|---|---|---|---|---|
+| AVX-512 OSR t3->t4 (ms) | 15 | 52 | 100 | 163 | 165 | 186 |
+| 128-bit OSR t3->t4 (ms) | 12 | 33 | 81 | 88 | 121 | 140 |
+
+The OSR compile is *faster* than the standard one at every ladder point: **186
+ms at 248 ops** against "~10 seconds at 64 ops". Four times the op count, and
+roughly fifty times less compile time.
+
+Stated carefully, because this is a different machine and a different JDK from
+the one that produced the original number: **the ~10-second OSR compile does not
+reproduce here, on the same path, at four times the width.** That is not a claim
+that the observation was wrong when it was made - `SKILLS.md` records the rate
+jumping 9 to ~1000 M rows/s at t=12s, which is not the kind of thing one
+mismeasures. It is a claim that the number no longer describes this JDK, and
+that anything resting on it needs re-deriving rather than re-citing.
+
+### 8.3 C1 refuses, and it is not about the register file
+
+`COMPILE SKIPPED: out of virtual registers in linear scan (retry at different
+tier)` appears in both runs, on exactly the same two methods:
+
+* `VarkaFusedLadder13::epilogueDense` (1954 bytes) - the *epilogue* at the
+  widest ladder point, not the loop. `loopDense0` is never refused, at any
+  ladder point, at either width.
+* `ChronoVectorOps::vectorFourFields` (936 bytes), the hand-written kernel.
+
+Both are refused **identically at 512-bit and at 128-bit**, which is the finding.
+`SKILLS.md` attributes that refusal to 128-bit and its sixteen `xmm` registers;
+it happens just as readily with thirty-two `zmm` available, so it is C1's own
+linear-scan allocator running out of *virtual* registers on a large body, not
+the machine register file. And "retry at different tier" means the method goes
+to C2 instead - it is a tier decision, not a failure to compile, which is why
+nothing was ever visibly slow.
+
+### 8.4 Predictions, scored
+
+1. **Held.** Flat at AVX-512, +-4% from 58 ops up.
+2. **Missed.** 128-bit was predicted to degrade between 100 and 200 ops on
+   register-pressure grounds. It does not degrade at all; per-op cost improves
+   from 58 to 153 and then flattens. This is the same conclusion task 32 step B2
+   reached from a different direction - `SKILLS.md`'s spill investigation traced
+   128-bit bimodality to one hand-written 936-byte body, and B2 found the
+   emitter's own generated four-output method had none. This ladder extends that
+   from four outputs to 248 ops in a single method: **the register-residency
+   argument in `GROUP_BUDGET`'s javadoc is about hand-written bytecode, not
+   about what the emitter produces.**
+3. **Held**, and it is the one the milestone turns on - but it took a second
+   measurement to earn. The first pass compared standard compilations against a
+   figure describing OSR ones, which would have been a wrong comparison drawn
+   from right numbers. On the OSR path the gap is wider still: 186 ms at 248
+   ops. See 8.2.
+4. **Missed in both halves.** C1 was predicted to refuse somewhere on the
+   128-bit ladder and nowhere on the AVX-512 one. It refuses in the same one
+   place at both widths, and that place is the epilogue rather than the loop.
+
+### 8.5 What this does and does not license
+
+It licenses retiring the compile-time argument for `GROUP_BUDGET = 16` **as it
+applies to ops inside one output**: at 248 ops a loop method costs 271 ms of C2
+time on the standard path and 186 ms on the OSR one, and scales linearly in
+throughput, so a shape that fuses into one wide method is not paying the price
+the budget was written to avoid.
+
+`GROUP_BUDGET`'s own javadoc still states the ~10-second figure as its "measured
+reason". Correcting that sentence is deliberately left to task 43's second half
+rather than done here, and not to avoid a merge conflict: the javadoc explains
+why the constant has the value it has, and the second half is what decides
+whether the value changes. Editing the explanation while leaving the number, and
+the decision, outstanding would leave the file less coherent than it is now.
+This file and `SKILLS.md` carry the measurement in the meantime.
+
+It does not license "no cliff exists". This is one Zen 5 host, one JDK 25 build,
+one shape family, and a ladder that stops at 248 ops because that is where the
+milestone's question stopped. A different lowering with more live values per op
+could still spill; what has been shown is that op *count* alone does not cause
+it over this range.

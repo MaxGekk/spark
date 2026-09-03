@@ -232,6 +232,34 @@ apparent small wins turned out to be noise.
   vectors. A 30-second window showed the rate jump 9 -> ~1000 M rows/s at t=12s.
   "JVM history" only shifted when the compile started relative to the measurement
   window - fresh JVMs got it in during warmup, busy ones did not.
+
+  **Update, task 43: this no longer reproduces, on the same path, at four times the width.**
+  A ladder of single-output loops from 20 to 248 `IntVector` ops - a `greatest`/`least` tree
+  over independent `dayofweek(d + k)` subtrees, which is linear at 19 ops per step - was
+  measured with `-XX:+PrintCompilation` at both widths on JDK 25. Tier-4 **OSR** compile of
+  `loopDense0`, which is the path the paragraph above describes: 15, 52, 100, 163, 165 and
+  186 ms across the ladder at AVX-512, and 12 to 140 ms at 128-bit. The standard, non-OSR
+  compile is slower and still small: 30 to 271 ms at AVX-512, 58 to 501 ms at 128-bit, linear
+  at roughly 1.1 and 2.0 ms per op. So a 248-op loop compiles in 186 ms where a 64-op loop
+  once took ~10 s. The old observation is not being called a mismeasurement - a rate jumping
+  9 to ~1000 M rows/s at t=12s is not subtle - but the number describes a JDK that is no
+  longer the one in use, and anything resting on it (`GROUP_BUDGET`'s javadoc, among others)
+  needs re-deriving rather than re-citing.
+
+  **Throughput does not fall off either, at either width.** Nanoseconds per row per op over
+  the same ladder: 0.0078, 0.0073, 0.0072, 0.0077, 0.0075 from 58 ops up at AVX-512, and
+  0.0212, 0.0179, 0.0163, 0.0163, 0.0168 at 128-bit - flat, and at 128-bit *improving* with
+  width, since the narrowest body spreads the loop's fixed costs over the fewest ops. There
+  is no register-pressure cliff for an emitted single-output loop up to 248 ops.
+
+  **And C1's `out of virtual registers in linear scan` is not about the machine register
+  file.** The bimodality section below attributes that refusal to 128-bit and its sixteen
+  `xmm` registers. Measured, it happens identically at 512-bit with thirty-two `zmm`
+  available, on exactly the same two methods - `ChronoVectorOps::vectorFourFields` (936
+  bytes) and the widest ladder point's `epilogueDense` (1954 bytes), never any
+  `loopDense0`. It is C1's own linear-scan allocator running out of *virtual* registers on a
+  large body, and it ends in "retry at different tier", so the method goes to C2 rather than
+  failing to compile - which is why it was never visibly slow.
 - The structural fix stands regardless: keep every hot loop method small by
   construction (the emitter splits outputs across sibling loop methods of at most
   `GROUP_BUDGET = 16` ops, called from a driver). Small methods compile in
