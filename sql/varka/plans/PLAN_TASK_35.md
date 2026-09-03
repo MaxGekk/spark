@@ -319,7 +319,7 @@ each omission is a compile error rather than a silent decline.
 | file | what |
 |---|---|
 | `VarkaVectorIR.java` | the record, the `Chrono` permits clause, `TruncLevel`, and the two renderings |
-| `VarkaLoopEmitter.java` | `childrenOf`, `analyze`, `planWordRef` (alias the child's word), `planSlots` (`TRUNC_TMP_COUNT`), `emitValue` (`case TruncDate n -> emitChrono(...)`), `chronoChild`, `weightOf`, and the new `emitChronoTrunc` plus `emitJanuaryDayOfYear` |
+| `VarkaLoopEmitter.java` | `childrenOf`, `analyze`, `planWordRef` (alias the child's word), `planSlots` (`TRUNC_TMP_COUNT`), `emitValue` (`case TruncDate n -> emitChrono(...)`), `chronoChild`, `weightOf`, and the new `emitChronoTrunc` plus `emitJanuaryDayOfYear`; once task 48 lands, `tailReadsMarchMonth` too (`level != YEAR`) |
 | `VarkaEmitOptions.java` | a `TruncDate { SUBTRACT, RECOMPOSE }` field, its `with...`, and its place in `canonical()` - which stays empty for `DEFAULTS`, so no production hash moves |
 | `VarkaExpressionCompiler.scala` | the `TruncDate` arm, `foldTruncLevel`, and the `WEEK` rewrite |
 | `VarkaLoopEmitterSuite.scala` | the `evalValue` arm, the boundary matrix, the variants-agree test, the opt-in sweep, both pinned fixtures |

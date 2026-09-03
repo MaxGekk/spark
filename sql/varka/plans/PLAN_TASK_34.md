@@ -384,3 +384,41 @@ among them - against `LocalDate` over all 16,777,216 days of the covered
 range, under both the shared and unshared prefix, and passes at both vector
 widths. 116 catalyst / 131 sql tests green with the sweeps enabled at both
 widths; `dev/lint-java` and `dev/scalastyle` clean.
+
+## What landed after this branch was written, and what it changed here
+
+Two things merged to master while this task sat open, and both touched the
+op count the section above quotes. They are recorded here because that
+section is a snapshot of one moment and re-editing it would erase the
+history rather than continue it.
+
+**The perfect-hash leap flag (PR #83).** `emitLeapFlag` became Huffner's
+`((y * 1073750999) & 0xC001F00F) <= 126976`, four ops against twenty-two,
+taking the year and nothing else. `DayOfYear` dropped the five scratch
+locals task 40's helper needed, its slot count fell from
+`CHRONO_PREFIX_SLOTS + 6` to `+ 1`, and its weight fell from 73 to 55. This
+branch also deleted its own `VarkaChrono.isLeapYear` and the four constants
+behind it: master's is exact over a strictly wider domain
+(-15200..87299 against this one's narrowed range), so there was nothing to
+weigh.
+
+**Task 48's month elision (PR #80).** Task 48 observed that
+`marchMonth >= 10` and `dayOfYear >= 306` are the same test one step apart,
+so a tail that only needs the January turn can read it off the day of year
+and let the prefix skip the month step. It shipped that for `Year` and
+recorded the decision in `tailReadsMarchMonth`.
+
+**`DayOfYear` is the second node with that property**, and this branch is
+where that shows up. Its tail computes the reported year (for the leap flag)
+and then blends `doy - 305` against `doy + 60 + L` - the March month appears
+in neither. So its arm of `tailReadsMarchMonth` is `false`, its call to
+`emitChronoYear` passes `rem` rather than `marchMonth` (task 48 changed that
+parameter's meaning, and the textual merge did not), and the four ops of the
+month step come off: `DAY_OF_YEAR_WEIGHT` is now 51, re-counted rather than
+reasoned - `laneOps(loopDense0)` reads 52 with the step kept and 48 with it
+elided, and the weight's own basis counts three mask ops the helper does
+not. The exhaustive sweep is what certifies the elision here, since a tail
+reading an unwritten local would produce a plausible wrong answer rather
+than a crash: it runs the five-field kernel, `dayofyear` among them, against
+`LocalDate` over all 16,777,216 days of the covered range under both sharing
+modes and both switch positions.

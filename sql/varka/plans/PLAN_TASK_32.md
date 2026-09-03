@@ -715,7 +715,37 @@ the same way, after task 51:
 | 48 | 12 | 25329 | 9765 |
 
 The crossing moves again, from 17/40 to **19/44** - two more outputs fit unshared, four
-more shared, before either crosses. `VarkaLoopEmitterSuite`'s
+more shared, before either crosses.
+
+**Update: the unshared column moved a third time (task 48).** The year tail now reads its
+January bit off the day of year rather than off the March-based month, so a prefix whose
+only consumer is a `Year` skips the month step entirely - four lane ops and a store. Under
+sharing that changes nothing in this table, because the epilogue holds every output and so
+every fragment here has a `Month` consumer; unshared, every `Year` node has its own prefix
+and every row loses one month step per date. Re-measured the same way again:
+
+| outputs | dates | unshared | shared |
+|---|---|---|---|
+| 1 | 1 | 575 | 575 |
+| 2 | 1 | 956 | 670 |
+| 4 | 1 | 1742 | 834 |
+| 8 | 2 | 3391 | 1575 |
+| 16 | 4 | 6697 | 3065 |
+| 17 | 5 | 7177 | 3545 |
+| 18 | 5 | 7560 | 3642 |
+| 19 | 5 | **7953** | 3724 |
+| 20 | 5 | **8386** | 3810 |
+| 24 | 6 | 10747 | 4555 |
+| 32 | 8 | 15467 | 6051 |
+| 40 | 10 | 20217 | 7547 |
+| 44 | 11 | 22612 | **8639** |
+| 48 | 12 | 24989 | 9777 |
+
+The unshared crossing moves from 19 to **20**; the shared one stays at **44**, gaining only
+the one byte a year tail's `sipush 306` costs over a `bipush 10`. That is three moves of the
+same number for three unrelated reasons - sharing, the guard's removal, and now the month
+elision - which is the strongest argument yet that task 44 should measure its own baseline
+when it is picked up rather than inherit any ladder recorded here. `VarkaLoopEmitterSuite`'s
 `"sharing the prefix moves the epilogue's HugeMethodLimit crossing from 19 outputs to 44"`
 test carries the new numbers; this section keeps the original ladder above it rather than
 overwriting it, since both were true measurements of the emitter at the time they were

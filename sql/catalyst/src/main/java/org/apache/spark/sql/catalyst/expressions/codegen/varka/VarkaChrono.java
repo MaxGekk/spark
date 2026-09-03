@@ -154,6 +154,22 @@ public final class VarkaChrono {
   /** The day of the March-based year on which January arrives, and the year number turns. */
   public static final int MARCH_YEAR_JANUARY = 10;
 
+  /**
+   * The same turn as {@link #MARCH_YEAR_JANUARY}, one step earlier in the chain: the
+   * March-based day of year at which the March year has become January, which is the count of
+   * days from 1 March through 31 December. Because {@code marchMonth = (5 * dayOfYear + 2)
+   * / 153} is exact over this domain, {@code marchMonth >= 10} is {@code 5 * dayOfYear + 2
+   * >= 1530}, that is {@code dayOfYear >= 305.6}, that is {@code dayOfYear >= 306} on
+   * integers - an identity, not an approximation, and {@code VarkaChronoSuite} asserts it
+   * over all 366 values of the domain. Task 48 reads the year's January bit from here so a
+   * kernel computing the year alone never computes the month.
+   *
+   * <p>Task 34 reads the same threshold as a conversion rather than a bit: past it, the
+   * March-based day of year becomes the January-based one by subtracting
+   * {@code MARCH_TO_JANUARY_DAYS - 1}.
+   */
+  public static final int MARCH_TO_JANUARY_DAYS = 306;
+
   // --- Task 40: the inverse direction, and the month arithmetic built on it ------------------
 
   /**
@@ -346,7 +362,7 @@ public final class VarkaChrono {
     int dayOfMonth = dayOfYear - (((153 * marchMonth + 2) * DAY_M) >>> DAY_K) + 1;
     int month = marchMonth < MARCH_YEAR_JANUARY ? marchMonth + 3 : marchMonth - 9;
     int year = 400 * era + 100 * century + yearOfCentury
-        + (marchMonth >= MARCH_YEAR_JANUARY ? 1 : 0);
+        + (dayOfYear >= MARCH_TO_JANUARY_DAYS ? 1 : 0);
     int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;
     int januaryDayOfYear = dayOfYear >= MARCH_TO_JANUARY_DAYS
         ? dayOfYear - (MARCH_TO_JANUARY_DAYS - 1)
@@ -355,14 +371,6 @@ public final class VarkaChrono {
   }
 
   // --- The January-based day of year, and the leap flag it needs (task 34) ------------------
-
-  /**
-   * Days from 1 March to 31 December: the March-based day of year at or past which a date has
-   * rolled into January of the reported year. {@link #fromEra}'s {@code dayOfYear} is
-   * March-based ({@code 0} is 1 March); past this threshold it converts to the January-based
-   * day of year by subtracting {@code MARCH_TO_JANUARY_DAYS - 1}.
-   */
-  public static final int MARCH_TO_JANUARY_DAYS = 306;
 
   /**
    * The January-based day of year of 1 March in a common year ({@code 31 + 28 + 1}). A leap
