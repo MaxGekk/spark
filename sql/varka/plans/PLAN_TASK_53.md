@@ -32,6 +32,15 @@ month step, so task 48's elision shrinks from four ops to two. It stays correct
 and stays a win; the number in `PLAN_TASK_48.md` 9.1 just becomes a number about
 code that no longer exists, and section 5's op-count test moves with it.
 
+**Corrected once PR #64 was integrated against task 48**: the elision covers
+*two* nodes, not one. `dayofyear`'s tail blends `doy - 305` against
+`doy + 60 + L` and reads no month index at all, so it too skips the month step
+and its `tailReadsMarchMonth` arm is `false`. Everything this section says about
+`year` therefore applies to `dayofyear` as well, and the arithmetic below counts
+both. Nothing about the design moves - what moves is a count this plan
+registered in advance, which is the kind of thing worth fixing on the record
+rather than discovering mid-task.
+
 ## 2. The admission check, done
 
 Same gate task 26 applied before any emitter work, and it splits the paper
@@ -105,9 +114,16 @@ round-down magics and their carries stay exactly as they are, and the year tail
 `emitChronoPrefix`'s last step becomes the two-op numerator, stored in the slot
 `marchMonth` uses today (`t[5]`, renamed `monthNumerator`). Task 48's
 `tailReadsMarchMonth` becomes `tailReadsMonthNumerator` with the same
-membership - the year is still the one tail that reads neither - and its
-elision, its per-lane-group consumer set and its `VarkaEmitOptions` switch all
-carry over unchanged in shape.
+membership - `year` and `dayofyear` are the two tails that read neither - and
+its elision, its per-lane-group consumer set and its `VarkaEmitOptions` switch
+all carry over unchanged in shape.
+
+The switch is exhaustive with a throwing `default`, and that is load-bearing
+rather than decorative: it is what made PR #64 and PR #78 fail immediately on
+merging task 48 instead of computing a wrong month quietly. By the time this
+task starts it carries six arms - `Year` and `DayOfYear` false, `Month`,
+`DayOfMonth`, `Quarter`, `AddMonths` and `LastDay` true - and the rename must
+carry all of them.
 
 ### 3.2 The month index becomes 3-based, everywhere
 
@@ -156,18 +172,26 @@ this table:
 | `trunc(d, 'MONTH')` | 10 | 7 | -3 |
 | `emitMonthStart`, per call | 4 | 3 | -1 |
 | `year` | unchanged | unchanged | 0 |
+| `dayofyear` | unchanged | unchanged | 0 |
 
 `add_months` and `last_day` call `emitMonthStart` twice each and go through the
 month and day-of-month tails, so they take the largest absolute saving; they
 are also the two nodes where a mistake is least likely to be caught by a
 bounded test, which is what section 5's sweep is for.
 
+`year` and `dayofyear` are zero for the same reason: both elide, so neither
+emits the step this task replaces, in either form. What does move for them is
+the *kept* side of the A/B, from four ops to two, which is section 6.1's
+prediction 6 and not a shipped number. `DAY_OF_YEAR_WEIGHT` (51 since PR #64
+was integrated against task 48) therefore stays 51 - stated because a weight
+that does not move is as easy to get wrong by adjusting it as one that does.
+
 ## 4. Files
 
 | file | what |
 |---|---|
 | `VarkaChrono.java` | `MONTH_NUM_M`/`MONTH_NUM_ADD`/`MONTH_NUM_K`, `DOM_M`/`DOM_K`, `MONTH_START_M`/`MONTH_START_SUB`/`MONTH_START_K`, each with its own domain and its verification in the javadoc; `MARCH_YEAR_JANUARY` to 13; `fromEra`'s month block |
-| `VarkaLoopEmitter.java` | `emitMonthNumerator`; `emitChronoMonth`, `emitChronoDayOfMonth`, `emitMonthStart`, the `Quarter` arm, `emitAddMonths`, `emitChronoLastDay` on the new axis; `tailReadsMarchMonth` renamed with its javadoc; the `CHRONO_WEIGHT`/`ADD_MONTHS_TMP_COUNT`/`LAST_DAY_TMP_COUNT` accounting re-derived, not adjusted by eye |
+| `VarkaLoopEmitter.java` | `emitMonthNumerator`; `emitChronoMonth`, `emitChronoDayOfMonth`, `emitMonthStart`, the `Quarter` arm, `emitAddMonths`, `emitChronoLastDay` on the new axis; `tailReadsMarchMonth` renamed with its javadoc; the `CHRONO_WEIGHT`/`ADD_MONTHS_TMP_COUNT`/`LAST_DAY_TMP_COUNT` accounting re-derived, not adjusted by eye (`DAY_OF_YEAR_WEIGHT` is expected to stay 51; re-count it rather than assume it) |
 | `VarkaEmitOptions.java` | `neriSchneiderMonth`, so the old block stays a live reference variant the differential checks against, per `FloorMod7`'s precedent |
 | `VarkaChronoSuite.scala` | the three identities over their exact domains (366, 65536 and 12 cases), and the existing exhaustive sweep, unchanged and still green |
 | `VarkaLoopEmitterSuite.scala` | section 5 |
@@ -216,16 +240,26 @@ control that says whether the machine moved.
 4. The four-field shared kernel gains more than any single-field one, because
    it pays the month block once and the tails three times.
 5. The unshared `HugeMethodLimit` crossing moves out again, to 21 or 22.
-6. Task 48's elision shrinks from four ops to two, and its section 9.1 number
-   is superseded rather than contradicted.
+6. Task 48's elision shrinks from four ops to two, for **both** nodes that take
+   it - `year` and `dayofyear` - and `PLAN_TASK_48.md` 9.1's number is
+   superseded rather than contradicted. The elided bodies do not move at all;
+   only the kept side of the switch does.
 
 ## 7. Risks
 
 1. **The 3-based axis touching seven call sites at once.** The month index is
-   read in more places than any other prefix value, and two of them (PR #64,
-   PR #78) are in flight. Mitigated by the rename: `marchMonth` becomes
-   `monthIndex3`, so a call site left on the old convention does not compile
-   rather than computing a month three off.
+   read in more places than any other prefix value. Mitigated by the rename:
+   `marchMonth` becomes `monthIndex3`, so a call site left on the old
+   convention does not compile rather than computing a month three off.
+
+   This plan originally named two in-flight call sites, PR #64 and PR #78.
+   **Only PR #78 is one**, and the correction is worth keeping rather than
+   quietly deleting, because it was an assumption about another task's lowering
+   made without reading it: `dayofyear` was assumed to read the month index and
+   does not. `last_day` is the real exposure and the worst of the seven - two
+   `emitMonthStart` calls plus both the month and day-of-month tails - so this
+   task should start after PR #78 merges, and edit that call site directly
+   rather than hand-resolve it in a merge.
 2. **`MARCH_YEAR_JANUARY` changing value.** A constant whose meaning is
    unchanged but whose number moves is the classic silent-merge hazard. It gets
    a javadoc sentence naming the axis, and the identity test in section 5 fails
@@ -242,9 +276,16 @@ control that says whether the machine moved.
 
 ## 8. Sequencing
 
-Four commits, each green on its own:
+Four commits, each green on its own. Commit 1 landed with PR #80; the
+corrections in sections 1, 3.1, 3.4, 6.1 and 7 are a follow-up to it, made
+before commit 2 rather than folded into the work, so the plan a later reader
+diffs against is the one the work actually started from.
 
-1. **This plan**, with section 2's admission check.
+Commit 2 waits on PR #78. Section 7's risk 1 says why: `emitChronoLastDay` is
+the worst of the seven month-axis call sites, and editing it directly on master
+is a different job from hand-resolving it inside a merge.
+
+1. **This plan**, with section 2's admission check. **DONE** (PR #80).
 2. **The constants and the scalar twin**: `VarkaChrono`'s new constants, the
    3-based axis, `fromEra`'s month block, and the three identity tests. No
    emitter change, so the case is on record before the code that rests on it.
