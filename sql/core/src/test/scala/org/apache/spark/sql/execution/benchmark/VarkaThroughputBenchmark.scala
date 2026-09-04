@@ -231,6 +231,16 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
 
       runQueries(baseline, varka, "date_add", "SELECT date_add(d, 3) AS a FROM varka_dates")
       runQueries(baseline, varka, "date_sub", "SELECT date_sub(d, 5) AS a FROM varka_dates")
+      // Task 56's pair: the same column-offset kernel with and without the evaluator's per-batch
+      // bound check. `date_add(d, i)` (task 38) records no bound and is the control;
+      // `d + CAST(i AS INTERVAL DAY)` compiles to the same node with a bound on `i`, because
+      // Spark's cast throws past 106751991 days, so its varka row pays one vector compare pass
+      // over the offset column before the kernel runs. The difference between the two varka rows
+      // is the check's price on the cheapest shape that pays it.
+      runQueries(baseline, varka, "date_add, column offset (task 56 control)",
+        "SELECT date_add(d, i) AS a FROM varka_dates")
+      runQueries(baseline, varka, "date + CAST(i AS INTERVAL DAY), bound checked (task 56)",
+        "SELECT d + CAST(i AS INTERVAL DAY) AS a FROM varka_dates")
       runQueries(baseline, varka, "datediff",
         "SELECT datediff(d2, d) AS diff FROM varka_date_pairs")
       // The milestone-2 fusion cases (PLAN_TASK_14.md 2.2). The nested projection is the query
