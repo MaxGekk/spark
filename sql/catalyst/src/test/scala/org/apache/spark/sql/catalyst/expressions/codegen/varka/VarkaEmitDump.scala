@@ -54,6 +54,11 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, Sh
  *
  * Options take the record's own `with*` methods by name (`--options cse=false,groupBudget=24`),
  * found by reflection so a new option needs nothing here.
+ *
+ * `--table` prints instead the markdown a plan's registered-op-counts section wants: one row
+ * per expression, one column per option variant given with `--variant k=v,...` (the defaults
+ * first), each cell the `IntVector` invocation count of `loopDense0`, and a delta column per
+ * variant against the defaults. That is the table tasks 53 and 54 built by hand.
  */
 object VarkaEmitDump {
 
@@ -65,12 +70,16 @@ object VarkaEmitDump {
     var columns = defaultColumns
     var optionSpec = ""
     var rounds = 0
+    var table = false
+    var variants = Vector.empty[String]
     var i = 0
     while (i < args.length) {
       args(i) match {
         case "--columns" => columns = args(i + 1); i += 2
         case "--options" => optionSpec = args(i + 1); i += 2
         case "--rounds" => rounds = args(i + 1).toInt; i += 2
+        case "--table" => table = true; i += 1
+        case "--variant" => variants :+= args(i + 1); i += 2
         case e => exprs :+= e; i += 1
       }
     }
@@ -85,6 +94,10 @@ object VarkaEmitDump {
     val options = parseOptions(optionSpec)
     val resolved = exprs.map(e => resolve(CatalystSqlParser.parseExpression(e), childOutput))
     val named = resolved.map(e => Alias(e, "c")())
+    if (table) {
+      printTable(exprs, named, childOutput, options, variants)
+      return
+    }
 
     val partial = VarkaExpressionCompiler.compilePartial(named, childOutput).getOrElse {
       report("nothing fused: every entry declined or no column is referenced")
@@ -133,6 +146,34 @@ object VarkaEmitDump {
     }
   }
 
+  /** `--table`: `loopDense0`'s `IntVector` count per expression, under the defaults and under
+   *  each `--variant`, with the delta - each expression emitted alone, as a one-output kernel. */
+  private def printTable(exprs: Seq[String], named: Seq[org.apache.spark.sql.catalyst.expressions
+      .NamedExpression], childOutput: Seq[Attribute], base: VarkaEmitOptions,
+      variants: Seq[String]): Unit = {
+    val columns = ("defaults", base) +: variants.map(v => (v, applyOptions(base, v)))
+    val header = "| expression | " + columns.map(_._1).mkString(" | ") +
+      variants.map(v => s" | delta $v").mkString + " |"
+    report(header)
+    report("|---|" + columns.map(_ => "---|").mkString + variants.map(_ => "---|").mkString)
+    exprs.zip(named).foreach { case (text, one) =>
+      val fused = VarkaExpressionCompiler.compilePartial(Seq(one), childOutput).map(_.fused)
+      fused match {
+        case None => report(s"| `$text` | declined |")
+        case Some(f) =>
+          val counts = columns.map { case (_, opts) =>
+            val bytes = VarkaLoopEmitter.emit(className, f.outputs.asJava,
+              f.inputOrdinals.size, f.literals.size, null, null, opts)
+            VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0",
+              "jdk.incubator.vector.IntVector")
+          }
+          val deltas = counts.tail.map(c => f"${c - counts.head}%+d")
+          report(s"| `$text` | " + counts.mkString(" | ") +
+            deltas.map(d => s" | $d").mkString + " |")
+      }
+    }
+  }
+
   private def report(s: String): Unit = {
     // scalastyle:off println
     println(s)
@@ -164,9 +205,12 @@ object VarkaEmitDump {
   }
 
   /** `k=v,k=v` onto the record's `with<K>` methods, by reflection. */
-  private def parseOptions(spec: String): VarkaEmitOptions = {
-    if (spec.trim.isEmpty) return VarkaEmitOptions.DEFAULTS
-    spec.split(",").foldLeft(VarkaEmitOptions.DEFAULTS) { (opts, kv) =>
+  private def parseOptions(spec: String): VarkaEmitOptions =
+    applyOptions(VarkaEmitOptions.DEFAULTS, spec)
+
+  private def applyOptions(base: VarkaEmitOptions, spec: String): VarkaEmitOptions = {
+    if (spec.trim.isEmpty) return base
+    spec.split(",").foldLeft(base) { (opts, kv) =>
       val Array(k, v) = kv.trim.split("=", 2)
       val method = "with" + k.head.toUpper + k.tail
       val m = classOf[VarkaEmitOptions].getMethods.find(_.getName == method).getOrElse(
