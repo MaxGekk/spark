@@ -192,103 +192,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   // Task 11: the reference evaluator - an independent Scala implementation of the milestone's
   // 2.6 semantics (three-valued conditions, blend, null-skipping greatest/least, floorMod)
   // that every predication test runs the emitted loop against, row for row and bit for bit.
+  // It lives in VarkaReferenceEvaluator now, shared with the IR fuzzer; these two are the
+  // suite's names for it.
   // -----------------------------------------------------------------------------------------
 
   private def evalValue(
-      node: VarkaVectorIR, row: Seq[Option[Int]], lits: Array[Int]): Option[Int] = node match {
-    case c: ColumnRef => row(c.ordinal())
-    case l: LiteralSlot => Some(lits(l.index()))
-    case n: AddDays =>
-      for (d <- evalValue(n.days(), row, lits); o <- evalValue(n.offset(), row, lits))
-        yield d + o
-    case n: SubDays =>
-      for (d <- evalValue(n.days(), row, lits); o <- evalValue(n.offset(), row, lits))
-        yield d - o
-    case n: DateDiff =>
-      for (e <- evalValue(n.end(), row, lits); s <- evalValue(n.start(), row, lits)) yield e - s
-    case n: DayOfWeek =>
-      evalValue(n.days(), row, lits).map(v => (Math.floorMod(v, 7) + 4) % 7 + 1)
-    case n: WeekDay =>
-      evalValue(n.days(), row, lits).map(v => (Math.floorMod(v, 7) + 3) % 7)
-    // The oracle is Spark's own getNextDateForDayOfWeek, quoted directly, not the lowering:
-    // Scala's Int arithmetic wraps exactly as the lanes do, so this is exact even at
-    // Int.MinValue, and it is byte-for-byte what the row engine evaluates.
-    case n: NextDay =>
-      for (d <- evalValue(n.days(), row, lits); k <- evalValue(n.offset(), row, lits))
-        yield d + 1 + Math.floorMod(k - d, 7)
-    // The calendar oracle is java.time, which is what DateTimeUtils.getYear and its three
-    // siblings call - not VarkaChrono, so the emitted bytes are checked against the
-    // definition rather than against the model they were derived from.
-    case n: Year =>
-      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getYear)
-    case n: Month =>
-      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getMonthValue)
-    case n: DayOfMonth =>
-      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getDayOfMonth)
-    case n: Quarter =>
-      // IsoFields.QUARTER_OF_YEAR, which is what DateTimeUtils.getQuarter calls - not
-      // (month + 2) / 3, which is what the emitter computes. An oracle that restates the
-      // implementation is not an oracle.
-      evalValue(n.days(), row, lits)
-        .map(v => LocalDate.ofEpochDay(v.toLong).get(IsoFields.QUARTER_OF_YEAR))
-    case n: DayOfYear =>
-      evalValue(n.days(), row, lits).map(v => LocalDate.ofEpochDay(v.toLong).getDayOfYear)
-    case n: LastDay =>
-      // The definition, not the linear-form-plus-leap-flag this task's lowering computes.
-      evalValue(n.days(), row, lits).map(DateTimeUtils.getLastDayOfMonth)
-    // The oracle is DateTimeUtils.dateAddMonths - the definition AddMonthsBase's nullSafeEval
-    // calls - not VarkaChrono.daysFromCivil, which is the model this node's own arithmetic was
-    // derived from and checked against; using it here would test the lowering against itself.
-    case n: AddMonths =>
-      for (d <- evalValue(n.days(), row, lits); m <- evalValue(n.months(), row, lits))
-        yield DateTimeUtils.dateAddMonths(d, m)
-    case n: Greatest =>
-      pick(evalValue(n.left(), row, lits), evalValue(n.right(), row, lits), math.max)
-    case n: Least =>
-      pick(evalValue(n.left(), row, lits), evalValue(n.right(), row, lits), math.min)
-    case n: IfElse =>
-      if (evalCond(n.cond(), row, lits).contains(true)) evalValue(n.thenNode(), row, lits)
-      else evalValue(n.elseNode(), row, lits)
-    case c: Cond => fail(s"condition $c evaluated as a value")
-  }
+      node: VarkaVectorIR, row: Seq[Option[Int]], lits: Array[Int]): Option[Int] =
+    VarkaReferenceEvaluator.evalValue(node, row, lits)
 
-  private def pick(a: Option[Int], b: Option[Int], op: (Int, Int) => Int): Option[Int] =
-    (a, b) match {
-      case (Some(x), Some(y)) => Some(op(x, y))
-      case (Some(x), None) => Some(x)
-      case (None, y) => y
-    }
-
-  /** Kleene three-valued logic; `None` is unknown, and only known-true selects THEN. */
   private def evalCond(
-      cond: Cond, row: Seq[Option[Int]], lits: Array[Int]): Option[Boolean] = cond match {
-    case n: Compare =>
-      for (l <- evalValue(n.left(), row, lits); r <- evalValue(n.right(), row, lits)) yield {
-        n.op() match {
-          case CompareOp.LT => l < r
-          case CompareOp.LE => l <= r
-          case CompareOp.GT => l > r
-          case CompareOp.GE => l >= r
-          case CompareOp.EQ => l == r
-        }
-      }
-    case n: And =>
-      (evalCond(n.left(), row, lits), evalCond(n.right(), row, lits)) match {
-        case (Some(false), _) | (_, Some(false)) => Some(false)
-        case (Some(true), Some(true)) => Some(true)
-        case _ => None
-      }
-    case n: Or =>
-      (evalCond(n.left(), row, lits), evalCond(n.right(), row, lits)) match {
-        case (Some(true), _) | (_, Some(true)) => Some(true)
-        case (Some(false), Some(false)) => Some(false)
-        case _ => None
-      }
-    case n: Not => evalCond(n.child(), row, lits).map(!_)
-    // The first total condition (task 20): IS NOT NULL never returns unknown - a null
-    // operand is a definite false, not a missing answer.
-    case n: IsNotNull => Some(evalValue(n.child(), row, lits).isDefined)
-  }
+      cond: Cond, row: Seq[Option[Int]], lits: Array[Int]): Option[Boolean] =
+    VarkaReferenceEvaluator.evalCond(cond, row, lits)
 
   private def defaultData(col: Int, i: Int): Int = (i * (col + 3)) % 23 - 11
 
