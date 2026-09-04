@@ -757,11 +757,174 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val roots = Seq[VarkaVectorIR](
       new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
       new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
-      new DayOfYear(new ColumnRef(0)), new LastDay(new ColumnRef(0)))
+      new DayOfYear(new ColumnRef(0)), new LastDay(new ColumnRef(0)),
+      new TruncDate(new ColumnRef(0), TruncLevel.YEAR),
+      new TruncDate(new ColumnRef(0), TruncLevel.MONTH),
+      new TruncDate(new ColumnRef(0), TruncLevel.QUARTER))
     for (julian <- Seq(true, false)) {
       checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
         nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
         ctx = s"julianMap=$julian", options = VarkaEmitOptions.DEFAULTS.withJulianMap(julian))
+    }
+  }
+
+  // Task 35: trunc(date, YEAR | MONTH | QUARTER), two lowerings behind VarkaEmitOptions.truncDate.
+  private val truncRoots = Seq[VarkaVectorIR](
+    new TruncDate(new ColumnRef(0), TruncLevel.YEAR),
+    new TruncDate(new ColumnRef(0), TruncLevel.MONTH),
+    new TruncDate(new ColumnRef(0), TruncLevel.QUARTER))
+
+  private val truncForms = Seq(VarkaEmitOptions.TruncDateForm.SUBTRACT,
+    VarkaEmitOptions.TruncDateForm.RECOMPOSE)
+
+  test("task 35: trunc matches DateTimeUtils.truncDate over the calendar boundaries, under " +
+      "both lowerings and both prefix forms, and its date output feeds further arithmetic") {
+    // The boundary set is the calendar family's: year and era edges, February in leap, common
+    // and century years, every month-length boundary, and the covered range's own ends. The
+    // reference is DateTimeUtils.truncDate, the definition. The two lowerings agreeing with it
+    // is them agreeing with each other, which keeps whichever is not the default a live
+    // reference variant (FloorMod7's precedent). The date_add over the MONTH form is the
+    // DateType output surviving a second operation in the same chain, which the milestone
+    // row asks for and which a single-column test cannot show.
+    val chained = new AddDays(new TruncDate(new ColumnRef(0), TruncLevel.MONTH),
+      new LiteralSlot(0))
+    for (form <- truncForms; julian <- Seq(true, false); neri <- Seq(true, false)) {
+      val options = VarkaEmitOptions.DEFAULTS.withTruncDate(form).withJulianMap(julian)
+        .withNeriSchneiderMonth(neri)
+      checkMatrix(truncRoots :+ chained, 1, Array(5), Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
+        ctx = s"trunc $form julianMap=$julian neri=$neri", options = options)
+    }
+  }
+
+  test("task 35: every trunc level and every month of two years, quarter starts included") {
+    // Day-by-day over 2023 (common) and 2024 (leap), so every quarter start and every month
+    // start is crossed in both year kinds rather than sampled - the four-way quarter select
+    // and the leap-adjusted starts are what this sweep is for.
+    val start = LocalDate.of(2023, 1, 1).toEpochDay.toInt
+    val days = (0 until 731).map(start + _)
+    def day(c: Int, i: Int): Int = if (i < days.length) days(i) else i * 9973 - 400000
+    for (form <- truncForms) {
+      checkMatrix(truncRoots, 1, Array.empty[Int], Seq(731),
+        nullPatterns.map(p => Seq(p._2)), data = day, ctx = s"trunc two years $form",
+        options = VarkaEmitOptions.DEFAULTS.withTruncDate(form))
+    }
+  }
+
+  test("task 35: trunc shares the calendar prefix with a sibling extraction over the same date") {
+    // trunc(d, 'MONTH') beside year(d) in one loop method runs the civil-from-days prefix once,
+    // asserted the way task 32's own tests do: the shared kernel's dense loop carries fewer
+    // IntVector calls than the unshared one, by at least the prefix's own op count.
+    val roots = Seq[VarkaVectorIR](new Year(new ColumnRef(0)),
+      new TruncDate(new ColumnRef(0), TruncLevel.MONTH))
+    val wide = VarkaEmitOptions.DEFAULTS.withGroupBudget(200)
+    val shared = laneOps(emitMulti(roots, 1, 0, wide)._2, "loopDense0")
+    val unshared = laneOps(emitMulti(roots, 1, 0, wide.withShareChronoPrefix(false))._2,
+      "loopDense0")
+    assert(unshared - shared >= 20,
+      s"expected the prefix to be shared: $shared IntVector ops shared vs $unshared unshared")
+  }
+
+  test("task 35: the trunc tails cost what PLAN_TASK_35.md section 8 registered, per level " +
+      "and form, and adding the node moved no other node's bytes") {
+    // Off the class file, like the task 53 and 54 registers, at the shipped prefix options.
+    // The DayOfYear arm was refactored onto emitJanuaryDayOfYear for this task, so its count
+    // is pinned too: the extraction's bytes must not have moved.
+    val col = new ColumnRef(0)
+    def ops(root: VarkaVectorIR, form: VarkaEmitOptions.TruncDateForm): Int =
+      laneOps(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS.withTruncDate(form))._2,
+        "loopDense0")
+    val dayOfYear = ops(new DayOfYear(col), VarkaEmitOptions.TruncDateForm.SUBTRACT)
+    val month = ops(new Month(col), VarkaEmitOptions.TruncDateForm.SUBTRACT)
+    val dayOfMonth = ops(new DayOfMonth(col), VarkaEmitOptions.TruncDateForm.SUBTRACT)
+    val registered = Seq(
+      ("dayofyear", new DayOfYear(col), VarkaEmitOptions.TruncDateForm.SUBTRACT, 43),
+      ("trunc YEAR, subtract", new TruncDate(col, TruncLevel.YEAR),
+        VarkaEmitOptions.TruncDateForm.SUBTRACT, 45),
+      ("trunc MONTH, subtract", new TruncDate(col, TruncLevel.MONTH),
+        VarkaEmitOptions.TruncDateForm.SUBTRACT, 36),
+      ("trunc QUARTER, subtract", new TruncDate(col, TruncLevel.QUARTER),
+        VarkaEmitOptions.TruncDateForm.SUBTRACT, 62),
+      ("trunc YEAR, recompose", new TruncDate(col, TruncLevel.YEAR),
+        VarkaEmitOptions.TruncDateForm.RECOMPOSE, 70),
+      ("trunc MONTH, recompose", new TruncDate(col, TruncLevel.MONTH),
+        VarkaEmitOptions.TruncDateForm.RECOMPOSE, 74),
+      ("trunc QUARTER, recompose", new TruncDate(col, TruncLevel.QUARTER),
+        VarkaEmitOptions.TruncDateForm.RECOMPOSE, 79))
+    // The subtract MONTH form is dayofmonth's tail with the increment replaced by the
+    // subtraction (36 against 36), and YEAR is dayofyear's plus two (45 against 43).
+    assert(month === 35 && dayOfMonth === 36 && dayOfYear === 43,
+      s"the siblings moved: month=$month dayofmonth=$dayOfMonth dayofyear=$dayOfYear")
+    val counted = registered.map { case (name, root, form, _) => (name, ops(root, form)) }
+    assert(counted.map(_._2) === registered.map(_._4),
+      s"the register: ${counted.map { case (n, c) => s"$n=$c" }.mkString(", ")}; " +
+        s"month=$month dayofmonth=$dayOfMonth dayofyear=$dayOfYear")
+  }
+
+  test("the emitted trunc kernels match DateTimeUtils.truncDate over the whole covered range " +
+      "(opt-in: -Dvarka.sweep=true; task 35)") {
+    // The gate that found the leap-flag constant tasks 34 and 36 each shipped wrong, and
+    // which no boundary list caught: every day the narrowed prefix covers, through the real
+    // emitted kernel, per level, under both lowerings and both prefix forms.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to sweep the emitted kernels")
+    for (form <- truncForms; julian <- Seq(true, false); neri <- Seq(true, false)) {
+      sweepTrunc(VarkaEmitOptions.DEFAULTS.withTruncDate(form).withJulianMap(julian)
+        .withNeriSchneiderMonth(neri))
+    }
+  }
+
+  private def sweepTrunc(options: VarkaEmitOptions): Unit = {
+    val (kernel, loader) = load(emitMulti(truncRoots, 1, 0, options))
+    val levels = Seq(DateTimeUtils.TRUNC_TO_YEAR, DateTimeUtils.TRUNC_TO_MONTH,
+      DateTimeUtils.TRUNC_TO_QUARTER)
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val chunk = 1 << 16
+        val data = alloc(arena, chunk * 4L)
+        val validity = alloc(arena, (chunk + 7) / 8L)
+        validity.fill(0xFF.toByte)
+        val outs = truncRoots.map(_ => makeOutput(arena, chunk))
+        var day = VarkaChrono.NARROW_MIN_DAYS
+        var mismatches = 0
+        while (day <= VarkaChrono.NARROW_MAX_DAYS) {
+          val n = math.min(chunk, VarkaChrono.NARROW_MAX_DAYS - day + 1)
+          var i = 0
+          while (i < n) {
+            data.set(ValueLayout.JAVA_INT, i * 4L, day + i)
+            i += 1
+          }
+          val status = kernel.run(Array(data.address()), Array(validity.address()), Array(0),
+            outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
+            Array.empty[Int], n)
+          assert(status === 0, s"the kernel declined an in-range batch at day $day")
+          i = 0
+          while (i < n) {
+            val d = day + i
+            var o = 0
+            while (o < levels.length) {
+              val got = outs(o)._1.get(ValueLayout.JAVA_INT, i * 4L)
+              val want = DateTimeUtils.truncDate(d, levels(o))
+              if (got != want) {
+                mismatches += 1
+                if (mismatches < 4) {
+                  fail(s"day $d level ${levels(o)} under ${options.canonical()}: " +
+                    s"emitted $got, DateTimeUtils.truncDate $want")
+                }
+              }
+              o += 1
+            }
+            i += 1
+          }
+          day += n
+        }
+        assert(mismatches === 0, s"the emitted kernels disagreed on $mismatches days")
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
     }
   }
 
@@ -1787,20 +1950,22 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "17=(dayOfMonth 1)",
     "18=(quarter 1)",
     "19=(lastDay 1)",
-    "20=(least 18 19)",
-    "21=(greatest 17 20)",
-    "22=(least 16 21)",
-    "23=(dayOfYear 1)",
-    "24=(greatest 22 23)",
-    "25=(dayOfWeek 1)",
-    "26=(dateDiff 24 25)",
-    "27=(weekDay 1)",
-    "28=(nextDay 1 2)",
-    "29=(addMonths 1 2)",
-    "30=(least 28 29)",
-    "31=(least 27 30)",
-    "32=(least 26 31)",
-    "33=(if 10 13 32)").mkString("\n")
+    "20=(truncDate:YEAR 1)",
+    "21=(least 19 20)",
+    "22=(least 18 21)",
+    "23=(greatest 17 22)",
+    "24=(least 16 23)",
+    "25=(dayOfYear 1)",
+    "26=(greatest 24 25)",
+    "27=(dayOfWeek 1)",
+    "28=(dateDiff 26 27)",
+    "29=(weekDay 1)",
+    "30=(nextDay 1 2)",
+    "31=(addMonths 1 2)",
+    "32=(least 30 31)",
+    "33=(least 29 32)",
+    "34=(least 28 33)",
+    "35=(if 10 13 34)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -1844,7 +2009,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val chrono = new Greatest(
       new Least(
         new Greatest(new Year(col), new Month(col)),
-        new Greatest(new DayOfMonth(col), new Least(new Quarter(col), new LastDay(col)))),
+        new Greatest(new DayOfMonth(col),
+          new Least(new Quarter(col),
+            new Least(new LastDay(col), new TruncDate(col, TruncLevel.YEAR))))),
       new DayOfYear(col))
     val everyNode = new IfElse(
       cond,
@@ -1853,7 +2020,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         new Least(new WeekDay(col),
           new Least(new NextDay(col, lit), new AddMonths(col, lit)))))
     val (_, bytes) = emitMulti(Seq(everyNode), 1, 1)
-    assert(VarkaDebugInfoReader.lineMap(bytes) === pinnedLineMap)
+    val lineMap = VarkaDebugInfoReader.lineMap(bytes)
+    assert(lineMap === pinnedLineMap, s"re-pin pinnedLineMap from this output:\n$lineMap")
     // The DAG, not a tree: col:0 is written once as line 1 and pointed at sixteen times. The
     // Record.toString rendering this replaced inlined every subtree, so line 25 alone carried
     // the whole IR and the key grew quadratically in exactly the sharing the emitter exploits.

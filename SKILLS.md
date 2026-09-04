@@ -1179,6 +1179,23 @@ above 4 KB plus one byte per row; one warning per task on two consecutive suspec
 allocates on purpose - the positive case is not a polluted Vector API loop, because making the shared
 test JVM box would degrade every vector suite after it.
 
+## A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic
+
+Task 35, the third of the four recipe tasks (34-37) to be executed. Its section 2 arithmetic
+was verified in planning and was right on the first run under every variant; every correction
+the build needed was to the recipe's picture of the emitter, and the re-plan written six weeks
+earlier (its section 7) had itself gone stale in three places by build time: the leap flag's
+signature (seven parameters, then one), a helper the re-plan assumed would exist (it did not;
+the code was inline in another arm), and the weight constants (two values each moved twice).
+The lesson for writing such recipes: pin the arithmetic in a verification script, which
+survives, and describe the emitter by *what to look for* - "the method that leaves the leap
+mask", "the switch that throws on an unknown calendar node" - rather than by signatures and
+numbers, which do not. The one thing that reliably told the builder what had moved was the
+compiler: every exhaustive switch over the sealed IR family fails to compile until the new
+record is handled, and the two that are not exhaustive (`tailReadsMarchMonth`, `chronoChild`)
+throw at emit time on the first test. The hand-maintained lists are the ones to check by hand:
+the fuzzer's node generator and the two pinned fixtures.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
