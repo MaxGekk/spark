@@ -21,8 +21,13 @@
 #   dev/varka_emit.sh "year(d)"
 #   dev/varka_emit.sh "year(d)" "month(d)" --options shareChronoPrefix=false
 #   dev/varka_emit.sh "date_add(d, 7)" --columns d:date --asm
+#   dev/varka_emit.sh "year(d)" "month(d)" "add_months(d, 1)" --table \
+#     --variant neriSchneiderMonth=false
 #
-# Everything but --asm is passed through to VarkaEmitDump (catalyst test scope),
+# Everything but --asm is passed through to VarkaEmitDump (catalyst test scope);
+# --table prints the markdown op-count table a plan registers (one row per
+# expression, one column per --variant, deltas against the defaults).
+# Otherwise VarkaEmitDump
 # which prints the IR, the shape hash, and per emitted method its bytecode size,
 # IntVector and VectorMask invocation counts and line-map entries. --asm runs the
 # kernel hot under -XX:CompileCommand=print for loopDense0, saves the full
@@ -47,7 +52,7 @@ for a in "${pass[@]}"; do quoted+=" \"$a\""; done
 
 if [ "$asm" -eq 0 ]; then
   build/sbt -batch "catalyst/Test/runMain $main$quoted" 2>&1 | sed -E 's/^\[(info|error)\] ?//' \
-    | sed -n '/^entry /,$p' | grep -v -E '^\[(success|warn)\]|^WARNING: '
+    | sed -n '/^entry \|^| expression/,$p' | grep -v -E '^\[(success|warn)\]|^WARNING: '
   exit 0
 fi
 

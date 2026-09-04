@@ -95,13 +95,35 @@ lengths and `VarkaEmitOptions` variants against the shared
 with `-Dvarka.fuzz.seed=<seed> -Dvarka.fuzz.only=<iteration>`. A new option is
 fuzzed the day it lands, since the suite toggles every `with*` on the record.
 
+A regeneration ends with the requote: `dev/varka_bench_diff.py --git HEAD <file>
+--requote` lists, under each moved row, every document line that quotes its old
+number, and the regeneration is done when that list is empty or every line left
+says on purpose that it quotes the number a change moved away from. The checks
+that need volume run from `dev/varka_nightly.sh` - the canary, the fuzzer at ten
+thousand iterations with the day's seed, the exhaustive sweeps, optionally the
+gate - into a dated log under `target/varka-nightly/`.
+
+A task starts with `dev/varka_task_new.sh <n> "<title>"`: the worktree and
+branch off master, the plan file from `plans/TEMPLATE_TASK.md` (the sections
+above, with guidance under each that is deleted as they are filled), and the
+pre-commit hook installed. The first commit is the plan, once its admission
+check is done.
+
 For an emitter question, `dev/varka_emit.sh "year(d)" "month(d)"` prints what
 a projection compiles to, its shape hash, and per emitted method the bytecode
 size and the `IntVector`/`VectorMask` invocation counts on the scale the
 emitter suite's op-count tests use - so a plan's registered op counts come
 from the tool, not from reading the emitter. `--asm` adds C2's assembly for the
 dense loop and its mnemonic frequencies; `--options k=v` selects any
-`VarkaEmitOptions` variant by name.
+`VarkaEmitOptions` variant by name. `--table --variant k=v` prints the
+op-count table a plan registers instead - one row per expression, one column
+per variant, deltas against the defaults - ready to paste.
+
+`-XX:+PrintAssembly`, and so `--asm` and the assembly suite, need the hsdis
+disassembler plugin, which no JDK ships. `dev/varka_hsdis_build.sh` builds it
+in seconds from the JDK's one source file and the distribution's capstone
+library, without a JDK build, and checks HotSpot loads it. Worktrees are
+listed and the merged ones removed with `dev/varka_worktree.sh list|gc`.
 
 `SKILLS.md` at the repository root is where a lesson goes when it will outlive
 the task that learned it - especially the negative results, which are what stop

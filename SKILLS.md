@@ -1163,6 +1163,24 @@ in `PLAN_MILESTONE_4.md`). Two tells, either sufficient: an allocation inside a 
 the disassembly (task 55 makes it an assertion), and a "callee changed to" line naming a second
 species class in `-XX:+PrintInlining` output.
 
+### The runtime half: the evaluator samples allocation, because nothing else can see a box
+
+A boxing kernel is correct, so the ghost fallback, the differential suites and the fuzzer are all
+blind to it; the assembly suite (task 55) catches it in the test JVM, and the test JVM is clean by
+construction. `VarkaKernelEvaluator` therefore samples the same signal at run time: bytes the thread
+allocated across `run`, from `ThreadMXBean`, on a schedule that skips the JIT warm-up (an
+interpreted or C1 Vector API loop allocates every vector, which C2's escape analysis then removes -
+sampling batch 1 would report boxing that is about to stop; the evaluator's wiring test watches
+exactly that, every early sample suspect and the tail clean at a constant 520 bytes per call). How
+long the warm-up lasts is the machine's business: this laptop had C2's loop inside 300 batches of
+1024 rows, GitHub's runner took 1112 - so the wiring test runs rounds of batches until a whole round
+samples clean rather than asserting a fixed tail, and a host that slow sees the default schedule's
+first two samples (512 and 1024) both inside the warm-up, which is one spurious warning. Batch 512
+first, then powers of two and every 4096th - two million rows at the default batch size; suspect
+above 4 KB plus one byte per row; one warning per task on two consecutive suspect samples, a
+`numSuspectAllocationSamples` metric, and a `KernelAllocation` JFR event on every sample. The decisions live in `VarkaAllocationSampler` and are unit-tested against a loop that
+allocates on purpose - the positive case is not a polluted Vector API loop, because making the shared
+test JVM box would degrade every vector suite after it.
 ## A range guard belongs where the value is made, not where it is read
 
 Task 52. Task 26 checked the narrowed civil-from-days range at every calendar extraction, per
@@ -1239,9 +1257,17 @@ is the decision. Three things came out of building it.
 - `VarkaIrFuzzSuite` fuzzes the emitter: random IR over random null patterns, lengths
   and option variants against the shared reference evaluator, reproducible by seed
   and iteration.
+- A task starts with `dev/varka_task_new.sh <n> "<title>"` (worktree, branch, plan from
+  `sql/varka/plans/TEMPLATE_TASK.md`, hook); a regeneration ends with
+  `dev/varka_bench_diff.py --git HEAD <file> --requote`; the volume checks run from
+  `dev/varka_nightly.sh`.
 - Before registering op counts in a plan, print them: `dev/varka_emit.sh "<sql>"`
   gives the IR, the shape hash and per-method `IntVector` invocation counts on the
-  suite's own scale; `--asm` adds C2's assembly for the dense loop.
+  suite's own scale; `--asm` adds C2's assembly for the dense loop; `--table
+  --variant k=v` prints the plan's op-count table with deltas against the defaults.
+- `dev/varka_hsdis_build.sh` builds `hsdis-<arch>.so` from the JDK's single source
+  file against the distribution's libcapstone, no JDK build needed;
+  `dev/varka_worktree.sh gc` removes the worktrees whose PRs merged.
 
 ## A store the loop repeats per group with a constant operand is a fill the driver should do once
 
@@ -1426,7 +1452,10 @@ fastdebug build and `PrintAssembly` to see. Task 50 builds this; four things it 
 **You do not need to run the fastdebug JVM to read product assembly.** HotSpot's fourth
 fallback for locating the disassembler is `hsdis-<arch>.so` on `LD_LIBRARY_PATH`
 (`disassembler.cpp`), so a `libhsdis.so` built once against a fastdebug tree can be copied to
-`hsdis-amd64.so` and used with the *product* JVM:
+`hsdis-amd64.so` and used with the *product* JVM (and you do not need the fastdebug tree
+either: `dev/varka_hsdis_build.sh` compiles `src/utils/hsdis/capstone/hsdis-capstone.c`
+against the distribution's `libcapstone-dev` with `make/Hsdis.gmk`'s flags - a 16 KB shared
+object in under a second, the JDK headers only for `jni.h`):
 
 ```
 LD_LIBRARY_PATH=<dir with hsdis-amd64.so> java -XX:+UnlockDiagnosticVMOptions \

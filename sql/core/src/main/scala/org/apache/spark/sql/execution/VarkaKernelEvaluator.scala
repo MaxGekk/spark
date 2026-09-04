@@ -32,7 +32,9 @@ import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps, VarkaFallbackEvent, VarkaFusedKernel, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps,
+  VarkaAllocationSampler, VarkaFallbackEvent, VarkaFusedKernel, VarkaKernelAllocationEvent,
+  VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -57,7 +59,8 @@ private[sql] case class VarkaExecMetrics(
     fallbackBatchesKernel: Option[SQLMetric] = None,
     fallbackBatchesRowPath: Option[SQLMetric] = None,
     fallbackBatchesDeclined: Option[SQLMetric] = None,
-    emissionFailures: Option[SQLMetric] = None)
+    emissionFailures: Option[SQLMetric] = None,
+    suspectAllocationSamples: Option[SQLMetric] = None)
 
 private[sql] object VarkaExecMetrics {
 
@@ -85,7 +88,9 @@ private[sql] object VarkaExecMetrics {
     "numFallbackBatchesDeclined" -> SQLMetrics.createMetric(
       sparkContext, "batches falling back: a value outside a lowering's range (task 26)"),
     "numEmissionFailures" -> SQLMetrics.createMetric(
-      sparkContext, "tasks that could not emit or define the kernel class"))
+      sparkContext, "tasks that could not emit or define the kernel class"),
+    "numSuspectAllocationSamples" -> SQLMetrics.createMetric(
+      sparkContext, "sampled kernel batches that allocated like a boxing Vector API loop"))
 
   /** [[nodeMetrics]] plus the projection nodes' static residual-entry count; a filter's
    * residual is a visible row `FilterExec` above it rather than a number. */
@@ -102,7 +107,8 @@ private[sql] object VarkaExecMetrics {
     fallbackBatchesKernel = Some(metric("numFallbackBatchesKernel")),
     fallbackBatchesRowPath = Some(metric("numFallbackBatchesRowPath")),
     fallbackBatchesDeclined = Some(metric("numFallbackBatchesDeclined")),
-    emissionFailures = Some(metric("numEmissionFailures")))
+    emissionFailures = Some(metric("numEmissionFailures")),
+    suspectAllocationSamples = Some(metric("numSuspectAllocationSamples")))
 }
 
 /**
@@ -306,6 +312,34 @@ private[sql] abstract class VarkaEvaluatorBase(
     } else {
       recordRefusedBatch(input)
       fallbackPath
+    }
+  }
+
+  // The species-pollution check (SKILLS.md, "Every operator the plans rely on ..."): a kernel
+  // that boxes still answers correctly, so no fallback path and no differential test can see
+  // it - only its allocation rate can. Sampled on the schedule VarkaAllocationSampler explains,
+  // never on every batch: the two management reads cost more than a short kernel call.
+  private var kernelBatches = 0L
+  private val allocationSampling = VarkaAllocationSampler.supported()
+  private val allocationTracker = new VarkaAllocationSampler.Tracker
+
+  /** One allocation sample of the kernel call: evented always, counted and warned when suspect. */
+  private def recordAllocationSample(allocatedBytes: Long, rows: Int): Unit = {
+    val suspect = VarkaAllocationSampler.suspect(allocatedBytes, rows)
+    VarkaKernelEvaluator.emitAllocationEvent(kernelIdentity, kernelBatches, rows, allocatedBytes,
+      suspect)
+    if (suspect) {
+      metrics.suspectAllocationSamples.foreach(_ += 1)
+      if (allocationTracker.record(true)) {
+        logWarning(s"The Varka SIMD kernels $kernelIdentity allocated $allocatedBytes bytes " +
+          s"over a $rows-row batch (batch $kernelBatches), and did so on the previous sample " +
+          "too. A kernel that runs as emitted allocates nothing per row; this rate means the " +
+          "Vector API is boxing its vectors, most likely because two vector species of one " +
+          "lane type ran hot in this JVM (SKILLS.md, the species-pollution section). Results " +
+          "are still correct; the kernel is several times slower than it should be.")
+      }
+    } else {
+      allocationTracker.record(false)
     }
   }
 
@@ -520,6 +554,9 @@ private[sql] abstract class VarkaEvaluatorBase(
    * machinery that shares the same try (task-21 review). A fatal error passes unmarked.
    */
   protected def invokeFused(runner: FusedRunner, len: Int): Unit = {
+    kernelBatches += 1
+    val sampled = allocationSampling && VarkaKernelEvaluator.allocationSchedule.due(kernelBatches)
+    val before = if (sampled) VarkaAllocationSampler.allocatedBytes() else 0L
     val status = try {
       if (VarkaColumnarToRowExec.isFailKernelForTesting) {
         // scalastyle:off throwerror
@@ -531,6 +568,7 @@ private[sql] abstract class VarkaEvaluatorBase(
     } catch {
       case e if isCatchable(e) => throw new VarkaKernelFailure(e)
     }
+    if (sampled) recordAllocationSample(VarkaAllocationSampler.allocatedBytes() - before, len)
     // A non-zero status means the kernel met a value its lowering is not defined over and
     // declined the batch (task 26). The outputs it wrote are not answers; the batch takes the
     // caller's fallback path, which recomputes it row by row. Signalled by a throw because
@@ -1179,6 +1217,30 @@ private[execution] object VarkaKernelEvaluator {
       event.commit()
     }
   }
+
+  /** The allocation-sample event; populated only while a recording has it enabled. */
+  private[execution] def emitAllocationEvent(
+      kernelIdentity: => String,
+      batchIndex: Long,
+      rows: Int,
+      allocatedBytes: Long,
+      suspect: Boolean): Unit = {
+    val event = new VarkaKernelAllocationEvent
+    if (event.isEnabled()) {
+      event.kernelIdentity = kernelIdentity
+      event.batchIndex = batchIndex
+      event.rows = rows
+      event.allocatedBytes = allocatedBytes
+      event.suspect = suspect
+      event.commit()
+    }
+  }
+
+  // Which kernel batches the allocation sampler measures. The production schedule skips the
+  // JIT warm-up (see VarkaAllocationSampler); suites set a dense one so a short query samples,
+  // and restore the default in a finally.
+  @volatile private[execution] var allocationSchedule: VarkaAllocationSampler.Schedule =
+    VarkaAllocationSampler.Schedule.DEFAULT
 
   // The (directory, SourceFile) pairs this JVM has dumped, so a shape's class file is
   // written once per process rather than once per task - and exactly once per process,
