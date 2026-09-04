@@ -18,8 +18,8 @@
 # Run the date-surface benchmark (task 62) on several Spark distributions, one
 # after another on an idle machine, and print the table that compares them.
 #
-#   dev/varka_bench_surface.sh [--rows N] [--driver-memory 8g] [--force] [--only REGEX] \
-#       [--skip-build] \
+#   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--driver-memory 16g] \
+#       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--skip-build] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
 #
 #   dev/varka_bench_surface.sh \
@@ -27,6 +27,13 @@
 #       spark-4.2.0-jdk25=/opt/spark-4.2.0-bin-hadoop3:/usr/lib/jvm/java-25-openjdk-amd64 \
 #       varka-off-jdk25=$PWD:/usr/lib/jvm/java-25-openjdk-amd64 \
 #       varka-jdk25=$PWD:/usr/lib/jvm/java-25-openjdk-amd64:varka
+#
+# The defaults, 500M rows in one partition under a 16g driver, are the job-size
+# rule of PLAN_MILESTONE_4.md 2.29 as PLAN_TASK_62.md 2.6 measured it: one
+# partition because every task on local[1] costs about two milliseconds of
+# scheduling and commit round trip, and 500M rows because the fastest Varka
+# rows run near half a nanosecond per row and need 250 ms of executor time
+# for a 12 ms job to be under 5% of them.
 #
 # Each LABEL names one run and its results file,
 # sql/varka/bench/benchmarks/DateSurface-<LABEL>-results.txt. SPARK_HOME is a
@@ -61,10 +68,12 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 usage() { sed -n '17,50p' "$0"; exit 2; }
-rows=200000000; force=0; only=""; build=1; memory=8g; dists=()
+rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --rows) rows="$2"; shift 2 ;;
+    --partitions) partitions="$2"; shift 2 ;;
+    --max-fixed-share) share="$2"; shift 2 ;;
     --driver-memory) memory="$2"; shift 2 ;;
     --force) force=1; shift ;;
     --only) only="$2"; shift 2 ;;
@@ -128,7 +137,7 @@ engine_jar() {
   local j
   j="$(ls sql/varka/engine/target/varka-engine-*.jar 2>/dev/null | grep -v -- '-tests' | head -1)"
   if [ -z "$j" ]; then
-    echo "== building the engine jar: build/mvn -f sql/varka/engine/pom.xml -q -DskipTests package" >&2
+    echo "== building the engine jar (build/mvn -f sql/varka/engine/pom.xml package)" >&2
     build/mvn -f sql/varka/engine/pom.xml -q -DskipTests package >&2
     j="$(ls sql/varka/engine/target/varka-engine-*.jar 2>/dev/null | grep -v -- '-tests' | head -1)"
   fi
@@ -156,7 +165,7 @@ for spec in "${dists[@]}"; do
         submit+=(--conf spark.sql.codegen.varka.enabled=true
           --conf "spark.sql.cache.serializer=$arrow_serializer"
           --driver-class-path "$(engine_jar)")
-        driver+=(--expect-fused --max-fixed-share 5) ;;
+        driver+=(--expect-fused --max-fixed-share "$share") ;;
       *=*) submit+=(--conf "$c") ;;
       *) echo "$label: conf '$c' is not key=value" >&2; exit 1 ;;
     esac
@@ -165,7 +174,8 @@ for spec in "${dists[@]}"; do
   echo "== $label: $spark_home under $java_home -> $out"
   JAVA_HOME="$java_home" "$spark_home/bin/spark-submit" "${submit[@]}" \
     --class org.apache.spark.sql.varka.bench.DateSurfaceBenchmark "$jar" \
-    --label "$label" --rows "$rows" --out "$out" ${only:+--only "$only"} "${driver[@]}" \
+    --label "$label" --rows "$rows" --partitions "$partitions" --out "$out" \
+    ${only:+--only "$only"} "${driver[@]}" \
     --provenance "commit=$commit" --provenance "datapath=$datapath" \
     --provenance "canary=$canary" --provenance "host=$(hostname -s)" \
     --provenance "spark home=$spark_home"

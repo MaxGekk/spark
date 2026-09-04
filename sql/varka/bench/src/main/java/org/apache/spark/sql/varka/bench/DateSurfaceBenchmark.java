@@ -52,7 +52,7 @@ import scala.jdk.javaapi.CollectionConverters;
  *
  * <pre>
  *   spark-submit --master local[1] --driver-memory 8g --class ...DateSurfaceBenchmark \
- *     varka-bench.jar --label spark-4.2.0 --rows 200000000 --out FILE [--iters 5]
+ *     varka-bench.jar --label spark-4.2.0 --rows 500000000 --out FILE [--partitions 1] [--iters 5]
  *     [--warmup-seconds 2] [--min-seconds 2] [--only REGEX] [--provenance key=value]...
  *     [--expect-fused] [--max-fixed-share PERCENT]
  * </pre>
@@ -62,9 +62,12 @@ import scala.jdk.javaapi.CollectionConverters;
  * fails it when a Varka-planned row's fixed share, {@code (wall - executor) / wall}, is over the
  * given percent - the job-size rule, checked from the numbers the file carries.
  *
- * The row count is the job-size rule of PLAN_MILESTONE_4.md 2.29: enough rows that the job's
- * fixed cost is under 5% of every Varka row's wall time, which the file makes checkable by
- * printing executor time beside wall time.
+ * The row count and the partition count are the job-size rule of PLAN_MILESTONE_4.md 2.29:
+ * enough rows in few enough tasks that the job's fixed cost is under 5% of every Varka row's
+ * wall time, which the file makes checkable by printing executor time beside wall time. One
+ * partition is the default because on {@code local[1]} every task costs about two
+ * milliseconds of scheduling and commit round trip, which fifty tasks turn into a tenth of
+ * a second - invisible behind stock Spark's seconds, a third of a Varka row's.
  */
 public final class DateSurfaceBenchmark {
 
@@ -130,7 +133,8 @@ public final class DateSurfaceBenchmark {
 
   static final class Args {
     String label = "unnamed";
-    long rows = 200_000_000L;
+    long rows = 500_000_000L;
+    int partitions = 1;
     Path out = null;
     int iters = 5;
     double warmupSeconds = 2.0;
@@ -148,6 +152,7 @@ public final class DateSurfaceBenchmark {
         switch (k) {
           case "--label" -> a.label = need(k, v);
           case "--rows" -> a.rows = Long.parseLong(need(k, v));
+          case "--partitions" -> a.partitions = Integer.parseInt(need(k, v));
           case "--out" -> a.out = Path.of(need(k, v));
           case "--iters" -> a.iters = Integer.parseInt(need(k, v));
           case "--warmup-seconds" -> a.warmupSeconds = Double.parseDouble(need(k, v));
@@ -203,11 +208,12 @@ public final class DateSurfaceBenchmark {
     };
     PrintStream log = System.out;
     try {
-      buildTable(spark, args.rows);
+      buildTable(spark, args.rows, args.partitions);
       StringBuilder file = new StringBuilder();
       Map<String, String> prov =
           Provenance.collect(args.label, spark.version(), load, args.provenance);
       prov.put("rows", Long.toString(args.rows));
+      prov.put("partitions", Integer.toString(args.partitions));
       prov.put("methodology", String.format(Locale.ROOT,
           "%d+ iterations over %.0fs windows after %.0fs warm-up; wall time by nanoTime, "
               + "executor time as the sum of TaskMetrics.executorRunTime over the iteration",
@@ -236,12 +242,10 @@ public final class DateSurfaceBenchmark {
   }
 
   /**
-   * The table: the generator {@code VarkaThroughputBenchmark} uses, in partitions of 4M rows so
-   * a run is one job of many tasks rather than one task (the per-job cost is paid once either
-   * way; the per-task cost stays in the executor's share where the file shows it).
+   * The table: the generator {@code VarkaThroughputBenchmark} uses, in the given number of
+   * partitions (one by default; see the class comment on what a task costs).
    */
-  static void buildTable(SparkSession spark, long rows) {
-    long partitions = Math.max(1L, (rows + 4_000_000L - 1) / 4_000_000L);
+  static void buildTable(SparkSession spark, long rows, int partitions) {
     spark.sql(String.format(Locale.ROOT,
         "SELECT CASE WHEN id %% 31 = 0 THEN NULL"
             + " ELSE date_add(DATE'2020-01-01', CAST(id %% 1460 AS INT)) END AS d,"
@@ -292,7 +296,9 @@ public final class DateSurfaceBenchmark {
       measureShape(spark, executor, batches, drain, "projection, columnar consumer", q, body,
           args, warmup, min, wall, exec, plans, shares, log, entry, violations);
     }
+    Long selected = null;
     if (entry.filter() != null) {
+      selected = spark.sql(filterQuery(entry)).collectAsList().get(0).getLong(0);
       String qc = filterColumnarQuery(entry);
       Runnable bodyc = () -> spark.sql(qc).write().format("noop").mode("overwrite").save();
       measureShape(spark, executor, batches, drain, "filter, columnar consumer", qc, bodyc,
@@ -307,6 +313,10 @@ public final class DateSurfaceBenchmark {
     sb.append(Harness.table(name, args.rows, wall)).append(System.lineSeparator());
     sb.append(Harness.table(name + ", executor time", args.rows, exec));
     sb.append("# plan: ").append(String.join(", ", plans)).append(System.lineSeparator());
+    if (selected != null) {
+      sb.append(String.format(Locale.ROOT, "# selectivity: %d of %d rows, %.1f%%%n", selected,
+          args.rows, 100.0 * selected / args.rows));
+    }
     sb.append("# fixed share (wall - executor) / wall: ").append(String.join(", ", shares))
         .append(System.lineSeparator()).append(System.lineSeparator());
     return sb.toString();

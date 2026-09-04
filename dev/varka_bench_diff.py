@@ -199,6 +199,23 @@ def within(text, label_a, label_b, threshold):
 
 
 SURFACE_NAME = re.compile(r"^(.*) over (\d+) rows(, executor time)?$")
+SELECTIVITY = re.compile(r"^# selectivity: \d+ of \d+ rows, ([\d.]+%)")
+
+
+def selectivities(text):
+    """{entry: selectivity} from the `# selectivity` lines the driver prints under a filter
+    entry's tables; the entry is the table name the line follows."""
+    out, entry = {}, None
+    for line in text.splitlines():
+        h = HEADER.match(line)
+        if h:
+            m = SURFACE_NAME.match(h.group(1).strip())
+            entry = m.group(1) if m else None
+            continue
+        m = SELECTIVITY.match(line)
+        if m and entry:
+            out[entry] = m.group(1)
+    return out
 
 
 def surface_table(specs):
@@ -206,17 +223,19 @@ def surface_table(specs):
     rate of every distribution in M rows/s, and the last distribution's ratio against each of
     the others; then the same for the executor-time tables. `specs` are LABEL=FILE, the Varka
     file last."""
-    labels, files = [], []
+    labels, files, selected = [], [], {}
     for spec in specs:
         label, _, path = spec.partition("=")
         if not path:
             raise SystemExit(f"--table wants LABEL=FILE, got {spec}")
         labels.append(label)
-        files.append(parse(read(path)))
+        text = read(path)
+        files.append(parse(text))
+        selected.update(selectivities(text))
     last_rates, order = files[-1]
     for executor in (False, True):
         title = "executor time" if executor else "wall time"
-        head = ["expression", "shape"] + [f"{l} (M rows/s)" for l in labels]
+        head = ["expression", "shape", "selects"] + [f"{l} (M rows/s)" for l in labels]
         head += [f"{labels[-1]} / {l}" for l in labels[:-1]]
         print(f"**{title}**")
         print()
@@ -226,9 +245,9 @@ def surface_table(specs):
             m = SURFACE_NAME.match(table)
             if not m or bool(m.group(3)) != executor:
                 continue
-            entry, shape = m.group(1), case.split(",")[0]
+            entry = m.group(1)
             rates = [f.get((table, case)) for f, _ in files]
-            cells = [f"`{entry}`", shape]
+            cells = [f"`{entry}`", case, selected.get(entry, "-") if "filter" in case else "-"]
             cells += [f"{r:.1f}" if r is not None else "-" for r in rates]
             for r in rates[:-1]:
                 cells.append(f"**{rates[-1] / r:.2f}x**" if r and rates[-1] else "-")

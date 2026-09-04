@@ -44,7 +44,7 @@ public class SurfaceTest {
         .config("spark.ui.enabled", "false")
         .config("spark.sql.shuffle.partitions", "1")
         .getOrCreate();
-    DateSurfaceBenchmark.buildTable(spark, 1_000L);
+    DateSurfaceBenchmark.buildTable(spark, 1_000L, 2);
   }
 
   @AfterAll
