@@ -148,12 +148,6 @@ Nothing under `src/main`. This task measures the emitter; it does not change it.
 
 ## 8. Outcome
 
-Filled in when the measurement lands: the per-op timing at both widths, the
-tier-4 compile times, whether C1 refused anywhere, and which of section 4's
-predictions held.
-
-## 8. Outcome
-
 The ladder ran at both widths, with a `-XX:+PrintCompilation` pass at each. Four
 predictions, two held, two missed - and the two that missed are the informative
 ones.

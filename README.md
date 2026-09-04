@@ -147,8 +147,15 @@ task, each with a recorded outcome:
   asserting the *instructions* the kernels compile to rather than inferring
   vectorization from a throughput ratio. Float lanes wait for the taxi
   target, and aggregation leads the follow-on ladder.
-* **Milestone 5**: *coverage* - the scope catalogue is in
-  [`sql/varka/plans/SCOPE_MILESTONE_5.md`](sql/varka/plans/SCOPE_MILESTONE_5.md),
+* **Milestone 5**: *the other lanes* - the task plan is
+  [`sql/varka/plans/PLAN_MILESTONE_5.md`](sql/varka/plans/PLAN_MILESTONE_5.md):
+  the tasks milestone 4 planned for every lane but the date's int32, moved out
+  when milestone 4 was re-scoped to the date family and the emitter under it -
+  boolean outputs, lane-width conversion, int64 lanes (`TimestampNTZ`,
+  `bigint`), ANSI integer arithmetic, `date - date`, and civil-from-days in
+  long lanes.
+* **Milestone 6**: *coverage* - the scope catalogue is in
+  [`sql/varka/plans/SCOPE_MILESTONE_6.md`](sql/varka/plans/SCOPE_MILESTONE_6.md),
   driven by a census of TPC-DS, TPC-H and the New York taxi benchmark. What that
   census says: `DateType`, the only type Varka has today, is 3.1% of the columns
   in TPC-DS and TPC-H; `DECIMAL` is the most-aggregated type and strings are 60%
