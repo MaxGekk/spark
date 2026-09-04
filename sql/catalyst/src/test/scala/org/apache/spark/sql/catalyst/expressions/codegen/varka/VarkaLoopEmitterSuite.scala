@@ -627,12 +627,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(e.getMessage.contains("IsNotNull child must be a ColumnRef"))
   }
 
-  test("a non-literal month count or weekday is rejected at analysis, naming its own node") {
-    // The two nodes share the check; the message must name the operand that failed it, not
-    // the other node's - the IR fuzzer's first failure quoted `next_day` for an add_months.
-    val months = intercept[IllegalArgumentException](
-      emitMulti(Seq(new AddMonths(new ColumnRef(0), new ColumnRef(1))), 2, 0))
-    assert(months.getMessage.contains("add_months' month count"), months.getMessage)
+  test("task 60: a non-literal month count no longer trips analysis; a non-literal weekday " +
+      "still does, naming its own node") {
+    // Task 60 widened add_months' month count to a column (like AddDays' offset, task 38); the
+    // check that used to reject both nodes together (and whose message the IR fuzzer's first
+    // failure quoted for the wrong one) now guards only next_day, whose weekday still folds
+    // into emit-time constants (task 33) rather than reading from a lane.
+    emitMulti(Seq(new AddMonths(new ColumnRef(0), new ColumnRef(1))), 2, 0)
     val weekday = intercept[IllegalArgumentException](
       emitMulti(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0))
     assert(weekday.getMessage.contains("next_day's weekday"), weekday.getMessage)
@@ -1534,6 +1535,116 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     } finally {
       loader.release()
     }
+  }
+
+  // Task 60's runtime half: the same range-guard block (now `emitRangeGuard`, generalized from
+  // task 52's `emitProducerGuard`) on AddMonths' own month count, wherever it sits - the guard
+  // protects the node's own magic-multiply arithmetic, not a further calendar consumer's.
+
+  test("task 60: a column month count declines the batch whose count leaves the range - in a " +
+      "loop lane, in an epilogue lane, and not under a null; the bounds themselves compute") {
+    val root = new AddMonths(new ColumnRef(0), new ColumnRef(1))
+    val (kernel, loader) = load(emitMulti(Seq(root), 2, 0))
+    val (kernelOff, loaderOff) = load(emitMulti(Seq(root), 2, 0, guardOff))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        // Days stay well inside the narrowed range regardless of the count under test, so a
+        // failure here is the count guard's, not the unrelated day decomposition's.
+        def day(i: Int): Int = (i * 97) % 40000 - 20000
+        def count(at: Int, value: Int)(i: Int): Int = if (i == at) value else i % 11 - 5
+        def status(k: VarkaFusedKernel, length: Int, at: Int, value: Int,
+            nullDate: Int => Boolean, nullCount: Int => Boolean): Int = {
+          val d = makeInputData(arena, length, nullDate, day)
+          val m = makeInputData(arena, length, nullCount, count(at, value))
+          runKernel2(k, d, m, makeOutput(arena, length), length)
+        }
+        val none = (_: Int) => false
+        val hi = VarkaChrono.MONTH_ARITH_MAX_MONTHS
+        val lo = VarkaChrono.MONTH_ARITH_MIN_MONTHS
+        // In range: computed, under both settings.
+        assert(status(kernel, 64, -1, 0, none, none) === 0)
+        assert(status(kernelOff, 64, -1, 0, none, none) === 0)
+        // Both bounds themselves compute - the guard is `< lo || > hi`, not `<= lo || >= hi`.
+        assert(status(kernel, 64, 3, hi, none, none) === 0)
+        assert(status(kernel, 64, 3, lo, none, none) === 0)
+        // One past each bound, in a loop lane (dense body: no nulls anywhere).
+        assert(status(kernel, 64, 3, hi + 1, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 64, 3, lo - 1, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        // The same lane in the masked body, with an unrelated null elsewhere.
+        assert(status(kernel, 64, 3, hi + 1, _ == 40, none) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        // A lane only the epilogue covers, whatever the host's lane count.
+        assert(status(kernel, 17, 16, hi + 1, none, none) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 17, 16, lo - 1, none, none) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        // The out-of-range lane under a null count, then under a null date: the row is null,
+        // its data lanes are undefined, and the batch must not be condemned.
+        assert(status(kernel, 64, 3, hi + 1, none, _ == 3) === 0)
+        assert(status(kernel, 64, 3, hi + 1, _ == 3, none) === 0)
+        assert(status(kernel, 17, 16, hi + 1, none, _ == 16) === 0)
+        // The reference variant computes every one of them - wrongly past the range, which is
+        // exactly what the metric-only differential asserts against.
+        assert(status(kernelOff, 64, 3, hi + 1, none, none) === 0)
+        assert(status(kernelOff, 17, 16, lo - 1, none, none) === 0)
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+      loaderOff.release()
+    }
+  }
+
+  test("task 60: in-range column month counts match the reference evaluator under both " +
+      "option values, with and without a further calendar reader") {
+    val root = new AddMonths(new ColumnRef(0), new ColumnRef(1))
+    val roots = Seq[VarkaVectorIR](root, new Year(root))
+    // The count cycles across the whole guarded bound, both ends included; the day stays near
+    // the epoch so add_months' own recompose never leaves the narrowed range even at the
+    // bound's most extreme shift.
+    val counts = Seq(VarkaChrono.MONTH_ARITH_MIN_MONTHS, VarkaChrono.MONTH_ARITH_MAX_MONTHS,
+      0, 1, -1, 12, -12, 100, -100)
+    val data = (c: Int, i: Int) =>
+      if (c == 0) (i * 9973) % 40000 - 20000 else counts(i % counts.length)
+    for (options <- Seq(VarkaEmitOptions.DEFAULTS, guardOff,
+        VarkaEmitOptions.DEFAULTS.withCse(false))) {
+      checkMatrix(roots, 2, Array.emptyIntArray, Seq(1, 17, 64, 65, 1000), combos(2),
+        data = data, ctx = s"task 60 ${options.canonical()}", options = options)
+    }
+  }
+
+  test("task 60: the guard is emitted only for a column-driven month count, and the literal " +
+      "form's bytes do not move") {
+    val literal = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
+    val column = new AddMonths(new ColumnRef(0), new ColumnRef(1))
+    val bodies = Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")
+    def sizes(root: VarkaVectorIR, numInputs: Int, lits: Int, options: VarkaEmitOptions)
+        : Seq[Int] = {
+      val bytes = emitMulti(Seq(root), numInputs, lits, options)._2
+      bodies.map(VarkaEmitterTestSupport.codeSize(bytes, _))
+    }
+    // The literal form: byte-identical under both settings, and identical to its shape before
+    // this task (asserted below by the register itself).
+    assert(sizes(literal, 1, 1, VarkaEmitOptions.DEFAULTS) === sizes(literal, 1, 1, guardOff))
+    // The guarded shape: every body grows by the guard, and only the guarded shape does.
+    val guarded = sizes(column, 2, 0, VarkaEmitOptions.DEFAULTS)
+    val unguarded = sizes(column, 2, 0, guardOff)
+    for ((body, (on, off)) <- bodies.zip(guarded.zip(unguarded))) {
+      assert(on > off, s"$body: expected the guard's bytes, got $on vs $off")
+    }
+  }
+
+  test("task 60: the register PLAN_TASK_60.md 3.3 predicted - the guard costs two IntVector " +
+      "compares on top of a column's load replacing a literal's broadcast") {
+    val literal = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
+    val column = new AddMonths(new ColumnRef(0), new ColumnRef(1))
+    val literalOps = laneOps(emitMulti(Seq(literal), 1, 1)._2, "loopDense0")
+    val guardedOps = laneOps(emitMulti(Seq(column), 2, 0)._2, "loopDense0")
+    val unguardedOps = laneOps(emitMulti(Seq(column), 2, 0, guardOff)._2, "loopDense0")
+    assert((literalOps, unguardedOps, guardedOps) === ((112, 112, 114)),
+      s"the register: literal=$literalOps unguarded=$unguardedOps guarded=$guardedOps")
   }
 
   test("the shared prefix survives two calendar outputs in one loop method") {

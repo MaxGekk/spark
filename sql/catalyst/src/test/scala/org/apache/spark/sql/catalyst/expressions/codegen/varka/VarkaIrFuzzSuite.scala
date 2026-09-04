@@ -139,8 +139,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
             case _ => rnd.nextInt(4) match {
               case 0 => Gen(new DayOfYear(a.node), 366)
               case 2 if numLiterals > 0 =>
-                // add_months' month count must be a literal slot, like next_day's weekday
-                // (the emitter's message for it says next_day, which is the same check).
+                // The emitter accepts a column month count too (task 60), but this fuzzer's
+                // columns hold day-magnitude values - vastly past MONTH_ARITH_MIN/MAX_MONTHS -
+                // so a column here would trip the runtime guard on every batch and decline it,
+                // leaving nothing for the status-zero assertions below to check. A literal
+                // keeps the count small and in range, the way arm 8 above keeps next_day's
+                // weekday literal because the emitter still requires it to be.
                 val m = literal()
                 Gen(new AddMonths(a.node, m.node), a.bound + m.bound * 31)
               case 3 =>

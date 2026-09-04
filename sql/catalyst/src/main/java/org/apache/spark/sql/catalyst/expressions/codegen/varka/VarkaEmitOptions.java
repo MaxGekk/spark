@@ -93,14 +93,17 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        century-then-year split this project shipped first, with its leap-day underflow
  *        correction. Same fields either way, differentially checked against each other, so the
  *        older form stays a live reference variant, on {@link FloorMod7}'s precedent.
- * @param guardDayProducers whether a {@code date_add}/{@code date_sub} whose offset is a column
- *        and whose result a calendar node reads carries a per-lane range check on that result
- *        (task 52), declining the batch to the row engine when a lane leaves the range the
- *        civil-from-days lowering is exact over. The compiler bounds every other producer at
- *        compile time; this is the one shape it cannot, so the check is at run time and at the
- *        producer rather than at each extraction (task 51 removed the latter). Off, the bytes
- *        are task 51's exactly and such a lane is computed wrongly rather than declined - a
- *        reference variant for the A/B that priced the guard, on {@link FloorMod7}'s precedent.
+ * @param guardDayProducers whether a column-driven producer carries a per-lane range check on
+ *        its own result: a {@code date_add}/{@code date_sub} whose offset is a column and whose
+ *        result a calendar node reads (task 52), against the range the civil-from-days lowering
+ *        is exact over, and an {@code add_months}/{@code date +- INTERVAL n MONTH} whose month
+ *        count is a column (task 60), against the range the magic-multiply month arithmetic is
+ *        exact over. Either check declines the batch to the row engine when a lane leaves its
+ *        range. The compiler bounds every other producer at compile time; these are the shapes
+ *        it cannot, so the check is at run time and at the producer rather than at each
+ *        extraction (task 51 removed the latter). Off, the bytes are task 51's exactly and such
+ *        a lane is computed wrongly rather than declined - a reference variant for the A/B that
+ *        priced the guard, on {@link FloorMod7}'s precedent.
  * @param truncDate which lowering {@code trunc(date, ...)} uses at the {@code YEAR} and
  *        {@code QUARTER} levels (task 35): {@link TruncDateForm#SUBTRACT} takes the day of year
  *        off the date ({@code d - dayofyear + start}), {@link TruncDateForm#RECOMPOSE} rebuilds

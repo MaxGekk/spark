@@ -1002,17 +1002,22 @@ public final class VarkaLoopEmitter {
     /** Whether the subtree holds a null-skipping node (IfElse, Greatest, Least). */
     final Map<VarkaVectorIR, Boolean> skipping = new HashMap<>();
     /**
-     * The producers that carry task 52's runtime range guard: every {@link AddDays}/{@link
-     * SubDays} whose offset is a column (not a {@link LiteralSlot}) and which some calendar
-     * node reads, directly or through further arithmetic. Empty on every kernel with no
-     * column-offset date arithmetic under a calendar node - which is what makes the guard's
-     * default cheap: nothing is planned or emitted for it then, and every such shape stays
-     * byte-identical under either setting of {@link VarkaEmitOptions#guardDayProducers}.
+     * The producers that carry a runtime range guard on their own result: every {@link
+     * AddDays}/{@link SubDays} whose offset is a column (not a {@link LiteralSlot}) and which
+     * some calendar node reads, directly or through further arithmetic (task 52), and every
+     * {@link AddMonths} whose month count is a column (task 60) - the latter wherever it sits,
+     * because that guard protects the node's own magic-multiply arithmetic rather than a
+     * consumer's, so a bare {@code add_months(d, m)} with no further calendar wrapper still
+     * needs it. Empty on every kernel with no such column-driven producer - which is what makes
+     * the guard's default cheap: nothing is planned or emitted for it then, and every such
+     * shape stays byte-identical under either setting of
+     * {@link VarkaEmitOptions#guardDayProducers}.
      *
-     * <p>The pair is hand-picked, not derived: the compiler's {@code dayRange} analysis
-     * bounds every other producer at compile time and declines a node it does not know, so a
-     * future column-driven producer fails safe as a residual entry until it is taught to both
-     * sides. Filled by {@link #collectGuardedProducers()} once every root is analyzed.
+     * <p>The set is hand-picked, not derived: the compiler's {@code dayRange} and {@code
+     * compileMonths} analyses bound every other producer at compile time and decline a node
+     * they do not know, so a future column-driven producer fails safe as a residual entry until
+     * it is taught to both sides. Filled by {@link #collectGuardedProducers()} once every root
+     * is analyzed.
      */
     final Set<VarkaVectorIR> guardedProducers = new HashSet<>();
     private final Map<VarkaVectorIR, Integer> height = new HashMap<>();
@@ -1037,11 +1042,17 @@ public final class VarkaLoopEmitter {
       }
     }
 
-    /** See {@link #guardedProducers}: a walk under each calendar node, over the whole DAG. */
+    /**
+     * See {@link #guardedProducers}: a walk under each calendar node for a column-offset day
+     * producer, plus every {@link AddMonths} with a column count, over the whole DAG.
+     */
     void collectGuardedProducers() {
       for (VarkaVectorIR node : topoOrder) {
         if (isChrono(node)) {
           collectColumnOffsetProducers(chronoChild(node), guardedProducers);
+        }
+        if (node instanceof AddMonths n && !(n.months() instanceof LiteralSlot)) {
+          guardedProducers.add(node);
         }
       }
     }
@@ -1120,7 +1131,7 @@ public final class VarkaLoopEmitter {
         case LastDay n -> analyzeOp(node, false, n.days());
         case TruncDate n -> analyzeOp(node, false, n.days());
         case AddMonths n -> {
-          requireLiteralOffset(n.months(), "add_months' month count");
+          requireOffsetShape(n.months());
           analyzeOp(node, false, n.days(), n.months());
         }
         case Greatest n -> analyzeOp(node, true, n.left(), n.right());
@@ -1188,16 +1199,18 @@ public final class VarkaLoopEmitter {
     }
 
     /**
-     * The stricter check {@code next_day} and {@code add_months} need. Task 38 widened day
-     * offsets to accept a column as well as a literal, but that widening is specific to
-     * {@code AddDays} and {@code SubDays}, whose offset is added to a lane at run time.
-     * {@code NextDay} folds its weekday into emit-time constants instead - the whole point of
-     * task 33's lowering - and {@code AddMonths} bounds its month count at compile time (task
-     * 40), so a non-literal at either is not merely unsupported, it is unrepresentable, and the
-     * compiler declines it before ever reaching the emitter. This keeps that guarantee where
-     * the tasks merged. {@code position} names the operand in the message, because the same
-     * check guards two nodes and a message naming the wrong one sent the IR fuzzer's first
-     * failure (#110) looking for a {@code next_day} the shape did not contain.
+     * The stricter check {@code next_day}'s weekday still needs. Task 38 widened day offsets to
+     * accept a column as well as a literal, but that widening is specific to {@code AddDays}
+     * and {@code SubDays}, whose offset is added to a lane at run time. {@code NextDay} folds
+     * its weekday into emit-time constants instead - the whole point of task 33's lowering - so
+     * a non-literal weekday is not merely unsupported, it is unrepresentable, and the compiler
+     * declines it before ever reaching the emitter. {@code AddMonths} used to share this check
+     * too, bounding its month count at compile time (task 40); task 60 widened it to a column
+     * behind a runtime guard instead ({@link #requireOffsetShape}), so once {@code next_day}'s
+     * weekday widens the same way (task 59) this method has no caller left. {@code position}
+     * names the operand in the message, kept even with one caller because the same message
+     * naming the wrong node sent the IR fuzzer's first failure (#110) looking for a
+     * {@code next_day} the shape did not contain.
      */
     private static void requireLiteralOffset(VarkaVectorIR offset, String position) {
       if (!(offset instanceof LiteralSlot)) {
@@ -2151,12 +2164,7 @@ public final class VarkaLoopEmitter {
       case DayOfMonth n -> emitChrono(cb, node, dense, analysis, s, computed);
       case Quarter n -> emitChrono(cb, node, dense, analysis, s, computed);
       case DayOfYear n -> emitChrono(cb, node, dense, analysis, s, computed);
-      case AddMonths n -> {
-        emitAddMonths(cb, n, dense, analysis, s, computed);
-        if (!dense && s.ownWord.contains(node)) {
-          emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.months()));
-        }
-      }
+      case AddMonths n -> emitAddMonths(cb, n, dense, analysis, s, computed);
       case LastDay n -> emitChrono(cb, node, dense, analysis, s, computed);
       case TruncDate n -> emitChrono(cb, node, dense, analysis, s, computed);
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
@@ -2227,41 +2235,46 @@ public final class VarkaLoopEmitter {
     }
     Integer guardTmp = s.guardTmp.get(node);
     if (guardTmp != null) {
-      emitProducerGuard(cb, node, guardTmp, dense, s);
+      emitRangeGuard(cb, node, guardTmp, dense, s, VarkaChrono.NARROW_MIN_DAYS,
+          VarkaChrono.NARROW_MAX_DAYS);
     }
   }
 
   /**
-   * Task 52's runtime range guard, on the result of a column-offset {@code AddDays}/{@code
-   * SubDays} some calendar node reads: lanes below {@link VarkaChrono#NARROW_MIN_DAYS} or above
-   * {@link VarkaChrono#NARROW_MAX_DAYS} are ORed into {@link Slots#guardAcc}, and
-   * {@link #emitStatusReturn} turns a non-empty accumulator into {@code STATUS_CHRONO_RANGE},
-   * which the evaluator answers by recomputing the batch on the row engine. The result stays on
-   * the operand stack for the parent; it is parked in {@code guardTmp} only for the compares.
+   * The runtime range guard on a column-driven producer's own result: lanes outside
+   * {@code [lo, hi]} are ORed into {@link Slots#guardAcc}, and {@link #emitStatusReturn} turns
+   * a non-empty accumulator into {@code STATUS_CHRONO_RANGE}, which the evaluator answers by
+   * recomputing the batch on the row engine. Task 52 calls this on the result of a
+   * column-offset {@code AddDays}/{@code SubDays} some calendar node reads, with {@code lo}/
+   * {@code hi} = {@link VarkaChrono#NARROW_MIN_DAYS}/{@link VarkaChrono#NARROW_MAX_DAYS}; task
+   * 60 calls it on {@code AddMonths}' own month count, with {@code lo}/{@code hi} =
+   * {@link VarkaChrono#MONTH_ARITH_MIN_MONTHS}/{@link VarkaChrono#MONTH_ARITH_MAX_MONTHS} - two
+   * compares are two compares regardless of what they bound. The guarded value stays on the
+   * operand stack for the caller; it is parked in {@code guardTmp} only for the compares.
    *
-   * <p>This is task 26's guard block, which task 51 deleted from {@code emitEra}, retargeted
-   * from the extraction's input to the producer's output - so it runs once per distinct
-   * producer rather than once per calendar node reading it, and not at all for the shapes the
-   * compiler bounds. Two ANDs carry over unchanged and for the same reasons: with the node's
-   * validity word in the masked body, because a null row's lanes are undefined and must not
-   * condemn the batch (the node's word is the AND of the date's and the offset's, so a null
-   * offset is covered), and with the epilogue's bounds mask, because a partial group's padding
-   * lanes hold whatever the masked load left. The dense body skips the word AND: every lane is
-   * valid there. A producer used more than once is emitted once per lane group under CSE, guard
-   * included; with CSE off it is re-emitted per use, which repeats the guard - correct, merely
-   * redundant, and not a shape production emits.
+   * <p>This is task 26's guard block, which task 51 deleted from {@code emitEra} and task 52
+   * retargeted from the extraction's input to the producer's output - so it runs once per
+   * distinct producer rather than once per calendar node reading it, and not at all for the
+   * shapes the compiler bounds. Two ANDs carry over unchanged and for the same reasons: with the
+   * node's validity word in the masked body, because a null row's lanes are undefined and must
+   * not condemn the batch (the node's word is the AND of every input, so a null offset or a
+   * null count is covered), and with the epilogue's bounds mask, because a partial group's
+   * padding lanes hold whatever the masked load left. The dense body skips the word AND: every
+   * lane is valid there. A producer used more than once is emitted once per lane group under
+   * CSE, guard included; with CSE off it is re-emitted per use, which repeats the guard -
+   * correct, merely redundant, and not a shape production emits.
    */
-  private static void emitProducerGuard(CodeBuilder cb, VarkaVectorIR node, int guardTmp,
-      boolean dense, Slots s) {
+  private static void emitRangeGuard(CodeBuilder cb, VarkaVectorIR node, int guardTmp,
+      boolean dense, Slots s, int lo, int hi) {
     cb.dup();
     cb.astore(guardTmp);
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.NARROW_MIN_DAYS);
+    cb.loadConstant(lo);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
-    cb.loadConstant(VarkaChrono.NARROW_MAX_DAYS);
+    cb.loadConstant(hi);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     if (!dense) {
@@ -2857,6 +2870,12 @@ public final class VarkaLoopEmitter {
    * length instead, which is where {@link #emitLeapFlag} comes in, the same flag three of tasks
    * 34-37 need per {@code PLAN_TASK_34.md} section 2.1. Both branches are computed for every
    * lane and blended, since a vector lane cannot skip work the way a scalar branch would.
+   *
+   * <p>{@code node.months()} is a {@link LiteralSlot} or, since task 60, a column: when it is a
+   * column, {@link #emitRangeGuard} runs on it right after it loads, against
+   * {@link VarkaChrono#MONTH_ARITH_MIN_MONTHS}/{@code MAX_MONTHS} - the same bound a literal
+   * count is checked against at compile time (task 40) - because the magic multiply a few lines
+   * below is exact only there.
    */
   private static void emitAddMonths(CodeBuilder cb, AddMonths node, boolean dense,
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
@@ -2905,6 +2924,20 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(-1);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     emitValue(cb, node.months(), dense, analysis, s, computed);
+    // The node's own word (the AND of both children's) used to be computed after this method
+    // returned, from the caller's dispatch; the guard below needs it already stored, and both
+    // children's words are ready by now (the date's from the prefix just above, the count's
+    // from the emitValue call just above), so it moves here instead - earlier than task 40
+    // needed it, but the AND itself is unchanged.
+    if (!dense && s.ownWord.contains(node)) {
+      emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(node.days()),
+          s.wordRef.get(node.months()));
+    }
+    Integer monthsGuardTmp = s.guardTmp.get(node);
+    if (monthsGuardTmp != null) {
+      emitRangeGuard(cb, node, monthsGuardTmp, dense, s, VarkaChrono.MONTH_ARITH_MIN_MONTHS,
+          VarkaChrono.MONTH_ARITH_MAX_MONTHS);
+    }
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
     cb.loadConstant(VarkaChrono.MONTH_ARITH_BIAS);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
@@ -3407,10 +3440,12 @@ public final class VarkaLoopEmitter {
    * under every calendar node and declines an entry whose interval can leave this range
    * (literal offsets, {@code next_day}, {@code add_months}, {@code last_day}, and their
    * compositions), and the one producer it cannot bound - {@code date_add}/{@code date_sub} with
-   * a column offset - carries the check on its own result ({@link #emitProducerGuard}), once per
+   * a column offset - carries the check on its own result ({@link #emitRangeGuard}), once per
    * producer instead of once per reader. This step therefore trusts its input, and the
    * {@link VarkaEmitOptions#guardDayProducers} reference variant is the only way to hand it a
-   * day outside the range.
+   * day outside the range. (Task 60 reuses the same guard block on a separate producer and a
+   * separate range - {@code AddMonths}' own month count against the magic multiply's bound -
+   * which this step never sees, since the day it decomposes has already passed the check above.)
    */
   private static void emitEra(CodeBuilder cb, int days, int era, int rem, int mask) {
     // w = days + BIAS, non-negative throughout the range, so one round-down magic and one
