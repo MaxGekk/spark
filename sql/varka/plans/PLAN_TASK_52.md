@@ -655,31 +655,42 @@ widths, the catalyst doc build, the engine module and the linters, plus
 ## 11. The measurement, and the default
 
 `VarkaEmitterParityBenchmark`, "year" section, regenerated at both widths by
-`dev/varka_bench_regen.sh` on an idle machine (load 0.73 at start, canary within
-2% on all three axes, governor `performance`), then run a second time at both
-widths to scratch logs and compared by minimums, since every ratio here is
-under 1.3x. Rates in M rows/s; the committed file carries the first run, the
-second run agreed with it to within 1% on every row that matters, and the
-figures below are the better of the two.
+`dev/varka_bench_regen.sh` on an idle machine after the merge with #116 (load
+0.83 at start, canary compute +0.0%, cache +3.1%, memory -0.7%, governor
+`powersave` with the balanced profile, as this machine's committed runs are),
+then run a second time at both widths to scratch logs and compared by
+minimums, since every ratio here is under 1.3x. Rates in M rows/s, from the
+committed file; where the second run disagreed, the text says by how much.
+An earlier regeneration, before the merge, is in this file's history and gave
+the same picture with the null-free 256-bit pair 9% apart.
 
 | case | 256-bit, guard on / off | 128-bit, guard on / off |
 |---|---|---|
-| `year(date_add(d, off))`, null-free | 2919.7 / 3203.5, **-8.9%** | 1196.3 / 1245.2, **-3.9%** |
-| `year(date_add(d, off))`, mixed nulls | 1777.3 / 2054.8, **-13.5%** | 648.1 / 756.1, **-14.3%** |
-| `date_add(d, off)` alone (control) | 10889.3 / 10963.1, 0.7% | 10133.8 / 9645.2, 5% |
+| `year(date_add(d, off))`, null-free | 2696.7 / 3154.3, **-14.5%** | 1193.3 / 1224.3, **-2.5%** |
+| `year(date_add(d, off))`, mixed nulls | 1908.5 / 2183.7, **-12.6%** | 648.6 / 755.0, **-14.1%** |
+| `date_add(d, off)` alone (control) | 9876.1 / 9888.1, -0.1% | 10447.2 / 10603.1, -1.5% |
 
 The control row is the noise floor: those two kernels are byte-identical (the
-emitter suite asserts it), so its 0.7% at 256 bits and 5% at 128 bits is what
-run-to-run variance looks like on a 2 ms row. The A/B pairs are adjacent cases
-in one run, so they share JIT and thermal state.
+emitter suite asserts it), so its 0.1% at 256 bits and 1.5% at 128 bits is
+what run-to-run variance looks like on a 2 ms row in this run - and the second
+run put the same control pair 4% apart at 256 bits and 5% at 128, which is
+the floor to read the null-free rows against. The second run's pairs: 5.1%
+null-free and 13.5% mixed at 256 bits, 2.9% and 13.6% at 128 bits. So the
+mixed-null cost is 13-14% at both widths in every run, and the null-free cost
+is 3-6% at 128 bits and somewhere between 5% and 15% at 256 bits, which a 7 ms
+row measured to whole milliseconds cannot resolve finer. The A/B pairs are
+adjacent cases in one run, so they share JIT and thermal state.
 
 **Predictions scored.**
 
-1. *3-8% at AVX-512, under 10% at 128-bit.* Null-free: 8.9% and 3.9%, at the
-   edge of the range and inside it. Mixed nulls: 13.5% and 14.3%, **over the
-   10% line at both widths**. Per row the guard costs 0.030 ns null-free and
-   0.076 ns with mixed nulls at 256 bits - two and a half times as much in
-   absolute terms, not merely a larger fraction of a slower body. The masked
+1. *3-8% at AVX-512, under 10% at 128-bit.* Null-free: 5-15% at 256 bits
+   across the runs and 2.5-3% at 128 bits - inside the range at 128, at or
+   over its edge at 256. Mixed nulls: 12.6% and 14.1%, **over the 10% line at
+   both widths**, in every run. Per row, from the committed file at 256 bits,
+   the guard costs 0.05 ns null-free and 0.07 ns with mixed nulls; the second
+   run's null-free pair puts it at 0.02 ns, so the masked body pays between
+   one and a half and three times the dense body's price for the same two
+   compares, not merely a larger fraction of a slower body. The masked
    body's guard is the dense body's plus the validity AND: `aload species`,
    `lload word`, `VectorMask.fromLong`, `and` - and `fromLong` is a mask
    materialization from a scalar, not a lane op, which is the part the
@@ -688,11 +699,13 @@ in one run, so they share JIT and thermal state.
    guard did.
 2. *`date_add(d, off)` alone is byte-identical under both flag values.*
    Asserted in `VarkaLoopEmitterSuite`; the control row measures it as noise.
-3. *No committed number for an existing case moves.* The calendar rows did not
-   (`year` null-free 3452.2 to 3457.1); the non-calendar rows moved 4-20% in
-   both directions with the controls within 0.1%, which is the machine-day
-   variance `PLAN_TASK_54.md` 9.2 and `SKILLS.md` already record for the
-   memory-bound rows, not this task.
+3. *No committed number for an existing case moves.* The null-free calendar
+   rows did not (`year` null-free 3455.8 against 3452.2 before this task); the
+   mixed-null calendar rows moved 6-7% up and the shared four-field rows 3-5%
+   either way against the file this branch started from, with the four scalar
+   controls within 0.8%, which is the machine-day variance `PLAN_TASK_54.md`
+   9.2 and `SKILLS.md` already record, not this task: the guard is emitted for
+   no shape but its own.
 4. *No pinned oracle moves.* None did.
 5. *The compile-time half declines nothing in the corpus.* Nothing in TPC-H or
    TPC-DS shifts a date under a calendar function by more than a few days.

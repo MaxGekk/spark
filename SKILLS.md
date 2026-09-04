@@ -1213,12 +1213,13 @@ is the decision. Three things came out of building it.
   not two: bounded, column-shifted (admit; the emitter guards), and unknown (decline), so a
   producer nobody has taught to the analysis fails as a residual entry, never as a wrong year.
 - **A mask guard costs its `fromLong`, not its compares.** Measured on `year(date_add(d, off))`
-  (`VarkaEmitterParityBenchmark`, two runs by minimums): the guard costs 8.9% null-free and
-  13.5% with mixed nulls at 256 bits, 3.9% and 14.3% at 128 bits - 0.030 against 0.076 ns per
-  row, two and a half times more in the masked body for the same two compares. The
-  difference is the validity AND, whose `VectorMask.fromLong` materializes a mask from a
-  scalar word; the prediction counted it as one lane op and it is not. A guard that reuses a
-  mask the body has already built for its store would not pay it.
+  (`VarkaEmitterParityBenchmark`, two regenerations and a second run each): the guard costs
+  13-14% with mixed nulls at both widths in every run, against 5-15% null-free at 256 bits
+  and 2.5-4% at 128 - 0.05 to 0.07 ns per row in the masked body against 0.02 to 0.05 in the
+  dense one for the same two compares. The difference is the validity AND, whose
+  `VectorMask.fromLong` materializes a mask from a scalar word; the prediction counted it as
+  one lane op and it is not. A guard that reuses a mask the body has already built for its
+  store would not pay it.
 
 ## A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic
 
