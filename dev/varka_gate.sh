@@ -35,6 +35,8 @@
 #   doc       build/sbt catalyst/doc, the javadoc gate CI runs
 #   engine    ./build/mvn -f sql/varka/engine/pom.xml test (off by default)
 #   lint      dev/lint-java and dev/scalastyle
+#   quotes    dev/varka_quote_check.py: every number the documents quote traces to a
+#             committed results file (or the allowlist)
 #
 # The assembly suite (task 31) is part of `wide` and `narrow`; it needs a
 # disassembler and cancels without one. If VARKA_HSDIS_DIR is unset this
@@ -43,7 +45,7 @@
 # its instruction assertions is a gate that lies.
 set -uo pipefail
 
-steps_all=(compile wide narrow sweep doc lint)
+steps_all=(compile wide narrow sweep doc lint quotes)
 only=""; skip=""; engine=0; list=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -113,6 +115,7 @@ for s in "${selected[@]}"; do
     doc) run_step doc build/sbt -batch catalyst/doc ;;
     engine) run_step engine ./build/mvn -q -f sql/varka/engine/pom.xml test ;;
     lint) run_step lint bash -c 'dev/lint-java && dev/scalastyle' ;;
+    quotes) run_step quotes dev/varka_quote_check.py ;;
   esac
 done
 

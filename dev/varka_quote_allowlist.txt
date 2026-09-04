@@ -1,0 +1,56 @@
+# Numbers quoted in the Varka documents that trace to no committed results file,
+# accepted with a reason. Read by dev/varka_quote_check.py; one line per number:
+# <document> <TAB> <number> <TAB> <reason>. This list is a ratchet - it should
+# only shrink. Everything below predates the tool (September 2026): the
+# narrow-width numbers came from scratch logs before dev/varka_bench_regen.sh
+# committed a 128-bit companion file, the "compared by minimums" figures were
+# computed from per-iteration output that was never committed, and the probe
+# figures came from throwaway runs the plans already call scratch.
+SKILLS.md	3573.9	REASON NEEDED
+SKILLS.md	2379.8	REASON NEEDED
+SKILLS.md	2368.3	REASON NEEDED
+SKILLS.md	3766.3	REASON NEEDED
+SKILLS.md	4630.0	REASON NEEDED
+SKILLS.md	4630.0	REASON NEEDED
+SKILLS.md	2368.3	REASON NEEDED
+SKILLS.md	2166.5	REASON NEEDED
+SKILLS.md	36524.25	REASON NEEDED
+SKILLS.md	26.04	REASON NEEDED
+sql/varka/plans/PLAN_MILESTONE_4.md	3573.9	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_MILESTONE_4.md	2379.8	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_MILESTONE_4.md	2368.3	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_MILESTONE_4.md	4630.0	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_TASK_24.md	6034.3	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	5707.8	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	4722.4	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	4603.5	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	4157.3	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	3925.5	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	18382.0	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	15544.8	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	14216.5	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	13451.9	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	7190.6	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	9531.4	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_24.md	8955.0	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_32.md	1822.2	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_32.md	2630.7	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_32.md	3445.2	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_32.md	902.2	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_32.md	1174.3	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_39.md	106.75	not a measurement: an overflow bound in days
+sql/varka/plans/PLAN_TASK_45.md	2166.5	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_45.md	2687.8	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_45.md	2749.4	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_45.md	2234.1	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_45.md	2757.0	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_45.md	2185.6	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_45.md	8378.1	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_45.md	7768.1	128-bit numbers from a scratch log, before the committed companion file
+sql/varka/plans/PLAN_TASK_48.md	2181.7	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_48.md	2161.7	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_48.md	2145.2	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_48.md	2166.5	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_48.md	1042.8	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/PLAN_TASK_48.md	7759.6	interleaved re-run compared by minimums; per-iteration output not committed
+sql/varka/plans/SCOPE_MILESTONE_5.md	1853.0	probe figure from a throwaway run the text itself calls a scratch probe

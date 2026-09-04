@@ -96,6 +96,16 @@ public final class VarkaEmitterTestSupport {
    * in ascending order and without duplicates - the task 16 mapping, read the way a debugger or
    * a stack trace reads it. Empty when the method carries no table (or does not exist).
    */
+  /** Every method the class declares, in declaration order - for tools that report per method
+   *  and cannot name the Class-File API's types from Scala. */
+  public static List<String> methodNames(byte[] bytes) {
+    List<String> names = new java.util.ArrayList<>();
+    for (java.lang.classfile.MethodModel method : ClassFile.of().parse(bytes).methods()) {
+      names.add(method.methodName().stringValue());
+    }
+    return names;
+  }
+
   public static List<Integer> lineNumbers(byte[] bytes, String methodName) {
     java.util.TreeSet<Integer> lines = new java.util.TreeSet<>();
     for (java.lang.classfile.MethodModel method : ClassFile.of().parse(bytes).methods()) {
