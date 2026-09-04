@@ -81,6 +81,13 @@ becomes timestamp arithmetic) decline:
 * `DAYOFYEAR` (task 34), `LAST_DAY` (task 36) and `ADD_MONTHS` / `date +
   INTERVAL n MONTH` (task 40) with a literal month count, all over the same
   civil-from-days prefix; `LAST_DAY` and `ADD_MONTHS` return dates.
+* `WEEKOFYEAR`, `EXTRACT(WEEK FROM d)` and `DATE_PART('WEEK', d)` (task 37), the ISO-8601 week
+  by the Thursday rule: the day is moved to the Thursday of its Monday-based
+  week and the week is that Thursday's ordinal day in sevens, so the year
+  boundaries need no correction. The shift is its own node and the week tail's
+  prefix runs over it, which is what makes `EXTRACT(YEAROFWEEK FROM d)`
+  (task 58) `YEAR` over the same shift; a projection mixing `WEEKOFYEAR` with
+  `YEAR` or `MONTH` of the same date decomposes twice, once per side.
 * `TRUNC(date, fmt)` (task 35) at the date levels, for a literal format only:
   `YEAR`/`YYYY`/`YY`, `MONTH`/`MON`/`MM` and `QUARTER` are one node each with
   the level as part of the kernel's shape, and `WEEK` is rewritten onto

@@ -138,6 +138,17 @@ Whichever of the two merges second carries those two lines, as task 35 did;
 until then a `weekofyear` over a far day answers as every calendar node on
 master does today. Section 2.25's `[-6, +3]` is corrected to `[-3, +3]`.
 
+**Added while the differential ran, the same day: the int literal in a
+comparison.** `WHERE weekofyear(d) = 53` declined - not at the new node but
+at the `53`: `compileNode`'s literal arm accepts date literals only, so no
+fused int field had ever been compared with an int literal in a kernel
+(`year(d) = 2021` in the task 62 surface reached the kernel only because the
+analyzer rewrites that particular shape). The predicate comparison now takes
+an int literal as a literal slot on either side, in `compare` alone, so the
+value leaves stay date-typed and integer arithmetic over an output remains
+task 30's. Three ops in the kernel, no new IR, no emitter change; the
+compiler suite pins both the new predicate and the unchanged value side.
+
 ### 3.2 What is deliberately unchanged
 
 * `emitFloorMod7` and its three variants: the reciprocal form is its own task.
@@ -156,15 +167,23 @@ Dense-loop `IntVector` calls, the register test's metric, under the shipped
 options; asserted in section 5 and printed with `dev/varka_emit.sh --table`
 before the PR opens.
 
-| kernel | before | after |
-|---|---|---|
-| `ThursdayOf(col)` alone | - | 17 |
-| `weekofyear(col)` (`WeekOfYear(ThursdayOf(col))`) | - | 64 (17 + 43 + 4) |
-| `dayofyear(col)` | 43 | 43 |
-| `month(col)` / `dayofmonth(col)` | 35 / 36 | 35 / 36 |
-| `next_day(col, 'MON')` | 15 (derived, unpinned) | 15, now pinned |
+| kernel | before | after (planned) | after (emitted) |
+|---|---|---|---|
+| `ThursdayOf(col)` alone | - | 17 | 19 |
+| `weekofyear(col)` (`WeekOfYear(ThursdayOf(col))`) | - | 64 (17 + 43 + 4) | 64 (19 + 45) |
+| `dayofyear(col)` | 43 | 43 | 43 |
+| `month(col)` / `dayofmonth(col)` | 35 / 36 | 35 / 36 | 35 / 36 |
+| `weekday(col)` | unpinned | 15 | 17, now pinned |
+| `next_day(col, 'MON')` | unpinned | 15 | 18, now pinned |
 
-Weights: `THURSDAY_OF_WEIGHT = 17`, `WEEK_OF_YEAR_WEIGHT = 55`
+*Corrected from the register's first run, the same day:* the mod-7 fold is
+14 `IntVector` calls, not the 12 the survey derived (`weekday` is 17, not 15),
+so the shift is 19; and the week tail past the prefix is 45 against
+`dayofyear`'s 43, not 47 - `emitMagic`'s shift is a `lanewise` call the
+counter sees, so the two missing ops are the January-turn `blend` and the
+`sub 1`, which the JIT-visible count folds differently than the plan
+counted by hand. The total, 64, is what the plan predicted, by two errors
+that cancel. Weights: `THURSDAY_OF_WEIGHT = 19`, `WEEK_OF_YEAR_WEIGHT = 55`
 (`DAY_OF_YEAR_WEIGHT + 4`), both in the `weightOf` chain before the
 `isChrono` fallthrough.
 
@@ -222,7 +241,7 @@ inherit both.
   the failing output, old and new recorded in section 9.
 * **The compiler**: `weekofyear(d)` compiles to
   `WeekOfYear(ThursdayOf(ColumnRef(0)))` with an `IntegerType` output;
-  `extract(WEEK FROM d)` and `week(d)` to the same; two `weekofyear` outputs
+  `extract(WEEK FROM d)` and `date_part` to the same; two `weekofyear` outputs
   share the `ThursdayOf` under CSE.
 * **The differential**: a cached table of every day 1990-12-20..2030-01-10
   built from `range` (so the row engine and the kernel see the same 14,631
