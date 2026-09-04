@@ -27,7 +27,12 @@
 #     (sql/varka/AGENTS.md: open work is recorded in a plan, never left as a
 #     marker);
 #   * every number the documents quote traces to a committed results file
-#     (dev/varka_quote_check.py), when a document changed.
+#     (dev/varka_quote_check.py), when a document changed;
+#   * Python files pass `ruff check` and `ruff format --check`, the two halves of
+#     CI's Python linter (dev/lint-python runs both; a hand-wrapped script that
+#     passes the first still fails the second). A missing ruff is itself a
+#     finding, because dev/lint-python skips ruff silently when it is not on PATH
+#     and CI does not.
 #
 #   dev/varka_precommit.sh                 # the staged files
 #   dev/varka_precommit.sh --working-tree  # staged, unstaged and untracked
@@ -90,6 +95,23 @@ for f in "${files[@]}"; do
     done < <(grep -n -E "$pattern" "$f" | cut -d: -f1)
   fi
 done
+
+py_files=()
+for f in "${files[@]}"; do [ -f "$f" ] && [[ "$f" =~ \.py$ ]] && py_files+=("$f"); done
+if [ "${#py_files[@]}" -gt 0 ]; then
+  if command -v ruff > /dev/null 2>&1; then
+    while IFS= read -r hit; do
+      note "ruff check: $hit"
+    done < <(ruff check --output-format concise "${py_files[@]}" 2>&1 \
+      | grep -E '^[^ ]+:[0-9]+:[0-9]+:')
+    while IFS= read -r hit; do
+      note "ruff format: $hit would be reformatted; run ruff format on it"
+    done < <(ruff format --check "${py_files[@]}" 2>&1 | sed -n 's/^Would reformat: //p')
+  else
+    note "ruff not found: CI runs ruff check and ruff format over ${#py_files[@]} Python file(s); \
+install the version dev/lint-python pins"
+  fi
+fi
 
 if [ "$docs_changed" -eq 1 ] && [ -x dev/varka_quote_check.py ]; then
   out="$(dev/varka_quote_check.py 2>&1)"; rc=$?

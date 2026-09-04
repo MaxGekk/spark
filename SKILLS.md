@@ -1168,8 +1168,10 @@ species class in `-XX:+PrintInlining` output.
   committed file.
 - Run `dev/varka_precommit.sh` before committing, or install it as the pre-commit hook:
   non-ASCII outside strings, lines over 100 columns, TODO/FIXME under Varka
-  directories, and the quote check. Each of those has reached CI or a reviewer at
-  least once.
+  directories, the quote check, and ruff (`check` and `format --check`) on Python
+  files. Each of those has reached CI or a reviewer at least once; the formatter
+  reached CI on five PRs at once, because `dev/lint-python` skips ruff silently
+  when it is not installed.
 - `VarkaIrFuzzSuite` fuzzes the emitter: random IR over random null patterns, lengths
   and option variants against the shared reference evaluator, reproducible by seed
   and iteration.
