@@ -1016,7 +1016,7 @@ public final class VarkaLoopEmitter {
         case DayOfWeek n -> analyzeOp(node, false, n.days());
         case WeekDay n -> analyzeOp(node, false, n.days());
         case NextDay n -> {
-          requireLiteralOffset(n.offset());
+          requireLiteralOffset(n.offset(), "next_day's weekday");
           analyzeOp(node, false, n.days(), n.offset());
         }
         case Year n -> analyzeOp(node, false, n.days());
@@ -1026,7 +1026,7 @@ public final class VarkaLoopEmitter {
         case DayOfYear n -> analyzeOp(node, false, n.days());
         case LastDay n -> analyzeOp(node, false, n.days());
         case AddMonths n -> {
-          requireLiteralOffset(n.months());
+          requireLiteralOffset(n.months(), "add_months' month count");
           analyzeOp(node, false, n.days(), n.months());
         }
         case Greatest n -> analyzeOp(node, true, n.left(), n.right());
@@ -1094,18 +1094,21 @@ public final class VarkaLoopEmitter {
     }
 
     /**
-     * The stricter check {@code next_day} needs. Task 38 widened day offsets to accept a
-     * column as well as a literal, but that widening is specific to {@code AddDays} and
-     * {@code SubDays}, whose offset is added to a lane at run time. {@code NextDay} folds its
-     * weekday into emit-time constants instead - the whole point of task 33's lowering - so a
-     * non-literal there is not merely unsupported, it is unrepresentable, and the compiler
-     * declines it before ever reaching the emitter. This keeps the guarantee that would
-     * otherwise be lost when the two tasks merged.
+     * The stricter check {@code next_day} and {@code add_months} need. Task 38 widened day
+     * offsets to accept a column as well as a literal, but that widening is specific to
+     * {@code AddDays} and {@code SubDays}, whose offset is added to a lane at run time.
+     * {@code NextDay} folds its weekday into emit-time constants instead - the whole point of
+     * task 33's lowering - and {@code AddMonths} bounds its month count at compile time (task
+     * 40), so a non-literal at either is not merely unsupported, it is unrepresentable, and the
+     * compiler declines it before ever reaching the emitter. This keeps that guarantee where
+     * the tasks merged. {@code position} names the operand in the message, because the same
+     * check guards two nodes and a message naming the wrong one sent the IR fuzzer's first
+     * failure (#110) looking for a {@code next_day} the shape did not contain.
      */
-    private static void requireLiteralOffset(VarkaVectorIR offset) {
+    private static void requireLiteralOffset(VarkaVectorIR offset, String position) {
       if (!(offset instanceof LiteralSlot)) {
         throw new IllegalArgumentException(
-            "next_day's weekday must be a literal slot, got " + offset);
+            position + " must be a literal slot, got " + offset);
       }
     }
   }
