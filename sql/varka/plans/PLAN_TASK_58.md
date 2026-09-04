@@ -65,7 +65,8 @@ the shape `Year(ThursdayOf(col))` is one task 37's fixtures already render.
 ### 3.3 Registered op counts
 
 None move. `yearofweek(col)` alone is `ThursdayOf`'s 19 plus `year`'s tail,
-read off the bytes by the register in section 5 for the record.
+read off the bytes by the register in section 5 for the record: 51 dense-loop
+`IntVector` calls.
 
 ## 4. Files
 
