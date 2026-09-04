@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
@@ -220,6 +220,107 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // one declined.
     assert(VarkaExpressionCompiler.compile(
       Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS)))), childOutput).isDefined)
+  }
+
+  // Task 52's compile-time range guard. `HI` and `LO` are the largest literal shifts that keep
+  // a contract column inside the narrowed range, derived from the constants rather than
+  // retyped, so the tests below sit at +-1 of the real bound whatever it is.
+  private val shiftHi = VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS
+  private val shiftLo = VarkaChrono.NARROW_MIN_DAYS - VarkaChrono.CONTRACT_MIN_DAYS
+
+  private def fuses(e: Expression, output: Seq[Attribute] = childOutput): Boolean =
+    VarkaExpressionCompiler.compile(Seq(out(e)), output).isDefined
+
+  private def declineReason(e: Expression, output: Seq[Attribute] = childOutput): String = {
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(e), out(DateAdd(d, Literal(1)))), output).get
+    assert(partial.declines.contains(0), s"$e fused; expected it to decline")
+    partial.declines(0).reason
+  }
+
+  test("task 52: a literal day shift fuses at the bound and declines one day past it") {
+    assert(fuses(Year(DateAdd(d, Literal(shiftHi)))))
+    assert(declineReason(Year(DateAdd(d, Literal(shiftHi + 1)))) ===
+      s"day range [${VarkaChrono.CONTRACT_MIN_DAYS + shiftHi + 1}, " +
+        s"${VarkaChrono.NARROW_MAX_DAYS + 1}] leaves the calendar lowering's range")
+    assert(fuses(Year(DateSub(d, Literal(-shiftLo)))))
+    assert(declineReason(Month(DateSub(d, Literal(-shiftLo + 1)))) ===
+      s"day range [${VarkaChrono.NARROW_MIN_DAYS - 1}, " +
+        s"${VarkaChrono.CONTRACT_MAX_DAYS + shiftLo - 1}] leaves the calendar lowering's range")
+    // Every calendar arm checks: the same shift declines under each of the seven.
+    val far = DateAdd(d, Literal(shiftHi + 1))
+    Seq[Expression](Year(far), Month(far), DayOfMonth(far), Quarter(far), DayOfYear(far),
+      LastDay(far), AddMonths(far, Literal(1)),
+      DateAddYMInterval(far, Literal.create(1, YearMonthIntervalType()))).foreach { e =>
+      assert(!fuses(e), s"$e should decline")
+    }
+    // The same literal that the removed runtime guard's differential used, and the exact
+    // query PLAN_TASK_52.md names as fusing wrongly after task 51.
+    assert(!fuses(Year(DateAdd(d, Literal(20000000)))))
+  }
+
+  test("task 52: no calendar consumer, no bound - and the analysis composes") {
+    // date_add alone produces whatever int addition produces, as Spark's DateAdd does.
+    assert(fuses(DateAdd(d, Literal(shiftHi + 1))))
+    assert(fuses(DateDiff(DateAdd(d, Literal(shiftHi + 1)), d2)))
+    // Two literals each under the bound whose sum is over it.
+    assert(!fuses(Year(DateAdd(DateAdd(d, Literal(5000000)), Literal(5000000)))))
+    assert(fuses(Year(DateAdd(DateSub(d, Literal(5000000)), Literal(5000000)))))
+    // Long arithmetic: two Int.MaxValue offsets must not wrap back into range.
+    assert(!fuses(Year(DateAdd(DateAdd(d, Literal(Int.MaxValue)), Literal(Int.MaxValue)))))
+    // The identity cast and unix_date/date_from_unix_date unwrap to the child, so the
+    // analysis sees through them.
+    assert(!fuses(Year(Cast(DateAdd(d, Literal(shiftHi + 1)), DateType))))
+    assert(!fuses(Year(DateFromUnixDate(UnixDate(DateAdd(d, Literal(shiftHi + 1)))))))
+  }
+
+  test("task 52: pass-through nodes take the hull of their date operands") {
+    assert(fuses(Year(Greatest(Seq(DateAdd(d, Literal(5000000)), d)))))
+    assert(!fuses(Year(Greatest(Seq(DateAdd(d, Literal(shiftHi + 1)), d)))))
+    assert(!fuses(Year(Least(Seq(d, d2, DateSub(d, Literal(-shiftLo + 1)))))))
+    assert(fuses(Year(If(LessThan(d, d2), DateAdd(d, Literal(shiftHi)), d))))
+    assert(!fuses(Year(If(LessThan(d, d2), DateAdd(d, Literal(shiftHi + 1)), d))))
+    assert(!fuses(Year(CaseWhen(Seq((LessThan(d, d2), d)),
+      Some(DateAdd(d2, Literal(shiftHi + 1)))))))
+    assert(!fuses(Year(Coalesce(Seq(d, DateAdd(d2, Literal(shiftHi + 1)))))))
+    assert(fuses(Year(Coalesce(Seq(d, DateAdd(d2, Literal(shiftHi)))))))
+    // A date literal is itself: in range when the parser wrote it, out of range when a test
+    // builds one by hand - read back, not assumed.
+    assert(fuses(Year(If(LessThan(d, d2), Literal(0, DateType), d))))
+    assert(!fuses(Year(If(LessThan(d, d2), Literal(VarkaChrono.NARROW_MAX_DAYS + 1, DateType), d))))
+    assert(fuses(Year(If(LessThan(d, d2), Literal(VarkaChrono.NARROW_MAX_DAYS, DateType), d))))
+  }
+
+  test("task 52: the date-typed calendar outputs carry their own bound") {
+    // add_months's month count is bounded by task 40's decline, and inside that bound the
+    // analysis charges up to 31 days a month on top of the child's interval.
+    assert(fuses(Year(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS)))))
+    assert(fuses(Year(AddMonths(DateAdd(d, Literal(shiftHi - 12 * 31)), Literal(12)))))
+    assert(!fuses(Year(AddMonths(DateAdd(d, Literal(shiftHi - 12 * 31 + 1)), Literal(12)))))
+    assert(!fuses(Year(AddMonths(DateAdd(d, Literal(shiftHi - 100)), Literal(12)))))
+    // add_months by a negative count shifts the low end.
+    assert(fuses(Year(AddMonths(DateSub(d, Literal(-shiftLo - 31)), Literal(-1)))))
+    assert(!fuses(Year(AddMonths(DateSub(d, Literal(-shiftLo - 30)), Literal(-1)))))
+    // last_day's output is up to 30 days past an input that itself passed the check.
+    assert(fuses(Year(LastDay(DateAdd(d, Literal(shiftHi - 30))))))
+    assert(!fuses(Year(LastDay(DateAdd(d, Literal(shiftHi - 29))))))
+    // next_day shifts by 1 to 7.
+    assert(fuses(Year(NextDay(DateAdd(d, Literal(shiftHi - 7)), Literal("MON")))))
+    assert(!fuses(Year(NextDay(DateAdd(d, Literal(shiftHi - 6)), Literal("MON")))))
+  }
+
+  test("task 52: a column offset is admitted - the emitter guards that producer") {
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(Year(DateAdd(d, i)))), childOutput).get
+    assert(compiled.outputs === Seq(new IRYear(new AddDays(new ColumnRef(0), new ColumnRef(1)))))
+    assert(fuses(Year(DateSub(DateAdd(d, Literal(shiftHi)), i))))
+    assert(fuses(Year(Greatest(Seq(DateAdd(d, i), d2)))))
+    // A column offset above an out-of-range literal shift is admitted too: the runtime guard
+    // checks the producer's actual result lanes, so an intermediate the offset brings back
+    // into range is fine and one it leaves outside is caught per batch. Only an unknown
+    // producer under the column offset still declines.
+    assert(fuses(Year(DateAdd(Greatest(Seq(DateAdd(d, Literal(shiftHi + 1)), d)), i))))
+    val ts = AttributeReference("t", TimestampType)()
+    assert(!fuses(Year(DateAdd(Cast(ts, DateType), i)), childOutput :+ ts))
   }
 
   test("task 26 declines: year over a timestamp, which the analyzer casts") {

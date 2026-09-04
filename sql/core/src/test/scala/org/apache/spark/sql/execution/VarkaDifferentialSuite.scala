@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaShapeCache}
 import org.apache.spark.sql.internal.SQLConf
 
 /**
@@ -173,6 +173,31 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
     }
+  }
+
+  test("task 52: a literal day shift past the calendar range is residual, with its reason, " +
+      "and an in-range one fuses") {
+    // The compile-time half of the range guard: `year(date_add(d, 20000000))` is the query
+    // task 51's removed differential used, and it fused - wrongly - between task 51 and this
+    // task. Now the entry declines at compile time, the row engine computes it (LocalDate
+    // handles any int day, so the answer is a real year near 56770), and verbose EXPLAIN says
+    // why. `near` keeps the node fused so there is a Varka node to explain at all.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    val plan = checkDifferential(spark, varkaSpark,
+      "SELECT year(date_add(d, 20000000)) AS far, year(d) AS near FROM varka_dates " +
+        "ORDER BY near, far",
+      expectFused = true)
+    val explained = plan.collect { case p if isVarkaNode(p) => p.verboseStringWithOperatorId() }
+      .mkString("\n")
+    assert(explained.contains("far: residual (day range ["), explained)
+    assert(explained.contains("near: fused"), explained)
+    // The largest shift the analysis admits still fuses and still matches the row engine.
+    val shiftHi = VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS
+    checkDifferential(spark, varkaSpark,
+      s"SELECT year(date_add(d, $shiftHi)) AS y, month(date_sub(d, 30)) AS m FROM varka_dates " +
+        "ORDER BY y, m",
+      expectFused = true)
   }
 
   test("datediff matches the row engine in both argument orders with nulls") {
