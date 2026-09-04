@@ -1047,6 +1047,204 @@ node rather than the extraction, since that is now where the check lives. Both
 flag settings green; a committed number for the guard's cost isolates what it
 adds on top of the arithmetic it protects.
 
+### 2.23 `date + INTERVAL n DAY` with a column interval (task 56)
+
+The analyzer resolves `date + INTERVAL n DAY` two ways. A literal interval
+folds to `date_add(d, n)` before the compiler sees it, and is covered. A
+column interval becomes `DateAdd(d, ExtractANSIIntervalDays(col))`, and
+`ExtractANSIIntervalDays` has no arm, so the whole entry declines through the
+"day offset is not a foldable literal or an integer column" reason task 38
+pinned. A `DayTimeIntervalType(DAY)` value is physically **int64
+microseconds**, which is why this is not simply another leaf: the kernel has
+no int64 lane to read it into, and the division by 86400000000 has to happen
+before any narrowing to int32.
+
+The task takes the half of it a date lane can express and names the other
+half honestly. **The rewrite.** When the interval is itself a cast of an
+`IntegerType` column - `d + CAST(i AS INTERVAL DAY)`, the spelling the
+differential suite already uses, and `d + i * INTERVAL '1' DAY` where the
+optimizer folds the multiply into the same cast - the compiler sees
+`ExtractANSIIntervalDays(Cast(i, DayTimeIntervalType(DAY)))` and the day
+count is `i` itself: the cast multiplies by the day's micros and the extractor
+divides them back out, both exact for every int. The arm unwraps the pair to
+`compileOffset(i)`, task 41's pattern of retiring an expression onto existing
+IR, and the result is task 38's `AddDays(d, ColumnRef)` with everything that
+already comes with it - the AND of the two validity words, task 52's producer
+guard under a calendar consumer. **The decline, by decision.** A stored
+`INTERVAL DAY` column, or an interval computed from anything but an int cast,
+keeps declining, with its own reason ("day interval column, not an int cast").
+The owner scoped this task to the date lane alone: the int64 column is not
+read by a kernel, neither through milestone 5's width machinery nor through a
+per-row narrowing in the evaluator, unless a query is one day found to need it,
+at which point it is argued in on its own - the corpus writes literal
+intervals, which fold, and int-cast intervals, which this task covers.
+
+Validation: the rewrite's shape pinned in the compiler suite (`AddDays(col,
+col)` from the cast form, literal slots untouched); a differential over
+`d + CAST(i AS INTERVAL DAY)` and `d - CAST(i AS INTERVAL DAY)` against the row
+engine with nulls on both sides; the stored-interval column still residual,
+with its reason in `EXPLAIN`. No new node, so neither pinned fixture moves and
+no committed number changes.
+
+### 2.24 `extract(DAYOFWEEK_ISO)` and `DOW_ISO` (task 57)
+
+`Extract` resolves the two spellings to `Add(WeekDay(d), Literal(1))`
+(`datetimeExpressions.scala`, the `DAYOFWEEK_ISO` arm): Monday 1 to Sunday 7.
+`WeekDay` compiles; the integer `Add` on top of a non-date value does not, on
+purpose - a general int-arithmetic arm would admit `datediff(a, b) + 1`, whose
+overflow semantics are milestone 5's task 30. This value cannot overflow: the
+addend is a constant one over a result in 0..6.
+
+So the task is one narrow arm, not a general one: `Add(WeekDay(child),
+Literal(1, IntegerType))`, in either operand order, compiles to a new
+`DayOfWeekIso(child)` node whose tail is `WeekDay`'s (`emitFloorMod7` on the
+`(v + 3) mod 7` form) plus one lanewise add - the same one op that separates
+`dayofweek` from `weekday` today. A user writing `weekday(d) + 1` by hand hits
+the same arm and gets the same bytes, which is correct, since it is the same
+function. The node joins `weightOf` at `NEXT_DAY_WEIGHT`'s scale (a floorMod7
+tail), `tailReadsMarchMonth` is not involved (no prefix), and both pinned
+fixtures move once for the new node type, re-pinned from their failing output.
+
+Validation: the reference evaluator's arm is `DateTimeUtils.getWeekDay(d) + 1`
+- the definition, not the lowering; the boundary matrix over a whole week at
+both widths under the three `FloorMod7` variants; a differential with
+`extract(DAYOFWEEK_ISO FROM d)`, `date_part('DOW_ISO', d)` and `weekday(d) + 1`
+in one query against every null pattern; `dayofweek` and `weekday` byte
+for byte unchanged.
+
+### 2.25 `extract(YEAROFWEEK)` (task 58)
+
+The ISO week-numbering year: `DateTimeUtils.getWeekBasedYear`, i.e.
+`LocalDate.get(IsoFields.WEEK_BASED_YEAR)` - 2004 for 2005-01-02, 2021 for
+2020-12-31 in a year whose last days belong to week 1. There is no registered
+function; only `extract(YEAROFWEEK FROM d)` and `date_part` reach it, and the
+corpus never does, so this is completeness - and it is nearly free once task
+37 has landed, which is why it is here.
+
+The definition has the same shape as task 37's Thursday rule: the ISO year of
+a day is the calendar year of the Thursday of its ISO week, `t = d + 3 -
+weekday0(d)` with `weekday0` Monday-based, and `yearofweek(d) = year(t)`.
+Task 37 builds the Thursday shift as the day its own prefix runs over; this
+task composes `Year` over that same shifted day. The composition is decided
+by what 37 ships: if 37 exposes the shift as an IR node, this is a compiler
+arm building `Year(ThursdayOf(d))` and nothing in the emitter; if 37 keeps
+the shift inside its own tail, this task lifts it out into that node and 37's
+`WeekOfYear` tail reads it too, so the two nodes over one date share it. Task
+52's `dayRange` needs an arm for the shift, `[-6, +3]` days, so `Year` over it
+is admitted at compile time. No new arithmetic, no new constant, no leap
+question: `year` of a computed day is the prefix the family already has.
+
+Validation: the boundary rows are the ones the ISO year moves on - December 28
+to January 4 of years whose week 1 starts in the old year (2004/2005,
+2020/2021, 2026/2027) and of years where it does not, plus the century years -
+against `DateTimeUtils.getWeekBasedYear`; a differential with `weekofyear`,
+`yearofweek` and `year` over the same column, since the three disagree on
+exactly the rows that matter; both widths.
+
+### 2.26 `next_day` with a weekday column (task 59)
+
+Task 33 covers `next_day(d, 'MON')`: the weekday resolves at compile time and
+travels as the literal `k = dayOfWeek - 1`. A weekday **column** declines,
+because the kernel cannot read a string lane and the row engine's parse -
+`DateTimeUtils.getDayOfWeekFromString`, case-insensitive, three spellings per
+day, null or an error for anything else - is per row. This task adds the one
+mechanism that lets a string-argument date function run in the kernel without
+string lanes, and it is worth having because task 61 reuses it.
+
+**The derived leaf.** The evaluator computes, per batch and before the kernel
+runs, an int32 column the kernel then reads like any other input: here
+`k[i] = getDayOfWeekFromString(name[i]) - 1`, null where the name is null or
+unrecognised in the non-ANSI mode. It is the row engine's own parser applied
+to one column, so its semantics are the definition's by construction, and it
+is the same shape as the validity bitmap the evaluator already synthesises
+for a dense batch. In ANSI mode an unrecognised name must throw, and the
+pre-pass does exactly what the row engine does - calls the same function,
+which raises the same error at the same row - so ANSI needs no decline; it is
+the one place where a kernel-side value can throw *correctly*, because the
+throw happens before the kernel. The IR sees `NextDay(days, ColumnRef(k))`:
+`requireLiteralOffset` on `NextDay` widens to `requireOffsetShape` the way
+task 38 widened `AddDays`, the lowering is unchanged - `floorMod7(k - d)` is
+lanewise whether `k` is a broadcast or a vector - and the node's validity word
+becomes the AND of the two inputs' words through `andRef`, so a null weekday
+nulls its row.
+
+**The number that decides it.** The pre-pass is a scalar parse per row, the
+kind of cost the kernel exists to remove, and the date arithmetic behind it is
+cheap; the honest prediction is that fusing `next_day(d, col)` wins little over
+the row engine when the column is a string, and a lot when the *same* derived
+column feeds several fused expressions. Measured in `VarkaEmitterParityBenchmark`
+against the row path; if the fused form does not beat the row engine by at
+least 1.3x on a single `next_day`, the mechanism still ships (task 61 needs
+it) and the entry records that its value is in reuse, not in this shape.
+
+Validation: the derived leaf's null and error rules pinned in the evaluator
+suite (null name, `'monday'`, `'MO'`, `'xyz'` under both ANSI settings, the
+ANSI error identical to the row engine's); the emitter's two-column `NextDay`
+over every null pattern at both widths; a differential over a weekday column
+mixing spellings and nulls; the literal form byte for byte unchanged.
+
+### 2.27 `add_months` with a month-count column (task 60)
+
+Task 40 covers `add_months(d, 12)` and `d + INTERVAL n MONTH` with a literal
+count, bounded at compile time to `MONTH_ARITH_MIN/MAX_MONTHS` because the
+magic division by 12 is exact only there. A month-count **column** declines
+("month count is not a foldable literal"). The column form is task 38's story
+again, with task 52's mechanism attached: the count becomes a `ColumnRef`
+operand, `requireLiteralOffset` on `AddMonths` widens to `requireOffsetShape`,
+the validity word becomes the AND of both inputs, and the lowering does not
+change - the numerator `(month - 1) + months + BIAS` is lanewise either way.
+
+What changes is where the bound is checked. At compile time nothing bounds a
+column, so the check moves to run time, and it is exactly the producer guard
+task 52 built for `date_add(d, off)`: two compares on the month-count lanes
+against `MONTH_ARITH_MIN/MAX_MONTHS`, ANDed with the node's validity word and
+the epilogue mask, ORed into `s.guardAcc`, and `STATUS_CHRONO_RANGE` declines
+the batch to the row engine when any lane is out. Task 52's `dayRange` gives
+`AddMonths` with a column count the `ColumnShifted` answer, so a calendar node
+over it is admitted and the guard is what protects the decomposition; the
+guard on the count is what protects the month magic. Both sit behind
+`guardDayProducers`, which is already on.
+
+Validation: the compiler shape (`AddMonths(col, col)`) and the literal form
+unchanged; the emitter's guard declining a batch with one lane past the bound
+in a loop lane and an epilogue lane, not under a null count, and computing an
+in-range batch at both widths; the differential with in-range and
+out-of-range counts and nulls, the declined metric firing only for the latter;
+the cost of the count guard measured on `add_months(d, m)` in the parity
+benchmark beside task 52's row.
+
+### 2.28 `trunc` with a format column (task 61)
+
+Task 35 covers `trunc(d, 'MONTH')`: the level resolves at compile time and
+selects which code is emitted, which is why it is a shape-bearing field. A
+format **column** makes the level a per-row value, and the lowering has to
+change shape rather than gain an operand: the code for every level has to be
+present and the row picks. This is the last of the three string-argument
+functions and the one the corpus is least likely to write; it is here because
+task 59's derived leaf makes it cheap to finish the family.
+
+**The derived leaf, again.** The evaluator's pre-pass maps the format column
+through `DateTimeUtils.parseTruncLevel` to an int32 level column: the four date
+levels as small codes, and a null where the format is null, unrecognised or
+below a day - which is exactly the row engine's result for those rows, a NULL,
+so the derived column's validity *is* the output's. **The node.**
+`TruncDateDynamic(days, levelRef)` is a chrono node whose tail computes the
+subtract form's three date-level results off one prefix - `MONTH` two ops,
+`YEAR` and `QUARTER` sharing the leap flag and the January day of year - and
+the `WEEK` result through the `next_day` arithmetic task 33 owns, then selects
+per lane with three blends on the level lanes. Roughly the cost of all four
+levels at once, paid per row, which is the price of not knowing the level at
+compile time; the literal form stays the shape a query should write and the
+doc says so. `tailReadsMarchMonth` answers yes, `dayRange` treats the output
+like `TruncDate`'s, and the node takes the widest of the level weights.
+
+Validation: the reference evaluator's arm is `DateTimeUtils.truncDate` per row
+over the parsed level, null where the parse fails; the boundary matrix with the
+level column cycling through all four levels and the invalid codes at both
+widths; a differential over a format column mixing `'YEAR'`, `'mm'`,
+`'QUARTER'`, `'week'`, `'HOUR'`, `'QTR'` and null, whose answers are the row
+engine's including the NULL rows; the literal `trunc` byte for byte unchanged.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1100,7 +1298,13 @@ DONE marker was checked against the code, its plan file and the merged pull
 requests, and the state each row now carries is what that check found. Rows 37
 and 42 are the planned recipes with nothing unmerged in their way; 25 and 44
 have no plan file yet. Rows 27, 28, 29, 30, 39 and 49 left this table with the
-re-scope the same day (`PLAN_MILESTONE_5.md` section 3).
+re-scope the same day (`PLAN_MILESTONE_5.md` section 3), and rows 56-61 joined
+it: the date-lane gaps a survey of Spark's date surface found after the
+re-scope (sections 2.23 to 2.28) - the column forms of three functions whose
+literal forms are covered, the two ISO week fields `extract` reaches, and the
+int-cast `INTERVAL DAY` offset (the stored int64 column stays out, by decision). 56 and 57 depend on nothing unmerged; 58 waits on
+37, 60 on 52, and 61 on 59, which brings the derived-leaf mechanism both
+string-argument forms need.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -1130,6 +1334,12 @@ re-scope the same day (`PLAN_MILESTONE_5.md` section 3).
 | 52 | Guard at the producer, not the extraction. **Planned** (`PLAN_TASK_52.md`, second version) | A compile-time day-shift interval analysis in the compiler that declines a calendar entry whose literal `date_add`/`date_sub` chain can leave the narrowed range's slack around the `[0001, 9999]` contract (free, not flagged, closes the gap reachable on master today), and a flag-gated runtime guard on `AddDays`/`SubDays` with a column offset (PR #62) that a calendar node consumes - the old guard's bytecode at the producer's output, once per distinct producer, reusing task 51's still-live `s.guardAcc`/`STATUS_CHRONO_RANGE` plumbing | The bound's edges at `+-1` in the compiler suite; the producer guard declining in a loop lane, an epilogue lane and not under a null offset; `date_add(d, off)` alone byte-identical under both flag values; the two differentials task 51 removed restored around the producer and the compile-time decline; a committed number for the guard's cost on the one shape that pays it |
 | 54 | The Julian map in the prefix. **DONE** (`PLAN_TASK_54.md` 9) | Ben Joffe's replacement for the century-then-year split, behind `VarkaEmitOptions.julianMap` and now the default: `quad = 4 * doe + 3`, the century by one round-down magic and a carry, `jul = quad + 4 * century`, the year of era by one more magic and carry, the day of year as the remainder shifted right by two - no leap test in the prefix, no `century == 4` fold, no year-step underflow correction, and `100 * century` gone from the year assembly. `t[4]` holds the year of era; `emitChronoYear` takes the form. Five `IntVector` invocations fewer on `year`, `dayofyear`, `last_day` and `add_months`, three on the other tails - and **`year` null-free 2769.1 to 3452.2 M rows/s at AVX-512 (+25%; +25% and +26% in the same-run A/B at the two widths)**, four fields unshared +17%, shared +11%, `add_months` +3%; the mixed-null rows moved 0-14%. The op count predicted 8-12%: the stage removed was five serial masked ops on a latency-bound chain, worth its depth rather than its count. The epilogue ladder moved a fourth time, to 21/44 | The map over all 146097 days of an era against `java.time` and the old form on every build; both forms over the calendar boundaries with `last_day` and under every `add_months` offset; the Julian axis on the whole-range and `last_day` sweeps (run, green); the registered op counts off the class file, first time green; `VarkaChrono.narrowed` follows the default, the old form stays a live reference variant on `FloorMod7`'s precedent |
 | 55 | Assert no allocation inside a kernel loop. **DONE** (`PLAN_TASK_55.md`) | The one failure that keeps every packed instruction in place and still costs 3-13x: a heap box per lane group, which two species of one lane type in one JVM produce (`SKILLS.md`, "Every operator the plans rely on"). Asserted as a *measured rate* - the probe reports heap bytes per call at steady state, the suite allows at most one byte per row - because a count of allocation sites in the disassembly cannot tell a per-call segment view from a per-iteration box (`vectorFourFields` carries four of the former). The site detector (allocation prefetch, mark-word store) is the printed diagnosis, with the `-XX:+PrintInlining` tell. On every kernel and emitted-loop case at both widths | The self-test pair at both widths: a gather alone reads 0 bytes per call and shows `vpgatherdd`; the same gather interleaved with a second species reads 26 bytes per row at 512 bits and 192 at 128, packed instructions intact. A `selectFrom` lookup, the first choice, boxes only if the second species ran hot first, so the gather is the calibrating shape; every existing case reads 0 except `vectorFourFields` at 0.16 per row, its per-call views |
+| 56 | `date + INTERVAL n DAY` with a column interval | The compiler unwrapping `ExtractANSIIntervalDays(Cast(i, INTERVAL DAY))` to the int column itself, onto task 38's `AddDays(col, col)`; a stored `INTERVAL DAY` column declining with its own reason - by the owner's decision this task stays in the date lane, and the int64 column is not read | The rewrite's shape pinned; `d + CAST(i AS INTERVAL DAY)` and `d - CAST(i AS INTERVAL DAY)` differential with nulls on both sides; the stored-interval column still residual with its reason; no pinned value or committed number moves |
+| 57 | `extract(DAYOFWEEK_ISO)` / `DOW_ISO` | One narrow arm, `Add(WeekDay(child), Literal(1))`, to a new `DayOfWeekIso` node: `WeekDay`'s floorMod7 tail plus one add; no general int arithmetic | The reference arm `getWeekDay + 1`; a whole week under the three `FloorMod7` variants at both widths; the three spellings in one differential; both pinned fixtures re-pinned once; `dayofweek`/`weekday` bytes unchanged |
+| 58 | `extract(YEAROFWEEK)` | `year` over task 37's Thursday shift, `t = d + 3 - weekday0(d)`: a compiler composition if 37 exposes the shift as a node, else the shift lifted out so both nodes share it; a `dayRange` arm of `[-6, +3]` | The December 28 to January 4 rows of years whose week 1 starts early and late, and the century years, against `getWeekBasedYear`; `weekofyear`, `yearofweek` and `year` in one differential; both widths |
+| 59 | `next_day` with a weekday column | The derived int32 leaf: an evaluator pre-pass mapping a string column through the row engine's own parser before the kernel runs, null or the row engine's ANSI error per its rules; `NextDay(days, ColumnRef)` with `requireOffsetShape` and the two words ANDed; the parity number against the row path, registered prediction that a lone `next_day` wins little and reuse wins more | The leaf's null and error rules under both ANSI settings; the two-column `NextDay` over every null pattern at both widths; a differential over mixed spellings and nulls; the literal form byte for byte unchanged; the number committed whichever way it falls |
+| 60 | `add_months` with a month-count column | `AddMonths(days, ColumnRef)` with `requireOffsetShape` and the words ANDed; the compile-time month bound moved to a runtime guard on the count lanes through task 52's `emitProducerGuard` plumbing, `STATUS_CHRONO_RANGE` on an out-of-range lane; `dayRange` answering `ColumnShifted` | The guard declining in a loop lane and an epilogue lane, not under a null count; in-range batches computed at both widths; the differential with in-range and out-of-range counts and nulls, the declined metric firing only for the latter; the count guard's cost measured beside task 52's row |
+| 61 | `trunc` with a format column | Task 59's derived leaf mapping the format through `parseTruncLevel` to a level column whose validity is the output's; `TruncDateDynamic(days, levelRef)`, a chrono node computing all four levels off one prefix and selecting per lane by three blends; the doc saying the literal form is the shape to write | The reference arm `truncDate` per row over the parsed level; the matrix cycling all levels and the invalid codes at both widths; a differential over a format column mixing every level, invalid formats and null; the literal `trunc` byte for byte unchanged |
 
 ## 4. Files
 
