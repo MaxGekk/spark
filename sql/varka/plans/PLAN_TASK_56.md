@@ -217,4 +217,61 @@ The control is the `date_add(d, i)` row itself, which must not move.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Built as designed in sections 3 to 5, with one change of file: `IntRangeOps`
+lives in catalyst's `codegen.varka` package rather than the engine module
+(section 3.1 records why). No emitter byte changed and neither pinned fixture
+moved. The differential task 38 left pinning `d + CAST(i AS INTERVAL DAY)` as
+residual now asserts it fuses, with the history in its comment.
+
+### 9.1 The measurement
+
+`VarkaThroughputBenchmark`, 2M Arrow-cached rows, columnar consumer, both
+widths from one regeneration (`dev/varka_bench_regen.sh core
+org.apache.spark.sql.execution.benchmark.VarkaThroughputBenchmark`; the
+benchmark is not under `org.apache.spark.sql` directly, so the class needs its
+full name). This is the first regeneration of this file since the script
+existed, so its 128-bit companion and its provenance file are new here.
+
+| case, varka (SIMD) | 256-bit, M rows/s | 128-bit, M rows/s |
+|---|---|---|
+| `date_add(d, i)`, column offset, no check (control) | 206.1 | 183.4 |
+| `d + CAST(i AS INTERVAL DAY)`, bound checked | 207.4 | 191.6 |
+| the Janino baseline of either | 36.4 / 36.5 | 37.5 / 37.0 |
+
+Both varka rows have a best time of 10 ms with a standard deviation of 2-3 ms,
+so the check is below this benchmark's resolution at both widths.
+
+### 9.2 The predictions, scored
+
+1. **Wrong, by a mis-scaling.** The prediction priced the check against a
+   kernel-only rate near 0.1 ns/row, the parity benchmark's number for a bare
+   `date_add`. The throughput benchmark runs the whole batch pipeline -
+   Arrow read, kernel, columnar write - at about 4.9 ns/row, and a vector
+   min/max over 4096 ints per batch is a few percent of the kernel alone and
+   under one percent of that pipeline. Measured: +0.6% at 256 bits and +4.5%
+   at 128 bits in the checked row's favour, both inside the run-to-run noise.
+   The check is not visible where a query pays it, which settles the follow-up
+   in section 3.1: moving the check into the kernel after #115 has nothing to
+   recover, and is not recorded as a task.
+2. **Held, with the caveat that the control is new.** The control row was
+   added by this task, so "does not move" has no prior value to hold; the
+   row's 256-bit rate lands beside the neighbouring `date_sub` row (172.5),
+   which is the same node with a literal offset.
+3. **Held.** The exec suite's past-limit batch declines and its in-range and
+   null-masked batches run on the kernel; the differential's past-limit
+   fixture raises Spark's own `castingCauseOverflowError` through both
+   sessions with the same class and message.
+
+The rows already in the file moved 3-32% either way against the committed
+values (`datediff` +31.7%, `residual-heavy projection, row consumer` -18.4%,
+most others +9-15%), with the Janino baselines within 5%; that is the
+machine-day variance the task 54 PR recorded for this file, on a run whose
+canary and load line were clean, and no row in it is this task's.
+
+### 9.3 What the admission check bought
+
+The milestone section's "exact for every int" would have shipped a kernel that
+wraps where Spark throws, for offsets past 292,000 years. No query writes such
+an offset, which is exactly why a differential would not have caught it; the
+bound costs nothing measurable and keeps the row engine's exception as the
+answer.
