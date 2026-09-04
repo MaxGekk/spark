@@ -1321,6 +1321,38 @@ commands, the seed and row count, how long it takes, and how to tell a
 `docs/sql-varka.md` points at it. The quote check's rule holds: every figure in
 the README traces to one of the three committed files.
 
+**The job size: the per-job fixed cost under 5% of every Varka row.** Added
+4 September 2026 from task 56's measurement (`PLAN_TASK_56.md` 9.2). The
+throughput benchmark's Varka rows over 2M rows run in about 10 ms of wall
+time, and a JFR and task-metrics probe taken after that run showed most of
+those 10 ms is the job's fixed cost - the driver analysing and planning the
+write again on every run, serialising and broadcasting the task, launching
+it, the executor deserialising it - not the scan, the kernel or the output.
+The number a reader is shown must not be that overhead: it makes the Varka
+rate look several times lower than the pipeline's, it makes the ratio against
+Janino several times smaller than the executor's, and it is why the committed
+rows drift 10-30% between regenerations, a few milliseconds of standard
+deviation on a ten-millisecond measurement. The rule for this task's driver,
+then: **the table is sized so that the fixed per-job cost is under 5% of the
+wall time of every Varka row**, which on a run whose fixed cost is about
+10 ms means every Varka query runs for at least 200 ms - a row count in the
+tens of millions on the laptop, or, where the runner's memory is the limit,
+a view that unions the cached table enough times that one job runs enough
+sequential tasks (the driver's cost is paid once per job, the per-task cost
+is a fraction of a millisecond and stays in the executor's share). The
+driver **records executor time beside wall time** for every row, through a
+`SparkListener` over `TaskMetrics.executorRunTime` and `executorCpuTime`,
+printed in the harness's own column layout under a second header so the diff
+script and the quote check read it unchanged; the fixed share is then a
+number in the file - wall minus executor time, over wall - and the 5% rule is
+checked from the file, not asserted. The wall-time table stays the README's
+table, because a reader understands how long a query took without a footnote;
+the executor-time table beside it is what says how much of that was the
+engine. The probe's own numbers are not committed and are not quoted; the
+driver's first run on the laptop is where they are measured properly, and is
+the baseline-first PR (`SKILLS.md`, the baseline rule) that lands before any
+row of the public table.
+
 **Predictions, registered when the task file is written, not here** - except
 one that this section can already make: on the same host, the fork-with-Varka-off
 numbers and stock Spark on JDK 25 will agree within noise for every shape,
@@ -1426,7 +1458,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 59 | `next_day` with a weekday column | The derived int32 leaf: an evaluator pre-pass mapping a string column through the row engine's own parser before the kernel runs, null or the row engine's ANSI error per its rules; `NextDay(days, ColumnRef)` with `requireOffsetShape` and the two words ANDed; the parity number against the row path, registered prediction that a lone `next_day` wins little and reuse wins more | The leaf's null and error rules under both ANSI settings; the two-column `NextDay` over every null pattern at both widths; a differential over mixed spellings and nulls; the literal form byte for byte unchanged; the number committed whichever way it falls |
 | 60 | `add_months` with a month-count column | `AddMonths(days, ColumnRef)` with `requireOffsetShape` and the words ANDed; the compile-time month bound moved to a runtime guard on the count lanes through task 52's `emitProducerGuard` plumbing, `STATUS_CHRONO_RANGE` on an out-of-range lane; `dayRange` answering `ColumnShifted` | The guard declining in a loop lane and an epilogue lane, not under a null count; in-range batches computed at both widths; the differential with in-range and out-of-range counts and nulls, the declined metric firing only for the latter; the count guard's cost measured beside task 52's row |
 | 61 | `trunc` with a format column | Task 59's derived leaf mapping the format through `parseTruncLevel` to a level column whose validity is the output's; `TruncDateDynamic(days, levelRef)`, a chrono node computing all four levels off one prefix and selecting per lane by three blends; the doc saying the literal form is the shape to write | The reference arm `truncDate` per row over the parsed level; the matrix cycling all levels and the invalid codes at both widths; a differential over a format column mixing every level, invalid formats and null; the literal `trunc` byte for byte unchanged |
-| 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25 | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
+| 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25 | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 
 ## 4. Files
 
