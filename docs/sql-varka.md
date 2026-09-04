@@ -81,6 +81,10 @@ becomes timestamp arithmetic) decline:
 * `DAYOFYEAR` (task 34), `LAST_DAY` (task 36) and `ADD_MONTHS` / `date +
   INTERVAL n MONTH` (task 40) with a literal month count, all over the same
   civil-from-days prefix; `LAST_DAY` and `ADD_MONTHS` return dates.
+* `EXTRACT(DAYOFWEEK_ISO FROM d)` / `DATE_PART('DOW_ISO', d)` (task 57),
+  Monday 1 to Sunday 7, as one node: the analyzer spells it `weekday(d) + 1`,
+  and that spelling by hand fuses the same way; any other integer arithmetic
+  over a field, such as `weekday(d) + 2`, stays residual (milestone 5).
 * `TRUNC(date, fmt)` (task 35) at the date levels, for a literal format only:
   `YEAR`/`YYYY`/`YY`, `MONTH`/`MON`/`MM` and `QUARTER` are one node each with
   the level as part of the kernel's shape, and `WEEK` is rewritten onto
