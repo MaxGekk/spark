@@ -746,8 +746,9 @@ the one byte a year tail's `sipush 306` costs over a `bipush 10`. That is three 
 same number for three unrelated reasons - sharing, the guard's removal, and now the month
 elision - which is the strongest argument yet that task 44 should measure its own baseline
 when it is picked up rather than inherit any ladder recorded here. `VarkaLoopEmitterSuite`'s
-`"sharing the prefix moves the epilogue's HugeMethodLimit crossing from 19 outputs to 44"`
-test carries the new numbers; this section keeps the original ladder above it rather than
+`"sharing the prefix moves the epilogue's HugeMethodLimit crossing from 21 outputs to 44"`
+test carries the new numbers (its title has since moved twice more: task 48 to 20, task 54's
+shorter prefix to 21, shared still 44 - `PLAN_TASK_54.md` section 9 has that ladder); this section keeps the original ladder above it rather than
 overwriting it, since both were true measurements of the emitter at the time they were
 taken, and a reader tracing why a number changed should be able to see both. The same
 caveat task 32's own note above already raised - "this does not close tasks 43 or 44" -

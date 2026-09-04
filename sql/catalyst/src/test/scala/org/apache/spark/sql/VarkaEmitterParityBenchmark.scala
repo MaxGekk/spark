@@ -444,20 +444,40 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false))
         val addMonths = emit(Seq(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
           1, 1, loader, 811)
-        def chunkedAddMonths(mixed: Boolean): Unit =
+        def chunkedAddMonths(kernel: VarkaFusedKernel, mixed: Boolean): Unit =
           eachChunk { (dataOff, validityOff, n) =>
             val status = if (mixed) {
-              addMonths.run(Array(mxData.address() + dataOff),
+              kernel.run(Array(mxData.address() + dataOff),
                 Array(mxValidity.address() + validityOff), Array(nullsIn(n)),
                 Array(dst.address() + dataOff),
                 Array(dstValidity.address() + validityOff), Array(13), n)
             } else {
-              addMonths.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
+              kernel.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
                 Array(dst.address() + dataOff),
                 Array(dstValidity.address() + validityOff), Array(13), n)
             }
             require(status == 0, s"the kernel declined a batch: status $status")
           }
+        // Task 54's A/B, both prefix forms named explicitly rather than one of them as "the
+        // default", so the labels survive the default changing. `year` is the shape that pays
+        // the prefix and nothing else, so it brackets the top of what the map is worth (five
+        // ops off a body of about forty, one carry stage off the dependent chain); the
+        // four-field shared shape pays the prefix once and the tails thrice, so it brackets the
+        // bottom; `add_months` is the widest node and the one whose year assembly runs inside a
+        // recomposition. Adjacent cases, both null patterns, the same interleaving discipline
+        // as tasks 45, 48 and 53.
+        val julian = VarkaEmitOptions.DEFAULTS.withJulianMap(true)
+        val centuryYear = VarkaEmitOptions.DEFAULTS.withJulianMap(false)
+        val yearJulian = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 840, julian)
+        val yearCenturyYear =
+          emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 841, centuryYear)
+        val fourJulian = emit(fourFields, 1, 0, loader, 842, julian)
+        val fourCenturyYear = emit(fourFields, 1, 0, loader, 843, centuryYear)
+        val addMonthsJulian = emit(Seq(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
+          1, 1, loader, 844, julian)
+        val addMonthsCenturyYear = emit(
+          Seq(new AddMonths(new ColumnRef(0), new LiteralSlot(0))), 1, 1, loader, 845,
+          centuryYear)
         benchmark.addCase("year, null-free") { _ => chunked(year, false) }
         benchmark.addCase("year, validity OR-ed per group (task 45 A/B), null-free") { _ =>
           chunked(yearPerGroup, false)
@@ -472,8 +492,36 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year, month step kept (task 48 A/B), mixed nulls") { _ =>
           chunked(yearMonthKept, true)
         }
-        benchmark.addCase("add_months(d, 13), null-free") { _ => chunkedAddMonths(false) }
-        benchmark.addCase("add_months(d, 13), mixed nulls") { _ => chunkedAddMonths(true) }
+        benchmark.addCase("add_months(d, 13), null-free") { _ =>
+          chunkedAddMonths(addMonths, false)
+        }
+        benchmark.addCase("add_months(d, 13), mixed nulls") { _ =>
+          chunkedAddMonths(addMonths, true)
+        }
+        benchmark.addCase("year, Julian map (task 54 A/B), null-free") { _ =>
+          chunked(yearJulian, false)
+        }
+        benchmark.addCase("year, century-then-year (task 54 A/B), null-free") { _ =>
+          chunked(yearCenturyYear, false)
+        }
+        benchmark.addCase("year, Julian map (task 54 A/B), mixed nulls") { _ =>
+          chunked(yearJulian, true)
+        }
+        benchmark.addCase("year, century-then-year (task 54 A/B), mixed nulls") { _ =>
+          chunked(yearCenturyYear, true)
+        }
+        benchmark.addCase("year+month+day+quarter, Julian map (task 54 A/B), null-free") { _ =>
+          chunked(fourJulian, false, outputs = 4)
+        }
+        benchmark.addCase("year+month+day+quarter, century-then-year (task 54 A/B), null-free") {
+          _ => chunked(fourCenturyYear, false, outputs = 4)
+        }
+        benchmark.addCase("add_months(d, 13), Julian map (task 54 A/B), null-free") { _ =>
+          chunkedAddMonths(addMonthsJulian, false)
+        }
+        benchmark.addCase("add_months(d, 13), century-then-year (task 54 A/B), null-free") { _ =>
+          chunkedAddMonths(addMonthsCenturyYear, false)
+        }
         benchmark.addCase("month, Neri-Schneider (task 53 A/B), null-free") { _ =>
           chunked(monthNeri, false)
         }
