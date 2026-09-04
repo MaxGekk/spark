@@ -1372,6 +1372,56 @@ which is the check that the baseline is honest.
 
 Depends on every other open row of this milestone: it is the last one.
 
+### 2.30 Int32 arithmetic in the date lane (task 63)
+
+Added on 4 September 2026 by the owner's decision, after task 37 found that
+`WHERE weekofyear(d) = 53` declined at the literal and task 57 had to be a
+node of its own because `weekday(d) + 1` could not be an `Add`. The compiler
+has no arm for `Add`, `Subtract`, `Multiply` or `UnaryMinus`, so any
+arithmetic over a fused int field - `year(d) * 100 + month(d)`, the composite
+key every month-grouped query writes; `datediff(a, b) + 1`; `weekday(d) + 2`
+- declines whole and the row engine computes the entry, although every one of
+those operations exists in the emitter's int32 lanes. The reason it was
+deferred was semantics, not mechanics: in ANSI mode, Spark 4's default, an
+overflow must raise `ARITHMETIC_OVERFLOW`, and until tasks 52 and 56 built the
+per-batch decline route there was nowhere to send an overflowing lane.
+
+**The scope.** `Add`, `Subtract`, `Multiply` and `UnaryMinus` over int32,
+with operands that are fused int fields, `IntegerType` columns and int
+literals, in both evaluation modes:
+
+* non-ANSI: the lanewise op, which wraps exactly as Java's does, nothing
+  else - the free case;
+* ANSI: the same op plus an overflow mask per lane - same signs in and a
+  different sign out for the add and subtract, a widened or saturating
+  check for the multiply - ORed into the body's accumulator, so the batch
+  declines through task 52's status route and the row engine recomputes it
+  and raises Spark's own error for the same row (task 56's error-identity
+  rule); behind a `VarkaEmitOptions` switch so the check's cost is measured
+  against the unchecked form;
+* `try_add`, `try_subtract` and `try_multiply`: the overflow mask cleared
+  from the validity word - milestone 5's "difference-mask-as-validity path",
+  which is the cheapest form of all.
+
+Out, and staying in milestone 5: `/` (a double in Spark), `div` (a long,
+task 29's lane), `%` and `pmod` (the divide-by-zero rule and no SIMD
+division), and every int64 form. The one interaction with task 52's range
+analysis is an int expression feeding a date function, `date_add(d, i * 7)`,
+which is column-shifted whatever the arithmetic and needs no new bound.
+
+**What it closes.** The compositions section 2.24 and scope item 11 of
+`SCOPE_MILESTONE_6.md` list as residual today - the day of quarter, the week
+of month, the Julian day number - and the composite keys, which join the
+closing table (task 62) as rows of their own. Task 57's node stays: it is
+the cheaper lowering of its one shape, and the arm for `Add(WeekDay, 1)` is
+simply subsumed. The size is task 56's: a compiler arm set, one
+overflow-detection block in the emitter behind an option, boundary tests at
+`Int.MaxValue` and `Int.MinValue` in both modes, the error-identity
+differential under ANSI, the `try_*` differential over overflow-dense and
+overflow-free data, and a parity pair for the ANSI check's price with a
+registered prediction. It comes after tasks 57 and 58 and is infrastructure,
+so it takes a row of its own rather than a date function's.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1470,6 +1520,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 59 | `next_day` with a weekday column | The derived int32 leaf: an evaluator pre-pass mapping a string column through the row engine's own parser before the kernel runs, null or the row engine's ANSI error per its rules; `NextDay(days, ColumnRef)` with `requireOffsetShape` and the two words ANDed; the parity number against the row path, registered prediction that a lone `next_day` wins little and reuse wins more | The leaf's null and error rules under both ANSI settings; the two-column `NextDay` over every null pattern at both widths; a differential over mixed spellings and nulls; the literal form byte for byte unchanged; the number committed whichever way it falls |
 | 60 | `add_months` with a month-count column | `AddMonths(days, ColumnRef)` with `requireOffsetShape` and the words ANDed; the compile-time month bound moved to a runtime guard on the count lanes through task 52's `emitProducerGuard` plumbing, `STATUS_CHRONO_RANGE` on an out-of-range lane; `dayRange` answering `ColumnShifted` | The guard declining in a loop lane and an epilogue lane, not under a null count; in-range batches computed at both widths; the differential with in-range and out-of-range counts and nulls, the declined metric firing only for the latter; the count guard's cost measured beside task 52's row |
 | 61 | `trunc` with a format column | Task 59's derived leaf mapping the format through `parseTruncLevel` to a level column whose validity is the output's; `TruncDateDynamic(days, levelRef)`, a chrono node computing all four levels off one prefix and selecting per lane by three blends; the doc saying the literal form is the shape to write | The reference arm `truncDate` per row over the parsed level; the matrix cycling all levels and the invalid codes at both widths; a differential over a format column mixing every level, invalid formats and null; the literal `trunc` byte for byte unchanged |
+| 63 | Int32 arithmetic in the date lane: `Add`, `Subtract`, `Multiply`, `UnaryMinus` over fused fields, int columns and literals (section 2.30) | The compiler arms with an `IntegerType` column leaf; the lanewise op in non-ANSI; the per-lane overflow mask ORed into task 52's accumulator in ANSI, behind a `VarkaEmitOptions` switch; `try_add`/`try_subtract`/`try_multiply` as the mask cleared from validity; `/`, `div`, `%` and int64 left to milestone 5 | Boundary tests at `Int.MaxValue`/`Int.MinValue` in both modes; the error-identity differential under ANSI (same error, same row, as the row engine); the `try_*` differential over overflow-dense and overflow-free data; `year(d) * 100 + month(d)` and `datediff(a, b) + 1` fusing end to end; a parity pair for the check's cost with a registered prediction; both pinned fixtures re-pinned once |
 | 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25 | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 
 ## 4. Files
