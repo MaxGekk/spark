@@ -1230,6 +1230,15 @@ is the decision. Three things came out of building it.
   (`dev/varka_bench_canary.sh`) the regen script runs first, and the quote check
   (`dev/varka_quote_check.py`, a gate step) that holds every quoted number to a
   committed file.
+- Run `dev/varka_precommit.sh` before committing, or install it as the pre-commit hook:
+  non-ASCII outside strings, lines over 100 columns, TODO/FIXME under Varka
+  directories, the quote check, and ruff (`check` and `format --check`) on Python
+  files. Each of those has reached CI or a reviewer at least once; the formatter
+  reached CI on five PRs at once, because `dev/lint-python` skips ruff silently
+  when it is not installed.
+- `VarkaIrFuzzSuite` fuzzes the emitter: random IR over random null patterns, lengths
+  and option variants against the shared reference evaluator, reproducible by seed
+  and iteration.
 - Before registering op counts in a plan, print them: `dev/varka_emit.sh "<sql>"`
   gives the IR, the shape hash and per-method `IntVector` invocation counts on the
   suite's own scale; `--asm` adds C2's assembly for the dense loop.
