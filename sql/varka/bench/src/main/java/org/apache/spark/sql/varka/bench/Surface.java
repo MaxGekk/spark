@@ -52,6 +52,8 @@ public final class Surface {
       Entry.projection("date_add(d, 3)"),
       Entry.projection("date_add(d, i)"),
       Entry.projection("date_sub(d, 5)"),
+      // Task 56: the int-cast day interval, a column offset under a per-batch bound.
+      Entry.projection("d + CAST(i AS INTERVAL DAY)"),
       Entry.projection("datediff(d2, d)"),
       Entry.projection("unix_date(d)"),
       Entry.projection("date_from_unix_date(unix_date(d))"),
