@@ -1,5 +1,277 @@
 # Task 42: `make_date(year, month, day)`
 
+<!-- Rewritten on 4 September 2026 against master and PR #115. The recipe
+     below the line is kept as the record: its three-outcome rule, its
+     lowering and its tests held; what changed is the guard channel it
+     assumed, the dense fast path it did not know about, the year limit it
+     left open, and the compiler's int leaf. -->
+
+## 1. Where this came from
+
+`PLAN_MILESTONE_4.md` row 42. `make_date(y, m, d)` is the one date constructor
+the corpus's helpers write, and the first expression in this engine that reads
+three integer columns and can return null for non-null inputs. The recipe was
+written before task 40 landed `emitDaysFromCivil`, before task 51 removed the
+per-lane range guard it planned to reuse, and before task 52 (#115, mergeable
+today) rebuilt that guard as a per-body accumulator at the producer. This plan
+is the recipe re-read against those three facts.
+
+## 2. The admission check, done
+
+**The validity rule is the calendar's.** Over 2,184,000 `(year, month, day)`
+triples - every day of six complete 400-year cycles and of the top of the
+range, with months `-3..16` and days `-3..35` - "month in 1..12 and day in
+1..length of the clamped month" agrees with `LocalDate.of`'s acceptance on
+every one, with the month length as the closed form `30 | (m ^ (m >>> 3))`
+for every month but February and `28 + leap` for February (`SKILLS.md`, the
+`datealgo-rs` review; the twelve lengths checked). Clamping the month before
+the length is what keeps the day test meaningful when the month is out of
+range, and the month test has already condemned that lane.
+
+**The recompose arithmetic is exact where this node will run it.**
+`emitDaysFromCivil`'s scalar twin round-trips with `narrowed` over every day
+of years 1 to 9999 and over the wider range `add_months` reaches, roughly
+years -14848 to 35181 (`PLAN_TASK_40.md` 7, `verify_days_from_civil.py`,
+after the task's correction of the `/100` and `/400` magics). The leap flag
+is exact over reported years -15200..87299. The year limit this node guards
+to (3.1) is the calendar range's whole years, -12799 to 33133, which lies
+inside both.
+
+**What the check would have rejected:** a validity rule that needed a month
+table, or a year limit outside the recompose's proven range, in which case
+a valid-looking date past the limit would have been a wrong day rather than
+a declined batch.
+
+**Found while checking, not in the recipe:** the dense fast path. Since task
+45 a kernel whose inputs are null-free runs a dense body that writes no
+per-lane validity - the driver fills the destination validity once - on
+task 11's invariant that every node maps valid inputs to valid outputs. A
+non-ANSI `make_date` breaks that invariant: `make_date(2024, 2, 30)` over
+three non-null ints is null. Section 3.3 is the consequence.
+
+## 3. The design
+
+### 3.1 The node, its validity, and where its two masks go
+
+**`MakeDate(VarkaVectorIR year, VarkaVectorIR month, VarkaVectorIR day,
+boolean failOnError)`**, a plain record in the top-level `permits` (a
+producer of a date, not a `Chrono` extraction), the flag shape-bearing on
+`TruncDate`'s precedent, rendered `(makeDate:ANSI ...)` /
+`(makeDate:NULL ...)`. Three children is `IfElse`'s shape: `childrenOf`,
+`analyze` and the fuzzer's bound bookkeeping follow it.
+
+**The lowering**, with the three inputs in slots after their `emitValue`:
+
+    mc     = min(max(m, 1), 12)                          2 ops
+    L      = emitLeapFlag(y)                             4 ops, a mask
+    len    = blend(30 | (mc ^ (mc >>> 3)), 28 + L, mc == 2)   6 ops
+    okM    = (m >= 1) & (m <= 12)                        3 mask ops
+    okD    = (d >= 1) & (d <= len)                       3
+    okY    = (y >= MIN_YEAR) & (y <= MAX_YEAR)           3
+    valid  = okM & okD                                   1
+    out    = emitDaysFromCivil(y, mc, d, ...)            about 30, task 40's
+
+`out` is garbage wherever `valid` or `okY` is false and that is the contract:
+a null lane's data is undefined, and a declined batch is recomputed whole.
+`emitDaysFromCivil` takes its three operands from slots and leaves the day on
+the stack, so the node's own slots are the three inputs, `mc`, `len`, the
+two masks and the helper's eleven scratch locals: `MAKE_DATE_TMP_COUNT = 18`,
+fresh named slots (task 36's lesson), and a weight of about 60, read off the
+register.
+
+**Two masks, two destinations.**
+
+* The **decline mask** is `!okY` in both modes, plus `!valid` in ANSI mode -
+  ANDed with the inputs' validity word in a masked body (a null input is not
+  an invalid date; task 52's guard does the same AND for the same reason),
+  ANDed with the epilogue mask when there is one, and ORed into the body's
+  guard accumulator. The batch returns `STATUS_CHRONO_RANGE`, the evaluator
+  recomputes it on the row engine, which returns the far date or raises
+  Spark's own `SparkDateTimeException` (`DATETIME_FIELD_OUT_OF_BOUNDS`) at
+  the same row - task 56's error-identity rule, no error machinery here.
+* The **validity** of the output is the inputs' word AND `valid` in non-ANSI
+  mode - the node computes its own word, as `IfElse` and `Greatest` do - and
+  just the inputs' word in ANSI mode, where an invalid date never reaches
+  the output.
+
+**The year limit** is the calendar range's whole years: `MAKE_DATE_MIN_YEAR`
+and `MAKE_DATE_MAX_YEAR` in `VarkaChrono`, derived in source from
+`NARROW_MIN_DAYS` and `NARROW_MAX_DAYS` (the first whole year after the
+range's start, the last whole year before its end: -12799 and 33133), not
+from the recompose's wider exact range. Two reasons: every date the node
+publishes then lies inside the narrow range, so under #115's analysis
+`dayRange(MakeDate) = Bounded(first day of MIN_YEAR, last day of MAX_YEAR)`
+and `year(make_date(y, m, d))` is admitted at compile time with no runtime
+guard of its own; and a user asking for year 50,000 gets the row engine's
+answer, which is the designed failure mode for a value the lowering does
+not cover. Spark itself accepts years to about five million; declining past
+twelve thousand costs no query in the corpus.
+
+### 3.2 The guard accumulator: this task starts after #115
+
+On master `Slots.guardAcc` is always null (task 51). #115 allocates it when a
+body reaches a guarded producer and gives the emitter `emitProducerGuard`,
+whose block - compare, AND with the validity word in masked bodies, AND with
+the epilogue mask, OR into the accumulator - is the decline mask's shape
+exactly. This task extends #115's `guardedProducers` rule by one clause: a
+body containing a `MakeDate` allocates the accumulator whatever its
+consumers, and the node's arm ORs its mask in through the same helper,
+refactored to take the mask off the stack rather than compute the range
+compare itself. Building a second accumulator on master and merging the two
+would be the wrong order; the row's dependency is #115, and section 8 says so.
+
+### 3.3 The dense path: a body with a non-ANSI `MakeDate` is masked
+
+The dense body assumes valid in, valid out. Rather than teach it per-lane
+validity stores, the analysis gains one flag, `nullsFromValidInputs`, set
+when a body reaches a `MakeDate` whose flag is `NULL`; for such a body the
+emitter generates the dense loop method as the masked body with every input
+word all-true (`loadWord` already emits the constant for `WORD_ALL_TRUE`),
+so the output word is stored per lane group as in any masked body, and the
+driver's once-only validity fill is skipped for that kernel (the option
+`denseValidityOnce` is answered false by the flag). Every other shape's
+bytes are unchanged - the flag is false - which the suite asserts on method
+sizes as task 52 did. The ANSI form never nulls a valid input and keeps the
+dense body.
+
+### 3.4 The compiler: an int operand, and a bounded date producer
+
+`compileNode`'s column leaf stays `DateType`-only (task 38's rule); the three
+children go through a new `compileIntOperand`: a foldable int literal becomes
+a `LiteralSlot`, a bare `IntegerType` `BoundReference` a `ColumnRef`, and
+anything else declines with "make_date argument is not an int column or
+literal" - `compileOffset`'s shape without its interval cases. Task 63 will
+widen what an int operand can be; this helper is what it widens. The arm:
+
+    case MakeDate(y, m, d, failOnError) =>
+      for (yy <- int(y); mm <- int(m); dd <- int(d))
+        yield new IRMakeDate(yy, mm, dd, failOnError)
+
+`failOnError` is captured on the expression from `spark.sql.ansi.enabled` at
+analysis, so the mode is a compile-time fact and two modes are two shapes.
+The output type is `DateType`, from the expression, as `LastDay`'s is. Under
+#115, `dayRange` gains the `Bounded` arm of 3.1.
+
+### 3.5 What is deliberately unchanged
+
+* `emitDaysFromCivil`, `emitLeapFlag`, `emitMonthStart`: called, not edited.
+* `try_make_date`: does not exist in this Spark; nothing to do.
+* `make_timestamp` and the interval constructors: int64 lanes, milestone 5.
+* The year limit is not widened past the calendar range; task 49's long lanes
+  are where a wider constructor would live.
+
+### 3.6 Registered op counts
+
+Dense-loop `IntVector` calls, the register's metric, to be read off the
+emitted bytes: `make_date` about 55 to 60 (the lowering above), the ANSI and
+`NULL` forms within two ops of each other (the `NULL` form stores a word the
+ANSI form does not), `add_months` and `trunc` unmoved.
+
+## 4. Files
+
+| file | what |
+|---|---|
+| `VarkaChrono.java` (+ suite) | `MAKE_DATE_MIN_YEAR`/`MAX_YEAR` derived from the narrow range; a scalar twin `makeDate(y, m, d)` returning the day or a sentinel, swept against `LocalDate.of` |
+| `VarkaVectorIR.java` | the record, both renderings with the mode |
+| `VarkaLoopEmitter.java` | `MAKE_DATE_WEIGHT`, `MAKE_DATE_TMP_COUNT`; `childrenOf`, `analyze` (three int children), `planWordRef` (own word in `NULL` mode, the AND of three in ANSI), `planSlots`, `emitValue`; the guard helper taking a mask; the `nullsFromValidInputs` flag and the masked dense body |
+| `VarkaReferenceEvaluator.scala` | `LocalDate.of` in a `try`, `None` on `DateTimeException`, the definition |
+| `VarkaLoopEmitterSuite.scala` | the validity matrix in both modes; the decline tests on status; the dense null-free invalid-date test; the year-limit test; the register; byte-identity of every other shape; both fixtures re-pinned |
+| `VarkaIrFuzzSuite.scala` | the round-trip arm `MakeDate(Year(a), Month(a), DayOfMonth(a))` in both modes, and a `NULL`-mode arm with a literal day |
+| `VarkaShapeCacheSuite.scala` | the hash re-pinned |
+| `VarkaExpressionCompiler.scala` (+ suite) | `compileIntOperand`, the arm, the `dayRange` arm (#115), the decline reason |
+| `VarkaSharedSessions.scala`, `VarkaDifferentialSuite.scala` | a `withAnsi` helper over both sessions; the differential in both modes, the error identity under ANSI |
+| `VarkaEmitterParityBenchmark.scala` + files | the three-input runner; `make_date` null-free and mixed, both modes, and the per-row `LocalDate.of` anchor |
+| `docs/sql-varka.md` | the surface bullet, with the year limit and the two modes |
+| `PLAN_MILESTONE_4.md`, this file | row 42, section 9 |
+
+## 5. Tests, and what each is for
+
+* **Oracle**: `LocalDate.of(y, m, d)` in a `try`, `toEpochDay` on success,
+  `None` on `DateTimeException` - the definition; the fuzzer and matrices
+  inherit it.
+* **The validity matrix, both modes**: valid dates; month 0, 13 and negative;
+  day 0, 32, and 29/30/31 in months that lack them; 29 February in a leap
+  year and in a common year and in 1900 and 2000; nulls in each input alone
+  and together; every length and null pattern. In `NULL` mode the invalid
+  rows are null outputs and the status is 0; in ANSI mode the same rows make
+  the kernel return `STATUS_CHRONO_RANGE`, asserted on the status the way
+  task 52's guard tests are, with no output published.
+* **The dense path**: a null-free batch with one invalid date under the
+  `NULL` form returns that lane null - the test the old recipe could not have
+  written, because the dense body did not exist.
+* **The year limit declines in both modes**, at `MIN_YEAR - 1` and
+  `MAX_YEAR + 1`, and `MIN_YEAR-01-01` and `MAX_YEAR-12-31` are answered;
+  and a year past the limit with an invalid month declines rather than nulls,
+  which is the recipe's three-outcome distinction as a test.
+* **Byte identity**: every kernel without a `MakeDate` has the same method
+  sizes with the flag machinery in place.
+* **Constants and twin**: the two year constants against `LocalDate`; the
+  scalar twin over every day of the covered years, opt-in, and at the
+  invalid corners.
+* **Compiler**: columns and literals in each position, both modes, the
+  `DateType` output; a non-int argument declining with the reason; under
+  #115, `year(make_date(y, m, d))` admitted and its range arm.
+* **Differential**: a cached table of three int columns with nulls and
+  invalid combinations; in `NULL` mode the projection, the same date fed to
+  `year` and `date_add`, and a filter on the result; in ANSI mode the valid
+  table matching, and the invalid table raising the same `getCondition` and
+  `getMessage` through both sessions (task 56's pattern).
+* Both pinned fixtures move once, re-pinned from their output.
+
+## 6. The measurement
+
+`VarkaEmitterParityBenchmark`, a `make_date` section: the `NULL` and ANSI
+forms as an adjacent A/B, null-free and mixed nulls, over three int columns
+of valid dates (a three-input `chunked` walk beside the two-input one), the
+`add_months` row as the sibling control, and a per-row
+`DateTimeUtils.localDateToDays(LocalDate.of(...))` anchor; both widths,
+one regeneration on an idle machine. The throughput benchmark gains a
+`make_date(y, m, d)` row over a three-int-column table.
+
+### 6.1 Predictions, registered before the run
+
+1. The register: 55 to 60 for either form, within two of each other.
+2. Both forms run at 1.6x to 2x `add_months`'s rate at 256 bits (about half
+   the ops) and no lower than 1.4x at 128 bits.
+3. At least 8x the per-row `LocalDate.of` anchor at 256 bits: the row path
+   allocates a `LocalDate` per row.
+4. The ANSI form is within 3% of the `NULL` form null-free, and the `NULL`
+   form is the slower one with mixed nulls, by the word store.
+5. No other row moves beyond the machine-day variance already recorded.
+
+## 7. Risks
+
+1. **The dense-path flag reaches a shape it should not.** Asserted by the
+   byte-identity test over every other node; the flag is set by one record.
+2. **A garbage lane's arithmetic traps.** No lane op traps; the only
+   division is a magic multiply. The matrix over out-of-range inputs holds it.
+3. **`emitLeapFlag` off its domain.** Only lanes `okY` rejects can be
+   there, and they decline; the year-limit test at `MIN_YEAR - 1` covers the
+   edge.
+4. **#115's merge order.** This task starts after it, per 3.2.
+5. **The ANSI differential's session state.** `withAnsi` sets and restores
+   the conf on both sessions in a `finally`; a leaked setting would show as
+   every later differential failing, which is loud.
+
+## 8. Sequencing
+
+0. #115 merged.
+1. Constants, twin and suite; the record and renderings.
+2. The emitter: the arm, the guard helper taking a mask, the dense flag; the
+   oracle; the matrix, status, dense, limit and identity tests; fixtures.
+3. The compiler and its suite; `withAnsi`; the differential; the docs.
+4. The benchmark section, one regeneration, section 9, row 42.
+
+## 9. Outcome
+
+Filled in when the measurement lands.
+
+---
+
+## The recipe before the re-plan (superseded, kept as the record)
+
+# Task 42: `make_date(year, month, day)`
+
 A recipe for a cheap agent, in the shape task 33 established. Read
 `PLAN_TASK_33.md` section 3 for the mechanics of adding a node type.
 
