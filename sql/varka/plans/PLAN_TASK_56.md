@@ -245,11 +245,15 @@ so the check is below this benchmark's resolution at both widths.
 
 1. **Wrong, by a mis-scaling.** The prediction priced the check against a
    kernel-only rate near 0.1 ns/row, the parity benchmark's number for a bare
-   `date_add`. The throughput benchmark runs the whole batch pipeline -
-   Arrow read, kernel, columnar write - at about 4.9 ns/row, and a vector
-   min/max over 4096 ints per batch is a few percent of the kernel alone and
-   under one percent of that pipeline. Measured: +0.6% at 256 bits and +4.5%
-   at 128 bits in the checked row's favour, both inside the run-to-run noise.
+   `date_add`. The throughput benchmark times a whole single-task job, and
+   at 2M rows most of its 10 ms is the job's fixed cost - planning the noop
+   write, serialising and launching the task - with the Arrow cache read, the
+   output allocation and the kernel behind it (a JFR and task-metrics probe
+   taken after this run; the benchmark itself cannot separate them, which is
+   a methodology point for task 62). A vector min/max over the offset column
+   is a few percent of the kernel alone and far under one percent of that
+   job. Measured: +0.6% at 256 bits and +4.5% at 128 bits in the checked
+   row's favour, both inside the run-to-run noise.
    The check is not visible where a query pays it, which settles the follow-up
    in section 3.1: moving the check into the kernel after #115 has nothing to
    recover, and is not recorded as a task.
