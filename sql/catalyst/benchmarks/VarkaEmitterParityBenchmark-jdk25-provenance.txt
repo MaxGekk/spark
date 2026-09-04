@@ -1,11 +1,11 @@
 benchmark:   org.apache.spark.sql.VarkaEmitterParityBenchmark
-commit:      0e68d297cda
-date:        2026-09-04T07:20:48Z
+commit:      ba0f9319222
+date:        2026-09-04T10:25:33Z
 jdk:         OpenJDK Runtime Environment (build 25.0.4+7-1-26.04-Ubuntu)
 kernel:      7.0.0-30-generic
 cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 power:       governor=performance epp=performance profile=performance
-load at start: 0.73
-canary:      ok (compute +0.2% cache +1.8% memory -0.3% )
+load at start: 0.16
+canary:      ok (compute +0.2% cache -1.2% memory -1.1% )
 wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaEmitterParityBenchmark
 narrow run:  build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaEmitterParityBenchmark"

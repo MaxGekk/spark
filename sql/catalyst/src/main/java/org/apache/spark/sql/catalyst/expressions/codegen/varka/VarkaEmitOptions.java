@@ -101,6 +101,13 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        producer rather than at each extraction (task 51 removed the latter). Off, the bytes
  *        are task 51's exactly and such a lane is computed wrongly rather than declined - a
  *        reference variant for the A/B that priced the guard, on {@link FloorMod7}'s precedent.
+ * @param truncDate which lowering {@code trunc(date, ...)} uses at the {@code YEAR} and
+ *        {@code QUARTER} levels (task 35): {@link TruncDateForm#SUBTRACT} takes the day of year
+ *        off the date ({@code d - dayofyear + start}), {@link TruncDateForm#RECOMPOSE} rebuilds
+ *        the period's first day from the year and month through {@code emitDaysFromCivil}. Same
+ *        dates either way, differentially checked against each other, and {@code MONTH} follows
+ *        the switch too so the recomposition has a third shape to agree on; whichever is not
+ *        the default stays a live reference variant, on {@link FloorMod7}'s precedent.
  * @param floorMod7 which lowering {@code dayofweek}/{@code weekday} use for their mod-7.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
@@ -118,6 +125,7 @@ public record VarkaEmitOptions(
     boolean neriSchneiderMonth,
     boolean julianMap,
     boolean guardDayProducers,
+    TruncDateForm truncDate,
     FloorMod7 floorMod7,
     boolean misdescribeAdd) {
 
@@ -130,15 +138,21 @@ public record VarkaEmitOptions(
    */
   public enum FloorMod7 { MAGIC, DIV, DIGIT_SUM }
 
+  /** The two {@code trunc(date, ...)} lowerings; see {@link #truncDate}. */
+  public enum TruncDateForm { SUBTRACT, RECOMPOSE }
+
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
           VarkaLoopEmitter.GROUP_BUDGET, true, true, true, true, true, true, true,
-          FloorMod7.MAGIC, false);
+          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
       throw new IllegalArgumentException("groupBudget must be positive: " + groupBudget);
+    }
+    if (truncDate == null) {
+      throw new IllegalArgumentException("truncDate must not be null");
     }
     if (floorMod7 == null) {
       throw new IllegalArgumentException("floorMod7 must not be null");
@@ -149,61 +163,67 @@ public record VarkaEmitOptions(
   public VarkaEmitOptions withGroupBudget(int budget) {
     return new VarkaEmitOptions(budget, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap,
-        guardDayProducers, floorMod7, misdescribeAdd);
+        guardDayProducers, truncDate, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withCse(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, enabled, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap,
-        guardDayProducers, floorMod7, misdescribeAdd);
+        guardDayProducers, truncDate, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withShareChronoPrefix(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, enabled, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap,
-        guardDayProducers, floorMod7, misdescribeAdd);
+        guardDayProducers, truncDate, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withDenseValidityOnce(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, enabled,
         elideChronoMonth, neriSchneiderMonth, julianMap,
-        guardDayProducers, floorMod7, misdescribeAdd);
+        guardDayProducers, truncDate, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withElideChronoMonth(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
         enabled, neriSchneiderMonth, julianMap,
-        guardDayProducers, floorMod7, misdescribeAdd);
+        guardDayProducers, truncDate, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withNeriSchneiderMonth(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, enabled, julianMap,
-        guardDayProducers, floorMod7, misdescribeAdd);
+        guardDayProducers, truncDate, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withJulianMap(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, enabled,
-        guardDayProducers, floorMod7, misdescribeAdd);
+        guardDayProducers, truncDate, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withGuardDayProducers(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap,
-        enabled, floorMod7, misdescribeAdd);
+        enabled, truncDate, floorMod7, misdescribeAdd);
+  }
+
+  public VarkaEmitOptions withTruncDate(TruncDateForm form) {
+    return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
+        elideChronoMonth, neriSchneiderMonth, julianMap,
+        guardDayProducers, form, floorMod7, misdescribeAdd);
   }
 
   public VarkaEmitOptions withFloorMod7(FloorMod7 lowering) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap,
-        guardDayProducers, lowering, misdescribeAdd);
+        guardDayProducers, truncDate, lowering, misdescribeAdd);
   }
 
   public VarkaEmitOptions withMisdescribeAdd(boolean misdescribe) {
     return new VarkaEmitOptions(groupBudget, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap,
-        guardDayProducers, floorMod7, misdescribe);
+        guardDayProducers, truncDate, floorMod7, misdescribe);
   }
 
   public boolean isDefault() {

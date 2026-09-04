@@ -1,5 +1,8 @@
 # Task 35: `trunc(date, 'YEAR' | 'MONTH' | 'QUARTER')`
 
+**Status: done; section 8 is the outcome.** Sections 1-7 are the recipe and its
+re-plan as they were handed over.
+
 One of four small vocabulary tasks (34-37) written as recipes for a cheap
 agent. Read `PLAN_TASK_33.md` section 3 for the mechanics of adding a node
 type, and `PLAN_TASK_34.md` section 2.1 for the leap flag this task needs.
@@ -492,4 +495,132 @@ Five commits, each green on its own:
 
 ## 8. Outcome
 
-Filled in when the work lands, including which steps of this recipe misled you.
+Built in September 2026 against master at 0289e503b62, after tasks 48, 51-55
+and the tooling PRs had landed. The arithmetic in section 2 was right on the
+first run under every combination the suites drive: both lowerings, both
+prefix forms, both month axes, every boundary, and the whole covered range
+through the emitted kernels (sweep step of the gate, zero mismatches on
+16,777,216 days times three levels times eight variants). What needed
+correcting was the recipe's picture of the emitter, and section 8.1 is that
+list, in the order it bit.
+
+### 8.1 Where the recipe misled, and what held
+
+1. **`emitLeapFlag` is one slot in, one mask out.** Section 7.1 describes task
+   40's seven-parameter helper. Task 34's follow-up replaced it with Huffner's
+   perfect hash: `emitLeapFlag(cb, yearSlot)` takes the plain reported year,
+   biases it itself, uses no scratch, and leaves a `VectorMask` on the stack.
+   The `YEAR` and `QUARTER` tails call that; there is no second overload on
+   master to avoid.
+2. **There was no `emitJanuaryDayOfYear`.** Task 34's conversion sat inline in
+   `emitChrono`'s `DayOfYear` arm. It is now a helper, factored out
+   instruction for instruction, and the register test pins `dayofyear` at 43
+   dense-loop `IntVector` calls before and after - the extraction's bytes did
+   not move, which prediction 4 required.
+3. **`tailReadsMarchMonth` throws on an unknown node** (task 48), so the node
+   had to declare which levels read the month numerator: `MONTH` and
+   `QUARTER` do, `YEAR` does not under either form - the recompose form's
+   January month is a constant. Section 7.5's "once task 48 lands" clause was
+   the right prediction of exactly this edit.
+4. **The weights were 40 and 51, not 50 and 70.** Section 7.5's `CHRONO_WEIGHT`
+   and `DAY_OF_YEAR_WEIGHT` figures predate task 48's month elision and the
+   perfect-hash leap flag. The shipped tails count 45 (`YEAR`), 36 (`MONTH`)
+   and 62 (`QUARTER`) `IntVector` calls under the subtract form against
+   `dayofmonth`'s 36 and `dayofyear`'s 43, so `MONTH` weighs `CHRONO_WEIGHT`
+   and the other two carry the same eight-op mask allowance the day-of-year
+   weight does: 53 and 70. The recompose form is 70, 74 and 79; a weight is a
+   shape property and does not follow the option.
+5. **`QTR` is indeed not a spelling** (7.1 item 4 was right), and the compiler
+   suite pins it as "trunc with an unrecognized format". The four decline
+   reasons are each pinned by string, the way task 16's report needs them.
+6. **The fuzzer's node list is hand-maintained** (`VarkaIrFuzzSuite`, PR
+   #110), which no earlier recipe could have known: a new node type goes
+   unfuzzed until its generator arm is added. Added, with the child's bound.
+7. **Task 52 was not on master** when this was built (its PR #115 was open),
+   so the compiler arm is the plain two-liner and `dayRange` - task 52's
+   interval analysis - has no `TruncDate` arm yet. It needs one: a truncated
+   date lies in the child's interval shifted by `[-365, 0]`. Whichever of the
+   two PRs merges second carries that arm; until then a calendar function over
+   a `trunc` output would decline as an unknown producer rather than answer
+   wrongly, which is task 52's designed failure mode.
+8. **`TRUNC_DATE_TMP_COUNT` is 24**, one size for both forms: the prefix's
+   eight, the reported year, the month, the day, the day of year and the
+   quarter, then the eleven scratch locals `emitDaysFromCivil` takes. Fresh
+   named slots per `PLAN_TASK_36.md`'s lesson; the prefix's two carry masks
+   `t[6..7]` are reused as `DayOfYear` reuses them.
+9. **What held as written.** Section 2's three formulas; the level as a record
+   component (both pinned fixtures moved once, for the new node, and the
+   `DEFAULTS` hash did not); `emitChronoTrunc` as a tail method called from
+   the switch, `emitChronoLastDay`'s shape; the `WEEK` rewrite onto
+   `IRNextDay(SubDays(d, 7), 3)`, exact against the row engine on the Sunday,
+   Monday and first-week-of-January rows; and the `DateType` output feeding
+   `date_add` in the same chain, at the IR level and through SQL.
+
+### 8.2 The MONTH form under the numerator
+
+Section 7.3's single-subtraction `MONTH` is what shipped: `emitZeroBasedDayOfMonth`
+is `emitChronoDayOfMonth` one step before its increment, and `trunc(d, 'MONTH')`
+is `d` minus that. 36 `IntVector` calls against `dayofmonth`'s 36 - the increment
+became the subtraction. Under the 0-based reference axis the same helper is
+`rem - monthStart(mp)`, and the differential runs both axes.
+
+### 8.3 The measurement, and the default
+
+`VarkaEmitterParityBenchmark`, "year" section, regenerated at both widths by
+`dev/varka_bench_regen.sh` on an idle machine (load 0.16 at start, canary within
+1.2% on all three axes, governor `performance`). The A/B pairs are adjacent
+cases in one run; every ratio is above 1.3x, so the standing rule's
+minimum-based rerun was not needed. Rates in M rows/s.
+
+| case | 256-bit, subtract / recompose | 128-bit, subtract / recompose |
+|---|---|---|
+| `trunc YEAR`, null-free | 2314.8 / 1585.4, **1.46x** | 872.2 / 547.8, **1.59x** |
+| `trunc MONTH`, null-free | 3380.0 / 1201.7, **2.81x** | 1268.7 / 419.9, **3.02x** |
+| `trunc QUARTER`, null-free | 1575.3 / 1086.2, **1.45x** | 565.6 / 371.1, **1.52x** |
+| `trunc YEAR`, mixed nulls | 1809.9 / 1255.4, **1.44x** | 633.4 / 456.7, **1.39x** |
+| `trunc QUARTER`, mixed nulls | 1316.7 / 952.9, **1.38x** | 502.9 / 354.1, **1.42x** |
+| per-row `DateTimeUtils.truncDate` (the row path) | 192.8 | 192.7 |
+
+For scale, `dayofmonth` (Neri-Schneider, null-free) is 3395.4 and 1257.1 at the
+two widths and `year` is 3457.5 and 1334.4 in the same run.
+
+**The default: `SUBTRACT`**, at every level. It was the provisional default
+while the code was built and the numbers confirm it without a close call:
+the recompose form pays a whole second era decomposition through
+`emitDaysFromCivil` where the subtract form pays a leap flag and a handful of
+lane ops, and the gap is widest exactly where the subtract form is cheapest
+(`MONTH`, two ops on the prefix against a full recomposition). `RECOMPOSE`
+stays a live reference variant: the sweep and the boundary matrix run it, and
+it is `emitDaysFromCivil`'s second caller, which was half the reason to build
+it.
+
+**Predictions scored** (section 7.8).
+
+1. *Subtract beats recompose by 1.10x to 1.35x at AVX-512, less at 128-bit.*
+   Direction right, size wrong twice over: 1.38x to 1.46x at 256 bits, and
+   *more* at 128 bits (1.39x to 1.59x), not less. The prediction assumed both
+   forms were dominated by the shared prefix; the recompose form's own
+   arithmetic (`emitDaysFromCivil`, twenty-odd ops with two divisions) is not
+   small against a forty-op prefix, and at 128 bits every op costs twice the
+   lane groups, so the extra work shows more, not less.
+2. *`MONTH` within noise of `dayofmonth`, 4x to 8x over the row path.*
+   3380.0 against 3395.4 (0.5%) and 1268.7 against 1257.1 (0.9%): confirmed.
+   Against the row path it is 17.5x, past the predicted band - the band was
+   guessed off `dayofweek`'s 8.8x over `LocalDate`, but `DateTimeUtils.truncDate`
+   is slower per row than a bare `LocalDate.getYear` (192.8 against 481.5 M
+   rows/s here), so the ratio is larger.
+3. *The two variants agree bit for bit over the covered range.* Confirmed by the
+   gate's sweep step, both forms under all four prefix variants.
+4. *No committed number for an existing shape moves; no emitted byte of the
+   other calendar nodes changes; the two pinned fixtures move once.* The byte
+   claim is asserted (`dayofyear` at 43 before and after the refactor, the
+   sharing test's byte-for-byte check); the calendar rows are unchanged
+   (`year` null-free 3452.2 to 3457.5); the non-calendar rows moved 3-20% in
+   both directions with every control within 0.1%, the machine-day variance
+   `PLAN_TASK_54.md` 9.2 and `SKILLS.md` record for the memory-bound rows.
+   The fixtures moved once each.
+5. *`WEEK` costs what `next_day` costs.* Not measured separately: it is
+   `next_day`'s own emitted code behind one literal subtract, and the
+   compiler test pins that shape. A number would be `next_day`'s number.
+6. *No new `FragmentKind`.* Confirmed: the prefix-sharing test passes on
+   `trunc(d, 'MONTH')` beside `year(d)` with no change to `fragmentKey`.

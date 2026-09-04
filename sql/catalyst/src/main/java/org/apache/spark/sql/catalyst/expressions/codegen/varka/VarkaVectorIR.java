@@ -64,6 +64,13 @@ public sealed interface VarkaVectorIR
   enum CompareOp { LT, LE, GT, GE, EQ }
 
   /**
+   * The period {@link TruncDate} rounds a date down to (task 35). {@code WEEK} is deliberately
+   * absent: Spark defines it as {@code next_day(d - 7, 'MONDAY')}, and the compiler rewrites it
+   * onto {@link NextDay} over {@link SubDays} rather than giving it a lowering of its own.
+   */
+  enum TruncLevel { YEAR, MONTH, QUARTER }
+
+  /**
    * A mask-valued node (task 11): per lane group it evaluates to a known-true and a
    * known-false mask, and an unknown lane (a null input somewhere below) is neither - which is
    * what makes {@code CASE WHEN}'s null condition fall through to ELSE.
@@ -194,7 +201,8 @@ public sealed interface VarkaVectorIR
    * handled, which is the same protection {@link Cond} gives the condition nodes.
    */
   sealed interface Chrono extends VarkaVectorIR
-      permits Year, Month, DayOfMonth, Quarter, DayOfYear, LastDay {}
+      permits Year, Month, DayOfMonth, Quarter, DayOfYear, LastDay,
+      TruncDate {}
 
   /**
    * {@code date +- INTERVAL n MONTH/YEAR} and {@code add_months(date, n)} (task 40): month
@@ -249,6 +257,16 @@ public sealed interface VarkaVectorIR
   record LastDay(VarkaVectorIR days) implements Chrono {}
 
   /**
+   * Spark's {@code trunc(date, fmt)} at its three date levels (task 35): the first day of the
+   * year, month or quarter {@code days} falls in - a {@link org.apache.spark.sql.types.DateType}
+   * output like {@link LastDay}'s. The level is a record component rather than a literal slot
+   * because it selects which code is emitted, not which value is used: two levels are two
+   * shapes, and the shape hash must tell them apart. {@link Compare}'s {@link CompareOp} is the
+   * precedent. See {@link Year} for what a chrono node costs and why.
+   */
+  record TruncDate(VarkaVectorIR days, TruncLevel level) implements Chrono {}
+
+  /**
    * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is
    * derived from it and must be stable across JVMs, restarts and JDK releases - one shape,
    * one {@code VarkaFusedProjection_<hash>} name, everywhere. {@link Record#toString} makes
@@ -289,6 +307,7 @@ public sealed interface VarkaVectorIR
       case Quarter n -> "(quarter " + canonical(n.days()) + ")";
       case DayOfYear n -> "(dayOfYear " + canonical(n.days()) + ")";
       case LastDay n -> "(lastDay " + canonical(n.days()) + ")";
+      case TruncDate n -> "(truncDate:" + n.level().name() + " " + canonical(n.days()) + ")";
       case AddMonths n ->
           "(addMonths " + canonical(n.days()) + " " + canonical(n.months()) + ")";
     };
@@ -350,6 +369,8 @@ public sealed interface VarkaVectorIR
       case Quarter n -> "(quarter " + lineOf.applyAsInt(n.days()) + ")";
       case DayOfYear n -> "(dayOfYear " + lineOf.applyAsInt(n.days()) + ")";
       case LastDay n -> "(lastDay " + lineOf.applyAsInt(n.days()) + ")";
+      case TruncDate n ->
+          "(truncDate:" + n.level().name() + " " + lineOf.applyAsInt(n.days()) + ")";
       case AddMonths n -> "(addMonths " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.months()) + ")";
     };

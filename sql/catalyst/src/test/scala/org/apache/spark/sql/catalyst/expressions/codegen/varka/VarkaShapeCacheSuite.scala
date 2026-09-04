@@ -367,16 +367,17 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
   }
 
   test("every node type's canonical rendering is pinned, not only the chain ops") {
-    // One key that uses all 23 IR node types (and three CompareOps), so a rendering change
+    // One key that uses all 24 IR node types (and three CompareOps), so a rendering change
     // to any of them - operand order, a token - fails here even though the chain-based
     // pinned hash above would still pass. Same update rule as above when intended. Task 20
     // added IsNotNull and re-pinned the value (recorded in PLAN_TASK_20.md); task 26 added
     // the four calendar extractions and re-pinned it again (PLAN_TASK_26.md); task 33 added
-    // NextDay, task 40 added AddMonths, task 36 added LastDay and task 34 added DayOfYear,
-    // each re-pinning it again (PLAN_TASK_33.md, PLAN_TASK_40.md, PLAN_TASK_36.md,
-    // PLAN_TASK_34.md). This value is re-pinned from the failing assertion's own output on
-    // every such change - never carried over from either side of a merge, since a hash that
-    // is right for one node set is wrong for the union of two.
+    // NextDay, task 40 added AddMonths, task 36 added LastDay, task 34 added DayOfYear and
+    // task 35 added TruncDate, each re-pinning it again (PLAN_TASK_33.md, PLAN_TASK_40.md,
+    // PLAN_TASK_36.md, PLAN_TASK_34.md, PLAN_TASK_35.md). This value is re-pinned from the
+    // failing assertion's own output on every such change - never carried over from either
+    // side of a merge, since a hash that is right for one node set is wrong for the union of
+    // two.
     import VarkaVectorIR._
     val cond = new And(
       new Or(
@@ -387,7 +388,8 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
       new Least(
         new Greatest(new Year(columnRef), new Month(columnRef)),
         new Greatest(new DayOfMonth(columnRef),
-          new Least(new Quarter(columnRef), new LastDay(columnRef)))),
+          new Least(new Quarter(columnRef),
+            new Least(new LastDay(columnRef), new TruncDate(columnRef, TruncLevel.YEAR))))),
       new DayOfYear(columnRef))
     val everyNode = new IfElse(
       cond,
@@ -395,7 +397,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
       new Least(new DateDiff(chrono, new DayOfWeek(columnRef)),
         new Least(new WeekDay(columnRef),
           new Least(new NextDay(columnRef, literal), new AddMonths(columnRef, literal)))))
-    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "87270539b247f78e")
+    assert(VarkaShapeCache.shapeHash(keyOf(everyNode)) === "fa74c56aed4bf5a1")
   }
 
   test("side-table identities are recorded truncated, so one entry cannot grow unbounded") {

@@ -18,9 +18,9 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, TruncDate, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
 /**
@@ -304,6 +304,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // last_day's output is up to 30 days past an input that itself passed the check.
     assert(fuses(Year(LastDay(DateAdd(d, Literal(shiftHi - 30))))))
     assert(!fuses(Year(LastDay(DateAdd(d, Literal(shiftHi - 29))))))
+    // A trunc output (task 35) is up to 365 days before its input, so it can only leave the
+    // range at the bottom: the last shift that fuses is 365 short of date_sub's own.
+    assert(fuses(Year(TruncDate(DateSub(d, Literal(-shiftLo - 365)), Literal("YEAR")))))
+    assert(!fuses(Year(TruncDate(DateSub(d, Literal(-shiftLo - 364)), Literal("YEAR")))))
     // next_day shifts by 1 to 7.
     assert(fuses(Year(NextDay(DateAdd(d, Literal(shiftHi - 7)), Literal("MON")))))
     assert(!fuses(Year(NextDay(DateAdd(d, Literal(shiftHi - 6)), Literal("MON")))))
@@ -321,6 +325,54 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(fuses(Year(DateAdd(Greatest(Seq(DateAdd(d, Literal(shiftHi + 1)), d)), i))))
     val ts = AttributeReference("t", TimestampType)()
     assert(!fuses(Year(DateAdd(Cast(ts, DateType), i)), childOutput :+ ts))
+
+  test("task 35: trunc compiles to one node per date level with a DateType output, under every " +
+      "spelling parseTruncLevel accepts") {
+    for ((spelling, level) <- Seq("YEAR" -> TruncLevel.YEAR, "yyyy" -> TruncLevel.YEAR,
+        "YY" -> TruncLevel.YEAR, "MONTH" -> TruncLevel.MONTH, "mon" -> TruncLevel.MONTH,
+        "MM" -> TruncLevel.MONTH, "QUARTER" -> TruncLevel.QUARTER,
+        "quarter" -> TruncLevel.QUARTER)) {
+      val compiled = VarkaExpressionCompiler.compile(
+        Seq(out(TruncDate(d, Literal(spelling)))), childOutput).get
+      assert(compiled.outputs === Seq(new IRTruncDate(new ColumnRef(0), level)), spelling)
+      assert(compiled.outputTypes === Seq(DateType), spelling)
+      assert(compiled.literals.isEmpty, s"$spelling: the level is a field, not a slot")
+    }
+    // Two levels over one date are two nodes, so CSE cannot merge them and the shape hash
+    // tells them apart - the reason the level is a record component.
+    val two = VarkaExpressionCompiler.compile(
+      Seq(out(TruncDate(d, Literal("YEAR"))), out(TruncDate(d, Literal("MONTH")))),
+      childOutput).get
+    assert(two.outputs(0) !== two.outputs(1))
+  }
+
+  test("task 35: trunc to WEEK is next_day over date_sub by seven, on the nodes task 33 has") {
+    // Spark defines truncDate(d, WEEK) as getNextDateForDayOfWeek(d - 7, MONDAY); task 33's
+    // next_day slot holds dayOfWeek - 1, and Monday is 4 in DateTimeUtils' numbering, so the
+    // literal is 3. The shape is the assertion: if the rewrite is wrong, this is where it shows.
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(TruncDate(d, Literal("WEEK")))), childOutput).get
+    assert(compiled.outputs === Seq(
+      new IRNextDay(new SubDays(new ColumnRef(0), new LiteralSlot(0)), new LiteralSlot(1))))
+    assert(compiled.literals === Seq(7, 3))
+    assert(compiled.outputTypes === Seq(DateType))
+  }
+
+  test("task 35 declines: a non-foldable, null, unrecognized or sub-day trunc format, each " +
+      "with its own reason") {
+    val fmt = AttributeReference("fmt", StringType)()
+    def reason(format: Expression, output: Seq[Attribute] = childOutput): String = {
+      val partial = VarkaExpressionCompiler.compilePartial(
+        Seq(out(TruncDate(d, format)), out(DateAdd(d, Literal(1)))), output).get
+      partial.declines(0).reason
+    }
+    assert(reason(fmt, childOutput :+ fmt) === "trunc with a non-foldable format")
+    assert(reason(Literal.create(null, StringType)) === "trunc with a null format")
+    // QTR is not a spelling parseTruncLevel accepts (the recipe said it was); the row engine
+    // answers it with NULL, which no IR node can produce.
+    assert(reason(Literal("QTR")) === "trunc with an unrecognized format")
+    assert(reason(Literal("DAY")) === "trunc to a level below a day, which is null for a date")
+    assert(reason(Literal("HOUR")) === "trunc to a level below a day, which is null for a date")
   }
 
   test("task 26 declines: year over a timestamp, which the analyzer casts") {

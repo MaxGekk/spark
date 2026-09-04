@@ -26,6 +26,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaFusedKernel, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestSupport
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.varka.vector.{ChronoScalarOps, ChronoVectorOps, DateVectorOps}
 
 /**
@@ -671,6 +672,51 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         benchmark.addCase("date_add(d, off) alone, guard option off (task 52 control), null-free") {
           _ => chunkedTwo(addAloneGuardOff, false)
+        // Task 35's A/B: trunc(date, ...) under its two lowerings, SUBTRACT (the day of year
+        // or day of month taken off the date) against RECOMPOSE (the period's first day rebuilt
+        // through emitDaysFromCivil), adjacent per level like the task 48, 53 and 54 pairs so
+        // both sides run under one JIT and thermal state. MONTH follows the switch too, though
+        // only its subtract form is expected to ship: it is the day-of-month tail with one op
+        // changed, and it prices the recomposition on the shape where it has the least to hide
+        // behind. The per-row DateTimeUtils.truncDate loop is what Spark runs today.
+        val recompose = VarkaEmitOptions.DEFAULTS
+          .withTruncDate(VarkaEmitOptions.TruncDateForm.RECOMPOSE)
+        val truncCases = Seq(
+          ("YEAR", TruncLevel.YEAR, 860), ("MONTH", TruncLevel.MONTH, 862),
+          ("QUARTER", TruncLevel.QUARTER, 864)).map { case (name, level, id) =>
+          (name,
+            emit(Seq(new TruncDate(col0, level)), 1, 0, loader, id),
+            emit(Seq(new TruncDate(col0, level)), 1, 0, loader, id + 1, recompose))
+        }
+        for ((name, subtract, recomposed) <- truncCases) {
+          benchmark.addCase(s"trunc $name, subtract (task 35 A/B), null-free") { _ =>
+            chunked(subtract, false)
+          }
+          benchmark.addCase(s"trunc $name, recompose (task 35 A/B), null-free") { _ =>
+            chunked(recomposed, false)
+          }
+        }
+        for ((name, subtract, recomposed) <- truncCases if name != "MONTH") {
+          benchmark.addCase(s"trunc $name, subtract (task 35 A/B), mixed nulls") { _ =>
+            chunked(subtract, true)
+          }
+          benchmark.addCase(s"trunc $name, recompose (task 35 A/B), mixed nulls") { _ =>
+            chunked(recomposed, true)
+          }
+        }
+        benchmark.addCase("per-row DateTimeUtils.truncDate YEAR (the path Spark uses today)") {
+          _ =>
+            var pass = 0
+            while (pass < repeats) {
+              var i = 0
+              while (i < numRows) {
+                val days = nfData.get(ValueLayout.JAVA_INT, i * 4L)
+                dst.set(ValueLayout.JAVA_INT, i * 4L,
+                  DateTimeUtils.truncDate(days, DateTimeUtils.TRUNC_TO_YEAR))
+                i += 1
+              }
+              pass += 1
+            }
         }
         // Task 32's ceiling (PLAN_TASK_32.md): the same four fields from one shared
         // decomposition, computed by hand outside the emitter (ChronoVectorOps), against the four

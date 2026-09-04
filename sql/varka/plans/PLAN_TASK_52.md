@@ -708,3 +708,14 @@ The masked-body `fromLong` is the thing to attack if this cost ever matters:
 the validity word is already in a local, and a guard that ANDs the compare
 masks with a mask the body has already materialized for the store would save
 the conversion.
+
+**Merged after #116 (task 35).** `trunc(date, ...)` landed while this PR was
+open, as a calendar node with a date-typed output. Its arm in `compileNode`
+now takes its child through `calendarInput`, like the seven this task
+covered, and `dayRange` bounds its output at its input shifted by
+`[-365, 0]` - a truncated date is its input or an earlier day of the same
+period, at most the 31st of December of a leap year back to the 1st of
+January. The compiler suite holds `year(trunc(date_sub(d, k), 'YEAR'))` at
+365 short of `date_sub`'s own last fusing shift, and one past it. The parity
+file was regenerated once more after the merge, since the task 35 pair and
+this task's pair now share it.
