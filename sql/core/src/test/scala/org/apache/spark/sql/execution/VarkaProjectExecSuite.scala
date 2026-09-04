@@ -410,22 +410,35 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       "has the loop") {
     // The species-pollution check, wired: under a schedule that samples every batch, each
     // batch produces one event, and the suspect metric agrees with the events' verdicts. The
-    // verdicts themselves show why the production schedule starts at batch 512: the first
-    // batches run the kernel interpreted, where every vector is a heap object, and only once
-    // C2 has compiled the loop do the samples read clean. So the assertion is on the tail,
-    // not on every batch. The positive case - a compiled loop that still boxes - cannot run
-    // here without making this JVM box (see VarkaAllocationSamplerSuite). The test plan puts
-    // each batch in its own partition, so every batch is its own evaluator's first: the
-    // samples are ordered by time, not by the per-evaluator batch index.
-    val batches = 1200
+    // verdicts themselves show why the production schedule does not start at batch 1: the
+    // first batches run the kernel interpreted, where every vector is a heap object, and only
+    // once C2 has compiled the loop do the samples read clean. How many batches that takes is
+    // the machine's business - this laptop compiled the loop inside 300 batches of 1024 rows,
+    // GitHub's runner took 1112 - so the test runs rounds of batches until a whole round is
+    // clean, and asserts only that this happens within a cap. The positive case - a compiled
+    // loop that still boxes - cannot run here without making this JVM box (see
+    // VarkaAllocationSamplerSuite). The test plan puts each batch in its own partition, so
+    // every batch is its own evaluator's first: the samples are ordered by time, not by the
+    // per-evaluator batch index.
+    val batchesPerRound = 1200
+    val maxRounds = 8
     val column = (0 until 1024).map(Int.box)
-    val specs = Seq.fill(batches)(BatchSpec("arrow", Seq(column)))
+    val specs = Seq.fill(batchesPerRound)(BatchSpec("arrow", Seq(column)))
     VarkaKernelEvaluator.allocationSchedule = new VarkaAllocationSampler.Schedule(1, 1)
-    val (plan, recorded) = try {
+    val (plans, recorded) = try {
       VarkaJfrTestSupport.withJfrRecording(classOf[VarkaKernelAllocationEvent]) {
-        val plan = node(project(Alias(DateAdd(attrD, Literal(3)), "add")()), specs, Seq(attrD))
-        assert(values(plan).length === batches * column.length)
-        plan
+        val plans = Seq.newBuilder[VarkaProjectExec]
+        var cleanRound = false
+        var rounds = 0
+        while (!cleanRound && rounds < maxRounds) {
+          val plan = node(project(Alias(DateAdd(attrD, Literal(3)), "add")()), specs, Seq(attrD))
+          assert(values(plan).length === batchesPerRound * column.length)
+          assert(plan.metrics("numVarkaBatches").value === batchesPerRound)
+          plans += plan
+          rounds += 1
+          cleanRound = plan.metrics("numSuspectAllocationSamples").value === 0
+        }
+        plans.result()
       }
     } finally {
       VarkaKernelEvaluator.allocationSchedule = VarkaAllocationSampler.Schedule.DEFAULT
@@ -434,19 +447,20 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaKernelAllocationEvent]))
       .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
       .sortBy(_.getStartTime)
-    assert(plan.metrics("numVarkaBatches").value === batches)
+    val batches = plans.length * batchesPerRound
     assert(samples.length === batches)
     assert(samples.forall(_.getInt("rows") === column.length))
     assert(samples.forall(_.getLong("batchIndex") === 1L))
     val verdicts = samples.map(_.getBoolean("suspect"))
-    assert(plan.metrics("numSuspectAllocationSamples").value === verdicts.count(identity))
+    val suspectMetric = plans.map(_.metrics("numSuspectAllocationSamples").value).sum
+    assert(suspectMetric === verdicts.count(identity))
     val lastSuspect = verdicts.lastIndexOf(true)
     val bytes = samples.map(_.getLong("allocatedBytes"))
-    assert(lastSuspect < batches - 200,
-      s"the last 200 samples should be clean; last suspect at sample $lastSuspect; " +
-        s"bytes ${bytes.mkString(" ")}")
-    logInfo(s"allocation samples: ${verdicts.count(identity)} suspect, last at $lastSuspect, " +
-      s"tail ${bytes.takeRight(5).mkString(" ")}")
+    assert(lastSuspect < batches - batchesPerRound,
+      s"no clean round within $maxRounds rounds of $batchesPerRound batches; last suspect at " +
+        s"sample $lastSuspect; tail bytes ${bytes.takeRight(20).mkString(" ")}")
+    logInfo(s"allocation samples: ${verdicts.count(identity)} suspect, last at $lastSuspect " +
+      s"of $batches, tail ${bytes.takeRight(5).mkString(" ")}")
   }
 
   /** Drives the evaluator directly, so a test can control when the next batch is requested. */
