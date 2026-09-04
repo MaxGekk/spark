@@ -35,6 +35,7 @@ are marked; rows matching --control (the scalar anchors) are listed first,
 because if they moved the machine moved and nothing else in the file can be
 read. Exit status 0 always; this is a reading aid, not a gate.
 """
+
 import argparse
 import re
 import subprocess
@@ -64,8 +65,9 @@ def read(path, rev=None):
     if rev is None:
         with open(path, encoding="utf-8") as f:
             return f.read()
-    return subprocess.run(["git", "show", f"{rev}:{path}"], check=True,
-                          capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["git", "show", f"{rev}:{path}"], check=True, capture_output=True, text=True
+    ).stdout
 
 
 def pct(before, after):
@@ -78,8 +80,9 @@ def print_rows(rows, threshold):
     counts = {}
     for _, case, _, _ in rows:
         counts[case] = counts.get(case, 0) + 1
-    labels = [(f"[{table}] {case}" if counts[case] > 1 else case, b, a)
-              for table, case, b, a in rows]
+    labels = [
+        (f"[{table}] {case}" if counts[case] > 1 else case, b, a) for table, case, b, a in rows
+    ]
     width = max((len(label) for label, _, _ in labels), default=10)
     print(f"{'case':{width}}  {'before':>9}  {'after':>9}  {'change':>8}")
     for label, b, a in labels:
@@ -137,18 +140,30 @@ def within(text, label_a, label_b, threshold):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("old", nargs="?", help="the older results file")
     p.add_argument("new", nargs="?", help="the newer results file")
     p.add_argument("--git", metavar="REV", help="read the old side of FILE from this revision")
     p.add_argument("--within", metavar="FILE", help="A/B pairs inside one file")
-    p.add_argument("--ab", nargs=2, metavar=("A", "B"),
-                   help="the two labels that distinguish an A/B pair's rows")
-    p.add_argument("--threshold", type=float, default=3.0,
-                   help="percent change that counts as moved (default 3)")
-    p.add_argument("--control", default=r"per-row|scalar|LocalDate|row engine",
-                   help="regex naming the control rows (default: the scalar anchors)")
+    p.add_argument(
+        "--ab",
+        nargs=2,
+        metavar=("A", "B"),
+        help="the two labels that distinguish an A/B pair's rows",
+    )
+    p.add_argument(
+        "--threshold",
+        type=float,
+        default=3.0,
+        help="percent change that counts as moved (default 3)",
+    )
+    p.add_argument(
+        "--control",
+        default=r"per-row|scalar|LocalDate|row engine",
+        help="regex naming the control rows (default: the scalar anchors)",
+    )
     p.add_argument("--all", action="store_true", help="also list rows within the threshold")
     args = p.parse_args()
 

@@ -39,6 +39,7 @@ are reported as "allowed" rather than counted. The list is a ratchet: it should
 only shrink. --update-allowlist appends the current orphans to it with a
 placeholder reason for you to edit, which is the one time a run may add to it.
 """
+
 import argparse
 import glob
 import os
@@ -54,8 +55,9 @@ QUOTE = re.compile(r"(?<![\w.\-])(\d{2,}\.\d{1,3})(?![\w.%]|\s*x\b|\s*x\)|\s*x,|
 
 
 def root():
-    return subprocess.run(["git", "rev-parse", "--show-toplevel"], check=True,
-                          capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 def numbers_in(text):
@@ -73,9 +75,13 @@ def committed_numbers(top):
     # `git log -p` over the results directories: additions and removals both count,
     # since a plan may quote the number a regeneration replaced.
     dirs = sorted({os.path.dirname(r) for r in rel})
-    log = subprocess.run(["git", "-C", top, "log", "-p", "--format=", "--", *dirs],
-                         check=True, capture_output=True, text=True,
-                         errors="replace").stdout
+    log = subprocess.run(
+        ["git", "-C", top, "log", "-p", "--format=", "--", *dirs],
+        check=True,
+        capture_output=True,
+        text=True,
+        errors="replace",
+    ).stdout
     historical = numbers_in(log)
     return current, historical, rel
 
@@ -94,17 +100,27 @@ def read_allowlist(top):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("docs", nargs="*", help="documents to check (default: the Varka set)")
     p.add_argument("--all", action="store_true", help="also list the numbers that were found")
-    p.add_argument("--update-allowlist", action="store_true",
-                   help="append the current orphans to the allowlist, reason left to edit")
+    p.add_argument(
+        "--update-allowlist",
+        action="store_true",
+        help="append the current orphans to the allowlist, reason left to edit",
+    )
     args = p.parse_args()
     top = root()
     allowed = read_allowlist(top)
-    docs = args.docs or (DOCS + [os.path.relpath(x, top)
-                                 for g in DOC_GLOBS for x in sorted(glob.glob(os.path.join(top, g)))])
+    docs = args.docs or (
+        DOCS
+        + [
+            os.path.relpath(x, top)
+            for g in DOC_GLOBS
+            for x in sorted(glob.glob(os.path.join(top, g)))
+        ]
+    )
     current, historical, result_files = committed_numbers(top)
 
     orphans = 0
@@ -134,8 +150,10 @@ def main():
             print(f"== {doc}")
             for i, n, where, ctx in shown:
                 print(f"  {i:5d}  {n:>10}  {where:10}  {ctx[:90]}")
-    print(f"\n{orphans} orphan(s) not in the allowlist ({len(allowed)} allowed); "
-          f"results files searched: {len(result_files)} current, plus their git history")
+    print(
+        f"\n{orphans} orphan(s) not in the allowlist ({len(allowed)} allowed); "
+        f"results files searched: {len(result_files)} current, plus their git history"
+    )
     if args.update_allowlist and new_orphans:
         with open(os.path.join(top, ALLOWLIST), "a", encoding="utf-8") as f:
             for doc, n in new_orphans:
