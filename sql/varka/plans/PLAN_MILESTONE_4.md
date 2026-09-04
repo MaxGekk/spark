@@ -1245,6 +1245,89 @@ widths; a differential over a format column mixing `'YEAR'`, `'mm'`,
 `'QUARTER'`, `'week'`, `'HOUR'`, `'QTR'` and null, whose answers are the row
 engine's including the NULL rows; the literal `trunc` byte for byte unchanged.
 
+### 2.29 The closing measurement: every date expression against stock Spark (task 62)
+
+Every number this milestone has committed is a comparison the project ran
+against itself, on one laptop whose AVX-512 is issued through a 256-bit
+datapath (`SKILLS.md`, "This machine's AVX-512 is 256 bits wide"), against a
+Janino baseline that is this fork with Varka switched off. That is the right
+instrument for choosing between two lowerings; it is not the number a reader
+of the README wants, which is how much faster a date expression runs on Varka
+than on the Spark they have today, on hardware that can use the vector width
+Varka emits. Task 62 produces that number, and is the milestone's last task
+because it measures everything the milestone added. Its audience is outside
+this repository: the owner intends to present Varka publicly once the
+milestone closes, and the table and the reproduction guide this task writes
+are what a blog post quotes and what a reader who has never seen this tree
+follows - which is why the baseline is stock Spark, why every step is spelled
+out, and why the losses are printed beside the wins.
+
+**What is measured.** Every date expression the compiler covers when the task
+starts - the survey of section 2.23's neighbourhood is the list: `date_add`,
+`date_sub`, `datediff`, the six extractions and `dayofweek`/`weekday`, `next_day`,
+`last_day`, `add_months`, `trunc` at its four levels, `unix_date` and
+`date_from_unix_date`, `make_date`, `weekofyear`, the two ISO fields, and the
+predicate forms (comparisons, `BETWEEN`, `IN`, `CASE WHEN`, `coalesce`,
+`greatest`/`least`, `IS NULL`) - each as one SQL query over one Arrow-cached
+date table, in the two shapes the engine distinguishes: a projection read by a
+columnar consumer and a filter counted. One row per query in the results,
+nothing synthetic: the query text is committed beside the number, so a reader
+can paste it into a `spark-sql` shell.
+
+**Three distributions, one driver.** The baseline is **stock Apache Spark**,
+the release this fork tracks, not this fork with Varka off - the two differ
+by the Arrow cache serializer and whatever else the fork carries, and the
+README should not have to explain that away. It runs twice: on **JDK 17**,
+Spark's default runtime, and on **JDK 25**, so the reader can separate what
+the JDK gives Janino from what Varka gives on top. Varka runs on JDK 25, the
+only JDK it builds on (the Class-File and Vector APIs). The driver is a small
+Java application under `sql/varka/bench` (Java, per the house rule), submitted
+to each distribution with `spark-submit`: it builds the table at a fixed row
+count and seed, warms each query, runs it for at least five iterations over
+two-second windows, and writes one results file per distribution with the
+provenance block `dev/varka_bench_regen.sh` already writes - git SHA, JDK,
+kernel, CPU model and flags, `MaxVectorSize` as the JVM reports it, governor,
+load. A shell driver, `dev/varka_bench_surface.sh`, runs the three in
+sequence on an idle machine and hands the three files to
+`dev/varka_bench_diff.py`, whose output is the README's table.
+
+**The machine, through the benchmark workflow.** The run is a dispatch of
+`.github/workflows/benchmark.yml`, not a machine of ours: the workflow already
+takes the JDK, extra driver JVM options, and an `expected-cpu` model that fails
+the job early when the runner's CPU is not the one asked for, which is how a
+required CPU is picked on hosted runners - dispatch, and re-dispatch until the
+pool hands out the model. The model to pin is an Intel Xeon with a full-width
+512-bit unit (the hosted pool's Xeon Platinum 8370C and 8272CL both qualify;
+the pool's AMD EPYC 7763 has no AVX-512 at all, and Zen 4 and Zen 5 mobile
+parts are double-pumped). The three distributions run in one dispatch so the
+CPU is the same for all three, and the datapath is proven rather than
+assumed: the provenance block carries task 43's op-count ladder at
+`-XX:MaxVectorSize` 32 and 64, whose 256-to-512 step must be near 2x, not the
+laptop's 0.95x (`SKILLS.md`, "This machine's AVX-512 is 256 bits wide") - a
+run whose ladder says 256 bits is labelled as such, whatever the model name
+claims. The workflow's commit input lands the three files on the branch; the
+laptop's run is committed too, as the second data point, so the two show what
+the datapath is worth - the unmeasured headroom that `SKILLS.md` entry names.
+
+**The README.** Its benchmark section is rewritten from the three files: one
+table, every covered date expression, Varka against stock Spark on JDK 17 and
+on JDK 25, both shapes, on the 512-bit runner, with the laptop's numbers linked
+rather than repeated; the honest rows stay (a row consumer at the read-back
+floor is still 0.8x); and a reproduction section a reader can follow two ways
+- the workflow dispatch with its inputs (class, JDK, `expected-cpu`), and by
+hand without this repository's history: the three downloads, the three
+commands, the seed and row count, how long it takes, and how to tell a
+512-bit host from a double-pumped one before believing a number.
+`docs/sql-varka.md` points at it. The quote check's rule holds: every figure in
+the README traces to one of the three committed files.
+
+**Predictions, registered when the task file is written, not here** - except
+one that this section can already make: on the same host, the fork-with-Varka-off
+numbers and stock Spark on JDK 25 will agree within noise for every shape,
+which is the check that the baseline is honest.
+
+Depends on every other open row of this milestone: it is the last one.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1302,9 +1385,12 @@ re-scope the same day (`PLAN_MILESTONE_5.md` section 3), and rows 56-61 joined
 it: the date-lane gaps a survey of Spark's date surface found after the
 re-scope (sections 2.23 to 2.28) - the column forms of three functions whose
 literal forms are covered, the two ISO week fields `extract` reaches, and the
-int-cast `INTERVAL DAY` offset (the stored int64 column stays out, by decision). 56 and 57 depend on nothing unmerged; 58 waits on
-37, 60 on 52, and 61 on 59, which brings the derived-leaf mechanism both
-string-argument forms need.
+int-cast `INTERVAL DAY` offset (the stored int64 column stays out, by
+decision). 56 and 57 depend on nothing unmerged; 58 waits on 37, 60 on 52, and
+61 on 59, which brings the derived-leaf mechanism both
+string-argument forms need. Row 62 closes the milestone: every covered date
+expression measured against stock Spark on JDK 17 and JDK 25, on a host with a
+real 512-bit datapath, and the README rewritten from that run (2.29).
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -1340,6 +1426,7 @@ string-argument forms need.
 | 59 | `next_day` with a weekday column | The derived int32 leaf: an evaluator pre-pass mapping a string column through the row engine's own parser before the kernel runs, null or the row engine's ANSI error per its rules; `NextDay(days, ColumnRef)` with `requireOffsetShape` and the two words ANDed; the parity number against the row path, registered prediction that a lone `next_day` wins little and reuse wins more | The leaf's null and error rules under both ANSI settings; the two-column `NextDay` over every null pattern at both widths; a differential over mixed spellings and nulls; the literal form byte for byte unchanged; the number committed whichever way it falls |
 | 60 | `add_months` with a month-count column | `AddMonths(days, ColumnRef)` with `requireOffsetShape` and the words ANDed; the compile-time month bound moved to a runtime guard on the count lanes through task 52's `emitProducerGuard` plumbing, `STATUS_CHRONO_RANGE` on an out-of-range lane; `dayRange` answering `ColumnShifted` | The guard declining in a loop lane and an epilogue lane, not under a null count; in-range batches computed at both widths; the differential with in-range and out-of-range counts and nulls, the declined metric firing only for the latter; the count guard's cost measured beside task 52's row |
 | 61 | `trunc` with a format column | Task 59's derived leaf mapping the format through `parseTruncLevel` to a level column whose validity is the output's; `TruncDateDynamic(days, levelRef)`, a chrono node computing all four levels off one prefix and selecting per lane by three blends; the doc saying the literal form is the shape to write | The reference arm `truncDate` per row over the parsed level; the matrix cycling all levels and the invalid codes at both widths; a differential over a format column mixing every level, invalid formats and null; the literal `trunc` byte for byte unchanged |
+| 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25 | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 
 ## 4. Files
 
