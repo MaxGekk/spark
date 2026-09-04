@@ -36,6 +36,11 @@ import org.apache.spark.scheduler.SparkListenerTaskEnd;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.execution.QueryExecution;
+import org.apache.spark.sql.execution.SparkPlan;
+import org.apache.spark.sql.execution.metric.SQLMetric;
+import org.apache.spark.sql.util.QueryExecutionListener;
+import scala.jdk.javaapi.CollectionConverters;
 
 /**
  * The date-surface benchmark (task 62): every entry of {@link Surface}, in the projection shape
@@ -78,6 +83,49 @@ public final class DateSurfaceBenchmark {
 
     long millis() {
       return runMillis.get();
+    }
+  }
+
+  /**
+   * Sums the fork's batch metrics over every finished execution: {@code numVarkaBatches} (the
+   * kernel served the batch) and every {@code numFallbackBatches*} (it did not). On stock Spark
+   * no plan carries them and both stay 0. This is what tells a kernel run from a row-engine run
+   * under a Varka node, which the plan alone cannot: a distribution without the engine jar
+   * plans every entry through a Varka node and falls back on every batch.
+   */
+  static final class KernelBatches implements QueryExecutionListener {
+    private final AtomicLong kernel = new AtomicLong();
+    private final AtomicLong fallback = new AtomicLong();
+
+    @Override
+    public void onSuccess(String funcName, QueryExecution qe, long durationNs) {
+      walk(qe.executedPlan());
+    }
+
+    @Override
+    public void onFailure(String funcName, QueryExecution qe, Exception exception) {
+    }
+
+    private void walk(SparkPlan plan) {
+      Map<String, SQLMetric> metrics = CollectionConverters.asJava(plan.metrics());
+      for (Map.Entry<String, SQLMetric> e : metrics.entrySet()) {
+        if (e.getKey().equals("numVarkaBatches")) {
+          kernel.addAndGet(e.getValue().value());
+        } else if (e.getKey().startsWith("numFallbackBatches")) {
+          fallback.addAndGet(e.getValue().value());
+        }
+      }
+      for (SparkPlan child : CollectionConverters.asJava(plan.children())) {
+        walk(child);
+      }
+    }
+
+    long kernel() {
+      return kernel.get();
+    }
+
+    long fallback() {
+      return fallback.get();
     }
   }
 
@@ -145,6 +193,8 @@ public final class DateSurfaceBenchmark {
     SparkSession spark = SparkSession.builder().appName("VarkaDateSurface").getOrCreate();
     ExecutorTime executor = new ExecutorTime();
     spark.sparkContext().addSparkListener(executor);
+    KernelBatches batches = new KernelBatches();
+    spark.listenerManager().register(batches);
     Runnable drain = () -> {
       try {
         spark.sparkContext().listenerBus().waitUntilEmpty();
@@ -170,7 +220,7 @@ public final class DateSurfaceBenchmark {
         if (args.only != null && !args.only.matcher(entry.label()).find()) {
           continue;
         }
-        String block = runEntry(spark, executor, drain, entry, args, log, violations);
+        String block = runEntry(spark, executor, batches, drain, entry, args, log, violations);
         file.append(block);
         log.print(block);
         log.flush();
@@ -208,6 +258,11 @@ public final class DateSurfaceBenchmark {
     return "SELECT " + e.projection() + " AS a FROM varka_dates";
   }
 
+  /** The filter with a columnar consumer: the selected dates written to the noop sink. */
+  static String filterColumnarQuery(Surface.Entry e) {
+    return "SELECT d FROM varka_dates WHERE " + e.filter() + "";
+  }
+
   static String filterQuery(Surface.Entry e) {
     return "SELECT count(*) FROM varka_dates WHERE " + e.filter();
   }
@@ -219,8 +274,8 @@ public final class DateSurfaceBenchmark {
   }
 
   private static String runEntry(
-      SparkSession spark, ExecutorTime executor, Runnable drain, Surface.Entry entry,
-      Args args, PrintStream log, List<String> violations) {
+      SparkSession spark, ExecutorTime executor, KernelBatches batches, Runnable drain,
+      Surface.Entry entry, Args args, PrintStream log, List<String> violations) {
     long warmup = (long) (args.warmupSeconds * 1e9);
     long min = (long) (args.minSeconds * 1e9);
     List<Harness.Case> wall = new ArrayList<>();
@@ -231,14 +286,19 @@ public final class DateSurfaceBenchmark {
       String q = projectionQuery(entry);
       Dataset<Row> df = spark.sql(q);
       Runnable body = () -> df.write().format("noop").mode("overwrite").save();
-      measureShape(spark, executor, drain, "projection, columnar consumer", q, body, args,
-          warmup, min, wall, exec, plans, shares, log, entry, violations);
+      measureShape(spark, executor, batches, drain, "projection, columnar consumer", q, body,
+          args, warmup, min, wall, exec, plans, shares, log, entry, violations);
     }
     if (entry.filter() != null) {
+      String qc = filterColumnarQuery(entry);
+      Dataset<Row> dfc = spark.sql(qc);
+      Runnable bodyc = () -> dfc.write().format("noop").mode("overwrite").save();
+      measureShape(spark, executor, batches, drain, "filter, columnar consumer", qc, bodyc,
+          args, warmup, min, wall, exec, plans, shares, log, entry, violations);
       String q = filterQuery(entry);
       Dataset<Row> df = spark.sql(q);
       Runnable body = df::collect;
-      measureShape(spark, executor, drain, "filter, counted", q, body, args,
+      measureShape(spark, executor, batches, drain, "filter, counted", q, body, args,
           warmup, min, wall, exec, plans, shares, log, entry, violations);
     }
     String name = entry.label() + " over " + args.rows + " rows";
@@ -252,23 +312,34 @@ public final class DateSurfaceBenchmark {
   }
 
   private static void measureShape(
-      SparkSession spark, ExecutorTime executor, Runnable drain, String caseName, String query,
-      Runnable body, Args args, long warmup, long min, List<Harness.Case> wall,
-      List<Harness.Case> exec, List<String> plans, List<String> shares, PrintStream log,
-      Surface.Entry entry, List<String> violations) {
+      SparkSession spark, ExecutorTime executor, KernelBatches batches, Runnable drain,
+      String caseName, String query, Runnable body, Args args, long warmup, long min,
+      List<Harness.Case> wall, List<Harness.Case> exec, List<String> plans, List<String> shares,
+      PrintStream log, Surface.Entry entry, List<String> violations) {
     boolean varka = plansVarka(spark, query);
     if (args.expectFused && entry.expectFused() && !varka) {
       violations.add("expected fused, planned without a Varka node: " + query);
     }
     log.println("Running: " + query + (varka ? "  [Varka]" : "  [plain]"));
+    long kernelBefore = batches.kernel();
+    long fallbackBefore = batches.fallback();
     Harness.Samples s = Harness.measure(body, System::nanoTime, executor::millis, drain,
         args.iters, warmup, min);
+    long kernelBatches = batches.kernel() - kernelBefore;
+    long fallbackBatches = batches.fallback() - fallbackBefore;
+    if (args.expectFused && entry.expectFused() && varka && kernelBatches == 0) {
+      violations.add("planned a Varka node but the kernel served no batch ("
+          + fallbackBatches + " fell back): " + query);
+    }
     Harness.Stats w = Harness.stats(s.wallMs());
     Harness.Stats x = Harness.stats(s.executorMs());
     wall.add(new Harness.Case(caseName, w));
     exec.add(new Harness.Case(caseName, x));
-    String shape = caseName.substring(0, caseName.indexOf(','));
-    plans.add(shape + " " + (varka ? "Varka" : "plain"));
+    String shape = caseName;
+    plans.add(shape + (varka
+        ? String.format(Locale.ROOT, " Varka (kernel %d batches, fallback %d)", kernelBatches,
+            fallbackBatches)
+        : " plain"));
     double share = 100.0 * (w.bestMs() - x.bestMs()) / w.bestMs();
     shares.add(String.format(Locale.ROOT, "%s %.1f%%", shape, share));
     if (varka && !Double.isNaN(args.maxFixedShare) && share > args.maxFixedShare) {

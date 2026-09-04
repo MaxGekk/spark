@@ -65,6 +65,9 @@ public class SurfaceTest {
         assertFalse(DateSurfaceBenchmark.plansVarka(spark, q), q);
       }
       if (e.filter() != null) {
+        String qc = DateSurfaceBenchmark.filterColumnarQuery(e);
+        assertTrue(spark.sql(qc).count() <= 1_000L, qc);
+        assertFalse(DateSurfaceBenchmark.plansVarka(spark, qc), qc);
         String q = DateSurfaceBenchmark.filterQuery(e);
         List<Row> rows = spark.sql(q).collectAsList();
         assertEquals(1, rows.size(), q);

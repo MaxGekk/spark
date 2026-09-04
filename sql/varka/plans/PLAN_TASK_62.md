@@ -64,6 +64,21 @@ forms of `next_day`, `add_months` and `trunc` (tasks 59 to 61) are open
 rows, so they are not in this PR's list; the list is data and PR (B)'s
 dispatch runs what it holds then.
 
+**2.5 A packaged tree does not run the kernels, found by the smoke run.** The
+driver's first run on this checkout's `bin/spark-submit` with Varka on planned
+every entry through a Varka node and answered at the row engine's speed, with
+a `ClassNotFoundException` for `VarkaVectorSupport` on every batch: the
+assembly does not ship the engine jar, because the build has the engine as a
+test-scope dependency, and under sbt's test classpath nobody had noticed. The
+shell driver passes the jar with `--driver-class-path` (the kernels' loader
+delegates to the system loader, which `--jars` does not reach), the issue is
+recorded (`ISSUES.md`, "The engine jar is not in the distribution"), and the
+build fix is its own task. What the check would have rejected: a public
+table whose Varka column was Janino under another name - which is exactly
+what the `EXPLAIN` check alone would have passed, since the plan was right
+and the runtime was not. The driver therefore also fails a Varka run whose
+log shows a kernel fallback on every batch: see 3.1, the fallback count.
+
 ## 3. The design
 
 ### 3.1 A standalone driver, submitted to any Spark
@@ -120,22 +135,36 @@ on the fork with Varka on, an entry that does not fuse is reported in the
 file as `residual`, never silently timed, and the shell driver fails the
 run if any entry the surface marks as expected-fused is residual.
 
+**Corrected after the smoke run (2.5), the same day.** Two things the first
+run taught. The counted filter is the WHERE-plus-aggregate shape a query has,
+and on the fork it pays the row read-back for every selected row on the way
+to the count, so it measures the read-back floor as much as the kernel; the
+fork's own filter benchmark prices both consumers, and so does this driver
+now: a third shape, `filter, columnar consumer` - `SELECT d FROM varka_dates
+WHERE <pred>` written to the `noop` sink - beside `filter, counted`. And the
+`EXPLAIN` check is not enough to know the kernel ran: the driver registers a
+`QueryExecutionListener` and sums the fork's `numVarkaBatches` and
+`numFallbackBatches*` metrics over each shape's measured iterations, prints
+them on the plan line (`Varka (kernel N batches, fallback M)`), and under
+`--expect-fused` fails a shape that planned a Varka node and ran no kernel
+batch. On stock Spark no plan carries the metrics and the counts stay 0.
+
 **The results file** is in Spark's harness format exactly - the table
 header `<name>:  Best Time(ms)  Avg Time(ms)  Stdev(ms)  Rate(M/s)  Per
 Row(ns)  Relative` and its row layout - because `dev/varka_bench_diff.py`
 keys on that header and `dev/varka_quote_check.py` reads those numbers.
-Two tables per entry: `<entry> over N rows` with two cases, `projection,
-columnar consumer` and `filter, counted`, and `<entry> over N rows,
-executor time` with the same two cases, so the fixed share of every row is
-`(wall - executor) / wall` from the file. The file opens with the
-provenance block `dev/varka_bench_regen.sh` writes - commit, date, JDK,
-kernel, CPU, power, load at start - extended with what this task needs:
+Two tables per entry: `<entry> over N rows` with its cases - `projection,
+columnar consumer`, `filter, columnar consumer`, `filter, counted` - and
+`<entry> over N rows, executor time` with the same two cases, so the fixed
+share of every row is `(wall - executor) / wall` from the file. The file opens
+with the provenance block `dev/varka_bench_regen.sh` writes - commit, date,
+JDK, kernel, CPU, power, load at start - extended with what this task needs:
 Spark's `version()`, the JVM's `MaxVectorSize` read through
-`HotSpotDiagnosticMXBean` (the flag the run actually had, not the one it
-was asked for), the `avx512*` flags from `/proc/cpuinfo`, and the datapath
-probe (below). Files are named `DateSurface-<label>-jdk<NN>-results.txt`
-under `sql/varka/bench/benchmarks/`, and the quote check's `RESULT_GLOBS`
-gains that directory.
+`HotSpotDiagnosticMXBean` (the flag the run actually had, not the one it was
+asked for), the `avx512*` flags from `/proc/cpuinfo`, and the datapath probe
+(below). Files are named `DateSurface-<label>-jdk<NN>-results.txt` under
+`sql/varka/bench/benchmarks/`, and the quote check's `RESULT_GLOBS` gains that
+directory.
 
 **The shell driver, `dev/varka_bench_surface.sh`.** Takes the three (or
 four) distributions as `LABEL=SPARK_HOME:JAVA_HOME[:extra confs]`, refuses a

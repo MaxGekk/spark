@@ -18,7 +18,8 @@
 # Run the date-surface benchmark (task 62) on several Spark distributions, one
 # after another on an idle machine, and print the table that compares them.
 #
-#   dev/varka_bench_surface.sh [--rows N] [--force] [--only REGEX] [--skip-build] \
+#   dev/varka_bench_surface.sh [--rows N] [--driver-memory 8g] [--force] [--only REGEX] \
+#       [--skip-build] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
 #
 #   dev/varka_bench_surface.sh \
@@ -32,11 +33,21 @@
 # distribution's root - a downloaded release, or this checkout after
 # `build/sbt package` (its bin/spark-submit runs the assembled jars). The third
 # field is a comma-separated list of extra `--conf` settings; the word `varka`
-# stands for the three the fork needs (Varka on, the Arrow cache serializer,
-# `--expect-fused --max-fixed-share 5` on the driver), so a run of the kernel
-# fails when an entry the surface marks as fused is not, or when a Varka row's
-# fixed share is over the job-size rule of PLAN_MILESTONE_4.md 2.29. Put the
-# Varka run last: the table's ratios are the last file against the others.
+# stands for what the fork needs: Varka on, the Arrow cache serializer, the
+# engine jar on the driver's class path, and `--expect-fused --max-fixed-share
+# 5` on the driver, so a run of the kernel fails when an entry the surface
+# marks as fused is not, or when a Varka row's fixed share is over the
+# job-size rule of PLAN_MILESTONE_4.md 2.29. Put the Varka run last: the
+# table's ratios are the last file against the others.
+#
+# The engine jar: the fork's assembly does not ship sql/varka/engine (it is a
+# test-scope dependency of the build), yet every emitted kernel links against
+# its VarkaVectorSupport, so a distribution with Varka on and no engine jar
+# falls back on every batch with a ClassNotFoundException in the log and
+# measures the row engine under the kernel's name (ISSUES.md, "The engine jar
+# is not in the distribution"). This script builds the jar if it is missing
+# and passes it with --driver-class-path, which is the system class loader
+# the kernels' loader delegates to; --jars would not reach it.
 #
 # Before the runs: the same load gate as dev/varka_bench_regen.sh, the machine
 # canary, and the datapath probe - dev/varka_canary/Canary.java under the last
@@ -50,10 +61,11 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 usage() { sed -n '17,50p' "$0"; exit 2; }
-rows=200000000; force=0; only=""; build=1; dists=()
+rows=200000000; force=0; only=""; build=1; memory=8g; dists=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --rows) rows="$2"; shift 2 ;;
+    --driver-memory) memory="$2"; shift 2 ;;
     --force) force=1; shift ;;
     --only) only="$2"; shift 2 ;;
     --skip-build) build=0; shift ;;
@@ -112,6 +124,17 @@ commit="$(git rev-parse --short=11 HEAD)"
 git diff --quiet HEAD -- . ':!sql/varka/bench/benchmarks' || commit="$commit (working tree dirty)"
 out_dir="sql/varka/bench/benchmarks"; mkdir -p "$out_dir"
 arrow_serializer=org.apache.spark.sql.execution.columnar.ArrowCachedBatchSerializer
+engine_jar() {
+  local j
+  j="$(ls sql/varka/engine/target/varka-engine-*.jar 2>/dev/null | grep -v -- '-tests' | head -1)"
+  if [ -z "$j" ]; then
+    echo "== building the engine jar: build/mvn -f sql/varka/engine/pom.xml -q -DskipTests package" >&2
+    build/mvn -f sql/varka/engine/pom.xml -q -DskipTests package >&2
+    j="$(ls sql/varka/engine/target/varka-engine-*.jar 2>/dev/null | grep -v -- '-tests' | head -1)"
+  fi
+  [ -n "$j" ] || { echo "no engine jar under sql/varka/engine/target" >&2; exit 1; }
+  echo "$PWD/$j"
+}
 files=()
 for spec in "${dists[@]}"; do
   label="${spec%%=*}"; rest="${spec#*=}"
@@ -121,7 +144,7 @@ for spec in "${dists[@]}"; do
   [ -x "$spark_home/bin/spark-submit" ] \
     || { echo "$label: no bin/spark-submit under $spark_home" >&2; exit 1; }
   [ -x "$java_home/bin/java" ] || { echo "$label: no bin/java under $java_home" >&2; exit 1; }
-  submit=(--master 'local[1]' --driver-memory 8g
+  submit=(--master 'local[1]' --driver-memory "$memory"
     --conf spark.ui.enabled=false --conf spark.sql.shuffle.partitions=1
     --conf spark.sql.adaptive.enabled=false)
   driver=()
@@ -131,7 +154,8 @@ for spec in "${dists[@]}"; do
       "") ;;
       varka)
         submit+=(--conf spark.sql.codegen.varka.enabled=true
-          --conf "spark.sql.cache.serializer=$arrow_serializer")
+          --conf "spark.sql.cache.serializer=$arrow_serializer"
+          --driver-class-path "$(engine_jar)")
         driver+=(--expect-fused --max-fixed-share 5) ;;
       *=*) submit+=(--conf "$c") ;;
       *) echo "$label: conf '$c' is not key=value" >&2; exit 1 ;;
