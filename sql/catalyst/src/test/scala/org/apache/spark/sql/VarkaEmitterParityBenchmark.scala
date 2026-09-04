@@ -988,10 +988,29 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           val kValidity = arena.allocate((numRows + 7) / 8L, 8)
           val literal = emit(Seq(new NextDay(new ColumnRef(0), new LiteralSlot(0))), 1, 1,
             loader, 890)
+          val column = emit(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
+            loader, 891)
           def chunkedLiteral(): Unit = eachChunk { (dataOff, validityOff, n) =>
             val status = literal.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
               Array(dst.address() + dataOff), Array(dstValidity.address() + validityOff),
               Array(3), n)
+            require(status == 0, s"the kernel declined a batch: status $status")
+          }
+          // The column kernel over the k column as the leaf leaves it: null-free, and with the
+          // date's mixed-null pattern on the date side (the leaf's own nulls are the parity of
+          // the mixed-names case above, not of this kernel).
+          def chunkedColumn(mixed: Boolean): Unit = eachChunk { (dataOff, validityOff, n) =>
+            val status = if (mixed) {
+              column.run(Array(mxData.address() + dataOff, kData.address() + dataOff),
+                Array(mxValidity.address() + validityOff, 0L), Array((n + 6) / 7, 0),
+                Array(dst.address() + dataOff), Array(dstValidity.address() + validityOff),
+                Array.empty[Int], n)
+            } else {
+              column.run(Array(nfData.address() + dataOff, kData.address() + dataOff),
+                Array(0L, 0L), Array(0, 0),
+                Array(dst.address() + dataOff), Array(dstValidity.address() + validityOff),
+                Array.empty[Int], n)
+            }
             require(status == 0, s"the kernel declined a batch: status $status")
           }
           def chunkedLeaf(columns: Array[ArrowColumnVector], parser: WeekdayLeaf.Parser): Unit =
@@ -1002,6 +1021,12 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             }
           benchmark.addCase("next_day(d, 'MON'), literal kernel (control), null-free") { _ =>
             chunkedLiteral()
+          }
+          benchmark.addCase("next_day(d, k), column kernel, null-free") { _ =>
+            chunkedColumn(false)
+          }
+          benchmark.addCase("next_day(d, k), column kernel, mixed nulls on the date") { _ =>
+            chunkedColumn(true)
           }
           benchmark.addCase("weekday leaf, row-engine parser, valid names") { _ =>
             chunkedLeaf(valid, WeekdayLeaf.Parser.ROW_ENGINE)

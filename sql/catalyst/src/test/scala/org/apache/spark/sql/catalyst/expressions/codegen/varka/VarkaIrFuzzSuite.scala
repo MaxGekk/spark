@@ -119,14 +119,14 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
         case 7 =>
           val a = value(depth - 1)
           Gen(new WeekDay(a.node), 6)
-        case 8 if numLiterals > 0 =>
-          // next_day's weekday must be a literal slot (the emitter re-checks the compiler's
-          // rule), so with no literal slots this arm is skipped.
-          val a = value(depth - 1); val k = literal()
-          Gen(new NextDay(a.node, k.node), a.bound + 8)
         case 8 =>
+          // next_day's weekday as a literal slot (task 33) or, on the other draw, a column
+          // (task 59's derived weekday leaf), whose values the reference reads like any int:
+          // the lowering is exact for every k, so a date column serves as the weekday column.
           val a = value(depth - 1)
-          Gen(new WeekDay(a.node), 6)
+          val k = if (rnd.nextBoolean()) literal()
+            else Gen(new ColumnRef(rnd.nextInt(numInputs)), columnBound)
+          Gen(new NextDay(a.node, k.node), a.bound + 8)
         case n =>
           // The calendar family, over a subtree that stays inside the narrowed range.
           val a = value(depth - 1)
