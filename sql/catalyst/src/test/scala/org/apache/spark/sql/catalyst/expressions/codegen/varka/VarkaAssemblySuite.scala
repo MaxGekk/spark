@@ -61,9 +61,13 @@ class VarkaAssemblySuite extends SparkFunSuite {
    * assertion would go red on a register-allocation roll with nothing actually wrong.
    */
   private case class Family(
-      description: String, mnemonics: Set[String], pattern: Option[Regex] = None) {
-    def matches(mnemonic: String): Boolean =
-      mnemonics.contains(mnemonic) || pattern.exists(_.matches(mnemonic))
+      description: String,
+      mnemonics: Set[String],
+      pattern: Option[Regex] = None,
+      operands: Option[Regex] = None) {
+    def matches(insn: Insn): Boolean =
+      (mnemonics.contains(insn.mnemonic) || pattern.exists(_.matches(insn.mnemonic))) &&
+        operands.forall(_.matches(insn.operands.trim))
   }
 
   private val packedIntAdd = Family("packed integer add", Set("vpaddd", "paddd"))
@@ -86,6 +90,35 @@ class VarkaAssemblySuite extends SparkFunSuite {
    */
   private val packedCompare = Family("packed integer compare", Set.empty,
     Some("""^v?pcmp[a-z]*d$""".r))
+
+  /** An index-map gather - {@code IntVector.fromArray} with an index array - and the shape task
+   *  55's allocation self-test is calibrated on. */
+  private val packedGather = Family("packed gather",
+    Set("vpgatherdd", "vpgatherqd", "vpgatherdq", "vgatherdps"))
+
+  /**
+   * A heap allocation site, by the two instructions C2 emits for nothing else (task 55). These
+   * are the *diagnosis* printed with an allocation failure, not the assertion: a static count
+   * cannot tell a per-call setup object from a per-iteration box (see {@link #assertNoBoxing}).
+   *
+   * <p>An inline TLAB allocation bumps the thread's top pointer, prefetches the lines past it
+   * ({@code prefetchnta}, three of them under the default {@code AllocatePrefetchLines}) and
+   * stores the prototype mark word, {@code movq $1, (%reg)}, into the new object's first word.
+   * Neither instruction appears in a Varka loop for any other reason: the kernels carry no
+   * software prefetch, and no other store writes the literal 1 to an object's base. Both are
+   * matched so that a JVM configured without allocation prefetch, or with compact object headers
+   * (whose header store is a different constant), still trips the other half.
+   *
+   * <p>Why a loop body would allocate at all: a Vector API value gets boxed when the shared
+   * {@code IntVector} templates inline bimorphically, which happens once a second species of the
+   * same lane type has been through them in the same JVM ({@code SKILLS.md}, "Every operator the
+   * plans rely on"). The packed instructions stay in place, so every positive family assertion
+   * in this suite still passes; only the allocation assertion sees it.
+   */
+  private val allocationPrefetch = Family("allocation prefetch",
+    Set("prefetchnta", "prefetcht0", "prefetcht1", "prefetcht2", "prefetchw"))
+  private val markWordStore = Family("mark-word store", Set("movq"),
+    operands = Some("^\\$1,\\s*\\(%r[a-z0-9]+\\)$".r))
 
   /**
    * What a body looks like when the intrinsic did not fire. Reported alongside a miss, because
@@ -137,6 +170,18 @@ class VarkaAssemblySuite extends SparkFunSuite {
 
     def ranToCompletion: Boolean =
       output.linesIterator.exists(_.startsWith(VarkaAssemblyProbe.DONE_PREFIX))
+
+    private def longAfter(prefix: String): Long = {
+      val line = output.linesIterator.find(_.startsWith(prefix))
+        .getOrElse(fail(s"the probe printed no '$prefix' line; output:\n${tail(output)}"))
+      line.stripPrefix(prefix).trim.toLong
+    }
+
+    /** Heap bytes the child allocated per call of the method under test, at steady state. */
+    def allocBytesPerCall: Long = longAfter(VarkaAssemblyProbe.ALLOC_BYTES_PER_CALL_PREFIX)
+
+    /** Rows one call processes, so the above can be read per row. */
+    def rowsPerCall: Long = longAfter(VarkaAssemblyProbe.ROWS_PER_CALL_PREFIX)
   }
 
   /** Cap on captured output. `print` over one method is a few thousand lines; a mistaken
@@ -311,8 +356,7 @@ class VarkaAssemblySuite extends SparkFunSuite {
 
   private def countIn(nmethod: Nmethod, family: Family, regClass: Option[String]): Int =
     nmethod.insns.count { insn =>
-      family.matches(insn.mnemonic) &&
-        regClass.forall(cls => insn.operands.contains(s"%$cls"))
+      family.matches(insn) && regClass.forall(cls => insn.operands.contains(s"%$cls"))
     }
 
   private def assertHasFamily(nmethod: Nmethod, family: Family, regClass: String): Unit = {
@@ -332,6 +376,63 @@ class VarkaAssemblySuite extends SparkFunSuite {
       s"${nmethod.method}: expected no ${family.description} anywhere in this body and found " +
         s"$found - the case is supposed to be unvectorizable, so either it is not or the " +
         s"detector is matching the wrong thing")
+  }
+
+  private def allocationSites(nmethod: Nmethod): String = {
+    val prefetches = countIn(nmethod, allocationPrefetch, None)
+    val markStores = countIn(nmethod, markWordStore, None)
+    s"$prefetches allocation prefetches and $markStores mark-word stores in " +
+      s"${nmethod.insns.size} instructions"
+  }
+
+  /**
+   * The line between a per-call setup object and a per-iteration box, in bytes per row.
+   *
+   * <p>A boxed vector is a fresh object per lane group - at least 80 bytes for the payload alone,
+   * so 5 bytes per row at 16 lanes and 20 at 4 - and the probe measured 10 to 16 bytes per row
+   * on its polluted case. A {@code MemorySegment} view C2 failed to scalar-replace is one object
+   * per call over 1024 rows, under 0.25 bytes per row even four times over. One byte per row
+   * sits between them with a margin of at least 5x on either side.
+   */
+  private val maxBytesPerRow = 1.0
+
+  /**
+   * Task 55's negative assertion: the compiled body does not allocate per lane group. A kernel
+   * loop that boxes a vector keeps every packed instruction and loses 3-13x (the numbers behind
+   * that are in {@code SKILLS.md}), so this is the one failure the positive families cannot see.
+   *
+   * <p>Measured, not read off the disassembly: the probe reports heap bytes per call at steady
+   * state. A static count of allocation sites cannot make this distinction - the hand-written
+   * kernels carry per-call segment views C2 leaves in place, and an allocation's slow path
+   * jumps backwards to its retry point, so "inside a backward branch" is not "inside the loop".
+   * The static sites are printed as the diagnosis when the rate fails.
+   */
+  private def assertNoBoxing(run: ProbeRun, nmethod: Nmethod): Unit = {
+    val bytes = run.allocBytesPerCall
+    val rows = run.rowsPerCall
+    val perRow = bytes.toDouble / rows
+    info(f"${nmethod.method}: $bytes bytes allocated per call of $rows rows ($perRow%.2f/row)")
+    assert(perRow <= maxBytesPerRow,
+      f"${nmethod.method}: allocates $bytes bytes per call of $rows rows, $perRow%.1f bytes " +
+        f"per row against a ceiling of $maxBytesPerRow%.1f - a Vector API value is being " +
+        s"boxed per lane group (${allocationSites(nmethod)}). The usual cause is a second " +
+        "species of the same lane type having been through the shared templates in this JVM; " +
+        "run the child with -XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining and look for " +
+        "'callee changed to' lines naming a second species class (SKILLS.md, 'Every operator " +
+        "the plans rely on').")
+  }
+
+  /** The self-test's positive half: the measurement sees the box where one is known to be. */
+  private def assertBoxes(run: ProbeRun, nmethod: Nmethod): Unit = {
+    val bytes = run.allocBytesPerCall
+    val rows = run.rowsPerCall
+    val perRow = bytes.toDouble / rows
+    info(f"${nmethod.method}: $bytes bytes allocated per call of $rows rows ($perRow%.2f/row)")
+    assert(perRow > maxBytesPerRow,
+      f"${nmethod.method}: expected the polluted body to box and measured $bytes bytes per " +
+        f"call of $rows rows ($perRow%.2f per row; ${allocationSites(nmethod)}) - either the " +
+        "pollution did not take (C2 inlined the templates monomorphically after all) or the " +
+        "measurement is not seeing the body under test")
   }
 
   // --- Preconditions -------------------------------------------------------------------------
@@ -443,6 +544,46 @@ class VarkaAssemblySuite extends SparkFunSuite {
     assertHasFamily(nmethod, packedIntAdd, registerClass(bits))
   }
 
+  // The allocation assertion's own pair (task 55), for the same reason as the pair above: a
+  // measurement that reads zero for everything is indistinguishable from a body that allocates
+  // nothing. The clean case must be clean; the polluted case, which differs only in having run
+  // the same loop over a second int species in the same JVM, must box.
+
+  private def assertGatherClean(extraFlags: Seq[String]): Unit = {
+    requireSupportedArch()
+    val run = runProbe("gatherLookup", s"$probeClass::gatherLookup", extraFlags)
+    requireHealthyChild(run)
+    requireDisassembler(run)
+    val nmethod = standardC2(run, "VarkaAssemblyProbe::gatherLookup")
+    assertHasFamily(nmethod, packedGather, registerClass(run.preferredBits))
+    assertNoBoxing(run, nmethod)
+  }
+
+  private def assertGatherBoxesWhenPolluted(extraFlags: Seq[String]): Unit = {
+    requireSupportedArch()
+    val run = runProbe("gatherLookupPolluted", s"$probeClass::gatherLookup", extraFlags)
+    requireHealthyChild(run)
+    requireDisassembler(run)
+    val nmethod = standardC2(run, "VarkaAssemblyProbe::gatherLookup")
+    // The packed instructions are still there - that is the whole point.
+    assertHasFamily(nmethod, packedGather, registerClass(run.preferredBits))
+    assertBoxes(run, nmethod)
+  }
+
+  test("self-test: a gather compiles to a gather and boxes nothing") {
+    assertGatherClean(Seq.empty)
+  }
+
+  test("self-test: the same gather boxes once a second species has been through the templates") {
+    assertGatherBoxesWhenPolluted(Seq.empty)
+  }
+
+  test("self-test: the allocation pair holds at 128-bit lanes") {
+    val narrow = Seq("-XX:MaxVectorSize=16")
+    assertGatherClean(narrow)
+    assertGatherBoxesWhenPolluted(narrow)
+  }
+
   // --- The kernels ---------------------------------------------------------------------------
 
   // These come before the emitted loops on purpose. DateVectorOps and ChronoVectorOps are the
@@ -464,6 +605,7 @@ class VarkaAssemblySuite extends SparkFunSuite {
     val nmethod = standardC2(run, method)
     val cls = registerClass(run.preferredBits)
     families.foreach(family => assertHasFamily(nmethod, family, cls))
+    assertNoBoxing(run, nmethod)
   }
 
   private val dateVectorOps = "org.apache.spark.sql.varka.vector.DateVectorOps"

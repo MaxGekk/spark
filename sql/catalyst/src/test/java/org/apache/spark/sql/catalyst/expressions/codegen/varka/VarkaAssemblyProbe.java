@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.management.ManagementFactory;
 import java.util.List;
 
 import jdk.incubator.vector.IntVector;
@@ -52,6 +53,18 @@ public final class VarkaAssemblyProbe {
   /** The line the parent parses the host's preferred vector width out of. */
   public static final String PREFERRED_BITS_PREFIX = "VARKA_PROBE_PREFERRED_BITS=";
 
+  /**
+   * The line carrying the case's steady-state allocation rate (task 55): heap bytes the probe
+   * thread allocated per call of the case's method, measured over {@link #MEASURE_ROUNDS} calls
+   * made after the {@link #ROUNDS} that got it compiled. A boxed vector costs a fresh object per
+   * lane group and shows up here as bytes that scale with the rows per call; a per-call setup
+   * object that C2 failed to scalar-replace shows up as a small constant.
+   */
+  public static final String ALLOC_BYTES_PER_CALL_PREFIX = "VARKA_PROBE_ALLOC_BYTES_PER_CALL=";
+
+  /** The rows one call of the case's method processes, so the parent can normalise the above. */
+  public static final String ROWS_PER_CALL_PREFIX = "VARKA_PROBE_ROWS_PER_CALL=";
+
   /** The line the parent uses to confirm the case ran to completion rather than dying early. */
   public static final String DONE_PREFIX = "VARKA_PROBE_DONE=";
 
@@ -66,10 +79,25 @@ public final class VarkaAssemblyProbe {
    */
   private static final int ROUNDS = 200_000;
 
+  /** Calls the allocation rate is averaged over, after the case's method has been compiled. */
+  private static final int MEASURE_ROUNDS = 1000;
+
   private VarkaAssemblyProbe() {
   }
 
-  public static void main(String[] args) {
+  /** One case, prepared: everything it needs is allocated, and {@link #run} makes {@code rounds}
+   *  calls of the method under test and nothing else that allocates. */
+  private interface Hot extends AutoCloseable {
+    int run(int rounds);
+
+    int rowsPerCall();
+
+    @Override
+    default void close() {
+    }
+  }
+
+  public static void main(String[] args) throws Exception {
     if (args.length != 1) {
       System.err.println("usage: VarkaAssemblyProbe <case>");
       System.exit(2);
@@ -77,33 +105,71 @@ public final class VarkaAssemblyProbe {
     String name = args[0];
     System.out.println(PREFERRED_BITS_PREFIX + SPECIES.vectorBitSize());
 
+    int sink = 0;
+    try (Hot hot = prepare(name)) {
+      sink += hot.run(ROUNDS);
+      // The steady state: the method under test is compiled, and from here on the only
+      // allocation on this thread is whatever its compiled body does.
+      com.sun.management.ThreadMXBean threads =
+          (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+      long tid = Thread.currentThread().threadId();
+      long before = threads.getThreadAllocatedBytes(tid);
+      sink += hot.run(MEASURE_ROUNDS);
+      long after = threads.getThreadAllocatedBytes(tid);
+      System.out.println(ALLOC_BYTES_PER_CALL_PREFIX + (after - before) / MEASURE_ROUNDS);
+      System.out.println(ROWS_PER_CALL_PREFIX + hot.rowsPerCall());
+    }
+    System.out.println(DONE_PREFIX + name + " sink=" + sink);
+  }
+
+  private static Hot prepare(String name) {
     int[] a = new int[LENGTH];
     int[] b = new int[LENGTH];
     int[] o = new int[LENGTH];
+    // Indexes into TABLE for the gather cases: every value in range, every lane group varied.
+    int[] idx = new int[LENGTH];
     for (int i = 0; i < LENGTH; i++) {
       a[i] = i;
       b[i] = LENGTH - i;
+      idx[i] = (i * 7) & (TABLE.length - 1);
     }
-
-    int sink = 0;
-    switch (name) {
-      case "scalarChain" -> {
-        for (int r = 0; r < ROUNDS; r++) {
+    return switch (name) {
+      case "scalarChain" -> simple(rounds -> {
+        int sink = 0;
+        for (int r = 0; r < rounds; r++) {
           sink += scalarChain(b);
         }
-      }
-      case "vectorAdd" -> {
-        for (int r = 0; r < ROUNDS; r++) {
+        return sink;
+      });
+      case "vectorAdd" -> simple(rounds -> {
+        int sink = 0;
+        for (int r = 0; r < rounds; r++) {
           sink += vectorAdd(a, b, o);
         }
-      }
-      case "chronoFourFields" -> sink += chronoFourFields();
-      case "dateAddDays" -> sink += dateAddDays();
-      case "emittedYear" -> sink += emittedProjection(
+        return sink;
+      });
+      case "gatherLookup" -> simple(rounds -> {
+        int sink = 0;
+        for (int r = 0; r < rounds; r++) {
+          sink += gatherLookup(idx, o);
+        }
+        return sink;
+      });
+      case "gatherLookupPolluted" -> simple(rounds -> {
+        int sink = 0;
+        for (int r = 0; r < rounds; r++) {
+          sink += gatherLookup(idx, o);
+          sink += gatherLookupOtherSpecies(idx, o);
+        }
+        return sink;
+      });
+      case "chronoFourFields" -> chronoFourFields();
+      case "dateAddDays" -> dateAddDays();
+      case "emittedYear" -> emittedProjection(
           "emittedYear", List.of(new VarkaVectorIR.Year(COLUMN_0)), 1, 0);
-      case "emittedDayOfWeek" -> sink += emittedProjection(
+      case "emittedDayOfWeek" -> emittedProjection(
           "emittedDayOfWeek", List.of(new VarkaVectorIR.DayOfWeek(COLUMN_0)), 1, 0);
-      case "emittedCompare" -> sink += emittedProjection(
+      case "emittedCompare" -> emittedProjection(
           "emittedCompare",
           List.of(new VarkaVectorIR.IfElse(
               new VarkaVectorIR.Compare(
@@ -114,9 +180,24 @@ public final class VarkaAssemblyProbe {
       default -> {
         System.err.println("unknown case: " + name);
         System.exit(2);
+        yield null;
       }
-    }
-    System.out.println(DONE_PREFIX + name + " sink=" + sink);
+    };
+  }
+
+  /** A case over the on-heap arrays: nothing to release, {@link #LENGTH} rows per call. */
+  private static Hot simple(java.util.function.IntUnaryOperator body) {
+    return new Hot() {
+      @Override
+      public int run(int rounds) {
+        return body.applyAsInt(rounds);
+      }
+
+      @Override
+      public int rowsPerCall() {
+        return LENGTH;
+      }
+    };
   }
 
   /**
@@ -157,6 +238,62 @@ public final class VarkaAssemblyProbe {
     return o[0];
   }
 
+  // --- The allocation self-test (task 55) --------------------------------------------------------
+
+  /**
+   * A second {@code IntVector} species, different from the preferred one at every width the suite
+   * runs at: 128 bits where the preferred species is wider, 64 bits under
+   * {@code -XX:MaxVectorSize=16}, where the preferred species is itself 128 bits.
+   */
+  private static final VectorSpecies<Integer> OTHER_SPECIES =
+      SPECIES.vectorBitSize() > 128 ? IntVector.SPECIES_128 : IntVector.SPECIES_64;
+
+  /** A constant table, indexed by the low six bits of each lane. */
+  private static final int[] TABLE = new int[64];
+
+  static {
+    for (int i = 0; i < TABLE.length; i++) {
+      TABLE[i] = 7 * i + 1;
+    }
+  }
+
+  /**
+   * The shape the allocation assertion is calibrated on: an index-map gather out of a small
+   * table, one {@code vpgatherdd} and its index check when it compiles cleanly. Its index vector
+   * flows through the shared {@code IntVector} templates, and those templates are what a second
+   * species turns bimorphic.
+   *
+   * <p>The plain {@link #vectorAdd} would not do for this, and neither would a {@code selectFrom}
+   * lookup: measured while building this task (`PLAN_TASK_55.md` 3), a bare add stays clean in
+   * a polluted JVM, a {@code selectFrom} lookup boxes only if the second species ran hot
+   * <em>first</em> and stays clean when the two are interleaved, and the gather boxes under both
+   * orders at both widths. The positive case has to be a shape that boxes whenever the templates
+   * are polluted, or the self-test proves nothing.
+   */
+  public static int gatherLookup(int[] idx, int[] o) {
+    int i = 0;
+    int bound = SPECIES.loopBound(idx.length);
+    for (; i < bound; i += SPECIES.length()) {
+      IntVector.fromArray(SPECIES, TABLE, 0, idx, i).intoArray(o, i);
+    }
+    return o[0];
+  }
+
+  /**
+   * The same loop over {@link #OTHER_SPECIES}. Never asserted on itself: it exists so that the
+   * {@code gatherLookupPolluted} case has pushed a second species through the same templates by
+   * the time C2 compiles {@link #gatherLookup}, which is the one condition under which that
+   * method's body acquires a heap allocation per lane group.
+   */
+  public static int gatherLookupOtherSpecies(int[] idx, int[] o) {
+    int i = 0;
+    int bound = OTHER_SPECIES.loopBound(idx.length);
+    for (; i < bound; i += OTHER_SPECIES.length()) {
+      IntVector.fromArray(OTHER_SPECIES, TABLE, 0, idx, i).intoArray(o, i);
+    }
+    return o[0];
+  }
+
   // --- The kernels and the emitted loops --------------------------------------------------------
 
   private static final VarkaVectorIR COLUMN_0 = new VarkaVectorIR.ColumnRef(0);
@@ -192,87 +329,128 @@ public final class VarkaAssemblyProbe {
     return validity;
   }
 
+  /** A case over off-heap buffers in an arena the {@link Hot} owns and closes. */
+  private abstract static class OffHeap implements Hot {
+    final Arena arena = Arena.ofConfined();
+
+    @Override
+    public int rowsPerCall() {
+      return ROWS;
+    }
+
+    @Override
+    public void close() {
+      arena.close();
+    }
+  }
+
   /** {@code ChronoVectorOps.vectorFourFields} - the hand-written reference the emitted calendar
    *  lowering is measured against, and the first thing this suite should be able to vouch for. */
-  private static int chronoFourFields() {
-    try (Arena arena = Arena.ofConfined()) {
-      MemorySegment src = arena.allocate(ROWS * 4L, 64);
-      fillDays(src, ROWS);
-      MemorySegment srcValidity = allValid(arena, ROWS);
-      long[] dstData = new long[4];
-      long[] dstValidity = new long[4];
-      for (int f = 0; f < 4; f++) {
-        dstData[f] = arena.allocate(ROWS * 4L, 64).address();
-        dstValidity[f] = arena.allocate((ROWS + 7) / 8L, 8).address();
+  private static Hot chronoFourFields() {
+    return new OffHeap() {
+      final MemorySegment src = arena.allocate(ROWS * 4L, 64);
+      final MemorySegment srcValidity = allValid(arena, ROWS);
+      final long[] dstData = new long[4];
+      final long[] dstValidity = new long[4];
+
+      {
+        fillDays(src, ROWS);
+        for (int f = 0; f < 4; f++) {
+          dstData[f] = arena.allocate(ROWS * 4L, 64).address();
+          dstValidity[f] = arena.allocate((ROWS + 7) / 8L, 8).address();
+        }
       }
-      int status = 0;
-      for (int r = 0; r < KERNEL_ROUNDS; r++) {
-        status |= ChronoVectorOps.vectorFourFields(
-            src.address(), srcValidity.address(), 0, dstData, dstValidity, ROWS);
+
+      @Override
+      public int run(int rounds) {
+        int status = 0;
+        for (int r = 0; r < rounds; r++) {
+          status |= ChronoVectorOps.vectorFourFields(
+              src.address(), srcValidity.address(), 0, dstData, dstValidity, ROWS);
+        }
+        return status;
       }
-      return status;
-    }
+    };
   }
 
   /** {@code DateVectorOps.vectorAddDays} - the simplest kernel, and the one whose body should be
    *  packed loads, one packed add and packed stores with nothing else in it. */
-  private static int dateAddDays() {
-    try (Arena arena = Arena.ofConfined()) {
-      MemorySegment src = arena.allocate(ROWS * 4L, 64);
-      fillDays(src, ROWS);
-      MemorySegment srcValidity = allValid(arena, ROWS);
-      MemorySegment dst = arena.allocate(ROWS * 4L, 64);
-      MemorySegment dstValidity = arena.allocate((ROWS + 7) / 8L, 8);
-      for (int r = 0; r < KERNEL_ROUNDS; r++) {
-        DateVectorOps.vectorAddDays(src.address(), srcValidity.address(), 0,
-            dst.address(), dstValidity.address(), ROWS, 7);
+  private static Hot dateAddDays() {
+    return new OffHeap() {
+      final MemorySegment src = arena.allocate(ROWS * 4L, 64);
+      final MemorySegment srcValidity = allValid(arena, ROWS);
+      final MemorySegment dst = arena.allocate(ROWS * 4L, 64);
+      final MemorySegment dstValidity = arena.allocate((ROWS + 7) / 8L, 8);
+
+      {
+        fillDays(src, ROWS);
       }
-      return dst.get(ValueLayout.JAVA_INT, 0);
-    }
+
+      @Override
+      public int run(int rounds) {
+        for (int r = 0; r < rounds; r++) {
+          DateVectorOps.vectorAddDays(src.address(), srcValidity.address(), 0,
+              dst.address(), dstValidity.address(), ROWS, 7);
+        }
+        return dst.get(ValueLayout.JAVA_INT, 0);
+      }
+    };
   }
 
   /**
-   * Emits one projection, loads it, and runs it hot.
+   * Emits one projection, loads it, and prepares to run it hot.
    *
    * <p>The driver calls {@code loopDense0} once per {@code run}, so the loop method's own
    * invocation counter trips at the same rate the kernel's does and HotSpot compiles it
    * standalone - which is what lets the assertion name a loop method rather than the whole
-   * kernel, and is why {@code KERNEL_ROUNDS} calls rather than one long loop.
+   * kernel, and is why {@code rounds} calls rather than one long loop. The argument arrays are
+   * built once: the allocation measurement must see the kernel's own allocations and nothing the
+   * driver did.
    */
-  private static int emittedProjection(
+  private static Hot emittedProjection(
       String suffix, List<VarkaVectorIR> outputs, int numInputs, int numLiterals) {
     String className = EMITTED_PREFIX + suffix;
     byte[] bytes = VarkaLoopEmitter.emit(
         className, outputs, numInputs, numLiterals, null, null, VarkaEmitOptions.DEFAULTS);
-    VarkaFusedKernel kernel;
+    VarkaFusedKernel loaded;
     try {
       VarkaGeneratedClassLoader loader =
           new VarkaGeneratedClassLoader(VarkaAssemblyProbe.class.getClassLoader());
       loader.defineGeneratedClass(className, bytes);
-      kernel = (VarkaFusedKernel) loader.loadClass(className).getConstructor().newInstance();
+      loaded = (VarkaFusedKernel) loader.loadClass(className).getConstructor().newInstance();
     } catch (ReflectiveOperationException e) {
       throw new IllegalStateException("could not load the emitted kernel " + className, e);
     }
-    try (Arena arena = Arena.ofConfined()) {
-      MemorySegment src = arena.allocate(ROWS * 4L, 64);
-      fillDays(src, ROWS);
-      MemorySegment srcValidity = allValid(arena, ROWS);
-      long[] dstData = new long[outputs.size()];
-      long[] dstValidity = new long[outputs.size()];
-      for (int i = 0; i < outputs.size(); i++) {
-        dstData[i] = arena.allocate(ROWS * 4L, 64).address();
-        dstValidity[i] = arena.allocate((ROWS + 7) / 8L, 8).address();
+    return new OffHeap() {
+      final VarkaFusedKernel kernel = loaded;
+      final MemorySegment src = arena.allocate(ROWS * 4L, 64);
+      final long[] srcData = {src.address()};
+      final long[] srcValidity = {allValid(arena, ROWS).address()};
+      final int[] srcNullCount = {0};
+      final long[] dstData = new long[outputs.size()];
+      final long[] dstValidity = new long[outputs.size()];
+      final int[] scalarArgs = new int[numLiterals];
+
+      {
+        fillDays(src, ROWS);
+        for (int i = 0; i < outputs.size(); i++) {
+          dstData[i] = arena.allocate(ROWS * 4L, 64).address();
+          dstValidity[i] = arena.allocate((ROWS + 7) / 8L, 8).address();
+        }
+        for (int i = 0; i < numLiterals; i++) {
+          scalarArgs[i] = 18500;
+        }
       }
-      int[] scalarArgs = new int[numLiterals];
-      for (int i = 0; i < numLiterals; i++) {
-        scalarArgs[i] = 18500;
+
+      @Override
+      public int run(int rounds) {
+        int status = 0;
+        for (int r = 0; r < rounds; r++) {
+          status |= kernel.run(
+              srcData, srcValidity, srcNullCount, dstData, dstValidity, scalarArgs, ROWS);
+        }
+        return status;
       }
-      int status = 0;
-      for (int r = 0; r < KERNEL_ROUNDS; r++) {
-        status |= kernel.run(new long[] {src.address()}, new long[] {srcValidity.address()},
-            new int[] {0}, dstData, dstValidity, scalarArgs, ROWS);
-      }
-      return status;
-    }
+    };
   }
 }
