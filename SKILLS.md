@@ -1220,6 +1220,35 @@ is the decision. Three things came out of building it.
   `VectorMask.fromLong` materializes a mask from a scalar word; the prediction counted it as
   one lane op and it is not. A guard that reuses a mask the body has already built for its
   store would not pay it.
+- **The guard generalizes to a value bounded by anything other than the day range - and the
+  block itself needed no change to do it.** Task 60 widened `add_months`' month count from a
+  compile-time-bounded literal to a column, and reused this same block
+  (renamed `emitProducerGuard` to `emitRangeGuard`, taking the two bounds as parameters) to
+  guard the count against `MONTH_ARITH_MIN/MAX_MONTHS` instead of the day range. The correction
+  this forced onto `PLAN_MILESTONE_4.md` 2.27: a column bounded by a runtime guard is a
+  `Bounded` day range at the guard's own extremes (`shifted(days, 31 * MIN, 31 * MAX)`), not
+  `ColumnShifted` - `ColumnShifted` is for a shift the compiler genuinely cannot bound at all,
+  which a *guarded* column is not. Getting this wrong would have re-widened every consumer's
+  range to "unknowable" for no reason, the same over-approximation task 51 had just finished
+  removing.
+- **A word this block reads must already be stored, not merely available on the stack.** The
+  guard's mask-body AND reads `Slots#wordRef` for the node under guard - a *stored local*, not
+  whatever the emitter last pushed. For `AddDays`/`SubDays` that word is computed immediately
+  before the guard runs (`emitAndValidatedOp`'s own call site), so this was never visible at
+  task 52. `add_months` computes its own word differently: task 40's dispatcher ran
+  `emitAndWord` *after* `emitAddMonths` returned, once the whole value was on the stack - fine
+  for every reader that came after, but the guard needed to run *inside* `emitAddMonths`, right
+  after the count loads and before the magic-multiply's bias folds it in, which is earlier than
+  that word existed. The result was `VerifyError: Bad local variable type ... top ... not
+  assignable to long` in exactly the epilogue path a root-level `add_months(d, m)` reaches - a
+  case with no further calendar consumer to have exercised the ordering, which is also why
+  every one of task 60's emitter tests (a bare `AddMonths(col, col)` as the whole kernel) is
+  necessary and not just the ones nested under `Year`. The fix moved the `emitAndWord` call
+  earlier, into `emitAddMonths` itself, right after the count's `emitValue` - both children's
+  words are provably ready by then, so nothing about the word itself changed, only when it is
+  stored. The general lesson: before reusing a block that reads "the node's own word," check
+  where that word is written relative to where the reused block will run, not just that it is
+  written somewhere.
 
 ## A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic
 

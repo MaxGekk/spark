@@ -208,10 +208,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(compiled.outputTypes === Seq(DateType, DateType))
   }
 
-  test("task 40 declines: a non-foldable month count, and a literal past the magic's range") {
-    val n = AttributeReference("n", IntegerType)()
-    assert(VarkaExpressionCompiler.compile(
-      Seq(out(AddMonths(d, n))), childOutput :+ n).isEmpty)
+  test("task 40 declines: a literal month count past the magic's range") {
     assert(VarkaExpressionCompiler.compile(
       Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS + 1)))),
       childOutput).isEmpty)
@@ -222,6 +219,60 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // one declined.
     assert(VarkaExpressionCompiler.compile(
       Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS)))), childOutput).isDefined)
+  }
+
+  // Task 60: add_months' month count widened to a column, the way task 38 widened date_add's
+  // day offset - a runtime guard on the count takes over from the compile-time bound above.
+
+  test("task 60: add_months(d, i) and d + CAST(i AS INTERVAL MONTH) compile to the same " +
+      "column-count node, with no literal slot") {
+    val monthInterval = YearMonthIntervalType(YearMonthIntervalType.MONTH,
+      YearMonthIntervalType.MONTH)
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(AddMonths(d, i)), out(DateAddYMInterval(d, Cast(i, monthInterval)))),
+      childOutput).get
+    val shared = new IRAddMonths(new ColumnRef(0), new ColumnRef(1))
+    assert(compiled.outputs === Seq(shared, shared))
+    assert(compiled.inputOrdinals === Seq(0, 2))
+    assert(compiled.literals === Nil)
+    assert(compiled.outputTypes === Seq(DateType, DateType))
+  }
+
+  test("task 60 declines: a YEAR-end interval cast, the negated MONTH cast, a further-folded " +
+      "count, and a stored year-month interval column, each with its own reason") {
+    val monthInterval = YearMonthIntervalType(YearMonthIntervalType.MONTH,
+      YearMonthIntervalType.MONTH)
+    val yearInterval = YearMonthIntervalType(YearMonthIntervalType.YEAR,
+      YearMonthIntervalType.YEAR)
+    // CAST(i AS INTERVAL YEAR) can throw (Cast.intToYearMonthInterval multiplies by 12), so it
+    // is not admitted as the column itself the way the MONTH cast is.
+    assert(declineReason(DateAddYMInterval(d, Cast(i, yearInterval))) ===
+      "non-integer month count column of type interval year")
+    // date - INTERVAL m MONTH arrives as UnaryMinus over the cast; not matched until task 63's
+    // negate composes with it.
+    assert(declineReason(DateAddYMInterval(d, UnaryMinus(Cast(i, monthInterval)))) ===
+      "month count is neither a foldable literal nor an integer column")
+    // A column read through further arithmetic is not the bare-column or bare-cast shape
+    // compileMonths matches; it is not foldable either, so it declines the same way.
+    assert(declineReason(AddMonths(d, Add(i, Literal(1)))) ===
+      "month count is neither a foldable literal nor an integer column")
+    // A stored YearMonthIntervalType column: the Arrow cache holds it as an IntervalYearVector,
+    // unreadable by isArrowBacked, so it declines by name rather than fusing and refusing.
+    val ym = AttributeReference("ym", monthInterval)()
+    assert(declineReason(DateAddYMInterval(d, ym), childOutput :+ ym) ===
+      "year-month interval column is not readable by the int32 lanes")
+  }
+
+  test("task 60: a column count composes with dayRange like a literal count does") {
+    // year(add_months(d, m)) fuses: a column count is Bounded by the emitter's own runtime
+    // guard (task 60's correction to PLAN_MILESTONE_4.md 2.27), not ColumnShifted.
+    assert(fuses(Year(AddMonths(d, i))))
+    // The bound composes: a date already shifted to the edge of add_months' own guarded range,
+    // plus the guarded range itself, still leaves the narrowed range by one day.
+    val atBound = DateAdd(d, Literal((shiftHi - 761484).toInt))
+    assert(fuses(Year(AddMonths(atBound, i))))
+    assert(declineReason(Year(AddMonths(DateAdd(atBound, Literal(1)), i)))
+      .startsWith("day range ["))
   }
 
   // Task 52's compile-time range guard. `HI` and `LO` are the largest literal shifts that keep

@@ -18,6 +18,7 @@
 package org.apache.spark.sql.execution
 
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
 import org.apache.spark.sql.execution.columnar.{ArrowCachedBatchSerializer, InMemoryRelation}
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
@@ -145,6 +146,30 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
     session.createDataFrame(rows).toDF("d", "d2", "off", "small")
       .createOrReplaceTempView("varka_dates_far_offset")
     session.catalog.cacheTable("varka_dates_far_offset")
+  }
+
+  /**
+   * Builds and caches a `varka_date_months` temp view for task 60: a date `d` and an int month
+   * count `m`, each nullable independently, with `m` covering both ends of
+   * `VarkaChrono.MONTH_ARITH_MIN/MAX_MONTHS` and a row 30000 past each end - the value the
+   * removed task-26-style differential used for a far day offset, here for a far month count.
+   * The row engine's `DateTimeUtils.dateAddMonths` answers any int count correctly, so it is a
+   * valid oracle for the past-bound rows too; only a count near the type's extremes could
+   * overflow the bias added in the lowering, and none here does.
+   */
+  protected def cacheDatesMonthCounts(session: SparkSession): Unit = {
+    val rows = Seq(
+      (date("2024-01-01"), Int.box(3)),
+      (date("2024-01-02"), null: java.lang.Integer),
+      (null: java.sql.Date, Int.box(-5)),
+      (null: java.sql.Date, null: java.lang.Integer),
+      (date("1969-12-31"), Int.box(VarkaChrono.MONTH_ARITH_MAX_MONTHS)),
+      (date("1969-12-31"), Int.box(VarkaChrono.MONTH_ARITH_MIN_MONTHS)),
+      (date("2000-06-15"), Int.box(VarkaChrono.MONTH_ARITH_MAX_MONTHS + 30000)),
+      (date("2000-06-15"), Int.box(VarkaChrono.MONTH_ARITH_MIN_MONTHS - 30000)))
+    session.createDataFrame(rows).toDF("d", "m")
+      .createOrReplaceTempView("varka_date_months")
+    session.catalog.cacheTable("varka_date_months")
   }
 
   /**

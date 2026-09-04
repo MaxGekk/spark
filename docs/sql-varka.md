@@ -88,8 +88,17 @@ becomes timestamp arithmetic) decline:
   and the row engine's ANSI-mode behavior for a bad weekday is not
   reproduced.
 * `DAYOFYEAR` (task 34), `LAST_DAY` (task 36) and `ADD_MONTHS` / `date +
-  INTERVAL n MONTH` (task 40) with a literal month count, all over the same
-  civil-from-days prefix; `LAST_DAY` and `ADD_MONTHS` return dates.
+  INTERVAL n MONTH` (task 40), all over the same civil-from-days prefix;
+  `LAST_DAY` and `ADD_MONTHS` return dates. `ADD_MONTHS`' month count is a
+  literal or (task 60) an integer column - `CAST(m AS INTERVAL MONTH)` reads
+  the same way, but `CAST(m AS INTERVAL YEAR)` and a stored year-month
+  interval column decline, the first because the cast can throw and the
+  second because the Arrow cache holds it as a type no kernel reads. A
+  column count carries a per-batch range check on the count itself, the
+  same route as the day producer below: a lane outside
+  `VarkaChrono.MONTH_ARITH_MIN/MAX_MONTHS` (about 2047 years either way,
+  where the lowering's magic division by 12 stops being exact) declines the
+  batch to the row engine rather than compute past it.
 * `TRUNC(date, fmt)` (task 35) at the date levels, for a literal format only:
   `YEAR`/`YYYY`/`YY`, `MONTH`/`MON`/`MM` and `QUARTER` are one node each with
   the level as part of the kernel's shape, and `WEEK` is rewritten onto

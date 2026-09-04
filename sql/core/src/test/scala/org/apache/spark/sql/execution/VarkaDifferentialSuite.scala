@@ -283,6 +283,73 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 60: a column month count matches the row engine, declining the batch whose count " +
+      "leaves the emitter's guarded range - the same route as task 52's day producer") {
+    // varka_date_months puts two rows a further 30000 months past each end of
+    // MONTH_ARITH_MIN/MAX_MONTHS beside in-range and null rows; add_months' own guard on the
+    // count (task 60) declines the whole batch, and DateTimeUtils.dateAddMonths - the row
+    // engine's own definition - answers every count correctly, near or far.
+    cacheDatesMonthCounts(spark)
+    cacheDatesMonthCounts(varkaSpark)
+    try {
+      val q = "SELECT add_months(d, m) AS a, d + CAST(m AS INTERVAL MONTH) AS b " +
+        "FROM varka_date_months ORDER BY a, b"
+      val expected = spark.sql(q)
+      val actual = varkaSpark.sql(q)
+      val plan = actual.queryExecution.executedPlan
+      assertFused(plan)
+      checkAnswer(actual, expected)
+      assert(varkaMetric(plan, "numFallbackBatchesDeclined") > 0L,
+        s"the count guard should have declined the far batch:\n${plan.treeString}")
+      assert(varkaMetric(plan, "numFallbackBatchesKernel") === 0L)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_months"))
+    }
+  }
+
+  test("task 60: the producer's own guard reaches a filter predicate through the same route " +
+      "as task 52's day producer") {
+    // Unlike task 52's date_add offset, add_months' month count is never itself a filter
+    // operand VarkaExpressionCompiler can read - a bare int column only compiles through
+    // compileMonths/compileOffset, not through the general Compare path (task 38's scope
+    // note), so "WHERE m BETWEEN ..." cannot fuse and is not attempted here. This instead
+    // mirrors task 52's own filter test exactly: a calendar predicate over the guarded node.
+    cacheDatesMonthCounts(spark)
+    cacheDatesMonthCounts(varkaSpark)
+    try {
+      val q = "SELECT count(*) AS c FROM varka_date_months WHERE year(add_months(d, m)) = year(d)"
+      val expected = spark.sql(q)
+      val actual = varkaSpark.sql(q)
+      val plan = actual.queryExecution.executedPlan
+      assertFused(plan)
+      assert(!plan.toString.contains("Filter (year("),
+        s"the predicate should be fused, not residual:\n$plan")
+      checkAnswer(actual, expected)
+      val filterNode = plan.collectFirst { case f: VarkaFilterExec => f }
+        .orElse(plan.collectFirst { case f: VarkaFilterColumnarToRowExec => f })
+      assert(filterNode.isDefined, s"expected a Varka filter node:\n${plan.treeString}")
+      assert(filterNode.get.metrics("numFallbackBatchesDeclined").value > 0L,
+        s"the far rows should have declined the filter's batch too:\n${plan.treeString}")
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_months"))
+    }
+  }
+
+  test("task 60: an existing nullable int column, in range, still nulls its row on either " +
+      "side independently when read as a month count, and the guard stays silent") {
+    // Reuses task 38's varka_dates_nullable_offset fixture as an in-range count source, rather
+    // than adding a third nullability fixture for the same "either operand null nulls the
+    // row" fact task 52's own tests already establish for a day offset. Every count here is
+    // well inside MONTH_ARITH_MIN/MAX_MONTHS, so this is also where "the guard is silent on
+    // the data it exists for" (task 52's own phrase) is checked for task 60's guard.
+    cacheDatesNullableOffset(spark)
+    cacheDatesNullableOffset(varkaSpark)
+    val plan = checkDifferential(spark, varkaSpark,
+      "SELECT add_months(d, off) AS a FROM varka_dates_nullable_offset ORDER BY a",
+      expectFused = true)
+    assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
+  }
+
   test("task 56: date +- CAST(i AS INTERVAL DAY) matches the row engine on the projection " +
       "and filter paths, and a stored interval column stays residual") {
     cacheDatesNullableOffset(spark)
