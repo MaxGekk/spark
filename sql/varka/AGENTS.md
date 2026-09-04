@@ -86,8 +86,9 @@ each, and that list only shrinks. It is a step of the gate.
 Before committing, `dev/varka_precommit.sh` (or install it once with
 `--install-hook`) checks the staged files for the rules that slip most: a
 non-ASCII byte outside a string literal, a source line over 100 columns, a
-`TODO`/`FIXME` marker under a Varka directory, and the quote check when a
-document changed. And beside the emitter suite's curated matrices,
+`TODO`/`FIXME` marker under a Varka directory, the quote check when a
+document changed, and `ruff check` plus `ruff format --check` on Python files
+(CI's Python linter runs both). And beside the emitter suite's curated matrices,
 `VarkaIrFuzzSuite` runs random IR trees over random columns, null patterns,
 lengths and `VarkaEmitOptions` variants against the shared
 `VarkaReferenceEvaluator`; a failure names its seed and iteration and replays
