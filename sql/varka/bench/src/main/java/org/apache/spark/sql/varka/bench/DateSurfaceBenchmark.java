@@ -33,7 +33,6 @@ import java.util.regex.Pattern;
 import org.apache.spark.executor.TaskMetrics;
 import org.apache.spark.scheduler.SparkListener;
 import org.apache.spark.scheduler.SparkListenerTaskEnd;
-import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.execution.QueryExecution;
@@ -282,22 +281,24 @@ public final class DateSurfaceBenchmark {
     List<Harness.Case> exec = new ArrayList<>();
     List<String> plans = new ArrayList<>();
     List<String> shares = new ArrayList<>();
+    // Every iteration plans its query afresh. A Dataset reused across iterations keeps its
+    // RDD lineage, and the counted filter's final aggregate sits behind a shuffle, so Spark
+    // reuses the map stage's output on the second run and only the one-partition result stage
+    // executes: 4 ms and no executor time for 200M rows, which the first laptop run measured
+    // before this comment existed. A fresh plan is a fresh lineage and nothing is reused.
     if (entry.projection() != null) {
       String q = projectionQuery(entry);
-      Dataset<Row> df = spark.sql(q);
-      Runnable body = () -> df.write().format("noop").mode("overwrite").save();
+      Runnable body = () -> spark.sql(q).write().format("noop").mode("overwrite").save();
       measureShape(spark, executor, batches, drain, "projection, columnar consumer", q, body,
           args, warmup, min, wall, exec, plans, shares, log, entry, violations);
     }
     if (entry.filter() != null) {
       String qc = filterColumnarQuery(entry);
-      Dataset<Row> dfc = spark.sql(qc);
-      Runnable bodyc = () -> dfc.write().format("noop").mode("overwrite").save();
+      Runnable bodyc = () -> spark.sql(qc).write().format("noop").mode("overwrite").save();
       measureShape(spark, executor, batches, drain, "filter, columnar consumer", qc, bodyc,
           args, warmup, min, wall, exec, plans, shares, log, entry, violations);
       String q = filterQuery(entry);
-      Dataset<Row> df = spark.sql(q);
-      Runnable body = df::collect;
+      Runnable body = () -> spark.sql(q).collect();
       measureShape(spark, executor, batches, drain, "filter, counted", q, body, args,
           warmup, min, wall, exec, plans, shares, log, entry, violations);
     }
@@ -333,6 +334,12 @@ public final class DateSurfaceBenchmark {
     }
     Harness.Stats w = Harness.stats(s.wallMs());
     Harness.Stats x = Harness.stats(s.executorMs());
+    if (x.bestMs() <= 0.0) {
+      // No task ran in some iteration: a reused stage, a folded query, or a listener that did
+      // not see the tasks. Whatever it is, the row would be a number about nothing.
+      violations.add("an iteration ran no executor work (a reused shuffle stage, or a query "
+          + "the optimizer answered without a scan): " + query);
+    }
     wall.add(new Harness.Case(caseName, w));
     exec.add(new Harness.Case(caseName, x));
     String shape = caseName;

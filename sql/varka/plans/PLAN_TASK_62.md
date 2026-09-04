@@ -149,6 +149,18 @@ them on the plan line (`Varka (kernel N batches, fallback M)`), and under
 `--expect-fused` fails a shape that planned a Varka node and ran no kernel
 batch. On stock Spark no plan carries the metrics and the counts stay 0.
 
+**Corrected after the first 200M-row run, the same day.** Every counted
+filter on stock Spark took 4 ms with no executor time. The driver had built
+one `Dataset` per shape and called `collect` on it each iteration; the count's
+final aggregate is behind a shuffle once the table has more than one
+partition, and Spark reuses a registered shuffle map stage for an RDD lineage
+it has already run, so from the second iteration only the one-partition
+result stage executed. The 2M-row smoke runs had one partition, no shuffle,
+and could not show it. The driver now plans every iteration's query afresh
+(a fresh plan is a fresh lineage), and fails any shape whose best executor
+time is zero, which is what a reused stage or a folded query looks like from
+the file. Every row of the first run's file was discarded with the run.
+
 **The results file** is in Spark's harness format exactly - the table
 header `<name>:  Best Time(ms)  Avg Time(ms)  Stdev(ms)  Rate(M/s)  Per
 Row(ns)  Relative` and its row layout - because `dev/varka_bench_diff.py`
