@@ -718,12 +718,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(spark(Int.MinValue, 3) !== reduceFirst(Int.MinValue, 2))
   }
 
-  test("the calendar extractions match LocalDate over the range they cover") {
-    val roots = Seq[VarkaVectorIR](
-      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
-      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
-      new DayOfYear(new ColumnRef(0)))
-    val inRange = Array(
+  /** The calendar boundary set every bounded calendar test walks; see the first use below. */
+  private val calendarBoundaryDays: Array[Int] = Array(
       VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MIN_DAYS + 1,
       VarkaChrono.NARROW_MAX_DAYS, VarkaChrono.NARROW_MAX_DAYS - 1,
       -1, 0, 1, -719468, -719162,
@@ -739,10 +735,34 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       LocalDate.of(1900, 1, 1), LocalDate.of(1900, 12, 31), // century, not leap
       LocalDate.of(2000, 2, 28), LocalDate.of(1900, 2, 28)
     ).map(_.toEpochDay.toInt)
-    def days(c: Int, i: Int): Int =
-      if (i < inRange.length) inRange(i) else i * 9973 - 400000
+
+  private def calendarBoundaryDay(c: Int, i: Int): Int =
+    if (i < calendarBoundaryDays.length) calendarBoundaryDays(i) else i * 9973 - 400000
+
+  test("the calendar extractions match LocalDate over the range they cover") {
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
     checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-      nullPatterns.map(p => Seq(p._2)), data = days, ctx = "narrowed")
+      nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay, ctx = "narrowed")
+  }
+
+  test("task 54: both prefix forms match LocalDate over the calendar boundaries, last_day too") {
+    // The Julian map and the century-then-year split, each held to LocalDate over the same
+    // boundary set on every calendar tail plus last_day, whose month-length arithmetic reads
+    // the prefix's year. Agreeing with LocalDate here is also them agreeing with each other,
+    // which is what keeps whichever is not the default a live reference variant rather than
+    // dead code - the same discipline as FloorMod7 and task 53's month axis.
+    val roots = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)), new LastDay(new ColumnRef(0)))
+    for (julian <- Seq(true, false)) {
+      checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
+        ctx = s"julianMap=$julian", options = VarkaEmitOptions.DEFAULTS.withJulianMap(julian))
+    }
   }
 
   test("the emitted kernel agrees with VarkaChrono's scalar twin, not only with LocalDate") {
@@ -843,10 +863,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       if (i < clampDays.length) clampDays(i) else i * 9973 - 400000
     // Offsets of 0, +-1, +-11, +-12, +-13, +-1200 cross a multiple of 12 both ways, which is
     // where the month-arithmetic dividend's own bias could be off by one.
-    for (offset <- Seq(0, 1, -1, 11, -11, 12, -12, 13, -13, 1200, -1200,
-        VarkaChrono.MONTH_ARITH_MAX_MONTHS, VarkaChrono.MONTH_ARITH_MIN_MONTHS)) {
+    // Both prefix forms (task 54): add_months decomposes through the prefix and recomposes, so
+    // a year of era that was off by one would surface here before anywhere else.
+    for {
+      julian <- Seq(true, false)
+      offset <- Seq(0, 1, -1, 11, -11, 12, -12, 13, -13, 1200, -1200,
+        VarkaChrono.MONTH_ARITH_MAX_MONTHS, VarkaChrono.MONTH_ARITH_MIN_MONTHS)
+    } {
       checkMatrix(Seq(root), 1, Array(offset), Seq(1, 13, 17, 64, 1000),
-        nullPatterns.map(p => Seq(p._2)), data = days, ctx = s"add_months offset=$offset")
+        nullPatterns.map(p => Seq(p._2)), data = days,
+        ctx = s"add_months offset=$offset julianMap=$julian",
+        options = VarkaEmitOptions.DEFAULTS.withJulianMap(julian))
     }
   }
 
@@ -899,12 +926,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // month-axis mistake in either is exactly what a boundary set misses and a sweep cannot.
     val yearOnly = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
     val dayOfYearOnly = Seq[VarkaVectorIR](new DayOfYear(new ColumnRef(0)))
+    // Both prefix forms (task 54), for the same reason as the month axes: the two reach the
+    // year of era and the day of year through different divisions, and only the sweep holds
+    // the emitted Julian map to LocalDate over every covered day rather than over an era.
     for {
       options <- Seq(unshared, sharing)
       elide <- Seq(true, false)
       neri <- Seq(true, false)
+      julian <- Seq(true, false)
     } {
       val axis = options.withElideChronoMonth(elide).withNeriSchneiderMonth(neri)
+        .withJulianMap(julian)
       sweepCalendar(roots, axis)
       sweepCalendar(yearOnly, axis, date => Seq(date.getYear))
       sweepCalendar(dayOfYearOnly, axis, date => Seq(date.getDayOfYear))
@@ -980,8 +1012,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // Both month axes (task 53). This node is the one whose month-length arithmetic reads the
     // prefix slot directly rather than through a tail, so it is the only place the axis had to
     // be handled inside a recomposing node - which makes it the one most worth sweeping twice.
-    for (neri <- Seq(true, false)) {
-      sweepLastDay(VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(neri))
+    for {
+      neri <- Seq(true, false)
+      julian <- Seq(true, false)
+    } {
+      sweepLastDay(VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(neri).withJulianMap(julian))
     }
   }
 
@@ -1298,6 +1333,30 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "the year tail must not change when only the month axis does")
   }
 
+  test("task 54: the Julian map costs what PLAN_TASK_54.md 3.3 registered, per node") {
+    // Off the class file, like task 53's: the prefix loses the century fold and the year-step
+    // underflow correction and gains the map and a second carry, and the year assembly loses
+    // the `100 * century` multiply-add. Registered before the run; a miss is a bug in the
+    // lowering or an error in the registered accounting, and either way the plan says which.
+    val col = new ColumnRef(0)
+    def ops(root: VarkaVectorIR, lits: Int, julian: Boolean): Int =
+      laneOps(emitMulti(Seq(root), 1, lits,
+        VarkaEmitOptions.DEFAULTS.withJulianMap(julian))._2, "loopDense0")
+    for ((name, root, lits, delta) <- Seq(
+        ("year", new Year(col), 0, -5),
+        ("month", new Month(col), 0, -3),
+        ("dayofmonth", new DayOfMonth(col), 0, -3),
+        ("quarter", new Quarter(col), 0, -3),
+        ("dayofyear", new DayOfYear(col), 0, -5),
+        ("last_day", new LastDay(col), 0, -5),
+        ("add_months", new AddMonths(col, new LiteralSlot(0)), 1, -5))) {
+      val moved = ops(root, lits, julian = true) - ops(root, lits, julian = false)
+      assert(moved === delta,
+        s"$name moved by $moved ops, not $delta - PLAN_TASK_54.md 3.3 needs updating with " +
+          "the reason")
+    }
+  }
+
   test("task 48: a year-only body computes no month, and the switch says so") {
     assert(VarkaEmitOptions.DEFAULTS.elideChronoMonth(),
       "the elision is no longer the default - the case for it is in PLAN_TASK_48.md section " +
@@ -1405,7 +1464,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 20 outputs to 44") {
+  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 21 outputs to 44") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
     // grows with the whole projection rather than with a group. Four fields over one date
@@ -1421,24 +1480,26 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // prefix, shared or not, to 18 fits/19 crosses (see PLAN_TASK_51.md section 4.1 for the
     // numbers that replaced); task 48 lets a Year node's own prefix skip the March-month step,
     // and unshared every Year node has its own prefix, so the epilogue's four-fields-per-date
-    // shape loses one month step per date - 19 fits/20 crosses. Shared is unmoved at 44: the
-    // epilogue holds every output, so each date's fragment has a Month consumer and keeps the
-    // step, and the only difference is the one byte a year tail's sipush costs over a bipush.
-    // The limit itself is HotSpot's HugeMethodLimit, past which it gives up on compiling the
-    // method at all (interpreted, boxed vectors, on every batch whose length is not a lane
-    // multiple).
+    // shape loses one month step per date - 19 fits/20 crosses; task 54's Julian map takes a
+    // division stage out of every prefix, shared or not, so unshared 20 fits (7675 bytes) and
+    // 21 crosses (8336). Shared is still at 44 - 40 outputs fit in 7087 bytes and 44 cross at
+    // 8063, down from 8630 - because the epilogue holds every output, so each date's fragment
+    // has a Month consumer and keeps the month step, and the prefix it shares got shorter by
+    // the same amount for every date. The ladder is in PLAN_TASK_54.md section 9. The limit
+    // itself is HotSpot's HugeMethodLimit, past which it gives up on compiling the method at
+    // all (interpreted, boxed vectors, on every batch whose length is not a lane multiple).
     def fields(dates: Int): Seq[VarkaVectorIR] = (0 until dates).flatMap { c =>
       val col = new ColumnRef(c)
       Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     }
     val limit = 8000
-    // Unshared, 19 outputs fit and 20 do not.
-    assert(epilogueSize(fields(5).take(19), 12, unshared) < limit)
-    assert(epilogueSize(fields(5), 12, unshared) > limit)
-    // Shared, the same 19 fit with room to spare, and the boundary moves out to 44 outputs
+    // Unshared, 20 outputs fit and 21 do not.
+    assert(epilogueSize(fields(5), 12, unshared) < limit)
+    assert(epilogueSize(fields(6).take(21), 12, unshared) > limit)
+    // Shared, the same 20 fit with room to spare, and the boundary moves out to 44 outputs
     // over eleven dates.
-    assert(epilogueSize(fields(5).take(19), 12, sharing) < limit)
-    assert(epilogueSize(fields(8), 12, sharing) < limit)
+    assert(epilogueSize(fields(5), 12, sharing) < limit)
+    assert(epilogueSize(fields(10), 12, sharing) < limit)
     val past = epilogueSize(fields(11), 12, sharing)
     assert(past > limit,
       s"forty-four shared calendar outputs now fit in $past bytes - sharing reaches further " +

@@ -2319,11 +2319,12 @@ public final class VarkaLoopEmitter {
     // below takes the axis from here rather than deciding for itself.
     int marchMonth = t[5];
     boolean neri = analysis.options.neriSchneiderMonth();
+    boolean julian = analysis.options.julianMap();
 
     emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
 
     switch (node) {
-      case Year n -> emitChronoYear(cb, era, century, yearOfCentury, rem);
+      case Year n -> emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
       case Month n -> emitChronoMonth(cb, marchMonth, neri);
       case DayOfMonth n -> emitChronoDayOfMonth(cb, rem, marchMonth, neri);
       case Quarter n -> {
@@ -2343,7 +2344,7 @@ public final class VarkaLoopEmitter {
         // year and nothing upstream keeps one around. emitLeapFlag applies its own bias.
         // Like Year's own tail this reads the January bit off the day of year (task 48), so
         // this node is the second one whose prefix never needs the month step.
-        emitChronoYear(cb, era, century, yearOfCentury, rem);
+        emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
         cb.astore(year);
         emitLeapFlag(cb, year);
         cb.astore(leap);
@@ -2368,7 +2369,7 @@ public final class VarkaLoopEmitter {
         cb.aload(mask);
         cb.invokevirtual(INT_VECTOR, "blend", BLEND);
       }
-      case LastDay n -> emitChronoLastDay(cb, s, t, neri);
+      case LastDay n -> emitChronoLastDay(cb, s, t, neri, julian);
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
   }
@@ -2420,7 +2421,10 @@ public final class VarkaLoopEmitter {
    * {@code t[1..5]} for a field's own tail to read, and the day of year in {@code t[2]}
    * ({@code rem}, reused across the prefix the way the original method reused it). All but
    * {@code marchMonth} unconditionally: {@code emitMonth} false drops the month step, which
-   * task 48 does exactly where no tail of this fragment reads it.
+   * task 48 does exactly where no tail of this fragment reads it. Under
+   * {@link VarkaEmitOptions#julianMap} (task 54) {@code t[4]} holds the year of era rather than
+   * the year of century and {@code t[3]} is dead once the prefix is done; see
+   * {@link #emitJulianYearOfEra}.
    *
    * <p>Those five locals outliving the call is what makes the run a shareable fragment, since
    * {@link #emitChronoYear}, {@link #emitChronoMonth} and {@link #emitChronoDayOfMonth} read
@@ -2444,83 +2448,90 @@ public final class VarkaLoopEmitter {
 
     emitEra(cb, days, era, rem, mask);
 
-    // rem is now the day of era, in [0, 146096]. Everything below works on that.
-    // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
-    cb.aload(rem);
-    emitMagic(cb, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K);
-    cb.astore(century);
-    cb.aload(rem);
-    cb.aload(century);
-    cb.loadConstant(VarkaChrono.CENTURY_DAYS);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(rem);
-    emitCarry(cb, century, rem, VarkaChrono.CENTURY_DAYS, mask);
+    if (analysis.options.julianMap()) {
+      // Task 54: the year of era and the day of year through the Julian map - one division
+      // stage fewer than the split below, and no leap correction in the prefix at all.
+      emitJulianYearOfEra(cb, rem, century, yearOfCentury, mask, leap);
+    } else {
+      // rem is now the day of era, in [0, 146096]. Everything below works on that.
+      // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
+      cb.aload(rem);
+      emitMagic(cb, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K);
+      cb.astore(century);
+      cb.aload(rem);
+      cb.aload(century);
+      cb.loadConstant(VarkaChrono.CENTURY_DAYS);
+      cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+      cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+      cb.astore(rem);
+      emitCarry(cb, century, rem, VarkaChrono.CENTURY_DAYS, mask);
 
-    // An era's fourth century holds one extra day - its leap day - so the quotient can land on
-    // 4 for exactly one day of each era. Fold that back into century 3.
-    cb.aload(century);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(4);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.astore(mask);
-    cb.aload(century);
-    cb.loadConstant(1);
-    cb.aload(mask);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
-    cb.astore(century);
-    cb.aload(rem);
-    cb.loadConstant(VarkaChrono.CENTURY_DAYS);
-    cb.aload(mask);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
-    cb.astore(rem);
+      // An era's fourth century holds one extra day - its leap day - so the quotient can land on
+      // 4 for exactly one day of each era. Fold that back into century 3.
+      cb.aload(century);
+      cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+      cb.loadConstant(4);
+      cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+      cb.astore(mask);
+      cb.aload(century);
+      cb.loadConstant(1);
+      cb.aload(mask);
+      cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+      cb.astore(century);
+      cb.aload(rem);
+      cb.loadConstant(VarkaChrono.CENTURY_DAYS);
+      cb.aload(mask);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+      cb.astore(rem);
 
-    // yoc = doc / 365 - exact here, because the split into centuries left a dividend under
-    // 44859. It ignores leap days, so it can name the following year; the fix is below.
-    cb.aload(rem);
-    emitMagic(cb, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K);
-    cb.astore(yearOfCentury);
+      // yoc = doc / 365 - exact here, because the split into centuries left a dividend under
+      // 44859. It ignores leap days, so it can name the following year; the fix is below.
+      cb.aload(rem);
+      emitMagic(cb, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K);
+      cb.astore(yearOfCentury);
 
-    // doy = doc - (365 * yoc + yoc / 4). Negative exactly where yoc overshot.
-    cb.aload(rem);
-    cb.aload(yearOfCentury);
-    cb.loadConstant(365);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.aload(yearOfCentury);
-    emitShift(cb, "LSHR", 2);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-    cb.astore(rem);
+      // doy = doc - (365 * yoc + yoc / 4). Negative exactly where yoc overshot.
+      cb.aload(rem);
+      cb.aload(yearOfCentury);
+      cb.loadConstant(365);
+      cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+      cb.aload(yearOfCentury);
+      emitShift(cb, "LSHR", 2);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+      cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+      cb.astore(rem);
 
-    // Where it overshot, step back a year and give the days back - one more when the year we
-    // step into is a leap year, which in a March-based year is simply yoc divisible by four.
-    cb.aload(rem);
-    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.astore(mask);
-    cb.aload(yearOfCentury);
-    cb.loadConstant(3);
-    cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
-    cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-    cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    cb.aload(mask);
-    cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
-    cb.astore(leap);
-    cb.aload(rem);
-    cb.loadConstant(365);
-    cb.aload(mask);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
-    cb.loadConstant(1);
-    cb.aload(leap);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
-    cb.astore(rem);
-    cb.aload(yearOfCentury);
-    cb.loadConstant(1);
-    cb.aload(mask);
-    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
-    cb.astore(yearOfCentury);
+      // Where it overshot, step back a year and give the days back - one more when the year we
+      // step into is a leap year, which in a March-based year is simply yoc divisible by four.
+      cb.aload(rem);
+      cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+      cb.loadConstant(0);
+      cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+      cb.astore(mask);
+      cb.aload(yearOfCentury);
+      cb.loadConstant(3);
+      cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
+      cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+      cb.loadConstant(0);
+      cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+      cb.aload(mask);
+      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+      cb.astore(leap);
+      cb.aload(rem);
+      cb.loadConstant(365);
+      cb.aload(mask);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+      cb.loadConstant(1);
+      cb.aload(leap);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+      cb.astore(rem);
+      cb.aload(yearOfCentury);
+      cb.loadConstant(1);
+      cb.aload(mask);
+      cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI_MASKED);
+      cb.astore(yearOfCentury);
+
+    }
 
     // mp = (5 * doy + 2) / 153: the March-based month, 0 for March through 11 for February.
     // Skipped where no tail of this fragment reads it (task 48) - four lane ops and a store
@@ -2552,23 +2563,86 @@ public final class VarkaLoopEmitter {
     }
   }
 
-  /** Leaves the reported (January-based) year: {@code 400 * era + 100 * century + yoc}, plus
-   * one where the March year has turned January. The {@link Year} tail, factored out so
-   * {@link #emitAddMonths} can call it too.
+  /**
+   * Task 54: the day of era to the year of era and the March-based day of year through Ben
+   * Joffe's Julian map, in place of the century-then-year split in {@link #emitChronoPrefix}.
+   * The scalar twin is {@code VarkaChrono.narrowedJulian}; the constants' javadoc there says why
+   * each of the two divisions needs exactly one carry.
+   *
+   * <p>Scale the day of era by four and add three; one round-down magic gives the century, and
+   * a carry makes it exact. Add four back per century: the count is now in a calendar where
+   * every fourth year is leap without exception, so one more magic and carry give the year of
+   * era, and the remainder shifted right by two is the day of year with 29 February in the
+   * right place. Nothing here tests for a leap year, and the era's last day needs no fold.
+   *
+   * <p>Slots: {@code rem} arrives as the day of era and leaves as the day of year; {@code
+   * century} is written (the map needs it) but no tail reads it; {@code yearOfEra} is the slot
+   * the other form leaves the year of century in - which is why {@link #emitChronoYear} takes
+   * the form as an argument rather than deciding what the slot holds; {@code mask} and {@code
+   * scratch} are the carries' scratch, the same two the other form uses.
+   */
+  private static void emitJulianYearOfEra(CodeBuilder cb, int rem, int century, int yearOfEra,
+      int mask, int scratch) {
+    // quad = 4 * doe + 3
+    cb.aload(rem);
+    emitShift(cb, "LSHL", 2);
+    cb.loadConstant(VarkaChrono.QUAD_DAY_ADD);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.astore(rem);
+    // century = quad / 146097, round-down plus one carry; the remainder is only scratch.
+    cb.aload(rem);
+    emitMagic(cb, VarkaChrono.JULIAN_CENTURY_M, VarkaChrono.JULIAN_CENTURY_K);
+    cb.astore(century);
+    cb.aload(rem);
+    cb.aload(century);
+    cb.loadConstant(VarkaChrono.ERA_DAYS);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(scratch);
+    emitCarry(cb, century, scratch, VarkaChrono.ERA_DAYS, mask);
+    // jul = quad + 4 * century: the Julian map itself.
+    cb.aload(rem);
+    cb.aload(century);
+    emitShift(cb, "LSHL", 2);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    cb.astore(rem);
+    // yearOfEra = jul / 1461, round-down plus one carry; the remainder stays in rem.
+    cb.aload(rem);
+    emitMagic(cb, VarkaChrono.JULIAN_YEAR_M, VarkaChrono.JULIAN_YEAR_K);
+    cb.astore(yearOfEra);
+    cb.aload(rem);
+    cb.aload(yearOfEra);
+    cb.loadConstant(VarkaChrono.JULIAN_CYCLE_DAYS);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+    cb.astore(rem);
+    emitCarry(cb, yearOfEra, rem, VarkaChrono.JULIAN_CYCLE_DAYS, mask);
+    // doy = rem / 4
+    cb.aload(rem);
+    emitShift(cb, "LSHR", 2);
+    cb.astore(rem);
+  }
+
+  /** Leaves the reported (January-based) year - {@code 400 * era + 100 * century + yoc} under
+   * the century-then-year form, {@code 400 * era + yearOfEra} under the Julian map (task 54),
+   * where {@code t[4]} holds the year of era - plus one where the March year has turned
+   * January. The {@link Year} tail, factored out so {@link #emitAddMonths} can call it too.
    *
    * <p>The January bit is read off the day of year rather than the March-based month (task
    * 48): the two are the same test, one step apart in the chain, so the year is the one field
    * of the four that never needs the month step. See
    * {@link VarkaChrono#MARCH_TO_JANUARY_DAYS}. */
   private static void emitChronoYear(CodeBuilder cb, int era, int century, int yearOfCentury,
-      int dayOfYear) {
+      int dayOfYear, boolean julian) {
     cb.aload(era);
     cb.loadConstant(400);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.aload(century);
-    cb.loadConstant(100);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
-    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    if (!julian) {
+      cb.aload(century);
+      cb.loadConstant(100);
+      cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+    }
     cb.aload(yearOfCentury);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
     cb.loadConstant(1);
@@ -2665,7 +2739,7 @@ public final class VarkaLoopEmitter {
     int nm1 = t[30];
 
     emitChronoPrefixOnce(cb, node, dense, analysis, s, t, computed);
-    emitChronoYear(cb, era, century, yearOfCentury, rem);
+    emitChronoYear(cb, era, century, yearOfCentury, rem, analysis.options.julianMap());
     cb.astore(year);
     emitChronoMonth(cb, marchMonth, analysis.options.neriSchneiderMonth());
     cb.astore(month);
@@ -2911,7 +2985,8 @@ public final class VarkaLoopEmitter {
    * #emitAddMonths} needs for its own February case, and the same reason this reuses it rather
    * than a second copy of the leap test.
    */
-  private static void emitChronoLastDay(CodeBuilder cb, Slots s, int[] t, boolean neri) {
+  private static void emitChronoLastDay(CodeBuilder cb, Slots s, int[] t, boolean neri,
+      boolean julian) {
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -2929,7 +3004,7 @@ public final class VarkaLoopEmitter {
     // The year is only wanted for the leap flag; task 48 made emitChronoYear read the January
     // turn off the day of year rather than off the month, so this passes `rem`. The month step
     // still runs for this node - the month-length arithmetic below is what needs it.
-    emitChronoYear(cb, era, century, yearOfCentury, rem);
+    emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
     cb.astore(year);
     emitChronoDayOfMonth(cb, rem, marchMonth, neri);
     cb.astore(dayOfMonth);
