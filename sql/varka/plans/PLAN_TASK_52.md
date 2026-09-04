@@ -1,6 +1,8 @@
 # Task 52: guard at the producer, not the extraction
 
-**Status: planned, not started.** Task 51 (PR #73) removed the per-extraction
+**Status: planned, not started; section 10 is the execution plan (third
+version, 4 September 2026), written against a master where everything the
+second version waited on has landed.** Task 51 (PR #73) removed the per-extraction
 range guard task 26 shipped; this task closes the gap that removal opened. Read
 `PLAN_TASK_51.md` and `PLAN_MILESTONE_4.md` sections 2.21-2.22 first - they
 carry the argument for why the guard moved rather than simply disappearing, and
@@ -193,10 +195,9 @@ option that turns a free correctness check off.
 * `VarkaLoopEmitterSuite.scala` - section 5.2.
 * `sql/core/.../VarkaDifferentialSuite.scala` - section 5.3.
 * `VarkaEmitterParityBenchmark.scala` and its committed file - section 5.4.
-* `PLAN_TASK_51.md` section 4 currently says the gap is "reachable today only
-  through `date_add`/`date_sub`/`next_day` with a column offset"; corrected to
-  name the literal case too. `PLAN_MILESTONE_4.md` row 52 and section 2.22
-  likewise (done in the same commit as this revision).
+* `PLAN_TASK_51.md` section 4 was corrected by PR #76 to name the literal case
+  and closes in the past tense with this task; `PLAN_MILESTONE_4.md` row 52 and
+  section 2.22 likewise.
 
 ## 5. Validation
 
@@ -351,3 +352,383 @@ Two commits, in two PRs if #62 has not landed when the first is ready:
 * Task 30's `try_*` and ANSI paths, which will want a status bit of their own -
   `STATUS_CHRONO_RANGE` is bit 0 of a bitmask for exactly that reason, and
   nothing here makes it harder.
+
+## 10. Execution plan (third version)
+
+Sections 1-9 are the design and stay the spec. This section is what building
+it looks like against master at 403ecbbb5cf, where task 38's column offsets
+(PR #62) and the regeneration tooling (`dev/varka_bench_regen.sh`, PR #108) have
+both landed, so the two halves ship in one PR as two commits. Where a finding
+below differs from sections 3-5, this section wins; each difference says why.
+
+### 10.1 What a user observes
+
+Nothing changes in SQL semantics: no null, no exception, no new error.
+`date_add`/`date_sub` keep returning what 32-bit addition gives (Spark's
+`DateAdd` checks nothing either), and a day past the range that is only
+projected, compared or diffed is never guarded. When a calendar function
+consumes such a day, the *route* changes: the kernel reports the batch
+(`STATUS_CHRONO_RANGE`), the evaluator discards the kernel's outputs and
+recomputes that whole batch on the row engine, whose `LocalDate`-based
+`getYear` handles any int day, so `year(date_add(DATE'2000-01-01', 20000000))`
+returns the true year, counted in `numFallbackBatchesDeclined` and logged at
+debug. The compile-time decline is the same outcome one step earlier: the
+entry is residual and the row engine computes it for every row. The only
+behavioural difference from today's master is that today the kernel answers
+wrongly.
+
+### 10.2 Findings that adjust sections 3-5
+
+* **Paths.** The compiler and its suite live in package
+  `...expressions.codegen`, not `codegen/varka`:
+  `VarkaExpressionCompiler.scala` and `VarkaExpressionCompilerSuite.scala`
+  sit directly under `.../sql/catalyst/expressions/codegen/` in the main and
+  test trees. The parity benchmark is `VarkaEmitterParityBenchmark.scala` in
+  `sql/catalyst/src/test/scala/org/apache/spark/sql/`.
+* **Absolute intervals instead of shifts.** Section 3.1 phrases the analysis
+  as a shift relative to the column contract plus two slack constants. An
+  interval of possible epoch days is equivalent and simpler: a column is
+  `[CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]`, a date literal is `[v, v]`, and
+  the check is directly against `NARROW_MIN_DAYS`/`NARROW_MAX_DAYS`. No slack
+  constants; the two contract constants are new in `VarkaChrono` (main source
+  has none today; `-719162`/`2932896` appear only in tests), derived in source
+  from `LocalDate.of(1, 1, 1)` and `LocalDate.of(9999, 12, 31)`.
+* **No free pass for date-typed calendar outputs.** Section 3.1's "any
+  calendar node -> (0, 0)" is too loose for `LastDay`: its input passed the
+  check at the `LastDay` arm, but the output is up to 30 days later and can
+  cross `NARROW_MAX_DAYS`. `LastDay` propagates the child's interval plus
+  `[0, 30]`; `AddMonths` plus `[min(28m, 31m), max(28m, 31m)]`, as 3.1's own
+  explicit rule already says. Field-typed outputs (`Year` .. `DayOfYear`,
+  `DayOfWeek`, `WeekDay`, `DateDiff`) cannot be a calendar node's child
+  (Spark's type gate) and are outside the analysis.
+* **Three outcomes, not two.** Risk 3 requires telling "unbounded because of
+  a column offset" (build; the emitter guards) from "unknown node" (decline).
+  A small sealed result type carries that.
+* **The `AddMonths` arms need reshaping.** They are `for`/`yield`s that build
+  the `LiteralSlot` inside the `yield`; the check needs the compiled child, so
+  they become `flatMap`s.
+* **Reading a literal's value back.** `literals: LinkedHashMap[Int, Int]`
+  maps value to slot index in insertion order, so
+  `literals.keys.toIndexedSeq(slot.index)` is the value. The table is untyped
+  (day offsets, month counts and dates share it), so the analysis reads a
+  slot's value by its IR position only.
+* **Once-per-lane-group emission holds only under CSE.** `computed` and
+  `sharedSlot` exist for `cse && useCount > 1`; with `cse=false` a
+  multiply-used producer re-emits, guard included. Correct, redundant, said in
+  the javadoc; no code for it.
+* **Slot numbers move if `guardAcc` is allocated.** Its old place in
+  `planSlots` precedes `epilogueMask` and the per-node pass, so allocating it
+  shifts every later local. It is allocated only when the flag is on and this
+  body's outputs reach a guarded producer, which keeps every unguarded shape
+  byte-identical (asserted).
+* **Production emits with `VarkaEmitOptions.DEFAULTS`** through the shape
+  cache (the three-argument `VarkaShapeKey` in `VarkaKernelEvaluator`); there
+  is no config surface for options, by design. The flag-off differential
+  therefore needs a test hook beside the three `VarkaColumnarToRowExec`
+  already owns.
+* **Docs are stale from task 51, not just incomplete.** `docs/sql-varka.md`'s
+  calendar bullet and its fallback-cause bullet still describe the removed
+  runtime decline as live; `SKILLS.md` still cites "task 26's guard" in the
+  fragment-key lesson and the weekday-reciprocal lesson. `PLAN_TASK_51.md` 4
+  was already corrected by PR #76 (it names the literal case), so section 4's
+  bullet about it is done; what remains is closing the window in the past
+  tense. `PLAN_MILESTONE_4.md` row 38 lacks its DONE marker although PR #62
+  landed; fixed in passing.
+
+### 10.3 Commit 1: the compile-time half
+
+**`VarkaChrono.java`.** Beside `NARROW_MIN_DAYS`/`NARROW_MAX_DAYS`, in the same
+javadoc style: `CONTRACT_MIN_DAYS = (int) LocalDate.of(1, 1, 1).toEpochDay()`
+and `CONTRACT_MAX_DAYS = (int) LocalDate.of(9999, 12, 31).toEpochDay()`. A
+`VarkaChronoSuite` assertion pins them to -719162 and 2932896 and asserts both
+lie strictly inside the narrowed range, the fact the whole analysis rests on.
+
+**`VarkaExpressionCompiler.scala`.** A value helper in the block with
+`foldMonths` and `foldWeekday`:
+
+    private sealed trait DayRange
+    private case class Bounded(lo: Long, hi: Long) extends DayRange
+    private case object ColumnShifted extends DayRange  // AddDays/SubDays, column offset
+    private case object Unknown extends DayRange        // a node this analysis does not know
+
+    private def dayRange(node: VarkaVectorIR, literals: LinkedHashMap[Int, Int]): DayRange
+
+| node | range |
+|---|---|
+| `ColumnRef` | `[CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]` |
+| `LiteralSlot` as a date operand | `[v, v]`, `v` read back from `literals` |
+| `AddDays(x, LiteralSlot k)` / `SubDays` | child `+k` / `-k` |
+| `AddDays`/`SubDays(x, ColumnRef)` | `ColumnShifted` |
+| `NextDay(x, _)` | child `+[1, 7]` |
+| `AddMonths(x, LiteralSlot m)` | child `+[min(28m, 31m), max(28m, 31m)]` |
+| `LastDay(x)` | child `+[0, 30]` |
+| `Greatest`/`Least`/`IfElse` | hull of the date operands (`IfElse`: both branches; `Coalesce` compiles to `IfElse`, so it is covered) |
+| anything else | `Unknown` |
+
+Combination: any operand `Unknown` -> `Unknown`; else any `ColumnShifted` ->
+`ColumnShifted`; else the hull. Longs, so two literals of two billion cannot
+wrap. A separate pass over the IR the arm already built, not folded into
+compilation.
+
+In each of the seven calendar arms (`Year`, `Month`, `DayOfMonth`, `Quarter`,
+`DayOfYear`, `LastDay`, `AddMonths`, plus `DateAddYMInterval`), after the child
+compiles and before the node is built:
+
+    dayRange(node, literals) match {
+      case Bounded(lo, hi) if lo >= NARROW_MIN_DAYS && hi <= NARROW_MAX_DAYS => Some(node)
+      case Bounded(lo, hi) =>
+        sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", expr); None
+      case ColumnShifted => Some(node)   // the emitter guards the producer (commit 2)
+      case Unknown =>
+        sink.note("day producer the calendar range analysis does not bound", expr); None
+    }
+
+Reason strings follow the house style (lower case, noun phrase, no period);
+`compilePartial`'s invariant that every `None` notes a reason holds.
+
+**Tests.** `VarkaExpressionCompilerSuite`, constants read from `VarkaChrono`,
+never retyped; `HI = NARROW_MAX_DAYS - CONTRACT_MAX_DAYS` (8449747) and
+`LO = NARROW_MIN_DAYS - CONTRACT_MIN_DAYS` (-4675410) computed in the test:
+
+* `year(date_add(d, HI))` fuses, `year(date_add(d, HI + 1))` declines with the
+  exact reason; same at `LO`/`LO - 1` via `date_sub`.
+* `date_add(d, HI + 1)` alone fuses: no calendar consumer.
+* `year(date_add(date_add(d, 5000000), 5000000))` declines.
+* Hull: `year(greatest(date_add(d, 5000000), d))` fuses;
+  `year(if(d > d2, date_add(d, HI + 1), d))` and
+  `year(coalesce(d, date_add(d2, HI + 1)))` decline.
+* `year(add_months(d, MONTH_ARITH_MAX_MONTHS))` fuses;
+  `year(add_months(date_add(d, HI - 100), 12))` and
+  `year(last_day(date_add(d, HI - 10)))` decline.
+* `year(next_day(date_add(d, HI - 7), 'MON'))` fuses; at `HI - 6` it declines.
+* `year(date_add(d, off))` with `off` an int column fuses (`ColumnShifted`).
+* `VarkaKernelEvaluatorSuite`'s task-16 report test shows the new reason.
+* `VarkaDifferentialSuite`: `SELECT year(date_add(d, 20000000)) FROM varka_dates`
+  with `expectFused = false`, `checkAnswer` against the row engine, and
+  `verboseStringWithOperatorId()` containing the residual reason. In-range
+  literal shifts on the same table still fuse.
+
+### 10.4 Commit 2: the runtime half
+
+**`VarkaEmitOptions.java`.** Eighth component `boolean guardDayProducers`,
+`DEFAULTS` value true provisionally (10.5 decides; the owner picks from the
+numbers), `withGuardDayProducers`, every `with*` arg list extended,
+`canonical()` appends it in declaration order. `DEFAULTS` still renders empty,
+so production shape hashes do not move whichever default wins.
+
+**`VarkaLoopEmitter.java`.**
+
+* `Analysis.guardedProducers`, computed in `emit` after the `analyzeRoot`
+  loop: for every `isChrono` node in `topoOrder`, walk `chronoChild`'s subtree
+  via `childrenOf` and collect `AddDays`/`SubDays` whose `offset()` is not a
+  `LiteralSlot` (`requireOffsetShape` guarantees it is then a `ColumnRef`).
+  The javadoc says the pair is hand-picked and why `dayRange`'s `Unknown`
+  makes a missed producer a decline rather than a wrong answer.
+* `Slots.guardTmp`, one Object slot per guarded producer, the `dowTmp` shape.
+* `planSlots`: `guardAcc` allocated when the flag is on, the body is not the
+  driver, and one of its outputs reaches a guarded producer (a small
+  `subtreeContainsAny` walker over `childrenOf`); `guardTmp` allocated in the
+  topo pass for members of `guardedProducers` under the same flag.
+* `emitAndValidatedOp`: after `invokevirtual add|sub` and after the
+  `emitAndWord` call (the node's own word must be stored before the guard
+  reads it), when `s.guardTmp` has the node:
+
+      dup; astore guardTmp
+      aload guardTmp; getstatic LT; ldc NARROW_MIN_DAYS; invokevirtual compare
+      aload guardTmp; getstatic GT; ldc NARROW_MAX_DAYS; invokevirtual compare
+      invokevirtual VectorMask.or
+      [masked body]  aload species; loadWord(wordRef(node)); fromLong; and
+      [epilogue]     aload epilogueMask; and
+      aload guardAcc; or; astore guardAcc
+
+  This is task 26's block (`git show 35f4000c407:.../VarkaLoopEmitter.java`,
+  lines 2593-2619) retargeted at the producer's result; the only new lines are
+  `dup; astore`, because the old block read a local. The word AND covers a
+  null offset (under #62 the node's word is date AND offset). The dense body
+  skips the word AND. `emitStatusReturn` and the driver's OR are untouched.
+* `emitEra`'s task-51 javadoc rewritten to describe the two halves as built.
+
+**Evaluator.** A fourth hook in `VarkaColumnarToRowExec` beside
+`setDeclineKernelForTesting`: `setEmitOptionsForTesting`, read where
+`VarkaKernelEvaluator` builds the `VarkaShapeKey`, so the key carries the
+options. Same discipline: static, reset in a finally block, a comment saying
+why it is not a SQLConf. No production change to the fallback route:
+`serveBatch`/`recordDeclinedBatch` and `VarkaFilterExec.filterBatch` already
+act on a non-zero status.
+
+**Tests, `VarkaLoopEmitterSuite`.**
+
+* `Year(AddDays(col0, col1))`: one lane with `d + off = NARROW_MAX_DAYS + 1`
+  in a loop lane returns `STATUS_CHRONO_RANGE`; in an epilogue-only lane
+  likewise; the same lane under a null `off` row returns 0; a null `d` row
+  returns 0; an in-range batch returns 0. Under `withGuardDayProducers(false)`
+  every case returns 0. `SubDays` mirrored at `NARROW_MIN_DAYS - 1`.
+* `AddDays(col0, col1)` alone on the same data: 0 under both flag values and
+  `codeSize(loopMasked0)` identical under both.
+* `codeSize` of `Year(AddDays(col0, col1))`'s `loopMasked0` differs between
+  flag values; `Year(col0)`'s does not.
+* `checkMatrix` over `Year(AddDays(col0, col1))` and `Year(SubDays(...))`,
+  in-range offsets, both flag values: identical results, status 0.
+* `cse=false` with the producer used twice (`Year(p)`, `Month(p)`): still
+  declines at the same lane; documents the redundant re-emission.
+* The two task-51 tests stay: they feed out-of-range days through a bare
+  `ColumnRef`, which is the contract's responsibility, not a guard's. Their
+  comments gain a sentence saying so.
+* Pinned oracles (`pinnedLineMap`, `everyNode`, the shape-cache hash) do not
+  move: no node type added, `everyNode`'s `AddDays` has a literal offset,
+  `DEFAULTS` canonical stays empty.
+
+**Tests, `VarkaDifferentialSuite` and `VarkaSharedSessions`.**
+
+* New fixture `cacheDatesFarOffset`: `d` dates (one null), `off` int with
+  20000000, -20000000, 3, null, 100 (the `cacheDatesNullableOffset` shape).
+* Flag on: `SELECT year(date_add(d, off)) FROM ...` matches the row engine,
+  `numFallbackBatchesDeclined > 0`, `numFallbackBatchesKernel == 0`, reached
+  without the decline hook (that test's comment claiming sibling coverage is
+  corrected, and section 3's tombstone comment is replaced by the restored
+  tests).
+* Flag off (hook): the same query, `numFallbackBatchesDeclined == 0`, asserted
+  on the metric only, never on the value (`PLAN_TASK_51.md` 3's reason).
+* Filter path: `WHERE year(date_add(d, off)) = year(d2)` on a paired fixture,
+  flag on, through `VarkaFilterExec`: declined count above zero, answers match.
+* In-range `off` on the same fixture still fuses with a zero declined count.
+
+### 10.5 The measurement
+
+`VarkaEmitterParityBenchmark`, "year" section, adjacent cases like the task 48
+and 53 A/Bs, using `nf2Data` as the offset column (its epoch-day values keep
+`d + off` inside the range) and the two-input run shape the `twoDates` case
+already uses:
+
+| case | class ids |
+|---|---|
+| `year(date_add(d, off))`, guard on / off, null-free and mixed nulls | 830, 831 |
+| `date_add(d, off)` alone, guard on / off, null-free (the control: byte-identical by the suite's assertion) | 832, 833 |
+
+Regenerated with `dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark`
+on an idle machine, both widths, after #107 has merged (it regenerates the same
+three files, and results files are never merged textually). Ratios under 1.3x
+compared by minimums across a second run. Section 6's predictions stand; if the
+guard costs more than 10% on the first row, that is a finding to explain before
+the default flips on. The owner picks the default from the committed numbers;
+the choice and the scored predictions go in a section 11.
+
+### 10.6 Docs
+
+* `docs/sql-varka.md`: the calendar bullet rewritten (compile-time decline for
+  a bounded out-of-range shift, its reason string added to the EXPLAIN list;
+  runtime decline only for a column-offset producer under a calendar function;
+  the stored-column sentence replaced by the contract statement, unchecked at
+  ingestion per section 9); the "until task 38 lands" clause dropped.
+* `SKILLS.md`: the fragment-key and weekday-reciprocal lessons reworded away
+  from "task 26's guard"; a new lesson: the guard moved from six consumers to
+  one producer, the interval analysis is what made that safe, and a `LastDay`
+  output can leave the range its input was checked in.
+* This file: section 11 with the numbers and the default; section 4's stale
+  bullet about `PLAN_TASK_51.md` removed. `PLAN_TASK_51.md` 4: the window
+  closed, past tense. `PLAN_MILESTONE_4.md`: row 52 DONE, 2.22 update note,
+  row 38 marked DONE (PR #62).
+
+### 10.7 Verification
+
+The standing gate (`dev/varka_gate.sh`), which runs both suites at both vector
+widths, the catalyst doc build, the engine module and the linters, plus
+`dev/varka_precommit.sh --working-tree`. Specific to this task:
+
+* Commit 1 alone is green with no emitter change, no pinned value moving and
+  no committed number moving.
+* Commit 2: every unguarded shape byte-identical under both flag values, the
+  pinned oracles unchanged, the differential's declined metric firing without
+  the test hook, the parity file regenerated in one run with provenance.
+* `dev/varka_emit.sh --table` over `year(date_add(d, off))` with
+  `--variant guardDayProducers=false` as the reviewer's check that the guard
+  is the only difference.
+
+### 10.8 Sequencing
+
+1. Worktree off `origin/master`; commit 1.
+2. Commit 2, flag default provisionally on.
+3. Once #107 has merged: merge master, regenerate, record the numbers, the
+   owner picks the default, docs and plan files requoted from that run.
+4. Push and open the PR.
+
+## 11. The measurement, and the default
+
+`VarkaEmitterParityBenchmark`, "year" section, regenerated at both widths by
+`dev/varka_bench_regen.sh` on an idle machine after the merge with #116 (load
+0.83 at start, canary compute +0.0%, cache +3.1%, memory -0.7%, governor
+`powersave` with the balanced profile, as this machine's committed runs are),
+then run a second time at both widths to scratch logs and compared by
+minimums, since every ratio here is under 1.3x. Rates in M rows/s, from the
+committed file; where the second run disagreed, the text says by how much.
+An earlier regeneration, before the merge, is in this file's history and gave
+the same picture with the null-free 256-bit pair 9% apart.
+
+| case | 256-bit, guard on / off | 128-bit, guard on / off |
+|---|---|---|
+| `year(date_add(d, off))`, null-free | 2696.7 / 3154.3, **-14.5%** | 1193.3 / 1224.3, **-2.5%** |
+| `year(date_add(d, off))`, mixed nulls | 1908.5 / 2183.7, **-12.6%** | 648.6 / 755.0, **-14.1%** |
+| `date_add(d, off)` alone (control) | 9876.1 / 9888.1, -0.1% | 10447.2 / 10603.1, -1.5% |
+
+The control row is the noise floor: those two kernels are byte-identical (the
+emitter suite asserts it), so its 0.1% at 256 bits and 1.5% at 128 bits is
+what run-to-run variance looks like on a 2 ms row in this run - and the second
+run put the same control pair 4% apart at 256 bits and 5% at 128, which is
+the floor to read the null-free rows against. The second run's pairs: 5.1%
+null-free and 13.5% mixed at 256 bits, 2.9% and 13.6% at 128 bits. So the
+mixed-null cost is 13-14% at both widths in every run, and the null-free cost
+is 3-6% at 128 bits and somewhere between 5% and 15% at 256 bits, which a 7 ms
+row measured to whole milliseconds cannot resolve finer. The A/B pairs are
+adjacent cases in one run, so they share JIT and thermal state.
+
+**Predictions scored.**
+
+1. *3-8% at AVX-512, under 10% at 128-bit.* Null-free: 5-15% at 256 bits
+   across the runs and 2.5-3% at 128 bits - inside the range at 128, at or
+   over its edge at 256. Mixed nulls: 12.6% and 14.1%, **over the 10% line at
+   both widths**, in every run. Per row, from the committed file at 256 bits,
+   the guard costs 0.05 ns null-free and 0.07 ns with mixed nulls; the second
+   run's null-free pair puts it at 0.02 ns, so the masked body pays between
+   one and a half and three times the dense body's price for the same two
+   compares, not merely a larger fraction of a slower body. The masked
+   body's guard is the dense body's plus the validity AND: `aload species`,
+   `lload word`, `VectorMask.fromLong`, `and` - and `fromLong` is a mask
+   materialization from a scalar, not a lane op, which is the part the
+   prediction priced as one op and is not. The dense body pays only the two
+   compares, the `or` and the accumulator `or`, and lands where task 26's
+   guard did.
+2. *`date_add(d, off)` alone is byte-identical under both flag values.*
+   Asserted in `VarkaLoopEmitterSuite`; the control row measures it as noise.
+3. *No committed number for an existing case moves.* The null-free calendar
+   rows did not (`year` null-free 3455.8 against 3452.2 before this task); the
+   mixed-null calendar rows moved 6-7% up and the shared four-field rows 3-5%
+   either way against the file this branch started from, with the four scalar
+   controls within 0.8%, which is the machine-day variance `PLAN_TASK_54.md`
+   9.2 and `SKILLS.md` already record, not this task: the guard is emitted for
+   no shape but its own.
+4. *No pinned oracle moves.* None did.
+5. *The compile-time half declines nothing in the corpus.* Nothing in TPC-H or
+   TPC-DS shifts a date under a calendar function by more than a few days.
+
+**The default: on.** The owner's call, made on these numbers. What decides
+it: the cost is paid only by a calendar function over a column-offset
+`date_add`/`date_sub`, a shape the corpus does not contain and that no other
+kernel's bytes change for; the shape that pays it is the one that returns a
+wrong year without it; and the mixed-null cost, though over the prediction,
+is a bounded price on a correct answer against an unbounded one on a wrong
+one. Off stays a reference variant for the A/B, on `FloorMod7`'s precedent.
+The masked-body `fromLong` is the thing to attack if this cost ever matters:
+the validity word is already in a local, and a guard that ANDs the compare
+masks with a mask the body has already materialized for the store would save
+the conversion.
+
+**Merged after #116 (task 35).** `trunc(date, ...)` landed while this PR was
+open, as a calendar node with a date-typed output. Its arm in `compileNode`
+now takes its child through `calendarInput`, like the seven this task
+covered, and `dayRange` bounds its output at its input shifted by
+`[-365, 0]` - a truncated date is its input or an earlier day of the same
+period, at most the 31st of December of a leap year back to the 1st of
+January. The compiler suite holds `year(trunc(date_sub(d, k), 'YEAR'))` at
+365 short of `date_sub`'s own last fusing shift, and one past it. The parity
+file was regenerated once more after the merge, since the task 35 pair and
+this task's pair now share it.

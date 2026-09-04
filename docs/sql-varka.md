@@ -69,11 +69,20 @@ becomes timestamp arithmetic) decline:
   lowered entirely to magic multiplies because no vector divide exists; two
   fields of the same date are computed twice, in sibling loop methods, rather
   than shared. The lowering is defined over years -12800 to 33134 -
-  every date SQL can write, and then some - and a batch holding a day past that
-  is declined by the kernel and recomputed on the row path, counted as
-  `numFallbackBatchesDeclined`. Such a day does not have to be written by hand:
-  `DATE_ADD` arithmetic reaches one, and so does a stored column, since a
-  Parquet `INT32` date carries any day value the writer put there.
+  every date SQL can write, and then some - and the range is enforced where a
+  day can leave it, not at every extraction (tasks 51 and 52). A date column
+  is taken to hold `0001-01-01..9999-12-31`, the project's column contract,
+  and is not checked at ingestion. The compiler bounds how far the arithmetic
+  under a calendar function can shift such a day - literal `DATE_ADD` offsets,
+  `NEXT_DAY`, `ADD_MONTHS`, `LAST_DAY` and their compositions - and an entry
+  whose shift can leave the range is residual at compile time, with the
+  interval as its reason (`year(date_add(d, 20000000))` is the canonical
+  case; the row engine computes it). The one producer the compiler cannot
+  bound, a `DATE_ADD`/`DATE_SUB` with a *column* offset under a calendar
+  function, carries a per-batch range check on its result: a batch with a
+  lane past the range is recomputed on the row path and counted as
+  `numFallbackBatchesDeclined`. A `DATE_ADD` with no calendar consumer is never
+  checked - it returns what 32-bit addition returns, as Spark's does.
 * `NEXT_DAY` (task 33), for a literal weekday only - a non-foldable, null or
   unrecognized weekday declines, since resolving it is a compile-time step
   and the row engine's ANSI-mode behavior for a bad weekday is not
@@ -91,8 +100,8 @@ becomes timestamp arithmetic) decline:
   column, which no kernel can produce.
 * `UNIX_DATE` relabels a date column to its underlying `INT` day count with no
   new node and no emitted code (task 41); the paired `DATE_FROM_UNIX_DATE`
-  compiles the same way but still declines today, since its child is an
-  integer column and no leaf can read one until task 38 lands.
+  compiles the same way but still declines, since its child is an integer
+  column and only a `date_add`/`date_sub` offset position reads one (task 38).
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
 
@@ -254,9 +263,13 @@ attributes alone did not answer:
   column gets its own reasons: "non-integer day offset column of type ..."
   for a `ShortType`/`ByteType` column, "day offset is not a foldable
   literal or an integer column" for anything else (e.g. a computed
-  expression), and, since task 56, "day interval is not an int column cast to
-  days" for a day interval that is not `CAST(i AS INTERVAL DAY)` over an int
-  column. A Varka filter node (task 21) reports its predicate the same
+  expression). Since task 52, a calendar function over arithmetic that can
+  leave the lowering's range reports "day range [lo, hi] leaves the calendar
+  lowering's range", with the interval in epoch days, and one over a producer
+  the range analysis does not know reports "day producer the calendar range
+  analysis does not bound"; since task 56, "day interval is not an int column
+  cast to days" names a day interval that is not `CAST(i AS INTERVAL DAY)`
+  over an int column. A Varka filter node (task 21) reports its predicate the same
   way, one line per conjunct. The same account goes to the debug log once per
   task.
 

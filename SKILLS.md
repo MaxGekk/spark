@@ -411,12 +411,13 @@ trusting them, not just its ratios.
   fragment wins because it generalizes to every node built on the same prefix without
   the IR naming any of them.
 - **A shared run must be keyed on everything it reads, not just on its input.** The
-  prefix here also emits a range guard, and the guard is ANDed with the node's
-  validity word. Every plain extraction aliases its word to its child's, so those
-  share safely - but `add_months(d, n)` ANDs the date's word with the month count's,
-  so keying on the child alone would have given it a guard computed under a different
-  mask. Put the extra input in the key and the mistake becomes unrepresentable rather
-  than a rule in a comment.
+  prefix at the time also emitted a range guard (task 26's, since moved by tasks 51
+  and 52), ANDed with the node's validity word. Every plain extraction aliases its
+  word to its child's, so those shared safely - but `add_months(d, n)` ANDs the date's
+  word with the month count's, so keying on the child alone would have given it a
+  guard computed under a different mask. Put the extra input in the key and the
+  mistake becomes unrepresentable rather than a rule in a comment; the key kept the
+  extra input after the guard left, since the lesson is about what a run reads.
 - **A generated class's raw bytes never compare equal across two emissions**, because
   the harness names each class afresh and the name is in the constant pool. An
   assertion of the form "this option changed / did not change the bytecode" has to
@@ -928,8 +929,10 @@ bits, which is the remainder. Three ops. Today's `dayofweek(col)` body is 19 Int
 which the two-fold mod-7 is about 16; `weekday` and `next_day` carry the same fold. This is the
 largest single saving found since the calendar family started, and it is **range-bounded**: the
 fold is exact for every int32 day, the reciprocal only inside the narrow range, so it belongs
-behind task 26's guard, as a fourth `FloorMod7` variant with the fold kept as the total-range
-reference. It is a task of its own after the emitter settles, not a rider on another PR.
+inside the range task 52's compile-time analysis guarantees a calendar input (it would make
+`dayofweek` a range-checked node like the extractions), as a fourth `FloorMod7` variant with the
+fold kept as the total-range reference. It is a task of its own after the emitter settles, not a
+rider on another PR.
 
 **The Thursday rule for the ISO week.** `weekofyear` planned as "provisional week, then two
 year-boundary corrections and a weeks-in-year helper". `datealgo-rs` does it as: move to the
@@ -1178,6 +1181,45 @@ above 4 KB plus one byte per row; one warning per task on two consecutive suspec
 `numSuspectAllocationSamples` metric, and a `KernelAllocation` JFR event on every sample. The decisions live in `VarkaAllocationSampler` and are unit-tested against a loop that
 allocates on purpose - the positive case is not a polluted Vector API loop, because making the shared
 test JVM box would degrade every vector suite after it.
+## A range guard belongs where the value is made, not where it is read
+
+Task 52. Task 26 checked the narrowed civil-from-days range at every calendar extraction, per
+lane, per batch; task 51 removed that on the argument that the range is decidable once; task 52
+is the decision. Three things came out of building it.
+
+- **Most of the guard is a compile-time interval.** A date column is the contract range
+  0001..9999 (`VarkaChrono.CONTRACT_MIN/MAX_DAYS`, derived from `LocalDate` in source), a literal
+  day offset shifts it by exactly its value, `next_day` by 1..7, `add_months(n)` by 28n..31n,
+  `last_day` by 0..30, and `greatest`/`least`/`if`/`coalesce` take the hull. The check is one
+  compare of that interval against `NARROW_MIN/MAX_DAYS` in the compiler's calendar arms
+  (`dayRange`/`calendarInput` in `VarkaExpressionCompiler`), and it costs nothing at run time.
+  The slack is large - 8449747 days forward and 4675410 back from the contract - so the
+  corpus never trips it, and a query that does is computed by the row engine with the interval
+  named in `EXPLAIN`.
+- **A date-typed calendar output is not "back in range".** The tempting rule "a calendar node's
+  output re-enters the contract" is false for `last_day` and `add_months`: their input passed
+  the check at their own arm, but the output is up to 30 days (or 31 per month) later, so a
+  second calendar node over it needs the child's interval plus that bound. The analysis
+  propagates the interval through them for exactly this reason; the +-1 tests at the bound
+  are what keep the rule honest.
+- **The runtime half is one producer, guarded once, behind an option.** The only shift the
+  compiler cannot see is a column offset (task 38), so `AddDays`/`SubDays` with a `ColumnRef`
+  offset under a calendar node re-emit task 26's guard block on their own result
+  (`emitProducerGuard`), ANDed with the node's validity word (a null offset must not condemn a
+  batch) and the epilogue mask, ORed into the per-body accumulator task 51 left in place. The
+  accumulator is allocated only when the body reaches such a producer and
+  `VarkaEmitOptions.guardDayProducers` is on, so every other shape is byte-identical under
+  both settings - the suite asserts it on method sizes. The analysis returns three answers,
+  not two: bounded, column-shifted (admit; the emitter guards), and unknown (decline), so a
+  producer nobody has taught to the analysis fails as a residual entry, never as a wrong year.
+- **A mask guard costs its `fromLong`, not its compares.** Measured on `year(date_add(d, off))`
+  (`VarkaEmitterParityBenchmark`, two regenerations and a second run each): the guard costs
+  13-14% with mixed nulls at both widths in every run, against 5-15% null-free at 256 bits
+  and 2.5-4% at 128 - 0.05 to 0.07 ns per row in the masked body against 0.02 to 0.05 in the
+  dense one for the same two compares. The difference is the validity AND, whose
+  `VectorMask.fromLong` materializes a mask from a scalar word; the prediction counted it as
+  one lane op and it is not. A guard that reuses a mask the body has already built for its
+  store would not pay it.
 
 ## A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic
 
