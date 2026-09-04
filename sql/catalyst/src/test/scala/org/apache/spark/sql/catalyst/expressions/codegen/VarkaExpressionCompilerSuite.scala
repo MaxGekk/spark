@@ -19,9 +19,9 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, MakeDate, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
@@ -188,6 +188,36 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val compiled = VarkaExpressionCompiler.compile(Seq(out(DayOfYear(d))), childOutput).get
     assert(compiled.outputs === Seq(new IRDayOfYear(new ColumnRef(0))))
     assert(compiled.outputTypes === Seq(IntegerType))
+  }
+
+  test("task 42: make_date compiles over int columns and literals in either mode, with a " +
+      "DateType output, and a non-int argument declines with its position") {
+    val y = AttributeReference("y", IntegerType)()
+    val m = AttributeReference("m", IntegerType)()
+    val dd = AttributeReference("dd", IntegerType)()
+    val ints: Seq[Attribute] = Seq(d, y, m, dd)
+    for (ansi <- Seq(false, true)) {
+      val compiled = VarkaExpressionCompiler.compile(
+        Seq(out(MakeDate(y, m, dd, ansi)), out(MakeDate(y, Literal(2), Literal(29), ansi))),
+        ints).get
+      assert(compiled.outputs === Seq(
+        new IRMakeDate(new ColumnRef(0), new ColumnRef(1), new ColumnRef(2), ansi),
+        new IRMakeDate(new ColumnRef(0), new LiteralSlot(0), new LiteralSlot(1), ansi)))
+      assert(compiled.outputTypes === Seq(DateType, DateType))
+      assert(compiled.inputOrdinals === Seq(1, 2, 3))
+      assert(compiled.literals === Seq(2, 29))
+    }
+    // The two modes are two shapes: the same tree under each renders differently.
+    assert(VarkaVectorIR.canonical(new IRMakeDate(new ColumnRef(0), new ColumnRef(1),
+      new ColumnRef(2), true)) !== VarkaVectorIR.canonical(new IRMakeDate(new ColumnRef(0),
+      new ColumnRef(1), new ColumnRef(2), false)))
+    // compilePartial answers None when nothing fuses, so a fused sibling rides along.
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(MakeDate(y, m, Cast(d, IntegerType), false)), out(Year(d))), ints).get
+    assert(partial.declines(0).reason === "make_date's day is not an int column or literal")
+    // Under the range analysis the node is a bounded producer: a calendar node over it fuses.
+    assert(VarkaExpressionCompiler.compile(Seq(out(Year(MakeDate(y, m, dd, false)))), ints)
+      .isDefined)
   }
 
   test("task 36: last_day compiles with a DateType output, unlike its four siblings") {

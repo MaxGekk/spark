@@ -167,6 +167,25 @@ emitted bytes: `make_date` about 55 to 60 (the lowering above), the ANSI and
 `NULL` forms within two ops of each other (the `NULL` form stores a word the
 ANSI form does not), `add_months` and `trunc` unmoved.
 
+*Read off the bytes, the same day:* 57 for both forms in the dense loop and
+57 in the masked loop as well - the forms differ by a `long` AND and a mask
+`not`, neither an `IntVector` call, so the counter cannot tell them apart -
+and `add_months` at 112 (the 117 the register first carried was task 40's
+count before tasks 53 and 54), `dayofyear` at 43, both unmoved.
+
+### 3.7 Corrected while building: the masked dispatch, not a re-emitted body
+
+Section 3.3 had the dense loop method re-emitted as a masked body with
+all-true words. The survey of the body mechanics showed a shorter route: the
+masked body already treats a null-free input as a constant all-true word
+without touching its buffer (its per-input null state decides that, per
+batch), so a kernel whose analysis says `nullsFromValidInputs` simply emits
+no dense methods and its `run` dispatches every batch to `runMasked`. The
+ANSI form keeps the dense path. The test in section 5 - a null-free batch
+with one invalid date under the `NULL` form yielding a null lane - holds
+either way, and the method-layout test pins that the `NULL` form's class has
+no `runDense`.
+
 ## 4. Files
 
 | file | what |

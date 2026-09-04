@@ -90,6 +90,12 @@ becomes timestamp arithmetic) decline:
 * `DAYOFYEAR` (task 34), `LAST_DAY` (task 36) and `ADD_MONTHS` / `date +
   INTERVAL n MONTH` (task 40) with a literal month count, all over the same
   civil-from-days prefix; `LAST_DAY` and `ADD_MONTHS` return dates.
+* `MAKE_DATE(year, month, day)` (task 42) over int columns and literals, in
+  both evaluation modes: an invalid month or day is a null date with ANSI
+  off and, with ANSI on, sends the batch to the row engine, which raises
+  Spark's own error at that row; a year outside the whole years of the
+  calendar range goes to the row engine in both modes, so the kernel never
+  publishes a date the lowering is not exact for.
 * `TRUNC(date, fmt)` (task 35) at the date levels, for a literal format only:
   `YEAR`/`YYYY`/`YY`, `MONTH`/`MON`/`MM` and `QUARTER` are one node each with
   the level as part of the kernel's shape, and `WEEK` is rewritten onto
