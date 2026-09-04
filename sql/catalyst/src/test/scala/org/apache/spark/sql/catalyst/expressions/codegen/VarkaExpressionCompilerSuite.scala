@@ -17,10 +17,12 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen
 
-import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, LessThan, Literal, Month, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, TruncDate, UnixDate, WeekDay, Year}
+import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
+import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, LessThan, Literal, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
 /**
@@ -664,4 +666,103 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val decline = predicate.specs.reverse.head.decline.get
     assert(decline.reason === "exceeds the emitter's fused budget")
   }
+
+  // Task 56: date +- INTERVAL n DAY with a column interval, through the analyzer's own resolver so
+  // the shapes asserted are the ones a query produces, not ones this suite invented.
+  private val dayInterval = DayTimeIntervalType(DayTimeIntervalType.DAY)
+  private def resolved(e: Expression): Expression = BinaryArithmeticWithDatetimeResolver.resolve(e)
+  private val limit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS
+
+  /** The reason the first of two entries declined, the second being a known-good fused one. */
+  private def intervalDeclineReason(e: Expression, output: Seq[Attribute] = childOutput): String = {
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(e), out(DateAdd(d, Literal(1)))), output).get
+    assert(partial.declines.contains(0), s"$e fused; expected it to decline")
+    partial.declines(0).reason
+  }
+
+  test("task 56: the int-to-day-interval cast is exact inside its limit and throws one past it") {
+    // The admission check, held to Spark's own code: the rewrite assumes getDays undoes the
+    // cast wherever the cast does not throw, and that it throws in every mode past the limit.
+    assert(limit === 106751991)
+    for (v <- Seq(0, 1, -1, 365, -366, limit, -limit)) {
+      val micros = IntervalUtils.intToDayTimeInterval(v, DayTimeIntervalType.DAY,
+        DayTimeIntervalType.DAY)
+      assert(IntervalUtils.getDays(micros) === v)
+    }
+    for (v <- Seq(limit + 1, -limit - 1, Int.MaxValue, Int.MinValue)) {
+      intercept[SparkArithmeticException] {
+        IntervalUtils.intToDayTimeInterval(v, DayTimeIntervalType.DAY, DayTimeIntervalType.DAY)
+      }
+    }
+  }
+
+  test("task 56: date + CAST(i AS INTERVAL DAY) compiles to task 38's AddDays with a bound on " +
+      "the offset input") {
+    val plus = resolved(Add(d, Cast(i, dayInterval)))
+    assert(plus.isInstanceOf[DateAdd], plus)
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(plus)), childOutput).get
+    assert(compiled.outputs === Seq(new AddDays(new ColumnRef(0), new ColumnRef(1))))
+    assert(compiled.inputOrdinals === Seq(0, 2))
+    assert(compiled.inputBounds === Seq(VarkaInputBound(1, -limit, limit)))
+    assert(compiled.outputTypes === Seq(DateType))
+    // The same shape from a plain int column records no bound: date_add wraps in Spark too.
+    val plain = VarkaExpressionCompiler.compile(Seq(out(DateAdd(d, i))), childOutput).get
+    assert(plain.outputs === compiled.outputs)
+    assert(plain.inputBounds === Nil)
+  }
+
+  test("task 56: date - CAST(i AS INTERVAL DAY) is the negated extraction, compiled to SubDays " +
+      "under the same bound") {
+    val minus = resolved(Subtract(d, Cast(i, dayInterval)))
+    assert(minus.isInstanceOf[DateAdd], minus)
+    assert(minus.asInstanceOf[DateAdd].days.isInstanceOf[UnaryMinus], minus)
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(minus)), childOutput).get
+    assert(compiled.outputs === Seq(new SubDays(new ColumnRef(0), new ColumnRef(1))))
+    assert(compiled.inputBounds === Seq(VarkaInputBound(1, -limit, limit)))
+  }
+
+  test("task 56: i * INTERVAL '1' DAY leaves the date lane - the product widens to DAY TO " +
+      "SECOND and the analyzer casts the date to a timestamp") {
+    // The admission check's second finding: a multiplied interval is not a day interval,
+    // whatever the literal, so the resolver's timestamp branch takes the whole expression and
+    // it declines here on the cast, not on the offset. Recorded so the multiply form is not
+    // mistaken for a gap in this task's arm.
+    val oneDay = Literal.create(java.time.Duration.ofDays(1), dayInterval)
+    for (product <- Seq(Multiply(i, oneDay), Multiply(oneDay, i))) {
+      val scaled = resolved(product)
+      assert(scaled.dataType !== dayInterval, scaled)
+      val plus = resolved(Add(d, scaled))
+      assert(plus.isInstanceOf[TimestampAddInterval], plus)
+      assert(intervalDeclineReason(plus) === "unsupported expression")
+    }
+  }
+
+  test("task 56 declines: a stored INTERVAL DAY column, a short column cast to an interval, and " +
+      "the rollback of a declining entry's bound") {
+    val iv = AttributeReference("iv", dayInterval)()
+    val stored = resolved(Add(d, iv))
+    assert(intervalDeclineReason(stored, childOutput :+ iv) ===
+      "day interval is not an int column cast to days")
+    // A short column under the cast is not the int leaf task 38 admits; it declines through
+    // the extractor arm rather than being read as an int.
+    val short = resolved(Add(d, Cast(sh, dayInterval)))
+    assert(intervalDeclineReason(short) === "day interval is not an int column cast to days")
+    // Two entries: the first declines after noting nothing, the second is bounded; the bound
+    // is keyed on the surviving input table, not on the position the declining entry would
+    // have taken.
+    val partial = VarkaExpressionCompiler.compilePartial(Seq(
+      out(resolved(Add(d, Cast(sh, dayInterval)))),
+      out(resolved(Add(d2, Cast(i, dayInterval))))), childOutput).get
+    assert(partial.specs.head === ResidualOutput)
+    assert(partial.fused.inputOrdinals === Seq(1, 2))
+    assert(partial.fused.inputBounds === Seq(VarkaInputBound(1, -limit, limit)))
+  }
+
+  test("task 56: a bounded offset inside a filter predicate carries the bound on the predicate") {
+    val pred = VarkaExpressionCompiler.compilePredicate(
+      GreaterThan(resolved(Add(d, Cast(i, dayInterval))), d2), childOutput).get
+    assert(pred.fused.inputBounds === Seq(VarkaInputBound(1, -limit, limit)))
+  }
+
 }
