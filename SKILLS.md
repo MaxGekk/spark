@@ -1160,6 +1160,25 @@ in `PLAN_MILESTONE_4.md`). Two tells, either sufficient: an allocation inside a 
 the disassembly (task 55 makes it an assertion), and a "callee changed to" line naming a second
 species class in `-XX:+PrintInlining` output.
 
+### The runtime half: the evaluator samples allocation, because nothing else can see a box
+
+A boxing kernel is correct, so the ghost fallback, the differential suites and the fuzzer are all
+blind to it; the assembly suite (task 55) catches it in the test JVM, and the test JVM is clean by
+construction. `VarkaKernelEvaluator` therefore samples the same signal at run time: bytes the thread
+allocated across `run`, from `ThreadMXBean`, on a schedule that skips the JIT warm-up (an
+interpreted or C1 Vector API loop allocates every vector, which C2's escape analysis then removes -
+sampling batch 1 would report boxing that is about to stop; the evaluator's wiring test watches
+exactly that, every early sample suspect and the tail clean at a constant 520 bytes per call). How
+long the warm-up lasts is the machine's business: this laptop had C2's loop inside 300 batches of
+1024 rows, GitHub's runner took 1112 - so the wiring test runs rounds of batches until a whole round
+samples clean rather than asserting a fixed tail, and a host that slow sees the default schedule's
+first two samples (512 and 1024) both inside the warm-up, which is one spurious warning. Batch 512
+first, then powers of two and every 4096th - two million rows at the default batch size; suspect
+above 4 KB plus one byte per row; one warning per task on two consecutive suspect samples, a
+`numSuspectAllocationSamples` metric, and a `KernelAllocation` JFR event on every sample. The decisions live in `VarkaAllocationSampler` and are unit-tested against a loop that
+allocates on purpose - the positive case is not a polluted Vector API loop, because making the shared
+test JVM box would degrade every vector suite after it.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =

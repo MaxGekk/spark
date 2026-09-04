@@ -260,14 +260,27 @@ Task 22 extends the account to the SQL UI and to JDK Flight Recorder:
   number, and its `numOutputRows` counts selected rows). A fallen-back
   query is diagnosable from the SQL UI alone: the cause class from the
   metrics, the exact reason from `EXPLAIN` or the log.
-* **JFR events.** Three events under the `Varka` category fire while a JDK
+* **Boxing is sampled.** A kernel whose Vector API loop boxes - on HotSpot,
+  because two vector species of one lane type ran hot in the same JVM -
+  still answers correctly, several times slower, so no fallback and no
+  differential test can see it. The evaluator samples the bytes the thread
+  allocated across the kernel call on a schedule that skips the JIT warm-up
+  (batch 512, then every power of two and every 4096th batch), counts a
+  sample above a fixed allowance plus one byte per row under
+  `numSuspectAllocationSamples`, and warns once per task on the second
+  suspect sample in a row, naming the kernel. `VarkaAllocationSampler` holds
+  the schedule and the verdict; `SKILLS.md`'s species-pollution section has
+  the mechanism and the C2 evidence.
+* **JFR events.** Four events under the `Varka` category fire while a JDK
   Flight Recorder recording is active - no JVM flag or build change is
   needed, `jdk.jfr` is a default module. Under the shared prefix
   `org.apache.spark.sql.varka`: `KernelEmission` (timed over emit plus
   class define; shape hash, class name, IR sizes, byte count),
   `ShapeCacheLookup` (shape hash, hit, the per-execution identity - the
-  join a profile needs), and `Fallback` (cause, kernel identity, exception
-  class; the cause vocabulary is the constants on `VarkaFallbackEvent`).
+  join a profile needs), `Fallback` (cause, kernel identity, exception
+  class; the cause vocabulary is the constants on `VarkaFallbackEvent`), and
+  `KernelAllocation` (one per allocation sample, suspect or not: kernel
+  identity, batch index, rows, allocated bytes, verdict).
   Record with a programmatic `jdk.jfr.Recording`, `jcmd JFR.start`, or
   `-XX:StartFlightRecording`.
 
