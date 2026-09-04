@@ -121,6 +121,19 @@ public final class VarkaChrono {
   /** The last epoch day under the column contract: 9999-12-31. See {@link #CONTRACT_MIN_DAYS}. */
   public static final int CONTRACT_MAX_DAYS = (int) LocalDate.of(9999, 12, 31).toEpochDay();
 
+  /**
+   * The largest day count {@code CAST(int AS INTERVAL DAY)} can produce (task 56):
+   * {@code Long.MAX_VALUE / MICROS_PER_DAY}, since Spark builds the interval as
+   * {@code Math.multiplyExact(days, MICROS_PER_DAY)} and throws a cast-overflow error - in every
+   * evaluation mode - one past it. A kernel adding such a day count to a date must therefore see
+   * only values in {@code [-INTERVAL_DAY_LIMIT_DAYS, INTERVAL_DAY_LIMIT_DAYS]}; the evaluator
+   * checks the offset column against this bound per batch and declines the batch to the row
+   * engine, which raises the same error, when a live lane is outside. Derived in source rather
+   * than typed in (106751991) so it cannot drift from the fact it states.
+   */
+  public static final int INTERVAL_DAY_LIMIT_DAYS =
+      (int) (Long.MAX_VALUE / java.util.concurrent.TimeUnit.DAYS.toMicros(1));
+
   // --- Day of era to the five fields ---------------------------------------
 
   /** {@code floor(2^28 / 36524)}, round-down; one correction, dividend at most 146096. */

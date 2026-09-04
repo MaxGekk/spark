@@ -42,7 +42,14 @@ skipped at the row boundary - by that mask.
 The supported expression surface, over `DateType` columns (stored as `INT`
 days since epoch) and day offsets that are either a foldable integer literal
 or an `IntegerType` column (task 38; a `ShortType`/`ByteType` offset column
-still declines):
+still declines), including that column spelled as a day interval,
+`d + CAST(i AS INTERVAL DAY)` and `d - CAST(i AS INTERVAL DAY)` (task 56; a
+literal interval folds to `date_add` before planning). The cast throws past
+106751991 days in every mode, so the evaluator checks the offset column per
+batch and a batch holding such a value is recomputed on the row engine, which
+raises that error, counted as `numFallbackBatchesDeclined`. A stored `INTERVAL
+DAY` column and `i * INTERVAL '1' DAY` (which widens to a sub-day interval and
+becomes timestamp arithmetic) decline:
 
 * `DATE_ADD` / `DATE_SUB` / `DATEDIFF`, nested to any depth up to the
   emitter's chain cap, including chains mixing them.
@@ -254,13 +261,15 @@ attributes alone did not answer:
   type ..." - in the query's own column names. Since task 38, a `date_add`/
   `date_sub` day offset that is neither a foldable literal nor a supported
   column gets its own reasons: "non-integer day offset column of type ..."
-  for a `ShortType`/`ByteType` column, and "day offset is not a foldable
+  for a `ShortType`/`ByteType` column, "day offset is not a foldable
   literal or an integer column" for anything else (e.g. a computed
   expression). Since task 52, a calendar function over arithmetic that can
   leave the lowering's range reports "day range [lo, hi] leaves the calendar
   lowering's range", with the interval in epoch days, and one over a producer
   the range analysis does not know reports "day producer the calendar range
-  analysis does not bound". A Varka filter node (task 21) reports its predicate the same
+  analysis does not bound"; since task 56, "day interval is not an int column
+  cast to days" names a day interval that is not `CAST(i AS INTERVAL DAY)`
+  over an int column. A Varka filter node (task 21) reports its predicate the same
   way, one line per conjunct. The same account goes to the debug log once per
   task.
 

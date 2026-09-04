@@ -32,7 +32,7 @@ import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps,
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{IntRangeOps, SelectionVectorOps,
   VarkaAllocationSampler, VarkaFallbackEvent, VarkaFusedKernel, VarkaKernelAllocationEvent,
   VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -120,8 +120,10 @@ private[sql] object VarkaExecMetrics {
 private[execution] class VarkaKernelFailure(cause: Throwable) extends Exception(cause)
 
 /**
- * The kernel ran and declined the batch (task 26): its status was non-zero, meaning some lane
- * lay outside the range a partial lowering is defined over. Not an error - it carries no cause
+ * The batch was declined to the row engine: the kernel ran and returned a non-zero status
+ * (task 26), meaning some lane lay outside the range a partial lowering is defined over, or
+ * the evaluator's own pre-check found an input lane outside a bound the compiler recorded
+ * (task 56, [[VarkaKernelEvaluator.STATUS_INPUT_BOUND]]). Not an error - it carries no cause
  * and no stack trace, because it is control flow on a designed path, and [[serveBatch]] turns
  * it into the row-engine fallback.
  */
@@ -545,6 +547,19 @@ private[sql] abstract class VarkaEvaluatorBase(
       runner.srcValidity(i) = morsel.validityAddress
       runner.srcNullCount(i) = morsel.nullCount.toInt
       i += 1
+    }
+    // Task 56: an input the compiler bounded - today a day offset that came from
+    // CAST(i AS INTERVAL DAY), which Spark's cast throws on past the bound - is checked before
+    // the kernel runs, over its live lanes only. A lane outside declines the batch the same
+    // way a kernel status does: the row engine recomputes it and raises the error the kernel
+    // cannot. One vector compare pass over the column, priced in VarkaThroughputBenchmark
+    // against the unbounded date_add row.
+    plan.inputBounds.foreach { b =>
+      val k = b.inputIndex
+      if (!IntRangeOps.allWithin(runner.srcData(k), runner.srcValidity(k), runner.srcNullCount(k),
+          len, b.lo, b.hi)) {
+        throw new VarkaBatchDeclined(VarkaKernelEvaluator.STATUS_INPUT_BOUND)
+      }
     }
   }
 
@@ -1239,6 +1254,13 @@ private[execution] object VarkaKernelEvaluator {
   // Which kernel batches the allocation sampler measures. The production schedule skips the
   // JIT warm-up (see VarkaAllocationSampler); suites set a dense one so a short query samples,
   // and restore the default in a finally.
+  /**
+   * The decline status the evaluator itself reports when an input lane lies outside a bound
+   * the compiler recorded (task 56) - bit 1, beside the kernels' `STATUS_CHRONO_RANGE` (bit 0),
+   * so a log line tells the two apart. Never returned by an emitted kernel.
+   */
+  private[execution] val STATUS_INPUT_BOUND: Int = 2
+
   @volatile private[execution] var allocationSchedule: VarkaAllocationSampler.Schedule =
     VarkaAllocationSampler.Schedule.DEFAULT
 
