@@ -19,8 +19,9 @@ package org.apache.spark.sql.execution
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaShapeCache}
 import org.apache.spark.sql.internal.SQLConf
 
 /**
@@ -142,19 +143,20 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 38 declines: an interval column offset still does not fuse") {
-    // `d + INTERVAL n DAY` with a foldable `n` already fuses (the analyzer folds it to a
-    // DateAdd literal, unaffected by this task). A non-foldable interval *column* does not:
+  test("task 38, then 56: an int column cast to a day interval fuses as the column offset it is") {
+    // `d + INTERVAL n DAY` with a foldable `n` already fused before task 38 (the analyzer folds
+    // it to a DateAdd literal). Task 38 left the non-foldable interval column declined -
     // BinaryArithmeticWithDatetimeResolver rewrites it to
-    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)), and ExtractANSIIntervalDays has no
-    // compiler arm, so it declines through the ordinary unsupported-expression path.
-    // CAST(i AS INTERVAL DAY) is DayTimeIntervalType(DAY, DAY) - a single-field ANSI interval,
-    // not the literal `INTERVAL '3' DAY` syntax the optimizer folds away.
+    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)), which had no arm - and this test
+    // pinned that. Task 56 gave the int-cast form its arm: CAST(i AS INTERVAL DAY) is
+    // DayTimeIntervalType(DAY, DAY), the extractor undoes the cast exactly, and the entry is
+    // task 38's own column-offset node under a per-batch bound. The stored interval column,
+    // which is what task 38's comment was really about, stays declined in the task 56 tests.
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
       "SELECT d + CAST(i AS INTERVAL DAY) AS a FROM varka_dates ORDER BY a",
-      expectFused = false)
+      expectFused = true)
   }
 
   test("task 38: a column-offset date_add fuses inside a filter predicate too") {
@@ -172,6 +174,59 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
         s"the column-offset predicate should be fused, not residual:\n$fused")
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
+    }
+  }
+
+  test("task 56: date +- CAST(i AS INTERVAL DAY) matches the row engine on the projection " +
+      "and filter paths, and a stored interval column stays residual") {
+    cacheDatesNullableOffset(spark)
+    cacheDatesNullableOffset(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT d + CAST(off AS INTERVAL DAY) AS a, d - CAST(off AS INTERVAL DAY) AS b " +
+        "FROM varka_dates_nullable_offset ORDER BY a, b",
+      expectFused = true)
+    val filtered = checkDifferential(spark, varkaSpark,
+      "SELECT count(*) AS c FROM varka_dates_nullable_offset " +
+        "WHERE d + CAST(off AS INTERVAL DAY) > DATE'2024-01-01'",
+      expectFused = true)
+    assert(!filtered.toString.contains("Filter (d"), filtered.toString)
+    // A stored INTERVAL DAY column is int64 microseconds, out of the date lane by decision.
+    // Cached as its own table so the column really is stored: a subquery's cast collapses back
+    // onto the int under the optimizer and fuses, which is the case above.
+    Seq(spark, varkaSpark).foreach { session =>
+      session.sql("SELECT d, CAST(off AS INTERVAL DAY) AS iv FROM varka_dates_nullable_offset")
+        .createOrReplaceTempView("varka_interval_column")
+      session.catalog.cacheTable("varka_interval_column")
+    }
+    try {
+      checkDifferential(spark, varkaSpark,
+        "SELECT d + iv AS a FROM varka_interval_column ORDER BY a", expectFused = false)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_interval_column"))
+    }
+  }
+
+  test("task 56: an offset past the cast's limit raises the row engine's error through Varka") {
+    // The bound the evaluator checks per batch: Spark's CAST(i AS INTERVAL DAY) throws past
+    // INTERVAL_DAY_LIMIT_DAYS in every mode. Through Varka the batch declines to the row
+    // engine, so the error is the row engine's own - compared by running both sessions, as
+    // the plan's error-identity rule asks.
+    val rows = Seq(
+      (date("2024-01-01"), Int.box(3)),
+      (date("2024-01-02"), Int.box(VarkaChrono.INTERVAL_DAY_LIMIT_DAYS + 1)),
+      (null: java.sql.Date, Int.box(5)))
+    Seq(spark, varkaSpark).foreach { session =>
+      session.createDataFrame(rows).toDF("d", "off").createOrReplaceTempView("varka_far_interval")
+      session.catalog.cacheTable("varka_far_interval")
+    }
+    try {
+      val q = "SELECT d + CAST(off AS INTERVAL DAY) AS a FROM varka_far_interval ORDER BY a"
+      val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
+      val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
+      assert(actual.getCondition === expected.getCondition)
+      assert(actual.getMessage === expected.getMessage)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_far_interval"))
     }
   }
 
