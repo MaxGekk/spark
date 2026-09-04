@@ -124,6 +124,21 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(VarkaChrono.inNarrowRange(LocalDate.of(9999, 12, 31).toEpochDay.toInt))
   }
 
+  test("task 52: the column contract's bounds lie strictly inside the narrowed range") {
+    // The compile-time range analysis starts every column at the contract and admits a
+    // calendar node only if the shifted interval stays inside the narrowed range; both facts
+    // it rests on are pinned here, with the slack on each side stated as a number so a plan
+    // quoting it can be checked against this test.
+    assert(VarkaChrono.CONTRACT_MIN_DAYS === LocalDate.of(1, 1, 1).toEpochDay.toInt)
+    assert(VarkaChrono.CONTRACT_MAX_DAYS === LocalDate.of(9999, 12, 31).toEpochDay.toInt)
+    assert(VarkaChrono.CONTRACT_MIN_DAYS === -719162)
+    assert(VarkaChrono.CONTRACT_MAX_DAYS === 2932896)
+    assert(VarkaChrono.NARROW_MIN_DAYS < VarkaChrono.CONTRACT_MIN_DAYS)
+    assert(VarkaChrono.CONTRACT_MAX_DAYS < VarkaChrono.NARROW_MAX_DAYS)
+    assert(VarkaChrono.NARROW_MIN_DAYS - VarkaChrono.CONTRACT_MIN_DAYS === -4675410)
+    assert(VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS === 8449747)
+  }
+
   test("the January turn is the same test on the day of year as on the March month") {
     // The year tail reads doy >= MARCH_TO_JANUARY_DAYS where the month and day-of-month tails
     // read marchMonth >= MARCH_YEAR_JANUARY (task 48). The two are one integer identity apart,

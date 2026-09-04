@@ -22,7 +22,7 @@ import java.nio.file.Files
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, If, In, LessThan, Literal, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, If, In, LessThan, Literal, NamedExpression, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaShapeCache}
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.{DateType, IntegerType}
@@ -235,6 +235,16 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
       Alias(DateAdd(attrD, Literal(1)), "fused")())
     val elseLines = VarkaFusionReport.lines(noElse, childOutput)
     assert(elseLines(0).contains("CASE WHEN without an ELSE branch"), elseLines(0))
+  }
+
+  test("task 52: a day shift past the calendar range reports its interval as the reason") {
+    val farYear = Seq[NamedExpression](
+      Alias(Year(DateAdd(attrD, Literal(20000000))), "far")(),
+      Alias(Year(attrD), "near")())
+    val lines = VarkaFusionReport.lines(farYear, childOutput)
+    assert(lines(0).startsWith("far: residual (day range ["), lines(0))
+    assert(lines(0).contains("leaves the calendar lowering's range"), lines(0))
+    assert(lines(1) === "near: fused", lines(1))
   }
 
   test("task 20: the IN cap and the validity-operand declines report their reasons") {
