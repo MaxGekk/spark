@@ -107,7 +107,7 @@ The survey named two gating shapes that cost almost nothing and unlock a large
 fraction of real date expressions: `cast(string AS DATE)` folding (85 sites wrap
 date expressions in it) and `BETWEEN`'s rewrite into paired comparisons (41
 sites). Two more joined them from the benchmark census in
-`SCOPE_MILESTONE_5.md`: `In` and `InSet` over the lane types Varka already has
+`SCOPE_MILESTONE_6.md` (then numbered 5): `In` and `InSet` over the lane types Varka already has
 (118 `IN (` sites across TPC-DS and TPC-H), and `Coalesce` (41 sites, the third
 most common non-aggregate function in the corpus after `cast`). All four are
 compiler-side only - no new kernel, no plan-shape change - so they come first
@@ -125,7 +125,7 @@ demonstrable win in the roadmap and the reason the task is worth widening.
 
 Two limits come with it, both recorded rather than discovered later. `IN` over
 strings and decimals is *not* cheap - 2.6 and 1.8 M rows/s at 200 literals -
-and stays with milestone 5's items 1 and 3, since it needs lane types Varka
+and stays with milestone 6's items 1 and 3, since it needs lane types Varka
 does not have. And a long list is one node with many literals, a shape milestone
 2 did not size for: task 10 measured 482 against 1616 M rows/s on a two-chain
 shape and 168 against 526 at 64 literals. Task 20 should fix a literal-count
@@ -276,7 +276,7 @@ Varka suites on the arm matrix leg too, and is CI work rather than engine work.
    how much of this milestone's machinery is worth generalising.
    **Settled in task 22, by the owner: whole-stage generation stays in the
    charter** as an eventual goal - `VISION.md` section 13 records the
-   decision and the honest present (nothing through milestone 5 builds it;
+   decision and the honest present (nothing through milestone 6 builds it;
    a future generator starts from the vector IR and the loop emitter).
 
 ## 8. Explicitly out of milestone 3

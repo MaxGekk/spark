@@ -1,8 +1,14 @@
-# Varka Milestone 5 Scope: coverage
+# Varka Milestone 6 Scope: coverage
+
+*Renumbered from milestone 5 on 4 September 2026, when milestone 4 was
+re-scoped to the date family and the emitter and the other lanes became a
+milestone of their own (`PLAN_MILESTONE_5.md`). The text below still says
+"milestone 4" where it argues about breadth; read "milestones 4 and 5".*
 
 Milestone 3 is *reach* - make the fast path apply to real queries. Milestone 4
-is *breadth* - widen the vocabulary of types and expressions. Milestone 5 is
-**coverage**: pick named queries from benchmarks people actually cite, find
+is the date family and the emitter under it, and milestone 5 the other lanes -
+together, *breadth*, the wider vocabulary of types and expressions. Milestone 6
+is **coverage**: pick named queries from benchmarks people actually cite, find
 every feature standing between Varka and running them, and publish the number.
 
 The distinction matters because breadth is measured in expressions and coverage
@@ -15,9 +21,9 @@ Section 1 is the survey milestone 4's section 5 asked for and could not assume.
 It changes milestone 4's ordering, and section 2 says how - honestly, because
 the project scores its predictions.
 
-Task numbering continues the single sequence. Milestone 4's task plan assigns
-24-31, so this milestone resumes at 32 - unless that plan grows further the way
-milestone 3's did. No task numbers are assigned here.
+Task numbering continues the single sequence, and no task numbers are assigned
+here: this milestone's plan takes the next free numbers when it is written
+(milestone 4's plan reached 55, and milestone 5 carries 27-30, 39 and 49).
 
 ## 1. The survey
 
@@ -544,7 +550,7 @@ rather than as a silent 1.0x.
 ### Item 10. The calendar as a lookup table, sized to the era
 
 **Where this came from.** Reading ClickHouse's `toYear` while milestone 4's
-calendar family was being built. It is not a milestone 5 subject by topic - it
+calendar family was being built. It is not a milestone 6 subject by topic - it
 belongs to the calendar family - but milestone 4's catalogue has become a task
 plan, and this is not a task yet, so it lands here per `sql/varka/AGENTS.md`.
 
@@ -676,7 +682,7 @@ one did, it becomes a task in its own right and is scheduled then; if it does
 not, the catalogue entry is the record of why the idea was dropped, which is
 worth as much.
 
-## 6. Explicitly out of milestone 5
+## 6. Explicitly out of milestone 6
 
 * Joins, sorting, grouping sets, and window functions - per item 9.
 * Decimal *division*, and any decimal whose result precision exceeds the lane -

@@ -30,7 +30,7 @@ missing `numVarkaBatches` count, and no stated cause anywhere.
   the planning assistant's recommendation - that whole-stage code
   generation remains in Varka's charter as an eventual goal rather than
   being written out of it. The recorded answer stays honest about the
-  present: nothing through milestone 5 builds or plans it, today's engine
+  present: nothing through milestone 6 builds or plans it, today's engine
   is the columnar fast path beside whole-stage codegen, the milestone-5
   census prices what full ownership entails, and a future whole-stage
   generator starts from the vector IR and the loop emitter (item 9's

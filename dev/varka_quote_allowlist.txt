@@ -16,10 +16,10 @@ SKILLS.md	2368.3	REASON NEEDED
 SKILLS.md	2166.5	REASON NEEDED
 SKILLS.md	36524.25	REASON NEEDED
 SKILLS.md	26.04	REASON NEEDED
-sql/varka/plans/PLAN_MILESTONE_4.md	3573.9	probe figures from a throwaway run the text itself calls a scratch probe
-sql/varka/plans/PLAN_MILESTONE_4.md	2379.8	probe figures from a throwaway run the text itself calls a scratch probe
-sql/varka/plans/PLAN_MILESTONE_4.md	2368.3	probe figures from a throwaway run the text itself calls a scratch probe
-sql/varka/plans/PLAN_MILESTONE_4.md	4630.0	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_MILESTONE_5.md	3573.9	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_MILESTONE_5.md	2379.8	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_MILESTONE_5.md	2368.3	probe figures from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/PLAN_MILESTONE_5.md	4630.0	probe figures from a throwaway run the text itself calls a scratch probe
 sql/varka/plans/PLAN_TASK_24.md	6034.3	interleaved re-run compared by minimums; per-iteration output not committed
 sql/varka/plans/PLAN_TASK_24.md	5707.8	interleaved re-run compared by minimums; per-iteration output not committed
 sql/varka/plans/PLAN_TASK_24.md	4722.4	interleaved re-run compared by minimums; per-iteration output not committed
@@ -53,4 +53,4 @@ sql/varka/plans/PLAN_TASK_48.md	2145.2	interleaved re-run compared by minimums; 
 sql/varka/plans/PLAN_TASK_48.md	2166.5	interleaved re-run compared by minimums; per-iteration output not committed
 sql/varka/plans/PLAN_TASK_48.md	1042.8	interleaved re-run compared by minimums; per-iteration output not committed
 sql/varka/plans/PLAN_TASK_48.md	7759.6	interleaved re-run compared by minimums; per-iteration output not committed
-sql/varka/plans/SCOPE_MILESTONE_5.md	1853.0	probe figure from a throwaway run the text itself calls a scratch probe
+sql/varka/plans/SCOPE_MILESTONE_6.md	1853.0	probe figure from a throwaway run the text itself calls a scratch probe
