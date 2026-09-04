@@ -627,6 +627,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(e.getMessage.contains("IsNotNull child must be a ColumnRef"))
   }
 
+  test("a non-literal month count or weekday is rejected at analysis, naming its own node") {
+    // The two nodes share the check; the message must name the operand that failed it, not
+    // the other node's - the IR fuzzer's first failure quoted `next_day` for an add_months.
+    val months = intercept[IllegalArgumentException](
+      emitMulti(Seq(new AddMonths(new ColumnRef(0), new ColumnRef(1))), 2, 0))
+    assert(months.getMessage.contains("add_months' month count"), months.getMessage)
+    val weekday = intercept[IllegalArgumentException](
+      emitMulti(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0))
+    assert(weekday.getMessage.contains("next_day's weekday"), weekday.getMessage)
+  }
+
   test("task 20: fitsBudgets mirrors the analysis caps, distinct ops across outputs") {
     def chain(base: Int, depth: Int): VarkaVectorIR =
       (0 until depth).foldLeft[VarkaVectorIR](new ColumnRef(base)) { (n, _) =>
