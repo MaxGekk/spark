@@ -672,6 +672,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         benchmark.addCase("date_add(d, off) alone, guard option off (task 52 control), null-free") {
           _ => chunkedTwo(addAloneGuardOff, false)
+        }
         // Task 35's A/B: trunc(date, ...) under its two lowerings, SUBTRACT (the day of year
         // or day of month taken off the date) against RECOMPOSE (the period's first day rebuilt
         // through emitDaysFromCivil), adjacent per level like the task 48, 53 and 54 pairs so

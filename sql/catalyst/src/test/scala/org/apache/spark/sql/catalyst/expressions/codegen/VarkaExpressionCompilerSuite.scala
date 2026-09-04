@@ -325,6 +325,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(fuses(Year(DateAdd(Greatest(Seq(DateAdd(d, Literal(shiftHi + 1)), d)), i))))
     val ts = AttributeReference("t", TimestampType)()
     assert(!fuses(Year(DateAdd(Cast(ts, DateType), i)), childOutput :+ ts))
+  }
 
   test("task 35: trunc compiles to one node per date level with a DateType output, under every " +
       "spelling parseTruncLevel accepts") {
