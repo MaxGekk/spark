@@ -68,8 +68,10 @@ public final class Canary {
     System.out.printf("preferred_bits=%d%n", SPECIES.vectorBitSize());
     long[] seed = {sink};
     System.out.printf("compute=%.1f%n", best(() -> compute(1 << 16, ++seed[0]), 1 << 16));
-    System.out.printf("cache=%.1f%n", best(() -> vectorAdd(a, b, o, CACHE_ELEMENTS), CACHE_ELEMENTS));
-    System.out.printf("memory=%.1f%n", best(() -> vectorAdd(a, b, o, MEMORY_ELEMENTS), MEMORY_ELEMENTS));
+    System.out.printf("cache=%.1f%n",
+        best(() -> vectorAdd(a, b, o, CACHE_ELEMENTS), CACHE_ELEMENTS));
+    System.out.printf("memory=%.1f%n",
+        best(() -> vectorAdd(a, b, o, MEMORY_ELEMENTS), MEMORY_ELEMENTS));
     System.out.printf("sink=%d%n", sink);
   }
 
