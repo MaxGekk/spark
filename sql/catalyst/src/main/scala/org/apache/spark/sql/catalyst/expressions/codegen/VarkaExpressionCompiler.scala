@@ -22,11 +22,11 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, UnaryMinus, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType, IntegerType}
+import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -41,7 +41,20 @@ private[sql] case class CompiledVarkaProjection(
     outputs: Seq[VarkaVectorIR],
     outputTypes: Seq[DataType],
     inputOrdinals: Seq[Int],
-    literals: Seq[Int])
+    literals: Seq[Int],
+    inputBounds: Seq[VarkaInputBound] = Nil)
+
+/**
+ * A closed interval every live value of kernel input `inputIndex` (a position in
+ * `inputOrdinals`) must lie in for the kernel's answer to be Spark's (task 56). The compiler
+ * records one where it rewrote an expression whose row-engine form throws outside the bound -
+ * the first is `CAST(i AS INTERVAL DAY)`, which overflows past
+ * `VarkaChrono.INTERVAL_DAY_LIMIT_DAYS` days - and the evaluator checks it per batch before the
+ * kernel runs, declining the batch to the row engine, which then raises the error, when a live
+ * lane is outside. A bound is a property of the compiled plan, not of the emitted bytes: two
+ * projections with the same IR and different bounds share a kernel class.
+ */
+private[sql] case class VarkaInputBound(inputIndex: Int, lo: Int, hi: Int)
 
 /**
  * How one projection entry is served under partial eligibility (task 12): computed by the fused
@@ -72,7 +85,10 @@ private[sql] case class VarkaDecline(reason: String, expr: String) {
 }
 
 /**
- * Collects the decline of one entry. The recursion reports at the point of failure and the
+ * Collects what one entry's compilation leaves behind besides its IR: its decline, and the
+ * input bounds it asks the evaluator to check (task 56; keyed by child ordinal until the
+ * entry is accepted, and dropped with a declining entry the way its columns and literals
+ * are). The recursion reports a decline at the point of failure and the
  * first note wins, so the recorded reason is the innermost cause rather than the outermost
  * expression that inherited it; [[take]] hands it over and resets for the next entry.
  *
@@ -82,6 +98,22 @@ private[sql] case class VarkaDecline(reason: String, expr: String) {
  */
 private final class DeclineSink(childOutput: Seq[Attribute]) {
   private var first: Option[VarkaDecline] = None
+  private val bounds = mutable.ArrayBuffer.empty[(Int, Int, Int)]
+
+  /** Notes that child ordinal `ordinal` must lie in `[lo, hi]` for the entry being compiled. */
+  def bound(ordinal: Int, lo: Int, hi: Int): Unit = bounds += ((ordinal, lo, hi))
+
+  def boundsMark: Int = bounds.size
+
+  /** Drops the bounds noted since `mark` - a declining entry's. */
+  def truncateBounds(mark: Int): Unit = bounds.remove(mark, bounds.size - mark)
+
+  /** The noted bounds in kernel-input terms, given the accepted entries' input table. */
+  def inputBounds(inputs: mutable.LinkedHashMap[Int, Int]): Seq[VarkaInputBound] =
+    bounds.toSeq.collect {
+      case (ordinal, lo, hi) if inputs.contains(ordinal) =>
+        VarkaInputBound(inputs(ordinal), lo, hi)
+    }.distinct
 
   def note(reason: String, expr: Expression): Unit = {
     if (first.isEmpty) {
@@ -242,6 +274,7 @@ private[sql] object VarkaExpressionCompiler {
           // pre-entry size restores the exact prior state.
           val inputsMark = inputs.size
           val literalsMark = literals.size
+          val boundsMark = sink.boundsMark
           compileNode(e, inputs, literals, sink) match {
             // Task 20: an accepted entry must also fit the emitter's structural budgets
             // together with the entries accepted before it. The emitter enforces the same
@@ -257,6 +290,7 @@ private[sql] object VarkaExpressionCompiler {
             case compiled =>
               truncate(inputs, inputsMark)
               truncate(literals, literalsMark)
+              sink.truncateBounds(boundsMark)
               if (compiled.isDefined) {
                 sink.take() // an over-budget entry compiled clean; its reason is the budget
                 sink.note("exceeds the emitter's fused budget", e)
@@ -269,7 +303,8 @@ private[sql] object VarkaExpressionCompiler {
     }
     if (fusedCount > 0 && inputs.nonEmpty) {
       Some(PartialVarkaProjection(specs, CompiledVarkaProjection(
-        outputs.toSeq, outputTypes.result(), inputs.keys.toSeq, literals.keys.toSeq),
+        outputs.toSeq, outputTypes.result(), inputs.keys.toSeq, literals.keys.toSeq,
+        sink.inputBounds(inputs)),
         declines.result()))
     } else {
       None
@@ -317,6 +352,7 @@ private[sql] object VarkaExpressionCompiler {
       val bound = BindReferences.bindReference[Expression](conjunct, childOutput)
       val inputsMark = inputs.size
       val literalsMark = literals.size
+      val boundsMark = sink.boundsMark
       compileCond(bound, inputs, literals, sink) match {
         case Some(cond) if VarkaLoopEmitter.fitsBudgets(
             java.util.List.of(andFold(fusedConds.toSeq :+ cond)), inputs.size) =>
@@ -326,6 +362,7 @@ private[sql] object VarkaExpressionCompiler {
         case compiled =>
           truncate(inputs, inputsMark)
           truncate(literals, literalsMark)
+          sink.truncateBounds(boundsMark)
           if (compiled.isDefined) {
             sink.take()
             sink.note("exceeds the emitter's fused budget", bound)
@@ -337,7 +374,7 @@ private[sql] object VarkaExpressionCompiler {
     if (fusedConds.nonEmpty && inputs.nonEmpty) {
       Some(CompiledVarkaPredicate(specs,
         CompiledVarkaProjection(Seq(andFold(fusedConds.toSeq)), Seq(BooleanType),
-          inputs.keys.toSeq, literals.keys.toSeq)))
+          inputs.keys.toSeq, literals.keys.toSeq, sink.inputBounds(inputs))))
     } else {
       None
     }
@@ -409,10 +446,22 @@ private[sql] object VarkaExpressionCompiler {
       // DeclineSink's "first note wins" rule reports the child's reason, not the offset's
       // (pinned by VarkaExpressionCompilerSuite's "with two independently unfusable operands,
       // the child's reason is reported" test).
-      for {
-        node <- compileNode(child, inputs, literals, sink)
-        offsetNode <- compileOffset(days, inputs, literals, sink)
-      } yield new AddDays(node, offsetNode)
+      days match {
+        // `date - INTERVAL n DAY` (task 56): the analyzer spells it as an add of the negated
+        // day count, `DateAdd(d, UnaryMinus(ExtractANSIIntervalDays(r)))`. Inside the cast's
+        // own bound the negation cannot overflow, so it is absorbed into SubDays - no
+        // UnaryMinus node exists and none is needed.
+        case UnaryMinus(DayIntervalOffset(br), _) =>
+          for {
+            node <- compileNode(child, inputs, literals, sink)
+            offsetNode <- compileOffset(DayIntervalOffset.wrap(br), inputs, literals, sink)
+          } yield new SubDays(node, offsetNode)
+        case _ =>
+          for {
+            node <- compileNode(child, inputs, literals, sink)
+            offsetNode <- compileOffset(days, inputs, literals, sink)
+          } yield new AddDays(node, offsetNode)
+      }
     case DateSub(child, days) =>
       for {
         node <- compileNode(child, inputs, literals, sink)
@@ -597,11 +646,46 @@ private[sql] object VarkaExpressionCompiler {
           case br: BoundReference =>
             sink.note(s"non-integer day offset column of type ${br.dataType.simpleString}", br)
             None
+          // A day interval built from an int column (task 56): `CAST(i AS INTERVAL DAY)`. The
+          // cast multiplies by a day's micros and the extractor divides them back out, so the
+          // day count is `i` itself - wherever the cast does not throw. Past
+          // INTERVAL_DAY_LIMIT_DAYS it throws in every mode, where a kernel would wrap, so the
+          // column carries a bound the evaluator checks per batch and declines the batch to
+          // the row engine when a live lane is outside.
+          case DayIntervalOffset(br) =>
+            sink.bound(br.ordinal, -VarkaChrono.INTERVAL_DAY_LIMIT_DAYS,
+              VarkaChrono.INTERVAL_DAY_LIMIT_DAYS)
+            Some(columnRef(br, inputs))
+          case e: ExtractANSIIntervalDays =>
+            // A stored INTERVAL DAY column is int64 microseconds, which no int32 lane can
+            // read; the owner scoped task 56 to the int-cast form.
+            sink.note("day interval is not an int column cast to days", e)
+            None
           case other =>
             sink.note("day offset is not a foldable literal or an integer column", other)
             None
         }
     }
+  }
+
+  /**
+   * "An int column, as a day interval", the one spelling of it that stays a date-lane
+   * expression (task 56): `ExtractANSIIntervalDays` over `CAST(i AS INTERVAL DAY)`, which is
+   * exactly `i` inside the cast's bound. `i * INTERVAL '1' DAY` is not a second spelling: a
+   * multiplied interval widens to DAY TO SECOND, so the analyzer casts the date to a timestamp
+   * and the expression leaves the date lane (`TimestampAddInterval`, milestone 5). `wrap`
+   * rebuilds the cast form so the `DateAdd` arm can hand the negated case back to
+   * `compileOffset` and share its bound and reason.
+   */
+  private object DayIntervalOffset {
+    def unapply(e: Expression): Option[BoundReference] = e match {
+      case ExtractANSIIntervalDays(
+          Cast(br: BoundReference, DayTimeIntervalType(DayTimeIntervalType.DAY,
+            DayTimeIntervalType.DAY), _, _)) if br.dataType == IntegerType => Some(br)
+      case _ => None
+    }
+    def wrap(br: BoundReference): Expression =
+      ExtractANSIIntervalDays(Cast(br, DayTimeIntervalType(DayTimeIntervalType.DAY)))
   }
 
   /**
