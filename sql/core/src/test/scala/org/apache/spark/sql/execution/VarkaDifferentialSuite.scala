@@ -143,19 +143,20 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 38 declines: an interval column offset still does not fuse") {
-    // `d + INTERVAL n DAY` with a foldable `n` already fuses (the analyzer folds it to a
-    // DateAdd literal, unaffected by this task). A non-foldable interval *column* does not:
+  test("task 38, then 56: an int column cast to a day interval fuses as the column offset it is") {
+    // `d + INTERVAL n DAY` with a foldable `n` already fused before task 38 (the analyzer folds
+    // it to a DateAdd literal). Task 38 left the non-foldable interval column declined -
     // BinaryArithmeticWithDatetimeResolver rewrites it to
-    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)), and ExtractANSIIntervalDays has no
-    // compiler arm, so it declines through the ordinary unsupported-expression path.
-    // CAST(i AS INTERVAL DAY) is DayTimeIntervalType(DAY, DAY) - a single-field ANSI interval,
-    // not the literal `INTERVAL '3' DAY` syntax the optimizer folds away.
+    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)), which had no arm - and this test
+    // pinned that. Task 56 gave the int-cast form its arm: CAST(i AS INTERVAL DAY) is
+    // DayTimeIntervalType(DAY, DAY), the extractor undoes the cast exactly, and the entry is
+    // task 38's own column-offset node under a per-batch bound. The stored interval column,
+    // which is what task 38's comment was really about, stays declined in the task 56 tests.
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
       "SELECT d + CAST(i AS INTERVAL DAY) AS a FROM varka_dates ORDER BY a",
-      expectFused = false)
+      expectFused = true)
   }
 
   test("task 38: a column-offset date_add fuses inside a filter predicate too") {
