@@ -78,14 +78,14 @@ import org.openjdk.jmh.infra.Blackhole;
  * wrong number.
  *
  * <p>Run: {@code ./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true}. As with
- * {@link DateVectorOpsBenchmark}, {@code forks=0} - JMH runs in-process on the surefire JVM
- * because maven-jmh-plugin does not resolve on this environment's Maven mirror. A cross-benchmark
- * ratio within this file is safe to compare (same JVM, same run); a ratio against a different
- * committed results file is not.
+ * {@link DateVectorOpsBenchmark}, JMH is driven from a test because maven-jmh-plugin does not
+ * resolve on this environment's Maven mirror, and forks one JVM per benchmark. The lane-width
+ * pair keeps its own {@link LaneWidth} state: see there for why it must not share a JVM with
+ * anything it is compared against.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
-// Driven in-process (forks=0) by VarkaMilestone4MeasurementsBenchmarkTest on the surefire JVM.
+// One JVM per benchmark, forked by VarkaMilestone4MeasurementsBenchmarkTest (surefire argLine).
 @Fork(1)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 2)
@@ -118,9 +118,6 @@ public class VarkaMilestone4MeasurementsBenchmark {
   // -- 2. Boolean materialization --
   private MemorySegment boolA, boolB, boolIntDst, boolBitsDst;
 
-  // -- 3. Lane-width conversion --
-  private MemorySegment lwX, lwB, lwOut;
-
   // -- 4. Boolean trees --
   private MemorySegment btA, btB, btC, btD, btOutBits;
 
@@ -133,7 +130,6 @@ public class VarkaMilestone4MeasurementsBenchmark {
     Random r = new Random(42);
     setUpAlignment(r);
     setUpBoolean(r);
-    setUpLaneWidth(r);
     setUpBooleanTree(r);
     setUpDivision(r);
   }
@@ -266,63 +262,96 @@ public class VarkaMilestone4MeasurementsBenchmark {
   // 3. Lane-width conversion: cast(int AS long) + long
   // =====================================================================================
 
-  private void setUpLaneWidth(Random r) {
-    lwX = arena.allocate((long) N * 4, 64);
-    lwB = arena.allocate((long) N * 8, 64);
-    lwOut = arena.allocate((long) N * 8, 64);
-    for (int i = 0; i < N; i++) {
-      lwX.setAtIndex(ValueLayout.JAVA_INT, i, r.nextInt());
-      lwB.setAtIndex(ValueLayout.JAVA_LONG, i, r.nextLong());
-    }
-    // Correctness: both loops must agree with the scalar reference over the full range (N is a
-    // multiple of both 8 and 16, so both loops cover every row with no epilogue involved here).
-    laneWidthNarrowestDrive(NOOP);
-    laneWidthPartLoop(NOOP);
-    for (int i = 0; i < N; i++) {
-      long expected =
-          (long) lwX.getAtIndex(ValueLayout.JAVA_INT, i) + lwB.getAtIndex(ValueLayout.JAVA_LONG, i);
-      if (lwOut.getAtIndex(ValueLayout.JAVA_LONG, i) != expected) {
-        throw new AssertionError("lane-width mismatch at " + i);
-      }
-    }
-  }
-
   private static final String BLACKHOLE_MAGIC =
       "Today's password is swordfish. I understand instantiating Blackholes directly is dangerous.";
   private static final Blackhole NOOP = new Blackhole(BLACKHOLE_MAGIC);
 
+  /**
+   * The lane-width pair's own state. This is the one measurement that touches a second int
+   * species ({@code ISPEC_HALF}), and two species of one lane type in one JVM turn the shared
+   * {@code IntVector} templates bimorphic, after which C2 keeps a heap box per loop iteration in
+   * some shapes ({@code SKILLS.md}, "Every operator the plans rely on"). Kept out of the
+   * class-level {@link #setUp} so no other benchmark's fork ever sees the second species, and
+   * the correctness check runs in {@link #tearDown} against whichever variant this fork
+   * measured, so neither variant has to run the other.
+   */
+  @State(Scope.Benchmark)
+  public static class LaneWidth {
+    private Arena arena;
+    MemorySegment lwX;
+    MemorySegment lwB;
+    MemorySegment lwOut;
+    MemorySegment lwExpected;
+
+    @Setup(Level.Trial)
+    public void setUp() {
+      arena = Arena.ofShared();
+      Random r = new Random(42);
+      lwX = arena.allocate((long) N * 4, 64);
+      lwB = arena.allocate((long) N * 8, 64);
+      lwOut = arena.allocate((long) N * 8, 64);
+      lwExpected = arena.allocate((long) N * 8, 64);
+      for (int i = 0; i < N; i++) {
+        int x = r.nextInt();
+        long b = r.nextLong();
+        lwX.setAtIndex(ValueLayout.JAVA_INT, i, x);
+        lwB.setAtIndex(ValueLayout.JAVA_LONG, i, b);
+        lwExpected.setAtIndex(ValueLayout.JAVA_LONG, i, (long) x + b);
+      }
+    }
+
+    /**
+     * Correctness, checked once the trial is over: the last invocation left its full result in
+     * {@code lwOut} (N is a multiple of both lane counts, so either loop covers every row with no
+     * epilogue involved), and it must agree with the scalar reference.
+     */
+    @TearDown(Level.Trial)
+    public void tearDown() {
+      try {
+        for (int i = 0; i < N; i++) {
+          long expected = lwExpected.getAtIndex(ValueLayout.JAVA_LONG, i);
+          if (lwOut.getAtIndex(ValueLayout.JAVA_LONG, i) != expected) {
+            throw new AssertionError("lane-width mismatch at " + i);
+          }
+        }
+      } finally {
+        arena.close();
+      }
+    }
+  }
+
   @Benchmark
-  public void laneWidthNarrowestDrive(Blackhole bh) {
+  public void laneWidthNarrowestDrive(LaneWidth s, Blackhole bh) {
     int lanes = LSPEC.length();
     int bound = N - (N % lanes);
     for (int i = 0; i < bound; i += lanes) {
       long ioff = (long) i * 4;
       long loff = (long) i * 8;
-      IntVector vx = IntVector.fromMemorySegment(ISPEC_HALF, lwX, ioff, ORDER);
+      IntVector vx = IntVector.fromMemorySegment(ISPEC_HALF, s.lwX, ioff, ORDER);
       LongVector vxl = (LongVector) vx.convertShape(VectorOperators.I2L, LSPEC, 0);
-      LongVector vb = LongVector.fromMemorySegment(LSPEC, lwB, loff, ORDER);
-      vxl.add(vb).intoMemorySegment(lwOut, loff, ORDER);
+      LongVector vb = LongVector.fromMemorySegment(LSPEC, s.lwB, loff, ORDER);
+      vxl.add(vb).intoMemorySegment(s.lwOut, loff, ORDER);
     }
-    bh.consume(lwOut.get(ValueLayout.JAVA_LONG, 0L));
+    bh.consume(s.lwOut.get(ValueLayout.JAVA_LONG, 0L));
   }
 
   @Benchmark
-  public void laneWidthPartLoop(Blackhole bh) {
+  public void laneWidthPartLoop(LaneWidth s, Blackhole bh) {
     int halfLanes = LSPEC.length();
     int bound = N - (N % ILANES);
     for (int i = 0; i < bound; i += ILANES) {
       long ioff = (long) i * 4;
-      IntVector vx = IntVector.fromMemorySegment(ISPEC_FULL, lwX, ioff, ORDER);
+      IntVector vx = IntVector.fromMemorySegment(ISPEC_FULL, s.lwX, ioff, ORDER);
       LongVector vxl0 = (LongVector) vx.convertShape(VectorOperators.I2L, LSPEC, 0);
       LongVector vxl1 = (LongVector) vx.convertShape(VectorOperators.I2L, LSPEC, 1);
       long loff0 = (long) i * 8;
       long loff1 = (long) (i + halfLanes) * 8;
-      LongVector vb0 = LongVector.fromMemorySegment(LSPEC, lwB, loff0, ORDER);
-      LongVector vb1 = LongVector.fromMemorySegment(LSPEC, lwB, loff1, ORDER);
-      vxl0.add(vb0).intoMemorySegment(lwOut, loff0, ORDER);
-      vxl1.add(vb1).intoMemorySegment(lwOut, loff1, ORDER);
+      LongVector vb0 = LongVector.fromMemorySegment(LSPEC, s.lwB, loff0, ORDER);
+      LongVector vb1 = LongVector.fromMemorySegment(LSPEC, s.lwB, loff1, ORDER);
+      vxl0.add(vb0).intoMemorySegment(s.lwOut, loff0, ORDER);
+      vxl1.add(vb1).intoMemorySegment(s.lwOut, loff1, ORDER);
     }
-    bh.consume(lwOut.get(ValueLayout.JAVA_LONG, 0L));
+    bh.consume(s.lwOut.get(ValueLayout.JAVA_LONG, 0L));
   }
 
   // =====================================================================================

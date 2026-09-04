@@ -226,6 +226,12 @@ shape, not of unrolling. Rewriting K > 1 as straight-line interleaved code,
 matching K = 1's shape exactly, is what produced the numbers above (`SKILLS.md`
 carries the general lesson).
 
+Re-measured in forked JVMs after the harness debt closed (the results file's
+header says how): the same picture. Depth 8 flat at both widths; depth 20
+gains +4.4% from K = 2 at AVX-512 and +4.3% at 128-bit by min, and K = 4 over
+K = 2 is +3.4% at one width and -1.9% at the other. The conclusion did not
+depend on the harness, which is what a plain add/sub chain should show.
+
 If a factor above 1 pays, the deliverable is the planner version: the emitter
 already knows the DAG's live-temporary count per lane group, so K is chosen
 per shape, and a shape whose live set fills the register file declines to
@@ -273,23 +279,25 @@ The cheapest item and the only pure continuation of milestone 3: comparisons
 and `And`/`Or`/`Not` as projection *results*, built on task 21's mask-as-value
 machinery. `VectorMask.toVector` against a `blend` of one and zero was
 pre-registered as a measurement, not a debate, and it is now measured
-(`VarkaMilestone4MeasurementsBenchmark`, committed run in
+(`VarkaMilestone4MeasurementsBenchmark`, committed forked-JVM run in
 `sql/varka/engine/benchmarks/VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt`,
-four runs total, including two after merging task 24's PR with the machine's
-performance mode on): the two are statistically tied at both vector widths,
-on every run - neither wins the way the pre-registration expected. The real,
+which superseded four in-process runs; their reading is in git history and
+the file lists what moved): `toVector` is ahead by 1.12x at AVX-512 and
+`blend` by 1.04x at 128-bit - a small, width-dependent gap where the
+in-process runs had reported a tie, and not the clear winner the
+pre-registration expected either way. The real,
 width-dependent finding is a different question the pre-registration did not
 ask: whether to materialize an int column at all. Skipping it - packing
-`VectorMask.toLong()` straight into the output bitmap - wins by 1.10-1.18x at
-AVX-512 but *loses* by 1.40-1.60x at 128-bit, reproduced on every run. A
-compound predicate, `(a > b) AND (c < d)` kept in mask space the whole way
-through versus materialized as an int column at every node, shows a related
-split: the winner flips at AVX-512 (by up to 1.07x either way), but
-mask-space wins reproducibly at 128-bit on every run, by 1.24x-1.37x - never
-worse, sometimes decisively better. Two consequences for the task: walk
+`VectorMask.toLong()` straight into the output bitmap - wins by 1.18x at
+AVX-512 but *loses* by 1.34x-1.39x at 128-bit. A compound predicate, `(a > b)
+AND (c < d)` kept in mask space the whole way through versus materialized as
+an int column at every node, shows the same direction with a smaller margin
+than the in-process runs claimed: mask-space is ahead at both widths, by 1.02x
+at AVX-512 and 1.07x at 128-bit - never worse; the 1.24x-1.37x the earlier
+runs reported at 128-bit was the harness. Two consequences for the task: walk
 boolean sub-expressions in mask space and materialize only once at the output
-boundary (never worse, and the compound case argues for it directly), and the
-single-comparison bits-only shortcut needs a width check rather than a single
+boundary (never worse, at either width), and the single-comparison bits-only
+shortcut needs a width check rather than a single
 committed choice, since its sign flips between the two vector widths this
 project already tests at. The two real questions the pre-registration also
 named are format and nulls: Spark's bit-packed boolean vector against
@@ -1320,7 +1328,7 @@ only, and nothing currently blocks it from being picked up next.
 | 53 | The Neri-Schneider month block. **DONE** (`PLAN_TASK_53.md` 14) - one affine numerator `num = 2141 * doy + 197913` gives the month index as `num >>> 16` and the day of month out of `num & 0xFFFF`, on the March = 3 axis; the op counts landed exactly, `dayofmonth` gains 13.5% at AVX-512 and 12.6% at 128-bit (mixed nulls 11.9% and 12.7%), `month` 4.3% and 5.7%, the shared four-field shape least at 3.6% and 5.0%, and `year` does not move. Three predictions held, one was beaten and two missed: the four-field shape gains least, not most, because fragment sharing already pays the block once across four outputs, and the unshared `HugeMethodLimit` crossing stays at 19 fits / 20 crosses on both axes because a boundary measured in whole outputs does not move for a saving smaller than one output. The 0-based lowering stays as the reference variant the exhaustive sweep runs against | The month index and the day of month from one affine numerator - `num = 2141 * doy + 197913`, the month as `num >>> 16` and the day of month out of `num & 0xFFFF` - replacing the magic-multiply month step and the `emitMonthStart` inversion behind it; the month axis moved to Neri-Schneider's March = 3, which is what removes the add in front of the reported month; `emitMonthStart` as a shift. The era and year steps are explicitly out of scope and stay as they are: the paper's correction-free century needs a dividend of 2^26 against a multiplier no larger than 32, and its year step needs the high half of a 64-bit product, so both wait for task 49's int64 lanes | The three identities over their exact domains (366, 65536 and 12 cases); the exhaustive sweep over all 16777216 covered days with both variants, both sharing modes and both widths, since `add_months` and `last_day` recompose through these constants; op counts asserted off the class file per `PLAN_TASK_53.md` 3.4; the parity file regenerated by this task rather than by the next one |
 | 52 | Guard at the producer, not the extraction. **Planned** (`PLAN_TASK_52.md`, second version) | A compile-time day-shift interval analysis in the compiler that declines a calendar entry whose literal `date_add`/`date_sub` chain can leave the narrowed range's slack around the `[0001, 9999]` contract (free, not flagged, closes the gap reachable on master today), and a flag-gated runtime guard on `AddDays`/`SubDays` with a column offset (PR #62) that a calendar node consumes - the old guard's bytecode at the producer's output, once per distinct producer, reusing task 51's still-live `s.guardAcc`/`STATUS_CHRONO_RANGE` plumbing | The bound's edges at `+-1` in the compiler suite; the producer guard declining in a loop lane, an epilogue lane and not under a null offset; `date_add(d, off)` alone byte-identical under both flag values; the two differentials task 51 removed restored around the producer and the compile-time decline; a committed number for the guard's cost on the one shape that pays it |
 | 54 | The Julian map in the prefix | Ben Joffe's replacement for the century-then-year split (`SKILLS.md`, "The Julian map"; `benjoffe/fast-date-benchmarks`, read September 2026): scale the day of era, `qds = 4 * doe + 3`, take the century as `qds / 146097`, map onto the every-fourth-year calendar with `jul = qds + 4 * cen`, then `yrs = jul / 1461` is the year of era and `(jul - 1461 * yrs) >>> 2` the March-based day of year, with Feb 29 right by construction. Gone with it: the year-step underflow correction and its leap mask, the `cen == 4` fold, and `100 * cen` in the year assembly; `t[3]`/`t[4]` become one year-of-era slot. Verified in int32 terms over all 146097 days of an era with zero mismatches: `cen = (qds * 1837) >>> 28` and `yrs = (jul * 2870) >>> 22`, largest product 1677225130, one carry each (46 and 8627 of 146097 days need it). Predicted: six ops off `year`'s 41 (century 10 to 7, year 13 to 10, assembly 5 to 3) and one correction stage off the dependent chain; Joffe measured his scalar form at 2.5-12.4% over Neri-Schneider, and the masked form should gain more because the deleted stage is the one with the most serial masked ops. Same task, second item: blend the constant, not the result - a January offset of `197913 - 12 * 65536` on the month numerator makes `num >>> 16` the final month with the low half unchanged (checked over all 366 days), and `979 * 12 - 2919 = 8829` does the same for `emitMonthStart3FromStack`; no op-count change, the blend leaves the critical path, so task 31's instruction harness is what sees it, not a ratio | Task 53's shape: a `VarkaEmitOptions` variant, both lowerings differentially tested at both widths against the existing oracle, the A/B in `VarkaEmitterParityBenchmark` on `year`, the four-field projection and `add_months`, and the 128-bit run separately; the within-era check committed as an opt-in test; the register watch of task 50 on the new shape |
-| 55 | Assert no allocation inside a kernel loop | Task 31's suite asserts that packed families are *present*; it has no negative assertion, and the one failure mode a Vector API kernel has that leaves every packed instruction in place is a heap box per iteration - a TLAB bump (`movq $1, (%reg)` mark-word store, `prefetchnta` triple) inside the loop body, which is what two species of one lane type in one JVM produce (`SKILLS.md`, "Every operator the plans rely on"). Add the family and assert its count is zero in every kernel loop the suite already reads, at both widths; add the `-XX:+PrintInlining` tell, a "callee changed to" line naming a second species class, as the diagnostic the failure message points at | The self-test: a deliberately polluted probe (one call through `SPECIES_128` before the loop) goes red and the same loop in a clean JVM stays green; every existing shape green |
+| 55 | Assert no allocation inside a kernel loop. **DONE** (`PLAN_TASK_55.md`) | The one failure that keeps every packed instruction in place and still costs 3-13x: a heap box per lane group, which two species of one lane type in one JVM produce (`SKILLS.md`, "Every operator the plans rely on"). Asserted as a *measured rate* - the probe reports heap bytes per call at steady state, the suite allows at most one byte per row - because a count of allocation sites in the disassembly cannot tell a per-call segment view from a per-iteration box (`vectorFourFields` carries four of the former). The site detector (allocation prefetch, mark-word store) is the printed diagnosis, with the `-XX:+PrintInlining` tell. On every kernel and emitted-loop case at both widths | The self-test pair at both widths: a gather alone reads 0 bytes per call and shows `vpgatherdd`; the same gather interleaved with a second species reads 26 bytes per row at 512 bits and 192 at 128, packed instructions intact. A `selectFrom` lookup, the first choice, boxes only if the second species ran hot first, so the gather is the calibrating shape; every existing case reads 0 except `vectorFourFields` at 0.16 per row, its per-call views |
 
 ## 4. Files
 
@@ -1532,7 +1540,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   kernel long-lived enough that one extra compilation amortises, and only with task 50's
   numbers in hand to say how often the bad roll actually happens.
 
-* **`DateVectorOpsBenchmark` measures a degraded JIT state.** The engine's JMH
+* **`DateVectorOpsBenchmark` measures a degraded JIT state.** CLOSED. The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
   exercised the same kernels - so every committed figure in
   `DateVectorOpsBenchmark-jdk25-results.txt` is measured against profiles those
@@ -1561,7 +1569,14 @@ rewritten in the past tense with what the sweep found, never deleted.
   already prescribes, `forks = 1`, which the runner can do (a forked JMH child inherits the
   parent's `-XX:MaxVectorSize` and module flags, verified), plus a `@State` of its own for
   the lane-width pair so only `laneWidthNarrowestDrive`'s fork ever sees the second species;
-  it lands as its own change with the results files regenerated.
+  Closed: the three engine runners now fork one JVM per benchmark (the child
+  inherits the surefire argLine, `-XX:MaxVectorSize=16` included), the lane-width
+  pair has a `@State` of its own so only `laneWidthNarrowestDrive`'s fork sees the
+  second species, and all three results files were regenerated with what moved
+  listed at the end of each. The number task 24 could only reach by forcing C2 to
+  inline the Vector API - `vectorDateDiff` null-free at 10000 rows, 1276 against
+  the in-process 435 - is what a plain forked JVM measures (1211): the flag was
+  measuring the harness, as the entry above suspected.
 
 ## 10. Scope catalogue
 
