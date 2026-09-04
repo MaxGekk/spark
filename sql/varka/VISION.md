@@ -3,8 +3,9 @@
 > written before implementation started, are historical - the live roadmap is
 > `sql/varka/plans/`: `PLAN_MILESTONE_1.md` (the date MVP, done), `PLAN_MILESTONE_2.md`
 > (the fused vector loop, done), `PLAN_MILESTONE_3.md` (reach - the task plan for what comes
-> next), `PLAN_MILESTONE_4.md` (breadth - the task plan after it, tasks 24-30) and
-> `SCOPE_MILESTONE_5.md` (coverage - what the benchmark corpora say is missing).
+> next), `PLAN_MILESTONE_4.md` (the date family and the emitter under it),
+> `PLAN_MILESTONE_5.md` (the other lanes) and `SCOPE_MILESTONE_6.md` (coverage - what
+> the benchmark corpora say is missing).
 > Sections 7 and 12 carry their own status notes; `docs/sql-varka.md` describes what is
 > actually built. Section 13 answers the whole-stage charter question (task 22).
 
@@ -197,8 +198,9 @@ spark-submit \
 > **Status:** this list is done or superseded (step 6's `JavaClassFileEngine` was built,
 > never routed, and deliberately deleted in milestone 2 - `PLAN_TASK_9.md` section 5.4).
 > The next step is milestone 3, whose task plan is `sql/varka/plans/PLAN_MILESTONE_3.md`;
-> milestone 4's task plan (`PLAN_MILESTONE_4.md`) follows it, and
-> `SCOPE_MILESTONE_5.md` scopes benchmark coverage after that.
+> milestone 4's task plan (`PLAN_MILESTONE_4.md`) follows it, milestone 5's
+> (`PLAN_MILESTONE_5.md`) takes the other lanes, and `SCOPE_MILESTONE_6.md` scopes
+> benchmark coverage after that.
 
 When proceeding to implementation:
 1. **Write `VarkaMorsel`:** Helper to map `ArrowVector` to `MemorySegment`.
@@ -220,12 +222,12 @@ stays in Varka's charter** as an eventual goal - the mission's "eliminate runtim
 compilation overhead" is not narrowed to projections. The honest present, so this
 section is never read as delivered:
 
-- Nothing built through milestone 2, and nothing planned through milestone 5, generates
+- Nothing built through milestone 2, and nothing planned through milestone 6, generates
   the whole-stage class. Today's engine is the columnar fast path beside whole-stage
   codegen, and the 64 KB method limit the original design cites is not yet addressed by
   any shipped code (`PLAN_MILESTONE_2.md` records this explicitly).
-- The price of full ownership is measured, not guessed: the milestone-5 census
-  (`SCOPE_MILESTONE_5.md`) counts ~400 expression classes, ~17 whole-stage operators and
+- The price of full ownership is measured, not guessed: the milestone-6 census
+  (`SCOPE_MILESTONE_6.md`) counts ~400 expression classes, ~17 whole-stage operators and
   seven generators that exist to produce and compare `UnsafeRow` - which Varka does not
   produce - between here and retiring Janino.
 - When the whole-stage generator is built, it starts from the vector IR and

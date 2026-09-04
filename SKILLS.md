@@ -482,7 +482,7 @@ trusting them, not just its ratios.
   solves with a shared prefix, solved with memory instead. ClickHouse also keeps
   the inverse, a 4800-entry first-day-of-month table that makes days-from-civil
   one lookup plus `day - 1`. Neither variant is measured here; both are listed
-  under milestone 5's item 10, which also records what the rest of ClickHouse's
+  under milestone 6's item 10, which also records what the rest of ClickHouse's
   date code was checked for and why none of it transfers.
 
 - **Fusion reverses all of it, and that is the result that matters.** The table
@@ -998,7 +998,7 @@ What the same repository does *not* have, so nobody looks twice: any SIMD date o
 instructions) rests on a 52-bit multiply-add the Vector API does not expose; what survives for a
 future `date_format` is only the idea of producing all eight fixed-width digits with lane
 multiplies and inserting the separators with a shuffle, paired with ClickHouse's template-and-patch
-(milestone 5, section 6).
+(milestone 6, section 6).
 
 ## Velox is a semantics reference for the calendar family, not a performance one
 
@@ -1026,7 +1026,7 @@ item 8 sends to the fallback - optional sign, at least four year digits, optiona
 `-[d]d`, then end, space or `T` - which confirms that design's shape mask covers the right subset.
 Velox also ships `DateExtractBenchmark` and `FormatDateTimeBenchmark` over 1024-row vectors fuzzed
 within 67 years of the epoch; an external scalar-engine reference number is available from them at
-the cost of a Velox build, and that ~67-year range is a fair data-shape argument in milestone 5's
+the cost of a Velox build, and that ~67-year range is a fair data-shape argument in milestone 6's
 item 10 cache question.
 
 ## The Julian map: one division stage fewer in civil-from-days
