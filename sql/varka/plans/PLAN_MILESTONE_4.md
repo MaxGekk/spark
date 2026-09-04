@@ -1360,6 +1360,57 @@ which is the check that the baseline is honest.
 
 Depends on every other open row of this milestone: it is the last one.
 
+### 2.31 Statistics-directed guard selection (task 64)
+
+Added on 4 September 2026 from a question the owner asked about task 52's
+runtime guard: the input batch, or the node before, may already know the
+range of a column, and then the per-lane check is work the batch has proved
+unnecessary. Task 52 (#115) puts a per-lane range check on a `date_add` whose
+offset is a column and whose result a calendar node reads, at a measured 5-15%
+of that kernel null-free and 13-14% with mixed nulls (`PLAN_TASK_52.md` 11).
+The check exists because the compiler cannot bound a column at compile time;
+a batch can.
+
+**Three sources of the bound, in order of plumbing.** First, compute it: a
+vector minimum and maximum over the offset column before the kernel runs,
+which task 56 already does for the interval bound through
+`IntRangeOps.allWithin` and which the throughput benchmark could not measure.
+A date column holds the contract range (`CONTRACT_MIN_DAYS..CONTRACT_MAX_DAYS`),
+so if every offset of the batch lies in `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS,
+NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` no lane of `date_add(d, off)` can leave
+the calendar range and the batch runs the **unguarded** kernel - the class
+task 52's option already emits, since the shape cache keys on options. Second,
+read it: the cached-batch serializers, the Arrow one included, compute count,
+null count, lower and upper bound per column for every cached batch, and use
+them today only to prune batches under a filter at the scan; the fork owns the
+serializer and the scan-to-batch iterator, so the bounds can ride with the
+`ColumnarBatch` to the exec node, where the check costs nothing - the null
+count already travels that way for the null-free fast path. Third, the file:
+Parquet row-group and page statistics, which the Arrow-native datasource
+(`SCOPE_MILESTONE_6.md`, item 8's neighbourhood) is the place to attach.
+
+**The design, in two steps.** Step one, the pre-pass: the evaluator, for each
+compiled projection whose plan carries a guarded producer, runs
+`IntRangeOps.allWithin` over the offset input with the bound above and picks
+the unguarded kernel when it holds, the guarded one when it does not - both
+from the shape cache, both already tested by task 52's suite, so the change is
+in `VarkaKernelEvaluator` alone and the emitter does not move. The in-kernel
+guard stays as the answer for the batch whose offsets say "maybe", which in
+the corpus is never. Step two, the statistics: `ArrowCachedBatchSerializer`'s
+per-batch bounds attached to the batch it deserializes, read by the evaluator
+before it computes anything, so the pre-pass is skipped when the bound is
+already known; the same channel answers task 56's interval bound for free and
+opens batch pruning inside the fused pipeline later. Both steps behind their
+own switch, with the pass and the lookup priced against the guard on the
+parity benchmark's `year(date_add(d, off))` pair and on the throughput
+benchmark's `date_add(d, i)` control.
+
+**What it does not change.** Task 52's compile-time analysis is what says
+which producers need a check at all; this task decides per batch whether a
+given one does. A batch with a far offset still declines, through the same
+route, and the differential's far-offset fixtures hold that. Depends on #115
+and on task 56's kernel, both on master before it starts.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1458,6 +1509,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 59 | `next_day` with a weekday column | The derived int32 leaf: an evaluator pre-pass mapping a string column through the row engine's own parser before the kernel runs, null or the row engine's ANSI error per its rules; `NextDay(days, ColumnRef)` with `requireOffsetShape` and the two words ANDed; the parity number against the row path, registered prediction that a lone `next_day` wins little and reuse wins more | The leaf's null and error rules under both ANSI settings; the two-column `NextDay` over every null pattern at both widths; a differential over mixed spellings and nulls; the literal form byte for byte unchanged; the number committed whichever way it falls |
 | 60 | `add_months` with a month-count column | `AddMonths(days, ColumnRef)` with `requireOffsetShape` and the words ANDed; the compile-time month bound moved to a runtime guard on the count lanes through task 52's `emitProducerGuard` plumbing, `STATUS_CHRONO_RANGE` on an out-of-range lane; `dayRange` answering `ColumnShifted` | The guard declining in a loop lane and an epilogue lane, not under a null count; in-range batches computed at both widths; the differential with in-range and out-of-range counts and nulls, the declined metric firing only for the latter; the count guard's cost measured beside task 52's row |
 | 61 | `trunc` with a format column | Task 59's derived leaf mapping the format through `parseTruncLevel` to a level column whose validity is the output's; `TruncDateDynamic(days, levelRef)`, a chrono node computing all four levels off one prefix and selecting per lane by three blends; the doc saying the literal form is the shape to write | The reference arm `truncDate` per row over the parsed level; the matrix cycling all levels and the invalid codes at both widths; a differential over a format column mixing every level, invalid formats and null; the literal `trunc` byte for byte unchanged |
+| 64 | Statistics-directed guard selection (section 2.31) | Step one: the evaluator runs `IntRangeOps.allWithin` over a guarded producer's offset column against `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS, NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` and picks the unguarded or the guarded kernel from the shape cache per batch; step two: the Arrow cache's per-batch column bounds attached to the `ColumnarBatch` and read before the pass, answering task 56's bound too; each behind a switch | The guarded kernel never runs on the differential's in-range fixtures and the far-offset fixtures still decline; the pass and the lookup priced against the guard on the parity `year(date_add(d, off))` pair, both widths, with a registered prediction that the null-free and mixed-null cost of task 52's guard is recovered; byte identity of the emitter |
 | 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25 | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 
 ## 4. Files
