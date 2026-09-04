@@ -1194,6 +1194,13 @@ is the decision. Three things came out of building it.
   both settings - the suite asserts it on method sizes. The analysis returns three answers,
   not two: bounded, column-shifted (admit; the emitter guards), and unknown (decline), so a
   producer nobody has taught to the analysis fails as a residual entry, never as a wrong year.
+- **A mask guard costs its `fromLong`, not its compares.** Measured on `year(date_add(d, off))`
+  (`VarkaEmitterParityBenchmark`, two runs by minimums): the guard costs 8.9% null-free and
+  13.5% with mixed nulls at 256 bits, 3.9% and 14.3% at 128 bits - 0.030 against 0.076 ns per
+  row, two and a half times more in the masked body for the same two compares. The
+  difference is the validity AND, whose `VectorMask.fromLong` materializes a mask from a
+  scalar word; the prediction counted it as one lane op and it is not. A guard that reuses a
+  mask the body has already built for its store would not pay it.
 
 ## Repo Workflow (vecbricks/varka)
 

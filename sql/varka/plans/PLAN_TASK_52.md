@@ -651,3 +651,60 @@ widths, the catalyst doc build, the engine module and the linters, plus
 3. Once #107 has merged: merge master, regenerate, record the numbers, the
    owner picks the default, docs and plan files requoted from that run.
 4. Push and open the PR.
+
+## 11. The measurement, and the default
+
+`VarkaEmitterParityBenchmark`, "year" section, regenerated at both widths by
+`dev/varka_bench_regen.sh` on an idle machine (load 0.73 at start, canary within
+2% on all three axes, governor `performance`), then run a second time at both
+widths to scratch logs and compared by minimums, since every ratio here is
+under 1.3x. Rates in M rows/s; the committed file carries the first run, the
+second run agreed with it to within 1% on every row that matters, and the
+figures below are the better of the two.
+
+| case | 256-bit, guard on / off | 128-bit, guard on / off |
+|---|---|---|
+| `year(date_add(d, off))`, null-free | 2919.7 / 3203.5, **-8.9%** | 1196.3 / 1245.2, **-3.9%** |
+| `year(date_add(d, off))`, mixed nulls | 1777.3 / 2054.8, **-13.5%** | 648.1 / 756.1, **-14.3%** |
+| `date_add(d, off)` alone (control) | 10889.3 / 10963.1, 0.7% | 10133.8 / 9645.2, 5% |
+
+The control row is the noise floor: those two kernels are byte-identical (the
+emitter suite asserts it), so its 0.7% at 256 bits and 5% at 128 bits is what
+run-to-run variance looks like on a 2 ms row. The A/B pairs are adjacent cases
+in one run, so they share JIT and thermal state.
+
+**Predictions scored.**
+
+1. *3-8% at AVX-512, under 10% at 128-bit.* Null-free: 8.9% and 3.9%, at the
+   edge of the range and inside it. Mixed nulls: 13.5% and 14.3%, **over the
+   10% line at both widths**. Per row the guard costs 0.030 ns null-free and
+   0.076 ns with mixed nulls at 256 bits - two and a half times as much in
+   absolute terms, not merely a larger fraction of a slower body. The masked
+   body's guard is the dense body's plus the validity AND: `aload species`,
+   `lload word`, `VectorMask.fromLong`, `and` - and `fromLong` is a mask
+   materialization from a scalar, not a lane op, which is the part the
+   prediction priced as one op and is not. The dense body pays only the two
+   compares, the `or` and the accumulator `or`, and lands where task 26's
+   guard did.
+2. *`date_add(d, off)` alone is byte-identical under both flag values.*
+   Asserted in `VarkaLoopEmitterSuite`; the control row measures it as noise.
+3. *No committed number for an existing case moves.* The calendar rows did not
+   (`year` null-free 3452.2 to 3457.1); the non-calendar rows moved 4-20% in
+   both directions with the controls within 0.1%, which is the machine-day
+   variance `PLAN_TASK_54.md` 9.2 and `SKILLS.md` already record for the
+   memory-bound rows, not this task.
+4. *No pinned oracle moves.* None did.
+5. *The compile-time half declines nothing in the corpus.* Nothing in TPC-H or
+   TPC-DS shifts a date under a calendar function by more than a few days.
+
+**The default: on.** The owner's call, made on these numbers. What decides
+it: the cost is paid only by a calendar function over a column-offset
+`date_add`/`date_sub`, a shape the corpus does not contain and that no other
+kernel's bytes change for; the shape that pays it is the one that returns a
+wrong year without it; and the mixed-null cost, though over the prediction,
+is a bounded price on a correct answer against an unbounded one on a wrong
+one. Off stays a reference variant for the A/B, on `FloorMod7`'s precedent.
+The masked-body `fromLong` is the thing to attack if this cost ever matters:
+the validity word is already in a local, and a guard that ANDs the compare
+masks with a mask the body has already materialized for the store would save
+the conversion.
