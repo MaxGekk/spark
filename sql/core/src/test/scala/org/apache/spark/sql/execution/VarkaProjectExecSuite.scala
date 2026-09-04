@@ -17,16 +17,16 @@
 
 package org.apache.spark.sql.execution
 
-import org.apache.spark.TaskContext
+import org.apache.spark.{SparkArithmeticException, TaskContext}
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, DateAdd, DateDiff, DateSub, Literal, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, ExtractANSIIntervalDays, Literal, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
-  VarkaFallbackEvent, VarkaJfrTestSupport, VarkaKernelAllocationEvent}
+  VarkaChrono, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaKernelAllocationEvent}
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
-import org.apache.spark.sql.types.{DateType, IntegerType}
+import org.apache.spark.sql.types.{DateType, DayTimeIntervalType, IntegerType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -194,6 +194,40 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     } finally {
       VarkaColumnarToRowExec.setFailKernelForTesting(false)
     }
+  }
+
+  test("task 56: an interval-cast offset past the cast's limit declines the batch, a null " +
+      "offset with the same data does not, and an in-range batch runs on the kernel") {
+    // The evaluator's pre-check: the compiler bounded the offset column because Spark's
+    // CAST(i AS INTERVAL DAY) throws past INTERVAL_DAY_LIMIT_DAYS in every mode, so a batch
+    // holding such a live lane must reach the row engine - which throws - rather than the
+    // kernel, which would wrap. A null lane's data is undefined and must not count.
+    val limit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS
+    def plan(days: Seq[Integer], offsets: Seq[Integer]) = node(
+      project(Alias(DateAdd(attrD, ExtractANSIIntervalDays(
+        Cast(intAttr, DayTimeIntervalType(DayTimeIntervalType.DAY)))), "shifted")()),
+      Seq(BatchSpec("arrow", Seq(days, offsets))),
+      Seq(attrD, intAttr))
+    val inRange = plan(Seq(Int.box(1), Int.box(2), null), Seq(Int.box(limit), null, Int.box(3)))
+    assert(values(inRange) === Seq(1 + limit, null, null))
+    assert(inRange.metrics("numVarkaBatches").value === 1)
+    assert(inRange.metrics("numFallbackBatchesDeclined").value === 0)
+    // The violating value under a null offset: ignored, the batch runs on the kernel.
+    val underNull = plan(Seq(Int.box(1), Int.box(2)), Seq(null, Int.box(3)))
+    assert(values(underNull) === Seq(null, 5))
+    assert(underNull.metrics("numFallbackBatchesDeclined").value === 0)
+    // One live lane past the limit: declined, and the row engine raises the cast's own error.
+    // The task fails, so its SQL metrics are never merged; the decline is read off the JFR
+    // fallback event the evaluator emits before it hands the batch to the row path.
+    val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
+      val past = plan(Seq(Int.box(1), Int.box(2)), Seq(Int.box(limit + 1), Int.box(3)))
+      intercept[SparkArithmeticException](values(past))
+    }
+    val causes = recorded
+      .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
+      .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
+      .map(_.getString("cause"))
+    assert(causes === Seq(VarkaFallbackEvent.RANGE_DECLINED), causes.mkString("; "))
   }
 
   test("task 16: verbose EXPLAIN accounts for every entry, with the residual entry's reason") {

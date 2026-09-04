@@ -42,14 +42,15 @@ Inside the cast's own bound `UnaryMinus` cannot overflow (`-106751991` is a
 valid int), so under the same bound the subtraction is exactly `SubDays(d, i)`
 - the negation is absorbed into the node, no `UnaryMinus` arm is needed.
 
-**`d + i * INTERVAL '1' DAY`** resolves to
-`DateAdd(d, ExtractANSIIntervalDays(MultiplyDTInterval(INTERVAL '1' DAY, i)))`,
-and `MultiplyDTInterval` on an integral `num` is the same `multiplyExact` with
-the same bound, so a one-day literal times `i` is `i` under the same rule. A
-literal other than one day would need an int multiply in the lanes, which no
-node provides, and declines. (The exact trees are pinned by the compiler
-suite; if the analyzer's spelling differs from the above, the test says so
-before the arm ships.)
+**`d + i * INTERVAL '1' DAY` is not a date expression.** The paragraph first
+written here assumed it resolved like the cast; the compiler suite, driving
+the analyzer's own resolver, showed otherwise before the arm shipped: a
+multiplied interval widens to `DAY TO SECOND` (a number times a day interval
+can be a fraction of a day), so `BinaryArithmeticWithDatetimeResolver` takes
+its timestamp branch and the whole expression becomes
+`TimestampAddInterval(CAST(d AS TIMESTAMP), ...)`. That is milestone 5's
+lane, not a second spelling of this task, and it declines today on the cast
+with "unsupported expression". The arm covers the cast form alone.
 
 **Verified, not asserted:** a unit test (section 5) drives Spark's own
 `intToDayTimeInterval` at `LIMIT` and `LIMIT + 1` and `getDays` back, and the
@@ -64,11 +65,10 @@ that this project's contract says must decline rather than answer.
 ### 3.1 The mechanism: a compiler rewrite, and a per-batch bound the evaluator checks
 
 **The compiler** (`compileOffset`, the one place a day offset is resolved)
-gains three shapes, all reducing to an `IntegerType` column `i` with a bound:
+gains two shapes, both reducing to an `IntegerType` column `i` with a bound:
 
     ExtractANSIIntervalDays(Cast(i, DayTimeIntervalType(DAY, DAY)))            -> i
-    ExtractANSIIntervalDays(MultiplyDTInterval(Literal(1 day), i))            -> i
-    UnaryMinus(ExtractANSIIntervalDays(<either of the above>))                 -> i, negated node
+    UnaryMinus(ExtractANSIIntervalDays(Cast(i, DayTimeIntervalType(DAY, DAY))))  -> i, negated node
 
 The negated form is recognised by the `DateAdd` arm, which builds `SubDays`
 instead of `AddDays` (there is no `UnaryMinus` node and none is added). In
@@ -86,8 +86,12 @@ kernel's wrap is the definition.
 **The evaluator**, after it has the batch's morsel addresses and before it
 calls `run`: for each bound, a vector range check over the input column -
 `IntRangeOps.allWithin(data, validity, nullCount, length, lo, hi)`, a small
-hand-written kernel in the engine module beside `DateVectorOps`, null lanes
-masked out because their data is undefined - and a `VarkaBatchDeclined` when
+hand-written kernel in catalyst's `codegen.varka` package beside
+`SelectionVectorOps` - the engine module is a test-scope dependency, and a
+kernel called from Scala on the batch path has to be on the compile classpath,
+which is `SelectionVectorOps`'s own reason for living there - in
+`DateVectorOps`'s reference shape, null lanes masked out because their data is
+undefined - and a `VarkaBatchDeclined` when
 any live lane is outside. The existing decline route does the rest: the batch
 is recomputed on the row engine, which throws `castingCauseOverflowError` for
 the same row Spark would, counted under `numFallbackBatchesDeclined`. The
@@ -111,8 +115,8 @@ number.
 * `date_add(d, i)` and `date_sub(d, i)` with a plain int column (task 38): no
   bound, since Spark wraps there too.
 * A stored `INTERVAL DAY` column and every interval not built from an int
-  cast or a one-day multiply: declined, with a reason of their own ("day
-  interval is not an int column cast to days"), by the owner's decision.
+  cast: declined, with a reason of their own ("day interval is not an int
+  column cast to days"), by the owner's decision.
 * `date + INTERVAL n HOUR` and every sub-day interval: the analyzer casts the
   date to a timestamp first; milestone 5's lanes.
 * Task 52's compile-time range analysis and producer guard: the rewritten
@@ -129,8 +133,8 @@ is untouched; the compiler suite asserts the rewritten shape equals task 38's.
 | file | what |
 |---|---|
 | `VarkaChrono.java` | `INTERVAL_DAY_LIMIT_DAYS`, derived from `Long.MAX_VALUE / MICROS_PER_DAY` |
-| `VarkaExpressionCompiler.scala` | the three shapes in `compileOffset` and the negated form in the `DateAdd` arm; `VarkaInputBound`; `CompiledVarkaProjection.inputBounds`; the sink's bound notes and their rollback; the new decline reason |
-| `sql/varka/engine/.../IntRangeOps.java` (+ test) | `allWithin` over an off-heap int column with its validity, both widths |
+| `VarkaExpressionCompiler.scala` | the cast shape in `compileOffset` and the negated form in the `DateAdd` arm; `VarkaInputBound`; `CompiledVarkaProjection.inputBounds`; the sink's bound notes and their rollback; the new decline reason |
+| `codegen/varka/IntRangeOps.java` (+ `IntRangeOpsSuite`) | `allWithin` over an off-heap int column with its validity, both widths; in catalyst, not the engine module, which production code does not link |
 | `VarkaKernelEvaluator.scala` | the per-batch check before `run`, declining through the existing route |
 | `VarkaExpressionCompilerSuite.scala` | the shapes, the bound, the declines (section 5) |
 | `VarkaDifferentialSuite.scala` + `VarkaSharedSessions.scala` | a fixture with an offset past the limit; in-range, out-of-range, subtraction, multiply forms |
@@ -144,7 +148,7 @@ is untouched; the compiler suite asserts the rewritten shape equals task 38's.
 * Compiler: `d + CAST(i AS INTERVAL DAY)` compiles to `AddDays(col, col)` with
   one bound on the offset's input index at `[-LIMIT, LIMIT]`; `d - CAST(i AS
   INTERVAL DAY)` to `SubDays(col, col)` with the same bound; `d + i * INTERVAL
-  '1' DAY` to the same node; `d + i * INTERVAL '2' DAY` declines; `d + CAST(s
+  '1' DAY` resolves to a timestamp add and declines on the cast; `d + CAST(s
   AS INTERVAL DAY)` for a short column declines; a stored interval column
   declines with the new reason; `date_add(d, i)` records no bound. The trees
   are built the way the analyzer builds them, so the assertion is on the
@@ -152,15 +156,15 @@ is untouched; the compiler suite asserts the rewritten shape equals task 38's.
 * Admission: `IntervalUtils.intToDayTimeInterval(LIMIT)` round-trips through
   `getDays`, `LIMIT + 1` throws - Spark's code as the oracle, so a change
   there fails here first.
-* Engine: `IntRangeOps.allWithin` over aligned and unaligned lengths, a
+* Kernel: `IntRangeOps.allWithin` over aligned and unaligned lengths, a
   violation in a loop lane, in a tail lane, under a null lane (must be
-  ignored), and none; both widths through the module's narrow profile.
+  ignored), and none; both widths through the gate's narrow pass.
 * Evaluator: a batch with one offset past the limit declines and counts under
   `numFallbackBatchesDeclined`; the same batch with that row null does not.
 * Differential: in-range column intervals on the projection and filter paths
   match the row engine with nulls on both sides; the out-of-range fixture
   throws the same error through Varka as through the row engine (compared by
-  running both); the subtraction and multiply spellings; the stored interval
+  running both); the subtraction spelling; the stored interval
   column still residual with its reason in `EXPLAIN`.
 * Pinned fixtures: none move.
 
