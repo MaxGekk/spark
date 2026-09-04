@@ -603,6 +603,49 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 35: trunc matches the row engine at every date level, and its date output feeds " +
+      "further arithmetic in the same chain") {
+    // The calendar family's boundary rows plus the ones the four-way quarter select and the
+    // WEEK rewrite care about: a Sunday and a Monday, the first days of each quarter, a date
+    // in the first week of January whose Monday belongs to the previous year, and February
+    // in a leap, common and century year. All four levels in one query, and the MONTH form
+    // under a date_add so the DateType output is proved to survive a second operation, as the
+    // milestone row asks.
+    val rows = Seq("2024-01-01", "2024-01-07", "2024-01-08", "2024-02-29", "2024-03-01",
+      "2024-04-01", "2024-06-30", "2024-07-01", "2024-09-30", "2024-10-01", "2024-12-31",
+      "2023-01-01", "2023-01-02", "2023-12-31", "2025-01-05", "2025-01-06", "1969-12-31",
+      "1970-01-01", "1900-02-28", "1900-03-01", "2000-02-29", "0001-01-01", "9999-12-31",
+      null)
+    Seq(spark, varkaSpark).foreach { session =>
+      import scala.jdk.CollectionConverters._
+      val schema = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("d", org.apache.spark.sql.types.DateType, true)))
+      val data = rows.map(v =>
+        org.apache.spark.sql.Row(if (v == null) null else java.sql.Date.valueOf(v)))
+      session.createDataFrame(data.asJava, schema).createOrReplaceTempView("varka_trunc")
+      session.catalog.cacheTable("varka_trunc")
+    }
+    try {
+      checkDifferential(spark, varkaSpark,
+        "SELECT trunc(d, 'YEAR') AS y, trunc(d, 'MONTH') AS m, trunc(d, 'QUARTER') AS q, " +
+          "trunc(d, 'WEEK') AS w, date_add(trunc(d, 'MONTH'), 5) AS m5 " +
+          "FROM varka_trunc ORDER BY y, m, q, w, m5",
+        expectFused = true)
+      // Every spelling parseTruncLevel accepts for the three levels, through SQL.
+      checkDifferential(spark, varkaSpark,
+        "SELECT trunc(d, 'yyyy') AS a, trunc(d, 'yy') AS b, trunc(d, 'mon') AS c, " +
+          "trunc(d, 'mm') AS e FROM varka_trunc ORDER BY a, b, c, e",
+        expectFused = true)
+      // A format the date form does not cover returns a NULL column on the row engine, which
+      // Varka cannot produce: the entry is residual and the answers still match.
+      checkDifferential(spark, varkaSpark,
+        "SELECT trunc(d, 'HOUR') AS h, trunc(d, 'QTR') AS q FROM varka_trunc ORDER BY h, q",
+        expectFused = false)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_trunc"))
+    }
+  }
+
   test("last_day matches the row engine across the Gregorian range (task 36)") {
     // The same boundary set task 26's own test uses, since last_day shares emitChrono's
     // prefix and can get the same things wrong, plus two far-future century years a DATE

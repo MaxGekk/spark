@@ -136,13 +136,18 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
             case 10 => Gen(new Month(a.node), 12)
             case 11 => Gen(new DayOfMonth(a.node), 31)
             case 12 => Gen(new Quarter(a.node), 4)
-            case _ => rnd.nextInt(3) match {
+            case _ => rnd.nextInt(4) match {
               case 0 => Gen(new DayOfYear(a.node), 366)
               case 2 if numLiterals > 0 =>
                 // add_months' month count must be a literal slot, like next_day's weekday
                 // (the emitter's message for it says next_day, which is the same check).
                 val m = literal()
                 Gen(new AddMonths(a.node, m.node), a.bound + m.bound * 31)
+              case 3 =>
+                // trunc (task 35) moves a date down by at most a year, so the child's bound
+                // holds; the level is drawn at random so all three tails are fuzzed.
+                val levels = TruncLevel.values()
+                Gen(new TruncDate(a.node, levels(rnd.nextInt(levels.length))), a.bound)
               case _ => Gen(new LastDay(a.node), a.bound + 31)
             }
           }

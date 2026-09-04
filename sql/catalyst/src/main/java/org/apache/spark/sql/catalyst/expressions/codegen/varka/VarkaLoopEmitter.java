@@ -62,6 +62,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Or;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Quarter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.SubDays;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncDate;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncLevel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Year;
 
@@ -283,6 +285,34 @@ public final class VarkaLoopEmitter {
    * gone along with the parameters that carried them.
    */
   private static final int LAST_DAY_TMP_COUNT = 14;
+
+  /**
+   * How many int-vector/mask locals {@link #emitChronoTrunc} needs, whichever level and form:
+   * the {@link #CHRONO_PREFIX_SLOTS}, then the reported year, the month, the day, the
+   * January-based day of year and the quarter start for the subtract form, and the eleven
+   * scratch locals {@link #emitDaysFromCivil} takes for the recompose form - fresh named slots
+   * rather than a reuse of the prefix's scratch, which is the lesson {@code PLAN_TASK_36.md}
+   * recorded after doing it the other way first. Sized for the widest case so the slot plan
+   * does not depend on the option.
+   */
+  private static final int TRUNC_DATE_TMP_COUNT = 24;
+
+  /**
+   * What {@code TruncDate} (task 35) weighs against {@link #GROUP_BUDGET} at the {@code YEAR}
+   * and {@code QUARTER} levels, counted the way {@link #DAY_OF_YEAR_WEIGHT} is: {@code YEAR} is
+   * that tail plus the two-op subtraction, {@code QUARTER} adds the month and quarter steps and
+   * the four-way start select. {@code MONTH} weighs {@link #CHRONO_WEIGHT}: it is the
+   * day-of-month tail with its final increment removed and one subtraction added. Both exceed
+   * {@link #GROUP_BUDGET}, so the grouping does not turn on the exact figure; it is read off
+   * the emitted instructions rather than estimated: the dense loop's {@code IntVector} calls
+   * are 45 for {@code YEAR}, 36 for {@code MONTH} and 62 for {@code QUARTER} under the shipped
+   * subtract form (the register in {@code VarkaLoopEmitterSuite} pins them), against 43 for
+   * {@code DayOfYear}, and the weights carry the same eight-op allowance for the mask work
+   * that count omits. The recompose form is heavier (70, 74 and 79) and is not the default; a
+   * weight is a shape property and does not follow the option.
+   */
+  private static final int TRUNC_YEAR_WEIGHT = 53;
+  private static final int TRUNC_QUARTER_WEIGHT = 70;
 
   /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
@@ -673,6 +703,13 @@ public final class VarkaLoopEmitter {
     if (node instanceof DayOfYear) {
       return DAY_OF_YEAR_WEIGHT;
     }
+    if (node instanceof TruncDate n) {
+      return switch (n.level()) {
+        case MONTH -> CHRONO_WEIGHT;
+        case YEAR -> TRUNC_YEAR_WEIGHT;
+        case QUARTER -> TRUNC_QUARTER_WEIGHT;
+      };
+    }
     if (isChrono(node)) {
       return CHRONO_WEIGHT;
     }
@@ -698,6 +735,7 @@ public final class VarkaLoopEmitter {
       case DayOfYear n -> n.days();
       case AddMonths n -> n.days();
       case LastDay n -> n.days();
+      case TruncDate n -> n.days();
       default -> throw new IllegalStateException("not a calendar node: " + node);
     };
   }
@@ -722,6 +760,11 @@ public final class VarkaLoopEmitter {
       case DayOfYear n -> false;
       case AddMonths n -> true;
       case LastDay n -> true;
+      // MONTH reads the numerator for the zero-based day of month, QUARTER goes through
+      // emitChronoMonth for the quarter; YEAR takes the January turn off the day of year like
+      // Year and DayOfYear do, under either lowering (the recompose form's January month is a
+      // constant).
+      case TruncDate n -> n.level() != TruncLevel.YEAR;
       default -> throw new IllegalStateException("not a calendar node: " + node);
     };
   }
@@ -805,6 +848,7 @@ public final class VarkaLoopEmitter {
       case Quarter n -> new VarkaVectorIR[] {n.days()};
       case DayOfYear n -> new VarkaVectorIR[] {n.days()};
       case LastDay n -> new VarkaVectorIR[] {n.days()};
+      case TruncDate n -> new VarkaVectorIR[] {n.days()};
       case AddMonths n -> new VarkaVectorIR[] {n.days(), n.months()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
@@ -1025,6 +1069,7 @@ public final class VarkaLoopEmitter {
         case Quarter n -> analyzeOp(node, false, n.days());
         case DayOfYear n -> analyzeOp(node, false, n.days());
         case LastDay n -> analyzeOp(node, false, n.days());
+        case TruncDate n -> analyzeOp(node, false, n.days());
         case AddMonths n -> {
           requireLiteralOffset(n.months(), "add_months' month count");
           analyzeOp(node, false, n.days(), n.months());
@@ -1337,6 +1382,7 @@ public final class VarkaLoopEmitter {
             // carry mask, which no field's tail reads - see emitChronoPrefixOnce.)
             int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT
                 : node instanceof LastDay ? LAST_DAY_TMP_COUNT
+                : node instanceof TruncDate ? TRUNC_DATE_TMP_COUNT
                 : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 1
                 : CHRONO_PREFIX_SLOTS;
             FragmentKey key = fragmentKey(node, dense, s);
@@ -1394,6 +1440,7 @@ public final class VarkaLoopEmitter {
       case Quarter n -> s.wordRef.get(n.days());
       case DayOfYear n -> s.wordRef.get(n.days());
       case LastDay n -> s.wordRef.get(n.days());
+      case TruncDate n -> s.wordRef.get(n.days());
       case AddMonths n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.months()));
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
@@ -2049,6 +2096,7 @@ public final class VarkaLoopEmitter {
         }
       }
       case LastDay n -> emitChrono(cb, node, dense, analysis, s, computed);
+      case TruncDate n -> emitChrono(cb, node, dense, analysis, s, computed);
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
       case Least n -> emitPick(cb, n, n.left(), n.right(), "min", dense, analysis, s,
@@ -2348,28 +2396,11 @@ public final class VarkaLoopEmitter {
         cb.astore(year);
         emitLeapFlag(cb, year);
         cb.astore(leap);
-
-        // dayofyear = doy >= 306 ? doy - 305 : doy + 60 + L
-        cb.aload(rem);
-        cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
-        cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS);
-        cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-        cb.astore(mask);
-
-        cb.aload(rem);
-        cb.loadConstant(VarkaChrono.MARCH_DAY_OF_YEAR);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        cb.loadConstant(1);
-        cb.aload(leap);
-        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
-
-        cb.aload(rem);
-        cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS - 1);
-        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
-        cb.aload(mask);
-        cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+        emitJanuaryDayOfYear(cb, rem, leap, mask);
       }
       case LastDay n -> emitChronoLastDay(cb, s, t, neri, julian);
+      case TruncDate n -> emitChronoTrunc(cb, n, s, t, neri, julian,
+          analysis.options.truncDate());
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
   }
@@ -2655,6 +2686,15 @@ public final class VarkaLoopEmitter {
    * it too. */
   private static void emitChronoDayOfMonth(CodeBuilder cb, int rem, int monthSlot,
       boolean neri) {
+    emitZeroBasedDayOfMonth(cb, rem, monthSlot, neri);
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+  }
+
+  /** The zero-based day of month, {@link #emitChronoDayOfMonth} one step before its increment
+   * - which is exactly what {@code trunc(d, 'MONTH')} subtracts (task 35). */
+  private static void emitZeroBasedDayOfMonth(CodeBuilder cb, int rem, int monthSlot,
+      boolean neri) {
     if (neri) {
       // The numerator's low half divided by 2141 is the zero-based day of month, so this tail
       // never runs the month start forwards and never touches the day of year at all.
@@ -2662,14 +2702,10 @@ public final class VarkaLoopEmitter {
       cb.loadConstant(0xFFFF);
       cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
       emitMagic(cb, VarkaChrono.DOM_M, VarkaChrono.DOM_K);
-      cb.loadConstant(1);
-      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     } else {
       cb.aload(rem);
       emitMonthStart(cb, monthSlot);
       cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
-      cb.loadConstant(1);
-      cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     }
   }
 
@@ -2970,6 +3006,172 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
     cb.getstatic(VECTOR_OPERATORS, "ULE", VO_COMPARISON);
     cb.loadConstant(VarkaChrono.LEAP_HASH_MAX);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+  }
+
+  /**
+   * The January-based day of year from the March-based one (task 34):
+   * {@code doy >= 306 ? doy - 305 : doy + 60 + L}, with {@code leap} the year's leap mask as
+   * {@link #emitLeapFlag} leaves it and {@code mask} a scratch local for the branch select.
+   * Factored out of the {@code DayOfYear} arm for {@link #emitChronoTrunc}'s {@code YEAR} and
+   * {@code QUARTER} forms, instruction for instruction, so the extraction's bytes did not move.
+   */
+  private static void emitJanuaryDayOfYear(CodeBuilder cb, int rem, int leap, int mask) {
+    cb.aload(rem);
+    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+    cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.astore(mask);
+
+    cb.aload(rem);
+    cb.loadConstant(VarkaChrono.MARCH_DAY_OF_YEAR);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+    cb.loadConstant(1);
+    cb.aload(leap);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+
+    cb.aload(rem);
+    cb.loadConstant(VarkaChrono.MARCH_TO_JANUARY_DAYS - 1);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+    cb.aload(mask);
+    cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+  }
+
+  /**
+   * {@code trunc(date, level)} (task 35): the first day of the year, month or quarter, under
+   * one of two lowerings selected by {@link VarkaEmitOptions#truncDate()}.
+   *
+   * <p><b>{@code SUBTRACT}</b> takes the elapsed part of the period off the date. {@code MONTH}
+   * is {@code d - dom0}: the numerator's low half already is the zero-based day of month, so
+   * this reads {@link #emitZeroBasedDayOfMonth} one step before the extraction's {@code + 1}
+   * and stops - two ops on top of the prefix, no leap flag. {@code YEAR} is
+   * {@code d - dayofyear + 1} over {@link #emitJanuaryDayOfYear}, and {@code QUARTER} is
+   * {@code d - dayofyear + start}, with {@code start} the January-based day of year of the
+   * quarter's first day: 1, 91 + L, 182 + L, 274 + L, built as a broadcast 1 plus three masked
+   * adds on {@code quarter >= 2, 3, 4} and one masked add of the leap flag on
+   * {@code quarter >= 2}. The quarter is the {@code Quarter} tail's, off {@code emitChronoMonth}'s
+   * January-based month - never off the March month directly, which would be right from April
+   * on and wrong for January to March.
+   *
+   * <p><b>{@code RECOMPOSE}</b> rebuilds the period's first day from its year and month through
+   * {@link #emitDaysFromCivil}: {@code (year, 1, 1)}, {@code (year, month, 1)} and
+   * {@code (year, 3 * quarter - 2, 1)}. No leap flag anywhere; the recomposition does its own
+   * era arithmetic. Its value beyond the measurement is a second caller for task 40's helper,
+   * which {@code add_months}'s own day clamp could otherwise mask a defect in.
+   *
+   * <p>Both leave the epoch-day vector on the operand stack and read nothing but the prefix's
+   * results in {@code t[0..5]} plus this node's own slots from {@code t[6]} on
+   * ({@link #TRUNC_DATE_TMP_COUNT}); the two prefix carry masks {@code t[6..7]} are dead by here
+   * and are reused, as {@code DayOfYear} reuses them.
+   */
+  private static void emitChronoTrunc(CodeBuilder cb, TruncDate node, Slots s, int[] t,
+      boolean neri, boolean julian, VarkaEmitOptions.TruncDateForm form) {
+    int days = t[0];
+    int era = t[1];
+    int rem = t[2];
+    int century = t[3];
+    int yearOfCentury = t[4];
+    int marchMonth = t[5];
+    int mask = t[6];
+    int leap = t[7];
+    int year = t[8];
+    int month = t[9];
+    int day = t[10];
+    int dayOfYear = t[11];
+    int quarter = t[12];
+    switch (form) {
+      case SUBTRACT -> {
+        switch (node.level()) {
+          case MONTH -> {
+            cb.aload(days);
+            emitZeroBasedDayOfMonth(cb, rem, marchMonth, neri);
+            cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+          }
+          case YEAR -> {
+            emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
+            cb.astore(year);
+            emitLeapFlag(cb, year);
+            cb.astore(leap);
+            emitJanuaryDayOfYear(cb, rem, leap, mask);
+            cb.astore(dayOfYear);
+            cb.aload(days);
+            cb.aload(dayOfYear);
+            cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+            cb.loadConstant(1);
+            cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+          }
+          case QUARTER -> {
+            emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
+            cb.astore(year);
+            emitLeapFlag(cb, year);
+            cb.astore(leap);
+            emitJanuaryDayOfYear(cb, rem, leap, mask);
+            cb.astore(dayOfYear);
+            emitChronoMonth(cb, marchMonth, neri);
+            cb.loadConstant(2);
+            cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+            emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+            cb.astore(quarter);
+            // start = 1 (+90 if q >= 2) (+91 if q >= 3) (+92 if q >= 4) (+L if q >= 2)
+            cb.aload(s.species);
+            cb.loadConstant(1);
+            cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+            int[] steps = {90, 91, 92};
+            for (int q = 2; q <= 4; q++) {
+              cb.loadConstant(steps[q - 2]);
+              emitQuarterAtLeast(cb, quarter, q);
+              cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+            }
+            cb.loadConstant(1);
+            cb.aload(leap);
+            emitQuarterAtLeast(cb, quarter, 2);
+            cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+            cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
+            cb.aload(days);
+            cb.aload(dayOfYear);
+            cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+            cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
+          }
+        }
+      }
+      case RECOMPOSE -> {
+        emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
+        cb.astore(year);
+        switch (node.level()) {
+          case YEAR -> {
+            cb.aload(s.species);
+            cb.loadConstant(1);
+            cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+          }
+          case MONTH -> emitChronoMonth(cb, marchMonth, neri);
+          case QUARTER -> {
+            // 3 * quarter - 2, the quarter's first month
+            emitChronoMonth(cb, marchMonth, neri);
+            cb.loadConstant(2);
+            cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
+            emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+            cb.loadConstant(3);
+            cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+            cb.loadConstant(2);
+            cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
+          }
+        }
+        cb.astore(month);
+        cb.aload(s.species);
+        cb.loadConstant(1);
+        cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+        cb.astore(day);
+        emitDaysFromCivil(cb, year, month, day, t[13], t[14], t[15], t[16], t[17], t[18], t[19],
+            t[20], t[21], t[22], t[23]);
+      }
+    }
+  }
+
+  /** Leaves the mask {@code quarter >= q}, for {@link #emitChronoTrunc}'s start select. */
+  private static void emitQuarterAtLeast(CodeBuilder cb, int quarter, int q) {
+    cb.aload(quarter);
+    cb.getstatic(VECTOR_OPERATORS, "GE", VO_COMPARISON);
+    cb.loadConstant(q);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
   }
 
