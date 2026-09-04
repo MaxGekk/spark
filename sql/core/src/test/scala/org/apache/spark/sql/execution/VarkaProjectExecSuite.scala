@@ -203,7 +203,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     // holding such a live lane must reach the row engine - which throws - rather than the
     // kernel, which would wrap. A null lane's data is undefined and must not count.
     val limit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS
-    def plan(days: Seq[Integer], offsets: Seq[Integer]) = node(
+    def plan(days: Seq[Integer], offsets: Seq[Integer]): VarkaProjectExec = node(
       project(Alias(DateAdd(attrD, ExtractANSIIntervalDays(
         Cast(intAttr, DayTimeIntervalType(DayTimeIntervalType.DAY)))), "shifted")()),
       Seq(BatchSpec("arrow", Seq(days, offsets))),
