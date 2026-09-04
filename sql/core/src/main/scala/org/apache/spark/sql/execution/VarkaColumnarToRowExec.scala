@@ -25,6 +25,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, JoinedRow, NamedExpression, SortOrder, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{ForwardedOutput, FusedOutput, ResidualOutput, VarkaExpressionCompiler}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.CompletionIterator
@@ -203,6 +204,21 @@ private[sql] object VarkaColumnarToRowExec {
   }
 
   private[sql] def isFailEmissionForTesting: Boolean = failEmissionForTesting
+
+  // Test-only hook that emits every kernel with these options instead of the defaults, so an
+  // end-to-end suite can drive a reference variant - task 52's guard-off bytes, whose only
+  // observable difference is a metric - through the real evaluator. The options ride the shape
+  // key (task 23), so a variant is cached under its own identity and nothing has to be flushed
+  // when the hook is reset. Same discipline as the three above: static because Spark runs
+  // tasks on other threads, reset in a finally block, and here rather than a SQLConf entry so
+  // the production configuration surface stays free of emitter knobs.
+  @volatile private var emitOptionsForTesting: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS
+
+  private[sql] def setEmitOptionsForTesting(options: VarkaEmitOptions): Unit = {
+    emitOptionsForTesting = options
+  }
+
+  private[sql] def currentEmitOptions: VarkaEmitOptions = emitOptionsForTesting
 }
 
 private[sql] class VarkaColumnarToRowEvaluatorFactory(

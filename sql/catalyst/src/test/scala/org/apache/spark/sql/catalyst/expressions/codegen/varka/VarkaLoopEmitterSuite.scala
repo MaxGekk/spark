@@ -1267,8 +1267,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // the narrowed range (VarkaChronoSuite's exhaustive sweep is over exactly that range), but
     // nothing checks it at run time anymore, so a day outside it is now computed silently
     // rather than declined. PLAN_TASK_51.md records why the owner accepted that trade, and
-    // PLAN_TASK_52.md tracks moving the check to the nodes that can actually manufacture such
-    // a day - unbounded runtime arithmetic, not a bare column.
+    // Task 52 moved the check to the nodes that can actually manufacture such a day: the
+    // compiler bounds every literal shift and the emitter guards a column-offset producer
+    // (the "task 52" tests below). A bare column past the range is the column contract's
+    // breach, not a guard's business, so this batch is still computed, not declined.
     val root = new Year(new ColumnRef(0))
     val (kernel, loader) = load(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS))
     try {
@@ -1404,7 +1406,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // needed no change here: there was never a second, sharing-specific copy of the guard to
     // find and delete. This test now exists to keep it that way - if a future change gives
     // the shared path its own inlined guard logic instead of routing through emitEra, this is
-    // where that would first show up as a mistaken STATUS_CHRONO_RANGE.
+    // where that would first show up as a mistaken STATUS_CHRONO_RANGE. Task 52's guard lives
+    // at a column-offset producer, never in the prefix, so this stays true after it too.
     val col = new ColumnRef(0)
     val roots = Seq[VarkaVectorIR](new Year(col), new Month(col), new Quarter(col))
     val (kernel, loader) = load(emitMulti(roots, 1, 0, sharing))
@@ -1427,6 +1430,135 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           "a day past the range was declined in the epilogue, where sharing happens today")
         assert(status(64, i => i == 3, i => if (i == 3) VarkaChrono.NARROW_MAX_DAYS + 1
           else i * 97) === 0, "an out-of-range value under a null row condemned the batch")
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
+  // Task 52's runtime half: the range guard, moved from every calendar extraction to the one
+  // producer the compiler cannot bound - a date_add/date_sub whose offset is a column.
+  private val guardOff = VarkaEmitOptions.DEFAULTS.withGuardDayProducers(false)
+
+  /** Runs a two-input kernel with one output, returning the batch status. */
+  private def runKernel2(kernel: VarkaFusedKernel, a: Col, b: Col,
+      out: (MemorySegment, MemorySegment), length: Int): Int =
+    kernel.run(
+      Array(a.data.address(), b.data.address()),
+      Array(a.validityAddress(length), b.validityAddress(length)),
+      Array(a.nullCount, b.nullCount),
+      Array(out._1.address()), Array(out._2.address()), Array.empty[Int], length)
+
+  test("task 52: a column-offset producer under a calendar node declines the batch whose " +
+      "result leaves the range - in a loop lane, in an epilogue lane, and not under a null") {
+    val add = new Year(new AddDays(new ColumnRef(0), new ColumnRef(1)))
+    val sub = new Month(new SubDays(new ColumnRef(0), new ColumnRef(1)))
+    for ((root, past, mirrored) <- Seq(
+        (add, VarkaChrono.NARROW_MAX_DAYS + 1, false),
+        (sub, VarkaChrono.NARROW_MIN_DAYS - 1, true))) {
+      val (kernel, loader) = load(emitMulti(Seq(root), 2, 0))
+      val (kernelOff, loaderOff) = load(emitMulti(Seq(root), 2, 0, guardOff))
+      try {
+        val arena = Arena.ofConfined()
+        try {
+          // The offset that lands lane `at` exactly one day past the range; every other lane
+          // stays a small shift. `sub` subtracts, so its offset is the negated distance.
+          def day(i: Int): Int = i * 97
+          def off(at: Int)(i: Int): Int =
+            if (i == at) { if (mirrored) day(i) - past else past - day(i) } else i % 5
+          def status(k: VarkaFusedKernel, length: Int, at: Int,
+              nullDate: Int => Boolean, nullOff: Int => Boolean): Int = {
+            val d = makeInputData(arena, length, nullDate, day)
+            val o = makeInputData(arena, length, nullOff, off(at))
+            runKernel2(k, d, o, makeOutput(arena, length), length)
+          }
+          val none = (_: Int) => false
+          // In range: computed, under both settings.
+          assert(status(kernel, 64, -1, none, none) === 0)
+          assert(status(kernelOff, 64, -1, none, none) === 0)
+          // A loop lane past the range (dense body: no nulls anywhere).
+          assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          // The same lane in the masked body, with an unrelated null elsewhere.
+          assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          // A lane only the epilogue covers, whatever the host's lane count.
+          assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          // The out-of-range lane under a null offset, then under a null date: the row is
+          // null, its data lanes are undefined, and the batch must not be condemned.
+          assert(status(kernel, 64, 3, none, _ == 3) === 0)
+          assert(status(kernel, 64, 3, _ == 3, none) === 0)
+          assert(status(kernel, 17, 16, none, _ == 16) === 0)
+          // The reference variant computes every one of them - wrongly past the range, which
+          // is exactly what the metric-only differential asserts against.
+          assert(status(kernelOff, 64, 3, none, none) === 0)
+          assert(status(kernelOff, 17, 16, none, none) === 0)
+        } finally {
+          arena.close()
+        }
+      } finally {
+        loader.release()
+        loaderOff.release()
+      }
+    }
+  }
+
+  test("task 52: the guard is emitted only where a calendar node reads a column-offset " +
+      "producer, and adds bytes nowhere else") {
+    val producer = new AddDays(new ColumnRef(0), new ColumnRef(1))
+    val bodies = Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")
+    def sizes(root: VarkaVectorIR, numInputs: Int, options: VarkaEmitOptions): Seq[Int] = {
+      val bytes = emitMulti(Seq(root), numInputs, 0, options)._2
+      bodies.map(VarkaEmitterTestSupport.codeSize(bytes, _))
+    }
+    // A producer with no calendar consumer: byte-identical under both settings, so
+    // `date_add(d, off)` on its own pays nothing for a guard it does not need.
+    assert(sizes(producer, 2, VarkaEmitOptions.DEFAULTS) === sizes(producer, 2, guardOff))
+    assert(sizes(new DateDiff(producer, new ColumnRef(0)), 2, VarkaEmitOptions.DEFAULTS) ===
+      sizes(new DateDiff(producer, new ColumnRef(0)), 2, guardOff))
+    // A calendar node over a bare column, and over a literal-offset producer: the compiler
+    // bounds both, and the emitter plans nothing.
+    assert(sizes(new Year(new ColumnRef(0)), 1, VarkaEmitOptions.DEFAULTS) ===
+      sizes(new Year(new ColumnRef(0)), 1, guardOff))
+    val literal = new Year(new AddDays(new ColumnRef(0), new LiteralSlot(0)))
+    assert(emitMulti(Seq(literal), 1, 1)._2.length ===
+      emitMulti(Seq(literal), 1, 1, guardOff)._2.length)
+    // The guarded shape: every body grows by the guard, and only the guarded shape does.
+    val guarded = sizes(new Year(producer), 2, VarkaEmitOptions.DEFAULTS)
+    val unguarded = sizes(new Year(producer), 2, guardOff)
+    for ((body, (on, off)) <- bodies.zip(guarded.zip(unguarded))) {
+      assert(on > off, s"$body: expected the guard's bytes, got $on vs $off")
+    }
+  }
+
+  test("task 52: in-range column offsets under calendar nodes match the reference evaluator " +
+      "under both settings, and CSE off repeats the guard without breaking it") {
+    val producer = new AddDays(new ColumnRef(0), new ColumnRef(1))
+    val roots = Seq[VarkaVectorIR](new Year(producer), new Month(producer),
+      new DayOfMonth(new SubDays(new ColumnRef(0), new ColumnRef(1))))
+    // Days stay near the epoch and offsets small, so no lane leaves the range and the status
+    // must read zero in every case the matrix drives - the guard's silence is asserted too.
+    val data = (c: Int, i: Int) => if (c == 0) (i * 97) % 40000 - 20000 else i % 23 - 11
+    for (options <- Seq(VarkaEmitOptions.DEFAULTS, guardOff,
+        VarkaEmitOptions.DEFAULTS.withCse(false))) {
+      checkMatrix(roots, 2, Array.emptyIntArray, Seq(1, 17, 64, 65, 1000), combos(2),
+        data = data, ctx = s"task 52 ${options.canonical()}", options = options)
+    }
+    // With CSE off the producer is re-emitted per reader, guard included; an out-of-range
+    // lane is still caught.
+    val (kernel, loader) = load(emitMulti(roots, 2, 0, VarkaEmitOptions.DEFAULTS.withCse(false)))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val d = makeInputData(arena, 64, _ => false, i => i * 97)
+        val o = makeInputData(arena, 64, _ => false,
+          i => if (i == 5) VarkaChrono.NARROW_MAX_DAYS + 1 - 5 * 97 else 1)
+        val outs = roots.map(_ => makeOutput(arena, 64))
+        val status = kernel.run(Array(d.data.address(), o.data.address()), Array(0L, 0L),
+          Array(0, 0), outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
+          Array.empty[Int], 64)
+        assert(status === VarkaFusedKernel.STATUS_CHRONO_RANGE)
       } finally {
         arena.close()
       }

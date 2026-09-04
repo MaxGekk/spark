@@ -127,6 +127,27 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   }
 
   /**
+   * Builds and caches a `varka_dates_far_offset` temp view for task 52: dates `d` and `d2`, an
+   * int offset `off` whose two extreme rows push `date_add(d, off)` twenty million days past
+   * the range the calendar lowering is exact over - the value the removed task-26 differential
+   * used - beside in-range and null rows, and an int offset `small` that never leaves it. The
+   * row engine's answer for a far day is a real year (LocalDate handles any int day), so it is
+   * a valid oracle here; only an offset near `Int.MaxValue` would wrap, and none is.
+   */
+  protected def cacheDatesFarOffset(session: SparkSession): Unit = {
+    val rows = Seq(
+      (date("2024-01-01"), date("2024-01-01"), Int.box(20000000), Int.box(3)),
+      (date("2024-01-02"), date("2020-05-05"), Int.box(-20000000), Int.box(-5)),
+      (date("2023-12-27"), null: java.sql.Date, Int.box(3), null: java.lang.Integer),
+      (null: java.sql.Date, date("2024-01-01"), null: java.lang.Integer, Int.box(7)),
+      (date("1969-12-31"), date("1969-12-31"), Int.box(100), Int.box(100)),
+      (date("2024-02-29"), date("2024-02-29"), null: java.lang.Integer, Int.box(0)))
+    session.createDataFrame(rows).toDF("d", "d2", "off", "small")
+      .createOrReplaceTempView("varka_dates_far_offset")
+    session.catalog.cacheTable("varka_dates_far_offset")
+  }
+
+  /**
    * Builds and caches a `varka_dates_big` temp view with `numRows` rows, one null every 17 rows
    * to exercise null handling, and `parts` partitions (via `repartition` when > 1) so the scan
    * fans out over several tasks (which share one cached kernel class since task 18).

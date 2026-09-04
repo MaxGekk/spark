@@ -21,7 +21,7 @@ import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaEmitOptions, VarkaShapeCache}
 import org.apache.spark.sql.internal.SQLConf
 
 /**
@@ -174,6 +174,112 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
         s"the column-offset predicate should be fused, not residual:\n$fused")
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
+    }
+  }
+
+  test("task 52: a literal day shift past the calendar range is residual, with its reason, " +
+      "and an in-range one fuses") {
+    // The compile-time half of the range guard: `year(date_add(d, 20000000))` is the query
+    // task 51's removed differential used, and it fused - wrongly - between task 51 and this
+    // task. Now the entry declines at compile time, the row engine computes it (LocalDate
+    // handles any int day, so the answer is a real year near 56770), and verbose EXPLAIN says
+    // why. `near` keeps the node fused so there is a Varka node to explain at all.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    val plan = checkDifferential(spark, varkaSpark,
+      "SELECT year(date_add(d, 20000000)) AS far, year(d) AS near FROM varka_dates " +
+        "ORDER BY near, far",
+      expectFused = true)
+    val explained = plan.collect { case p if isVarkaNode(p) => p.verboseStringWithOperatorId() }
+      .mkString("\n")
+    assert(explained.contains("far: residual (day range ["), explained)
+    assert(explained.contains("near: fused"), explained)
+    // The largest shift the analysis admits still fuses and still matches the row engine.
+    val shiftHi = VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS
+    checkDifferential(spark, varkaSpark,
+      s"SELECT year(date_add(d, $shiftHi)) AS y, month(date_sub(d, 30)) AS m FROM varka_dates " +
+        "ORDER BY y, m",
+      expectFused = true)
+  }
+
+  /** The Varka node's metric, zero if the node or the metric is absent. */
+  private def varkaMetric(plan: SparkPlan, name: String): Long =
+    plan.collectFirst { case v if isVarkaNode(v) => v }
+      .flatMap(_.metrics.get(name)).map(_.value).getOrElse(0L)
+
+  test("task 52: a column-offset date_add under a calendar node declines the batch that " +
+      "leaves the range, and the row engine answers it") {
+    // The runtime half of the range guard, restoring what task 51 removed: the far rows of the
+    // fixture put date_add(d, off) twenty million days past the range, the producer's guard
+    // reports the batch, and the evaluator recomputes it on the row engine - the answers
+    // match, and the batch lands under the declined metric, not the kernel-failure one.
+    cacheDatesFarOffset(spark)
+    cacheDatesFarOffset(varkaSpark)
+    val q = "SELECT year(date_add(d, off)) AS y, month(date_sub(d, off)) AS m, " +
+      "dayofmonth(d + off) AS dm FROM varka_dates_far_offset ORDER BY y, m, dm"
+    val expected = spark.sql(q)
+    val actual = varkaSpark.sql(q)
+    val plan = actual.queryExecution.executedPlan
+    assertFused(plan)
+    checkAnswer(actual, expected)
+    assert(varkaMetric(plan, "numFallbackBatchesDeclined") > 0L,
+      s"the producer guard should have declined the far batch:\n${plan.treeString}")
+    assert(varkaMetric(plan, "numFallbackBatchesKernel") === 0L)
+    // An in-range column offset over the same dates fuses, runs on the kernel and never
+    // declines - the guard is silent on the data it exists for.
+    val near = checkDifferential(spark, varkaSpark,
+      "SELECT year(date_add(d, small)) AS y, month(date_sub(d, small)) AS m " +
+        "FROM varka_dates_far_offset ORDER BY y, m",
+      expectFused = true)
+    assert(varkaMetric(near, "numFallbackBatchesDeclined") === 0L)
+  }
+
+  test("task 52: with the guard off, the far batch runs on the kernel - asserted on the " +
+      "metric, never on the value") {
+    // The reference variant (guardDayProducers = false) is task 51's bytes: the far batch is
+    // computed, and computed wrongly past the range. PLAN_TASK_51.md section 3 is why no test
+    // encodes that answer as green - this asserts only that the batch was not declined, which
+    // is what the A/B in VarkaEmitterParityBenchmark measures the cost of.
+    cacheDatesFarOffset(spark)
+    cacheDatesFarOffset(varkaSpark)
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(
+      VarkaEmitOptions.DEFAULTS.withGuardDayProducers(false))
+    try {
+      val q = "SELECT year(date_add(d, off)) AS y FROM varka_dates_far_offset ORDER BY y"
+      val df = varkaSpark.sql(q)
+      df.collect()
+      val plan = df.queryExecution.executedPlan
+      assertFused(plan)
+      assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
+      assert(varkaMetric(plan, "numVarkaBatches") > 0L)
+    } finally {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+    }
+  }
+
+  test("task 52: the producer guard reaches a filter predicate through the same route") {
+    // The mask kernel shares the emitter and the evaluator's status route with the
+    // projection; a calendar node over a column-offset producer in a WHERE clause declines the
+    // far batch to the row filter, and the count agrees with the row engine.
+    cacheDatesFarOffset(spark)
+    cacheDatesFarOffset(varkaSpark)
+    try {
+      val q = "SELECT count(*) AS c FROM varka_dates_far_offset " +
+        "WHERE year(date_add(d, off)) = year(d2)"
+      val expected = spark.sql(q)
+      val actual = varkaSpark.sql(q)
+      val plan = actual.queryExecution.executedPlan
+      assertFused(plan)
+      assert(!plan.toString.contains("Filter (year("),
+        s"the predicate should be fused, not residual:\n$plan")
+      checkAnswer(actual, expected)
+      val filterNode = plan.collectFirst { case f: VarkaFilterExec => f }
+        .orElse(plan.collectFirst { case f: VarkaFilterColumnarToRowExec => f })
+      assert(filterNode.isDefined, s"expected a Varka filter node:\n${plan.treeString}")
+      assert(filterNode.get.metrics("numFallbackBatchesDeclined").value > 0L)
+      assert(filterNode.get.metrics("numFallbackBatchesKernel").value === 0L)
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_far_offset"))
     }
   }
 
@@ -817,20 +923,16 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  // Task 51 removed the calendar range guard these two tests exercised end to end (a date
-  // pushed past VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS by date_add used to decline the
-  // batch to the row engine; the "guard on the filter side" and "falls back rather than
-  // answering wrongly" assertions checked exactly that). Removed rather than rewritten to
-  // assert the new, weaker behavior: PLAN_TASK_51.md section 4 records the accepted regression
-  // window, and PLAN_TASK_52.md tracks the producer-side guard that will need an equivalent
-  // differential test once it lands, shaped around the node that manufactures the out-of-range
-  // day rather than the calendar extraction that reads it.
+  // Task 51 removed two tests here that drove a real out-of-range day through the
+  // then per-extraction guard; task 52 restored them below, anchored on the producer the
+  // guard now lives at (the "task 52" tests), so the routing is again reached with real
+  // data and no hook.
 
   test("a declined batch falls back with the row engine's answers, counted as its own cause") {
     // Task 26: a partial lowering (the narrowed civil-from-days one) reports a batch it cannot
-    // compute, and the evaluator recomputes it row by row. The sibling tests above reach that
-    // path with real out-of-range dates and no hook; this one uses the hook to make a
-    // whole-query fallback cheap to assert without depending on any expression's range. What
+    // compute, and the evaluator recomputes it row by row. The task 52 tests reach that path
+    // with real out-of-range days and no hook; this one uses the hook to make a whole-query
+    // fallback cheap to assert without depending on any expression's range. What
     // it proves is the routing - that a declined batch answers correctly, and lands under its
     // own metric rather than the ghost fallback's, which is a defect count and must stay
     // clean.

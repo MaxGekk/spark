@@ -544,19 +544,22 @@ private[sql] object VarkaExpressionCompiler {
       sink.note("next_day with a non-foldable weekday", n)
       None
     // The calendar extractions (task 26). One civil-from-days decomposition per node, so two
-    // fields of the same date are computed twice - see VarkaVectorIR.Year for why.
+    // fields of the same date are computed twice - see VarkaVectorIR.Year for why. The child
+    // goes through `calendarInput` (task 52): the decomposition is exact only over
+    // VarkaChrono's narrowed range, and the compiler is where a shift that can leave it is
+    // known before anything runs.
     case Year(child) =>
-      compileNode(child, inputs, literals, sink).map(new IRYear(_))
+      calendarInput(child, expr, inputs, literals, sink).map(new IRYear(_))
     case Month(child) =>
-      compileNode(child, inputs, literals, sink).map(new IRMonth(_))
+      calendarInput(child, expr, inputs, literals, sink).map(new IRMonth(_))
     case DayOfMonth(child) =>
-      compileNode(child, inputs, literals, sink).map(new IRDayOfMonth(_))
+      calendarInput(child, expr, inputs, literals, sink).map(new IRDayOfMonth(_))
     case Quarter(child) =>
-      compileNode(child, inputs, literals, sink).map(new IRQuarter(_))
+      calendarInput(child, expr, inputs, literals, sink).map(new IRQuarter(_))
     case DayOfYear(child) =>
-      compileNode(child, inputs, literals, sink).map(new IRDayOfYear(_))
+      calendarInput(child, expr, inputs, literals, sink).map(new IRDayOfYear(_))
     case LastDay(child) =>
-      compileNode(child, inputs, literals, sink).map(new IRLastDay(_))
+      calendarInput(child, expr, inputs, literals, sink).map(new IRLastDay(_))
     // trunc(date, fmt) (task 35): the format resolves at compile time, like next_day's weekday,
     // because the level chooses which code is emitted. YEAR, MONTH and QUARTER are one node
     // with the level as a shape-bearing field; WEEK is Spark's own definition,
@@ -567,7 +570,7 @@ private[sql] object VarkaExpressionCompiler {
     case TruncDate(date, format) if format.foldable =>
       foldTruncLevel(format, sink).flatMap {
         case ToLevel(level) =>
-          compileNode(date, inputs, literals, sink).map(new IRTruncDate(_, level))
+          calendarInput(date, expr, inputs, literals, sink).map(new IRTruncDate(_, level))
         case ToWeek =>
           compileNode(date, inputs, literals, sink).map { d =>
             val week = new LiteralSlot(literals.getOrElseUpdate(7, literals.size))
@@ -589,7 +592,7 @@ private[sql] object VarkaExpressionCompiler {
     case AddMonths(startDate, numMonths) =>
       for {
         months <- foldMonths(numMonths, sink)
-        node <- compileNode(startDate, inputs, literals, sink)
+        node <- calendarInput(startDate, expr, inputs, literals, sink)
       } yield {
         val slot = new LiteralSlot(literals.getOrElseUpdate(months, literals.size))
         new IRAddMonths(node, slot)
@@ -597,7 +600,7 @@ private[sql] object VarkaExpressionCompiler {
     case DateAddYMInterval(date, interval) =>
       for {
         months <- foldMonths(interval, sink)
-        node <- compileNode(date, inputs, literals, sink)
+        node <- calendarInput(date, expr, inputs, literals, sink)
       } yield {
         val slot = new LiteralSlot(literals.getOrElseUpdate(months, literals.size))
         new IRAddMonths(node, slot)
@@ -738,6 +741,120 @@ private[sql] object VarkaExpressionCompiler {
         sink.note("month count outside the range the emitter's magic multiply covers", months)
         None
       case some => some
+    }
+  }
+
+
+  /**
+   * How far the IR under a calendar node can move a day (task 52). `Bounded` is an interval of
+   * epoch days the value is proven to lie in; `ColumnShifted` means a `date_add`/`date_sub`
+   * with a column offset sits in the subtree, so the interval is unknowable here and the
+   * emitter guards that producer at run time; `Unknown` means a node this analysis does not
+   * know, which `calendarInput` declines rather than trusts.
+   */
+  private sealed trait DayRange
+  private case class Bounded(lo: Long, hi: Long) extends DayRange
+  private case object ColumnShifted extends DayRange
+  private case object Unknown extends DayRange
+
+  /**
+   * The compile-time half of the calendar range guard (task 52, `PLAN_TASK_52.md` 3.1 and
+   * 10.3). Task 26's decomposition is exact only over `VarkaChrono.NARROW_MIN_DAYS ..
+   * NARROW_MAX_DAYS`, and task 51 removed the per-lane check every calendar node used to run,
+   * on the argument that the range is decidable once, here, for everything except a column
+   * offset. This is that decision, over the IR already built for the calendar node's child:
+   *
+   *  - a column holds `[CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]` by the project's contract, and
+   *    a date literal is itself (the parser cannot write one outside the contract, but a
+   *    hand-built `Literal` can, so it is read back rather than assumed);
+   *  - a literal day offset shifts by exactly its value, `next_day` by 1 to 7, `add_months(n)`
+   *    by 28n to 31n in whichever order, `last_day` by 0 to 30 - each an over-approximation in
+   *    the safe direction, and the `LastDay`/`AddMonths` outputs matter because a date they
+   *    produce can be read by a further calendar node after its own input passed this check;
+   *  - `greatest`/`least`/`if`/`coalesce` (the last compiles to `IfElse`) take the hull of
+   *    their date operands.
+   *
+   * Values are `Long` so two literals of two billion cannot wrap the sum. A field-typed output
+   * (`year`, `dayofweek`, `datediff`...) never reaches here as a calendar node's child - the
+   * Spark type gate forbids it - and anything else is `Unknown`. The literal table is keyed by
+   * value in slot order and untyped, so a slot's value is read by its IR position only.
+   */
+  private def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]): DayRange = {
+    def literalValue(slot: LiteralSlot): Long = literals.keysIterator.drop(slot.index).next().toLong
+    def shifted(child: VarkaVectorIR, lo: Long, hi: Long): DayRange =
+      dayRange(child, literals) match {
+        case Bounded(clo, chi) => Bounded(clo + lo, chi + hi)
+        case other => other
+      }
+    def hull(a: VarkaVectorIR, b: VarkaVectorIR): DayRange =
+      (dayRange(a, literals), dayRange(b, literals)) match {
+        case (Unknown, _) | (_, Unknown) => Unknown
+        case (ColumnShifted, _) | (_, ColumnShifted) => ColumnShifted
+        case (Bounded(alo, ahi), Bounded(blo, bhi)) =>
+          Bounded(math.min(alo, blo), math.max(ahi, bhi))
+      }
+    def columnShifted(child: VarkaVectorIR): DayRange = dayRange(child, literals) match {
+      case Unknown => Unknown
+      case _ => ColumnShifted
+    }
+    node match {
+      case _: ColumnRef => Bounded(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS)
+      case slot: LiteralSlot =>
+        val v = literalValue(slot)
+        Bounded(v, v)
+      case n: AddDays => n.offset() match {
+        case slot: LiteralSlot => shifted(n.days(), literalValue(slot), literalValue(slot))
+        case _ => columnShifted(n.days())
+      }
+      case n: SubDays => n.offset() match {
+        case slot: LiteralSlot => shifted(n.days(), -literalValue(slot), -literalValue(slot))
+        case _ => columnShifted(n.days())
+      }
+      case n: IRNextDay => shifted(n.days(), 1, 7)
+      case n: IRAddMonths => n.months() match {
+        case slot: LiteralSlot =>
+          val m = literalValue(slot)
+          shifted(n.days(), math.min(28 * m, 31 * m), math.max(28 * m, 31 * m))
+        case _ => Unknown
+      }
+      case n: IRLastDay => shifted(n.days(), 0, 30)
+      // A truncated date (task 35) is its input or an earlier day of the same period: at most
+      // 365 back, the 31st of December of a leap year truncated to its year.
+      case n: IRTruncDate => shifted(n.days(), -365, 0)
+      case n: IRGreatest => hull(n.left(), n.right())
+      case n: IRLeast => hull(n.left(), n.right())
+      case n: IfElse => hull(n.thenNode(), n.elseNode())
+      case _ => Unknown
+    }
+  }
+
+  /**
+   * Compiles a calendar node's child and admits it only if `dayRange` says the decomposition
+   * will see a day inside the narrowed range. A bounded interval that leaves it declines the
+   * entry - free at run time, and the row engine computes it correctly; a column-shifted
+   * subtree is admitted, because the emitter guards that producer per batch (task 52's
+   * runtime half); an unknown producer declines, so a node this analysis has not been taught
+   * fails safe as a residual entry rather than as a wrong answer.
+   */
+  private def calendarInput(
+      child: Expression,
+      calendar: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = {
+    compileNode(child, inputs, literals, sink).flatMap { node =>
+      dayRange(node, literals) match {
+        case Bounded(lo, hi)
+            if lo >= VarkaChrono.NARROW_MIN_DAYS && hi <= VarkaChrono.NARROW_MAX_DAYS =>
+          Some(node)
+        case Bounded(lo, hi) =>
+          sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", calendar)
+          None
+        case ColumnShifted => Some(node)
+        case Unknown =>
+          sink.note("day producer the calendar range analysis does not bound", calendar)
+          None
+      }
     }
   }
 
