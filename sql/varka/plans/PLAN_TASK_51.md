@@ -115,8 +115,14 @@ task, the same day is computed anyway, using arithmetic that is undefined
 outside that range, and can silently produce a wrong year, month, day or
 quarter. Nothing above debug logging says so.
 
-This is a real, temporary contract violation, accepted deliberately rather
-than found and fixed. It is reachable today through `date_add`/`date_sub` with a **literal**
+**Closed by task 52** (`PLAN_TASK_52.md` section 10): the compiler now bounds
+the day shift under every calendar node and declines an entry whose interval
+can leave the range, and a column-offset `date_add`/`date_sub` under a calendar
+node carries the guard on its own result. The paragraph below describes the
+window as it stood between the two tasks.
+
+This was a real, temporary contract violation, accepted deliberately rather
+than found and fixed. It was reachable through `date_add`/`date_sub` with a **literal**
 offset past the narrowed range's slack around the column contract (more than
 8449747 days forward or 4675410 back - nothing bounds a literal day offset;
 the first version of `PLAN_TASK_52.md` wrongly assumed the compiler did), and,
@@ -125,8 +131,11 @@ date's day count past roughly 33134 CE or before roughly -12800 CE - `year`,
 `month`, `dayofmonth`, `quarter`, `dayofyear`, `last_day` and `add_months`
 directly on a column, or on each other, cannot produce such a day on their
 own, since `add_months`'s own literal-month-count bound (task 40) keeps its
-output inside the range whenever its input was. It closes when task 52 lands
-a guard on the column-offset arithmetic nodes themselves.
+output inside the range whenever its input was (task 52 found one refinement
+to that: `last_day` and `add_months` can carry a date up to 30 days, or 31 per
+month, past an input that itself passed the check, which its analysis charges
+for). It closed when task 52 landed the compile-time interval analysis and the
+guard on the column-offset arithmetic nodes themselves.
 
 ### 4.1 A side effect found while merging past PR #72: two compile-cliff numbers moved
 

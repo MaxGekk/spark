@@ -223,7 +223,8 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /** The cache key of the fused sub-plan: exactly the emitter inputs the bytes follow. */
   protected def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
-    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.literals.size)
+    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.literals.size,
+      VarkaColumnarToRowExec.currentEmitOptions)
 
   /**
    * The kernel named the way its telemetry names it (task 16, shape-based since task 18): the

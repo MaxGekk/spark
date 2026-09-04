@@ -195,10 +195,9 @@ option that turns a free correctness check off.
 * `VarkaLoopEmitterSuite.scala` - section 5.2.
 * `sql/core/.../VarkaDifferentialSuite.scala` - section 5.3.
 * `VarkaEmitterParityBenchmark.scala` and its committed file - section 5.4.
-* `PLAN_TASK_51.md` section 4 currently says the gap is "reachable today only
-  through `date_add`/`date_sub`/`next_day` with a column offset"; corrected to
-  name the literal case too. `PLAN_MILESTONE_4.md` row 52 and section 2.22
-  likewise (done in the same commit as this revision).
+* `PLAN_TASK_51.md` section 4 was corrected by PR #76 to name the literal case
+  and closes in the past tense with this task; `PLAN_MILESTONE_4.md` row 52 and
+  section 2.22 likewise.
 
 ## 5. Validation
 
