@@ -78,6 +78,15 @@ object VarkaReferenceEvaluator {
     case n: LastDay =>
       // The definition, not the linear-form-plus-leap-flag this task's lowering computes.
       evalValue(n.days(), row, lits).map(DateTimeUtils.getLastDayOfMonth)
+    // DateTimeUtils.truncDate, which is what Spark's TruncDate evaluates - through LocalDate,
+    // not through either of the emitter's two forms.
+    case n: TruncDate =>
+      val level = n.level() match {
+        case TruncLevel.YEAR => DateTimeUtils.TRUNC_TO_YEAR
+        case TruncLevel.MONTH => DateTimeUtils.TRUNC_TO_MONTH
+        case TruncLevel.QUARTER => DateTimeUtils.TRUNC_TO_QUARTER
+      }
+      evalValue(n.days(), row, lits).map(DateTimeUtils.truncDate(_, level))
     // The oracle is DateTimeUtils.dateAddMonths - the definition AddMonthsBase's nullSafeEval
     // calls - not VarkaChrono.daysFromCivil, which is the model this node's own arithmetic was
     // derived from and checked against; using it here would test the lowering against itself.

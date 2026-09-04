@@ -22,9 +22,9 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, TruncDate, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaLoopEmitter, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, IntegerType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -501,6 +501,31 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRDayOfYear(_))
     case LastDay(child) =>
       compileNode(child, inputs, literals, sink).map(new IRLastDay(_))
+    // trunc(date, fmt) (task 35): the format resolves at compile time, like next_day's weekday,
+    // because the level chooses which code is emitted. YEAR, MONTH and QUARTER are one node
+    // with the level as a shape-bearing field; WEEK is Spark's own definition,
+    // next_day(d - 7, 'MONDAY'), rewritten onto the nodes task 33 already has - the unix_date
+    // pattern of retiring an expression onto existing IR. Everything else declines, each for
+    // its own reason: the row engine answers those with a NULL column, which no IR node can
+    // produce.
+    case TruncDate(date, format) if format.foldable =>
+      foldTruncLevel(format, sink).flatMap {
+        case ToLevel(level) =>
+          compileNode(date, inputs, literals, sink).map(new IRTruncDate(_, level))
+        case ToWeek =>
+          compileNode(date, inputs, literals, sink).map { d =>
+            val week = new LiteralSlot(literals.getOrElseUpdate(7, literals.size))
+            // next_day's slot holds dayOfWeek - 1 (task 33); Monday through the same parser
+            // foldWeekday uses, so the constant is the definition's, not a retyped 3.
+            val monday = new LiteralSlot(literals.getOrElseUpdate(
+              DateTimeUtils.getDayOfWeekFromString(UTF8String.fromString("MONDAY")) - 1,
+              literals.size))
+            new IRNextDay(new SubDays(d, week), monday)
+          }
+      }
+    case t: TruncDate =>
+      sink.note("trunc with a non-foldable format", t)
+      None
     // Month arithmetic (task 40): add_months(d, n) and d +- INTERVAL n MONTH/YEAR are the same
     // node - AddMonthsBase's two subclasses differ only in where the month count comes from,
     // both physically an Int. `d - INTERVAL n MONTH` arrives as DatetimeSub, already replaced
@@ -651,6 +676,47 @@ private[sql] object VarkaExpressionCompiler {
         None
       case NonFatal(e) =>
         sink.note(s"next_day weekday failed to evaluate: ${e.getMessage}", dow)
+        None
+    }
+  }
+
+  /** Where a `trunc(date, fmt)` compiles to: a `TruncDate` level, or the `WEEK` rewrite. */
+  private sealed trait TruncTarget
+  private case class ToLevel(level: TruncLevel) extends TruncTarget
+  private case object ToWeek extends TruncTarget
+
+  /**
+   * Resolves `trunc`'s format operand (task 35) through `DateTimeUtils.parseTruncLevel` - the
+   * definition, never a re-implementation of its spellings and case folding - to one of the
+   * three date levels or the `WEEK` rewrite, or `None` with the reason noted. Like
+   * `foldWeekday`, the operand is any foldable expression, so it is evaluated eagerly and every
+   * way that can fail declines rather than throws: a null format, an unrecognized string, a
+   * level below a day (`'DAY'`, `'HOUR'`... - `truncDate` is undefined there and the row engine
+   * returns NULL), or an exception from evaluating a computed format.
+   */
+  private def foldTruncLevel(format: Expression, sink: DeclineSink): Option[TruncTarget] = {
+    try {
+      val fmt = format.eval()
+      if (fmt == null) {
+        sink.note("trunc with a null format", format)
+        None
+      } else {
+        DateTimeUtils.parseTruncLevel(fmt.asInstanceOf[UTF8String]) match {
+          case DateTimeUtils.TRUNC_TO_YEAR => Some(ToLevel(TruncLevel.YEAR))
+          case DateTimeUtils.TRUNC_TO_MONTH => Some(ToLevel(TruncLevel.MONTH))
+          case DateTimeUtils.TRUNC_TO_QUARTER => Some(ToLevel(TruncLevel.QUARTER))
+          case DateTimeUtils.TRUNC_TO_WEEK => Some(ToWeek)
+          case DateTimeUtils.TRUNC_INVALID =>
+            sink.note("trunc with an unrecognized format", format)
+            None
+          case _ =>
+            sink.note("trunc to a level below a day, which is null for a date", format)
+            None
+        }
+      }
+    } catch {
+      case NonFatal(e) =>
+        sink.note(s"trunc format failed to evaluate: ${e.getMessage}", format)
         None
     }
   }

@@ -71,6 +71,17 @@ still declines):
   unrecognized weekday declines, since resolving it is a compile-time step
   and the row engine's ANSI-mode behavior for a bad weekday is not
   reproduced.
+* `DAYOFYEAR` (task 34), `LAST_DAY` (task 36) and `ADD_MONTHS` / `date +
+  INTERVAL n MONTH` (task 40) with a literal month count, all over the same
+  civil-from-days prefix; `LAST_DAY` and `ADD_MONTHS` return dates.
+* `TRUNC(date, fmt)` (task 35) at the date levels, for a literal format only:
+  `YEAR`/`YYYY`/`YY`, `MONTH`/`MON`/`MM` and `QUARTER` are one node each with
+  the level as part of the kernel's shape, and `WEEK` is rewritten onto
+  `NEXT_DAY` over `DATE_SUB`, which is Spark's own definition of it. The
+  output is a date that can feed further date arithmetic in the same fused
+  chain. A non-foldable or null format, a spelling `trunc` does not accept,
+  and every sub-day level decline: the row engine answers those with a NULL
+  column, which no kernel can produce.
 * `UNIX_DATE` relabels a date column to its underlying `INT` day count with no
   new node and no emitted code (task 41); the paired `DATE_FROM_UNIX_DATE`
   compiles the same way but still declines today, since its child is an
