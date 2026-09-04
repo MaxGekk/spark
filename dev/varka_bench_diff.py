@@ -44,6 +44,7 @@ the docs, the README) for the old number and prints each line that quotes it.
 A regeneration is not finished until that list is empty or every remaining
 line says on purpose that it quotes the number a change moved away from.
 """
+
 import argparse
 import glob
 import os
@@ -78,8 +79,9 @@ def read(path, rev=None):
     if rev is None:
         with open(path, encoding="utf-8") as f:
             return f.read()
-    return subprocess.run(["git", "show", f"{rev}:{path}"], check=True,
-                          capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["git", "show", f"{rev}:{path}"], check=True, capture_output=True, text=True
+    ).stdout
 
 
 def pct(before, after):
@@ -87,15 +89,17 @@ def pct(before, after):
 
 
 def repo_root():
-    return subprocess.run(["git", "rev-parse", "--show-toplevel"], check=True,
-                          capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 def quotes_of(number):
     """Every document line quoting `number` (as a whole token), as path:line: text."""
     top = repo_root()
-    docs = DOCS + [os.path.relpath(x, top) for g in DOC_GLOBS
-                   for x in sorted(glob.glob(os.path.join(top, g)))]
+    docs = DOCS + [
+        os.path.relpath(x, top) for g in DOC_GLOBS for x in sorted(glob.glob(os.path.join(top, g)))
+    ]
     token = re.compile(r"(?<![\d.])" + re.escape(number) + r"(?![\d])")
     hits = []
     for doc in docs:
@@ -127,8 +131,9 @@ def print_rows(rows, threshold):
     counts = {}
     for _, case, _, _ in rows:
         counts[case] = counts.get(case, 0) + 1
-    labels = [(f"[{table}] {case}" if counts[case] > 1 else case, b, a)
-              for table, case, b, a in rows]
+    labels = [
+        (f"[{table}] {case}" if counts[case] > 1 else case, b, a) for table, case, b, a in rows
+    ]
     width = max((len(label) for label, _, _ in labels), default=10)
     print(f"{'case':{width}}  {'before':>9}  {'after':>9}  {'change':>8}")
     for label, b, a in labels:
@@ -190,21 +195,36 @@ def within(text, label_a, label_b, threshold):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("old", nargs="?", help="the older results file")
     p.add_argument("new", nargs="?", help="the newer results file")
     p.add_argument("--git", metavar="REV", help="read the old side of FILE from this revision")
     p.add_argument("--within", metavar="FILE", help="A/B pairs inside one file")
-    p.add_argument("--ab", nargs=2, metavar=("A", "B"),
-                   help="the two labels that distinguish an A/B pair's rows")
-    p.add_argument("--threshold", type=float, default=3.0,
-                   help="percent change that counts as moved (default 3)")
-    p.add_argument("--control", default=r"per-row|scalar|LocalDate|row engine",
-                   help="regex naming the control rows (default: the scalar anchors)")
+    p.add_argument(
+        "--ab",
+        nargs=2,
+        metavar=("A", "B"),
+        help="the two labels that distinguish an A/B pair's rows",
+    )
+    p.add_argument(
+        "--threshold",
+        type=float,
+        default=3.0,
+        help="percent change that counts as moved (default 3)",
+    )
+    p.add_argument(
+        "--control",
+        default=r"per-row|scalar|LocalDate|row engine",
+        help="regex naming the control rows (default: the scalar anchors)",
+    )
     p.add_argument("--all", action="store_true", help="also list rows within the threshold")
-    p.add_argument("--requote", action="store_true",
-                   help="list every document line quoting a moved row's old number")
+    p.add_argument(
+        "--requote",
+        action="store_true",
+        help="list every document line quoting a moved row's old number",
+    )
     args = p.parse_args()
 
     if args.within:
