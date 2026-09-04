@@ -18,6 +18,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.time.LocalDate;
+
 /**
  * The civil-from-days decomposition {@code year}, {@code month}, {@code dayofmonth} and
  * {@code quarter} are lowered from (task 26), as scalar Java, plus every magic constant the
@@ -104,6 +106,20 @@ public final class VarkaChrono {
   /** The last day {@link #narrowed} is defined for: the largest day with {@code w < 2^24}. In
    * calendar terms, 15 August 33134. */
   public static final int NARROW_MAX_DAYS = (1 << NARROW_ERA_K) - 1 - NARROW_BIAS;
+
+  /**
+   * The first epoch day a date column can hold under the project's column contract: 0001-01-01,
+   * the smallest date Spark SQL can write. The contract is what task 52's compile-time range
+   * analysis starts from: a bare column lies in {@code [CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]},
+   * every producer between it and a calendar node widens that interval by a bound the compiler
+   * knows, and the calendar node fuses only if the result stays inside
+   * {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]}. Derived from {@link LocalDate} rather than typed
+   * in, so the number cannot drift from the calendar fact it states.
+   */
+  public static final int CONTRACT_MIN_DAYS = (int) LocalDate.of(1, 1, 1).toEpochDay();
+
+  /** The last epoch day under the column contract: 9999-12-31. See {@link #CONTRACT_MIN_DAYS}. */
+  public static final int CONTRACT_MAX_DAYS = (int) LocalDate.of(9999, 12, 31).toEpochDay();
 
   /**
    * The largest day count {@code CAST(int AS INTERVAL DAY)} can produce (task 56):

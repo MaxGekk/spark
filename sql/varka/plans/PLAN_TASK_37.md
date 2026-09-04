@@ -134,7 +134,10 @@ already behind `FloorMod7`. The A/B in section 6 is against the sibling
 `compileNode` and there is no range analysis or guard; when #115 merges,
 `WeekOfYear`'s arm takes its child through `calendarInput` like the others
 and `dayRange` gains `case n: ThursdayOf => shifted(n.days(), -3, 3)`.
-Whichever of the two merges second carries those two lines, as task 35 did;
+#115 merged first, the same evening, so this branch carries those lines:
+`admitCalendar`, the admission half of `calendarInput` over the built
+`ThursdayOf`, and the `[-3, +3]` arm, with the boundary pinned in the
+compiler suite. As written before that:
 until then a `weekofyear` over a far day answers as every calendar node on
 master does today. Section 2.25's `[-6, +3]` is corrected to `[-3, +3]`.
 

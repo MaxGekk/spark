@@ -621,6 +621,58 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             require(status == 0, s"the kernel declined a batch: status $status")
           }
         }
+        // Task 52's A/B: the range guard, moved from every calendar extraction (task 26,
+        // removed by task 51) to the one producer the compiler cannot bound - a date_add whose
+        // offset is a column - and only under a calendar node. `year(date_add(d, off))` is the
+        // one shape that pays it, so that is what is priced, guard on against guard off,
+        // adjacent and on both null patterns like the task 48 and 53 pairs; `date_add(d, off)`
+        // alone is the control, byte-identical under both settings (VarkaLoopEmitterSuite
+        // asserts it) and measured here so a difference in that row is run noise, not the
+        // guard. The second date buffer stands in for the offset column: its values are days in
+        // [-10000, 10000), so every sum stays in range and the status must read zero.
+        val guardOff = VarkaEmitOptions.DEFAULTS.withGuardDayProducers(false)
+        val offsetAdd = new AddDays(col0, new ColumnRef(1))
+        val yearOfAddGuarded = emit(Seq(new Year(offsetAdd)), 2, 0, loader, 850)
+        val yearOfAddUnguarded = emit(Seq(new Year(offsetAdd)), 2, 0, loader, 851, guardOff)
+        val addAloneGuardOn = emit(Seq(offsetAdd), 2, 0, loader, 852)
+        val addAloneGuardOff = emit(Seq(offsetAdd), 2, 0, loader, 853, guardOff)
+        def nulls2In(n: Int): Int = (n + 10) / 11
+        def chunkedTwo(kernel: VarkaFusedKernel, mixed: Boolean): Unit =
+          eachChunk { (dataOff, validityOff, n) =>
+            val status = if (mixed) {
+              kernel.run(
+                Array(mxData.address() + dataOff, mx2Data.address() + dataOff),
+                Array(mxValidity.address() + validityOff, mx2Validity.address() + validityOff),
+                Array(nullsIn(n), nulls2In(n)),
+                Array(dst.address() + dataOff), Array(dstValidity.address() + validityOff),
+                Array.empty[Int], n)
+            } else {
+              kernel.run(
+                Array(nfData.address() + dataOff, nf2Data.address() + dataOff),
+                Array(0L, 0L), Array(0, 0),
+                Array(dst.address() + dataOff), Array(dstValidity.address() + validityOff),
+                Array.empty[Int], n)
+            }
+            require(status == 0, s"the kernel declined a batch: status $status")
+          }
+        benchmark.addCase("year(date_add(d, off)), producer guard on (task 52 A/B), null-free") {
+          _ => chunkedTwo(yearOfAddGuarded, false)
+        }
+        benchmark.addCase("year(date_add(d, off)), producer guard off (task 52 A/B), null-free") {
+          _ => chunkedTwo(yearOfAddUnguarded, false)
+        }
+        benchmark.addCase("year(date_add(d, off)), producer guard on (task 52 A/B), mixed nulls") {
+          _ => chunkedTwo(yearOfAddGuarded, true)
+        }
+        benchmark.addCase("year(date_add(d, off)), producer guard off (task 52 A/B), mixed nulls") {
+          _ => chunkedTwo(yearOfAddUnguarded, true)
+        }
+        benchmark.addCase("date_add(d, off) alone, guard option on (task 52 control), null-free") {
+          _ => chunkedTwo(addAloneGuardOn, false)
+        }
+        benchmark.addCase("date_add(d, off) alone, guard option off (task 52 control), null-free") {
+          _ => chunkedTwo(addAloneGuardOff, false)
+        }
         // Task 35's A/B: trunc(date, ...) under its two lowerings, SUBTRACT (the day of year
         // or day of month taken off the date) against RECOMPOSE (the period's first day rebuilt
         // through emitDaysFromCivil), adjacent per level like the task 48, 53 and 54 pairs so
