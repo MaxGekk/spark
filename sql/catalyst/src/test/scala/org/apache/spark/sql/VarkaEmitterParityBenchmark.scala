@@ -727,6 +727,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("weekofyear + yearofweek, one shift (task 58), null-free") { _ =>
           chunked(isoPair, false, 2)
         }
+        benchmark.addCase("weekofyear (task 37), null-free") { _ => chunked(weekOfYear, false) }
         benchmark.addCase("weekofyear (task 37), mixed nulls") { _ => chunked(weekOfYear, true) }
         benchmark.addCase("ThursdayOf alone (task 37), null-free") { _ =>
           chunked(thursdayOf, false)
