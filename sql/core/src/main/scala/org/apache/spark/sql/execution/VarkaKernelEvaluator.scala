@@ -33,9 +33,9 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{IntRangeOps, SelectionVectorOps,
-  VarkaAllocationSampler, VarkaFallbackEvent, VarkaFusedKernel, VarkaKernelAllocationEvent,
-  TruncLevelLeaf, VarkaDerivedKind, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey,
-  VarkaVectorIR, WeekdayLeaf}
+  TruncLevelLeaf, VarkaAllocationSampler, VarkaDerivedKind, VarkaFallbackEvent, VarkaFusedKernel,
+  VarkaKernelAllocationEvent, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR,
+  WeekdayLeaf}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
