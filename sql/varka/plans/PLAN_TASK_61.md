@@ -88,9 +88,11 @@ for `WEEKDAY`.
 null does. `chronoChild` is `days`; `tailReadsMarchMonth` is true (the
 `MONTH` and `QUARTER` results read it); `dayRange` treats it as `TruncDate`,
 `shifted(days, -365, 0)`; its weight is a new `TRUNC_DYNAMIC_WEIGHT`, the sum
-section 3.3 registers. It takes `TRUNC_DATE_TMP_COUNT` chrono slots plus the
-two `dowTmp` scratch slots `emitFloorMod7` needs, and three more of its own
-for the level vector and two intermediate results.
+section 3.3 registers. It takes the subtract form's thirteen chrono slots plus the
+two `dowTmp` scratch slots `emitFloorMod7` needs and one more of its own for
+the level vector (`TRUNC_DYNAMIC_TMP_COUNT`); the four results ride the
+operand stack, since the helpers between them only load and store named
+locals (built that way in commit 3; the plan first said three own slots).
 
 **The tail**, after `emitChronoPrefixOnce`: the `SUBTRACT` form's three
 results - `MONTH` off `emitZeroBasedDayOfMonth`, `YEAR` off
@@ -139,12 +141,20 @@ Dense-loop `IntVector` calls in `loopDense0`, from `dev/varka_emit.sh`
 committed register, the after column filled from the emitted bytes before
 commit 2 and asserted by the register test in section 5:
 
-| kernel | before | after (predicted) |
-|---|---|---|
-| `trunc(d, 'MONTH')` | 36 | 36 (unmoved, asserted) |
-| `trunc(d, 'YEAR')` | 45 | 45 (unmoved) |
-| `trunc(d, 'QUARTER')` | 62 | 62 (unmoved) |
-| `trunc(d, fmt)`, `fmt` a column | - | about 100: the `QUARTER` tail (62, which contains `YEAR`'s and the prefix), plus `MONTH`'s two ops, plus the week's 18, plus three compares and three blends |
+| kernel | before | after (predicted) | after (measured) |
+|---|---|---|---|
+| `trunc(d, 'MONTH')` | 36 | 36 (unmoved, asserted) | 36 |
+| `trunc(d, 'YEAR')` | 45 | 45 (unmoved) | 45 |
+| `trunc(d, 'QUARTER')` | 62 | 62 (unmoved) | 62 |
+| `trunc(d, fmt)`, `fmt` a column | - | about 100: the `QUARTER` tail (62, which contains `YEAR`'s and the prefix), plus `MONTH`'s two ops, plus the week's 18, plus three compares and three blends | 91 |
+
+The measured 91 is under the prediction because the week's 18 counted
+`weekday`'s whole kernel - its load, its own subtract and the store - where the
+tail only pays `emitFloorMod7` and `emitModOffset` (12 and 3 ops) plus one
+subtract, and because the year and quarter results share `emitTruncYearParts`
+once rather than `QUARTER`'s 62 containing a second copy of `YEAR`'s. The
+`WEEK` literal rewrite registers at 20 (`next_day` over `date_sub`), for the
+record; it is untouched.
 
 The prediction assumes the factoring shares the prefix, the year, the leap
 flag and the day of year across the three calendar results, which
