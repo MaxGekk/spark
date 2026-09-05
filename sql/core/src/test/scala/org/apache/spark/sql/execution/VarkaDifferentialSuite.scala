@@ -699,6 +699,23 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 57: extract(DAYOFWEEK_ISO), date_part('DOW_ISO') and weekday(d) + 1 match the " +
+      "row engine as one node, with nulls") {
+    // The three spellings the analyzer turns into Add(WeekDay(d), 1), over the shared dates
+    // table (a Monday, a Tuesday, a Wednesday, a Sunday - 1969-12-31 - and a null), beside
+    // dayofweek and weekday so the three offsets are checked against each other.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT extract(DAYOFWEEK_ISO FROM d) AS a, date_part('DOW_ISO', d) AS b, " +
+        "weekday(d) + 1 AS c, dayofweek(d) AS e, weekday(d) AS f FROM varka_dates " +
+        "ORDER BY a, b, c, e, f",
+      expectFused = true)
+    // weekday(d) + 2 is not the node and stays residual: the arm is the constant one only.
+    checkDifferential(spark, varkaSpark,
+      "SELECT weekday(d) + 2 AS a FROM varka_dates ORDER BY a", expectFused = false)
+  }
+
   test("the calendar extractions match the row engine across the Gregorian range") {
     // Every shape the decomposition could get wrong end to end: leap days of a 400-divisible
     // year (2000) and a 100-divisible one (1900), the century boundary itself, the era

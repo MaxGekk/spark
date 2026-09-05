@@ -984,6 +984,37 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       s"the register moved; re-pin from these IntVector counts:\n  " + table.mkString("\n  "))
   }
 
+  test("task 57: dayofweek_iso matches getWeekDay + 1 over two whole weeks and the calendar " +
+      "boundaries, under every mod-7 lowering") {
+    // A full week around 1970-01-01 and one around 2024-01-01, so the Sunday wrap (7, never 0)
+    // is in a loop lane and a tail lane, plus the boundary set at both ends of the range.
+    val week1970 = (-4 to 3).toArray
+    val week2024 = (0 to 7).map(i => LocalDate.of(2024, 1, 1).toEpochDay.toInt + i).toArray
+    val days = week1970 ++ week2024 ++ calendarBoundaryDays
+    def data(c: Int, i: Int): Int = if (i < days.length) days(i) else i * 9973 - 400000
+    val roots = Seq[VarkaVectorIR](new DayOfWeekIso(new ColumnRef(0)),
+      new WeekDay(new ColumnRef(0)), new DayOfWeek(new ColumnRef(0)))
+    for (mod <- VarkaEmitOptions.FloorMod7.values()) {
+      checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = data, ctx = s"mod=$mod",
+        options = VarkaEmitOptions.DEFAULTS.withFloorMod7(mod))
+    }
+  }
+
+  test("task 57: dayofweek_iso costs weekday plus one, and neither sibling moved") {
+    val col = new ColumnRef(0)
+    def ops(root: VarkaVectorIR): Int =
+      laneOps(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS)._2, "loopDense0")
+    val counts = Seq(
+      ("dayofweek_iso", ops(new DayOfWeekIso(col)), 18),
+      ("weekday", ops(new WeekDay(col)), 17),
+      ("dayofweek", ops(new DayOfWeek(col)), 18))
+    val table = counts.map { case (n, got, want) => s"$n=$got (registered $want)" }
+    assert(counts.forall { case (_, got, want) => got == want },
+      s"the register moved; re-pin from these dense-loop IntVector counts:\n  " +
+        table.mkString("\n  "))
+  }
+
   test("task 35: the trunc tails cost what PLAN_TASK_35.md section 8 registered, per level " +
       "and form, and adding the node moved no other node's bytes") {
     // Off the class file, like the task 53 and 54 registers, at the shipped prefix options.
@@ -2251,16 +2282,18 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "27=(dayOfWeek 1)",
     "28=(dateDiff 26 27)",
     "29=(weekDay 1)",
-    "30=(nextDay 1 2)",
-    "31=(addMonths 1 2)",
-    "32=(makeDate:NULL 1 2 2)",
-    "33=(makeDate:ANSI 1 2 2)",
-    "34=(least 32 33)",
-    "35=(least 31 34)",
-    "36=(least 30 35)",
-    "37=(least 29 36)",
-    "38=(least 28 37)",
-    "39=(if 10 13 38)").mkString("\n")
+    "30=(dayOfWeekIso 1)",
+    "31=(least 29 30)",
+    "32=(nextDay 1 2)",
+    "33=(addMonths 1 2)",
+    "34=(makeDate:NULL 1 2 2)",
+    "35=(makeDate:ANSI 1 2 2)",
+    "36=(least 34 35)",
+    "37=(least 33 36)",
+    "38=(least 32 37)",
+    "39=(least 31 38)",
+    "40=(least 28 39)",
+    "41=(if 10 13 40)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -2312,7 +2345,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
       new Least(new DateDiff(chrono, new DayOfWeek(col)),
-        new Least(new WeekDay(col),
+        new Least(new Least(new WeekDay(col), new DayOfWeekIso(col)),
           new Least(new NextDay(col, lit),
             new Least(new AddMonths(col, lit),
               new Least(new MakeDate(col, lit, lit, false), new MakeDate(col, lit, lit, true)))))))

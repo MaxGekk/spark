@@ -55,6 +55,9 @@ object VarkaReferenceEvaluator {
     // The oracle is Spark's own getNextDateForDayOfWeek, quoted directly, not the lowering:
     // Scala's Int arithmetic wraps exactly as the lanes do, so this is exact even at
     // Int.MinValue, and it is byte-for-byte what the row engine evaluates.
+    case n: DayOfWeekIso =>
+      // The definition: Spark's own weekday plus one, not the emitter's offset arithmetic.
+      evalValue(n.days(), row, lits).map(v => DateTimeUtils.getWeekDay(v) + 1)
     case n: NextDay =>
       for (d <- evalValue(n.days(), row, lits); k <- evalValue(n.offset(), row, lits))
         yield d + 1 + Math.floorMod(k - d, 7)
