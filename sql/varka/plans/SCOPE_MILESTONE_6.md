@@ -735,6 +735,66 @@ extraction decision, and this is the first case where it is not obvious by
 inspection. The literal-divisor `div` and `%` the digit form needs are noted
 under task 63 (`PLAN_MILESTONE_4.md` 2.30).
 
+**A catalogue of the date's physical forms.** Each form is defined by which
+operations it makes cheap, which is what an extractor trades on. Four
+families, by where the form comes from.
+
+*Forms the data arrives in - encodings to accept or convert away from.*
+
+| form | what it is | cheap in this form | cost to reach `int32 days` |
+|---|---|---|---|
+| `int32 days` (Arrow `Date32`, Spark's own) | days since 1970-01-01 | `date_add`, `datediff`, compare, `dayofweek` | none: Varka's home form |
+| `int64 millis` (Arrow `Date64`) | milliseconds at midnight | nothing extra | one magic division by 86400000, and a narrowing from a 64-bit lane to a 32-bit one |
+| `int32 yyyymmdd` | decimal digits | `year`, `month`, month keys, range filters on literal bounds | three magic multiplies, then task 42's `make_date` |
+| ISO-8601 text `yyyy-MM-dd` | ten ASCII bytes in a `VarCharVector` | equality and range compare as bytes - lexicographic order is date order | a fixed-width digit parse at known offsets, no per-row `String`; task 59's leaf is the template |
+| dictionary / surrogate key | an int index into a small table of dates (TPC-DS's `d_date_sk` into `date_dim`; Arrow dictionary encoding) | grouping and equality - the key is the group id; any field the dictionary carries | a gather, which Varka has no vector form of (milestone 4, item 11) - so this form wants its fields computed once on the dictionary, not per row |
+| INT96 (legacy Parquet) | Julian day plus nanoseconds | nothing | subtract 2440588 from the day half |
+| Julian Day Number, Rata Die, Excel serial | other epochs | as epoch days | one add: "epoch days" is a family, not one form |
+
+*Forms Varka already computes and keeps live across outputs.*
+
+| form | where it exists today | cheap in this form |
+|---|---|---|
+| civil fields (era, year of era, March month, day of era) | the shared prefix's slots (task 32) | `year`, `month`, `dayofmonth`, `quarter`, `dayofyear`, `last_day`, `add_months`, `trunc` |
+| Thursday-shifted days | `ThursdayOf(d)` (task 37) | `weekofyear`, `yearofweek` |
+| `floorMod(d + 3, 7)` | `emitFloorMod7`'s scratch | `dayofweek`, `weekday`, `next_day` |
+| a derived int32 code | task 59's weekday leaf | any string-argument function, once parsed |
+
+These are what task 58's measurement is about: which of them to materialise
+across outputs, and when.
+
+*Forms that would make one operation cheap - candidates for new nodes.*
+
+| form | cheap in this form | note |
+|---|---|---|
+| month number and day of month, `(year * 12 + month - 1, dom)` | `add_months` as an add plus a clamp, `months_between`, `trunc(MONTH)`, `last_day`, month-keyed grouping | the form the `add_months` kernel rebuilds every time (112 dense-loop calls); several month-arithmetic outputs would build it once |
+| `(year, dayOfYear)` | `dayofyear`, `trunc(YEAR)`, year-relative windows | the January day of year is already a prefix tail (task 34) |
+| `(isoYear, isoWeek, isoWeekday)` | the week family in one decomposition | task 37's shift is halfway there |
+| day of era plus era | every civil field by one load from item 10's 146097-entry table | a conversion whose cost is a gather rather than arithmetic |
+| packed bit fields, `year:16 / month:4 / day:5` | every field a shift and mask; compare order preserved | a better `yyyymmdd`: fields free, no decimal divisions; `date_add` impossible without unpacking |
+
+*Forms defined by the batch rather than the value.*
+
+| form | what it buys | note |
+|---|---|---|
+| frame of reference, `base + int16 offset` (or `int8`) | sixteen lanes per 256-bit vector instead of eight - a 2x lever on every memory-bound row | item 7's packed cache column seen from the kernel's side; widening back is one op |
+| constant or run-length (Arrow run-end encoding) | one computation per run and a broadcast; a `year(d)` over a one-day partition is a scalar and a fill | date-partitioned fact tables deliver exactly these batches; Varka computes the same value 4096 times today |
+| sorted run, monotonicity known | neighbour `datediff`, period boundaries and windowed features as scans rather than per-lane calendar work | a batch-level fact - an e-class analysis - rather than an encoding |
+| null as a sentinel (`Int.MIN_VALUE`) instead of a validity bitmap | the dense body usable with nulls, at one compare per lane | the dense/masked split is already a two-form choice over the same data, made by a null count rather than by cost |
+
+Not worth a node: `float64` days (Excel's real form), `LocalDate` objects (the
+row engine's form, the thing being escaped), decimal-string BCD (a worse
+`yyyymmdd`).
+
+The families are arithmetic (the second and third tables), layout (the
+fourth) and encoding (the first), and an extractor needs a cost for each
+conversion and for each operation in each form. Three would pay before any
+engine exists and can be measured on the existing benchmarks: the month-number
+form under `add_months`-heavy projections, `int16` frame-of-reference offsets
+for the lane-width doubling, and the run-length case for date-partitioned
+scans. They are the natural first measurements for this item, ahead of the
+corpus audit below.
+
 **Design input - what to decide now, before any engine exists.**
 
 * Make the physical form explicit on IR values rather than implied by the
