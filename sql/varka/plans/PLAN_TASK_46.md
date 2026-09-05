@@ -334,6 +334,53 @@ task 47 is left with, which is a scope question for the milestone rather than
 for a plan. Row 69 is sequenced after this one and measured against a tree
 that already carries it, so the two prizes are never counted twice.
 
+### 3.8 What the compiled code said, and the second half
+
+Added after the first measurement, from the compiled loop rather than from
+the plan. The A/B measured the width-named helpers at +10% to +13% at AVX-512
+and +16% to +20% at 128-bit on the masked calendar shapes, reproducibly across
+two runs; the plan's mechanism said that was the write helper inlining. Three
+readings of the JVM's own output said otherwise, in order:
+
+1. **PrintInlining, read against the source.** The refusals that looked
+   size-related - `callee is too large`, `callee uses too much stack` - are
+   C1's (`c1_GraphBuilder.cpp`, `C1MaxInlineSize` 35 and `C1InlineStackLimit`
+   10); `inline (hot)` is set only in C2's `bytecodeInfo.cpp`, and the one C2
+   refusal, `NodeCountInliningCutoff`, hit the 212-byte writer and the 33-byte
+   one exactly twice each. C2 was refusing both.
+2. **The loop, not the nmethod.** `-XX:CompileCommand=print` over the masked
+   `year` body through `VarkaAssemblyProbe`, which now takes an emit variant
+   and runs the masked path: the whole nmethod differed by nine instructions,
+   the *loop* by seven scalar ones (23 against 30, 53 vector in both), and the
+   write helper was a `callq` in the loop in **both** arms. The seven were the
+   read side - the general reader's `>>> (row % 8)`, which C2 cannot prove is
+   zero at 16 lanes, plus the `lanes` argument materialised for the call.
+   That was the whole measured win: the read, not the write.
+3. **The instrumented JVM.** A print at the refusal in a fastdebug build
+   (`src/hotspot/share/opto/bytecodeInfo.cpp`, the `NodeCountInliningCutoff`
+   branch) gave the number: `unique()` was 18250 to 18520 against the cutoff
+   of 18000, `incremental=0`, in both arms, for the standard and the OSR
+   compile alike. The masked `year` body's Vector API intrinsics alone parse
+   to about the cutoff, so whichever call comes *last in program order* is
+   refused, whatever its size. That is also why task 32's
+   `-XX:LiveNodeCountInliningCutoff=400000` moved nothing: that flag governs
+   the incremental branch, and this refusal is the initial parse's, a
+   develop-only limit no product flag reaches.
+
+**The second half, then, is program order.** A value root's validity word is
+known before its subtree is emitted whenever it is an input word or the
+all-true constant - every calendar extraction and every arithmetic node over
+columns - and the OR into the destination bitmap does not depend on the vector
+store. Emitted first, C2 meets it at a few hundred nodes and inlines it; the
+compiled loop has no call left, in either arm. `wordKnownBeforeCompute` is
+the exact test: not "the root computes no word of its own", because
+`Year(IfElse(...))` aliases the blend's *computed* slot, and reading it early
+is a frame with no such local - the verifier rejected the first attempt. The
+order rides `VarkaEmitOptions.validityOrFirst`, default on, off being the
+after-the-store order as the reference variant, and two parity pairs price it
+alone (`year` and the shared four-field shape, OR first against OR after, both
+with the width-named helpers).
+
 ## 4. Files
 
 | file | what |
@@ -468,9 +515,121 @@ touches `VarkaVectorSupport`, the option record or the emitter's prologue.
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, the PrintInlining verdict quoted rather
-     than summarised, what moved that the plan did not list, and what the task
-     leaves for later - which goes to the milestone's debt register or a scope
-     document, never to a code comment. -->
+Three parity regenerations at both widths on the idle machine, each with the
+canary passing and the scalar controls within 1.5%; two with the helpers only
+(run 1 and run 2, whose A/B ratios agreed within 2 points on every calendar
+row), one with the OR moved before the compute (run 3, the committed files).
+`sql/catalyst/benchmarks/VarkaEmitterParityBenchmark-jdk25-results.txt` and
+its `-128bit-` sibling hold run 3; runs 1 and 2 are quoted as ratios only.
+
+### 9.1 The helpers alone (runs 1 and 2): real, smaller than predicted, and
+for the wrong reason
+
+| pair, mixed nulls unless noted | AVX-512 (run 1 / run 2) | 128-bit (run 1 / run 2) |
+|---|---|---|
+| `year` | +12.3% / +11.6% | +18.4% / +16.3% |
+| `year`, dense + per-group OR | +10.5% / +10.5% | +17.9% / +16.5% |
+| four fields shared | +13.7% / +12.7% | +20.7% / +19.0% |
+| `dayofweek` | +0.3% / +1.4% | -6.4% / -5.9% |
+| selection kernel | +40.3% / +53.4% | +4.9% / +4.3% |
+| selection kernel, null-free | +1.7% / +26.9% | +0.0% / +2.5% |
+
+The ratios reproduce where the absolute rates do not: the null-free selection
+row measured 2.6x apart between runs on identical code, the bimodality task 32
+and task 50 documented, here on a filter. Section 3.8 says where the calendar
+rows' gain came from: the read helper's seven scalar instructions per lane
+group, not the write, which stayed a call in both arms.
+
+### 9.2 The order (run 3): the write inlines, and every masked kernel moves
+
+Within run 3, OR first against OR after, both arms width-named:
+
+| shape, mixed nulls | AVX-512 | 128-bit |
+|---|---|---|
+| `year` | 3203.0 against 2701.5, **+18.6%** | 1199.1 against 955.1, **+25.5%** |
+| four fields shared | 1028.7 against 956.5, **+7.5%** | 420.5 against 351.0, **+19.8%** |
+
+Across runs 2 and 3, same code but the order, every masked row in the file
+moved and nothing dense did: `year` +20.0% and +29.8%, `month` +22.8% and
++40.5%, `dayofmonth` +20.9% and +37.1%, `trunc YEAR` +20.4% and +15.2%,
+`weekofyear` +19.3% and +5.1%, the depth-4 arithmetic chain +22.8% and
++12.3%, `dayofweek` +7.7% and +4.5%; the 64-op fused shape +75.2% and the
+budget-24 single-method shape +83.2% at AVX-512 and +180.1% at 128-bit, the
+bodies furthest over the cutoff having had the most calls refused. The dense
+`year` row is 3468.7 and 1338.3, +0.5% - it has had no call since task 45.
+Against the file this task started from, the masked `year` row is 2291.3 to
+3203.0 at AVX-512 and 809.7 to 1199.1 at 128-bit.
+
+### 9.3 The helpers, once the write inlines
+
+With the order fixed in both arms, width-named against general, run 3:
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `year`, mixed nulls | 3203.0 against 3346.7, **-4.3%** | -5.1% |
+| `year`, dense + per-group OR | 3386.0 against 3378.9, +0.2% | 1171.6 against 1268.6, **-7.6%** |
+| four fields shared, mixed nulls | 1028.7 against 928.4, **+10.8%** | **+27.3%** |
+| selection kernel, mixed nulls | 22016.0 against 15349.3, **+43.4%** | +5.5% |
+| selection kernel, null-free | 28893.1 against 22132.4, **+30.5%** | 6498.7 against 6349.3, +2.4% |
+| `dayofweek`, mixed nulls | 7766.5 against 7722.3, +0.6% | -2.9% |
+
+A single write per group no longer pays for the name: `year` is 4% to 8%
+*slower* width-named. Four writes per group and the selection kernel still pay
+well. The probe's reordered loops say why the single-write case can lose:
+with the call gone, C2 unrolled the width-named `year` loop (172 vector
+instructions in the body, against 64 for the general arm), and a body that
+size at four lanes is task 32's register file. `validityByWidth` stays on -
+the multi-write and selection shapes are the ones the columnar path runs -
+with the single-write loss recorded here as the open item it is.
+
+### 9.4 Predictions, scored
+
+1. **Held, and misread.** PrintInlining showed `orValidityBitsAt` refused in
+   the masked loop bodies and `validityBitsAt` inlined, as registered - but
+   the reason was the caller's node count, not the callee's size, and the
+   33-byte replacement was refused at exactly the same sites. The reader
+   inlining is what the helpers' whole gain came from.
+2. **Failed.** Two writers came in over `MaxInlineSize` (section 3.1), and no
+   specialised helper was inlined anywhere the general one was refused, because
+   the refusal was never about the callee.
+3. **Missed as written, then overtaken by a different change.** The helpers
+   alone gave 11.6% to 12.3% and 16.3% to 18.4% on the masked `year` row,
+   under the 15% and 25% floors. The bound held throughout: no masked row
+   passed its dense counterpart (3203.0 against 3468.7; 1199.1 against 1338.3).
+4. **Held for `year` and the four-field shape, inverted for `dayofweek` and the
+   selection kernel** - `dayofweek` lost 6% at 128-bit with the helpers alone,
+   3% once the order was fixed.
+5. **Half held.** The dense value rows did not move. "Nothing else moves"
+   failed in every run: the hand-written kernels, unchanged, moved 5% to 14% in
+   both directions between runs, and the null-free selection row by 2.6x.
+
+### 9.5 What moved that the plan did not list
+
+* The premise. Task 32's "the helpers do not inline in a wide loop" is true,
+  and its reading - size - is not; `SKILLS.md` carries the correction.
+* `VarkaAssemblyProbe` takes an emit variant and a masked run, which is how
+  every claim above was checked; `VarkaEmitterParityBenchmark.emit` refuses a
+  reused case id, after one regeneration died on a collision with the trunc
+  block's computed ids twenty minutes in.
+* `VarkaEmitOptions.canonical()` renders `truncDate` (2.8).
+
+### 9.6 What this leaves
+
+* **Task 69** (`PLAN_MILESTONE_4.md` 2.34), unchanged by any of this: the
+  masked `year` row is still 8% under its dense one at both widths, and the
+  bitmap algebra removes the read and the write rather than inlining them.
+* **The single-write loss with the width-named helpers** (9.3): unrolling and
+  the register file, a task 50 question; the option is there to turn.
+* **Cold code.** The 2- and 4-lane writers sit over `C1InlineStackLimit`
+  (stack 8, locals 9, five parameter slots: 12 against 10), so C1 calls them
+  where it inlines the aligned pair. Steady state does not see it; the first
+  batches of a short query do. Shedding the `long off` local would fit.
+* **The harness.** A filter row that measures 2.6x apart on identical code is
+  a row the file cannot quote a magnitude for; the debt register has the
+  parity harness's per-regeneration cluster already, and this is a second
+  face of it.
+* **The node budget itself.** 18250 to 18520 nodes for one calendar extraction
+  is the cost of the Vector API's `@ForceInline` chains, and the reason a
+  second late call in a body - task 63's overflow check, task 52's guard on a
+  wider shape - will be refused the same way. The order is a lever, not a
+  fix; task 43 and task 44 own the size.
