@@ -671,6 +671,65 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
+  test("task 37: weekofyear matches the row engine on every day across forty year " +
+      "boundaries, at Velox's fixtures, under every spelling and on the filter path") {
+    // The dense sweep of the plan: every day from 1990-12-20 to 2030-01-10 built from range,
+    // so the row engine and the kernel see the same 14,631 rows, beside dayofyear and year
+    // over the same column - the three disagree on exactly the rows that matter - and the
+    // Velox Spark-compatibility fixtures as literal rows with a null.
+    Seq(spark, varkaSpark).foreach { session =>
+      session.sql("SELECT date_add(DATE'1990-12-20', CAST(id AS INT)) AS d FROM range(0, 14631)")
+        .createOrReplaceTempView("varka_iso_days")
+      session.catalog.cacheTable("varka_iso_days")
+      val fixtures = Seq("1919-12-31", "1969-12-31", "1960-01-01", "0001-01-01", "9999-12-31",
+        "2020-12-31", "2004-12-31", "2016-12-31", "2016-01-01", "2019-12-30", null)
+      import scala.jdk.CollectionConverters._
+      val schema = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("d", org.apache.spark.sql.types.DateType, true)))
+      val rows = fixtures.map(v =>
+        org.apache.spark.sql.Row(if (v == null) null else java.sql.Date.valueOf(v)))
+      session.createDataFrame(rows.asJava, schema).createOrReplaceTempView("varka_iso_fixtures")
+      session.catalog.cacheTable("varka_iso_fixtures")
+    }
+    try {
+      checkDifferential(spark, varkaSpark,
+        "SELECT weekofyear(d) AS w, dayofyear(d) AS y, year(d) AS a FROM varka_iso_days " +
+          "ORDER BY d",
+        expectFused = true)
+      checkDifferential(spark, varkaSpark,
+        "SELECT weekofyear(d) AS w, EXTRACT(WEEKS FROM d) AS w2, EXTRACT(WEEK FROM d) AS w3, " +
+          "date_part('W', d) AS w4 FROM varka_iso_fixtures ORDER BY w, w2, w3, w4",
+        expectFused = true)
+      // The predicate route: week 53 exists in 2004, 2009, 2015, 2020 and 2026 of the span.
+      checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c, min(d) AS lo, max(d) AS hi FROM varka_iso_days " +
+          "WHERE weekofyear(d) = 53",
+        expectFused = true)
+    } finally {
+      Seq(spark, varkaSpark).foreach { session =>
+        session.catalog.uncacheTable("varka_iso_days")
+        session.catalog.uncacheTable("varka_iso_fixtures")
+      }
+    }
+  }
+
+  test("task 57: extract(DAYOFWEEK_ISO), date_part('DOW_ISO') and weekday(d) + 1 match the " +
+      "row engine as one node, with nulls") {
+    // The three spellings the analyzer turns into Add(WeekDay(d), 1), over the shared dates
+    // table (a Monday, a Tuesday, a Wednesday, a Sunday - 1969-12-31 - and a null), beside
+    // dayofweek and weekday so the three offsets are checked against each other.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    checkDifferential(spark, varkaSpark,
+      "SELECT extract(DAYOFWEEK_ISO FROM d) AS a, date_part('DOW_ISO', d) AS b, " +
+        "weekday(d) + 1 AS c, dayofweek(d) AS e, weekday(d) AS f FROM varka_dates " +
+        "ORDER BY a, b, c, e, f",
+      expectFused = true)
+    // weekday(d) + 2 is not the node and stays residual: the arm is the constant one only.
+    checkDifferential(spark, varkaSpark,
+      "SELECT weekday(d) + 2 AS a FROM varka_dates ORDER BY a", expectFused = false)
+  }
+
   test("the calendar extractions match the row engine across the Gregorian range") {
     // Every shape the decomposition could get wrong end to end: leap days of a 400-divisible
     // year (2000) and a 100-divisible one (1900), the century boundary itself, the era

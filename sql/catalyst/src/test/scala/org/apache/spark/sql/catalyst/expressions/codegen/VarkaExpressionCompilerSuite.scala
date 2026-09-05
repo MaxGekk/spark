@@ -19,9 +19,9 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
@@ -188,6 +188,64 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val compiled = VarkaExpressionCompiler.compile(Seq(out(DayOfYear(d))), childOutput).get
     assert(compiled.outputs === Seq(new IRDayOfYear(new ColumnRef(0))))
     assert(compiled.outputTypes === Seq(IntegerType))
+  }
+
+  test("task 37: weekofyear compiles to the week tail over the Thursday shift, IntegerType") {
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(WeekOfYear(d))), childOutput).get
+    assert(compiled.outputs === Seq(new IRWeekOfYear(new ThursdayOf(new ColumnRef(0)))))
+    assert(compiled.outputTypes === Seq(IntegerType))
+  }
+
+  test("task 37: extract(WEEK FROM d) resolves to the same node, and two weekofyear outputs " +
+      "over one date are one tree under CSE") {
+    // Extract desugars WEEK, W and WEEKS to WeekOfYear before the compiler sees it; the
+    // compiler is not asked to know the spellings. Two entries build the same pair, which the
+    // emitter's CSE computes once - the compiler's job is only to build equal trees.
+    val extracted = Extract(Literal("WEEK"), d, WeekOfYear(d))
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(extracted), out(WeekOfYear(d))), childOutput).get
+    val pair = new IRWeekOfYear(new ThursdayOf(new ColumnRef(0)))
+    assert(compiled.outputs === Seq(pair, pair))
+  }
+
+  test("task 37: a fused int field compared with an int literal is a predicate, and an int " +
+      "literal is still not a value operand") {
+    val week53 = VarkaExpressionCompiler.compilePredicate(
+      EqualTo(WeekOfYear(d), Literal(53)), childOutput)
+    assert(week53.isDefined, "weekofyear(d) = 53 should compile")
+    assert(week53.get.specs.forall(_.fused))
+    val month = VarkaExpressionCompiler.compilePredicate(
+      GreaterThan(Literal(6), Month(d)), childOutput)
+    assert(month.isDefined && month.get.specs.forall(_.fused))
+    // The value side is unchanged: an int literal where a date is expected declines.
+    assert(VarkaExpressionCompiler.compile(Seq(out(DateAdd(Literal(5), Literal(3)))),
+      childOutput).isEmpty)
+  }
+
+  test("task 37: the range analysis bounds the Thursday shift at three days either way") {
+    // weekofyear over a date shifted to the last three days the analysis admits fuses; one more
+    // day and the Thursday of the shifted day can leave the calendar range, so it declines.
+    val shiftHiWeek = VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS - 3
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(WeekOfYear(DateAdd(d, Literal(shiftHiWeek))))), childOutput).isDefined)
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(WeekOfYear(DateAdd(d, Literal(shiftHiWeek + 1))))), childOutput).isEmpty)
+  }
+
+  test("task 57: extract(DAYOFWEEK_ISO) compiles to DayOfWeekIso in either operand order, and " +
+      "no other Add does") {
+    // Through Extract itself, so the assertion is on the analyzer's spelling as much as on
+    // the arm; the reversed order by hand, since the arm accepts it too.
+    val viaExtract = Extract(Literal("DAYOFWEEK_ISO"), d, Add(WeekDay(d), Literal(1)))
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(viaExtract), out(Add(Literal(1), WeekDay(d)))), childOutput).get
+    val node = new DayOfWeekIso(new ColumnRef(0))
+    assert(compiled.outputs === Seq(node, node))
+    assert(compiled.outputTypes === Seq(IntegerType, IntegerType))
+    for (other <- Seq(Add(WeekDay(d), Literal(2)), Add(DayOfWeek(d), Literal(1)),
+        Add(DateDiff(d, d2), Literal(1)))) {
+      assert(VarkaExpressionCompiler.compile(Seq(out(other)), childOutput).isEmpty, other)
+    }
   }
 
   test("task 36: last_day compiles with a DateType output, unlike its four siblings") {

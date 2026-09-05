@@ -293,6 +293,13 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIV))
         val dowDigitSum = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 502,
           VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM))
+        // Task 57: extract(DAYOFWEEK_ISO), dayofweek's tail with the other offset and the same
+        // add; priced beside the shipped dayofweek row, which it should match within noise.
+        val dowIso = emit(Seq(new DayOfWeekIso(new ColumnRef(0))), 1, 0, loader, 507)
+        benchmark.addCase("dayofweek_iso (task 57), null-free") { _ =>
+          dowIso.run(Array(nfData.address()), Array(0L), Array(0),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
         benchmark.addCase("magic multiply (shipped), null-free") { _ =>
           dow.run(Array(nfData.address()), Array(0L), Array(0),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
@@ -704,6 +711,29 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           benchmark.addCase(s"trunc $name, recompose (task 35 A/B), mixed nulls") { _ =>
             chunked(recomposed, true)
           }
+        }
+        // Task 37: weekofyear as the compiler builds it, the week tail over the Thursday shift,
+        // beside the dayofyear rows above as the sibling control (the tail is dayofyear's plus
+        // four ops, the shift another seventeen), the shift alone, and the per-row path.
+        val weekOfYear = emit(Seq(new WeekOfYear(new ThursdayOf(col0))), 1, 0, loader, 870)
+        val thursdayOf = emit(Seq(new ThursdayOf(col0)), 1, 0, loader, 872)
+        benchmark.addCase("weekofyear (task 37), null-free") { _ => chunked(weekOfYear, false) }
+        benchmark.addCase("weekofyear (task 37), mixed nulls") { _ => chunked(weekOfYear, true) }
+        benchmark.addCase("ThursdayOf alone (task 37), null-free") { _ =>
+          chunked(thursdayOf, false)
+        }
+        benchmark.addCase("per-row DateTimeUtils.getWeekOfYear (the path Spark uses today)") {
+          _ =>
+            var pass = 0
+            while (pass < repeats) {
+              var i = 0
+              while (i < numRows) {
+                val days = nfData.get(ValueLayout.JAVA_INT, i * 4L)
+                dst.set(ValueLayout.JAVA_INT, i * 4L, DateTimeUtils.getWeekOfYear(days))
+                i += 1
+              }
+              pass += 1
+            }
         }
         benchmark.addCase("per-row DateTimeUtils.truncDate YEAR (the path Spark uses today)") {
           _ =>

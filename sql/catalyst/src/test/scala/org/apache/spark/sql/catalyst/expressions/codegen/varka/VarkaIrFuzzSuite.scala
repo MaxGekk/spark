@@ -94,7 +94,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     def value(depth: Int): Gen = {
       if (depth == 0 || budget <= 1) return leaf()
       budget -= 1
-      rnd.nextInt(14) match {
+      rnd.nextInt(17) match {
         case 0 =>
           val a = value(depth - 1); val b = literal()
           Gen(new AddDays(a.node, b.node), a.bound + b.bound)
@@ -127,6 +127,20 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
         case 8 =>
           val a = value(depth - 1)
           Gen(new WeekDay(a.node), 6)
+        case 14 =>
+          // The Thursday of the day's week (task 37): a day-typed producer within three days.
+          val a = value(depth - 1)
+          Gen(new ThursdayOf(a.node), a.bound + 3)
+        case 15 =>
+          // weekofyear as the compiler builds it, the pair as a unit: the week tail is defined
+          // over ThursdayOf only (the emitter refuses any other child), and the subtree has to
+          // stay inside the narrowed range like every calendar node's.
+          val a = value(depth - 1)
+          if (a.bound > chronoBound) return a
+          Gen(new WeekOfYear(new ThursdayOf(a.node)), 53)
+        case 16 =>
+          val a = value(depth - 1)
+          Gen(new DayOfWeekIso(a.node), 7)
         case n =>
           // The calendar family, over a subtree that stays inside the narrowed range.
           val a = value(depth - 1)

@@ -22,9 +22,9 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, TruncDate, UnaryMinus, UnixDate, WeekDay, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaLoopEmitter, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -521,6 +521,13 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRDayOfWeek(_))
     case WeekDay(child) =>
       compileNode(child, inputs, literals, sink).map(new IRWeekDay(_))
+    // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO') (task 57): the analyzer spells them
+    // Add(WeekDay(d), 1), and so does a hand-written weekday(d) + 1. One narrow arm, either
+    // operand order, and nothing else: integer arithmetic over an output is task 30's.
+    case Add(WeekDay(child), Literal(1, IntegerType), _) =>
+      compileNode(child, inputs, literals, sink).map(new DayOfWeekIso(_))
+    case Add(Literal(1, IntegerType), WeekDay(child), _) =>
+      compileNode(child, inputs, literals, sink).map(new DayOfWeekIso(_))
     // next_day (task 33): the weekday must be resolved at compile time, since the emitted
     // lowering needs the offset as a runtime literal, not a per-row string. An unrecognized,
     // null or non-foldable weekday declines rather than throws - it is the row engine's
@@ -553,6 +560,14 @@ private[sql] object VarkaExpressionCompiler {
       calendarInput(child, expr, inputs, literals, sink).map(new IRDayOfYear(_))
     case LastDay(child) =>
       calendarInput(child, expr, inputs, literals, sink).map(new IRLastDay(_))
+    // weekofyear, extract(WEEK) and date_part (task 37): the ISO week by the Thursday rule - the
+    // week tail over the Thursday of the day's week, two nodes so the prefix runs over the
+    // shifted day and so extract(YEAROFWEEK) (task 58) is Year over the same ThursdayOf. The
+    // calendar node's child is the shift, so the range analysis admits the shift, not the day.
+    case WeekOfYear(child) =>
+      compileNode(child, inputs, literals, sink)
+        .flatMap(c => admitCalendar(new ThursdayOf(c), expr, literals, sink))
+        .map(new IRWeekOfYear(_))
     // trunc(date, fmt) (task 35): the format resolves at compile time, like next_day's weekday,
     // because the level chooses which code is emitted. YEAR, MONTH and QUARTER are one node
     // with the level as a shape-bearing field; WEEK is Spark's own definition,
@@ -814,6 +829,8 @@ private[sql] object VarkaExpressionCompiler {
       // A truncated date (task 35) is its input or an earlier day of the same period: at most
       // 365 back, the 31st of December of a leap year truncated to its year.
       case n: IRTruncDate => shifted(n.days(), -365, 0)
+      // The Thursday of a day's week is within three days of it either way (task 37).
+      case n: ThursdayOf => shifted(n.days(), -3, 3)
       case n: IRGreatest => hull(n.left(), n.right())
       case n: IRLeast => hull(n.left(), n.right())
       case n: IfElse => hull(n.thenNode(), n.elseNode())
@@ -835,19 +852,30 @@ private[sql] object VarkaExpressionCompiler {
       inputs: mutable.LinkedHashMap[Int, Int],
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = {
-    compileNode(child, inputs, literals, sink).flatMap { node =>
-      dayRange(node, literals) match {
-        case Bounded(lo, hi)
-            if lo >= VarkaChrono.NARROW_MIN_DAYS && hi <= VarkaChrono.NARROW_MAX_DAYS =>
-          Some(node)
-        case Bounded(lo, hi) =>
-          sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", calendar)
-          None
-        case ColumnShifted => Some(node)
-        case Unknown =>
-          sink.note("day producer the calendar range analysis does not bound", calendar)
-          None
-      }
+    compileNode(child, inputs, literals, sink).flatMap(admitCalendar(_, calendar, literals, sink))
+  }
+
+  /**
+   * The admission half of [[calendarInput]] over an already-built IR node, for a calendar node
+   * whose child is not the compiled expression itself - task 37's week tail runs over the
+   * Thursday shift the compiler wraps around the date, so the shift is what the analysis bounds.
+   */
+  private def admitCalendar(
+      node: VarkaVectorIR,
+      calendar: Expression,
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = {
+    dayRange(node, literals) match {
+      case Bounded(lo, hi)
+          if lo >= VarkaChrono.NARROW_MIN_DAYS && hi <= VarkaChrono.NARROW_MAX_DAYS =>
+        Some(node)
+      case Bounded(lo, hi) =>
+        sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", calendar)
+        None
+      case ColumnShifted => Some(node)
+      case Unknown =>
+        sink.note("day producer the calendar range analysis does not bound", calendar)
+        None
     }
   }
 
@@ -1078,9 +1106,19 @@ private[sql] object VarkaExpressionCompiler {
       inputs: mutable.LinkedHashMap[Int, Int],
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[Cond] = {
+    // An int literal against a fused int field - `weekofyear(d) = 53`, `month(d) = 6` - is a
+    // comparison of two int lanes like any other (task 37); the literal takes a slot the way a
+    // date literal does. Only here: compileNode's value leaves stay DateType, since a bare
+    // int literal has no meaning as a date operand, and int arithmetic over an output is
+    // task 30's, not a comparison's.
+    def operand(e: Expression): Option[VarkaVectorIR] = e match {
+      case Literal(v: Int, IntegerType) =>
+        Some(new LiteralSlot(literals.getOrElseUpdate(v, literals.size)))
+      case _ => compileNode(e, inputs, literals, sink)
+    }
     for {
-      left <- compileNode(l, inputs, literals, sink)
-      right <- compileNode(r, inputs, literals, sink)
+      left <- operand(l)
+      right <- operand(r)
     } yield new Compare(op, left, right)
   }
 }
