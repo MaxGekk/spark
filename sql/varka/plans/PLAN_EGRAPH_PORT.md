@@ -217,9 +217,9 @@ planned there.
 
 ## 6. The measurement
 
-A library's measurement is its own harness, committed under
-`sql/varka/egraph/benchmarks/` with the provenance header the other result
-files carry, on an idle machine. Cross-language comparison with egg's Rust
+A library's measurement is its own harness, committed under the repository's
+`benchmarks/` with the provenance header Varka's result files carry, on an
+idle machine. Cross-language comparison with egg's Rust
 numbers is not attempted; the ratios the paper established are.
 
 * **Deferred against eager rebuilding**, on the ported `math` and `lambda`
