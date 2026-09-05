@@ -1,10 +1,13 @@
 # Plan: an e-graph library for Java 25, ported from egg
 
-<!-- Not a numbered task: a library that Varka does not use yet, planned so
-     that scope item 11 of SCOPE_MILESTONE_6.md has an engine to pick up when
-     its time comes. The sections follow TEMPLATE_TASK.md where they apply;
-     3.3 registers size and effort rather than op counts, and 6 measures the
-     library rather than a kernel. Sections 1-8 before the code, 9 after. -->
+<!-- Not a numbered task, and not Varka source: a library that Varka does not
+     use yet, planned so that scope item 11 of SCOPE_MILESTONE_6.md has an
+     engine to pick up when its time comes. It lives in a dedicated repository
+     under github.com/vecbricks (owner's decision, 5 September 2026); this
+     file is Varka's record of the decision and moves to that repository, as
+     its plan, when the repository is created. The sections follow
+     TEMPLATE_TASK.md where they apply; 3.3 registers size and effort rather
+     than op counts, and 6 measures the library rather than a kernel. -->
 
 ## 1. Where this came from
 
@@ -16,7 +19,11 @@ semilattice analyses carrying type, encoding, nullability and range, and a
 cost-driven choice of representation over a whole projection. The owner's
 question of 5 September 2026: there is no e-graph library in Java, so port
 egg (Willsey et al., POPL 2021; `github.com/egraphs-good/egg`, MIT) to Java
-25+ for Varka's future use.
+25+ for Varka's future use - as a product of its own, in a dedicated
+repository under `github.com/vecbricks`, not as a module of the fork. The
+library has no Spark dependency and is usable outside Varka; Varka consumes
+it the way it consumes Arrow, as a versioned dependency, when item 11 needs
+it.
 
 The ecosystem check behind the premise: no maintained pure-Java e-graph
 library was found. The JVM has Risegg, the Scala engine of sketch-guided
@@ -75,16 +82,20 @@ the point of the flat design is lost).
 
 ### 3.1 The library
 
-A pure-Java module on the precedent of `sql/varka/engine`: Maven, Java 25,
-JUnit 5, JMH, no Spark and no Arrow dependency, so it builds, tests and
-benchmarks alone and can move with the Java Catalyst later.
+A pure-Java library in its own repository: Maven, Java 25, JUnit 5, JMH, no
+Spark and no Arrow dependency, its own GitHub Actions and release cadence, so
+it builds, tests, benchmarks and ships alone. `sql/varka/engine` is the
+precedent for the build shape (Java 25 release level, surefire and JMH
+wiring), not for the location: that module is Varka's own kernel code, this
+is a library Varka merely uses.
 
 | | |
 |---|---|
-| module | `sql/varka/egraph` |
-| artifact | `org.apache.spark.varka:varka-egraph` |
-| package | `org.apache.spark.sql.varka.egraph` |
+| repository | a dedicated one under `github.com/vecbricks`, named when created |
+| artifact | a `vecbricks` group id, versioned and published like any dependency |
+| package | the repository's own namespace, not `org.apache.spark` |
 | public surface | `EGraph<L, A>`, `Language<L>`, `Analysis<L, D>`, `Pattern`, `Rewrite`, `Condition`, `Applier`, `Runner`, `RunLimits`, `Scheduler`, `Extractor`, `CostFunction` |
+| Varka's side | nothing until item 11: then one dependency on a pinned version, and the client mapping |
 
 The egg-to-Java mapping, component by component:
 
@@ -147,19 +158,25 @@ can be built and accepted before the next (section 8).
 
 ## 4. Files
 
+In the library's repository:
+
 | file | what |
 |---|---|
-| `sql/varka/egraph/pom.xml` | the module, on `sql/varka/engine/pom.xml`'s pattern minus Arrow |
-| `.../egraph/EGraph.java`, `UnionFind.java`, `EClass.java`, `IntList.java` | the graph |
-| `.../egraph/Language.java`, `Analysis.java` | the two client interfaces |
-| `.../egraph/Pattern.java`, `Subst.java`, `Matcher.java` | matching |
-| `.../egraph/Rewrite.java`, `Condition.java`, `Applier.java` | rules |
-| `.../egraph/Runner.java`, `RunLimits.java`, `Scheduler.java`, `BackoffScheduler.java`, `StopReason.java` | the loop |
-| `.../egraph/Extractor.java`, `CostFunction.java` | extraction |
-| `src/test/java/.../egraph/` | invariant tests, determinism test, the four ported suites |
-| `src/jmh/java/.../egraph/` and `sql/varka/egraph/benchmarks/` | section 6 |
-| `project/SparkBuild.scala`, `.github/workflows/build_and_test.yml`, `dev/is-changed.py` | the module wired the way `varka-engine` is (`install-varka-engine`, the `varka-engine` change key) |
-| `SCOPE_MILESTONE_6.md` item 11 | a pointer to this plan |
+| `pom.xml` | the build, on `sql/varka/engine/pom.xml`'s shape minus Arrow; publishing configured from the start |
+| `.github/workflows/` | build, test at the Java 25 release level, JMH on demand |
+| `EGraph.java`, `UnionFind.java`, `EClass.java`, `IntList.java` | the graph |
+| `Language.java`, `Analysis.java` | the two client interfaces |
+| `Pattern.java`, `Subst.java`, `Matcher.java` | matching |
+| `Rewrite.java`, `Condition.java`, `Applier.java` | rules |
+| `Runner.java`, `RunLimits.java`, `Scheduler.java`, `BackoffScheduler.java`, `StopReason.java` | the loop |
+| `Extractor.java`, `CostFunction.java` | extraction |
+| `src/test/java/` | invariant tests, determinism test, the four ported suites |
+| `src/jmh/java/` and `benchmarks/` | section 6, with the provenance header Varka's result files carry |
+| `PLAN.md` (this file, moved) and `README.md` | the record and the front door |
+
+In Varka, now: `SCOPE_MILESTONE_6.md` item 11 pointing here. In Varka, at
+item 11's time: the dependency on a pinned version and the client mapping,
+planned there.
 
 ## 5. Tests, and what each is for
 
@@ -250,17 +267,20 @@ numbers is not attempted; the ratios the paper established are.
    component.
 6. **Scope creep toward egglog** (multi-patterns, incremental runs, proofs).
    Section 3.2 names what is out; a need for any of it is a new plan.
-7. **CI plumbing** for a second pure-Java module: the `varka-engine` wiring
-   (`install-varka-engine`, `is-changed.py`) is the template, done in the
-   first commit so every later commit runs green.
+7. **A second repository's overhead**: its own CI, publishing and
+   versioning, and a dependency Varka's build must resolve without a snapshot
+   repository in the way. Configure publishing in the first commit, release
+   from tags, and pin the version on Varka's side when item 11 adds it;
+   never a snapshot dependency in the fork.
 
 ## 8. Sequencing
 
 Each commit green alone, with its tests:
 
-1. The module skeleton and CI wiring; ids, union-find, `IntList`,
-   `Language`, hashcons, `add`/`find`/`canonicalize`; the array-trap and
-   hashcons-invariant tests.
+1. The repository: build, CI, publishing configuration, licence and
+   attribution to egg (MIT), this plan moved in as `PLAN.md`; then ids,
+   union-find, `IntList`, `Language`, hashcons, `add`/`find`/`canonicalize`;
+   the array-trap and hashcons-invariant tests.
 2. `merge`, the worklist, `rebuild`/`repair`; the congruence-invariant and
    deferred-against-eager tests.
 3. `Analysis` and its maintenance; the constant-folding analysis and the
