@@ -184,6 +184,40 @@ the `ClassFileCodegenSupport` trait, the `VarkaClassFileGen` assembler and the
 kernel-shape interfaces - was retired in task 17, along with the
 `CodeAndComment` cache-key field it fed (`PLAN_MILESTONE_2.md` section 8).
 
+### The IR in pictures
+
+Three Graphviz drawings of `VarkaVectorIR` live under `docs/img/varka/`, each
+as a `.dot` source and the `.svg` rendered from it (`dot -Tsvg x.dot -o x.svg`;
+`-Tpng`/`-Tjpg` for a raster). They are a snapshot of the node set as of task
+61 (5 September 2026) and are re-rendered when a node is added, in the same
+change that re-pins the shape hash.
+
+* `varka-ir-hierarchy.svg`: what a node *is* - the sealed `permits` lists as a
+  tree, grouped into the leaves, day arithmetic, the mod-7 family, selection,
+  `AddMonths`, the `Chrono` family and the `Cond` family, with each record's
+  components, its output kind (date, int field, mask) and its weight against
+  `GROUP_BUDGET`.
+
+  ![The sealed node families of VarkaVectorIR](img/varka/varka-ir-hierarchy.svg)
+
+* `varka-ir-dataflow.svg`: what a node *takes* - every operator with one port
+  per input component, typed edges from the kinds of value that can feed each
+  port (a date value, an int field, a stored int column, a derived int32
+  column from a leaf, a literal slot, a condition), and what each operator
+  produces.
+
+  ![Data flow between the IR nodes](img/varka/varka-ir-dataflow.svg)
+
+* `varka-ir-levels.svg`: the same data flow in levels, bottom to top - the
+  kernel's inputs, the leaves, the date producers, the field extractors, the
+  conditions and selection, and what the user sees - with the SQL that
+  compiles to each node written on it, and the emitter's two below-the-IR
+  fragments drawn in as a dashed layer: the civil-from-days prefix that every
+  calendar tail and `AddMonths` share within a lane group, and the mod-7
+  lowering, which is emitted per node.
+
+  ![The IR by data flow, in levels](img/varka/varka-ir-levels.svg)
+
 ### The shape cache, class loaders and Metaspace
 
 Task 14 measured the cost of the original per-task lifecycle: every task
