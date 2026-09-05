@@ -1142,8 +1142,9 @@ by what 37 ships: if 37 exposes the shift as an IR node, this is a compiler
 arm building `Year(ThursdayOf(d))` and nothing in the emitter; if 37 keeps
 the shift inside its own tail, this task lifts it out into that node and 37's
 `WeekOfYear` tail reads it too, so the two nodes over one date share it. Task
-52's `dayRange` needs an arm for the shift, `[-6, +3]` days, so `Year` over it
-is admitted at compile time. No new arithmetic, no new constant, no leap
+52's `dayRange` needs an arm for the shift, `[-3, +3]` days (task 37's
+admission check; this paragraph first said `[-6, +3]`), so `Year` over it is
+admitted at compile time. No new arithmetic, no new constant, no leap
 question: `year` of a computed day is the prefix the family already has.
 
 Validation: the boundary rows are the ones the ISO year moves on - December 28
@@ -1569,7 +1570,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 34 | `dayofyear`. **DONE** (`PLAN_TASK_34.md`, PR #64) | The node, the January-based conversion off `emitChrono`'s March-based day of year, and the shared leap-flag helper tasks 35-37 reuse | Every Varka suite green at both widths; the pinned fixtures re-pinned; a day outside the covered range still declines (**this decline was removed by task 51**; see 2.19's update note and `PLAN_TASK_51.md`) |
 | 35 | `trunc(date, YEAR/MONTH/QUARTER)`. **DONE** (`PLAN_TASK_35.md` section 8) | One node carrying the level as a shape-bearing field, three lowerings, and the decline path for every level and format this task does not cover | As 34, plus a `DateType` output proved to feed further date arithmetic in the same chain |
 | 36 | `last_day`. **DONE** (`PLAN_TASK_36.md`) | The node and the month-length tail, with February's leap case as its own branch | As 34, with every month length exercised in both a leap and a common year (the decline this inherited from 34 is likewise removed by task 51) |
-| 37 | `weekofyear` | The node and the Thursday rule; no boundary corrections and no weeks-in-year helper, so the prefix runs over a computed day (`t`, not the column) and cannot share a fragment with the other calendar fields of the same date - state that in the plan rather than discover it | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list: the rule claims to make the boundaries automatic, and the sweep is what checks the claim. Import Velox's Spark-compatibility `weekOfYear` fixtures as pinned cases beside the sweep (`velox/functions/sparksql/tests/DateTimeFunctionsTest.cpp`): 1919-12-31 and 1969-12-31 in week 1, 1960-01-01 in week 53, 0001-01-01 in week 1, 9999-12-31 in week 52, and the leap years ending on Thursday, Friday and Saturday - written against Spark by people who had to match it exactly |
+| 37 | `weekofyear`. **DONE** (`PLAN_TASK_37.md`, rewritten on 4 September 2026 around the Thursday rule as two nodes, `WeekOfYear(ThursdayOf(d))`, so task 58 is `Year` over the same shift; the rule, the division magic and the reciprocal weekday swept in its section 2) | The node and the Thursday rule; no boundary corrections and no weeks-in-year helper, so the prefix runs over a computed day (`t`, not the column) and cannot share a fragment with the other calendar fields of the same date - state that in the plan rather than discover it | As 34, plus a dense day-by-day sweep across forty year boundaries rather than a boundary list: the rule claims to make the boundaries automatic, and the sweep is what checks the claim. Import Velox's Spark-compatibility `weekOfYear` fixtures as pinned cases beside the sweep (`velox/functions/sparksql/tests/DateTimeFunctionsTest.cpp`): 1919-12-31 and 1969-12-31 in week 1, 1960-01-01 in week 53, 0001-01-01 in week 1, 9999-12-31 in week 52, and the leap years ending on Thursday, Friday and Saturday - written against Spark by people who had to match it exactly |
 | 38 | A day offset that is a column. **DONE** (`PLAN_TASK_38.md`, PR #62) | The four guards moved, the `andRef` validity fix, `IntegerType` leaves and Arrow `IntVector` inputs accepted, short and byte offsets declining | A null offset producing a null row, at both widths; short and byte columns declining; **no pinned value and no committed number moves**, since no node type is added and the literal path is untouched |
 | 40 | days-from-civil, and month arithmetic. **DONE** (`PLAN_TASK_40.md`, PR #67) | `emitDaysFromCivil` as a helper three later expressions can call; the node behind `date +- INTERVAL n MONTH/YEAR` and `add_months`; the small-dividend month arithmetic and the literal bound it implies | The round trip tested on its own, not only through the expression; the clamp cases in both directions; a non-foldable or over-large month count declining; green at both widths |
 | 41 | `unix_date` / `date_from_unix_date`. **DONE** (`PLAN_TASK_41.md`, PR #63) | Two compiler arms that unwrap to the child, no IR node and no emitted code; the bare-`ColumnRef` output shape tested | A projection mixing a relabelled entry with an ordinary one fuses both; no pinned value moves, no committed number moves, no emitted bytes change for any existing shape |
@@ -1858,6 +1859,14 @@ rewritten in the past tense with what the sweep found, never deleted.
   future derived leaf over a string column inherits it; closing it takes a string-column
   compaction that keeps the Arrow layout (offsets and data buffers, task 21's `filterCompact`
   for fixed-width columns is the pattern), measured on the task 59 differential's fixture.
+* **The week fold costs more than its op count (task 37).** `weekofyear` is 64
+  dense-loop calls against `year`'s prefix-plus-tail, yet runs at 0.41x of `year`'s
+  rate at 256 bits and 0.38x at 128 (`PLAN_TASK_37.md` section 9, prediction 2), a
+  lower share than the extra ops account for. A debt because the same tail shape
+  returns for task 58's `yearofweek`; closing it takes the dense loop's assembly
+  (`dev/varka_emit.sh --asm`) for `weekofyear` beside `year`, to see whether the
+  shift's `floorMod7` scratch or the fold's dependent chain is what the register
+  does not count.
 
 ## 10. Scope catalogue
 

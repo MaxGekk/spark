@@ -325,6 +325,8 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
         "SELECT trunc(d, 'MONTH') AS a FROM varka_dates_trunc_formats")
       runQueries(baseline, varka, "trunc, format column (task 61)",
         "SELECT trunc(d, fmt) AS a FROM varka_dates_trunc_formats")
+      // Task 37: the ISO week by the Thursday rule, the widest single-field kernel.
+      runQueries(baseline, varka, "weekofyear", "SELECT weekofyear(d) AS w FROM varka_dates")
       runQueries(baseline, varka, "mixed projection (partial fusion)",
         "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
       // Chain-depth scaling (PLAN_TASK_14.md 2.3): the fused loop pays one load and one store
