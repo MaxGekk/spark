@@ -673,6 +673,29 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("date_add(d, off) alone, guard option off (task 52 control), null-free") {
           _ => chunkedTwo(addAloneGuardOff, false)
         }
+        // Task 60's pair, the same guard block on a heavier producer: add_months' own month
+        // count, widened from a literal to a column, with a runtime guard against
+        // MONTH_ARITH_MIN/MAX_MONTHS in place of task 40's compile-time bound. nf2Data/mx2Data
+        // double as the count column - their values are days in [-10000, 10000), comfortably
+        // inside the guard's range - so the status must read zero and this prices the guard
+        // alone, not a decline. add_months(d, 13) (id 811 above) is the literal control that
+        // must not move; task 52's pair above says what the same guard costs on a body a third
+        // this one's size.
+        val addMonthsCol = new AddMonths(col0, new ColumnRef(1))
+        val addMonthsColGuarded = emit(Seq(addMonthsCol), 2, 0, loader, 854)
+        val addMonthsColUnguarded = emit(Seq(addMonthsCol), 2, 0, loader, 855, guardOff)
+        benchmark.addCase("add_months(d, m), guard on (task 60 A/B), null-free") { _ =>
+          chunkedTwo(addMonthsColGuarded, false)
+        }
+        benchmark.addCase("add_months(d, m), guard off (task 60 A/B), null-free") { _ =>
+          chunkedTwo(addMonthsColUnguarded, false)
+        }
+        benchmark.addCase("add_months(d, m), guard on (task 60 A/B), mixed nulls") { _ =>
+          chunkedTwo(addMonthsColGuarded, true)
+        }
+        benchmark.addCase("add_months(d, m), guard off (task 60 A/B), mixed nulls") { _ =>
+          chunkedTwo(addMonthsColUnguarded, true)
+        }
         // Task 35's A/B: trunc(date, ...) under its two lowerings, SUBTRACT (the day of year
         // or day of month taken off the date) against RECOMPOSE (the period's first day rebuilt
         // through emitDaysFromCivil), adjacent per level like the task 48, 53 and 54 pairs so

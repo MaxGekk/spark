@@ -132,6 +132,20 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
   }
 
   /**
+   * A date column `d` and an int month count `m` in `[-120, 120]` - well inside
+   * `VarkaChrono.MONTH_ARITH_MIN/MAX_MONTHS` - for task 60's `add_months` column-count pair.
+   */
+  private def cacheDatesMonthCounts(session: SparkSession): Unit = {
+    session.sql(
+      """select date_add(date'2020-01-01', cast(id as int) % 1460) as d,
+        |       cast(pmod(id, 241) - 120 as int) as m
+        |from range(0, 2000000)""".stripMargin)
+      .createOrReplaceTempView("varka_date_months")
+    session.catalog.cacheTable("varka_date_months")
+    session.sql("select count(*) from varka_date_months").collect()
+  }
+
+  /**
    * An alternating `date_add`/`date_sub` chain of the given depth over column `d`, every
    * literal distinct, so neither Catalyst constant-folding nor C2 reassociation can shorten
    * it - each depth really is `depth` dependent ops per row.
@@ -228,6 +242,8 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       cacheDatePairs(varka)
       cacheRandomDatePairs(baseline)
       cacheRandomDatePairs(varka)
+      cacheDatesMonthCounts(baseline)
+      cacheDatesMonthCounts(varka)
 
       runQueries(baseline, varka, "date_add", "SELECT date_add(d, 3) AS a FROM varka_dates")
       runQueries(baseline, varka, "date_sub", "SELECT date_sub(d, 5) AS a FROM varka_dates")
@@ -241,6 +257,14 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
         "SELECT date_add(d, i) AS a FROM varka_dates")
       runQueries(baseline, varka, "date + CAST(i AS INTERVAL DAY), bound checked (task 56)",
         "SELECT d + CAST(i AS INTERVAL DAY) AS a FROM varka_dates")
+      // Task 60's pair, the same A/B shape on add_months' heavier kernel: the month count
+      // widened from a compile-time-bounded literal to a column carrying a per-batch runtime
+      // guard instead. `add_months(d, 13)` is the literal control, on the same fixture so the
+      // two rows differ only in the offset's shape, not the underlying dates.
+      runQueries(baseline, varka, "add_months, literal (task 60 control)",
+        "SELECT add_months(d, 13) AS a FROM varka_date_months")
+      runQueries(baseline, varka, "add_months, column count (task 60)",
+        "SELECT add_months(d, m) AS a FROM varka_date_months")
       runQueries(baseline, varka, "datediff",
         "SELECT datediff(d2, d) AS diff FROM varka_date_pairs")
       // The milestone-2 fusion cases (PLAN_TASK_14.md 2.2). The nested projection is the query
