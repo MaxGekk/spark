@@ -654,6 +654,93 @@ template by doubling `memcpy` and lets the instructions patch bytes in place.
 That is the shape for a `date_format` kernel, a string-output expression outside
 this milestone (section 6).
 
+### Item 11. Physical representation as a compiler decision: the e-graph question
+
+**Where this came from.** Three documents read on 5 September 2026: two concept
+notes proposing a "time compiler" built from flat expression tables, equality
+saturation over date identities, Arrow columns with the Vector API and
+Class-File API emission; and the paper they sketch, egg (Willsey et al., POPL
+2021), which specialises e-graphs to equality saturation with deferred
+*rebuilding* (20.96x over whole runs, 87.85x on congruence maintenance in its
+section 3.4) and *e-class analyses* (a semilattice fact per equivalence class,
+readable by conditional rewrites, with extraction itself one such analysis).
+Like item 10 this is not a milestone 6 subject by topic - it is a compiler
+question - but it is not a task yet, so it lands here per `sql/varka/AGENTS.md`.
+
+**What is already built.** Three of the pitched four stages are Varka: the
+shape cache amortises compilation to once per shape, the kernels run over Arrow
+buffers at both widths, and the emitter is the Class-File API. The compiler
+also already carries the parts of a rewrite system as individual arms -
+balanced `AND`/`OR` folds, `IN` dedup and sort, literal slots interned by value,
+the identity `CAST` and `unix_date` unwraps, `date - INTERVAL n DAY` absorbed
+into `SubDays`, `trunc(d, 'WEEK')` rewritten onto `next_day`, and two analyses,
+`dayRange` (an interval domain with the hull as its join) and `inputBounds`.
+That works because the rules are few and none conflict, so their order never
+matters - exactly the condition under which equality saturation adds nothing
+over a fixed pass.
+
+**The idea, and why it is not about dates.** Against the date engine the
+benefit is small and unmeasured: canonical shapes (fewer kernel classes),
+identities Catalyst does not fold (`datediff(date_add(d, k), d) -> k`,
+literal-offset chains, idempotent `last_day`), and one home for the ad hoc
+arms. Against the engine Varka is meant to become - every Spark type and
+expression, several Arrow encodings per type, and Varka's own layouts - the
+question changes: *who decides, per expression, which physical form a value
+lives in.* That is the e-graph's native problem: an e-class is every way to
+obtain one logical value, its e-nodes become physical forms joined by
+conversion nodes, and extraction chooses, over the whole projection, where to
+convert and where to compute. Varka already solves that by hand in four
+places:
+
+| where | logical value | physical alternatives | who chooses today |
+|---|---|---|---|
+| `isArrowBacked` | a column | `DateDayVector`/`IntVector` accepted; every other encoding refused per batch | a hard-coded match - the refusal is a missing conversion |
+| task 59 | a weekday name | `VarCharVector` bytes, or an int32 code column derived per batch | the compiler, by a fixed rule |
+| task 32 | a date | int32 days, or the civil fields the shared prefix leaves live | the emitter's sharing rules and `GROUP_BUDGET` |
+| item 1 | a `DECIMAL(p <= 18)` | Arrow's 128-bit pairs, or one long lane after a de-interleave | to be measured |
+
+Four mechanisms are fine at four rows; not at the full type system times its
+encodings times Varka's layouts. Task 58's measurement is the first cost of
+guessing: two calendar outputs over one shift run at 0.58x of one of them
+alone, the no-sharing ratio, because the shipped budget decides sharing rather
+than a cost.
+
+**Design input - what to decide now, before any engine exists.**
+
+* Make the physical form explicit on IR values rather than implied by the
+  node type: a representation attribute, and conversion nodes as first-class
+  IR. Then an e-graph later is a change of engine, not of language. The
+  `DateDayVector`-only match in `isArrowBacked` is the first line to redesign.
+* Keep analyses semilattice-shaped (make, join, modify), as `dayRange` is;
+  add nullability and encoding facts in the same shape.
+* Keep the IR as immutable records with structural equality - they are
+  already e-nodes; hashconsing is literal-slot interning generalised.
+* Turn the register into a cost table keyed by operation, representation and
+  width, fed from measurement. It is the extractor's input either way.
+
+**What must hold whatever is built.** Costs stay measured, never modelled -
+the project's evidence (task 52's guard costs its `fromLong`, task 37's fold
+runs at 0.41x of `year`, task 58's sharing row) says op counts mispredict by
+2x, so extraction by a static cost would pick worse than today's measured
+defaults, and the A/B variants (`FloorMod7`, Neri-Schneider, the Julian map)
+stay measured. Every rule proves Spark's semantics, nulls and ANSI included;
+conversions add their own (item 1's high-word check). Extraction is
+deterministic: a fixed point or a deterministic bound, never a wall-clock
+timeout, because the pinned fixtures and shape hashes depend on it.
+
+**What it needs first.** One script over the corpus with two columns: how
+many expressions match a dozen candidate identities and how many shapes merge
+under canonicalisation; and how many columns arrive in an encoding the
+evaluator refuses today. The first sizes the algebraic benefit for dates,
+which may well be small; the second says how soon the conversion machinery
+pays, and that is the number the decision rests on.
+
+**When.** Milestone 7, once there are several types with several ops each,
+unless item 1 lands a second physical representation of a value earlier - at
+which point the IR decisions above become due, and the engine question is
+asked against real conversions rather than one. Candidate rules and their
+semantic conditions are recorded in the analysis of 5 September 2026.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
@@ -674,7 +761,10 @@ one this project invented:
 Targets fall in the order 1 (TPC-H q6), 5 (taxi, if milestone 4's items 2, 3
 and 6 have landed), 2 (TPC-H q1), then 3 and 4 (TPC-DS q9 and q41).
 
-Item 10 is deliberately absent from that table. It is gated on one measurement
+Items 10 and 11 are deliberately absent from that table. Item 11 is a
+milestone 7 question by its own text, and its only near-term deliverable is
+the two-column corpus measurement, which needs no ordering against the spine.
+Item 10 is deliberately absent It is gated on one measurement
 it does not yet have - the four-field lookup against task 32's shared prefix -
 and it belongs to the calendar family rather than to this milestone's decimal
 and aggregation spine. If that measurement comes back the way the single-field
@@ -684,6 +774,9 @@ worth as much.
 
 ## 6. Explicitly out of milestone 6
 
+* An equality-saturation engine or a representation-selecting extractor
+  (item 11): the IR decisions it depends on may be taken here as they arise,
+  the engine is milestone 7's.
 * Joins, sorting, grouping sets, and window functions - per item 9.
 * Decimal *division*, and any decimal whose result precision exceeds the lane -
   declined with a reason, not computed wrongly.
@@ -711,3 +804,8 @@ worth as much.
 4. **What scale factor?** Large enough that the JIT ladder is amortised (which
    milestone 3's task 18 changes) and small enough to run on the development
    machine. Fix it once, in the harness, and commit it with the numbers.
+5. **How much redundancy does the corpus carry, and in what?** Item 11's
+   two-column measurement: identities that fold and shapes that merge, and
+   columns whose Arrow encoding the evaluator refuses. The second column is
+   what decides whether representation selection is a milestone 7 question or
+   a milestone 6 one.
