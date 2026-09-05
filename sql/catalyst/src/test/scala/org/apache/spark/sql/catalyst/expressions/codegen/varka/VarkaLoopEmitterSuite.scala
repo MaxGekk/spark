@@ -2090,6 +2090,30 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("task 46: the validity OR before the compute answers what the OR after it answered") {
+    // The order moved so C2 meets the OR helper before the body's intrinsics have spent its
+    // node budget; the bytes are the same either way and the results must be. The second root
+    // is the shape that caught the first version of this: a Year over an IfElse, whose word
+    // aliases the blend's *computed* slot and so is not known before the compute - reading it
+    // early was a frame with no such local, and the verifier said so. Both settings, every
+    // null pattern, lengths with a partial last byte, the masked path forced. Not length 1:
+    // forcing the masked path sets the null count to 1, and a null count equal to the length is
+    // the all-null column by the harness's own contract (validity address 0L), which the oracle
+    // does not model - so that one length fails under either setting, for a reason that is not
+    // this test's.
+    val col = new ColumnRef(0)
+    val lit = new LiteralSlot(0)
+    val blend = new IfElse(new Compare(CompareOp.LT, col, lit), new AddDays(col, lit), col)
+    val roots = Seq[VarkaVectorIR](new Year(col), new Year(blend), new Greatest(col, blend))
+    def inRangeDays(c: Int, i: Int): Int = 19000 + (i % 9973)
+    for (orFirst <- Seq(true, false)) {
+      checkMatrix(roots, 1, Array(3), Seq(7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095),
+        nullPatterns.map(p => Seq(p._2)), data = inRangeDays, forceMasked = true,
+        ctx = s"validityOrFirst=$orFirst",
+        options = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(orFirst))
+    }
+  }
+
   test("task 46: an emission for a foreign width still computes that width's answers") {
     // lanesOverride exists so one JVM can exercise every arm, which is only honest if the
     // emitted class is self-consistent: it carries the species its helper names were chosen

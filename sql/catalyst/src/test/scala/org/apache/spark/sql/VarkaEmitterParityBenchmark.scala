@@ -515,6 +515,12 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // rather than known, so task 45's driver fill cannot serve it and the per-group OR
         // stays in the dense body too. It is the shape the columnar filter runs on every batch
         // and the one shape with no committed parity case before task 46.
+        // The second half of task 46: the same kernels with the validity OR emitted after the
+        // store, which is where it was until the compiled loop showed it as a real call in every
+        // arm. Both sides carry the width-named helpers, so this pair prices the order alone.
+        val orAfter = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(false)
+        val yearOrAfter = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 887, orAfter)
+        val fourSharedOrAfter = emit(fourFields, 1, 0, loader, 888, orAfter.withGroupBudget(200))
         val selectionRoot = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
         val filterKernel = emit(Seq(selectionRoot), 1, 1, loader, 884)
         val filterGeneral = emit(Seq(selectionRoot), 1, 1, loader, 885, generalHelpers)
@@ -551,6 +557,9 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
         benchmark.addCase("year, general validity helpers (task 46 A/B), mixed nulls") { _ =>
           chunked(yearGeneral, true)
+        }
+        benchmark.addCase("year, validity OR after the store (task 46 A/B), mixed nulls") { _ =>
+          chunked(yearOrAfter, true)
         }
         benchmark.addCase("dayofweek, mixed nulls") { _ => chunked(dow, true) }
         benchmark.addCase("dayofweek, general validity helpers (task 46 A/B), mixed nulls") { _ =>
@@ -686,6 +695,10 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase(
           "year+month+day+quarter, shared, general helpers (task 46 A/B), mixed nulls") { _ =>
           chunked(fourSharedGeneral, true, outputs = 4)
+        }
+        benchmark.addCase(
+          "year+month+day+quarter, shared, OR after the store (task 46 A/B), mixed nulls") { _ =>
+          chunked(fourSharedOrAfter, true, outputs = 4)
         }
         // The regression guard section 5.2 asks for: two chrono nodes over different dates
         // must not be pushed into one method by the widened budget clause, since there is

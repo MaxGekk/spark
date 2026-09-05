@@ -2093,6 +2093,20 @@ public final class VarkaLoopEmitter {
         emitValidityOr(cb, analysis, s);
         continue;
       }
+      // The validity OR goes *before* the vector computation wherever its word is already
+      // known - an aliased input word in the masked body, the constant in the dense one - and
+      // after it only where the word is computed by the node itself (IfElse, Greatest, Least).
+      // Same bytes either way; what changes is where C2's parser meets the call. Task 46 read
+      // the compiled loop and found the OR helper a real call in every arm, refused with
+      // NodeCountInliningCutoff: the caller is over C2's node budget by the time it reaches the
+      // last call in program order, after the body's Vector API intrinsics have been parsed,
+      // and no size of callee changes that. Parsed first, it is inlined.
+      boolean validityWritten = fillsValidityOnce(analysis, dense, root);
+      boolean wordKnownEarly = analysis.options.validityOrFirst()
+          && (dense || wordKnownBeforeCompute(analysis, s, root));
+      if (!validityWritten && wordKnownEarly) {
+        emitRootValidityOr(cb, dense, analysis, s, o, root);
+      }
       emitValue(cb, root, dense, analysis, s, computed);
       cb.aload(s.dstSeg[o]);
       cb.lload(s.byteOffset);
@@ -2103,18 +2117,45 @@ public final class VarkaLoopEmitter {
       } else {
         cb.invokevirtual(INT_VECTOR, "intoMemorySegment", INTO_MEMORY_SEGMENT_DENSE);
       }
-      if (!fillsValidityOnce(analysis, dense, root)) {
-        cb.aload(s.dstValSeg[o]);
-        cb.iload(s.iVar);
-        cb.i2l();
-        if (dense) {
-          cb.loadConstant(-1L);
-        } else {
-          loadWord(cb, s.wordRef.get(root));
-        }
-        emitValidityOr(cb, analysis, s);
+      if (!validityWritten && !wordKnownEarly) {
+        emitRootValidityOr(cb, dense, analysis, s, o, root);
       }
     }
+  }
+
+  /**
+   * Whether a masked value root's word exists before its subtree is emitted: the all-true
+   * constant, or one of this lane group's input words, which the body computes first. Not
+   * merely "the root computes no word of its own" - a root whose word aliases a child's
+   * <i>computed</i> word ({@code Year(IfElse(...))} reads the blend's slot) is written inside
+   * {@code emitValue}, and reading it earlier is a frame with no such local, which the verifier
+   * rejects.
+   */
+  private static boolean wordKnownBeforeCompute(Analysis analysis, Slots s, VarkaVectorIR root) {
+    int ref = s.wordRef.get(root);
+    if (ref == WORD_ALL_TRUE) {
+      return true;
+    }
+    for (int i = 0; i < analysis.numInputs; i++) {
+      if ((analysis.referencedColumns >>> i & 1L) != 0 && s.word[i] == ref) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** ORs a value root's validity word for this lane group into its destination bitmap. */
+  private static void emitRootValidityOr(CodeBuilder cb, boolean dense, Analysis analysis,
+      Slots s, int output, VarkaVectorIR root) {
+    cb.aload(s.dstValSeg[output]);
+    cb.iload(s.iVar);
+    cb.i2l();
+    if (dense) {
+      cb.loadConstant(-1L);
+    } else {
+      loadWord(cb, s.wordRef.get(root));
+    }
+    emitValidityOr(cb, analysis, s);
   }
 
   /**
