@@ -32,6 +32,9 @@ Six tasks, in the dependency order milestone 4's plan already gave them:
   written against machinery that does not exist yet and says so.
 * **49, exact civil-from-days in long lanes** - depends on 29; its admission
   check is committed (`verify_long_lane_magic.py`) and its gate registered.
+* **65, Joffe's `fast32` civil-from-days in int lanes** - added 5 September
+  2026 (section 2.7): the int32-lane alternative to 49, admitted or declined
+  by a sweep before any emitter change. Independent of 29.
 
 What stays true from milestone 4's plan and is not repeated here: the three
 invariants (one lane width per kernel, every value lane-shaped, no lane reads
@@ -331,11 +334,93 @@ measured cost at AVX-512 is worse than 0.75x - at which point the simplification
 is not worth a quarter of the calendar family's throughput, and the entry goes
 to the debt register with the number attached.
 
+### 2.7 Joffe's `fast32` civil-from-days in int lanes (task 65)
+
+*Added 5 September 2026, from a reading of the Habr translation of Ben Joffe's
+"fast-date-64" post and of the `benjoffe_fast32_v2.hpp` (2026) and
+`benjoffe_fast32_v1_wide.hpp` files in `benjoffe/fast-date-benchmarks`, on the
+owner's request. The same repository was read in September 2026 for task 54
+(`SKILLS.md`, "The Julian map"); what follows is what that review did not
+cover, because the `fast32_v2` file postdates it.*
+
+**What the prefix already took from this source.** The Julian map (task 54,
++25% on `year` at both widths) and the month numerator whose low half is the
+day (task 53). What the earlier review set aside was the rest of `fast64`: it
+reads the *fractional* part of the year division - the low word of a 64x64
+product - as the year-part, and folds the leap day into `(yrs % 4) * 512`, so
+the month/day split never computes a day of year at all. That is four
+multiplies for the whole date against Neri-Schneider's seven, and the review
+filed it under task 49's long lanes because every multiply reads a high half.
+
+**What is new: `fast32_v2`.** Joffe's own 32-bit rewrite of the same chain
+("based on the 64-bit algorithm, but using smaller constants throughout,
+avoiding umulh"), backwards-counting, with the year-part read off the low word
+of a 32x32 product and the month/day split as `m_num = (yrs & 3) * 64 + shift +
+ypt`, `month = m_num >> 8`, `day = ((m_num & 255) * DAY_MUL) >>> 32`. His
+option A is exact from -284,449-07-13 to +284,449-01-30, wider than the
+narrowed prefix's range by an order of magnitude; the scalar measurement puts
+it at 1.18-1.38x Neri-Schneider's time against `fast64`'s 1.00x, on three
+machines. The `fast32_v1_wide` file is the bucket technique the task 54 review
+already recorded as the guard-free fallback (full int32 range, 100% overflow
+safe, at more ops).
+
+**Why it is not a port.** Each of his multiplies is still a 32x32->64 product
+read from the high half (`>> 47`, `>> 32`): scalar-friendly, but the Vector
+API has no multiply-high on any lane, which is the absence task 49 works
+around by halving the lanes. So the transfer to int lanes is what tasks 53 and
+54 did by hand - re-derive each stage as a low-32-bit magic with its own exact
+range - and it is not obvious that every stage survives it: the year-part is
+*defined* as a high-half fraction, and the `(yrs & 3)` absorption of the leap
+day depends on the year-part's scale. The two ideas that transfer without that
+question are the backwards count (no `+ 3` alignment terms and one subtraction
+off the critical path) and the split's shape, in which the month and the day
+come out of one add and one shift.
+
+**Why it may be worth it.** The prefix is latency-bound on its dependent chain
+(task 54's lesson: count stages, not ops), and this chain is one stage shorter
+than the prefix's - no day of year before the month/day split - with one fewer
+correction. Registered expectation: 5-15% on the prefix at both widths if the
+low-product derivation holds over at least the narrowed range, and a wider
+covered range as the second prize, which would shrink what task 52's producer
+guard has to protect. Against that: the numerator of task 53 already gives
+month and day from one multiply, so part of the gain may already be banked.
+
+**The admission check, before any emitter change.** As for task 49, a sweep
+first, committed as a script beside `verify_long_lane_magic.py`:
+
+1. Transcribe the two files' algorithm text and constants into
+   `sql/varka/papers` under the BSL-1.0 notice they carry, with the reading
+   notes; they are code, not a paper, so the notes are the load-bearing part.
+2. Derive, for each stage, a low-32-bit magic (round-down plus at most one
+   carry, as `emitChronoPrefix` does today) and its exact range, and sweep the
+   whole chain against `LocalDate` over the union of the derived ranges. The
+   gate is the narrowed range at minimum
+   (`VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS`); a wider exact range is
+   recorded, a narrower one declines the task.
+3. Count the dependent stages of the surviving chain against the prefix's.
+   If it is not shorter, decline: the op count alone did not predict task 54.
+
+**If admitted:** a `VarkaEmitOptions` variant and an A/B in
+`VarkaEmitterParityBenchmark` beside the task 53 and 54 pairs, at both widths;
+the register and the `HugeMethodLimit` ladder re-pinned, since every prefix
+change moves them; the default chosen from the committed numbers.
+
+**Relation to task 49.** An alternative, not a complement, in the same sense
+2.6 gives for task 32's step B: both shorten the prefix, and whichever lands
+second inherits the smaller half. This one needs no int64 lanes and can run
+before task 29; if it admits and measures well, task 49's own expectation
+(0.75x-1.0x) gets harder to justify on throughput and stands on the
+simplification alone.
+
+**Declined if** step 2's exact range is narrower than today's, or step 3 finds
+no shorter chain, or the A/B is under 1.0x at either width; the numbers go to
+the debt register either way.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
 the milestone; 29 and 30 follow it; 39 and 49 wait on 29; 27 can run at any
-point.
+point; 65 waits on nothing and is an admission check before it is a task.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -345,6 +430,7 @@ point.
 | 30 | ANSI integer arithmetic - **narrowed on 4 September 2026**: the int32 add, subtract, multiply and negate over fused fields, int columns and literals, with the ANSI overflow decline and the `try_*` validity form, moved into milestone 4 as task 63 (`PLAN_MILESTONE_4.md` 2.30); what stays here is the rest | `/` (a double), `div` (task 29's long lane), `%` and `pmod` with the divide-by-zero rule, the int64 forms, and `Multiply` overflow through 28's widening where task 63's saturating check is not enough | The error-identity differential: same `SparkException`, same row, as the row engine under ANSI; `try_*` differential over overflow-dense and overflow-free data; committed number on the no-overflow path against Janino |
 | 39 | `date - date`. **Planned** (`PLAN_TASK_39.md`), blocked on tasks 28 and 29 | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining. The int-to-long step is the two-part `convertShape` from the preferred int species, never a load through a half-width int species: two species of one lane type in one JVM turn the shared `IntVector` templates bimorphic and C2 keeps a heap box per loop iteration (`SKILLS.md`, "Every operator the plans rely on"), and the lane-width "tie" in `VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt` was measured in exactly such a JVM | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
 | 49 | Exact civil-from-days in long lanes. **Planned in section 2.19** (PR #69; there is no `PLAN_TASK_49.md`), blocked on task 29 | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division with a 64-bit low product and no correction carries, run for **both** decompositions - the three-division era/century/year form (146097, 36524, 365) and task 54's two-division Julian map (146097 on `4 * d + 3`, then 1461), which Ben Joffe's `fast64` shows reaching four multiplies for the whole date where Neri-Schneider needs seven; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it. Verified before starting (`SKILLS.md`, "Every operator the plans rely on"): `LongVector.mul` by a constant compiles to one `vpmullq` on this CPU (AVX-512DQ with VL), not the three-multiply emulation plain AVX2 gets, and unsigned long compares are one `vpcmpuq` into a k-mask. Plan B if the 0.75x gate fails: Joffe's bucket technique for a guard-free int-lane total - `bucket = (d + 2^31) >>> 20`, reduce by `bucket * 1022679`, add `bucket * 2800` to the year - about 14 ops against task 26's `TOTAL` at 16 and without the deliberate wrap; his `article_2_l1` variant replaces two of those multiplies with an eight-entry offset table, one lane permute on a 256-bit int species | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
+| 65 | Joffe's `fast32` civil-from-days in int lanes. **Scoped in section 2.7** (5 September 2026); independent of 29 | The admission check first: the two source files transcribed into `sql/varka/papers` with reading notes; a committed script deriving a low-32-bit magic and its exact range per stage and sweeping the chain against `LocalDate`; the dependent-stage count against the prefix's. If admitted, an emit-option variant, the A/B beside the task 53 and 54 pairs at both widths, the register and the `HugeMethodLimit` ladder re-pinned, and the default chosen from the numbers | Exact over at least the narrowed range, or declined; a shorter dependent chain than the prefix's, or declined; the A/B at or above 1.0x at both widths, or the numbers go to the debt register |
 
 ## 4. Files
 
