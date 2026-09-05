@@ -236,7 +236,11 @@ NOT NULL`, `year(d) = 2021`, `dayofweek(d) = 1`, `d < d2 AND month(d) = 6`.
 The list is data in one Java class; task 56's `d + CAST(i AS INTERVAL
 DAY)` (#118, open), `weekofyear`, `make_date` and tasks 57-61's forms are
 one line each when they land, and the final dispatch in PR (B) runs
-whatever the list holds then.
+whatever the list holds then. *Noted after the laptop run (9.1): on this
+branch the three predicates over a calendar field and an int literal plan
+only partly fused (#123 is where the literal is admitted), and the two-column
+`d < d2` in the columnar-consumer shape narrows the filter's output and runs
+through rows; both are marked in the files' plan lines.*
 
 ## 4. Files
 
@@ -328,6 +332,137 @@ besides Varka). The 512-bit runner's files are PR (B)'s.
 3. The shell driver, the datapath probe, `--table`, the quote glob.
 4. The laptop run: four files, section 9, the milestone row.
 
-## 9. Outcome
+## 9. Outcome, PR (A): the driver and the laptop's run
 
-Filled in when the measurement lands.
+Measured on the night of 4-5 September 2026 on the idle laptop under the
+performance governor (canary ok, datapath probe ratio 1.00: the 256-bit
+datapath `SKILLS.md` records), 500M rows in one partition, `--iters 5`,
+two-second warm-up and windows, through `dev/varka_bench_surface.sh` with
+`--max-fixed-share 15`. Four files under `sql/varka/bench/benchmarks/`:
+`DateSurface-spark-4.2.0-jdk17-results.txt`,
+`DateSurface-spark-4.2.0-jdk25-results.txt`,
+`DateSurface-varka-off-jdk25-results.txt` and
+`DateSurface-varka-jdk25-results.txt`, each with its provenance block; the
+numbers below are wall-time rates in M rows/s from those files, stock Spark
+4.2.0 on JDK 17 against this fork with Varka on JDK 25, and the executor-time
+tables beside them agree within the fixed share.
+
+### 9.1 What the laptop says
+
+**Projections, columnar consumer.** Every entry between 15x and 41x:
+`date_add(d, 3)` 74.9 against 1637.0 (21.86x), `datediff(d2, d)` 57.0
+against 1303.4 (22.87x), `year(d)` 48.9 against 1055.8 (21.59x),
+`dayofweek(d)` 36.6 against 1487.7 (40.65x), `last_day(d)` 46.0 against
+802.2 (17.44x), `add_months(d, 3)` 33.5 against 505.5 (15.09x),
+`trunc(d, 'QUARTER')` 26.6 against 804.9 (30.26x), and the fused chain
+`year(date_add(d, 30))` 48.2 against 1069.4 (22.19x). No projection row is
+a loss.
+
+**Filters that fused whole.** Columnar consumer: `d BETWEEN ...` 152.7
+against 1216.2 (7.96x), `d IN (...)` 208.8 against 1405.4 (6.73x), `d IS
+NULL` 209.9 against 1208.7 (5.76x), `d IS NOT NULL` 83.3 against 883.1
+(10.60x), `d = d2` 93.3 against 681.2 (7.30x). Counted, where every selected
+row crosses the read-back floor into the aggregate: `d IN` 215.1 against
+825.2 (3.84x), `d IS NULL` 225.4 against 693.2 (3.08x), `d BETWEEN` 206.5
+against 245.8 (1.19x), and `d IS NOT NULL` at 96.8% selected 189.1 against
+78.7 (0.42x) - the task 19 floor, in the public table as the loss it is.
+
+**Three filter rows are losses, and none is a kernel loss.** `year(d) =
+2021` 86.3 against 59.8 (0.69x), `dayofweek(d) = 1` 50.9 against 43.1
+(0.85x), `d < d2` 67.7 against 43.2 (0.64x), and `d < d2 AND month(d) = 6`
+70.6 against 67.2 (0.95x). `EXPLAIN` on the fork, run while writing this
+section, shows why: the calendar predicates declined at their int literal
+on this branch (the compiler admits an int literal against a fused field
+only from task 37, #123), so the Varka filter took `isnotnull(d)` alone and
+Janino's `Filter` ran over every row through the filter's row-producing
+variant - 16.7 ns per input row is exactly that path; and `SELECT d ... WHERE
+d < d2` narrows the filter's output to one of its two columns, a projection
+the columnar rule does not take, so a Janino `Project` sits above the filter
+and again every selected row is a row. The driver's fusion check had passed
+all three because the plan contained a Varka node; it is a three-way
+classification now (`Fusion.PARTIAL` when a row-engine `Filter` or a
+non-empty `Project` sits above the Varka node, `PlanCheckTest` over the three
+plans as printed), and under `--expect-fused` a partial shape fails the run.
+The first finding closes with #123; the second is new and goes to the debt
+register (9.4).
+
+**The controls.** Stock 4.2.0 on JDK 25 against JDK 17: the date arithmetic
+rows within 11% (`date_add(d, i)` 56.6 to 62.8), but the calendar rows well
+outside it - `year(d)` 48.9 to 65.2 (+33.3%), its counted filter 100.2 to
+142.7 (+42.4%): JDK 25's C2 does better on the row engine's calendar code,
+so the JDK 17 column is the one a reader upgrading from today's Spark sees
+and the JDK 25 column the one that isolates Varka. The fork with Varka off
+against stock on JDK 25: every row within 4% except `trunc(d, 'QUARTER')`
+26.8 to 35.9 (+34.0%) and `trunc(d, 'WEEK')` 65.6 to 63.2 (-3.7%), so the
+fork's row engine is stock's, and the one row that is not is explained
+before PR (C) quotes it (9.4).
+
+**The fixed share.** 5.1% to 9.6% on the Varka projection rows (0.2% to
+0.4% on the filters, whose wall time is seconds): about 25 to 45 ms of
+planning and commit per job against 300 to 600 ms of kernel, so section
+2.29's 5% rule is **not met at 500M rows**, and the run passed only because
+the night script set the gate at 15%. The machine has 83 GB, so 1B rows
+(12 GB cached) is the next run's size; the executor-time table already
+gives the engine-only number, and every ratio quoted above moves by under
+one part in twenty between the two tables.
+
+### 9.2 The predictions of 6.1, scored
+
+1. **Every Varka projection row at 180-600 ms of wall time with a fixed
+   share under 5%.** The first half held (305 ms for `date_add(d, 3)`, 989
+   ms for `add_months`); the second **missed**: 5.1% to 9.6%, because the
+   per-job fixed cost is 25-45 ms when every iteration plans its query
+   afresh and commits a `noop` write, not the 10 ms task 56's probe saw on a
+   reused plan.
+2. **4x to 10x on the projections, 2x to 4x on the filters.** Exceeded by
+   two to four times on the projections (15x to 41x), because stock Spark's
+   cached-table scan and codegen run at 27-75 M rows/s over 500M rows here,
+   where the in-repo Janino baseline at 2M rows ran two to three times
+   faster from cache-resident data and the in-repo Varka rows were paying
+   the fixed cost - the varka-off control shows it is the row engine at this
+   size, not the fork. The filters landed above the band where they fused
+   (5.8x to 10.6x columnar) and below it where they did not (9.1).
+3. **Stock on JDK 25 within 10% of JDK 17 on every row.** **Missed** on the
+   calendar rows (+33% to +42%) and at the edge on day arithmetic (+7% to
+   +11%).
+4. **The fork with Varka off within 20% of stock on JDK 25.** Held on every
+   row but `trunc(d, 'QUARTER')` (+34.0%), to be explained.
+5. **No projection loss; the filters closest to 1x at `d IS NULL`.** The
+   first half held; the second missed - `d IS NULL` is 5.76x and 3.08x, and
+   the rows near or under 1x are the three partial-fusion shapes and the
+   counted `d IS NOT NULL`.
+
+### 9.3 What moved that the plan did not list
+
+* The table is 500M rows in one partition, not 200M in fifty tasks: the
+  first 200M-row run left 20-45% of every Varka row outside the executor in
+  per-task scheduling and commit on `local[1]` (the commit history has it).
+* The driver plans every iteration's query afresh, after a reused shuffle
+  stage answered the counted filters in 4 ms with no executor work; and a
+  shape whose best executor time is zero fails the run.
+* The third shape, `filter, columnar consumer`, and the selectivity beside
+  every filter row, since the filter rows split on it.
+* The fusion check is three-way (9.1), with a test over the plans as printed.
+* The fixed-share gate is a script option, and the night run set it at 15%.
+
+### 9.4 What PR (A) leaves for later
+
+* **A column-narrowing projection above a Varka filter runs through rows.**
+  `SELECT d FROM t WHERE d < d2` plans a Janino `Project` over the
+  row-producing filter, because a projection with no fusable entry is not
+  eligible even when every entry is a forwarded column of a Varka child. The
+  fix is small - let `VarkaFilterExec` prune its output to the columns the
+  parent needs, or take a forwarded-only projection when the child is a
+  Varka node - and it is worth a task row: every two-column predicate whose
+  consumer wants fewer columns pays the floor today. Recorded in
+  `PLAN_MILESTONE_4.md`'s debt register.
+* **The 1B-row run**, after the stack (#123 to #130) lands and the surface
+  gains its entries (`weekofyear`, `make_date`, the ISO fields, the column
+  forms of `next_day`, `add_months` and `trunc`, `d < d2` narrowed), which
+  replaces these four files with ones that meet the 5% rule and show the
+  calendar predicates fused.
+* **`trunc(d, 'QUARTER')` on the fork's row engine is 34% faster than
+  stock's**: the fork tracks master, whose `truncDate` may differ from
+  4.2.0's; to be read before PR (C) quotes the row.
+* PR (B), the runner with the pinned Xeon and the datapath probe; PR (C),
+  the README from the runner's files.
