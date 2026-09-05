@@ -208,12 +208,35 @@ lane mask at 8, so those two widths need neither mask nor shift. At 4 and 2
 lanes a group starts mid-byte, so those keep `row & 7` as the shift and a
 constant mask (`0xF`, `0x3`) - still one byte access and no switch.
 
-**The size gate.** Each specialised helper must come in at or under C2's
+**The size gate.** Each specialised helper should come in at or under C2's
 `MaxInlineSize` so that it inlines whether or not the call site is judged hot.
 That is a property the build can check rather than hope for: section 5 adds a
 test that reads each helper's `Code` length and compares it against the JVM's
 own `MaxInlineSize` (`HotSpotDiagnosticMXBean`, falling back to 35). If a
 helper does not fit, the test says so before any benchmark does.
+
+**Update, when they were written.** `javap` over the built class, against the
+general pair's 153 and 212 bytes:
+
+| lanes | reader | writer |
+|---|---|---|
+| 2 | 18 | 48 |
+| 4 | 25 | 48 |
+| 8 | 18 | 33 |
+| 16 | 18 | 33 |
+
+Every reader fits `MaxInlineSize`, and so do the two byte-aligned writers. The
+2- and 4-lane writers do not: they carry the lane mask and the shift the
+aligned pair folds away, and the two `MemorySegment` accesses alone are 16 of
+those bytes. The gate is therefore split rather than dropped - the aligned
+writers and every reader are held to `MaxInlineSize`, all four writers to
+`FreqInlineSize` (325, the bound C2 uses at a call site it judges hot, which a
+kernel's inner loop is), and every writer to a third of the general form. What
+this costs is the guarantee on a call site that has not been profiled yet; the
+binding constraint on the general pair was never its size but the node count
+of its four-arm switch, and these have a quarter of it. Section 6.1's
+prediction 2 stands as registered and is scored in section 9 with this
+paragraph as its evidence.
 
 The partial (epilogue) pair is **not** specialised. It runs once per batch, so
 its call cost is amortised over every row; specialising it would double the

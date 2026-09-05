@@ -1327,6 +1327,54 @@ the differential compares dense against masked validity byte for byte - and beca
 promises every Arrow reader stops at `valueCount`. Producing identical bits is what lets the
 existing differential be the change's oracle rather than something to rewrite.
 
+## Price a refused call before designing around it, and let the emitter name the width
+
+Task 46, whose whole design came out of reading the committed A/B rows rather than from the
+section that scoped it.
+
+**A refused call costs about 2 ns per lane group, and that figure does not move with the vector
+width.** The `denseValidityOnce=false` variant is an exact A/B for one `orValidityBitsAt` per
+output per lane group, and dividing its cost back out over the rows a group covers gives 1.95
+and 1.87 ns at AVX-512 and 128-bit for `year`, 2.35 and 2.18 for the shared four-field shape,
+3.24 and 2.55 for the hand-written kernel. That is the arithmetic behind "a per-group fixed cost
+is worth four times as much to remove at 128-bit": the call is the same call, and a four-lane
+group amortises it over four rows instead of sixteen. Once a per-group cost is priced this way,
+the ceiling of any change that removes it is arithmetic rather than hope.
+
+**Which of two calls is the cost can be read off the same rows.** The masked body adds a
+`validityBitsAt` read and the branchy word computation to the dense one, and the masked rows sit
+within 0.02 to 0.04 ns/row of their dense-plus-one-write A/B rows at both widths. A call that is
+not inlined cannot be that cheap, so the 153-byte reader is inlining and the 212-byte writer is
+not - two helpers in the same file, the same shape, the same call site, and only one of them is
+a problem. Size alone does not tell you which: both are under `FreqInlineSize`, and what refuses
+the writer is the node count of four `get`/`set` arms against the reader's four `get`s.
+
+**An emitter can specialise per machine width; hand-written Java cannot.** The lane count is a
+constant when the bytes are written, so the callee can carry it in its name -
+`orValidityBitsAt16` with the switch resolved, the lane mask folded into the narrowing cast and
+no shift at all where a group starts on a byte boundary. A Java caller cannot pick a method by a
+lane count without writing the switch it is trying to avoid. Two consequences: the emitted rows
+should be expected to pull further ahead of the hand-written reference kernels on masked shapes,
+which is a real difference and not a harness artifact; and the emitted class becomes
+width-specific, so the concrete species (`SPECIES_512`) is baked in beside the helper names
+rather than `SPECIES_PREFERRED` being read at run time. Baking removes the invariant instead of
+documenting it: a class that computes at one width and writes validity for another is not
+expressible.
+
+**Sizes, measured rather than assumed** (`javap -c -p`, JDK 25): the general pair is 153 and 212
+bytes; the specialised readers are 18 to 25; the byte-aligned writers 33; the 2- and 4-lane
+writers 48, because a group that starts mid-byte needs a mask and a shift, and two
+`MemorySegment` accesses alone are 16 bytes. `MaxInlineSize` is 35 and `FreqInlineSize` is 325,
+so the unaligned writers keep their guarantee only at a call site C2 judges hot. Worth knowing
+before designing a gate around the smaller bound.
+
+**A defect the same work surfaced:** `VarkaEmitOptions.canonical()` had omitted `truncDate` since
+task 35, so two option values differing only there rendered the same string and shared one
+execution identity in the shape cache's side table, while being different keys in its map. It
+was invisible because nothing asserted the rendering was complete. A test that walks the record's
+components and requires each to change the rendering is worth more than the fix: the next
+component cannot be forgotten by the person who forgets it.
+
 ## Read two fields out of one product, and put the axis where the formula wants it
 
 Task 53. The civil-from-days prefix used to find the month with a magic multiply on the March
