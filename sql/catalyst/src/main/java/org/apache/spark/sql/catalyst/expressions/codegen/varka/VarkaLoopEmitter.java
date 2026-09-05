@@ -64,9 +64,11 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Or;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Quarter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.SubDays;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ThursdayOf;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncLevel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekDay;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Year;
 
 /**
@@ -330,6 +332,19 @@ public final class VarkaLoopEmitter {
    * slots - fresh named slots rather than a reuse, {@code PLAN_TASK_36.md}'s lesson.
    */
   private static final int MAKE_DATE_TMP_COUNT = 18;
+
+  /**
+   * What {@link VarkaVectorIR.ThursdayOf} and {@link VarkaVectorIR.WeekOfYear} (task 37) weigh
+   * against {@link #GROUP_BUDGET}, counted the way {@link #NEXT_DAY_WEIGHT} and
+   * {@link #DAY_OF_YEAR_WEIGHT} are, and read off the emitted bytes rather than estimated:
+   * the shift's dense loop carries 19 {@code IntVector} calls ({@code weekday}'s 17 plus its
+   * add and subtract), and {@code weekofyear}'s 64 (the shift, then the day-of-year tail and
+   * {@code (doy - 1) / 7 + 1} by {@link VarkaChrono#WEEK_M}). Both exceed the budget, so no
+   * grouping decision turns on the exact figures; the register in
+   * {@code VarkaLoopEmitterSuite} pins the counts.
+   */
+  private static final int THURSDAY_OF_WEIGHT = 19;
+  private static final int WEEK_OF_YEAR_WEIGHT = DAY_OF_YEAR_WEIGHT + 4;
 
   /**
    * What {@link VarkaVectorIR.DayOfWeekIso} (task 57) weighs against {@link #GROUP_BUDGET},
@@ -734,6 +749,9 @@ public final class VarkaLoopEmitter {
     if (node instanceof DayOfYear) {
       return DAY_OF_YEAR_WEIGHT;
     }
+    if (node instanceof WeekOfYear) {
+      return WEEK_OF_YEAR_WEIGHT;
+    }
     if (node instanceof TruncDate n) {
       return switch (n.level()) {
         case MONTH -> CHRONO_WEIGHT;
@@ -746,6 +764,9 @@ public final class VarkaLoopEmitter {
     }
     if (node instanceof MakeDate) {
       return MAKE_DATE_WEIGHT;
+    }
+    if (node instanceof ThursdayOf) {
+      return THURSDAY_OF_WEIGHT;
     }
     if (node instanceof DayOfWeekIso) {
       return DAY_OF_WEEK_ISO_WEIGHT;
@@ -786,6 +807,7 @@ public final class VarkaLoopEmitter {
       case AddMonths n -> n.days();
       case LastDay n -> n.days();
       case TruncDate n -> n.days();
+      case WeekOfYear n -> n.days();
       default -> throw new IllegalStateException("not a calendar node: " + node);
     };
   }
@@ -815,6 +837,8 @@ public final class VarkaLoopEmitter {
       // Year and DayOfYear do, under either lowering (the recompose form's January month is a
       // constant).
       case TruncDate n -> n.level() != TruncLevel.YEAR;
+      // The week tail is the day-of-year tail plus a division: no month.
+      case WeekOfYear n -> false;
       default -> throw new IllegalStateException("not a calendar node: " + node);
     };
   }
@@ -893,6 +917,7 @@ public final class VarkaLoopEmitter {
       case WeekDay n -> new VarkaVectorIR[] {n.days()};
       case DayOfWeekIso n -> new VarkaVectorIR[] {n.days()};
       case NextDay n -> new VarkaVectorIR[] {n.days(), n.offset()};
+      case ThursdayOf n -> new VarkaVectorIR[] {n.days()};
       case Year n -> new VarkaVectorIR[] {n.days()};
       case Month n -> new VarkaVectorIR[] {n.days()};
       case DayOfMonth n -> new VarkaVectorIR[] {n.days()};
@@ -900,6 +925,7 @@ public final class VarkaLoopEmitter {
       case DayOfYear n -> new VarkaVectorIR[] {n.days()};
       case LastDay n -> new VarkaVectorIR[] {n.days()};
       case TruncDate n -> new VarkaVectorIR[] {n.days()};
+      case WeekOfYear n -> new VarkaVectorIR[] {n.days()};
       case AddMonths n -> new VarkaVectorIR[] {n.days(), n.months()};
       case MakeDate n -> new VarkaVectorIR[] {n.year(), n.month(), n.day()};
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
@@ -1175,6 +1201,7 @@ public final class VarkaLoopEmitter {
           requireLiteralOffset(n.offset(), "next_day's weekday");
           analyzeOp(node, false, n.days(), n.offset());
         }
+        case ThursdayOf n -> analyzeOp(node, false, n.days());
         case Year n -> analyzeOp(node, false, n.days());
         case Month n -> analyzeOp(node, false, n.days());
         case DayOfMonth n -> analyzeOp(node, false, n.days());
@@ -1182,6 +1209,10 @@ public final class VarkaLoopEmitter {
         case DayOfYear n -> analyzeOp(node, false, n.days());
         case LastDay n -> analyzeOp(node, false, n.days());
         case TruncDate n -> analyzeOp(node, false, n.days());
+        case WeekOfYear n -> {
+          requireThursdayChild(n.days());
+          analyzeOp(node, false, n.days());
+        }
         case AddMonths n -> {
           requireLiteralOffset(n.months(), "add_months' month count");
           analyzeOp(node, false, n.days(), n.months());
@@ -1274,6 +1305,19 @@ public final class VarkaLoopEmitter {
       if (!(offset instanceof LiteralSlot)) {
         throw new IllegalArgumentException(
             position + " must be a literal slot, got " + offset);
+      }
+    }
+
+    /**
+     * {@link WeekOfYear}'s lowering, {@code (dayOfYear - 1) / 7 + 1}, is the ISO week only of
+     * a Thursday (task 37), so the node is defined over {@link ThursdayOf} and nothing else:
+     * the compiler builds the pair, and any other tree is a bug, refused here rather than
+     * emitted as a plausible wrong week.
+     */
+    private static void requireThursdayChild(VarkaVectorIR days) {
+      if (!(days instanceof ThursdayOf)) {
+        throw new IllegalArgumentException(
+            "WeekOfYear's child must be a ThursdayOf, got " + days);
       }
     }
   }
@@ -1500,7 +1544,7 @@ public final class VarkaLoopEmitter {
             s.pairTmp.put(node, new int[] {slot++, slot++});
           }
           if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay
-              || node instanceof DayOfWeekIso) {
+              || node instanceof ThursdayOf || node instanceof DayOfWeekIso) {
             // emitFloorMod7's own two scratch slots; NextDay's second copy of the date rides
             // the operand stack (dup/swap in its emitValue arm) rather than needing a third.
             s.dowTmp.put(node, new int[] {slot++, slot++});
@@ -1531,7 +1575,7 @@ public final class VarkaLoopEmitter {
             int count = node instanceof AddMonths ? ADD_MONTHS_TMP_COUNT
                 : node instanceof LastDay ? LAST_DAY_TMP_COUNT
                 : node instanceof TruncDate ? TRUNC_DATE_TMP_COUNT
-                : node instanceof DayOfYear ? CHRONO_PREFIX_SLOTS + 1
+                : node instanceof DayOfYear || node instanceof WeekOfYear ? CHRONO_PREFIX_SLOTS + 1
                 : CHRONO_PREFIX_SLOTS;
             FragmentKey key = fragmentKey(node, dense, s);
             int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
@@ -1583,6 +1627,7 @@ public final class VarkaLoopEmitter {
       case WeekDay n -> s.wordRef.get(n.days());
       case DayOfWeekIso n -> s.wordRef.get(n.days());
       case NextDay n -> s.wordRef.get(n.days());
+      case ThursdayOf n -> s.wordRef.get(n.days());
       case Year n -> s.wordRef.get(n.days());
       case Month n -> s.wordRef.get(n.days());
       case DayOfMonth n -> s.wordRef.get(n.days());
@@ -1590,6 +1635,7 @@ public final class VarkaLoopEmitter {
       case DayOfYear n -> s.wordRef.get(n.days());
       case LastDay n -> s.wordRef.get(n.days());
       case TruncDate n -> s.wordRef.get(n.days());
+      case WeekOfYear n -> s.wordRef.get(n.days());
       case AddMonths n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.months()));
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
@@ -2211,6 +2257,21 @@ public final class VarkaLoopEmitter {
         emitFloorMod7(cb, node, analysis, s);
         emitModOffset(cb, s, 3);
       }
+      case ThursdayOf n -> {
+        // t = d + 3 - weekday0(d), the Thursday of d's Monday-based week (task 37), on
+        // NextDay's pattern: the date's second copy rides the operand stack across
+        // emitFloorMod7, whose two dowTmp slots it would otherwise have to share.
+        emitValue(cb, n.days(), dense, analysis, s, computed);   // [d]
+        cb.dup();                                                // [d, d]
+        line(cb, analysis, node);
+        emitFloorMod7(cb, node, analysis, s);                    // [d, floorMod(d, 7)]
+        emitModOffset(cb, s, 3);                                 // [d, weekday0]
+        cb.swap();                                               // [weekday0, d]
+        cb.loadConstant(3);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);        // [weekday0, d + 3]
+        cb.swap();                                               // [d + 3, weekday0]
+        cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);        // [d + 3 - weekday0]
+      }
       case DayOfWeekIso n -> {
         // WeekDay's tail plus one (task 57): Monday 1 to Sunday 7.
         emitValue(cb, n.days(), dense, analysis, s, computed);
@@ -2256,6 +2317,7 @@ public final class VarkaLoopEmitter {
       case LastDay n -> emitChrono(cb, node, dense, analysis, s, computed);
       case TruncDate n -> emitChrono(cb, node, dense, analysis, s, computed);
       case MakeDate n -> emitMakeDate(cb, n, dense, analysis, s, computed);
+      case WeekOfYear n -> emitChrono(cb, node, dense, analysis, s, computed);
       case Greatest n -> emitPick(cb, n, n.left(), n.right(), "max", dense, analysis, s,
           computed);
       case Least n -> emitPick(cb, n, n.left(), n.right(), "min", dense, analysis, s,
@@ -2744,6 +2806,7 @@ public final class VarkaLoopEmitter {
       case LastDay n -> emitChronoLastDay(cb, s, t, neri, julian);
       case TruncDate n -> emitChronoTrunc(cb, n, s, t, neri, julian,
           analysis.options.truncDate());
+      case WeekOfYear n -> emitChronoWeekOfYear(cb, t, era, century, yearOfCentury, rem, julian);
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
   }
@@ -3407,6 +3470,30 @@ public final class VarkaLoopEmitter {
    * ({@link #TRUNC_DATE_TMP_COUNT}); the two prefix carry masks {@code t[6..7]} are dead by here
    * and are reused, as {@code DayOfYear} reuses them.
    */
+  /**
+   * The ISO week tail (task 37): the {@code DayOfYear} tail over the prefix - which here ran
+   * over a {@link ThursdayOf}, the analysis's rule - then {@code (doy - 1) / 7 + 1} by
+   * {@link VarkaChrono#WEEK_M}, four ops. Same slots as {@code DayOfYear}: {@code t[6]} and
+   * {@code t[7]} are the prefix's dead carry scratch, {@code t[8]} the node's own year.
+   * Leaves the week, 1 to 53, on the stack.
+   */
+  private static void emitChronoWeekOfYear(CodeBuilder cb, int[] t, int era, int century,
+      int yearOfCentury, int rem, boolean julian) {
+    int mask = t[6];
+    int leap = t[7];
+    int year = t[8];
+    emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
+    cb.astore(year);
+    emitLeapFlag(cb, year);
+    cb.astore(leap);
+    emitJanuaryDayOfYear(cb, rem, leap, mask);                 // [doy]
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);          // [doy - 1]
+    emitMagic(cb, VarkaChrono.WEEK_M, VarkaChrono.WEEK_K);     // [(doy - 1) / 7]
+    cb.loadConstant(1);
+    cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);          // [week]
+  }
+
   private static void emitChronoTrunc(CodeBuilder cb, TruncDate node, Slots s, int[] t,
       boolean neri, boolean julian, VarkaEmitOptions.TruncDateForm form) {
     int days = t[0];

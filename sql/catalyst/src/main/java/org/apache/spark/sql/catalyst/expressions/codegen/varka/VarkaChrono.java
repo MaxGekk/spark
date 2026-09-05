@@ -259,6 +259,20 @@ public final class VarkaChrono {
   public static final int DOM_K = 26;
 
   /**
+   * Exact magic for {@code / 7} over {@code 0..684}, the domain of {@code dayOfYear - 1}
+   * (task 37): {@code (x * WEEK_M) >>> WEEK_K} is {@code x / 7} for every {@code x} up to 684
+   * and wrong at 685, with a maximum in-domain product of 200,412, nowhere near {@code 2^31}.
+   * The ISO week of a Thursday is {@code (januaryDayOfYear - 1) / 7 + 1}, so this is the
+   * whole of {@code weekofyear}'s arithmetic past the day of year: no correction step, no
+   * floorMod, because the dividend is never negative. Checked over the whole domain and one
+   * past it in {@code VarkaChronoSuite}, not sampled.
+   */
+  public static final int WEEK_M = 293;
+
+  /** The shift paired with {@link #WEEK_M}. */
+  public static final int WEEK_K = 11;
+
+  /**
    * The month-start map on the 3-based axis: {@code (979 * monthIndex3 - 2919) >>> 5}, equal to
    * {@link #DAY_M}'s {@code (153 * marchMonth + 2) / 5} at all twelve months. A shift rather
    * than a magic multiply, and its numerator runs from 18 to 10787 - never negative, so the
@@ -595,6 +609,24 @@ public final class VarkaChrono {
         ? dayOfYear - (MARCH_TO_JANUARY_DAYS - 1)
         : dayOfYear + MARCH_DAY_OF_YEAR + (isLeapYear(year) ? 1 : 0);
     return new Fields(year, month, dayOfMonth, quarter, januaryDayOfYear);
+  }
+
+  // --- The ISO week, by the Thursday rule (task 37) ------------------------------------------
+
+  /**
+   * Spark's {@code weekofyear} as the emitter computes it, over {@link #narrowed}'s fields:
+   * the day is moved to the Thursday of its Monday-based week, {@code t = d + 3 - weekday0},
+   * and the week is {@code (januaryDayOfYear(t) - 1) / 7 + 1}, since a Thursday's week is
+   * always in the Thursday's own year. Both year-boundary corrections of the textbook rule
+   * vanish by construction. The scalar twin of {@code emitChronoWeekOfYear}, held to
+   * {@code DateTimeUtils.getWeekOfYear} over the whole narrow range by the suite's sweep.
+   * {@code weekday0} is {@code floorMod(d + 3, 7)} because 1970-01-01 was a Thursday.
+   */
+  public static int weekOfYear(int days) {
+    int weekday0 = Math.floorMod(days + 3, 7);
+    int thursday = days + 3 - weekday0;
+    int x = narrowed(thursday).dayOfYear() - 1;
+    return ((x * WEEK_M) >>> WEEK_K) + 1;
   }
 
   // --- The January-based day of year, and the leap flag it needs (task 34) ------------------
