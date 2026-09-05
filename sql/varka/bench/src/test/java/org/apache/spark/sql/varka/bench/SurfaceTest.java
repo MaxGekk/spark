@@ -27,7 +27,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -62,17 +61,20 @@ public class SurfaceTest {
         var df = spark.sql(q);
         assertEquals(1, df.schema().fields().length, q);
         assertEquals(1_000L, df.count(), q);
-        assertFalse(DateSurfaceBenchmark.plansVarka(spark, q), q);
+        assertEquals(DateSurfaceBenchmark.Fusion.PLAIN,
+            DateSurfaceBenchmark.plansVarka(spark, q), q);
       }
       if (e.filter() != null) {
         String qc = DateSurfaceBenchmark.filterColumnarQuery(e);
         assertTrue(spark.sql(qc).count() <= 1_000L, qc);
-        assertFalse(DateSurfaceBenchmark.plansVarka(spark, qc), qc);
+        assertEquals(DateSurfaceBenchmark.Fusion.PLAIN,
+            DateSurfaceBenchmark.plansVarka(spark, qc), qc);
         String q = DateSurfaceBenchmark.filterQuery(e);
         List<Row> rows = spark.sql(q).collectAsList();
         assertEquals(1, rows.size(), q);
         assertEquals(DataTypes.LongType, spark.sql(q).schema().fields()[0].dataType(), q);
-        assertFalse(DateSurfaceBenchmark.plansVarka(spark, q), q);
+        assertEquals(DateSurfaceBenchmark.Fusion.PLAIN,
+            DateSurfaceBenchmark.plansVarka(spark, q), q);
       }
     }
   }

@@ -270,10 +270,46 @@ public final class DateSurfaceBenchmark {
     return "SELECT count(*) FROM varka_dates WHERE " + e.filter();
   }
 
-  /** Whether the physical plan of {@code query} has a Varka node, read through EXPLAIN. */
-  static boolean plansVarka(SparkSession spark, String query) {
+  /** What the physical plan says about a shape: see {@link #classifyPlan}. */
+  enum Fusion { FUSED, PARTIAL, PLAIN }
+
+  /** The plan's verdict for {@code query}, read through EXPLAIN. */
+  static Fusion plansVarka(SparkSession spark, String query) {
     List<Row> rows = spark.sql("EXPLAIN " + query).collectAsList();
-    return !rows.isEmpty() && rows.get(0).getString(0).contains("Varka");
+    return rows.isEmpty() ? Fusion.PLAIN : classifyPlan(rows.get(0).getString(0));
+  }
+
+  private static final Pattern RESIDUAL_ABOVE = Pattern.compile(
+      "^[\\s+:|-]*(?:\\*\\(\\d+\\) )?(?:Filter |Project \\[[^\\]]+\\])");
+
+  /**
+   * {@code PLAIN} when no Varka node planned; {@code PARTIAL} when one did but a row-engine
+   * {@code Filter} or a non-empty {@code Project} sits above it, which is what the laptop's
+   * first full run measured for {@code year(d) = 2021} (the predicate declined at its literal
+   * and Janino's {@code Filter} ran over every row) and for {@code SELECT d ... WHERE d < d2}
+   * (a column-narrowing projection the rule does not take, so the filter served rows to a
+   * Janino {@code Project}); {@code FUSED} otherwise. An empty {@code Project} above a counted
+   * filter is the aggregate's and is not residual. The plan text alone said "Varka" in all
+   * three cases, which is why a boolean was not enough.
+   */
+  static Fusion classifyPlan(String explain) {
+    String[] lines = explain.split("\\n");
+    int varkaAt = -1;
+    for (int i = 0; i < lines.length; i++) {
+      if (lines[i].contains("Varka")) {
+        varkaAt = i;
+        break;
+      }
+    }
+    if (varkaAt < 0) {
+      return Fusion.PLAIN;
+    }
+    for (int i = 0; i < varkaAt; i++) {
+      if (RESIDUAL_ABOVE.matcher(lines[i]).find()) {
+        return Fusion.PARTIAL;
+      }
+    }
+    return Fusion.FUSED;
   }
 
   private static String runEntry(
@@ -327,11 +363,16 @@ public final class DateSurfaceBenchmark {
       String caseName, String query, Runnable body, Args args, long warmup, long min,
       List<Harness.Case> wall, List<Harness.Case> exec, List<String> plans, List<String> shares,
       PrintStream log, Surface.Entry entry, List<String> violations) {
-    boolean varka = plansVarka(spark, query);
-    if (args.expectFused && entry.expectFused() && !varka) {
+    Fusion fusion = plansVarka(spark, query);
+    boolean varka = fusion != Fusion.PLAIN;
+    if (args.expectFused && entry.expectFused() && fusion == Fusion.PLAIN) {
       violations.add("expected fused, planned without a Varka node: " + query);
     }
-    log.println("Running: " + query + (varka ? "  [Varka]" : "  [plain]"));
+    if (args.expectFused && entry.expectFused() && fusion == Fusion.PARTIAL) {
+      violations.add("expected fused, but a row-engine Filter or Project sits above the Varka "
+          + "node: " + query);
+    }
+    log.println("Running: " + query + "  [" + fusion.name().toLowerCase(Locale.ROOT) + "]");
     long kernelBefore = batches.kernel();
     long fallbackBefore = batches.fallback();
     Harness.Samples s = Harness.measure(body, System::nanoTime, executor::millis, drain,
@@ -354,8 +395,9 @@ public final class DateSurfaceBenchmark {
     exec.add(new Harness.Case(caseName, x));
     String shape = caseName;
     plans.add(shape + (varka
-        ? String.format(Locale.ROOT, " Varka (kernel %d batches, fallback %d)", kernelBatches,
-            fallbackBatches)
+        ? String.format(Locale.ROOT, " Varka%s (kernel %d batches, fallback %d)",
+            fusion == Fusion.PARTIAL ? ", residual Filter/Project above" : "",
+            kernelBatches, fallbackBatches)
         : " plain"));
     double share = 100.0 * (w.bestMs() - x.bestMs()) / w.bestMs();
     shares.add(String.format(Locale.ROOT, "%s %.1f%%", shape, share));
