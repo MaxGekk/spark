@@ -204,7 +204,7 @@ public sealed interface VarkaVectorIR
    */
   sealed interface Chrono extends VarkaVectorIR
       permits Year, Month, DayOfMonth, Quarter, DayOfYear, LastDay,
-      TruncDate {}
+      TruncDate, TruncDateDynamic {}
 
   /**
    * {@code date +- INTERVAL n MONTH/YEAR} and {@code add_months(date, n)} (task 40): month
@@ -269,6 +269,21 @@ public sealed interface VarkaVectorIR
   record TruncDate(VarkaVectorIR days, TruncLevel level) implements Chrono {}
 
   /**
+   * {@code trunc(date, fmt)} with a format <i>column</i> (task 61): {@code level} is a
+   * {@link ColumnRef} to the int32 column the evaluator derives per batch from the strings
+   * ({@code TruncLevelLeaf}), holding {@code DateTimeUtils.parseTruncLevel}'s own code - 6
+   * ({@code WEEK}) to 9 ({@code YEAR}) - in every valid lane and a null lane elsewhere. The
+   * row picks its period after the fact, so the tail computes all four results off one prefix
+   * and one mod-7 and blends on the level: roughly the three literal tails plus the week's,
+   * which is why this is a separate node from {@link TruncDate} rather than a fourth level of
+   * it, and why a literal format keeps compiling to the literal node. The output's validity
+   * is the AND of both inputs', so a null or unrecognised format nulls the row exactly as the
+   * row engine's NULL does. A {@link Chrono} member like {@link TruncDate}; its decomposed
+   * child is {@code days}.
+   */
+  record TruncDateDynamic(VarkaVectorIR days, VarkaVectorIR level) implements Chrono {}
+
+  /**
    * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is
    * derived from it and must be stable across JVMs, restarts and JDK releases - one shape,
    * one {@code VarkaFusedProjection_<hash>} name, everywhere. {@link Record#toString} makes
@@ -310,6 +325,8 @@ public sealed interface VarkaVectorIR
       case DayOfYear n -> "(dayOfYear " + canonical(n.days()) + ")";
       case LastDay n -> "(lastDay " + canonical(n.days()) + ")";
       case TruncDate n -> "(truncDate:" + n.level().name() + " " + canonical(n.days()) + ")";
+      case TruncDateDynamic n ->
+          "(truncDateDynamic " + canonical(n.days()) + " " + canonical(n.level()) + ")";
       case AddMonths n ->
           "(addMonths " + canonical(n.days()) + " " + canonical(n.months()) + ")";
     };
@@ -373,6 +390,8 @@ public sealed interface VarkaVectorIR
       case LastDay n -> "(lastDay " + lineOf.applyAsInt(n.days()) + ")";
       case TruncDate n ->
           "(truncDate:" + n.level().name() + " " + lineOf.applyAsInt(n.days()) + ")";
+      case TruncDateDynamic n -> "(truncDateDynamic " + lineOf.applyAsInt(n.days()) + " "
+          + lineOf.applyAsInt(n.level()) + ")";
       case AddMonths n -> "(addMonths " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.months()) + ")";
     };
