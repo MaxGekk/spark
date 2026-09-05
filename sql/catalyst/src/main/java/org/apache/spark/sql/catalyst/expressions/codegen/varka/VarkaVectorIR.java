@@ -50,9 +50,9 @@ public sealed interface VarkaVectorIR
     permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
             VarkaVectorIR.IfElse, VarkaVectorIR.Greatest, VarkaVectorIR.Least,
-            VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.NextDay,
-            VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono, VarkaVectorIR.AddMonths,
-            VarkaVectorIR.Cond {
+            VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.DayOfWeekIso,
+            VarkaVectorIR.NextDay, VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono,
+            VarkaVectorIR.AddMonths, VarkaVectorIR.Cond {
 
   /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
   enum LaneType { INT }
@@ -178,6 +178,15 @@ public sealed interface VarkaVectorIR
 
   /** Spark's {@code weekday} (task 11): {@code floorMod(days + 3, 7)}, Monday = 0. */
   record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {}
+
+  /**
+   * {@code extract(DAYOFWEEK_ISO FROM d)} / {@code date_part('DOW_ISO', d)} (task 57): Monday 1
+   * to Sunday 7, which the analyzer spells {@code Add(WeekDay(d), Literal(1))}. One node rather
+   * than a general integer add: the value cannot overflow (a constant one over {@code 0..6}),
+   * and integer arithmetic over an output is milestone 5's task 30. The tail is {@link WeekDay}'s
+   * plus one lanewise add, the same op that separates {@link DayOfWeek} from {@link WeekDay}.
+   */
+  record DayOfWeekIso(VarkaVectorIR days) implements VarkaVectorIR {}
 
   /**
    * Spark's {@code next_day(date, day_of_week)} (task 33): the first date strictly later than
@@ -323,6 +332,7 @@ public sealed interface VarkaVectorIR
       case Least n -> "(least " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + canonical(n.days()) + ")";
       case WeekDay n -> "(weekDay " + canonical(n.days()) + ")";
+      case DayOfWeekIso n -> "(dayOfWeekIso " + canonical(n.days()) + ")";
       case NextDay n -> "(nextDay " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
       case ThursdayOf n -> "(thursdayOf " + canonical(n.days()) + ")";
       case Year n -> "(year " + canonical(n.days()) + ")";
@@ -386,6 +396,7 @@ public sealed interface VarkaVectorIR
           + lineOf.applyAsInt(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + lineOf.applyAsInt(n.days()) + ")";
       case WeekDay n -> "(weekDay " + lineOf.applyAsInt(n.days()) + ")";
+      case DayOfWeekIso n -> "(dayOfWeekIso " + lineOf.applyAsInt(n.days()) + ")";
       case NextDay n -> "(nextDay " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.offset()) + ")";
       case ThursdayOf n -> "(thursdayOf " + lineOf.applyAsInt(n.days()) + ")";
