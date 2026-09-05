@@ -88,9 +88,9 @@ for `WEEKDAY`.
 null does. `chronoChild` is `days`; `tailReadsMarchMonth` is true (the
 `MONTH` and `QUARTER` results read it); `dayRange` treats it as `TruncDate`,
 `shifted(days, -365, 0)`; its weight is a new `TRUNC_DYNAMIC_WEIGHT`, the sum
-section 3.3 registers. It takes the subtract form's thirteen chrono slots plus the
-two `dowTmp` scratch slots `emitFloorMod7` needs and one more of its own for
-the level vector (`TRUNC_DYNAMIC_TMP_COUNT`); the four results ride the
+section 3.3 registers. It takes the subtract form's thirteen chrono slots plus
+the two `dowTmp` scratch slots `emitFloorMod7` needs and one more of its own
+for the level vector (`TRUNC_DYNAMIC_TMP_COUNT`); the four results ride the
 operand stack, since the helpers between them only load and store named
 locals (built that way in commit 3; the plan first said three own slots).
 
