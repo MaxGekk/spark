@@ -285,8 +285,10 @@ has to be part of the shape key (`VarkaEmitOptions`' class doc, task 23).
 
 ### 3.7 The neighbour this changes the value of, and does not take
 
-There is a larger idea next to this one, and it should be written down before
-the smaller change lands so the two are not confused.
+There is a larger idea next to this one, and it is now **task 69**
+(`PLAN_MILESTONE_4.md` section 2.34), added out of this admission check. It is
+written down here too, because what this task is worth depends on which of the
+two lands first.
 
 For a value root whose validity word is a pure AND/OR over input bitmaps -
 which is every single-input calendar extraction, and `datediff` and the
@@ -306,8 +308,8 @@ It cannot serve `Cond` roots or `IfElse` blends, whose words are computed from
 comparisons rather than copied from inputs - so it does not remove the call
 this task makes cheap, it removes some of its call sites. And it changes what
 task 47 is left with, which is a scope question for the milestone rather than
-for a plan. Recommended as its own row, sequenced after this one and measured
-against a tree that already has it.
+for a plan. Row 69 is sequenced after this one and measured against a tree
+that already carries it, so the two prizes are never counted twice.
 
 ## 4. Files
 

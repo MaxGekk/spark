@@ -1574,6 +1574,61 @@ range of the two magic divisions over the full int32 month range, the way
 task 65 is admitted; its measurement is a parity row per new node beside
 the int arithmetic rows task 63 adds.
 
+### 2.34 Validity as bitmap algebra in the driver (task 69)
+
+Added 5 September 2026, out of task 46's admission check
+(`PLAN_TASK_46.md` 2 and 3.7), which priced the per-lane-group validity
+write from the committed A/B pairs and found it worth 1.87 to 3.24 ns per
+lane group whatever the vector width. Task 45 took that call off the dense
+path by knowing the answer in advance; 46 makes the calls that survive
+cheap; this task removes most of what survives, on the path 45 could not
+reach, by computing the answer differently rather than faster.
+
+**The observation.** Task 11's mask algebra derives a node's validity word
+from its children's: AND for the null-intolerant ops, OR for
+`greatest`/`least`, a literal all-ones for a slot, and the input's bitmap
+bits for a column. For every root whose derivation uses only those - which
+is every calendar extraction, every date arithmetic node, `datediff`,
+`add_months`, `trunc`, `next_day`, and any composition of them - the
+destination bitmap is a **bytewise function of the source bitmaps over the
+whole batch**, and nothing about it varies per lane group. So it can be
+computed once per batch in the driver, in `(length + 7) / 8` bytes of
+straight-line work, exactly as task 45's `setValid` fills a constant one:
+a copy of the input bitmap in the single-column case, an AND or OR of two
+in the rest, with the final partial byte masked to `length % 8` bits, which
+is the bit-exactness rule `setValid` already documents and
+`assertSameOutput` already enforces.
+
+**What it removes.** For a qualifying root, the loop's per-group
+`orValidityBitsAt`. Where every root of a loop method qualifies, the
+per-group `validityBitsAt` read and the word locals go too, and the masked
+body becomes byte-identical to the dense one - so the shape needs one body
+rather than two, which is a code-size and compile-time result on top of the
+throughput one, and is the part of this task to verify rather than assume.
+
+**What it cannot serve, which is why it does not replace task 46.** A
+`Cond` root's slot is a selection bitmap computed from comparisons, not a
+function of input bitmaps; an `IfElse` blends two branches' words by the
+known-true mask, which is computed per group; and a node that can be null
+on valid inputs - task 42's `make_date`, task 63's `try_*` forms - breaks
+the invariant the derivation rests on. Those keep their per-group call, and
+task 46 is what makes it cheap. The two compose; this one is measured on a
+tree that already has 46, and what is left over is what task 47 is finally
+worth.
+
+**What it is worth, as a bound.** The masked rows cannot pass their dense
+counterparts, and after this task they should approach them: `year` mixed
+nulls at 2291.3 against the dense 3446.0 at AVX-512, and 809.7 against
+1336.2 at 128-bit, with the per-batch bitmap pass costing 512 bytes per
+4096-row batch. That is more than task 46 can reach on those shapes, which
+is the reason this is a row rather than a follow-up note.
+
+**Step two, if step one pays.** The copy can become an alias: an output
+whose validity is exactly one input's bitmap could reference that buffer
+instead of copying it, which is an Arrow ownership and lifetime question at
+the evaluator rather than an emitter one, and is scoped separately inside
+the task's own plan.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1676,6 +1731,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 64 | Statistics-directed guard selection (section 2.31) | Step one: the evaluator runs `IntRangeOps.allWithin` over a guarded producer's offset column against `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS, NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` and picks the unguarded or the guarded kernel from the shape cache per batch; step two: the Arrow cache's per-batch column bounds attached to the `ColumnarBatch` and read before the pass, answering task 56's bound too; each behind a switch | The guarded kernel never runs on the differential's in-range fixtures and the far-offset fixtures still decline; the pass and the lookup priced against the guard on the parity `year(date_add(d, off))` pair, both widths, with a registered prediction that the null-free and mixed-null cost of task 52's guard is recovered; byte identity of the emitter |
 | 67 | Year-month interval columns in the date lane (section 2.32). **Planned** (`PLAN_TASK_67.md`) | `IntervalYearVector` admitted in `isArrowBacked` and `YearMonthIntervalType` in `allocateVector`; the interval column as a value leaf and the interval literal as a slot in the compiler; `d + ym` and `d - ym` with a column interval through task 60's guarded `AddMonths`; comparisons, `IN`, `BETWEEN`, `greatest`/`least`, `coalesce`, `IF`/`CASE` over intervals; the `MONTH`-unit casts as relabels; the interval entries in task 62's surface; the docs' type list. No IR node, no emitter byte | The differential over a cached table with columns of all three units, nulls and values past task 60's month bound, in both ANSI modes, through the projection and the filter, with zero fallbacks where the plan fuses and the declined metric where the bound trips; the evaluator suite with an `IntervalYearVector` input and output; both pinned fixtures unmoved; the compiler suite's shapes and declines (the `YEAR`-unit casts declined with their reason until task 63) |
 | 68 | Year-month interval algebra (section 2.33) | `make_ym_interval`, `extract(YEAR | MONTH FROM ym)` by literal-divisor magic, `ym * k` and `ym / k` with a literal, `ym +- ym`, `-ym`, `abs(ym)` on task 63's nodes with an interval output, the `YEAR`-unit casts; the literal-divisor node that section 2.30's note and scope item 11 both want | The admission check on the rounding of the literal division and the exactness range of the magic divisions over the whole int32 month range; the differential in both ANSI modes with the overflow rows raising the row engine's own error; a parity row per new node beside task 63's; both pinned fixtures re-pinned once |
+| 69 | Validity as bitmap algebra in the driver (section 2.34) | The analysis that says whether a root's validity word is a pure AND/OR over input bitmaps (no `Cond`, no `IfElse`, no node that can be null on valid inputs); the driver's per-batch bitmap pass - a copy for one column, a bytewise AND or OR for several, the final partial byte masked to `length % 8` bits - behind its own switch; the per-group write, and where every root of a loop method qualifies the per-group read and the word locals, not emitted; the one-body-not-two consequence for such shapes verified rather than assumed | The differential at both widths and both switch settings with byte-identical validity, the existing suite as the oracle; `assertSameOutput` holding on the tail byte; the qualifying predicate tested against a `CASE WHEN`, a filter root and a null-on-valid-input node, each of which must not qualify; the masked parity rows measured on a tree that already carries task 46, with a registered bound that no masked row passes its dense counterpart |
 | 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25 | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 
 ## 4. Files
