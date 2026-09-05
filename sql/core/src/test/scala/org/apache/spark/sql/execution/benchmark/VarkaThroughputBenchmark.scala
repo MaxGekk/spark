@@ -286,6 +286,8 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       // The one case that replaces an allocating path (Janino's LocalDate round trip) rather
       // than just fusing arithmetic - the kernel-level 36x of PLAN_TASK_11.md at query level.
       runQueries(baseline, varka, "dayofweek", "SELECT dayofweek(d) AS dw FROM varka_dates")
+      // Task 37: the ISO week by the Thursday rule, the widest single-field kernel.
+      runQueries(baseline, varka, "weekofyear", "SELECT weekofyear(d) AS w FROM varka_dates")
       runQueries(baseline, varka, "mixed projection (partial fusion)",
         "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
       // Chain-depth scaling (PLAN_TASK_14.md 2.3): the fused loop pays one load and one store

@@ -826,6 +826,80 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       s"expected the prefix to be shared: $shared IntVector ops shared vs $unshared unshared")
   }
 
+  // Task 37's days: the ISO corners its plan names - the week-53 years, the January days that
+  // belong to the old year and the December days that belong to the new one - and Velox's
+  // Spark-compatibility fixtures (velox/functions/sparksql/tests/DateTimeFunctionsTest.cpp),
+  // written against Spark by people who had to match it exactly, over the calendar boundary set.
+  private val isoWeekDays: Array[Int] = Array(
+      LocalDate.of(2015, 12, 28), LocalDate.of(2016, 1, 1), LocalDate.of(2019, 12, 30),
+      LocalDate.of(2020, 12, 31), LocalDate.of(2021, 1, 1),
+      LocalDate.of(2004, 12, 31), LocalDate.of(2009, 12, 31), LocalDate.of(2015, 12, 31),
+      LocalDate.of(2026, 12, 31),
+      LocalDate.of(1919, 12, 31), LocalDate.of(1969, 12, 31), LocalDate.of(1960, 1, 1),
+      LocalDate.of(1, 1, 1), LocalDate.of(9999, 12, 31),
+      // leap years ending on a Thursday, a Friday and a Saturday
+      LocalDate.of(2020, 12, 31), LocalDate.of(2004, 12, 31), LocalDate.of(2016, 12, 31)
+    ).map(_.toEpochDay.toInt) ++ calendarBoundaryDays
+
+  private def isoWeekDay(c: Int, i: Int): Int =
+    if (i < isoWeekDays.length) isoWeekDays(i) else i * 9973 - 400000
+
+  test("task 37: weekofyear matches IsoFields over the ISO corners, Velox's fixtures and the " +
+      "calendar boundaries, under both prefix forms and every mod-7 lowering") {
+    // The shift alone and Year over it (task 58's shape) ride along: the oracle for the
+    // shift is java.time's own adjuster, and Year over the Thursday is the ISO week-based
+    // year, both from the definition rather than from the lowering.
+    val thursday = new ThursdayOf(new ColumnRef(0))
+    val roots = Seq[VarkaVectorIR](new WeekOfYear(thursday), thursday, new Year(thursday))
+    for (julian <- Seq(true, false); mod <- VarkaEmitOptions.FloorMod7.values()) {
+      val options = VarkaEmitOptions.DEFAULTS.withJulianMap(julian).withFloorMod7(mod)
+      checkMatrix(roots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = isoWeekDay,
+        ctx = s"julian=$julian mod=$mod", options = options)
+    }
+  }
+
+  test("task 37: weekofyear matches IsoFields on every day from 1990-12-20 to 2030-01-10") {
+    // Forty year boundaries in both directions. The Thursday rule claims the boundaries are
+    // automatic; this is the check, at a length that puts every one of them in a loop lane
+    // and at one that leaves some in a tail lane.
+    val start = LocalDate.of(1990, 12, 20).toEpochDay.toInt
+    val end = LocalDate.of(2030, 1, 10).toEpochDay.toInt
+    val roots = Seq[VarkaVectorIR](new WeekOfYear(new ThursdayOf(new ColumnRef(0))))
+    checkMatrix(roots, 1, Array.empty[Int], Seq(end - start + 1, 4093),
+      nullPatterns.map(p => Seq(p._2)), data = (_, i) => start + i, ctx = "dense")
+  }
+
+  test("task 37: WeekOfYear over anything but a ThursdayOf is refused at analysis") {
+    // The lowering is the ISO week of a Thursday only; the compiler builds the pair, and the
+    // emitter refuses any other tree rather than emitting a plausible wrong week.
+    val col = new ColumnRef(0)
+    val lit = new LiteralSlot(0)
+    for (child <- Seq[VarkaVectorIR](col, new AddDays(col, lit), new NextDay(col, lit))) {
+      val e = intercept[IllegalArgumentException](emitMulti(Seq(new WeekOfYear(child)), 1, 1))
+      assert(e.getMessage.contains("WeekOfYear's child must be a ThursdayOf"), e.getMessage)
+    }
+  }
+
+  test("task 37: the Thursday shift and the week tail cost what PLAN_TASK_37.md 3.3 " +
+      "registered, and adding the nodes moved no sibling's bytes") {
+    // Off the class file, like the task 35 register, at the shipped options.
+    val col = new ColumnRef(0)
+    def ops(root: VarkaVectorIR, literals: Int = 0): Int =
+      laneOps(emitMulti(Seq(root), 1, literals, VarkaEmitOptions.DEFAULTS)._2, "loopDense0")
+    val counts = Seq(
+      ("ThursdayOf", ops(new ThursdayOf(col)), 19),
+      ("weekofyear", ops(new WeekOfYear(new ThursdayOf(col))), 64),
+      ("next_day", ops(new NextDay(col, new LiteralSlot(0)), literals = 1), 18),
+      ("weekday", ops(new WeekDay(col)), 17),
+      ("dayofyear", ops(new DayOfYear(col)), 43),
+      ("month", ops(new Month(col)), 35),
+      ("dayofmonth", ops(new DayOfMonth(col)), 36))
+    val table = counts.map { case (n, got, want) => s"$n=$got (registered $want)" }
+    assert(counts.forall { case (_, got, want) => got == want },
+      s"the register moved; re-pin from these dense-loop IntVector counts:\n  " +
+        table.mkString("\n  "))
+  }
   test("task 57: dayofweek_iso matches getWeekDay + 1 over two whole weeks and the calendar " +
       "boundaries, under every mod-7 lowering") {
     // A full week around 1970-01-01 and one around 2024-01-01, so the Sunday wrap (7, never 0)
@@ -855,6 +929,28 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(counts.forall { case (_, got, want) => got == want },
       s"the register moved; re-pin from these dense-loop IntVector counts:\n  " +
         table.mkString("\n  "))
+  }
+
+  test("task 37: the week tail and Year over one ThursdayOf share a prefix, and neither " +
+      "shares with year over the bare date") {
+    // weekofyear(d) and yearofweek(d) (task 58) in one loop method decompose the Thursday
+    // once, asserted the way the task 32 and 35 sharing tests are; year(d) beside them runs
+    // its own prefix over the date, which is the cost row 37 says a mixed projection pays.
+    val col = new ColumnRef(0)
+    val thursday = new ThursdayOf(col)
+    val pair = Seq[VarkaVectorIR](new WeekOfYear(thursday), new Year(thursday))
+    val wide = VarkaEmitOptions.DEFAULTS.withGroupBudget(200)
+    val shared = laneOps(emitMulti(pair, 1, 0, wide)._2, "loopDense0")
+    val unshared = laneOps(emitMulti(pair, 1, 0, wide.withShareChronoPrefix(false))._2,
+      "loopDense0")
+    assert(unshared - shared >= 20,
+      s"expected the prefix to be shared: $shared IntVector ops shared vs $unshared unshared")
+    val weekAlone = laneOps(emitMulti(Seq(pair.head), 1, 0, wide)._2, "loopDense0")
+    assert(shared - weekAlone < 10,
+      s"Year over the shared shift should cost under ten ops more: $shared vs $weekAlone")
+    val withYear = laneOps(emitMulti(pair :+ new Year(col), 1, 0, wide)._2, "loopDense0")
+    assert(withYear - shared >= 20,
+      s"year(d) beside the pair should run its own prefix: $withYear vs $shared")
   }
 
   test("task 35: the trunc tails cost what PLAN_TASK_35.md section 8 registered, per level " +
@@ -2230,18 +2326,21 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     "23=(greatest 17 22)",
     "24=(least 16 23)",
     "25=(dayOfYear 1)",
-    "26=(greatest 24 25)",
-    "27=(dayOfWeek 1)",
-    "28=(dateDiff 26 27)",
-    "29=(weekDay 1)",
-    "30=(dayOfWeekIso 1)",
-    "31=(least 29 30)",
-    "32=(nextDay 1 2)",
-    "33=(addMonths 1 2)",
+    "26=(thursdayOf 1)",
+    "27=(weekOfYear 26)",
+    "28=(greatest 25 27)",
+    "29=(greatest 24 28)",
+    "30=(dayOfWeek 1)",
+    "31=(dateDiff 29 30)",
+    "32=(weekDay 1)",
+    "33=(dayOfWeekIso 1)",
     "34=(least 32 33)",
-    "35=(least 31 34)",
-    "36=(least 28 35)",
-    "37=(if 10 13 36)").mkString("\n")
+    "35=(nextDay 1 2)",
+    "36=(addMonths 1 2)",
+    "37=(least 35 36)",
+    "38=(least 34 37)",
+    "39=(least 31 38)",
+    "40=(if 10 13 39)").mkString("\n")
 
   /** The class's own LineNumberTable key, parsed back into line -> rendered IR node. */
   private def lineKey(bytes: Array[Byte]): Map[Int, String] = {
@@ -2288,7 +2387,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         new Greatest(new DayOfMonth(col),
           new Least(new Quarter(col),
             new Least(new LastDay(col), new TruncDate(col, TruncLevel.YEAR))))),
-      new DayOfYear(col))
+      new Greatest(new DayOfYear(col), new WeekOfYear(new ThursdayOf(col))))
     val everyNode = new IfElse(
       cond,
       new Greatest(new AddDays(col, lit), new SubDays(col, lit)),
