@@ -49,6 +49,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Con
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
@@ -313,6 +314,14 @@ public final class VarkaLoopEmitter {
    */
   private static final int TRUNC_YEAR_WEIGHT = 53;
   private static final int TRUNC_QUARTER_WEIGHT = 70;
+
+  /**
+   * What {@link VarkaVectorIR.DayOfWeekIso} (task 57) weighs against {@link #GROUP_BUDGET},
+   * counted the way {@link #NEXT_DAY_WEIGHT} is: {@code WeekDay}'s mod-7 tail (17 dense-loop
+   * {@code IntVector} calls under the shipped lowering, per the register in
+   * {@code VarkaLoopEmitterSuite}) plus one add.
+   */
+  private static final int DAY_OF_WEEK_ISO_WEIGHT = 18;
 
   /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
@@ -714,6 +723,9 @@ public final class VarkaLoopEmitter {
     if (isChrono(node)) {
       return CHRONO_WEIGHT;
     }
+    if (node instanceof DayOfWeekIso) {
+      return DAY_OF_WEEK_ISO_WEIGHT;
+    }
     return node instanceof NextDay ? NEXT_DAY_WEIGHT : 1;
   }
 
@@ -855,6 +867,7 @@ public final class VarkaLoopEmitter {
       case DateDiff n -> new VarkaVectorIR[] {n.end(), n.start()};
       case DayOfWeek n -> new VarkaVectorIR[] {n.days()};
       case WeekDay n -> new VarkaVectorIR[] {n.days()};
+      case DayOfWeekIso n -> new VarkaVectorIR[] {n.days()};
       case NextDay n -> new VarkaVectorIR[] {n.days(), n.offset()};
       case Year n -> new VarkaVectorIR[] {n.days()};
       case Month n -> new VarkaVectorIR[] {n.days()};
@@ -1119,6 +1132,7 @@ public final class VarkaLoopEmitter {
         case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
         case DayOfWeek n -> analyzeOp(node, false, n.days());
         case WeekDay n -> analyzeOp(node, false, n.days());
+        case DayOfWeekIso n -> analyzeOp(node, false, n.days());
         case NextDay n -> {
           requireLiteralOffset(n.offset(), "next_day's weekday");
           analyzeOp(node, false, n.days(), n.offset());
@@ -1434,7 +1448,8 @@ public final class VarkaLoopEmitter {
           if (!dense && (node instanceof Greatest || node instanceof Least)) {
             s.pairTmp.put(node, new int[] {slot++, slot++});
           }
-          if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay) {
+          if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay
+              || node instanceof DayOfWeekIso) {
             // emitFloorMod7's own two scratch slots; NextDay's second copy of the date rides
             // the operand stack (dup/swap in its emitValue arm) rather than needing a third.
             s.dowTmp.put(node, new int[] {slot++, slot++});
@@ -1508,6 +1523,7 @@ public final class VarkaLoopEmitter {
       case SubDays n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
       case DayOfWeek n -> s.wordRef.get(n.days());
       case WeekDay n -> s.wordRef.get(n.days());
+      case DayOfWeekIso n -> s.wordRef.get(n.days());
       case NextDay n -> s.wordRef.get(n.days());
       case Year n -> s.wordRef.get(n.days());
       case Month n -> s.wordRef.get(n.days());
@@ -2136,6 +2152,15 @@ public final class VarkaLoopEmitter {
         line(cb, analysis, node);
         emitFloorMod7(cb, node, analysis, s);
         emitModOffset(cb, s, 3);
+      }
+      case DayOfWeekIso n -> {
+        // WeekDay's tail plus one (task 57): Monday 1 to Sunday 7.
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        emitFloorMod7(cb, node, analysis, s);
+        emitModOffset(cb, s, 3);
+        cb.loadConstant(1);
+        cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
       }
       case NextDay n -> {
         // date is needed twice - once inside w = k - d, once again for the final d + r - and
