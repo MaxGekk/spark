@@ -280,8 +280,105 @@ machine.
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+Measured 5 September 2026 on the idle machine under the performance profile
+(the provenance files beside each results file record the governor, the load
+and the canary), regenerated with `dev/varka_bench_regen.sh` at both widths.
+Two parity runs were made; the committed file is the second, and every task
+row of the first agreed with it within 2% at both widths. The numbers below
+are from `sql/catalyst/benchmarks/VarkaEmitterParityBenchmark-jdk25-results.txt`
+and its `-128bit` companion, and from
+`sql/core/benchmarks/VarkaThroughputBenchmark-jdk25-results.txt` and its
+companion; M rows/s throughout.
+
+### 9.1 The parity harness
+
+| row | 256-bit | 128-bit |
+|---|---|---|
+| `trunc(d, 'QUARTER')`, literal kernel (control), null-free | 1554.6 | 566.9 |
+| `trunc(d, 'MONTH')`, literal kernel (control), null-free | 3323.9 | 1263.7 |
+| `trunc(d, level)`, dynamic kernel, null-free | 1172.0 (0.75x of `QUARTER`) | 445.6 (0.79x) |
+| `trunc(d, 'QUARTER')`, literal kernel (control), mixed nulls | 1328.8 | 500.4 |
+| `trunc(d, level)`, dynamic kernel, mixed nulls on the date | 976.2 (0.73x) | 383.9 (0.77x) |
+| trunc-level leaf, valid formats | 27.1 | 31.7 |
+| trunc-level leaf, a tenth sub-day or unrecognised | 27.5 | 33.0 |
+| `trunc(d, fmt)` per row, `parseTruncLevel` then `truncDate` (the row engine) | 22.9 | 25.2 |
+| for scale: weekday leaf, row-engine parser, valid names (task 59) | 26.5 | 31.6 |
+
+The fused path is the leaf plus the kernel: at 256 bits about 36.9 ns for
+the parse and 0.85 ns for the arithmetic per row, against the row engine's
+43.7 ns - the parse is the cost on both sides, and the arithmetic was never
+it. The dynamic kernel against the widest literal tail lands at three quarters
+of its rate, for a kernel that computes four periods instead of one.
+
+### 9.2 Throughput
+
+| query | 256-bit, Janino to Varka | 128-bit |
+|---|---|---|
+| `trunc(d, 'MONTH')` (task 61 control) | 38.1 to 308.8 (8.1x) | 37.1 to 262.0 (7.1x) |
+| `trunc(d, fmt)`, format column | 13.3 to 25.9 (1.9x) | 12.6 to 27.8 (2.2x) |
+| for scale: `next_day(d, s)`, weekday column (task 59) | 14.4 to 59.8 | 14.2 to 60.2 |
+
+### 9.3 The predictions of 6.1, scored
+
+1. **The register: about 100; the literal rows unmoved.** 91, and unmoved:
+   the task 35 register holds at 36/45/62 and the SHA-256 of the emitted class
+   for every literal level under both forms, plus the sibling extractions, is
+   identical before and after the factoring (checked in a scratch run before
+   commit 3; the register test is what stays). Hit, under the estimate for
+   the reasons 3.3 records.
+2. **0.55x-0.7x of `QUARTER` at 256 bits, no lower than 0.5x at 128.** 0.75x
+   and 0.73x at 256, 0.79x and 0.77x at 128: better than the band on both
+   counts. The extra ops are compares and blends, the cheapest kind, and the
+   tail shares the year parts between its year and quarter results rather
+   than paying `QUARTER`'s copy of `YEAR`'s.
+3. **The leaf within 2x of task 59's row-engine parser; the parity ratio
+   against the per-row anchor between 1.5x and 3x.** The first half holds
+   exactly - 27.1 against 26.5, the same `toUpperCase` and a match - and the
+   second **missed**: the ratio is about 1.2x at both widths (37.7 ns fused
+   against 43.7 per row at 256 bits). The prediction counted the arithmetic
+   as a real share of the row engine's cost; it is a few nanoseconds under a
+   forty-nanosecond parse.
+4. **Throughput 2x-4x Janino.** 1.9x at 256 bits, 2.2x at 128: at the floor
+   of the band, for the reason prediction 3 missed. The row engine parses per
+   row too, so fusion removes only the arithmetic and the row-by-row
+   evaluation overhead, and the literal control's 8.1x is what the parse
+   costs against a kernel.
+5. **The literal `trunc` rows unmoved beyond the machine-day variance.** The
+   three subtract-form controls in the parity file moved by at most 3.3%
+   (`trunc YEAR`, mixed nulls) against the #121 baseline, inside the variance
+   #121's two runs recorded.
+
+### 9.4 What moved that the plan did not list
+
+* The node's slots: the plan said three own slots; the build needs one (the
+  level vector), because the four results ride the operand stack and the
+  factored helpers only load and store named locals between them (3.1,
+  amended).
+* `emitChronoTrunc`'s three `SUBTRACT` results became four helpers
+  (`emitTruncMonth`, `emitTruncYearParts`, `emitTruncYear`,
+  `emitTruncQuarter`) that both nodes emit; the literal node's bytes did not
+  move, which the hash check established and the register keeps.
+* `TruncLevelLeaf` restates the four level codes as Java constants: the
+  Scala values are `private[sql]` with no static forwarder, and its suite pins
+  each to its definition.
+* The compiler suite's task 35 decline test spelled its non-foldable case as
+  a bare string column, which now fuses; it is `upper(fmt)` now.
+* The parity run's unrelated rows carried the depressed-row artifacts every
+  regeneration has shown since task 52 - one cluster per run, different rows
+  each time (`sequential kernels`, the depth-4 chain, `datediff` hand-written,
+  a shared-decomposition row) - while the task rows reproduced within 2%
+  across the two runs. Recorded in the debt register.
+
+### 9.5 What the task leaves for later
+
+* **An ASCII fast path for the level leaf.** Task 59's ASCII weekday parser
+  ran about twice its row-engine parser; the same shape here would take the
+  fused row from about 38 ns to about 20 and the throughput ratio from 1.9x
+  toward 3x. A measured change of its own, for the debt register, not built
+  here on a guess.
+* **A constant format column.** When every live lane of a batch carries one
+  level, the dynamic tail still computes four; a per-batch check that picks
+  the literal kernel instead is a scope note, since it needs a batch-level
+  shape decision the evaluator does not make today.
+* The filter's string-column compaction limitation (task 59) applies to
+  this node the same way and is pinned by the same test; its entry stands.
