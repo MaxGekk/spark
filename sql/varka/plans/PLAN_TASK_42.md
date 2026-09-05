@@ -283,7 +283,61 @@ one regeneration on an idle machine. The throughput benchmark gains a
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Built as sections 3-5 describe. `VarkaEmitterParityBenchmark` regenerated at
+both widths overnight by `dev/varka_bench_regen.sh` on the idle machine under
+the `performance` governor (load 0.71 at start, canary ok), read against the
+#121 baseline measured on unchanged master under the same profile;
+`VarkaThroughputBenchmark` regenerated the same morning with the corrected
+class path. Rates in M rows/s from the committed files.
+
+| case | 256-bit | 128-bit |
+|---|---|---|
+| `make_date, NULL form (task 42 A/B), null-free` | 1667.4 | 606.7 |
+| `make_date, ANSI form (task 42 A/B), null-free` | 1692.1 | 717.7 |
+| `make_date, NULL form (task 42 A/B), mixed nulls` | 1484.6 | 569.8 |
+| `make_date, ANSI form (task 42 A/B), mixed nulls` | 1453.5 | 543.6 |
+| `add_months(d, 13), null-free` (the sibling control) | 733.5 | 254.9 |
+| per-row `LocalDate.of` `make_date` | 224.6 | 226.3 |
+| throughput `make_date(y, m, d)`, varka / Janino | 181.1 / 27.7 (6.5x) | 169.4 / 28.7 (5.9x) |
+
+End to end (`VarkaThroughputBenchmark`, the 2M-row three-int-column table,
+load 0.83 at start, canary ok), `make_date` runs 6.5x the Janino row path at
+256 bits and 5.9x at 128; 22 unrelated rows moved by 3% or more against
+#121, between -11% and +22%, the run-to-run floor.
+
+**Predictions scored.**
+
+1. *The register: 55 to 60 for either form, within two of each other.* 57
+   for both forms, dense and masked alike; the suite asserts it.
+2. *1.6x to 2x `add_months`'s rate at 256 bits, no lower than 1.4x at 128.*
+   Better than the band: 2.27x (`NULL`) and 2.31x (`ANSI`) at 256 bits, 2.38x
+   and 2.82x at 128. About half the ops bought more than half the time,
+   because `add_months` recomposes through the same `emitDaysFromCivil` after
+   a decomposition this node does not need.
+3. *At least 8x the per-row `LocalDate.of` anchor at 256 bits.* Missed, at
+   7.4x and 7.5x: the anchor runs at 224.6 M rows/s, faster than the
+   `LocalDate`-per-row paths the other anchors set (about 100 for
+   `getDayOfWeek`, 53 for `getWeekOfYear`), so the ratio is the anchor's, not
+   the kernel's. 2.7x and 3.2x at 128 bits.
+4. *`ANSI` within 3% of `NULL` null-free; `NULL` the slower one with mixed
+   nulls, by the word store.* Half held. Null-free at 256 bits, +1.5% - held;
+   at 128 bits `ANSI` is 18% faster, outside the 3%. With mixed nulls `NULL`
+   is the *faster* form at both widths, by 2% and 5%: the word store did not
+   cost what the prediction charged it, and the `ANSI` form's second mask
+   (the throw mask, computed either way) is what the mixed rows pay for.
+   Neither gap changes the decision - the shipped default is what SQL mode
+   selects, not what the A/B prefers.
+5. *No other row moves beyond the machine-day variance already recorded.*
+   Held: 37 rows moved by 3% or more against #121, between -17% and +9%,
+   with the controls flat; #121's own two runs of identical master code
+   moved 47 rows by 3-13% against each other.
+
+What moved that the plan did not list: nothing in the code. The regen tool's
+default class path does not reach `VarkaThroughputBenchmark`'s package, which
+cost the overnight throughput run (the corrected invocation names the class
+in full). Nothing left for later beyond the 128-bit `ANSI`/`NULL` gap in
+prediction 4, which is an observation about the two masks' cost at the
+narrow width, not a defect.
 
 ---
 
