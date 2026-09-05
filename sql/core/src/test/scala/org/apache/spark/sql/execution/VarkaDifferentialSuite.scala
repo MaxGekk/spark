@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution
 
 import scala.jdk.CollectionConverters._
 
-import org.apache.spark.SparkArithmeticException
+import org.apache.spark.{SparkArithmeticException, SparkDateTimeException}
 import org.apache.spark.sql.{QueryTest, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaEmitOptions, VarkaShapeCache}
 import org.apache.spark.sql.internal.SQLConf
@@ -700,6 +700,34 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
         expectFused = true)
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_iso_turns"))
+    }
+  }
+
+  test("task 42: make_date matches the row engine in both modes - nulls for invalid dates " +
+      "with ANSI off, the row engine's error with ANSI on, the date feeding further work") {
+    cacheDateParts(spark)
+    cacheDateParts(varkaSpark)
+    withAnsi(false) {
+      checkDifferential(spark, varkaSpark,
+        "SELECT make_date(y, m, dd) AS a, year(make_date(y, m, dd)) AS b, " +
+          "date_add(make_date(y, m, dd), 7) AS c, make_date(y, 2, 29) AS e FROM varka_date_parts " +
+          "ORDER BY a, b, c, e",
+        expectFused = true)
+      // The date the valid rows spell comes back as itself; the filter route counts them.
+      checkDifferential(spark, varkaSpark,
+        "SELECT count(*) AS c FROM varka_date_parts WHERE make_date(y, m, dd) = d",
+        expectFused = true)
+    }
+    withAnsi(true) {
+      // The valid rows alone match; the invalid rows raise the same error through both.
+      checkDifferential(spark, varkaSpark,
+        "SELECT make_date(y, m, dd) AS a FROM varka_date_parts WHERE d IS NOT NULL ORDER BY a",
+        expectFused = true)
+      val q = "SELECT make_date(y, m, dd) AS a FROM varka_date_parts ORDER BY a"
+      val expected = intercept[SparkDateTimeException](spark.sql(q).collect())
+      val actual = intercept[SparkDateTimeException](varkaSpark.sql(q).collect())
+      assert(actual.getCondition === expected.getCondition)
+      assert(actual.getMessage === expected.getMessage)
     }
   }
 
