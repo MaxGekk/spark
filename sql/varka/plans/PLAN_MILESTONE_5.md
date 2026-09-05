@@ -35,6 +35,11 @@ Six tasks, in the dependency order milestone 4's plan already gave them:
 * **65, Joffe's `fast32` civil-from-days in int lanes** - added 5 September
   2026 (section 2.7): the int32-lane alternative to 49, admitted or declined
   by a sweep before any emitter change. Independent of 29.
+* **66, second-level chrono fragments** - added 5 September 2026 (section
+  2.8): the calendar tails' shared parts (year and leap flag, January month,
+  month start) factored the way task 32's prefix was, behind the same
+  fragment mechanism. Pays only inside one lane group, so it follows task
+  32's step B2 grouping decision, which it does not change.
 
 What stays true from milestone 4's plan and is not repeated here: the three
 invariants (one lane width per kernel, every value lane-shaped, no lane reads
@@ -416,11 +421,84 @@ simplification alone.
 no shorter chain, or the A/B is under 1.0x at either width; the numbers go to
 the debt register either way.
 
+### 2.8 Second-level chrono fragments (task 66)
+
+*Added 5 September 2026, from the owner's question over the IR data-flow
+drawing (`docs/img/varka/varka-ir-levels.svg`): where the prefixes are, and
+whether there are only two.*
+
+**What exists.** One shared fragment kind: `FragmentKind.CHRONO_PREFIX`, task
+32's step B1 - the civil-from-days decomposition run once per distinct date
+per lane group into eight locals that every `Chrono` tail and `AddMonths` read.
+The mod-7 lowering is not a fragment; `emitFloorMod7` is emitted inside each
+node that needs it. And the calendar tails are in the same state: their
+helpers are factored in the Java source (task 35 and task 61 did it for
+`trunc`) but every node re-emits them against the prefix's locals.
+
+**The register of repeated tails**, read off `VarkaLoopEmitter` on the task 61
+branch as call sites of each helper, each site a node that recomputes the same
+value when it sits beside another consumer over the same date:
+
+| shared value | helper | emitted by |
+|---|---|---|
+| plain year, then the leap flag, then the January day of year | `emitChronoYear` (6 sites), `emitLeapFlag` (4), `emitJanuaryDayOfYear` (2) | `Year`; `DayOfYear`; `TruncDate` YEAR and QUARTER; `TruncDateDynamic`; `LastDay` and `AddMonths` (the leap flag only) |
+| January-based month | `emitChronoMonth` (6 sites) | `Month`; `Quarter`; `TruncDate` QUARTER; `TruncDateDynamic`; `AddMonths`; the recompose `trunc` form |
+| month start, zero-based day of month | `emitMonthStart` (6 sites), `emitZeroBasedDayOfMonth` (2) | `DayOfMonth`; `TruncDate` MONTH; `TruncDateDynamic`; `LastDay`; `AddMonths` |
+| `floorMod(d, 7)` over the same date | `emitFloorMod7` (4 sites) | `DayOfWeek`; `WeekDay`; `TruncDateDynamic`'s week result. Not `NextDay`, whose mod is over `k - d`; the week-rule tasks (37, 57, 58) add consumers through their Thursday shift, which node-level CSE already shares |
+
+So `year(d), dayofyear(d), trunc(d, 'YEAR')` runs the year-and-leap chain three
+times, `month(d), quarter(d)` the month step twice, and `dayofweek(d),
+weekday(d)` the twelve-op mod twice.
+
+**The design is the existing one, one level down.** Three or four more
+`FragmentKind`s (`YEAR_PARTS`, `JANUARY_MONTH`, `MONTH_START`, `FLOOR_MOD_7`),
+keyed by the same decomposed child, body mode and lane group as the prefix
+(`fragmentKey`), allocated once per fragment in `planSlots` and emitted once
+per lane group by the first consumer (`emittedFragments`), the later consumers
+reading the locals. The prefix's slot discipline carries over unchanged: a
+fragment writes only its own locals and never a sibling's, which is the lesson
+`PLAN_TASK_36.md` recorded after doing it the other way first. The tails'
+helpers already take their inputs and outputs as slot numbers, so the change is
+in the planning and the once-per-group check, not in the arithmetic. The
+`elideChronoMonth` question repeats one level down: a fragment is emitted only
+if some consumer in the group reads it, decided over the group as
+`fragmentsReadingMonth` decides the month step today.
+
+**What it is worth, honestly.** A tail is 4-12 ops against the prefix's ~30,
+so this pays only when three or more fields of one date sit in one lane group -
+which is exactly the shape task 32's step B2 makes common by relaxing
+`GROUP_BUDGET` for calendar outputs, and no other. Registered expectation:
+10-25% on the four-field shared row, under 5% on any two-field one, nothing on a
+single-field query. The register test's counts move for every shared shape and
+the `HugeMethodLimit` ladder may move again (every prefix change has), so both
+are re-pinned as fixtures, not as findings.
+
+**Sequencing.** After B2's grouping decision is in (`PLAN_TASK_32.md` 7.2 says
+its gate cleared; the default is a policy the owner sets from both widths'
+numbers). Independent of tasks 29 and 65; if 65 replaces the prefix, the
+year-parts fragment changes shape but not its existence.
+
+**The gate.** The four-field parity row shared under the new fragments against
+the same row under B1 alone, both widths, three runs, minimum best-time, on the
+shape `year(d), dayofyear(d), trunc(d, 'YEAR'), month(d)` and on the committed
+`year+month+day+quarter` row. Under 1.05x at AVX-512 on both: decline, and the
+register above goes to the debt register as the record of what re-emission
+costs.
+
+**Beyond dates.** The next first-level prefixes are milestone 5's timestamp
+work, where sharing will matter more than here because every field pays the
+split first: micros to days plus micros-of-day (under `date(ts)`, the calendar
+tails and the time-of-day tails), seconds-of-day under `hour`/`minute`/`second`,
+and the per-timestamp zone offset once item 2's tzdata design lands. They are
+recorded in section 9's item 2 as the shape to design the fragment keys for,
+not as tasks.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
 the milestone; 29 and 30 follow it; 39 and 49 wait on 29; 27 can run at any
-point; 65 waits on nothing and is an admission check before it is a task.
+point; 65 waits on nothing and is an admission check before it is a task; 66
+follows task 32's B2 grouping decision.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -431,6 +509,7 @@ point; 65 waits on nothing and is an admission check before it is a task.
 | 39 | `date - date`. **Planned** (`PLAN_TASK_39.md`), blocked on tasks 28 and 29 | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining. The int-to-long step is the two-part `convertShape` from the preferred int species, never a load through a half-width int species: two species of one lane type in one JVM turn the shared `IntVector` templates bimorphic and C2 keeps a heap box per loop iteration (`SKILLS.md`, "Every operator the plans rely on"), and the lane-width "tie" in `VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt` was measured in exactly such a JVM | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
 | 49 | Exact civil-from-days in long lanes. **Planned in section 2.19** (PR #69; there is no `PLAN_TASK_49.md`), blocked on task 29 | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division with a 64-bit low product and no correction carries, run for **both** decompositions - the three-division era/century/year form (146097, 36524, 365) and task 54's two-division Julian map (146097 on `4 * d + 3`, then 1461), which Ben Joffe's `fast64` shows reaching four multiplies for the whole date where Neri-Schneider needs seven; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it. Verified before starting (`SKILLS.md`, "Every operator the plans rely on"): `LongVector.mul` by a constant compiles to one `vpmullq` on this CPU (AVX-512DQ with VL), not the three-multiply emulation plain AVX2 gets, and unsigned long compares are one `vpcmpuq` into a k-mask. Plan B if the 0.75x gate fails: Joffe's bucket technique for a guard-free int-lane total - `bucket = (d + 2^31) >>> 20`, reduce by `bucket * 1022679`, add `bucket * 2800` to the year - about 14 ops against task 26's `TOTAL` at 16 and without the deliberate wrap; his `article_2_l1` variant replaces two of those multiplies with an eight-entry offset table, one lane permute on a 256-bit int species | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
 | 65 | Joffe's `fast32` civil-from-days in int lanes. **Scoped in section 2.7** (5 September 2026); independent of 29 | The admission check first: the two source files transcribed into `sql/varka/papers` with reading notes; a committed script deriving a low-32-bit magic and its exact range per stage and sweeping the chain against `LocalDate`; the dependent-stage count against the prefix's. If admitted, an emit-option variant, the A/B beside the task 53 and 54 pairs at both widths, the register and the `HugeMethodLimit` ladder re-pinned, and the default chosen from the numbers | Exact over at least the narrowed range, or declined; a shorter dependent chain than the prefix's, or declined; the A/B at or above 1.0x at both widths, or the numbers go to the debt register |
+| 66 | Second-level chrono fragments. **Scoped in section 2.8** (5 September 2026); after task 32's B2 grouping decision | `FragmentKind`s for the year parts, the January month, the month start and `floorMod(d, 7)`, keyed and planned as the prefix is; emitted once per lane group, elided when no consumer in the group reads them; the register and the `HugeMethodLimit` ladder re-pinned; the A/B beside task 32's shared rows at both widths | The matrix and the whole-range sweep under a widened group budget over every pair and triple of calendar outputs; the byte identity of every single-field kernel; the gate in 2.8 (at or above 1.05x at AVX-512 on both shapes), or the register goes to the debt register |
 
 ## 4. Files
 
