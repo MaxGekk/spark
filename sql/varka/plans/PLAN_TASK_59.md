@@ -359,8 +359,74 @@ gets a `next_day(d, s)` entry once both tasks have merged; not this task.
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+Built as sections 3-5 describe. `VarkaEmitterParityBenchmark` regenerated at
+both widths overnight by `dev/varka_bench_regen.sh` on the idle machine under
+the `performance` governor, read against the #121 baseline measured on
+unchanged master under the same profile; `VarkaThroughputBenchmark`
+regenerated the same morning with the corrected class path. Rates in M rows/s
+from the committed files; the parity section's rows are all null-free unless
+named otherwise.
+
+| case | 256-bit | 128-bit |
+|---|---|---|
+| `next_day(d, 'MON'), literal kernel (control)` | 9084.5 | 4248.8 |
+| `next_day(d, k), column kernel` | 8667.8 | 3590.5 |
+| `next_day(d, k), column kernel, mixed nulls on the date` | 7125.7 | 2910.5 |
+| `weekday leaf, row-engine parser, valid names` | 28.9 | 32.5 |
+| `weekday leaf, ascii parser, valid names` | 62.0 | 64.1 |
+| `weekday leaf, row-engine parser, a tenth unrecognised` | 5.8 | 5.9 |
+| `weekday leaf, ascii parser, a tenth unrecognised` | 63.0 | 72.0 |
+| `next_day(d, s) per row, getNextDateExact` (the anchor) | 28.1 | 32.4 |
+| throughput `next_day(d, 'MON')`, varka / Janino | 318.0 / 46.8 (6.8x) | 304.0 / 47.1 (6.5x) |
+| throughput `next_day(d, s)`, varka / Janino | 60.1 / 13.8 (4.3x) | 62.3 / 14.6 (4.3x) |
+| throughput `next_day(d, s), next_day(d2, s)` (two outputs), varka / Janino | 61.1 / 9.5 (6.5x) | 59.4 / 10.2 (5.8x) |
+
+**Predictions scored.**
+
+1. *The register: 18 for the column form, the literal row unmoved at 18.*
+   Held; the suite asserts both.
+2. *The column kernel within 5% of the literal kernel at both widths.* Held
+   at 256 bits (-4.6%), missed at 128 (-15.5%): the second column's load and
+   validity word weigh more where a lane group is four rows, the same shape
+   task 38 measured for `date_add`'s column offset.
+3. *The ASCII parser at least 5x the row-engine parser on valid names, and
+   at least 50x on the tenth-unrecognised run.* Both margins missed, both
+   comparisons won: 2.1x on valid names (2.0x at 128 bits) and 10.9x on the
+   unrecognised run (12.2x). The row-engine parser is cheaper than the
+   prediction charged it - `toUpperCase(Locale.ROOT)` on a seven-byte string
+   and the `SparkIllegalArgumentException` per bad row cost less than the
+   `String` round trip the prediction assumed dominated. The rule stands as
+   written: the ASCII parser loses neither comparison, so
+   `WeekdayLeaf.DEFAULT_PARSER = ASCII` stays.
+4. *Kernel plus ASCII leaf against the per-row anchor between 1.5x and 3x.*
+   Held: the fused form runs at the harmonic sum of the two, 61.6 M rows/s
+   against the anchor's 28.1 - 2.2x - and 63.0 against 32.4 at 128 bits,
+   1.9x. The kernel is 140 times faster than the leaf, so the fused form is
+   the parse; the arithmetic's saving is invisible behind it, which is the
+   outcome 2.26 priced in and the reason the mechanism's value is in reuse.
+5. *Throughput: 1.0x to 1.5x over Janino for `next_day(d, s)`, the reuse row
+   at least 1.3x over the single row.* Better than the band on the first
+   half: 4.3x at both widths (60.1 against 13.8 M rows/s), because the
+   Janino path with a string column runs at 13.8 where its literal form
+   runs at 46.8 - it pays the parse and a `String` per row - while the
+   fused form pays the leaf once per batch and the kernel almost nothing.
+   The reuse row: 61.1 M rows/s against the single row's 60.1, the same
+   rate for two outputs, which is the leaf paid once for two nodes - 2.0x
+   per output, 1.02x per row; the prediction's 1.3x was written per row
+   and is missed on that reading, held on the one that matters. 6.5x over
+   Janino, whose second `next_day` parses the column a second time.
+   (`VarkaThroughputBenchmark`, the 2M-row `varka_dates_weekday` fixture,
+   load 0.92 at start, canary ok; 35 unrelated rows moved by 3% or more
+   against #121, between -21% and +10%.)
+
+What moved that the plan did not list: the compaction limitation the
+differential suite records (a stacked `next_day(d, s)` projection over a
+Varka filter is refused, `numFallbackBatchesNonArrow`, because the filter
+compacts string columns through the generic on-heap pass) - answers stay
+correct, the entry runs on the row path; and the regen tool's default class
+path, which cost the overnight throughput run (the corrected invocation
+names the class in full).
+
+Left for later, in the milestone's debt register: the string-column
+compaction in `VarkaFilterExec`, which is what would let a derived leaf
+follow a fused filter.
