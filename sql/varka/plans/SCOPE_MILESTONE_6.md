@@ -829,7 +829,11 @@ pays, and that is the number the decision rests on.
 unless item 1 lands a second physical representation of a value earlier - at
 which point the IR decisions above become due, and the engine question is
 asked against real conversions rather than one. Candidate rules and their
-semantic conditions are recorded in the analysis of 5 September 2026.
+semantic conditions are recorded in the analysis of 5 September 2026. The
+engine itself - egg ported to Java 25 as a standalone module, with the
+determinism Varka needs and without proofs, parsing or the ILP extractor -
+is planned in `PLAN_EGRAPH_PORT.md`, independent of this item and buildable
+before it.
 
 ## 5. Ordering
 
