@@ -297,6 +297,8 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
         "SELECT next_day(d, s) AS a FROM varka_dates_weekday")
       runQueries(baseline, varka, "next_day, weekday column reused by two outputs (task 59)",
         "SELECT next_day(d, s) AS a, next_day(d2, s) AS b FROM varka_dates_weekday")
+      // Task 37: the ISO week by the Thursday rule, the widest single-field kernel.
+      runQueries(baseline, varka, "weekofyear", "SELECT weekofyear(d) AS w FROM varka_dates")
       runQueries(baseline, varka, "mixed projection (partial fusion)",
         "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
       // Chain-depth scaling (PLAN_TASK_14.md 2.3): the fused loop pays one load and one store
