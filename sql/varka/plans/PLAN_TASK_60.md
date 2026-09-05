@@ -248,8 +248,65 @@ VarkaEmitterParityBenchmark` on an idle machine. `VarkaThroughputBenchmark`:
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+Built as sections 3 and 8 describe, in two commits (emitter, then compiler
+and differential), with one correction found by the tests and recorded in
+`SKILLS.md`: the guard reads the node's own validity word, which for
+`AddMonths` was computed by the dispatcher after `emitAddMonths` returned,
+so the AND-of-words moved inside the method, right after the count loads.
+`VarkaEmitterParityBenchmark` re-run at both widths by
+`dev/varka_bench_regen.sh` on the idle machine under the `performance`
+governor (load 0.90 at start, canary compute +0.2%, cache -1.4%, memory
+-2.4%), against the #121 baseline measured on unchanged master under the
+same profile; `VarkaThroughputBenchmark` regenerated the same morning with
+the corrected class path. Rates in M rows/s from the committed files.
+
+| case | 256-bit | 128-bit |
+|---|---|---|
+| `add_months(d, m), guard on (task 60 A/B), null-free` | 697.6 | 242.4 |
+| `add_months(d, m), guard off (task 60 A/B), null-free` | 718.6 | 251.9 |
+| `add_months(d, m), guard on (task 60 A/B), mixed nulls` | 624.8 | 209.6 |
+| `add_months(d, m), guard off (task 60 A/B), mixed nulls` | 662.3 | 240.4 |
+| `add_months(d, 13), null-free` (the literal control) | 733.8 | 254.7 |
+| `year(date_add(d, off))`, guard on / off (task 52's pair, null-free) | 2961.0 / 3157.7 | 1203.8 / 1254.6 |
+| throughput `add_months(d, m)`, varka / Janino | 170.8 / 24.9 (6.9x) | 119.9 / 25.8 (4.7x) |
+| throughput `add_months(d, 13)`, varka / Janino | 185.5 / 28.6 (6.5x) | 119.0 / 28.1 (4.2x) |
+
+**Predictions scored.**
+
+1. *The register: 114 with the guard, 112 without; the literal row
+   unmoved.* Held exactly; the suite asserts it, and `year(date_add(d,
+   off))`'s 38 did not move either.
+2. *The count guard under 4% null-free and under 6% with mixed nulls at
+   both widths.* Held at 256 bits (-2.9% null-free, -5.7% mixed) and for the
+   null-free row at 128 (-3.8%); missed with mixed nulls at 128 bits, -12.8%.
+   The overnight run read the same four within a point (-3.6%, -5.5%,
+   -3.7%, -12.2%), so the miss is the shape, not noise: task 52's finding
+   again - the masked body's guard pays `VectorMask.fromLong` for the word
+   AND, and at 128 bits that is a larger share of a four-lane group. On the
+   light kernel beside it the same guard costs -6.2% null-free (task 52's
+   pair), so the heavy kernel does pay a smaller share, as section 6.1
+   reasoned; the mixed-null narrow case is where the reasoning ran out.
+3. *The column kernel with the guard off within 3% of the literal kernel.*
+   Held: -2.1% at 256 bits, -1.1% at 128 - one load in place of a broadcast
+   on a 112-call body.
+4. *Throughput: the column row within 10% of the literal row, both above
+   the baseline by the `add_months` ratio.* Held: -7.9% at 256 bits and
+   +0.8% at 128, at 6.9x and 4.7x over Janino against the literal's 6.5x
+   and 4.2x - the Janino path itself is slower with a column (24.9 against
+   28.6), so the ratio is higher for the column form.
+
+What moved that the plan did not list: the differential's "WHERE m BETWEEN
+..." idea does not fuse - a bare int column is not a filter operand the
+compiler reads (task 38's scope note) - so the guard-silent and filter-route
+cases use the nullable-offset fixture and task 52's calendar-equality shape
+instead; and the parity harness's run-to-run bimodality showed a third face:
+the overnight file had the `CASE WHEN` and `arithmetic depth 4` rows at a
+third of their value, this re-run has them in family and instead carries
+the three task 45 "validity OR-ed per group" rows 21-46% under #121, none of
+which this node's bytes touch. Recorded against the debt register's entry
+on those rows; the task 60 rows themselves agree across the two runs within
+one point.
+
+Left for later: nothing of this task's; the narrow-width mixed-null guard
+cost belongs with task 52's `fromLong` finding, already a lesson in
+`SKILLS.md` and a candidate for the mask-reuse it names.
