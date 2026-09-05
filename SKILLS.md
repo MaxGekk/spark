@@ -1247,6 +1247,17 @@ it). Two things came out of building it.
   byte at or above 0x80 to `getDayOfWeekFromString` itself, and `WeekdayLeafSuite` holds both
   parsers to the definition over every case pattern of the 21 spellings, every one- and
   two-byte ASCII string and every printable one-byte mutation of every spelling.
+- **The second leaf had no ANSI question at all, and that was a finding, not an assumption**
+  (task 61, `trunc(d, fmt)` with a format column). `TruncDate` has no `failOnError`, and
+  `TruncInstant.evalHelper` answers every non-date level - a null format, an unrecognised
+  spelling, `'DAY'` and below - with NULL in both modes, so the kind (`TRUNC_LEVEL`) has no
+  ANSI twin and `TruncLevelLeaf` never declines. The order of work that made this cheap: read
+  the row engine's eval for the error path first, and derive the leaf's contract (never throw;
+  null lane or decline) from what that path does. The other transferable piece: when the
+  derived value selects *which computation* applies (the level) rather than feeding one (the
+  weekday's `k`), the kernel computes every alternative and blends on the lane - 91 dense-loop
+  ops for the four periods against 36..62 for one literal level - so the literal form remains
+  the shape a query should write, and the doc says so.
 
 ## A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic
 

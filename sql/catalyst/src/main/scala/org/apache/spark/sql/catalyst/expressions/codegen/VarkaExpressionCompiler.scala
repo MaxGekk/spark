@@ -24,7 +24,7 @@ import scala.util.control.NonFatal
 import org.apache.spark.SparkIllegalArgumentException
 import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, TruncDate, UnaryMinus, UnixDate, WeekDay, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -617,9 +617,9 @@ private[sql] object VarkaExpressionCompiler {
     // because the level chooses which code is emitted. YEAR, MONTH and QUARTER are one node
     // with the level as a shape-bearing field; WEEK is Spark's own definition,
     // next_day(d - 7, 'MONDAY'), rewritten onto the nodes task 33 already has - the unix_date
-    // pattern of retiring an expression onto existing IR. Everything else declines, each for
-    // its own reason: the row engine answers those with a NULL column, which no IR node can
-    // produce.
+    // pattern of retiring an expression onto existing IR. A stored string column (task 61) is
+    // the dynamic node below. Everything else declines, each for its own reason: the row
+    // engine answers those with a NULL column, which no IR node can produce.
     case TruncDate(date, format) if format.foldable =>
       foldTruncLevel(format, sink).flatMap {
         case ToLevel(level) =>
@@ -635,6 +635,16 @@ private[sql] object VarkaExpressionCompiler {
             new IRNextDay(new SubDays(d, week), monday)
           }
       }
+    // A format column (task 61): the level is read per batch by the evaluator's derived leaf
+    // (TruncLevelLeaf) into an int32 column of parseTruncLevel's codes, on next_day's pattern
+    // (task 59), and the kernel computes every period and selects on it. No ANSI twin in the
+    // kind: TruncDate has no error path, so a null, unrecognised or sub-day format is a NULL
+    // row in either mode - the leaf's null lane, through the node's word. Any collation is
+    // admitted because the parser ignores it; an expression over the column stays the row
+    // engine's, since the leaf reads a stored column.
+    case TruncDate(date, br: BoundReference) if br.dataType.isInstanceOf[StringType] =>
+      calendarInput(date, expr, inputs, literals, sink)
+        .map(new IRTruncDateDynamic(_, derivedRef(br, VarkaDerivedKind.TRUNC_LEVEL, inputs)))
     case t: TruncDate =>
       sink.note("trunc with a non-foldable format", t)
       None
@@ -883,6 +893,9 @@ private[sql] object VarkaExpressionCompiler {
       // A truncated date (task 35) is its input or an earlier day of the same period: at most
       // 365 back, the 31st of December of a leap year truncated to its year.
       case n: IRTruncDate => shifted(n.days(), -365, 0)
+      // The same bound for the level-column form (task 61): its week result is at most six
+      // days back, its year result the same 365.
+      case n: IRTruncDateDynamic => shifted(n.days(), -365, 0)
       case n: IRGreatest => hull(n.left(), n.right())
       case n: IRLeast => hull(n.left(), n.right())
       case n: IfElse => hull(n.thenNode(), n.elseNode())
