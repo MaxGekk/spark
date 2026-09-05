@@ -486,6 +486,30 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val addMonthsCenturyYear = emit(
           Seq(new AddMonths(new ColumnRef(0), new LiteralSlot(0))), 1, 1, loader, 845,
           centuryYear)
+        // The selection kernel: a Cond root's slot holds a selection bitmap, which is
+        // computed rather than known, so task 45's driver fill cannot serve it and the
+        // per-group `orValidityBitsAt` stays in the dense body too - the one shape in the
+        // emitter that pays that call on every batch whether or not the data has nulls. It is
+        // what the columnar filter runs, and it had no parity case at all until now, which is
+        // why task 46's admission check had to price the call from other shapes.
+        val selectionRoot = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
+        val filterKernel = emit(Seq(selectionRoot), 1, 1, loader, 864)
+        // A Cond root writes no data at all, so its data address is 0L by the interface
+        // contract - the dst slot must not be materialized - and the day it compares against
+        // rides the scalar-args array. Zero selects about half of `fill`'s values, which run
+        // from -10000 to 9999, so the bitmap carries mixed bits rather than a constant.
+        def chunkedFilter(kernel: VarkaFusedKernel, mixed: Boolean): Unit =
+          eachChunk { (dataOff, validityOff, n) =>
+            val status = if (mixed) {
+              kernel.run(Array(mxData.address() + dataOff),
+                Array(mxValidity.address() + validityOff), Array(nullsIn(n)),
+                Array(0L), Array(dstValidity.address() + validityOff), Array(0), n)
+            } else {
+              kernel.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
+                Array(0L), Array(dstValidity.address() + validityOff), Array(0), n)
+            }
+            require(status == 0, s"the kernel declined a batch: status $status")
+          }
         benchmark.addCase("year, null-free") { _ => chunked(year, false) }
         benchmark.addCase("year, validity OR-ed per group (task 45 A/B), null-free") { _ =>
           chunked(yearPerGroup, false)
@@ -497,6 +521,12 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           chunked(yearMonthKept, false)
         }
         benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
+        benchmark.addCase("filter d < literal, null-free") { _ =>
+          chunkedFilter(filterKernel, false)
+        }
+        benchmark.addCase("filter d < literal, mixed nulls") { _ =>
+          chunkedFilter(filterKernel, true)
+        }
         benchmark.addCase("year, month step kept (task 48 A/B), mixed nulls") { _ =>
           chunked(yearMonthKept, true)
         }
