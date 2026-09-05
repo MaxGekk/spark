@@ -1409,6 +1409,25 @@ division), and every int64 form. The one interaction with task 52's range
 analysis is an int expression feeding a date function, `date_add(d, i * 7)`,
 which is column-shifted whatever the arithmetic and needs no new bound.
 
+*Note added 5 September 2026, from reading Stumpf and Povyshev, "Architectural
+Patterns and Performance Analysis of Integer Surrogate Keys for Time-Series
+Data Warehousing" (IJDMS 17(6), December 2025).* The two reasons above for
+leaving `%`, `pmod` and `div` out - the divide-by-zero rule and the absence of
+a SIMD division - both vanish when the divisor is a non-zero int *literal*: the
+quotient is then one magic multiply and a shift, the operation the calendar
+prefix is made of, and the remainder is one multiply and a subtract after it.
+That is exactly the idiom warehouses write over integer-coded dates,
+`YYYYMMDD` columns binned as `t div 10000` (the year), `t div 100 % 100` (the
+month) and `t % 100`, and month keys as `t div 100`; the paper documents the
+pattern across telecom, IoT and trading schemas, and TPC-DS's own `date_dim`
+surrogate keys are its relative. Two spellings would need a narrowing rule
+rather than a lane: Spark's `div` returns a long, and `CAST(t / 10000 AS INT)`
+goes through a double, so both are int32 only when the consumer is int32 and
+the compiler can prove the quotient fits. Whether that belongs to this task's
+family or to milestone 5's int64 lanes is the owner's call; it is recorded
+here because the shapes are int32 in and int32 out, and the divisor being a
+literal is what makes them cheap.
+
 **What it closes.** The compositions section 2.24 and scope item 11 of
 `SCOPE_MILESTONE_6.md` list as residual today - the day of quarter, the week
 of month, the Julian day number - and the composite keys, which join the
