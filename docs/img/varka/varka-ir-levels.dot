@@ -1,0 +1,134 @@
+digraph VarkaIRLevels {
+  graph [rankdir=BT, compound=true, newrank=true, fontname="Helvetica", fontsize=11, labelloc=t, pad=0.4, nodesep=0.22, ranksep=0.8, bgcolor="white",
+    label=<<b>Varka IR by data flow: leaves, intermediate nodes, user-visible results</b><br/><font point-size="9">Bottom: the leaves and what fills them. Middle: the operators, grouped by what they produce; each group has one output port (the round node) and the arrows out of it say where that value can go next - including back into its own group (dotted), which is how chains such as year(trunc(date_add(d, n), fmt)) arise. Top: what the user sees. Boxes carry the input components as ports and, in italics, the SQL that compiles to the node. Dashed grey: the emitter's shared fragments, which are code below the IR, not nodes - the civil-from-days prefix that every calendar tail reads, and the mod-7 lowering. Colours: green = date lanes, amber = int field lanes, blue = a stored int column, magenta = an int32 column derived per batch from a string column, grey = literal, violet = condition. Branch varka-task-61, 5 Sep 2026.</font>>];
+  node [shape=plain, fontname="Helvetica", fontsize=10];
+  edge [arrowsize=0.6, penwidth=1.1, fontname="Helvetica", fontsize=8];
+  subgraph cluster_L0 { label="level 0: the kernel's inputs"; fontsize=10; color="#9aa3ad"; style="rounded";
+    S_date [shape=box, style="rounded,filled", fillcolor="#cfe8e3", color="#2f8f82", label="Arrow date column"];
+    S_int  [shape=box, style="rounded,filled", fillcolor="#dbe6f5",  color="#3b6fb6",  label="Arrow int column"];
+    S_str  [shape=box, style="rounded,filled", fillcolor="#f3dcea",  color="#b0448a",  label="Arrow string column"];
+    S_lit  [shape=box, style="rounded,filled", fillcolor="#e6e6e3", color="#7a8088",  label="literal table (per kernel)"];
+  }
+  subgraph cluster_L1 { label="level 1: leaves"; fontsize=10; color="#9aa3ad"; style="rounded";
+    L_date [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#cfe8e3"><b>ColumnRef</b><br/><font point-size="8">date lanes</font></td></tr><tr><td bgcolor="white"><font point-size="9">-</font></td></tr><tr><td colspan="1" bgcolor="#cfe8e3"><font point-size="8"><i>a date column d</i></font></td></tr></table>>];
+    L_int  [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#dbe6f5"><b>ColumnRef</b><br/><font point-size="8">int column, admitted only as an offset</font></td></tr><tr><td bgcolor="white"><font point-size="9">-</font></td></tr><tr><td colspan="1" bgcolor="#dbe6f5"><font point-size="8"><i>an int column: day offset (38),<br/>month count (60)</i></font></td></tr></table>>];
+    L_wd   [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f3dcea"><b>ColumnRef, derived</b><br/><font point-size="8">filled per batch by the evaluator</font></td></tr><tr><td bgcolor="white"><font point-size="9">-</font></td></tr><tr><td colspan="1" bgcolor="#f3dcea"><font point-size="8"><i>WeekdayLeaf: dayOfWeek-1<br/>from the names (59)</i></font></td></tr></table>>];
+    L_tl   [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f3dcea"><b>ColumnRef, derived</b><br/><font point-size="8">filled per batch by the evaluator</font></td></tr><tr><td bgcolor="white"><font point-size="9">-</font></td></tr><tr><td colspan="1" bgcolor="#f3dcea"><font point-size="8"><i>TruncLevelLeaf: level codes 6..9<br/>from the formats (61)</i></font></td></tr></table>>];
+    L_lit  [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#e6e6e3"><b>LiteralSlot</b><br/><font point-size="8">broadcast lanes</font></td></tr><tr><td bgcolor="white"><font point-size="9">-</font></td></tr><tr><td colspan="1" bgcolor="#e6e6e3"><font point-size="8"><i>a folded literal: day offset, month count,<br/>weekday k, date, compare constant</i></font></td></tr></table>>];
+  }
+  S_date -> L_date [color="#2f8f82"]; S_int -> L_int [color="#3b6fb6"]; S_str -> L_wd [color="#b0448a", label="parse per row"]; S_str -> L_tl [color="#b0448a", label="parse per row"]; S_lit -> L_lit [color="#7a8088"];
+  subgraph cluster_L2 { label="level 2: date producers (a date in, a date out)"; fontsize=10; color="#9aa3ad"; style="rounded";
+    AddDays [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#cfe8e3"><b>AddDays</b></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td><td port="offset" bgcolor="white"><font point-size="9">offset</font></td></tr><tr><td colspan="2" bgcolor="#cfe8e3"><font point-size="8"><i>date_add(d, n), d + INTERVAL n DAY,<br/>d + CAST(i AS INTERVAL DAY)</i></font></td></tr></table>>];
+    SubDays [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#cfe8e3"><b>SubDays</b></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td><td port="offset" bgcolor="white"><font point-size="9">offset</font></td></tr><tr><td colspan="2" bgcolor="#cfe8e3"><font point-size="8"><i>date_sub(d, n), d - INTERVAL n DAY</i></font></td></tr></table>>];
+    NextDay [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#cfe8e3"><b>NextDay</b></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td><td port="offset" bgcolor="white"><font point-size="9">offset</font></td></tr><tr><td colspan="2" bgcolor="#cfe8e3"><font point-size="8"><i>next_day(d, 'MON'), next_day(d, s);<br/>trunc(d, 'WEEK') via SubDays</i></font></td></tr></table>>];
+    AddMonths [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#cfe8e3"><b>AddMonths</b><br/><font point-size="8">decompose + recompose</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td><td port="months" bgcolor="white"><font point-size="9">months</font></td></tr><tr><td colspan="2" bgcolor="#cfe8e3"><font point-size="8"><i>add_months(d, m), d + INTERVAL m MONTH,<br/>d + CAST(m AS INTERVAL MONTH)</i></font></td></tr></table>>];
+    LastDay [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#cfe8e3"><b>LastDay</b><br/><font point-size="8">Chrono</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#cfe8e3"><font point-size="8"><i>last_day(d)</i></font></td></tr></table>>];
+    TruncDate [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#cfe8e3"><b>TruncDate</b><br/><font point-size="8">Chrono; the level is part of the shape</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#cfe8e3"><font point-size="8"><i>trunc(d, 'YEAR' | 'MONTH' | 'QUARTER')</i></font></td></tr></table>>];
+    TruncDateDynamic [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#cfe8e3"><b>TruncDateDynamic</b><br/><font point-size="8">Chrono; all four periods, blended</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td><td port="level" bgcolor="white"><font point-size="9">level</font></td></tr><tr><td colspan="2" bgcolor="#cfe8e3"><font point-size="8"><i>trunc(d, fmt) with a string column</i></font></td></tr></table>>];
+    P_date [shape=ellipse, style="filled", fillcolor="#cfe8e3", color="#2f8f82", label=<<b>date value</b>>];
+  }
+  subgraph cluster_L3 { label="level 3: field extractors (a date in, an int out)"; fontsize=10; color="#9aa3ad"; style="rounded";
+    Year [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f6e3b5"><b>Year</b><br/><font point-size="8">Chrono</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#f6e3b5"><font point-size="8"><i>year(d), extract(YEAR)</i></font></td></tr></table>>];
+    Month [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f6e3b5"><b>Month</b><br/><font point-size="8">Chrono</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#f6e3b5"><font point-size="8"><i>month(d)</i></font></td></tr></table>>];
+    DayOfMonth [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f6e3b5"><b>DayOfMonth</b><br/><font point-size="8">Chrono</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#f6e3b5"><font point-size="8"><i>day(d), dayofmonth(d)</i></font></td></tr></table>>];
+    Quarter [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f6e3b5"><b>Quarter</b><br/><font point-size="8">Chrono</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#f6e3b5"><font point-size="8"><i>quarter(d)</i></font></td></tr></table>>];
+    DayOfYear [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f6e3b5"><b>DayOfYear</b><br/><font point-size="8">Chrono</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#f6e3b5"><font point-size="8"><i>dayofyear(d)</i></font></td></tr></table>>];
+    DayOfWeek [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f6e3b5"><b>DayOfWeek</b><br/><font point-size="8">mod 7</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#f6e3b5"><font point-size="8"><i>dayofweek(d)</i></font></td></tr></table>>];
+    WeekDay [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#f6e3b5"><b>WeekDay</b><br/><font point-size="8">mod 7</font></td></tr><tr><td port="days" bgcolor="white"><font point-size="9">days</font></td></tr><tr><td colspan="1" bgcolor="#f6e3b5"><font point-size="8"><i>weekday(d)</i></font></td></tr></table>>];
+    DateDiff [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#f6e3b5"><b>DateDiff</b></td></tr><tr><td port="end" bgcolor="white"><font point-size="9">end</font></td><td port="start" bgcolor="white"><font point-size="9">start</font></td></tr><tr><td colspan="2" bgcolor="#f6e3b5"><font point-size="8"><i>datediff(end, start)</i></font></td></tr></table>>];
+    P_int [shape=ellipse, style="filled", fillcolor="#f6e3b5", color="#c08a1e", label=<<b>int field value</b>>];
+  }
+  subgraph cluster_L4 { label="level 4: conditions and selection (values in, a mask or a chosen value out)"; fontsize=10; color="#9aa3ad"; style="rounded";
+    Compare [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#dcd8f1"><b>Compare</b><br/><font point-size="8">op is part of the shape</font></td></tr><tr><td port="left" bgcolor="white"><font point-size="9">left</font></td><td port="right" bgcolor="white"><font point-size="9">right</font></td></tr><tr><td colspan="2" bgcolor="#dcd8f1"><font point-size="8"><i>&lt; &lt;= &gt; &gt;= =, d IN (...) as an Or of =</i></font></td></tr></table>>];
+    IsNotNull [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#dcd8f1"><b>IsNotNull</b><br/><font point-size="8">child: a ColumnRef only</font></td></tr><tr><td port="child" bgcolor="white"><font point-size="9">child</font></td></tr><tr><td colspan="1" bgcolor="#dcd8f1"><font point-size="8"><i>d IS NOT NULL; IS NULL as Not(IsNotNull)</i></font></td></tr></table>>];
+    And [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#dcd8f1"><b>And</b></td></tr><tr><td port="left" bgcolor="white"><font point-size="9">left</font></td><td port="right" bgcolor="white"><font point-size="9">right</font></td></tr><tr><td colspan="2" bgcolor="#dcd8f1"><font point-size="8"><i>a AND b</i></font></td></tr></table>>];
+    Or [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#dcd8f1"><b>Or</b></td></tr><tr><td port="left" bgcolor="white"><font point-size="9">left</font></td><td port="right" bgcolor="white"><font point-size="9">right</font></td></tr><tr><td colspan="2" bgcolor="#dcd8f1"><font point-size="8"><i>a OR b</i></font></td></tr></table>>];
+    Not [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="1" port="out" bgcolor="#dcd8f1"><b>Not</b></td></tr><tr><td port="child" bgcolor="white"><font point-size="9">child</font></td></tr><tr><td colspan="1" bgcolor="#dcd8f1"><font point-size="8"><i>NOT a</i></font></td></tr></table>>];
+    P_mask [shape=ellipse, style="filled", fillcolor="#dcd8f1", color="#6a5bc4", label=<<b>condition</b>>];
+    IfElse [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="3" port="out" bgcolor="#cfe8e3"><b>IfElse</b><br/><font point-size="8">output: the type of its branches</font></td></tr><tr><td port="cond" bgcolor="white"><font point-size="9">cond</font></td><td port="then" bgcolor="white"><font point-size="9">then</font></td><td port="else" bgcolor="white"><font point-size="9">else</font></td></tr><tr><td colspan="3" bgcolor="#cfe8e3"><font point-size="8"><i>if(c, a, b), CASE WHEN,<br/>coalesce(a, b) as IfElse(IsNotNull(a), a, b)</i></font></td></tr></table>>];
+    Greatest [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#cfe8e3"><b>Greatest</b><br/><font point-size="8">output: the type of its operands</font></td></tr><tr><td port="left" bgcolor="white"><font point-size="9">left</font></td><td port="right" bgcolor="white"><font point-size="9">right</font></td></tr><tr><td colspan="2" bgcolor="#cfe8e3"><font point-size="8"><i>greatest(a, b, ...)</i></font></td></tr></table>>];
+    Least [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="3"><tr><td colspan="2" port="out" bgcolor="#cfe8e3"><b>Least</b><br/><font point-size="8">output: the type of its operands</font></td></tr><tr><td port="left" bgcolor="white"><font point-size="9">left</font></td><td port="right" bgcolor="white"><font point-size="9">right</font></td></tr><tr><td colspan="2" bgcolor="#cfe8e3"><font point-size="8"><i>least(a, b, ...)</i></font></td></tr></table>>];
+    P_sel [shape=ellipse, style="filled", fillcolor="#cfe8e3", color="#2f8f82", label=<<b>chosen value</b><br/><font point-size="8">date or int, as its operands</font>>];
+  }
+  subgraph cluster_L5 { label="level 5: what the user sees"; fontsize=10; color="#9aa3ad"; style="rounded";
+    U_proj [shape=box, style="rounded,filled", fillcolor="white", color="#1d2126", label=<<b>a projected column</b><br/><font point-size="8">SELECT expr: an int32 Arrow column (date or int) plus validity</font>>];
+    U_filt [shape=box, style="rounded,filled", fillcolor="white", color="#1d2126", label=<<b>the rows that pass</b><br/><font point-size="8">WHERE expr: a Cond root as the selection bitmap (task 21)</font>>];
+  }
+  L_date -> AddDays:days [color="#2f8f82"];
+  L_date -> SubDays:days [color="#2f8f82"];
+  L_date -> NextDay:days [color="#2f8f82"];
+  L_date -> AddMonths:days [color="#2f8f82"];
+  L_date -> LastDay:days [color="#2f8f82"];
+  L_date -> TruncDate:days [color="#2f8f82"];
+  L_date -> TruncDateDynamic:days [color="#2f8f82"];
+  L_int -> AddDays:offset [color="#3b6fb6"]; L_lit -> AddDays:offset [color="#7a8088"];
+  L_int -> SubDays:offset [color="#3b6fb6"]; L_lit -> SubDays:offset [color="#7a8088"];
+  L_int -> AddMonths:months [color="#3b6fb6", label="guarded"]; L_lit -> AddMonths:months [color="#7a8088", label="bounded"];
+  L_wd -> NextDay:offset [color="#b0448a"]; L_lit -> NextDay:offset [color="#7a8088", label="k"];
+  L_tl -> TruncDateDynamic:level [color="#b0448a"];
+  AddDays:out -> P_date [color="#2f8f82"];
+  SubDays:out -> P_date [color="#2f8f82"];
+  NextDay:out -> P_date [color="#2f8f82"];
+  AddMonths:out -> P_date [color="#2f8f82"];
+  LastDay:out -> P_date [color="#2f8f82"];
+  TruncDate:out -> P_date [color="#2f8f82"];
+  TruncDateDynamic:out -> P_date [color="#2f8f82"];
+  P_date -> Year:days [lhead=cluster_L3, color="#2f8f82", label="days / end / start", penwidth=2];
+  L_date -> DayOfMonth:days [lhead=cluster_L3, color="#2f8f82", penwidth=2, label="days"];
+  P_date -> AddDays:days [color="#2f8f82", style=dotted, constraint=false, label="a date again: chains"];
+  P_date -> Compare:left [color="#2f8f82"]; P_date -> Compare:right [color="#2f8f82"]; L_date -> Compare:left [color="#2f8f82"]; L_lit -> Compare:right [color="#7a8088"];
+  P_date -> Greatest:left [lhead=cluster_L4, color="#2f8f82", label="left / right / then / else"];
+  Year:out -> P_int [color="#c08a1e"];
+  Month:out -> P_int [color="#c08a1e"];
+  DayOfMonth:out -> P_int [color="#c08a1e"];
+  Quarter:out -> P_int [color="#c08a1e"];
+  DayOfYear:out -> P_int [color="#c08a1e"];
+  DayOfWeek:out -> P_int [color="#c08a1e"];
+  WeekDay:out -> P_int [color="#c08a1e"];
+  DateDiff:out -> P_int [color="#c08a1e"];
+  P_int -> Compare:left [color="#c08a1e"]; P_int -> Compare:right [color="#c08a1e"];
+  P_int -> Least:right [lhead=cluster_L4, color="#c08a1e", label="left / right / then / else"];
+  L_date -> IsNotNull:child [color="#3b6fb6"]; L_int -> IsNotNull:child [color="#3b6fb6"];
+  Compare:out -> P_mask [color="#6a5bc4"];
+  IsNotNull:out -> P_mask [color="#6a5bc4"];
+  And:out -> P_mask [color="#6a5bc4"];
+  Or:out -> P_mask [color="#6a5bc4"];
+  Not:out -> P_mask [color="#6a5bc4"];
+  P_mask -> And:left [color="#6a5bc4", style=dotted, constraint=false]; P_mask -> Or:left [color="#6a5bc4", style=dotted, constraint=false]; P_mask -> Not:child [color="#6a5bc4", style=dotted, constraint=false]; P_mask -> IfElse:cond [color="#6a5bc4", style=dotted, constraint=false];
+  IfElse:out -> P_sel [color="#2f8f82"];
+  Greatest:out -> P_sel [color="#2f8f82"];
+  Least:out -> P_sel [color="#2f8f82"];
+  P_sel -> LastDay:days [lhead=cluster_L2, color="#2f8f82", style=dotted, constraint=false, label="a chosen date is a date"];
+  P_sel -> Month:days [lhead=cluster_L3, color="#2f8f82", style=dotted, constraint=false];
+  P_date -> U_proj [color="#2f8f82"]; P_int -> U_proj [color="#c08a1e"]; P_sel -> U_proj [color="#2f8f82"]; L_date -> U_proj [color="#2f8f82", label="forwarded, no kernel"];
+  P_mask -> U_filt [color="#6a5bc4"];
+
+  { rank=same; S_date; S_int; S_str; S_lit; }
+  { rank=same; L_date; L_int; L_wd; L_tl; L_lit; }
+  { rank=same; AddDays; SubDays; NextDay; AddMonths; LastDay; TruncDate; TruncDateDynamic; }
+  { rank=same; Year; Month; DayOfMonth; Quarter; DayOfYear; DayOfWeek; WeekDay; DateDiff; }
+  { rank=same; Compare; IsNotNull; And; Or; Not; IfElse; Greatest; Least; }
+  { rank=same; P_mask; P_sel; }
+  { rank=same; U_proj; U_filt; }
+
+  subgraph cluster_frag { label="emitter fragments, below the IR (not nodes; shared code inside one lane group)"; fontsize=10; color="#444a52"; style="rounded,dashed";
+    Prefix [shape=box, style="rounded,filled,dashed", fillcolor="#f0efe9", color="#444a52", label=<<b>civil-from-days prefix</b><br/><font point-size="8">emitChronoPrefix: days -&gt; era, rem, century, yearOfCentury, [marchMonth]<br/>one run per distinct date per lane group (task 32 step B; tasks 48, 53, 54);<br/>every Chrono tail and AddMonths read its locals t[0..5]<br/>marchMonth is skipped when no consumer needs it (Year, DayOfYear, trunc YEAR)</font>>];
+    Mod7 [shape=box, style="rounded,filled,dashed", fillcolor="#f0efe9", color="#444a52", label=<<b>floorMod 7</b><br/><font point-size="8">emitFloorMod7: a magic multiply (task 14)<br/>per node, not shared: DayOfWeek, WeekDay, NextDay,<br/>and TruncDateDynamic's week result</font>>];
+  }
+  { rank=same; P_date; Prefix; Mod7; }
+  L_date -> Prefix [color="#444a52", style=dashed]; P_date -> Prefix [color="#444a52", style=dashed, constraint=false];
+  L_date -> Mod7 [color="#444a52", style=dashed]; P_date -> Mod7 [color="#444a52", style=dashed, constraint=false];
+  Prefix -> Year:days [color="#444a52", style=dashed, arrowhead=onormal];
+  Prefix -> Month:days [color="#444a52", style=dashed, arrowhead=onormal];
+  Prefix -> DayOfMonth:days [color="#444a52", style=dashed, arrowhead=onormal];
+  Prefix -> Quarter:days [color="#444a52", style=dashed, arrowhead=onormal];
+  Prefix -> DayOfYear:days [color="#444a52", style=dashed, arrowhead=onormal];
+  Prefix -> LastDay:days [color="#444a52", style=dashed, arrowhead=onormal, constraint=false];
+  Prefix -> TruncDate:days [color="#444a52", style=dashed, arrowhead=onormal, constraint=false];
+  Prefix -> TruncDateDynamic:days [color="#444a52", style=dashed, arrowhead=onormal, constraint=false];
+  Prefix -> AddMonths:days [color="#444a52", style=dashed, arrowhead=onormal, constraint=false];
+  Mod7 -> DayOfWeek:days [color="#444a52", style=dashed, arrowhead=onormal];
+  Mod7 -> WeekDay:days [color="#444a52", style=dashed, arrowhead=onormal];
+  Mod7 -> NextDay:days [color="#444a52", style=dashed, arrowhead=onormal, constraint=false];
+  Mod7 -> TruncDateDynamic:days [color="#444a52", style=dashed, arrowhead=onormal, constraint=false];
+}

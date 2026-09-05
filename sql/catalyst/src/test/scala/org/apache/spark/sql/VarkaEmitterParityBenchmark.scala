@@ -300,6 +300,13 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIV))
         val dowDigitSum = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 502,
           VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM))
+        // Task 57: extract(DAYOFWEEK_ISO), dayofweek's tail with the other offset and the same
+        // add; priced beside the shipped dayofweek row, which it should match within noise.
+        val dowIso = emit(Seq(new DayOfWeekIso(new ColumnRef(0))), 1, 0, loader, 507)
+        benchmark.addCase("dayofweek_iso (task 57), null-free") { _ =>
+          dowIso.run(Array(nfData.address()), Array(0L), Array(0),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
         benchmark.addCase("magic multiply (shipped), null-free") { _ =>
           dow.run(Array(nfData.address()), Array(0L), Array(0),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
