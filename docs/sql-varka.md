@@ -99,6 +99,12 @@ becomes timestamp arithmetic) decline:
   `VarkaChrono.MONTH_ARITH_MIN/MAX_MONTHS` (about 2047 years either way,
   where the lowering's magic division by 12 stops being exact) declines the
   batch to the row engine rather than compute past it.
+* `MAKE_DATE(year, month, day)` (task 42) over int columns and literals, in
+  both evaluation modes: an invalid month or day is a null date with ANSI
+  off and, with ANSI on, sends the batch to the row engine, which raises
+  Spark's own error at that row; a year outside the whole years of the
+  calendar range goes to the row engine in both modes, so the kernel never
+  publishes a date the lowering is not exact for.
 * `WEEKOFYEAR`, `EXTRACT(WEEK FROM d)` and `DATE_PART('WEEK', d)` (task 37), the ISO-8601 week
   by the Thursday rule: the day is moved to the Thursday of its Monday-based
   week and the week is that Thursday's ordinal day in sevens, so the year
