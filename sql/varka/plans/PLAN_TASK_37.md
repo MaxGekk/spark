@@ -308,7 +308,63 @@ will carry the expression.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Built as sections 3-5 describe, with the register corrected from the emitted
+bytes (3.3: `ThursdayOf` 19, `weekofyear` 64). Both benchmarks regenerated
+at both widths by `dev/varka_bench_regen.sh` on the idle machine under the
+`performance` governor, against the #121 baseline measured on unchanged
+master under the same profile the same morning. Rates in M rows/s from the
+committed files. The committed parity file is the third run on this branch
+(load 0.40 at start, canary compute +0.2%, cache +0.5%, memory -0.5%): the
+first, overnight, had the three `dayofweek, chunk 64/63` rows 23-37% under
+both master runs; the second put them back within 3-6% but carried one
+unrelated row at a fraction of its value; the third has neither, so those were
+each run's JIT state, not this node - `weekofyear` itself read 1422.7, 1408.3
+and 1413.8 across the three, 510.9, 510.7 and 510.8 at 128 bits.
+
+| case | 256-bit | 128-bit |
+|---|---|---|
+| `weekofyear (task 37), null-free` | 1413.8 | 510.8 |
+| `weekofyear (task 37), mixed nulls` | 1140.2 | 416.8 |
+| `ThursdayOf alone (task 37), null-free` | 7994.9 | 3174.7 |
+| `year, null-free` (the nearest sibling in the file) | 3446.0 | 1336.2 |
+| per-row `DateTimeUtils.getWeekOfYear` | 53.5 | 53.4 |
+| throughput `weekofyear`, varka / Janino | 267.0 / 25.7 (10.4x) | 179.2 / 25.3 (7.1x) |
+
+**Predictions scored.**
+
+1. *The register: 17 for `ThursdayOf`, 64 for `weekofyear`, siblings
+   unmoved.* 19 and 64, siblings unmoved - the suite asserts all of it; the
+   two extra ops on `ThursdayOf` are recorded against 3.3 (risk 4 said the
+   weights were guesses until the register ran).
+2. *`weekofyear` null-free at 0.6x-0.75x of `dayofyear` at 256 bits, no
+   lower than 0.55x at 128.* Not scorable as written: the parity benchmark
+   has no `dayofyear` row (task 34 never added one), which section 6 assumed.
+   Against `year`, the nearest sibling in the file, the ratio is 0.41x at
+   256 bits (1413.8 against 3446.0) and 0.38x at 128 - below the band even allowing that `year` is
+   the lighter kernel. The fold costs more than its op count suggests;
+   registered below as a leftover, not explained here.
+3. *At least 10x the per-row anchor at 256 bits.* 26x (1413.8 against
+   53.5); 9.6x at 128 bits, where the anchor does not slow down.
+4. *The sharing test saves the prefix's full price (20 ops or more), and the
+   `Year(ThursdayOf)` pair costs under 10 ops more than `weekofyear` alone.*
+   Held; the suite asserts both inequalities (`unshared - shared >= 20`,
+   `shared - weekAlone < 10`, `withYear - shared >= 20`).
+5. *The dense sweep and the Velox rows pass on the first emitted kernel.*
+   Held: no arithmetic fix-up commit follows the emitter commit on this
+   branch, and the gate is green.
+
+What moved that the plan did not list: nothing in the code. The regen tool's
+default class path does not reach `VarkaThroughputBenchmark`'s package, which
+cost the overnight throughput run (the corrected invocation names the class
+in full), and two parity runs this morning each carried one unrelated row at a
+fraction of its value - a JIT artifact that never reproduced (master's first
+run: `CASE WHEN, depth-4 arms`; this branch's second run:
+`year+month+day+quarter, shared decomposition (no validity write)`, 12.2
+against 1534.2). The third run, committed, has neither.
+
+Left for later, in the milestone's debt register: why the week fold's twelve
+ops cost more than a proportional share of `year`'s rate at both widths
+(prediction 2).
 
 ---
 
