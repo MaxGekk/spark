@@ -133,4 +133,55 @@ gains an `extract(YEAROFWEEK FROM d)` row.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Built as section 3 describes: one compiler arm, nothing in the emitter.
+`VarkaEmitterParityBenchmark` re-run this morning at both widths by
+`dev/varka_bench_regen.sh` on the idle machine under the `performance`
+governor (load 0.89 at start, canary compute +0.1%, cache +1.2%, memory
+-0.4%), read against the #121 baseline measured on unchanged master under the
+same profile; `VarkaThroughputBenchmark` regenerated the same morning with the
+corrected class path. Rates in M rows/s from the committed files.
+
+| case | 256-bit | 128-bit |
+|---|---|---|
+| `yearofweek (task 58), null-free` | 1960.1 | 728.6 |
+| `weekofyear + yearofweek, one shift (task 58), null-free` (two outputs) | 824.4 | 297.8 |
+| `weekofyear (task 37), null-free` | 1414.6 | 508.3 |
+| `year, null-free` | 3463.7 | 1336.1 |
+| per-row `DateTimeUtils.getWeekOfYear` | 53.5 | 53.6 |
+| throughput `yearofweek`, varka / Janino | 279.2 / 29.4 (9.5x) | 214.6 / 30.5 (7.0x) |
+
+**Predictions scored.**
+
+1. *`yearofweek` at 0.85x-0.95x of `year`'s rate.* Missed: 0.57x at 256
+   bits (1960.1 against 3463.7) and 0.55x at 128. The prediction contradicted
+   its own arithmetic - 51 ops against `year`'s 32 is 0.63x by count - and
+   the measurement is a little under that; the shift is not cheaper than its
+   ops, it is exactly its ops. (`weekofyear`, 64 ops, runs at 0.41x of
+   `year`; task 37's debt entry.)
+2. *The shared pair under 10% more than `weekofyear` alone.* Missed by a
+   wide margin: the two-output row runs at 824.4 against 1414.6, 72% more
+   time per row, where sharing the shift and the prefix should have cost
+   about `year`'s tail, 20% more ops. The number matches no sharing at all
+   - `weekofyear`'s 64 plus `yearofweek`'s 51 predicts 0.56x, and 0.58x is
+   what was measured. The likely reason, not verified from the bytes here:
+   under the shipped `GROUP_BUDGET` every calendar output gets its own loop
+   method, so two calendar outputs share only in the epilogue; task 37's
+   sharing test asserts the pair under a wide budget (200), which is the
+   shape task 44 would ship, not this one. Registered as a debt.
+3. *Nothing else moves beyond the machine-day variance.* Held for 44 of 47
+   moved rows (-12% to +8%, controls within 0.2%). Not for three: the
+   `dayofweek, chunk 64/63` rows sit 23-38% under both master runs, as they
+   did in task 37's first run and did not in its second and third. Two of
+   five runs on branches carrying task 37's emitter change show it and no
+   master run does; this node adds no kernel class, so whatever it is lives
+   in the parity harness's JIT state, not in `yearofweek`. Registered as a
+   debt rather than re-run until it looks right.
+
+What moved that the plan did not list: nothing in the code. The overnight
+parity file carried master's first-run `CASE WHEN` artifact and was re-run;
+the overnight throughput run was lost to the regen tool's default class path
+(the corrected invocation names the class in full).
+
+Left for later, in the milestone's debt register: the two-calendar-output
+sharing gap (prediction 2) and the bimodal `dayofweek, chunk` rows
+(prediction 3).
