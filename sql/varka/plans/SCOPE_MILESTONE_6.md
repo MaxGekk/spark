@@ -469,6 +469,19 @@ What this milestone owes the dependency: the benchmark work (item 8) should
 be written so the same query runs against both sources, so the day the reader
 lands the numbers can be regenerated rather than redesigned.
 
+One representation question belongs to the cache itself, recorded here beside
+open question 1 (a Varka-side layout chosen at cache-write time): sorted or
+near-sorted date and timestamp columns compress four to eight times under
+frame-of-reference plus bit-packing (Lemire and Boytsov's SIMD-BP128, cited by
+Stumpf and Povyshev, IJDMS 17(6), 2025, section 2.2.5), and the unpacking is
+itself a lane loop. A kernel that unpacks such a column straight into its
+lanes, rather than through a generic decoder into a `DateDayVector` first,
+would spend less memory bandwidth on exactly the rows the parity benchmark
+keeps showing as memory-bound. That is another physical form of a date column
+for item 11's extractor to choose, and a change to `ArrowCachedBatchSerializer`
+rather than to the emitter; it is not this milestone's, but the serializer
+should not be shaped in a way that rules it out.
+
 ### Item 8. Benchmarks: extend Spark's, rather than only writing our own
 
 **What is missing.** Every committed Varka number is the fork's own -
@@ -654,6 +667,175 @@ template by doubling `memcpy` and lets the instructions patch bytes in place.
 That is the shape for a `date_format` kernel, a string-output expression outside
 this milestone (section 6).
 
+### Item 11. Physical representation as a compiler decision
+
+**Where this came from.** Three documents read on 5 September 2026: two concept
+notes proposing a "time compiler" built from flat expression tables, equality
+saturation over date identities, Arrow columns with the Vector API and
+Class-File API emission; and the paper they sketch, egg (Willsey et al., POPL
+2021), which specialises e-graphs to equality saturation with deferred
+*rebuilding* (20.96x over whole runs, 87.85x on congruence maintenance in its
+section 3.4) and *e-class analyses* (a semilattice fact per equivalence class,
+readable by conditional rewrites, with extraction itself one such analysis).
+Like item 10 this is not a milestone 6 subject by topic - it is a compiler
+question - but it is not a task yet, so it lands here per `sql/varka/AGENTS.md`.
+
+**What is already built.** Three of the pitched four stages are Varka: the
+shape cache amortises compilation to once per shape, the kernels run over Arrow
+buffers at both widths, and the emitter is the Class-File API. The compiler
+also already carries the parts of a rewrite system as individual arms -
+balanced `AND`/`OR` folds, `IN` dedup and sort, literal slots interned by value,
+the identity `CAST` and `unix_date` unwraps, `date - INTERVAL n DAY` absorbed
+into `SubDays`, `trunc(d, 'WEEK')` rewritten onto `next_day`, and two analyses,
+`dayRange` (an interval domain with the hull as its join) and `inputBounds`.
+That works because the rules are few and none conflict, so their order never
+matters - exactly the condition under which equality saturation adds nothing
+over a fixed pass.
+
+**The idea, and why it is not about dates.** Against the date engine the
+benefit is small and unmeasured: canonical shapes (fewer kernel classes),
+identities Catalyst does not fold (`datediff(date_add(d, k), d) -> k`,
+literal-offset chains, idempotent `last_day`), and one home for the ad hoc
+arms. Against the engine Varka is meant to become - every Spark type and
+expression, several Arrow encodings per type, and Varka's own layouts - the
+question changes: *who decides, per expression, which physical form a value
+lives in.* That is the e-graph's native problem: an e-class is every way to
+obtain one logical value, its e-nodes become physical forms joined by
+conversion nodes, and extraction chooses, over the whole projection, where to
+convert and where to compute. Varka already solves that by hand in four
+places:
+
+| where | logical value | physical alternatives | who chooses today |
+|---|---|---|---|
+| `isArrowBacked` | a column | `DateDayVector`/`IntVector` accepted; every other encoding refused per batch | a hard-coded match - the refusal is a missing conversion |
+| task 59 | a weekday name | `VarCharVector` bytes, or an int32 code column derived per batch | the compiler, by a fixed rule |
+| task 32 | a date | int32 days, or the civil fields the shared prefix leaves live | the emitter's sharing rules and `GROUP_BUDGET` |
+| item 1 | a `DECIMAL(p <= 18)` | Arrow's 128-bit pairs, or one long lane after a de-interleave | to be measured |
+
+Four mechanisms are fine at four rows; not at the full type system times its
+encodings times Varka's layouts. Task 58's measurement is the first cost of
+guessing: two calendar outputs over one shift run at 0.58x of one of them
+alone, the no-sharing ratio, because the shipped budget decides sharing rather
+than a cost.
+
+**A worked example, from the data side.** Warehouses store dates as decimal
+integers - `20231027` in an `INT` column - as often as they store `DATE`, and
+compute over them with integer arithmetic: `t div 10000` for the year,
+`t div 100` for a month key, `t BETWEEN 20230101 AND 20230131` for a range
+(Stumpf and Povyshev, IJDMS 17(6), December 2025, survey the pattern across
+telecom, IoT and trading schemas; TPC-DS's `date_dim` surrogate keys are its
+relative). To Varka today such a column is not a date at all. Under this item
+it is the same logical value in a second physical form, `int32 yyyymmdd`
+beside `int32 days`, with a conversion node each way - the digit split is
+three magic multiplies, the recompose is task 42's `make_date` - and the
+cost asymmetry is the point: `year` is *cheaper* in the digit form (one
+division) than after conversion (the prefix), while `date_add` and
+`datediff` are cheaper after. Which form each expression computes in is the
+extraction decision, and this is the first case where it is not obvious by
+inspection. The literal-divisor `div` and `%` the digit form needs are noted
+under task 63 (`PLAN_MILESTONE_4.md` 2.30).
+
+**A catalogue of the date's physical forms.** Each form is defined by which
+operations it makes cheap, which is what an extractor trades on. Four
+families, by where the form comes from.
+
+*Forms the data arrives in - encodings to accept or convert away from.*
+
+| form | what it is | cheap in this form | cost to reach `int32 days` |
+|---|---|---|---|
+| `int32 days` (Arrow `Date32`, Spark's own) | days since 1970-01-01 | `date_add`, `datediff`, compare, `dayofweek` | none: Varka's home form |
+| `int64 millis` (Arrow `Date64`) | milliseconds at midnight | nothing extra | one magic division by 86400000, and a narrowing from a 64-bit lane to a 32-bit one |
+| `int32 yyyymmdd` | decimal digits | `year`, `month`, month keys, range filters on literal bounds | three magic multiplies, then task 42's `make_date` |
+| ISO-8601 text `yyyy-MM-dd` | ten ASCII bytes in a `VarCharVector` | equality and range compare as bytes - lexicographic order is date order | a fixed-width digit parse at known offsets, no per-row `String`; task 59's leaf is the template |
+| dictionary / surrogate key | an int index into a small table of dates (TPC-DS's `d_date_sk` into `date_dim`; Arrow dictionary encoding) | grouping and equality - the key is the group id; any field the dictionary carries | a gather, which Varka has no vector form of (milestone 4, item 11) - so this form wants its fields computed once on the dictionary, not per row |
+| INT96 (legacy Parquet) | Julian day plus nanoseconds | nothing | subtract 2440588 from the day half |
+| Julian Day Number, Rata Die, Excel serial | other epochs | as epoch days | one add: "epoch days" is a family, not one form |
+
+*Forms Varka already computes and keeps live across outputs.*
+
+| form | where it exists today | cheap in this form |
+|---|---|---|
+| civil fields (era, year of era, March month, day of era) | the shared prefix's slots (task 32) | `year`, `month`, `dayofmonth`, `quarter`, `dayofyear`, `last_day`, `add_months`, `trunc` |
+| Thursday-shifted days | `ThursdayOf(d)` (task 37) | `weekofyear`, `yearofweek` |
+| `floorMod(d + 3, 7)` | `emitFloorMod7`'s scratch | `dayofweek`, `weekday`, `next_day` |
+| a derived int32 code | task 59's weekday leaf | any string-argument function, once parsed |
+
+These are what task 58's measurement is about: which of them to materialise
+across outputs, and when.
+
+*Forms that would make one operation cheap - candidates for new nodes.*
+
+| form | cheap in this form | note |
+|---|---|---|
+| month number and day of month, `(year * 12 + month - 1, dom)` | `add_months` as an add plus a clamp, `months_between`, `trunc(MONTH)`, `last_day`, month-keyed grouping | the form the `add_months` kernel rebuilds every time (112 dense-loop calls); several month-arithmetic outputs would build it once |
+| `(year, dayOfYear)` | `dayofyear`, `trunc(YEAR)`, year-relative windows | the January day of year is already a prefix tail (task 34) |
+| `(isoYear, isoWeek, isoWeekday)` | the week family in one decomposition | task 37's shift is halfway there |
+| day of era plus era | every civil field by one load from item 10's 146097-entry table | a conversion whose cost is a gather rather than arithmetic |
+| packed bit fields, `year:16 / month:4 / day:5` | every field a shift and mask; compare order preserved | a better `yyyymmdd`: fields free, no decimal divisions; `date_add` impossible without unpacking |
+
+*Forms defined by the batch rather than the value.*
+
+| form | what it buys | note |
+|---|---|---|
+| frame of reference, `base + int16 offset` (or `int8`) | sixteen lanes per 256-bit vector instead of eight - a 2x lever on every memory-bound row | item 7's packed cache column seen from the kernel's side; widening back is one op |
+| constant or run-length (Arrow run-end encoding) | one computation per run and a broadcast; a `year(d)` over a one-day partition is a scalar and a fill | date-partitioned fact tables deliver exactly these batches; Varka computes the same value 4096 times today |
+| sorted run, monotonicity known | neighbour `datediff`, period boundaries and windowed features as scans rather than per-lane calendar work | a batch-level fact - an e-class analysis - rather than an encoding |
+| null as a sentinel (`Int.MIN_VALUE`) instead of a validity bitmap | the dense body usable with nulls, at one compare per lane | the dense/masked split is already a two-form choice over the same data, made by a null count rather than by cost |
+
+Not worth a node: `float64` days (Excel's real form), `LocalDate` objects (the
+row engine's form, the thing being escaped), decimal-string BCD (a worse
+`yyyymmdd`).
+
+The families are arithmetic (the second and third tables), layout (the
+fourth) and encoding (the first), and an extractor needs a cost for each
+conversion and for each operation in each form. Three would pay before any
+engine exists and can be measured on the existing benchmarks: the month-number
+form under `add_months`-heavy projections, `int16` frame-of-reference offsets
+for the lane-width doubling, and the run-length case for date-partitioned
+scans. They are the natural first measurements for this item, ahead of the
+corpus audit below.
+
+**Design input - what to decide now, before any engine exists.**
+
+* Make the physical form explicit on IR values rather than implied by the
+  node type: a representation attribute, and conversion nodes as first-class
+  IR. Then an e-graph later is a change of engine, not of language. The
+  `DateDayVector`-only match in `isArrowBacked` is the first line to redesign.
+* Keep analyses semilattice-shaped (make, join, modify), as `dayRange` is;
+  add nullability and encoding facts in the same shape.
+* Keep the IR as immutable records with structural equality - they are
+  already e-nodes; hashconsing is literal-slot interning generalised.
+* Turn the register into a cost table keyed by operation, representation and
+  width, fed from measurement. It is the extractor's input either way.
+
+**What must hold whatever is built.** Costs stay measured, never modelled -
+the project's evidence (task 52's guard costs its `fromLong`, task 37's fold
+runs at 0.41x of `year`, task 58's sharing row) says op counts mispredict by
+2x, so extraction by a static cost would pick worse than today's measured
+defaults, and the A/B variants (`FloorMod7`, Neri-Schneider, the Julian map)
+stay measured. Every rule proves Spark's semantics, nulls and ANSI included;
+conversions add their own (item 1's high-word check). Extraction is
+deterministic: a fixed point or a deterministic bound, never a wall-clock
+timeout, because the pinned fixtures and shape hashes depend on it.
+
+**What it needs first.** One script over the corpus with two columns: how
+many expressions match a dozen candidate identities and how many shapes merge
+under canonicalisation; and how many columns arrive in an encoding the
+evaluator refuses today. The first sizes the algebraic benefit for dates,
+which may well be small; the second says how soon the conversion machinery
+pays, and that is the number the decision rests on.
+
+**When.** Milestone 7, once there are several types with several ops each,
+unless item 1 lands a second physical representation of a value earlier - at
+which point the IR decisions above become due, and the engine question is
+asked against real conversions rather than one. Candidate rules and their
+semantic conditions are recorded in the analysis of 5 September 2026. The
+engine itself - egg ported to Java 25 as a library in its own repository
+under `github.com/vecbricks`, with the determinism Varka needs and without
+proofs, parsing or the ILP extractor - is planned in `PLAN_EGRAPH_PORT.md`,
+independent of this item and buildable before it; Varka takes it as a
+pinned dependency when this item needs it.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
@@ -674,7 +856,10 @@ one this project invented:
 Targets fall in the order 1 (TPC-H q6), 5 (taxi, if milestone 4's items 2, 3
 and 6 have landed), 2 (TPC-H q1), then 3 and 4 (TPC-DS q9 and q41).
 
-Item 10 is deliberately absent from that table. It is gated on one measurement
+Items 10 and 11 are deliberately absent from that table. Item 11 is a
+milestone 7 question by its own text, and its only near-term deliverable is
+the two-column corpus measurement, which needs no ordering against the spine.
+Item 10 is deliberately absent It is gated on one measurement
 it does not yet have - the four-field lookup against task 32's shared prefix -
 and it belongs to the calendar family rather than to this milestone's decimal
 and aggregation spine. If that measurement comes back the way the single-field
@@ -684,6 +869,9 @@ worth as much.
 
 ## 6. Explicitly out of milestone 6
 
+* An equality-saturation engine or a representation-selecting extractor
+  (item 11): the IR decisions it depends on may be taken here as they
+  arise; the engine is milestone 7's.
 * Joins, sorting, grouping sets, and window functions - per item 9.
 * Decimal *division*, and any decimal whose result precision exceeds the lane -
   declined with a reason, not computed wrongly.
@@ -711,3 +899,8 @@ worth as much.
 4. **What scale factor?** Large enough that the JIT ladder is amortised (which
    milestone 3's task 18 changes) and small enough to run on the development
    machine. Fix it once, in the harness, and commit it with the numbers.
+5. **How much redundancy does the corpus carry, and in what?** Item 11's
+   two-column measurement: identities that fold and shapes that merge, and
+   columns whose Arrow encoding the evaluator refuses. The second column is
+   what decides whether representation selection is a milestone 7 question or
+   a milestone 6 one.
