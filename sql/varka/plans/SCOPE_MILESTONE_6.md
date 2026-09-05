@@ -469,6 +469,19 @@ What this milestone owes the dependency: the benchmark work (item 8) should
 be written so the same query runs against both sources, so the day the reader
 lands the numbers can be regenerated rather than redesigned.
 
+One representation question belongs to the cache itself, recorded here beside
+open question 1 (a Varka-side layout chosen at cache-write time): sorted or
+near-sorted date and timestamp columns compress four to eight times under
+frame-of-reference plus bit-packing (Lemire and Boytsov's SIMD-BP128, cited by
+Stumpf and Povyshev, IJDMS 17(6), 2025, section 2.2.5), and the unpacking is
+itself a lane loop. A kernel that unpacks such a column straight into its
+lanes, rather than through a generic decoder into a `DateDayVector` first,
+would spend less memory bandwidth on exactly the rows the parity benchmark
+keeps showing as memory-bound. That is another physical form of a date column
+for item 11's extractor to choose, and a change to `ArrowCachedBatchSerializer`
+rather than to the emitter; it is not this milestone's, but the serializer
+should not be shaped in a way that rules it out.
+
 ### Item 8. Benchmarks: extend Spark's, rather than only writing our own
 
 **What is missing.** Every committed Varka number is the fork's own -
@@ -700,7 +713,24 @@ places:
 | item 1 | a `DECIMAL(p <= 18)` | Arrow's 128-bit pairs, or one long lane after a de-interleave | to be measured |
 
 Four mechanisms are fine at four rows; not at the full type system times its
-encodings times Varka's layouts. Task 58's measurement is the first cost of
+encodings times Varka's layouts.
+
+**A worked example, from the data side.** Warehouses store dates as decimal
+integers - `20231027` in an `INT` column - as often as they store `DATE`, and
+compute over them with integer arithmetic: `t div 10000` for the year,
+`t div 100` for a month key, `t BETWEEN 20230101 AND 20230131` for a range
+(Stumpf and Povyshev, IJDMS 17(6), December 2025, survey the pattern across
+telecom, IoT and trading schemas; TPC-DS's `date_dim` surrogate keys are its
+relative). To Varka today such a column is not a date at all. Under this item
+it is the same logical value in a second physical form, `int32 yyyymmdd`
+beside `int32 days`, with a conversion node each way - the digit split is
+three magic multiplies, the recompose is task 42's `make_date` - and the
+cost asymmetry is the point: `year` is *cheaper* in the digit form (one
+division) than after conversion (the prefix), while `date_add` and
+`datediff` are cheaper after. Which form each expression computes in is the
+extraction decision, and this is the first case where it is not obvious by
+inspection. The literal-divisor `div` and `%` the digit form needs are noted
+under task 63 (`PLAN_MILESTONE_4.md` 2.30). Task 58's measurement is the first cost of
 guessing: two calendar outputs over one shift run at 0.58x of one of them
 alone, the no-sharing ratio, because the shipped budget decides sharing rather
 than a cost.
