@@ -654,7 +654,7 @@ template by doubling `memcpy` and lets the instructions patch bytes in place.
 That is the shape for a `date_format` kernel, a string-output expression outside
 this milestone (section 6).
 
-### Item 11. Physical representation as a compiler decision: the e-graph question
+### Item 11. Physical representation as a compiler decision
 
 **Where this came from.** Three documents read on 5 September 2026: two concept
 notes proposing a "time compiler" built from flat expression tables, equality
@@ -775,8 +775,8 @@ worth as much.
 ## 6. Explicitly out of milestone 6
 
 * An equality-saturation engine or a representation-selecting extractor
-  (item 11): the IR decisions it depends on may be taken here as they arise,
-  the engine is milestone 7's.
+  (item 11): the IR decisions it depends on may be taken here as they
+  arise; the engine is milestone 7's.
 * Joins, sorting, grouping sets, and window functions - per item 9.
 * Decimal *division*, and any decimal whose result precision exceeds the lane -
   declined with a reason, not computed wrongly.
