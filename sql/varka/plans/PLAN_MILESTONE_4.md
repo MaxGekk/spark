@@ -1493,6 +1493,72 @@ given one does. A batch with a far offset still declines, through the same
 route, and the differential's far-offset fixtures hold that. Depends on #115
 and on task 56's kernel, both on master before it starts.
 
+### 2.32 Year-month interval columns in the date lane (task 67)
+
+Added 5 September 2026 by the owner's decision, after a survey of which
+Spark types share the date's lane. Exactly three Spark types are int32
+inside and in the Arrow cache: `DateType` (`DateDayVector`), `IntegerType`
+(`IntVector`) and `YearMonthIntervalType`, whose value is a count of months
+whatever its unit (`INTERVAL YEAR`, `INTERVAL MONTH`, `INTERVAL YEAR TO
+MONTH`) and whose Arrow vector is `IntervalYearVector`, a
+`BaseFixedWidthVector` of width four - the buffer layout the kernels already
+read. The Arrow cache serializer already stores and prunes such columns
+(`IntColumnStats`, `calculateMinMaxYearMonthInterval`), and
+`ArrowColumnVector` already reads them (`IntervalYearAccessor`). Nothing in
+the lane changes; what is missing is admission on both sides of the kernel:
+the evaluator's `isArrowBacked` names the vector classes it serves
+(`DateDayVector`, `IntVector`, `VarCharVector` at a derived source), and its
+`allocateVector` names the output types it writes (`DateType`,
+`IntegerType`); the compiler's value leaf admits a `DateType` column only.
+Task 60 declines a stored interval column at the compiler ("year-month
+interval column is not readable by the int32 lanes") because the evaluator
+did not read it, and the evaluator did not read it because no arm asked.
+
+**The task.** Admit the type end to end where no new arithmetic is needed:
+an interval column as a value leaf and an interval literal as a slot; an
+interval-typed kernel output; `d + ym` and `d - ym` with a column interval
+through task 60's guarded `AddMonths` (the value is months in every unit,
+which is what `DateAddYMInterval` adds); comparisons, `IN`, `BETWEEN`,
+`greatest`/`least`, `coalesce`, `IF`/`CASE` over intervals, which the
+existing nodes give once the leaf exists and Spark's type rules keep out of
+the date-only positions; `CAST(i AS INTERVAL MONTH)` as the relabel it is
+(`intToYearMonthInterval` returns its argument for the `MONTH` unit) and
+`CAST(ym AS INT)` for a `MONTH`-ended interval likewise; the interval
+entries in task 62's surface; and the wording in the docs, so that "three
+types" is said exactly as far as it is true. What waits for task 63: the
+`YEAR`-unit casts (a multiply or a division by 12 with the overflow check).
+What is task 68's: everything that computes an interval from something else.
+
+**Why it is worth a row of its own.** The change is small - two arms in the
+evaluator, one leaf and a literal arm in the compiler, a fixture, a
+differential and the surface entries; no IR node, no emitter byte, both
+pinned fixtures unmoved - and it is the difference between the engine
+covering one Spark type and three, which is the sentence the milestone's
+public write-up leads with. The owner's reasoning, recorded: a cheap,
+lane-compatible type is worth taking early for the message it sends,
+provided the claim matches what fuses.
+
+### 2.33 Year-month interval algebra (task 68)
+
+The expressions that produce or transform an interval, once task 63's int32
+arithmetic and task 67's type admission are in: `make_ym_interval(y, m)`
+(`y * 12 + m`, exact in every mode, so always the checked form);
+`extract(YEAR | MONTH FROM ym)` (`/ 12` and `% 12`, a literal-divisor magic
+multiply - the node section 2.30's note asks for, which scope item 11's
+`yyyymmdd` form reuses); `ym * k` and `ym / k` with a literal `k`
+(`MultiplyYMInterval` exact; `DivideYMInterval` rounds `HALF_UP`, so its
+literal form is a magic division plus a rounding step, registered before it
+is built); `ym + ym`, `ym - ym`, `-ym`, `abs(ym)` (task 63's nodes with an
+interval-typed output; Spark computes them with `addExact` and
+`negateExact` in every mode, so they are always the checked form); the
+`YEAR`-unit casts task 67 left. Out, and said so: `ym div ym` (a long),
+`signum(ym)` (a double), `sequence` with an interval step, the timestamp
+side, and `sum`/`avg` of intervals (milestone 6's aggregates). Its
+admission check is the rounding of the literal division and the exactness
+range of the two magic divisions over the full int32 month range, the way
+task 65 is admitted; its measurement is a parity row per new node beside
+the int arithmetic rows task 63 adds.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1593,6 +1659,8 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 61 | `trunc` with a format column | Task 59's derived leaf mapping the format through `parseTruncLevel` to a level column whose validity is the output's; `TruncDateDynamic(days, levelRef)`, a chrono node computing all four levels off one prefix and selecting per lane by three blends; the doc saying the literal form is the shape to write | The reference arm `truncDate` per row over the parsed level; the matrix cycling all levels and the invalid codes at both widths; a differential over a format column mixing every level, invalid formats and null; the literal `trunc` byte for byte unchanged |
 | 63 | Int32 arithmetic in the date lane: `Add`, `Subtract`, `Multiply`, `UnaryMinus` over fused fields, int columns and literals (section 2.30) | The compiler arms with an `IntegerType` column leaf; the lanewise op in non-ANSI; the per-lane overflow mask ORed into task 52's accumulator in ANSI, behind a `VarkaEmitOptions` switch; `try_add`/`try_subtract`/`try_multiply` as the mask cleared from validity; `/`, `div`, `%` and int64 left to milestone 5 | Boundary tests at `Int.MaxValue`/`Int.MinValue` in both modes; the error-identity differential under ANSI (same error, same row, as the row engine); the `try_*` differential over overflow-dense and overflow-free data; `year(d) * 100 + month(d)` and `datediff(a, b) + 1` fusing end to end; a parity pair for the check's cost with a registered prediction; both pinned fixtures re-pinned once |
 | 64 | Statistics-directed guard selection (section 2.31) | Step one: the evaluator runs `IntRangeOps.allWithin` over a guarded producer's offset column against `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS, NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` and picks the unguarded or the guarded kernel from the shape cache per batch; step two: the Arrow cache's per-batch column bounds attached to the `ColumnarBatch` and read before the pass, answering task 56's bound too; each behind a switch | The guarded kernel never runs on the differential's in-range fixtures and the far-offset fixtures still decline; the pass and the lookup priced against the guard on the parity `year(date_add(d, off))` pair, both widths, with a registered prediction that the null-free and mixed-null cost of task 52's guard is recovered; byte identity of the emitter |
+| 67 | Year-month interval columns in the date lane (section 2.32) | `IntervalYearVector` admitted in `isArrowBacked` and `YearMonthIntervalType` in `allocateVector`; the interval column as a value leaf and the interval literal as a slot in the compiler; `d + ym` and `d - ym` with a column interval through task 60's guarded `AddMonths`; comparisons, `IN`, `BETWEEN`, `greatest`/`least`, `coalesce`, `IF`/`CASE` over intervals; the `MONTH`-unit casts as relabels; the interval entries in task 62's surface; the docs' type list. No IR node, no emitter byte | The differential over a cached table with columns of all three units, nulls and values past task 60's month bound, in both ANSI modes, through the projection and the filter, with zero fallbacks where the plan fuses and the declined metric where the bound trips; the evaluator suite with an `IntervalYearVector` input and output; both pinned fixtures unmoved; the compiler suite's shapes and declines (the `YEAR`-unit casts declined with their reason until task 63) |
+| 68 | Year-month interval algebra (section 2.33) | `make_ym_interval`, `extract(YEAR | MONTH FROM ym)` by literal-divisor magic, `ym * k` and `ym / k` with a literal, `ym +- ym`, `-ym`, `abs(ym)` on task 63's nodes with an interval output, the `YEAR`-unit casts; the literal-divisor node that section 2.30's note and scope item 11 both want | The admission check on the rounding of the literal division and the exactness range of the magic divisions over the whole int32 month range; the differential in both ANSI modes with the overflow rows raising the row engine's own error; a parity row per new node beside task 63's; both pinned fixtures re-pinned once |
 | 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25 | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 
 ## 4. Files
