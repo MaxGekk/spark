@@ -97,6 +97,10 @@ becomes timestamp arithmetic) decline:
   prefix runs over it, which is what makes `EXTRACT(YEAROFWEEK FROM d)`
   (task 58) `YEAR` over the same shift; a projection mixing `WEEKOFYEAR` with
   `YEAR` or `MONTH` of the same date decomposes twice, once per side.
+* `EXTRACT(DAYOFWEEK_ISO FROM d)` / `DATE_PART('DOW_ISO', d)` (task 57),
+  Monday 1 to Sunday 7, as one node: the analyzer spells it `weekday(d) + 1`,
+  and that spelling by hand fuses the same way; any other integer arithmetic
+  over a field, such as `weekday(d) + 2`, stays residual (milestone 5).
 * `TRUNC(date, fmt)` (task 35) at the date levels, for a literal format only:
   `YEAR`/`YYYY`/`YY`, `MONTH`/`MON`/`MM` and `QUARTER` are one node each with
   the level as part of the kernel's shape, and `WEEK` is rewritten onto
@@ -190,6 +194,40 @@ emitter's tests. The per-op dispatcher machinery they were once called through -
 the `ClassFileCodegenSupport` trait, the `VarkaClassFileGen` assembler and the
 kernel-shape interfaces - was retired in task 17, along with the
 `CodeAndComment` cache-key field it fed (`PLAN_MILESTONE_2.md` section 8).
+
+### The IR in pictures
+
+Three Graphviz drawings of `VarkaVectorIR` live under `docs/img/varka/`, each
+as a `.dot` source and the `.svg` rendered from it (`dot -Tsvg x.dot -o x.svg`;
+`-Tpng`/`-Tjpg` for a raster). They are a snapshot of the node set as of task
+61 (5 September 2026) and are re-rendered when a node is added, in the same
+change that re-pins the shape hash.
+
+* `varka-ir-hierarchy.svg`: what a node *is* - the sealed `permits` lists as a
+  tree, grouped into the leaves, day arithmetic, the mod-7 family, selection,
+  `AddMonths`, the `Chrono` family and the `Cond` family, with each record's
+  components, its output kind (date, int field, mask) and its weight against
+  `GROUP_BUDGET`.
+
+  ![The sealed node families of VarkaVectorIR](img/varka/varka-ir-hierarchy.svg)
+
+* `varka-ir-dataflow.svg`: what a node *takes* - every operator with one port
+  per input component, typed edges from the kinds of value that can feed each
+  port (a date value, an int field, a stored int column, a derived int32
+  column from a leaf, a literal slot, a condition), and what each operator
+  produces.
+
+  ![Data flow between the IR nodes](img/varka/varka-ir-dataflow.svg)
+
+* `varka-ir-levels.svg`: the same data flow in levels, bottom to top - the
+  kernel's inputs, the leaves, the date producers, the field extractors, the
+  conditions and selection, and what the user sees - with the SQL that
+  compiles to each node written on it, and the emitter's two below-the-IR
+  fragments drawn in as a dashed layer: the civil-from-days prefix that every
+  calendar tail and `AddMonths` share within a lane group, and the mod-7
+  lowering, which is emitted per node.
+
+  ![The IR by data flow, in levels](img/varka/varka-ir-levels.svg)
 
 ### The shape cache, class loaders and Metaspace
 
