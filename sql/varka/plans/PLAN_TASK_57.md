@@ -153,4 +153,40 @@ machine. The control rows are `weekday` and `dayofweek`, which must not move.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Built as planned: one node, one arm each way, the register at 18. The
+measurement is `VarkaEmitterParityBenchmark`, regenerated at both widths by
+`dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark` on the idle
+machine (load 0.90 at start, canary compute +0.2%, cache +4.1%, memory
+-1.0%, governor `performance`), against the baseline #121 re-measured on
+unchanged master under the same profile the same morning. The row and its
+control sit in the dayofweek section, both run the same way (one call over
+the whole buffer). Rates in M rows/s from the committed files.
+
+| case | 256-bit | 128-bit |
+|---|---|---|
+| `dayofweek_iso (task 57), null-free` | 7561.6 | 3485.9 |
+| `magic multiply (shipped), null-free` (`dayofweek`, 18 ops) | 7550.7 | 3487.4 |
+
+**Predictions scored.**
+
+1. *The register: 18, siblings unmoved.* Held; the suite asserts it
+   (`dayofweek` 18, `weekday` 17, `dayofweek_iso` 18).
+2. *Within 3% of the sibling's rate at both widths.* Held with room:
+   +0.1% at 256 bits and -0.0% at 128 - the same 18 ops at the same rate,
+   which is what "one add on `weekday`'s tail" should cost. Section 6 named
+   `weekday` as the comparison; the benchmark has no `weekday` row, so the
+   shipped `dayofweek` (same op count) is the one used, and the case's own
+   comment already said so.
+3. *No other row moves beyond the machine-day variance.* Held: against
+   #121's second run, 32 rows moved by 3% or more, between -19% and +8%,
+   with the five compute-bound controls within 0.5%. #121's own two runs of
+   identical master code, the same morning, moved 47 rows by 3-13% against
+   each other, so this is the run-to-run floor, not the node - which touches
+   none of those rows' bytes (the suite pins `dayofweek` and `weekday`).
+
+What moved that the plan did not list: nothing in the code. The measurement
+itself was delayed by two things outside this task, recorded so the numbers
+read right: the first overnight regeneration ran under a power profile
+different from every committed baseline, which is why #121 exists, and a
+first master run had one row at a third of its value (a JIT artifact its
+second run did not reproduce). Nothing left for later.
