@@ -77,9 +77,17 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
     node
   }
 
+  /** Every case id handed to [[emit]], so a reused one is named here rather than deep in a run. */
+  private val usedIds = scala.collection.mutable.Set.empty[Int]
+
   private def emit(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
       loader: VarkaGeneratedClassLoader, n: Int,
       options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): VarkaFusedKernel = {
+    // A duplicate id is otherwise a LinkageError from the class loader, twenty minutes into a
+    // regeneration and pointing at the loader rather than at the two cases that chose the same
+    // number. Not every id in this file is a literal - the trunc block computes `id` and
+    // `id + 1` from a tuple list - so a grep is not a reliable way to pick a free one.
+    require(usedIds.add(n), s"case id $n is already in use by another emit in this benchmark")
     val name = s"org.apache.spark.sql.varka.execution.VarkaFusedBench$n"
     val javaRoots = new java.util.ArrayList[VarkaVectorIR]()
     roots.foreach(javaRoots.add)
@@ -496,20 +504,20 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // null-free-with-per-group-OR pair isolates the write with no masked machinery around
         // it, and is directly comparable to the task 45 row beside it.
         val generalHelpers = VarkaEmitOptions.DEFAULTS.withValidityByWidth(false)
-        val yearGeneral = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 860, generalHelpers)
-        val yearPerGroupGeneral = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 861,
+        val yearGeneral = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 880, generalHelpers)
+        val yearPerGroupGeneral = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 881,
           generalHelpers.withDenseValidityOnce(false))
-        val dowGeneral = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 862,
+        val dowGeneral = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 882,
           generalHelpers)
-        val fourSharedGeneral = emit(fourFields, 1, 0, loader, 863,
+        val fourSharedGeneral = emit(fourFields, 1, 0, loader, 883,
           generalHelpers.withGroupBudget(200))
         // The selection kernel: a Cond root's slot holds a selection bitmap, which is computed
         // rather than known, so task 45's driver fill cannot serve it and the per-group OR
         // stays in the dense body too. It is the shape the columnar filter runs on every batch
         // and the one shape with no committed parity case before task 46.
         val selectionRoot = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
-        val filterKernel = emit(Seq(selectionRoot), 1, 1, loader, 864)
-        val filterGeneral = emit(Seq(selectionRoot), 1, 1, loader, 865, generalHelpers)
+        val filterKernel = emit(Seq(selectionRoot), 1, 1, loader, 884)
+        val filterGeneral = emit(Seq(selectionRoot), 1, 1, loader, 885, generalHelpers)
         // A Cond root writes no data at all, so its data address is 0L by the interface
         // contract - the dst slot must not be materialized - and the day it compares against
         // rides the scalar-args array. Zero selects about half of `fill`'s values, which run
