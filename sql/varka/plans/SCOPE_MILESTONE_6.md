@@ -713,7 +713,10 @@ places:
 | item 1 | a `DECIMAL(p <= 18)` | Arrow's 128-bit pairs, or one long lane after a de-interleave | to be measured |
 
 Four mechanisms are fine at four rows; not at the full type system times its
-encodings times Varka's layouts.
+encodings times Varka's layouts. Task 58's measurement is the first cost of
+guessing: two calendar outputs over one shift run at 0.58x of one of them
+alone, the no-sharing ratio, because the shipped budget decides sharing rather
+than a cost.
 
 **A worked example, from the data side.** Warehouses store dates as decimal
 integers - `20231027` in an `INT` column - as often as they store `DATE`, and
@@ -730,10 +733,7 @@ division) than after conversion (the prefix), while `date_add` and
 `datediff` are cheaper after. Which form each expression computes in is the
 extraction decision, and this is the first case where it is not obvious by
 inspection. The literal-divisor `div` and `%` the digit form needs are noted
-under task 63 (`PLAN_MILESTONE_4.md` 2.30). Task 58's measurement is the first cost of
-guessing: two calendar outputs over one shift run at 0.58x of one of them
-alone, the no-sharing ratio, because the shipped budget decides sharing rather
-than a cost.
+under task 63 (`PLAN_MILESTONE_4.md` 2.30).
 
 **Design input - what to decide now, before any engine exists.**
 
