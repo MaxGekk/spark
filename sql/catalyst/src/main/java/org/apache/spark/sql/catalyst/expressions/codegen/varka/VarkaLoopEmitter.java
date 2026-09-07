@@ -1791,11 +1791,11 @@ public final class VarkaLoopEmitter {
           skipping.put(node, false);
         }
         case AddDays n -> {
-          requireOffsetShape(n.offset(), "date_add's day offset");
+          requireDayOffsetShape(n.offset(), "date_add's day offset");
           analyzeOp(node, false, n.days(), n.offset());
         }
         case SubDays n -> {
-          requireOffsetShape(n.offset(), "date_sub's day offset");
+          requireDayOffsetShape(n.offset(), "date_sub's day offset");
           analyzeOp(node, false, n.days(), n.offset());
         }
         case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
@@ -1921,10 +1921,10 @@ public final class VarkaLoopEmitter {
 
     // task 38 widened the offset from LiteralSlot-only to a literal or a column, but it is
     // still not an arbitrary subtree - VarkaExpressionCompiler only ever emits one of these
-    // two shapes, and this check fails fast if a future IR producer emits anything else. This
-    // now guards four operands of three kinds: AddDays/SubDays' day offset (task 38),
-    // NextDay's weekday (task 59) and AddMonths' month count (task 60), the stricter
-    // requireLiteralOffset that used to cover the latter two having no caller left. {@code
+    // two shapes, and this check fails fast if a future IR producer emits anything else. It
+    // guards NextDay's weekday (task 59) and AddMonths' month count (task 60), the stricter
+    // requireLiteralOffset that used to cover them having no caller left; the day offset it
+    // also guarded took a third kind in task 63 and moved to requireDayOffsetShape. {@code
     // position} names the operand that failed, because one message shared across operands is
     // exactly what sent the IR fuzzer's first failure (#110) hunting for a next_day the shape
     // did not contain - the reason the check requireLiteralOffset replaced carried the name too.
@@ -1932,6 +1932,25 @@ public final class VarkaLoopEmitter {
       if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)) {
         throw new IllegalArgumentException(
             position + " must be a literal slot or a column, got " + offset);
+      }
+    }
+
+    /**
+     * The day offset of {@code AddDays}/{@code SubDays}, which task 63 widened by one kind:
+     * a literal slot, a column, or int arithmetic over those - {@code date_add(d, i * 7)}.
+     * Not every node, which is the point of keeping a check here at all: a date-valued
+     * subtree in this position would be read as a day count and produce a plausible wrong
+     * date, and the calendar operands next door still take the stricter
+     * {@link #requireOffsetShape}, because {@code next_day}'s weekday and
+     * {@code add_months}' month count carry runtime bounds a derived value cannot declare.
+     * `VarkaExpressionCompiler.compileOffset` admits exactly these three kinds; the two are
+     * meant to be read together.
+     */
+    private static void requireDayOffsetShape(VarkaVectorIR offset, String position) {
+      if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)
+          && !(offset instanceof IntArith) && !(offset instanceof IntNeg)) {
+        throw new IllegalArgumentException(
+            position + " must be a literal slot, a column or int arithmetic, got " + offset);
       }
     }
 

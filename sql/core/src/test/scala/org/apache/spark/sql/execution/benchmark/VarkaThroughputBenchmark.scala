@@ -369,8 +369,11 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       runQueries(baseline, varka, "weekofyear", "SELECT weekofyear(d) AS w FROM varka_dates")
       runQueries(baseline, varka, "yearofweek",
         "SELECT extract(YEAROFWEEK FROM d) AS y FROM varka_dates")
+      // The residual entry is `i % 7` rather than `i + 1` because task 63 lowered int
+      // arithmetic: `i + 1` fuses now, and this row is here to measure a projection that is
+      // only partly fused. `%` has no arm, so it still is one.
       runQueries(baseline, varka, "mixed projection (partial fusion)",
-        "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
+        "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates")
       // Chain-depth scaling (PLAN_TASK_14.md 2.3): the fused loop pays one load and one store
       // whatever the depth; Janino pays per-row per-op overhead. Columnar consumer here, the
       // same chains through the row consumer below - their crossing is the break-even depth
@@ -388,11 +391,11 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       runRowQueries(baseline, varka, "date_add, row consumer",
         "SELECT date_add(d, 3) AS a FROM varka_dates")
       runRowQueries(baseline, varka, "mixed projection, row consumer",
-        "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
+        "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates")
       // Residual-heavy: the shape where merge-at-row would win if the extra materialisation
       // of assemble-then-read costs anything worth building it for.
       runRowQueries(baseline, varka, "residual-heavy projection, row consumer",
-        "SELECT date_add(d, 3) AS a, i + 1 AS r1, i + 2 AS r2, i + 3 AS r3, i + 4 AS r4 " +
+        "SELECT date_add(d, 3) AS a, i % 7 AS r1, i % 9 AS r2, i % 11 AS r3, i % 13 AS r4 " +
           "FROM varka_dates")
       // The heavy-op row twins (task 19): every row-consumer case above fuses only cheap
       // adds, where the ~6 ns/row read-back is most likely to dominate - deciding the

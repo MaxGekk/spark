@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution
 
 import org.apache.spark.{SparkArithmeticException, TaskContext}
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, ExtractANSIIntervalDays, Literal, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, ExtractANSIIntervalDays, Literal, NamedExpression, Remainder}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
   VarkaChrono, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaKernelAllocationEvent}
 import org.apache.spark.sql.execution.metric.SQLMetrics
@@ -109,7 +109,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       project(
         Alias(DateAdd(attrD, Literal(3)), "a")(),
         intAttr,
-        Alias(Add(intAttr, Literal(1)), "inc")()),
+        Alias(Remainder(intAttr, Literal(7)), "inc")()),
       Seq(BatchSpec("arrow", Seq(dates, ints))),
       Seq(attrD, intAttr))
     val rows = plan.executeColumnar().mapPartitions { batches =>
@@ -121,7 +121,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
         }.toList.iterator
       }
     }.collect().toSeq
-    assert(rows === Seq(List(3, 7, 8), List(null, 8, 9), List(20003, null, null)))
+    assert(rows === Seq(List(3, 7, 0), List(null, 8, 1), List(20003, null, null)))
     assert(plan.metrics("numVarkaBatches").value === 1)
     // Task 22: the residual entry (`inc`) is counted once, driver-side - a static plan
     // property, not multiplied by task count.
@@ -145,13 +145,15 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
   }
 
   test("an ineligible projection still produces the right batches") {
-    // `i + 1` is not a kernel op, so every batch goes through the fallback - the node is only
+    // `i % 7` is not a kernel op, so every batch goes through the fallback - the node is only
     // ever planned for eligible projections, but it must not produce wrong data if it is not.
+    // It replaced `i + 1` here when task 63 lowered int arithmetic and that shape started
+    // fusing; `%` has no arm, so this stays an ineligible projection.
     val plan = node(
-      project(Alias(Add(intAttr, Literal(1)), "add")()),
+      project(Alias(Remainder(intAttr, Literal(7)), "add")()),
       Seq(BatchSpec("onheap", Seq(Seq(Int.box(100), Int.box(101))))),
       Seq(intAttr))
-    assert(values(plan) === Seq(101, 102))
+    assert(values(plan) === Seq(2, 3))
     assert(plan.metrics("numVarkaBatches").value === 0)
   }
 
@@ -235,7 +237,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
       project(
         Alias(DateAdd(attrD, Literal(3)), "a")(),
         intAttr,
-        Alias(Add(intAttr, Literal(1)), "inc")()),
+        Alias(Remainder(intAttr, Literal(7)), "inc")()),
       Seq(BatchSpec("arrow", Seq(Seq(Int.box(0)), Seq(Int.box(7))))),
       Seq(attrD, intAttr))
     val explained = plan.verboseStringWithOperatorId()

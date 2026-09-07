@@ -901,20 +901,13 @@ private[sql] object VarkaExpressionCompiler {
     new ColumnRef(inputs.getOrElseUpdate(VarkaDerivedInput.key(br.ordinal, kind), inputs.size))
 
   /**
-   * The day offset of a `date_add`/`date_sub`: a folded literal keeps today's `LiteralSlot`
-   * shape (existing plans and their cached kernels are untouched), and a non-foldable offset
-   * (task 38) is a bare `IntegerType` column - deliberately not a general `compileNode`
-   * recursion. `compileNode`'s `BoundReference` leaf stays `DateType`-only: widening it instead
-   * of this dedicated path would let an int column reach every other position that calls
-   * `compileNode` too (`Compare`, `DateDiff`, `Coalesce`, `Greatest`...), fusing plain
-   * integer-vs-integer predicates that were never part of this task's scope (task 38 section 6:
-   * "do not open it wider").
-   */
-  /**
    * An int operand of a node that is not a day: a foldable int literal as a slot, a bare
-   * `IntegerType` column as a column ref, anything else declined with `position` in the
-   * reason. `compileOffset`'s shape without its interval cases, and the helper task 63 widens
-   * when integer arithmetic joins; `compileNode`'s column leaf stays `DateType`-only.
+   * `IntegerType` column as a column ref, and - since task 63 - any other `IntegerType`
+   * expression through `compileNode`, which is where the fused int fields and the arithmetic
+   * arms live. So `make_date(y + 1, m, d)` fuses, and an operand of the wrong type still
+   * declines here with `position` in the reason rather than reaching an arm that would read
+   * it as an int. `compileNode`'s column leaf stays `DateType`-only, which is why the two
+   * leaves above cannot be left to it.
    */
   private def compileIntOperand(
       e: Expression,
@@ -925,11 +918,23 @@ private[sql] object VarkaExpressionCompiler {
     case Literal(v: Int, IntegerType) =>
       Some(new LiteralSlot(literals.getOrElseUpdate(v, literals.size)))
     case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
-    case other =>
+    case other if other.dataType != IntegerType =>
       sink.note(s"$position is not an int column or literal", other)
       None
+    case other => compileNode(other, inputs, literals, sink)
   }
 
+  /**
+   * The day offset of a `date_add`/`date_sub`: a folded literal keeps today's `LiteralSlot`
+   * shape (existing plans and their cached kernels are untouched), a non-foldable offset
+   * (task 38) is a bare `IntegerType` column, and since task 63 it may also be int arithmetic
+   * over those - `date_add(d, i * 7)`. It is still deliberately not a general `compileNode`
+   * recursion. `compileNode`'s `BoundReference` leaf stays `DateType`-only: widening it instead
+   * of this dedicated path would let an int column reach every other position that calls
+   * `compileNode` too (`Compare`, `DateDiff`, `Coalesce`, `Greatest`...), fusing plain
+   * integer-vs-integer predicates that were never part of this task's scope (task 38 section 6:
+   * "do not open it wider").
+   */
   private def compileOffset(
       days: Expression,
       inputs: mutable.LinkedHashMap[Int, Int],
@@ -960,8 +965,20 @@ private[sql] object VarkaExpressionCompiler {
             // read; the owner scoped task 56 to the int-cast form.
             sink.note("day interval is not an int column cast to days", e)
             None
+          // Task 63: arithmetic over an int column as the offset, `date_add(d, i * 7)`. What
+          // makes this safe above rather than only here is task 52's `dayRange`, which reads
+          // any non-literal offset as a column shift: a calendar node over such a producer
+          // still gets the runtime range guard, exactly as it does for a bare column offset.
+          // Only the four arithmetic shapes, not every `IntegerType` expression - the emitter's
+          // own check on this operand admits the same three node kinds and nothing else, so
+          // the two stay a matched pair rather than one silently outgrowing the other.
+          case arith @ (_: Add | _: Subtract | _: Multiply | _: UnaryMinus)
+              if arith.dataType == IntegerType =>
+            compileNode(arith, inputs, literals, sink)
           case other =>
-            sink.note("day offset is not a foldable literal or an integer column", other)
+            sink.note(
+              "day offset is not a foldable literal, an integer column or int arithmetic",
+              other)
             None
         }
     }

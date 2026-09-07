@@ -565,11 +565,12 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
   test("a mixed-eligibility projection fuses partially and matches the row engine") {
     // Pinned as "not fused" until task 12: one ineligible entry used to poison the whole
     // projection. Now the date entry runs on the kernels, the bare `i` forwards zero-copy, and
-    // `i + 1` is evaluated per row beside them.
+    // `i % 7` is evaluated per row beside them. The residual entry was `i + 1` until task 63
+    // lowered int arithmetic, which left this test with nothing residual in it.
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
-      "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates ORDER BY a",
+      "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates ORDER BY a",
       expectFused = true)
   }
 
@@ -578,7 +579,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
-      "SELECT i, i + 1 AS inc FROM varka_dates ORDER BY i",
+      "SELECT i, i % 7 AS inc FROM varka_dates ORDER BY i",
       expectFused = false)
   }
 
@@ -586,7 +587,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     checkDifferential(spark, varkaSpark,
-      "SELECT CASE WHEN d < d2 THEN date_add(d, 1) ELSE d2 END AS a, i, i + 1 AS inc " +
+      "SELECT CASE WHEN d < d2 THEN date_add(d, 1) ELSE d2 END AS a, i, i % 7 AS inc " +
         "FROM varka_date_pairs ORDER BY a, i",
       expectFused = true)
   }
@@ -977,9 +978,11 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
         "weekday(d) + 1 AS c, dayofweek(d) AS e, weekday(d) AS f FROM varka_dates " +
         "ORDER BY a, b, c, e, f",
       expectFused = true)
-    // weekday(d) + 2 is not the node and stays residual: the arm is the constant one only.
+    // weekday(d) + 2 is not this node: since task 63 it fuses too, but as int arithmetic over
+    // the weekday field rather than as the dedicated ISO node, and the value is what says so.
+    // Reading the +1 arm as "any Add over a weekday" would silently answer +1 here.
     checkDifferential(spark, varkaSpark,
-      "SELECT weekday(d) + 2 AS a FROM varka_dates ORDER BY a", expectFused = false)
+      "SELECT weekday(d) + 2 AS a FROM varka_dates ORDER BY a", expectFused = true)
   }
 
   test("the calendar extractions match the row engine across the Gregorian range") {
@@ -1322,6 +1325,41 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 63: arithmetic is admitted as a day offset, and a calendar node over it is " +
+      "guarded rather than declined") {
+    cacheDatesNullableOffset(spark)
+    cacheDatesNullableOffset(varkaSpark)
+    for (ansi <- Seq(false, true)) {
+      withAnsi(ansi) {
+        // The offset is no longer only a leaf. A null in either operand still nulls the row,
+        // which is the null-intolerant rule the whole date lane runs on.
+        checkDifferential(spark, varkaSpark,
+          "SELECT date_add(d, off + 1) AS a, date_sub(d, off - 1) AS b " +
+            "FROM varka_dates_nullable_offset ORDER BY a, b",
+          expectFused = true)
+        // A calendar node over such a producer fuses too: the compiler cannot bound the day
+        // it produces, so it leans on the emitter's runtime range guard exactly as it does
+        // for a bare column offset (task 52), rather than declining the shape.
+        checkDifferential(spark, varkaSpark,
+          "SELECT year(date_add(d, off + 1)) AS a FROM varka_dates_nullable_offset ORDER BY a",
+          expectFused = true)
+      }
+    }
+    // A multiplied offset is the same shape one step further, and the evaluation mode decides
+    // it: LEGACY wraps and fuses, ANSI wants a check the int lanes cannot do over an unbounded
+    // column, so the entry stays on the row engine. Both answers still have to match.
+    withAnsi(false) {
+      checkDifferential(spark, varkaSpark,
+        "SELECT date_add(d, off * 7) AS a FROM varka_dates_nullable_offset ORDER BY a",
+        expectFused = true)
+    }
+    withAnsi(true) {
+      checkDifferential(spark, varkaSpark,
+        "SELECT date_add(d, off * 7) AS a FROM varka_dates_nullable_offset ORDER BY a",
+        expectFused = false)
+    }
+  }
+
   test("task 59: a collated weekday column is admitted and parsed the same way") {
     cacheDatesWeekdayCollated(spark)
     cacheDatesWeekdayCollated(varkaSpark)
@@ -1359,7 +1397,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDates(varkaSpark)
     varkaSpark.conf.set(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key, "true")
     try {
-      val query = "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates ORDER BY a"
+      val query = "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates ORDER BY a"
       val expected = spark.sql(query)
       val actual = varkaSpark.sql(query)
       checkAnswer(actual, expected)
@@ -1443,7 +1481,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDates(varkaSpark)
     VarkaColumnarToRowExec.setFailKernelForTesting(true)
     try {
-      val q = "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates ORDER BY a"
+      val q = "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates ORDER BY a"
       val expected = spark.sql(q)
       val actual = varkaSpark.sql(q)
       val plan = actual.queryExecution.executedPlan
@@ -1593,8 +1631,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     // only this harness can plan the Varka node - and asserts on the status store, the same
     // surface the SQL tab renders.
     cacheDates(varkaSpark)
-    // One fused entry keeps the projection eligible; the int arithmetic is residual.
-    varkaSpark.sql("SELECT date_add(d, 1) AS a, i + 1 AS b FROM varka_dates").collect()
+    // One fused entry keeps the projection eligible; `i % 7` is residual beside it.
+    varkaSpark.sql("SELECT date_add(d, 1) AS a, i % 7 AS b FROM varka_dates").collect()
     varkaSpark.sparkContext.listenerBus.waitUntilEmpty()
     val statusStore = varkaSpark.sharedState.statusStore
     val executionId = statusStore.executionsList().reverse

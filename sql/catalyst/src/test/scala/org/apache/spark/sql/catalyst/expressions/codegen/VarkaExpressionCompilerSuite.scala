@@ -19,11 +19,11 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, MakeDate, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, MakeDate, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
-import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -277,10 +277,18 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(VarkaVectorIR.canonical(new IRMakeDate(new ColumnRef(0), new ColumnRef(1),
       new ColumnRef(2), true)) !== VarkaVectorIR.canonical(new IRMakeDate(new ColumnRef(0),
       new ColumnRef(1), new ColumnRef(2), false)))
-    // compilePartial answers None when nothing fuses, so a fused sibling rides along.
+    // compilePartial answers None when nothing fuses, so a fused sibling rides along. The
+    // declining operand is a date, not an int expression: since task 63 widened this position
+    // to any `IntegerType` tree, only the wrong *type* still reaches the position-named reason.
     val partial = VarkaExpressionCompiler.compilePartial(
-      Seq(out(MakeDate(y, m, Cast(d, IntegerType), false)), out(Year(d))), ints).get
+      Seq(out(MakeDate(y, m, d, false)), out(Year(d))), ints).get
     assert(partial.declines(0).reason === "make_date's day is not an int column or literal")
+    // And the widening itself: arithmetic over the operands fuses, as one tree.
+    val overArithmetic = VarkaExpressionCompiler.compile(
+      Seq(out(MakeDate(Add(y, Literal(1), EvalMode.LEGACY), m, dd, false))), ints).get
+    assert(overArithmetic.outputs === Seq(new IRMakeDate(
+      new IntArith(IntOp.ADD, Overflow.WRAP, new ColumnRef(0), new LiteralSlot(0)),
+      new ColumnRef(1), new ColumnRef(2), false)))
     // Under the range analysis the node is a bounded producer: a calendar node over it fuses.
     assert(VarkaExpressionCompiler.compile(Seq(out(Year(MakeDate(y, m, dd, false)))), ints)
       .isDefined)
@@ -1115,6 +1123,120 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(out(e), out(DateAdd(d, Literal(1)))), output).get
     assert(partial.declines.contains(0), s"$e fused; expected it to decline")
     partial.declines(0).reason
+  }
+
+  test("task 63: the arithmetic arms carry the evaluation mode, and the operand leaves") {
+    // One tree per mode, built explicitly rather than through SQLConf, so the test says which
+    // mode it means. LEGACY wraps, ANSI condemns the batch, TRY nulls the lane. The left
+    // operand is an int column on purpose: it carries no bound, so the declared mode survives
+    // - over a bounded operand the compiler proves the check away, which the next test covers.
+    for ((mode, overflow) <- Seq(EvalMode.LEGACY -> Overflow.WRAP, EvalMode.ANSI -> Overflow.FAIL,
+        EvalMode.TRY -> Overflow.NULL)) {
+      val compiled = VarkaExpressionCompiler.compile(
+        Seq(out(Add(i, Literal(1), mode))), childOutput).get
+      assert(compiled.outputs === Seq(new IntArith(IntOp.ADD, overflow,
+        new ColumnRef(0), new LiteralSlot(0))))
+      assert(compiled.outputTypes === Seq(IntegerType))
+    }
+    // And the contrast, in one line: the same add over `datediff`, whose range the date
+    // contract bounds, needs no check even under ANSI.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Add(DateDiff(d, d2), Literal(1), EvalMode.ANSI))), childOutput).get.outputs ===
+      Seq(new IntArith(IntOp.ADD, Overflow.WRAP,
+        new IRDateDiff(new ColumnRef(0), new ColumnRef(1)), new LiteralSlot(0))))
+    // Subtract and multiply take the same route; unary minus has no TRY spelling in Spark, so
+    // its mode is only ever the two.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Subtract(i, Literal(1), EvalMode.LEGACY))), childOutput).get.outputs ===
+      Seq(new IntArith(IntOp.SUB, Overflow.WRAP, new ColumnRef(0), new LiteralSlot(0))))
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Multiply(i, Literal(7), EvalMode.LEGACY))), childOutput).get.outputs ===
+      Seq(new IntArith(IntOp.MUL, Overflow.WRAP, new ColumnRef(0), new LiteralSlot(0))))
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(UnaryMinus(i, false))), childOutput).get.outputs ===
+      Seq(new IntNeg(Overflow.WRAP, new ColumnRef(0))))
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(UnaryMinus(i, true))), childOutput).get.outputs ===
+      Seq(new IntNeg(Overflow.FAIL, new ColumnRef(0))))
+    // The operand leaves: an int column is the task 38 leaf, an int literal a slot, and a
+    // fused int field the node itself - three kinds, one arm.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Add(Year(d), i, EvalMode.LEGACY))), childOutput).get.outputs ===
+      Seq(new IntArith(IntOp.ADD, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+        new ColumnRef(1))))
+  }
+
+  test("task 63: a bound that rules out overflow removes the check, and an unprovable checked " +
+      "multiply declines") {
+    // year(d) * 100 + month(d) under ANSI: both operands are bounded by the calendar, so the
+    // product and the sum are proved to stay in the int range and every node emits as WRAP.
+    // This is the shape PLAN_TASK_63.md section 6 measures - it is fast because there is no
+    // check in it, not because the check is cheap.
+    val key = Add(Multiply(Year(d), Literal(100), EvalMode.ANSI), Month(d), EvalMode.ANSI)
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(key)), childOutput).get
+    assert(compiled.outputs === Seq(new IntArith(IntOp.ADD, Overflow.WRAP,
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+        new LiteralSlot(0)),
+      new IRMonth(new ColumnRef(0)))))
+    // An int column carries no bound, so the same multiply over one keeps its declared mode -
+    // and a checked multiply has no int-lane overflow test, so it declines with that reason.
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Multiply(i, Literal(3), EvalMode.ANSI)), out(DateAdd(d, Literal(1)))),
+      childOutput).get
+    assert(partial.declines(0).reason ===
+      "checked int multiply whose operands do not rule out overflow")
+    // The same tree under LEGACY has nothing to check and fuses.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Multiply(i, Literal(3), EvalMode.LEGACY))), childOutput).isDefined)
+  }
+
+  test("task 63 declines: a long add, a short column, a divide, and a modulo") {
+    for ((e, reason) <- Seq(
+        Add(Cast(i, LongType), Literal(1L), EvalMode.LEGACY) ->
+          "unsupported expression",
+        Add(sh, Literal(1.toShort), EvalMode.LEGACY) -> "unsupported expression",
+        Divide(i, Literal(2), EvalMode.LEGACY) -> "unsupported expression")) {
+      val partial = VarkaExpressionCompiler.compilePartial(
+        Seq(out(e), out(DateAdd(d, Literal(1)))), childOutput).get
+      assert(partial.specs === Seq(ResidualOutput, FusedOutput(0)), s"$e should be residual")
+      assert(partial.declines(0).reason === reason, s"$e")
+    }
+    // An int operand of the wrong type inside an arm the compiler does take: the reason names
+    // the operand's type rather than the whole expression.
+    val mixed = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Add(i, Cast(d, IntegerType), EvalMode.LEGACY)), out(DateAdd(d, Literal(1)))),
+      childOutput).get
+    assert(mixed.declines(0).reason === "unsupported expression")
+  }
+
+  test("task 63: int arithmetic is admitted as a day offset, and a calendar node over it is " +
+      "guarded rather than declined") {
+    // The offset was a foldable literal (task 38's predecessor) or a bare int column; task 63
+    // adds arithmetic over those. The emitter's own shape check on this operand admits the
+    // same three kinds.
+    val shifted = VarkaExpressionCompiler.compile(
+      Seq(out(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY)))), childOutput).get
+    assert(shifted.outputs === Seq(new AddDays(new ColumnRef(0),
+      new IntArith(IntOp.MUL, Overflow.WRAP, new ColumnRef(1), new LiteralSlot(0)))))
+    assert(shifted.outputTypes === Seq(DateType))
+    // A calendar node over such a producer still fuses: task 52's range analysis reads any
+    // non-literal offset as a column shift, so the emitter guards the producer's own result at
+    // run time instead of the compiler declining the shape.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Year(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY))))), childOutput)
+      .isDefined)
+    // date_sub takes the same route.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(DateSub(d, Add(i, Literal(1), EvalMode.LEGACY)))), childOutput).get.outputs ===
+      Seq(new SubDays(new ColumnRef(0),
+        new IntArith(IntOp.ADD, Overflow.WRAP, new ColumnRef(1), new LiteralSlot(0)))))
+    // An offset built from an operator no arm lowers still declines, with the offset's own
+    // reason rather than a generic one - the message names this position.
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(d, Remainder(i, Literal(7)))), out(DateAdd(d, Literal(1)))),
+      childOutput).get
+    assert(partial.declines(0).reason ===
+      "day offset is not a foldable literal, an integer column or int arithmetic")
   }
 
   test("task 56: the int-to-day-interval cast is exact inside its limit and throws one past it") {
