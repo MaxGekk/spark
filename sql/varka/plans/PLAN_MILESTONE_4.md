@@ -1764,6 +1764,60 @@ a projection are usually adjacent, so this is a small task with a bounded
 win; it is a row because the limitation is pinned in a test that should be
 flipped by a change, not silently.
 
+### 2.37 A stopping rule for the guard walk (task 73)
+
+Added 7 September 2026, out of task 70's fuzz run (see the debt register).
+
+**The observation.** `Analysis.collectGuardedProducers` calls
+`collectColumnOffsetProducers(chronoChild(node), ...)` for every `isChrono`
+node, and that walk descends the entire subtree, adding every
+`AddDays`/`SubDays` with a column offset it meets. It has no stopping rule.
+So in `month(dayOfWeek(date_add(date_add(d, off), off)))` the producer is
+guarded against `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` on its own value, when
+the value `month` actually decomposes is the `dayOfWeek` result and is always
+1 to 7. `weekday`, `dayofweek_iso`, `weekofyear` and `datediff` behave the
+same way: each bounds its output, and none of them stops the walk.
+
+The guard is not wrong, it is unnecessary. A batch whose producer leaves the
+range is declined and recomputed on the row engine, so the answers are right;
+what is lost is the fusion.
+
+**Why the task starts with an admission check, like task 69.** Through the
+compiler this shape never reaches the emitter. `dayRange` has no rule for a
+mod-7 node, so it returns `Unknown`, and `checkedForCalendar` declines the
+entry at compile time with "day producer the calendar range analysis does not
+bound". The entry is residual either way, and only a caller that builds IR
+directly - `VarkaIrFuzzSuite`, and any future planner-side rewrite - reaches
+the over-guard. So the first question is whether any SQL shape observes the
+difference at all. If none does, the honest outcome is to record that and
+close the task, exactly as task 69's section 2 is allowed to.
+
+If the check finds the shape does matter, the two halves have to move
+together, and the compiler half is the one that changes what a user sees:
+`dayRange` would gain a rule that a mod-7 node re-bases its child to a known
+small interval regardless of what the child's interval was, which is the same
+observation stated on the other side of the compiler. Then
+`year(dayofweek(date_add(d, off)))` fuses instead of going residual.
+
+**What closing the emitter half takes.** A stopping rule on the walk: descend
+only through nodes that pass a day through to the decomposition - `AddDays`,
+`SubDays`, `Greatest`, `Least`, `IfElse`, `NextDay`, `ThursdayOf`, `LastDay`,
+`AddMonths`, `TruncDate`, `MakeDate` - and stop at any node whose output is a
+bounded quantity of its own: the mod-7 family, `DateDiff`, `WeekOfYear` and
+every calendar field extraction. The set is the same one `dayRange` would
+need, which is the argument for taking both halves in one task rather than
+letting the two analyses drift apart again - drift between them is what this
+finding is.
+
+**How it was found, which is part of what it is.** Not by reading the
+emitter: by running `VarkaIrFuzzSuite` at 1.84 million iterations across
+twenty jobs on 7 September 2026, where every one of the twenty stopped on a
+shape of this form. At the shipped budget of 300 iterations it is
+unreachable. The suite's own half of the mismatch - a `Gen.bound` of 7 on a
+mod-7 node hid the producers beneath it from the `chronoBound` check - was
+fixed with task 70, because the fuzzer is unusable past about ten thousand
+iterations without it.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1871,6 +1925,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25. **(A) done** (`PLAN_TASK_62.md` 9 and 10: the driver, its module and shell driver, and the laptop's four files - re-measured at 1B rows, where the 5% job-size rule is met with the worst row at 4.5% and the median at 1.7%, every one of 50 shapes fused, and three of the four filter losses turned into wins by task 37); (B) the pinned runner and (C) the README open | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 | 71 | `GROUP_BUDGET` retuned on the emitter as it is (section 2.35): task 17's split-versus-merged rows reversed at task 46, and the budget rests on the reading they no longer support | A budget ladder (16 to 64) over the shapes a wider method changes, at both widths, with `-XX:+PrintCompilation` beside the throughput; C1's ~1900-byte refusal priced as a startup cost; whether B2's clause 2 widens from prefix reuse to "the marginal cost fits" decided on the same ladder | A committed number per budget per width; the pair that decides it read from the parity file rather than from a scratch run; the non-calendar byte-identity guard extended to assert that a budget change changes exactly the shapes it names; no calendar committed number moves |
 | 72 | Output order for prefix affinity (section 2.36): `year(d), year(d2), month(d)` takes three loop methods where the adjacent order takes two | The admission check first - no consumer of a group depends on contiguous output indices - then a two-pass grouping that gathers a calendar output into the group whose prefix it reuses wherever that group is; the evaluator and the line map untouched | The pinned limitation in `VarkaLoopEmitterSuite` flipped to two methods; the pinned oracles unmoved; the permuted and adjacent orders within noise in the parity harness at both widths; the differential suite green with the two orders |
+| 73 | A stopping rule for the guard walk (section 2.37): a column-offset day producer is guarded on its own value even when a mod-7 node between it and the calendar node has already re-based the day (task 70's fuzz run; see the debt register) | The admission check first - whether any SQL shape observes the difference, given that `dayRange` returns `Unknown` for a mod-7 child and declines the entry at compile time before the emitter is reached, which can legitimately close the task with the finding recorded. If it does: a stopping rule on `collectColumnOffsetProducers` that descends only through nodes passing a day to the decomposition and stops at any node whose output is bounded in itself, and the matching rule in `dayRange`, taken together so the two analyses cannot drift apart again | The reproducer from the fuzz run served rather than declined at both widths (seed 20260907005 iteration 61379's shape, and the nine siblings substituting `weekday`, `dayofweek_iso` and `datediff`); the compiler suite's decline for `year(dayofweek(date_add(d, off)))` flipped to `fuses` if the compiler half moves, or the reason requoted if it does not; every guarded shape task 52 and task 60 pin still declining, since the rule may only remove guards a bounded node stands under; `VarkaIrFuzzSuite` at a million iterations per width with the `chronoBound` check relaxed to match, which is the oracle that found it |
 
 ## 4. Files
 
