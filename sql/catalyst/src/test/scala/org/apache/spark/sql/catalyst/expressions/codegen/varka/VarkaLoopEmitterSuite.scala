@@ -2537,7 +2537,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 21 outputs to 44") {
+  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing, and task 70 moves " +
+      "it again: unshared 21 to 22, shared 44 to 49") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
     // grows with the whole projection rather than with a group. Four fields over one date
@@ -2566,17 +2567,28 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     }
     val limit = 8000
-    // Unshared, 20 outputs fit and 21 do not.
-    assert(epilogueSize(fields(5), 12, unshared) < limit)
-    assert(epilogueSize(fields(6).take(21), 12, unshared) > limit)
-    // Shared, the same 20 fit with room to spare, and the boundary moves out to 44 outputs
-    // over eleven dates.
-    assert(epilogueSize(fields(5), 12, sharing) < limit)
-    assert(epilogueSize(fields(10), 12, sharing) < limit)
-    val past = epilogueSize(fields(11), 12, sharing)
+    // Task 70 (PLAN_TASK_70.md 9): with the bitmap pass on by default, every word in these
+    // methods is dead, so epilogueMasked is epilogueDense's bytes and the crossing is the
+    // dense epilogue's - unshared 21 fits (7563) and 22 crosses (8033); shared reaches
+    // 49. The per-group arm keeps the old boundaries, asserted beside.
+    assert(epilogueSize(fields(6).take(21), 12, unshared) < limit)
+    assert(epilogueSize(fields(6).take(22), 12, unshared) > limit)
+    assert(epilogueSize(fields(12), 12, sharing) < limit,
+      "forty-eight shared outputs fit under the pass; the boundary is further out")
+    assert(epilogueSize(fields((49 + 3) / 4).take(49 - 1), 13,
+      sharing) < limit)
+    val past = epilogueSize(fields((49 + 3) / 4).take(49), 13,
+      sharing)
     assert(past > limit,
-      s"forty-four shared calendar outputs now fit in $past bytes - sharing reaches further " +
-        "than this test records, so the ladder in PLAN_TASK_32.md section 7.1 is stale again")
+      s"49 shared calendar outputs now fit in $past bytes - the pass reaches " +
+        "further than this test records, so PLAN_TASK_70.md 9's ladder is stale")
+    // The reference variant: the boundaries task 54 left, 20/21 unshared and 44 shared.
+    val perGroupUnshared = unshared.withValidityByBitmap(false)
+    val perGroupShared = sharing.withValidityByBitmap(false)
+    assert(epilogueSize(fields(5), 12, perGroupUnshared) < limit)
+    assert(epilogueSize(fields(6).take(21), 12, perGroupUnshared) > limit)
+    assert(epilogueSize(fields(10), 12, perGroupShared) < limit)
+    assert(epilogueSize(fields(11), 12, perGroupShared) > limit)
   }
 
   test("the masked body agrees with the dense body on null-free data") {
@@ -2610,7 +2622,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val d3 = new ColumnRef(2)
     val d4 = new ColumnRef(3)
     val lit = new LiteralSlot(0)
-    def ymdq(c: VarkaVectorIR) = Seq[VarkaVectorIR](
+    def ymdq(c: VarkaVectorIR): Seq[VarkaVectorIR] = Seq(
       new Year(c), new Month(c), new DayOfMonth(c), new Quarter(c))
     val shapes: Seq[(String, Seq[VarkaVectorIR], Int)] = Seq(
       ("year(d)", Seq(new Year(d)), 1),
@@ -2803,7 +2815,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         ("year(d)", Seq[VarkaVectorIR](new Year(d)), 1),
         ("four fields over d",
           Seq[VarkaVectorIR](new Year(d), new Month(d), new DayOfMonth(d), new Quarter(d)), 1),
-        ("next_day(d, k), column kernel", Seq[VarkaVectorIR](new NextDay(d, d2)), 2))) {
+        ("next_day(d, k), column kernel", Seq[VarkaVectorIR](new NextDay(d, d2)), 2),
+        ("datediff(d, d2)", Seq[VarkaVectorIR](new DateDiff(d, d2)), 2))) {
       val bytes = emitMulti(roots, n, 0, bitmapOn)._2
       for ((masked, dense) <- Seq(("loopMasked0", "loopDense0"),
           ("epilogueMasked", "epilogueDense"))) {
@@ -2908,8 +2921,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // "orValidityBitsAt16", so a substring test would pass on the form this task removes.
     val roots = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
     for ((lanes, bits) <- Seq(2 -> 64, 4 -> 128, 8 -> 256, 16 -> 512)) {
+      // Since task 70 the shipped year(d) makes no per-group validity call at all - its
+      // bitmap is copied once by the driver - so the helpers this test names are reached
+      // through the per-group reference variant, which is what the naming is pinned on.
       val bytes = emitMulti(roots, 1, 0,
-        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))._2
+        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withValidityByBitmap(false))._2
       val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
       assert(called.contains(s"validityBitsAt$lanes"), s"$lanes lanes: $called")
       assert(called.contains(s"orValidityBitsAt$lanes"), s"$lanes lanes: $called")
@@ -2930,8 +2946,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // 32 int lanes is a 1024-bit shape: SVE reaches it, the Vector API has no named species
     // constant for it, and VarkaVectorSupport has no pair. The fallback is what keeps such a
     // machine correct, so it is emitted and asserted rather than reasoned about.
+    // The per-group reference arm since task 70: the shipped year(d) makes no per-group
+    // validity call, and it is the general pair's naming this test pins.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
-      VarkaEmitOptions.DEFAULTS.withLanesOverride(32))._2
+      VarkaEmitOptions.DEFAULTS.withLanesOverride(32).withValidityByBitmap(false))._2
     val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
     assert(called.contains("validityBitsAt") && called.contains("orValidityBitsAt"), s"$called")
     assert(!called.exists(_.matches("(or)?ValidityBitsAt\\d+")), s"$called")
@@ -2942,8 +2960,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 46: with the option off the emission is the pre-task form") {
     // The A/B's other arm, and the reference variant: no width anywhere - not in a callee name
     // and not in the species - so what the benchmark compares against is what shipped before.
+    // Both of task 46's arms are reached through task 70's per-group reference arm now.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
-      VarkaEmitOptions.DEFAULTS.withValidityByWidth(false))._2
+      VarkaEmitOptions.DEFAULTS.withValidityByWidth(false).withValidityByBitmap(false))._2
     val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
     assert(called.contains("validityBitsAt") && called.contains("orValidityBitsAt"), s"$called")
     assert(!called.exists(_.matches("(or)?ValidityBitsAt\\d+")), s"$called")

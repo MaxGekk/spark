@@ -193,6 +193,15 @@ class has a deliberate method anatomy:
   unmasked loads and stores when every input is null-free (measured 2.3-2.9x
   the masked body in task 10), and a *masked* body that builds a
   `VectorMask` per lane group from the bit-packed validity words otherwise.
+  Since task 70 the masked *driver* writes an output's validity bitmap once
+  per batch wherever it is a pure AND/OR of the input bitmaps - which is every
+  calendar field, every date arithmetic node, `datediff` and the picks - and
+  the loop then neither writes it per group nor, where nothing else reads
+  them, loads the input words per group; for such a shape the masked loop and
+  epilogue are the dense ones' bytes. What stays per group is what is not a
+  function of input bitmaps: a filter's selection bitmap, `IF`/`CASE`'s blend,
+  `make_date`'s validity test, and every word a range guard or a comparison
+  still reads.
 * The vector walk is split into sibling loop methods of at most
   `GROUP_BUDGET` (16) IR nodes each - or up to `FUSED_CEILING` (400) vector
   ops where the outputs in a method share a calendar prefix (task 32) - one
@@ -297,7 +306,9 @@ semantics are implemented in mask algebra; `PLAN_MILESTONE_2.md` section 2.6
 is the normative statement of the rules. In brief:
 
 * Arithmetic is null-intolerant: an output row is valid only where every
-  referenced input is valid, tracked as per-lane-group validity words.
+  referenced input is valid, tracked as per-lane-group validity words in the
+  loop, and written whole by the driver where the word is a pure function of
+  the input bitmaps (task 70).
 * Comparisons and `AND`/`OR`/`NOT` follow three-valued logic as a
   *known-true / known-false* mask pair (`unknown` is neither), so
   `null AND false = false` comes out right without a branch.

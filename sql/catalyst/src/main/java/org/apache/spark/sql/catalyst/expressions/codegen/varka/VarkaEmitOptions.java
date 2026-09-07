@@ -142,8 +142,10 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        stays per group is what is not a function of input bitmaps - a {@code Cond} root's
  *        selection, an {@code IfElse}'s blend, {@code make_date}'s validity test - and what
  *        still reads a word: task 52 and 60's guards, the pick's null substitution, every
- *        condition. Off reproduces the per-group bytes exactly and stays a reference variant
- *        the differential checks against, on {@link FloorMod7}'s precedent.
+ *        condition. On since task 70's measurement (PLAN_TASK_70.md 9): every served row
+ *        faster at both widths, the four-field shape by 1.6x and 1.9x, and no masked row past
+ *        its dense twin beyond run noise. Off reproduces the per-group bytes exactly and stays
+ *        a reference variant the differential checks against, on {@link FloorMod7}'s precedent.
  * @param lanesOverride the lane count to emit for, or 0 to emit for the JVM's own
  *        {@code IntVector.SPECIES_PREFERRED} - which is what production always does, so
  *        {@link #DEFAULTS} renders empty and production hashes do not move. It exists because
@@ -209,7 +211,7 @@ public record VarkaEmitOptions(
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
           VarkaLoopEmitter.GROUP_BUDGET, VarkaLoopEmitter.FUSED_CEILING,
-          true, true, true, true, true, true, true, true, true, false,
+          true, true, true, true, true, true, true, true, true, true,
           0,
           TruncDateForm.SUBTRACT, FloorMod7.MAGIC, false, false);
 

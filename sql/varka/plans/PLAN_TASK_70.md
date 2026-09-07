@@ -183,8 +183,10 @@ javadoc records and `assertSameOutput` enforces byte for byte.
 
 ### 2.4 The bound, from the current file
 
-Masked against dense, M rows/s, the parity file as this branch commits it
-(provenance `018228099ef`, 2026-09-07, both widths from one regeneration):
+Masked against dense, M rows/s, the parity file the plan committed before the
+work (provenance `018228099ef`, 2026-09-07, both widths from one regeneration;
+the numbers here are that file's on purpose, and section 9's are the file this
+task ships):
 
 | shape | AVX-512 | 128-bit |
 |---|---|---|
@@ -715,10 +717,187 @@ row is slower than before at either width.
 2. The pass, the liveness rule and the skipped writes behind the switch, off
    by default; the tests of 5; both widths green. The driver pinned on the
    output ladder here, since it is the commit that grows it.
-3. The A/B rows, one regeneration, section 9 with the predictions scored; the
-   default set by 6.1's rule; the docs and the milestone rows swept, including
-   what task 47 is left with.
+3. The A/B rows and one regeneration with the switch off, section 9's 9.1 and
+   the default decided by 6.1's rule (step 3a). Then, because the decision was
+   on: the default flipped, the variant rows renamed to the per-group reference
+   arm, the crossing test re-pinned, and a second regeneration so the committed
+   file's plain rows are the shipped bytes (step 3b); 9.2 onward scored from
+   it; the docs and the milestone rows swept, including what task 47 is left
+   with. The second regeneration was not in the plan as written: a default
+   decided *from* a regeneration invalidates that regeneration's labelling the
+   moment it is applied, and the next task that measures before it decides
+   should budget for two runs.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Two regenerations of one commit's kernels, and the second is the file that
+ships. The first, at `eb76f9a2418` with the switch off by default, measured
+the pass as a variant beside every shipped shape it changes, and the default
+was decided on it by 6.1's rule (9.3). The second, at `1f4d3e12404` with the
+switch on, is the committed file: its plain rows are the shipped bytes and its
+"words per group (task 70 A/B)" rows are the reference arm - the masked loop
+reading the input words and ORing the root's validity per lane group, which is
+what shipped until this task. Both ran on an idle machine (loads 0.88 and
+0.86; canaries within 0.7% and, for the second, compute +0.1%, cache +5.2%,
+memory -0.4%); the controls held within 2.8% in each. Every number below is
+the committed file's unless it says otherwise, and the few that are the first
+run's are on the allowlist for the reason 9.3 gives.
+
+### 9.1 The pairs: reference arm -> shipped, masked, mixed nulls, and the dense row
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `year` | 3027.8 -> 3328.5 (1.10x), dense 3444.8 | 1204.7 -> 1333.4 (1.11x), dense 1335.0 |
+| `year+month+day+quarter`, one method | 1093.6 -> 1689.1 (1.54x), dense 1667.7 | 419.4 -> 782.5 (1.87x), dense 793.4 |
+| `next_day(d, k)`, column kernel | 6974.3 -> 8024.7 (1.15x), dense 8323.3 | 2825.1 -> 4003.7 (1.42x), dense 3494.3 |
+| `add_months(d, m)`, column count | 625.9 -> 683.7 (1.09x), dense 698.8 | 209.5 -> 238.5 (1.14x), dense 243.1 |
+| `add_months(d, 13)`, the control | 717.7 -> 724.1 (1.01x) | 254.8 -> 254.7 (1.00x) |
+| `greatest(d, d2)` | 9065.7 -> 10807.0 (1.19x), dense 12742.6 | 2683.6 -> 4371.0 (1.63x), dense 11492.5 |
+| the same, first input all-null | 11472.8 -> 11869.9 (1.03x) | 4113.4 -> 6107.8 (1.48x) |
+| four fields, chunk 4096 | 1348.4 -> 2140.0 (1.59x), dense 2192.7 | 428.4 -> 794.3 (1.85x), dense 807.8 |
+| four fields, chunk 4095 | 1336.1 -> 2152.4 (1.61x), dense 2185.1 | 429.6 -> 806.1 (1.88x), dense 809.7 |
+| four fields, chunk 64 | 912.2 -> 1080.1 (1.18x), dense 1549.6 | 384.9 -> 587.0 (1.53x), dense 700.0 |
+| four fields, chunk 63 | 739.2 -> 800.7 (1.08x), dense 1374.6 | 352.6 -> 513.6 (1.46x), dense 663.8 |
+
+The four-field shape, which B2 emits by default, runs 1.54x and 1.87x faster
+than the arm that shipped before this task and lands on its dense twin - 1.3%
+above it at AVX-512, 1.4% below at 128-bit. Every served row is faster at
+both widths, and the control does not move.
+
+### 9.2 The predictions, scored as 6.1 registered them
+
+Gap closed means the fraction of the reference arm's distance to the dense row
+that the shipped row recovers.
+
+1. **Four fields closes at least two thirds of its gap at both widths. Hit,
+   with margin.** 104% at AVX-512 (595.5 of 574.1) and 97% at 128-bit (363.1
+   of 374.0).
+2. **`year` closes its whole gap and is the smallest mover; `greatest` is the
+   largest at both widths and closes at least half its gap. One hit, three
+   misses - and the misses were on the record before the run.** `year` closes
+   99% at 128-bit and 72% at AVX-512 (3328.5 against 3444.8, 3.4% short), and
+   it is the smallest relative mover at 128-bit (+10.7%) but not at AVX-512,
+   where the all-null pick (+3.5%), the chunk-63 row (+8.3%) and the column
+   count (+9.2%) move less. `greatest` is not the largest mover at either
+   width - the four-field rows are, at +54.5% / +58.7% and +86.6% / +85.4% -
+   and it closes 47% of its gap at AVX-512 and 19% at 128-bit, not half. The
+   reason is 3.3's corrected row: the pick's null substitution reads both
+   operand words for the value, so the pass removes one of its three validity
+   calls rather than three of three, and the loop loses 17 bytes of 383 rather
+   than becoming its dense twin. The prediction reasoned from the inventory
+   that missed that consumer; the emitter did not.
+3. **The control is flat; the column count moves less than `next_day`; the
+   short batches close half their gap; the all-null row moves with its
+   sibling. Three hits and one width-dependent miss.** `add_months(d, 13)`
+   moves +0.9% and -0.0%. The column count moves less than `next_day(d, k)` at
+   both widths (+9.2% against +15.1%; +13.8% against +41.7%). The all-null
+   `greatest` row moves +3.5% and +48.5% beside its mixed-null sibling's +19.2%
+   and +62.9% - the same direction and a smaller step, since one operand's
+   contribution is a constant either way. The short batches close half their
+   gap at 128-bit - 64% at chunk 64, 52% at chunk 63 - and not at AVX-512,
+   where they close 26% and 10%. What is left there is not the loop. At 64
+   rows and sixteen lanes a batch is four lane groups, and the pass has removed
+   their four reads and sixteen writes; the residue between 1080.1 and the
+   dense 1549.6 is the masked *driver*, whose per-batch null-state prologue
+   runs in full for every referenced input on every batch and whose share of a
+   64-row batch is what it is. At four lanes the per-group work was the larger
+   share and the pass closed more. That residue is task 47's (9.5). The pass is
+   never the reason a short-batch row is slower: every one is faster.
+4. **No masked row past its dense twin by more than the tie floor. Hit on
+   every row but one, and the one is not the pass.** The largest genuine tie
+   is the four-field shape at AVX-512, 1.3% above dense (1689.1 against
+   1667.7), under the 4.1% floor. `next_day(d, k)` at 128-bit reads 4003.7
+   masked against 3494.3 dense, +14.6% - and read +12.3% in the first
+   regeneration too, so it is not a one-off. It is also not the pass: the
+   one-body test proves the two loop methods identical (257 bytes each),
+   `-XX:+PrintCompilation` shows both at 256 bytecode bytes reaching tier 4 the
+   same way, and timed interleaved under one JIT state over one L1-resident
+   buffer they run 4287 / 4319 / 4306 / 4278 M rows/s, within 1%. Identical
+   code at identical speed in the probe and 13-15% apart in the harness, at one
+   width only, across two runs: what differs between them is that the harness
+   streams two 80 MB columns from memory and the dense arm's pair (`nfData`
+   with `kData`) is not the masked arm's pair (`mxData` with `kData`), so the
+   relative placement of the two streams is not the same. That is the likely
+   mechanism and it is unverified; it is in the debt register as a harness
+   question, and it does not touch the decision, since the pass is faster than
+   its reference arm on this row at both widths whatever the dense row reads.
+5. **No pinned oracle moves; no dense number moves beyond noise. Hit, with the
+   noise measured rather than assumed.** The line map and shape hash tests are
+   as they were. The emitter's off-path bytes - the reference arm - were
+   compared method by method against master's on seven shapes and are
+   identical, so every non-A/B row in both runs is the same class file as
+   before; the sub-microsecond family still moved by up to 20% between the two
+   runs, in both directions, which is the noise 2.4 documented and the reason
+   this task's claims rest on adjacent pairs rather than on rows across files.
+6. **The epilogue crossing and the driver. Two hits, one miss in the good
+   direction, and one exact.** Unshared moves from 21 to 22 as predicted (7563
+   fits, 8033 crosses). Shared was predicted at 47 or 48 and is at 49 (48 fits
+   at 7464, 49 crosses at 8035), because what the prediction's last paragraph
+   allowed for happened in full: the null-state prologue went with the words,
+   and `epilogueMasked` is `epilogueDense`'s bytes on every rung of the ladder
+   rather than "within a hundred bytes" of it. The driver grows by 432 bytes
+   at 48 outputs (2624 to 3056), under the 500 registered, and crosses nothing
+   at either setting. The pinned crossing test carries the new boundaries and
+   the old ones under the reference arm.
+
+### 9.3 The default
+
+On. 6.1's rule was that prediction 4 holds and no served row is slower than
+before at either width. Every served row is faster at both widths in both
+runs; the control is flat; and prediction 4 holds on every row but one, which
+is identical bytecode running at identical speed when the JVM is asked
+directly - the "measurement error to explain" the prediction named, not a row
+the pass made worse.
+
+The decision was taken on the first regeneration, whose plain rows were the
+arm that shipped before this task: the four-field shape read 1034.6 -> 1644.5
+against a dense 1662.5 at AVX-512 and 420.1 -> 792.9 against 790.5 at 128-bit,
+`year` 3208.8 -> 3455.8 and 1193.4 -> 1330.9. Those numbers are on the
+allowlist because the commit that carried that file does not survive the
+squash-merge; the second regeneration says the same thing in the file a reader
+can open. The flip needed that second regeneration, which 8 did not
+anticipate: the committed file's plain rows must be the shipped bytes, and the
+moment the default moved those were the pass, so the variant rows became the
+per-group reference arm and the file was regenerated once more.
+
+### 9.4 Findings that were not predictions
+
+* **A fourth word consumer**, found by the assertion that pins 3.3 the first
+  time it ran (3.3, corrected in place with the original kept). It moved
+  prediction 2 from what was expected to what happened.
+* **The agreement check's operator arm was unsound**, and the fuzzer refused
+  it twenty jobs out of twenty on the first wave: two operands with different
+  owners can have equal expressions, and a pick's OR of two equal ANDs folds
+  to an AND. Removed in step 1; `SKILLS.md` has the lesson.
+* **One body, not two, exactly.** With the pass on, `loopMasked0` is the size
+  of `loopDense0` for `year(d)` (420), the four fields (626), `next_day(d, k)`
+  (257) and `datediff(d, d2)` (158), and the epilogues likewise (437, 649, 276,
+  177); the masked methods had been 514, 750, 442 and 343. `greatest(d, d2)`
+  keeps its substitution and goes 383 to 366; `year(date_add(d, off))` keeps
+  its guard and goes 691 to 681; `if(d < d2, d, d2)` is unserved and does not
+  move. On the output ladder every shared and unshared rung has the two
+  epilogues equal, which is why the crossing is the dense epilogue's now.
+* **The driver, measured**: 1122 / 2409 / 2624 bytes at 20 / 44 / 48 shared
+  outputs under the reference arm, 1282 / 2801 / 3056 under the pass; the
+  epilogue crossed first at every rung before this task and, at 49, still
+  does.
+* **The short-batch residue at AVX-512 is the driver's prologue** (prediction
+  3), which puts a number on what task 47 is now about.
+* **A default decided from a regeneration costs a second regeneration** (9.3;
+  8 is amended, and `SKILLS.md` has the lesson).
+* **The `next_day` dense row at 128-bit** (prediction 4): a harness question,
+  in the debt register.
+
+### 9.5 What task 47 is left with
+
+Per lane group, in the masked body: a `Cond` root's selection OR (the filter
+kernel), an `IfElse`'s blend, `make_date`'s validity test, the two reads a
+pick's substitution makes (`greatest(d, d2)` at 10807.0 and 4371.0 against its
+dense 12742.6 and 11492.5 - the widest gap left among the served shapes), and
+the read and AND a range guard keeps (`year(date_add(d, off))`,
+`add_months(d, m)` at 683.7 against 698.8 and 238.5 against 243.1). Per batch,
+in the masked driver: the null-state prologue for every referenced input,
+which is the whole of the gap left on a 64-row batch at AVX-512 (chunk 64 at
+1080.1 against 1549.6). Task 64 removes the guard from the in-range case and
+so widens what this task's rule drops; the prologue's share on short batches
+is a new item for 47's own plan.

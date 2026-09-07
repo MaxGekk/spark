@@ -105,13 +105,14 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
   }
 
   /**
-   * Task 70's arm: the masked driver writes a served root's validity once per batch from the
-   * input bitmaps and the loop skips its per-group write and, where nothing else reads it, the
-   * per-group read too (PLAN_TASK_70.md 3.1). Every task 70 pair below is the shipped kernel
+   * Task 70's reference arm, "words per group": the masked loop reads the input words and ORs
+   * a served root's validity in per lane group, which is what shipped until task 70's driver
+   * pass took both over (PLAN_TASK_70.md 3.1). Not to be read as task 45's "validity OR-ed per
+   * group", which is the dense body's arm. Every task 70 pair below is the shipped kernel
    * beside this one, adjacent, on the mixed-null arm the pass changes; the null-free arm is
    * task 45's fill either way and is not paired.
    */
-  private val bitmapPass = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(true)
+  private val perGroupWrite = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
 
   /**
    * Closes every non-null vector in `vs`, guarding each so one failure cannot strand the rest.
@@ -279,16 +280,16 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // Task 70's A/B on the OR root: the pass writes the OR of two whole bitmaps once and
         // the loop drops the root's write - but keeps both reads, since the pick's null
         // substitution blends by the operand words for the value (PLAN_TASK_70.md 3.3).
-        val greatestBitmap = emit(
-          Seq(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2, 0, loader, 945, bitmapPass)
-        benchmark.addCase("greatest(d, d2), bitmap pass (task 70 A/B), mixed nulls") { _ =>
-          greatestBitmap.run(Array(mxData.address(), mx2Data.address()),
+        val greatestPerGroup = emit(
+          Seq(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2, 0, loader, 945, perGroupWrite)
+        benchmark.addCase("greatest(d, d2), words per group (task 70 A/B), mixed nulls") { _ =>
+          greatestPerGroup.run(Array(mxData.address(), mx2Data.address()),
             Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
         }
         benchmark.addCase(
-          "greatest(d, d2), bitmap pass (task 70 A/B), first input all-null") { _ =>
-          greatestBitmap.run(Array(mxData.address(), mx2Data.address()),
+          "greatest(d, d2), words per group (task 70 A/B), first input all-null") { _ =>
+          greatestPerGroup.run(Array(mxData.address(), mx2Data.address()),
             Array(0L, mx2Validity.address()), Array(numRows, mx2Nulls),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
         }
@@ -516,7 +517,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // option, so movement there is run noise rather than an effect.
         val perGroup = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false)
         val yearPerGroup = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 830, perGroup)
-        val yearBitmap = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 940, bitmapPass)
+        val yearWordsPerGroup =
+          emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 940, perGroupWrite)
         val dowPerGroup = emit(Seq(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 832, perGroup)
         // Task 48's A/B. The shipped year kernel skips the prefix's March-month step - four
         // lane ops a year tail never reads, since it takes the January turn off the day of
@@ -648,8 +650,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         benchmark.addCase("year, mixed nulls") { _ => chunked(year, true) }
         // Task 70's A/B: the one read and one write per group gone, the bitmap copied once.
-        benchmark.addCase("year, bitmap pass (task 70 A/B), mixed nulls") { _ =>
-          chunked(yearBitmap, true)
+        benchmark.addCase("year, words per group (task 70 A/B), mixed nulls") { _ =>
+          chunked(yearWordsPerGroup, true)
         }
         benchmark.addCase("year, general validity helpers (task 46 A/B), mixed nulls") { _ =>
           chunked(yearGeneral, true)
@@ -761,7 +763,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val fourShared = four
         val fourSharedPerGroup = emit(fourFields, 1, 0, loader, 831,
           VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false))
-        val fourSharedBitmap = emit(fourFields, 1, 0, loader, 941, bitmapPass)
+        val fourSharedWordsPerGroup = emit(fourFields, 1, 0, loader, 941, perGroupWrite)
         benchmark.addCase("year+month, separate (2 loop methods), null-free") { _ =>
           chunked(yearMonthSeparate, false, outputs = 2)
         }
@@ -797,8 +799,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // Task 70's A/B on the shape B2 emits by default: four writes and one read per group
         // gone, four bitmap copies per batch - the largest predicted mover (PLAN_TASK_70.md 6.1).
         benchmark.addCase(
-          "year+month+day+quarter, shared, bitmap pass (task 70 A/B), mixed nulls") { _ =>
-          chunked(fourSharedBitmap, true, outputs = 4)
+          "year+month+day+quarter, shared, words per group (task 70 A/B), mixed nulls") { _ =>
+          chunked(fourSharedWordsPerGroup, true, outputs = 4)
         }
         benchmark.addCase(
           "year+month+day+quarter, shared, general helpers (task 46 A/B), mixed nulls") { _ =>
@@ -908,8 +910,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val addMonthsLit = new AddMonths(col0, new LiteralSlot(0))
         val addMonthsColGuarded = emit(Seq(addMonthsCol), 2, 0, loader, 854)
         val addMonthsLitControl = emit(Seq(addMonthsLit), 2, 1, loader, 855)
-        val addMonthsColBitmap = emit(Seq(addMonthsCol), 2, 0, loader, 943, bitmapPass)
-        val addMonthsLitBitmap = emit(Seq(addMonthsLit), 2, 1, loader, 944, bitmapPass)
+        val addMonthsColPerGroup = emit(Seq(addMonthsCol), 2, 0, loader, 943, perGroupWrite)
+        val addMonthsLitPerGroup = emit(Seq(addMonthsLit), 2, 1, loader, 944, perGroupWrite)
         benchmark.addCase("add_months(d, m), column count (task 60), null-free") { _ =>
           chunkedTwo(addMonthsColGuarded, false)
         }
@@ -926,12 +928,12 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // row moves by the write alone; the literal count's 81-op tail hides one write, so its
         // row is predicted flat (PLAN_TASK_70.md 6.1, prediction 3).
         benchmark.addCase(
-          "add_months(d, m), column count, bitmap pass (task 70 A/B), mixed nulls") { _ =>
-          chunkedTwo(addMonthsColBitmap, true)
+          "add_months(d, m), column count, words per group (task 70 A/B), mixed nulls") { _ =>
+          chunkedTwo(addMonthsColPerGroup, true)
         }
         benchmark.addCase(
-          "add_months(d, 13), literal count, bitmap pass (task 70 control), mixed nulls") { _ =>
-          chunkedTwo(addMonthsLitBitmap, true, Array(13))
+          "add_months(d, 13), literal count, words per group (task 70 control), mixed nulls") { _ =>
+          chunkedTwo(addMonthsLitPerGroup, true, Array(13))
         }
         // Task 35's A/B: trunc(date, ...) under its two lowerings, SUBTRACT (the day of year
         // or day of month taken off the date) against RECOMPOSE (the period's first day rebuilt
@@ -1427,8 +1429,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             loader, 890)
           val column = emit(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
             loader, 891)
-          val columnBitmap = emit(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
-            loader, 942, bitmapPass)
+          val columnPerGroup = emit(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
+            loader, 942, perGroupWrite)
           def chunkedLiteral(): Unit = eachChunk { (dataOff, validityOff, n) =>
             val status = literal.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
               Array(dst.address() + dataOff), Array(dstValidity.address() + validityOff),
@@ -1470,9 +1472,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           }
           // Task 70's A/B on the two-input AND: both reads and the write gone, one bitmap AND.
           benchmark.addCase(
-            "next_day(d, k), column kernel, bitmap pass (task 70 A/B), mixed nulls on the date") {
-            _ => chunkedColumn(columnBitmap, true)
-          }
+            "next_day(d, k), column kernel, words per group (task 70 A/B), mixed nulls on the " +
+              "date") { _ => chunkedColumn(columnPerGroup, true) }
           benchmark.addCase("weekday leaf, row-engine parser, valid names") { _ =>
             chunkedLeaf(valid, WeekdayLeaf.Parser.ROW_ENGINE)
           }
@@ -1761,7 +1762,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val fourFieldsUnshared = emit(fourFieldsCol, 1, 0, loader, 710,
           VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false))
         val fourFieldsShared = emit(fourFieldsCol, 1, 0, loader, 711)
-        val fourFieldsBitmap = emit(fourFieldsCol, 1, 0, loader, 946, bitmapPass)
+        val fourFieldsPerGroup = emit(fourFieldsCol, 1, 0, loader, 946, perGroupWrite)
         val calDstData = wideDst.map(_.address())
         val calDstValidity = wideDstValidity.map(_.address())
         def chunkedCalendar(kernel: VarkaFusedKernel, chunk: Int, mixed: Boolean): Unit = {
@@ -1802,9 +1803,9 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           // Task 70's A/B on the short batches risk 2 is about: at 64 rows the pass is an
           // 8-byte bitmap against four lane groups' calls.
           benchmark.addCase(
-            s"year+month+day+quarter, shared, bitmap pass (task 70 A/B), chunk $chunk ($note), " +
-              "mixed nulls") { _ =>
-            chunkedCalendar(fourFieldsBitmap, chunk, mixed = true)
+            s"year+month+day+quarter, shared, words per group (task 70 A/B), chunk $chunk " +
+              s"($note), mixed nulls") { _ =>
+            chunkedCalendar(fourFieldsPerGroup, chunk, mixed = true)
           }
         }
         benchmark.run()
