@@ -48,8 +48,9 @@ Six tasks, in the dependency order milestone 4's plan already gave them:
   milestone 4 can close.
 * **75, zero-copy validity for leaf words** - added the same day (section
   2.10): an output whose word *is* an input's bitmap shares the buffer
-  instead of copying it. Small and bounded by a committed number, so it is
-  an admission check before it is a task.
+  instead of copying it. Small and bounded by a committed number - and the
+  number moved under it when task 70 was regenerated a third time, to 0.4%,
+  below this task's own decline line, so read 2.10 before starting it.
 
 What stays true from milestone 4's plan and is not repeated here: the three
 invariants (one lane width per kernel, every value lane-shaped, no lane reads
@@ -655,15 +656,34 @@ cache in 19.0.0), and the evaluator asks for it once per input per batch in
 `extractMorsel` and once per compacted column in the filter - on a vector
 Varka itself just wrote, whose count the pass could have kept.
 
-**What it is worth, bounded before it is built.** The committed parity file
-after task 70 puts masked `year(d)` at 3328.5 M rows/s against its dense
-twin at 3444.8 at AVX-512 - a 3.4% gap on identical loop bytes, of which the
-copy pass is the visible driver-side difference - and at 1333.4 against
-1335.0 at 128-bit, no gap at all. The four-field shape's masked row sits
-*above* its dense row. So the ceiling is a few percent on the cheapest
-single-field kernels at the wide width and nothing elsewhere, and the null
-count scans are of the same order (a `popcount` per 64 rows). That is a
-probe, not a task, until the probe says otherwise.
+**What it is worth, bounded before it is built.** *Requoted on 7 September
+2026, and the requote moves the bound. This paragraph was written against
+task 70's second regeneration; the review of #145 forced a third, and the
+gap it rested on fell from 3.4% to 0.4%. The superseded figures are in this
+file's history and in `PLAN_TASK_70.md` 9.2, which scores its predictions
+against the run they came from.*
+
+The committed parity file puts masked `year(d)` at 3446.7 M rows/s against
+its dense twin at 3459.3 at AVX-512, adjacent rows in one run: a **0.4% gap**
+on identical loop bytes, where the earlier run read 3.4%. At 128-bit the
+masked row is 1332.5 against the dense 1331.4, which is to say ahead of it.
+The four-field shape's masked row also sits above its dense row, 1703.9
+against 1687.4. So the ceiling this task could recover is 0.4% on the
+cheapest single-field kernel at the wide width and nothing anywhere else, and
+the null-count scans are of that same order (a `popcount` per 64 rows).
+
+**Which is below this task's own decline threshold**, stated in the next
+paragraph as 2% at AVX-512. On today's committed numbers the admission check
+would decline before it ran. Two things follow rather than one. The
+*zero-copy validity* half is, on this evidence, already answered: the copy it
+would remove is not visible in the file, and the honest outcome is a recorded
+decline unless someone wants the probe for its own sake. The *cached null
+count* half is untouched by that arithmetic, because the masked-against-dense
+gap does not measure it at all - `getNullCount` is a bitmap scan the evaluator
+pays per input per batch and again per compacted column in the filter, on
+vectors Varka itself just wrote, and no row in the parity file prices it. If
+this task survives, that is what it is about, and it wants its own
+measurement rather than this one.
 
 **The admission check.** In the parity harness, the masked `year(d)` row
 with the destination validity pre-filled and the copy skipped, against the
@@ -703,7 +723,7 @@ nothing else, 75 being an admission check before it is a task.
 | 65 | Joffe's `fast32` civil-from-days in int lanes. **Scoped in section 2.7** (5 September 2026); independent of 29 | The admission check first: the two source files transcribed into `sql/varka/papers` with reading notes; a committed script deriving a low-32-bit magic and its exact range per stage and sweeping the chain against `LocalDate`; the dependent-stage count against the prefix's. If admitted, an emit-option variant, the A/B beside the task 53 and 54 pairs at both widths, the register and the `HugeMethodLimit` ladder re-pinned, and the default chosen from the numbers | Exact over at least the narrowed range, or declined; a shorter dependent chain than the prefix's, or declined; the A/B at or above 1.0x at both widths, or the numbers go to the debt register |
 | 66 | Second-level chrono fragments. **Scoped in section 2.8** (5 September 2026); after task 32's B2 grouping decision | `FragmentKind`s for the year parts, the January month, the month start and `floorMod(d, 7)`, keyed and planned as the prefix is; emitted once per lane group, elided when no consumer in the group reads them; the register and the `HugeMethodLimit` ladder re-pinned; the A/B beside task 32's shared rows at both widths | The matrix and the whole-range sweep under a widened group budget over every pair and triple of calendar outputs; the byte identity of every single-field kernel; the gate in 2.8 (at or above 1.05x at AVX-512 on both shapes), or the register goes to the debt register |
 | 74 | The validity-word algebra's missing axioms. **Scoped in section 2.9** (7 September 2026); after #145 | The coalesce axiom (`IfElse(IsNotNull(x), x, y)` denotes `x OR y`) and absorption in `pureOf`'s folding, behind task 70's switch; the census tool re-run through the emitter's own analysis rather than a mirror; the `coalesce(d, d2)` parity A/B pair | `coalesce(d, d2)` masked byte-equal to its dense twin and on its dense row at both widths; the differential over the nullable fixtures for two- and three-operand `coalesce`, `datediff(greatest(d, d2), d)` and `greatest(date_add(d, i), d)`; two million fuzz shapes with both extensions randomised; no other committed row moves |
-| 75 | Zero-copy validity for leaf words. **Scoped in section 2.10** (7 September 2026); after #145, an admission check before it is a task | The probe: masked `year(d)` with the copy skipped against the committed row, both widths. If admitted, the leaf case of the pass resolved to the input's validity buffer retained through Arrow's reference manager, a cached null count on Varka-owned output vectors, and the filter's compaction reading it | Under 2% at AVX-512 on the probe: declined on the record. Otherwise the differential over every null pattern with the output's validity address asserted equal to the input's, allocator accounting closing to zero with the retained buffers released, and the `year(d)` masked row on its dense row |
+| 75 | Zero-copy validity for leaf words. **Scoped in section 2.10**, and **the bound moved under it** (7 September 2026): task 70's third regeneration puts the masked-against-dense gap on `year(d)` at 0.4% at AVX-512 and below zero at 128-bit, under this task's own 2% decline line, so the zero-copy half is answered before the probe runs and what may survive is the cached null count, which that gap does not measure | The probe: masked `year(d)` with the copy skipped against the committed row, both widths. If admitted, the leaf case of the pass resolved to the input's validity buffer retained through Arrow's reference manager, a cached null count on Varka-owned output vectors, and the filter's compaction reading it | Under 2% at AVX-512 on the probe: declined on the record. Otherwise the differential over every null pattern with the output's validity address asserted equal to the input's, allocator accounting closing to zero with the retained buffers released, and the `year(d)` masked row on its dense row |
 
 ## 4. Files
 
