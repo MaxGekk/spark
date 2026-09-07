@@ -2518,8 +2518,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   future derived leaf over a string column inherits it; closing it takes a string-column
   compaction that keeps the Arrow layout (offsets and data buffers, task 21's `filterCompact`
   for fixed-width columns is the pattern), measured on the task 59 differential's fixture.
-  **Adopted as task 80** (section 2.42), before milestone 6's item 3 puts string columns
-  under filters and group keys.
+  **Adopted as task 80** (section 2.42), before milestone 6's item 3 puts
+  string columns under filters and group keys.
 * **The week fold costs more than its op count (task 37).** `weekofyear` is 64
   dense-loop calls against `year`'s prefix-plus-tail, yet runs at 0.41x of `year`'s
   rate at 256 bits and 0.38x at 128 (`PLAN_TASK_37.md` section 9, prediction 2), a
@@ -2577,8 +2577,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   Closing it is small: let `VarkaFilterExec` prune its output to the parent's required
   columns, or let the rule take a forwarded-only projection above a Varka node; either way
   the differential over `SELECT d ... WHERE d < d2` through a columnar consumer is the gate.
-  **Adopted as task 78** (section 2.40); it is the one entry here where Varka is slower
-  than stock Spark end to end.
+  **Adopted as task 78** (section 2.40); it is the one entry here where Varka
+  is slower than stock Spark end to end.
 
 ## 10. Scope catalogue
 
