@@ -2135,6 +2135,51 @@ rewritten in the past tense with what the sweep found, never deleted.
   Closing it means swapping or padding the allocations and re-measuring the pair; if the gap
   follows the placement, the harness allocates its streams with a fixed stride from then on.
 
+* **The 128-bit `fused, 64 ops` row collapsed 30x on master at `aef0b82260e`,
+  and the reason is not in the emitted methods (task 70's review).** The parity
+  file's four-chain, 64-op masked case read 270.4 to 273.2 M rows/s at 128-bit
+  across every regeneration up to `00eeed82279`, then 8.8 at `aef0b82260e` - the
+  commit that moved the per-group validity OR ahead of the compute, which made
+  the *same row* 1.8x faster at AVX-512 (988.6 to 1757.0) - and it stayed there
+  through task 70's step 3a at 9.2. It is back at 966.6 and 961.6 in the two
+  regenerations since the bitmap pass removed that call for a served root, above
+  the pre-regression baseline. At 8.8 the fused kernel was slower than the 64
+  sequential single-op passes it exists to beat, which is the signature of
+  methods not running compiled. It is a debt because the collapse was committed
+  into a results file without being remarked on, and because #145 removes it by
+  accident rather than by understanding it: the same lowering choice could put
+  another shape over the same edge. Two mechanisms are already excluded. Not a
+  method-size cliff: the masked loop is 898 bytes with the pass off and 804 with
+  it on, the masked epilogue 1477 and 1343, all far under `HugeMethodLimit`. And
+  not a compile failure of those methods: under `-XX:+PrintCompilation` at four
+  lanes, driven through the masked path by `VarkaEmitDump`'s `--nulls`, both
+  arms take every masked method to tier 4 with no bailout, no `COMPILE SKIPPED`
+  and no deoptimisation beyond the routine superseding of tier 3. In isolation
+  the arms behave identically, so what is left is the whole-file JIT state -
+  this case runs after about a hundred kernels have been compiled in the same
+  JVM, the condition `PLAN_TASK_11.md` section 6 names for it. Closing it means
+  running that one section in a fresh JVM and against the rest of the file, at
+  both widths and both arms, and reading the compile queue rather than the
+  times.
+
+* **Task 46's width-named validity helpers are the right default for one shape
+  and the wrong one for another (task 70's review).** With task 46's A/B arms
+  rebuilt on the per-group reference variant - they had been on `DEFAULTS`,
+  which after task 70 made both arms the same kernel - the pair measures again,
+  and it splits by shape. On the four-field shared method the width-named
+  helpers win: 1069.8 against 922.5 at AVX-512 and 417.3 against 335.2 at
+  128-bit. On single-field `year` they lose: 3092.5 against 3366.0 and 1190.5
+  against 1281.6. The shipped default is width-named everywhere, argued from a
+  measurement on the four-field shape, so a single-field masked kernel that
+  keeps its per-group write is paying 8-9% for it. It is a debt rather than a
+  fix because the switch is task 46's and the choice wants a rule, not a flip:
+  the plausible one is the number of validity writes in the loop body, which is
+  what differs between the two shapes. Closing it means one measurement across
+  the write count and a cost rule in `planSlots`, or a recorded decline saying
+  the single-field case is too small to matter. The same shape-dependence is the
+  argument in `SCOPE_MILESTONE_6.md` item 11 for choosing lowerings by cost
+  rather than by a global default.
+
 * **A guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the
   row never takes (task 60).** `emitGuardCollect` ANDs the out-of-range mask with the
   node's validity word and, in an epilogue, the bounds mask - but never with the
