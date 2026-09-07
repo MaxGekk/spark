@@ -158,8 +158,20 @@ only for words some emitted consumer reads: a `guardTmp` node's word, an
 `IfElse`'s condition and branches, a `Cond` root's, a `Greatest`/`Least`
 whose own word feeds one of those, and any root the pass does not serve. A
 method with no live word skips the per-group `validityBitsAt` reads entirely,
-and its body is then the dense body's bytes - the one-body-not-two result,
-verified in 5 rather than assumed.
+and an input whose word is dead in a method needs none of that method's
+null-state prologue either - no `srcValSeg`, no `dead`/`hasNulls` flags - so
+the lane-group body and the prologue are then the dense method's bytes, the
+one-body-not-two result, verified in 5 rather than assumed (6.1's prediction
+6 sizes what the epilogue keeps if the prologue is not dropped with the
+words).
+
+**Liveness is checked by the emission, not by the list in 2.2.** `loadWord` is
+the one call through which every consumer reads a word, so it counts each use
+in `Slots` as it emits, and the emitter asserts at the end of every method
+that a word the liveness pass declared dead was loaded zero times - an
+`IllegalStateException` at emit time, which `VarkaIrFuzzSuite` drives over
+random IR. The inventory in 2.2 is how the rule was designed; the counter is
+what keeps a future consumer from being missed silently.
 
 **The write.** `emitLaneGroup` skips the per-group `orValidityBitsAt` for a
 root the pass served, the way `fillsValidityOnce` skips it on a dense batch;
@@ -231,7 +243,14 @@ Registered from the emission sites in 2.2, to be asserted in 5:
   and `add_months(d, m)` over data whose null lanes hold `Int.MIN_VALUE` and
   `Int.MAX_VALUE`, asserting status 0 under both settings - the failure 2.2
   describes, which no existing test provokes because the fixtures zero their
-  null slots.
+  null slots. And `checkMatrix`'s data generator fills every null slot with
+  those sentinels by default from this task on, so the whole existing matrix
+  becomes sensitive to garbage reaching a guard or a lowering's domain, for
+  tasks 42, 52 and 60 as well as this one.
+* **The dead-word invariant fires**: a test that emits a shape with a
+  deliberately mis-marked word (through a test-only hook, the
+  `misdescribeAdd` pattern) and asserts the emit-time exception, so the
+  counter in 3.1 is known to be armed.
 * **An all-null input through the pass**: an AND root (`datediff(d, d2)` with
   `d` all-null, output all-null without touching `0L`) and an OR root
   (`greatest(d, d2)`, output equal to `d2`'s bitmap).
@@ -277,6 +296,35 @@ counterpart.
    measurement error to explain, not a result.
 5. No pinned oracle moves and no dense committed number moves beyond noise.
    Confidence high.
+6. **The epilogue's `HugeMethodLimit` crossing moves from 44 shared outputs
+   to 47, and from 21 unshared to 22.** Measured before the work rather than
+   discovered after, off `javap` of the classes the pinned crossing test
+   emits, at `bbc91b7ec39`: in `epilogueMasked` each served output's write is
+   one 12-byte sequence (`aload dst; iload i; i2l; lload word; iload lanes;
+   invokestatic orPartialValidityBitsAt`) and each input's word read is one
+   32-byte three-way block (dead, has nulls, null-free), and the ladder reads
+
+   | outputs (dates) | shared today | shared after | unshared today | unshared after |
+   |---|---|---|---|---|
+   | 20 (5) | 3575 | 3175 | 7670 | 7270 |
+   | 21 (6) | 4020 | 3576 | 8331 | 7887 |
+   | 40 (10) | 7082 | 6282 | 18396 | 17596 |
+   | 44 (11) | 8058 | 7178 | 20511 | 19631 |
+   | 45 (12) | 8726 | 7802 | | |
+   | 48 (12) | 9084 | 8124 | | |
+
+   where "after" subtracts 12 bytes per output and 32 per input. Interpolating
+   the shared column's 119 bytes per output inside a date, 46 outputs land
+   near 7909 and 47 near 8016 - sixteen bytes over the limit - so the shared
+   crossing is 47 or 48, and the pinned test re-pins to whichever it is;
+   unshared, 21 now fits and 22 crosses near 8377. The crossing can only move
+   outward here, so nothing that compiles today stops compiling. Confidence
+   medium-high on the direction and the 21-to-22 move, medium on 47 against
+   48. One more thing the same numbers say: after the reads and writes go, the
+   44-output masked epilogue is still 7178 bytes against the dense 6574, and
+   that residue is the per-input null-state prologue - which is why 3.1 drops
+   it with the dead words; the prediction for the one-body test in 5 is that
+   with the prologue gone the two differ by under a hundred bytes.
 
 The rule that decides the default: on, if prediction 4 holds and no served
 row is slower than before at either width.
@@ -292,10 +340,17 @@ row is slower than before at either width.
 3. **Reads kept for a guard hide the write's saving.** The column-count
    `add_months` control is there to show the write alone; if it does not
    move, the write was not the cost on that shape.
-4. **Task 44's crossing moves again.** The epilogue loses a write per served
-   output, so the `HugeMethodLimit` crossing (21 unshared, 44 shared outputs)
-   moves outward a fourth time; the ladder in `PLAN_TASK_32.md` 7.1 is
-   re-measured and recorded in 9, not adjusted beforehand.
+4. **Task 44's crossing moves again** - and it is not a risk to the shape or
+   the numbers, only to the record. The crossing is a measured property that
+   can only move outward here, it is pinned by a suite test that fails the
+   moment it moves, and 6.1's prediction 6 says where it lands, so the
+   re-pin in the same commit is a scored prediction rather than a surprise.
+   `PLAN_TASK_32.md` 7.1's ladder is requoted in 9.
+5. **A switch that defaults on changes the bytes of nearly every masked body
+   in the shape cache at once.** The differential and fuzz suites at both
+   settings are the oracle, the reference variant stays live, and the default
+   flips in the last commit per 8 - the same discipline every lowering change
+   here has followed, applied to the widest one so far.
 
 ## 8. Sequencing
 
