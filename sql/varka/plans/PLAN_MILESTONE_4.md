@@ -1833,6 +1833,83 @@ mod-7 node hid the producers beneath it from the `chronoBound` check - was
 fixed with task 70, because the fuzzer is unusable past about ten thousand
 iterations without it.
 
+### 2.38 The validity helper choice, keyed on the loop body (task 76)
+
+Added 7 September 2026, out of task 70's review (see the debt register).
+
+**The observation.** Task 46 gave the per-group validity write a
+width-specialised writer - `orValidityBitsAt16` and its siblings - and made it
+the default, argued from a measurement on the four-field shared method. Task
+70 then turned the per-group write off for a served root, which left task 46's
+A/B arms comparing two byte-identical kernels; with the arms rebuilt on the
+per-group reference variant they measure again, and the answer splits by
+shape. On the four-field shared method the specialised writer wins, 1069.8
+against 922.5 at AVX-512 and 417.3 against 335.2 at 128-bit. On single-field
+`year` it loses, 3092.5 against 3366.0 and 1190.5 against 1281.6. Both figures
+are from the third regeneration in `PLAN_TASK_70.md` 9.6.
+
+So the shipped default is right for the shape it was argued from and costs 8
+to 9% on a masked single-field kernel that keeps its per-group write. That is
+a real cost on a real shape - after task 70 the roots that keep the per-group
+write are the unserved ones, an `IfElse` blend, `make_date`, a `Cond` root -
+and a global boolean cannot express it.
+
+**The design.** Not another global flip: a rule, read where `planSlots`
+decides the writer. The quantity that differs between the two shapes is how
+many validity writes the loop body makes, which the emitter knows before it
+writes a byte - one per unserved value root in the body's output group. The
+plausible rule is "specialised above one write, general at one", and the task
+is one measurement across the write count to place the threshold, then that
+rule and the `VarkaEmitOptions` switch kept as the reference variant it
+already is.
+
+**What could close it without code.** If the sweep shows the single-field
+case is the only one below the threshold and the cost there is inside the
+file's noise for that row, the honest outcome is a recorded decline and the
+debt entry swept in the past tense. The measurement decides.
+
+### 2.39 The 128-bit compile cliff behind the per-group validity OR (task 77)
+
+Added 7 September 2026, out of task 70's review (see the debt register).
+
+**The observation.** The parity file's `fused, 64 ops` case - four disjoint
+depth-16 chains, masked - read 270.4 to 273.2 M rows/s at 128-bit through
+every regeneration up to `00eeed82279`, then 8.8 at `aef0b82260e`, the commit
+that moved the per-group validity OR ahead of the compute. The same commit
+made the same row 1.8x *faster* at AVX-512, 988.6 to 1757.0, which is
+presumably why it read as a win. The row stayed at 8.8 and 9.2 until task 70's
+bitmap pass removed that call for a served root, and reads 966.6 and 961.6 in
+the two regenerations since - above the pre-regression baseline. At 8.8 the
+fused kernel was slower than the 64 sequential single-op passes it exists to
+beat, which is the signature of methods not running compiled.
+
+**Why task 70 does not close it.** The pass removes the per-group OR only for
+a root whose word is a pure single-operator expression over input bitmaps.
+Every unserved root still emits it, before the compute, exactly as
+`aef0b82260e` left it: an `IfElse` blend, `make_date`, a mixed AND/OR tree, a
+`Cond` root. So the lowering that put this shape over the edge is still on the
+default path for those shapes, and nothing in the file measures a large one.
+
+**What is already excluded**, so the task does not re-test it. Not a
+method-size cliff: the masked loop is 898 bytes with the pass off and 804 with
+it on, the masked epilogue 1477 and 1343, all far under `HugeMethodLimit`. Not
+a compile failure of those methods: under `-XX:+PrintCompilation` at four
+lanes, driven through the masked path by `VarkaEmitDump`'s `--nulls`, both
+arms take every masked method to tier 4 with no bailout, no `COMPILE SKIPPED`
+and no deoptimisation beyond the routine superseding of tier 3. In isolation
+the two arms behave identically.
+
+**The design is a measurement first.** Run that one benchmark section in a
+fresh JVM and again after the whole file, at both widths and both arms of
+`validityOrFirst`, reading `-XX:+PrintCompilation` and the compile queue
+rather than the times - the condition `PLAN_TASK_11.md` section 6 already
+names for this case. Then the same on an unserved root of comparable size,
+which is where the exposure now lives. If the queue explains it, the outcome
+is a rule for `validityOrFirst` keyed on what the sweep says - width, body
+size, or both - and a benchmark row over an unserved root so the file can see
+it next time. If it does not, the finding is recorded and the debt entry is
+swept with what was learned.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1941,6 +2018,8 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 71 | `GROUP_BUDGET` retuned on the emitter as it is (section 2.35): task 17's split-versus-merged rows reversed at task 46, and the budget rests on the reading they no longer support | A budget ladder (16 to 64) over the shapes a wider method changes, at both widths, with `-XX:+PrintCompilation` beside the throughput; C1's ~1900-byte refusal priced as a startup cost; whether B2's clause 2 widens from prefix reuse to "the marginal cost fits" decided on the same ladder | A committed number per budget per width; the pair that decides it read from the parity file rather than from a scratch run; the non-calendar byte-identity guard extended to assert that a budget change changes exactly the shapes it names; no calendar committed number moves |
 | 72 | Output order for prefix affinity (section 2.36): `year(d), year(d2), month(d)` takes three loop methods where the adjacent order takes two | The admission check first - no consumer of a group depends on contiguous output indices - then a two-pass grouping that gathers a calendar output into the group whose prefix it reuses wherever that group is; the evaluator and the line map untouched | The pinned limitation in `VarkaLoopEmitterSuite` flipped to two methods; the pinned oracles unmoved; the permuted and adjacent orders within noise in the parity harness at both widths; the differential suite green with the two orders |
 | 73 | A stopping rule for the guard walk (section 2.37): a column-offset day producer is guarded on its own value even when a mod-7 node between it and the calendar node has already re-based the day (task 70's fuzz run; see the debt register) | The admission check first - whether any SQL shape observes the difference, given that `dayRange` returns `Unknown` for a mod-7 child and declines the entry at compile time before the emitter is reached, which can legitimately close the task with the finding recorded. If it does: a stopping rule on `collectColumnOffsetProducers` that descends only through nodes passing a day to the decomposition and stops at any node whose output is bounded in itself, and the matching rule in `dayRange`, taken together so the two analyses cannot drift apart again | The reproducer from the fuzz run served rather than declined at both widths (seed 20260907005 iteration 61379's shape, and the nine siblings substituting `weekday`, `dayofweek_iso` and `datediff`); the compiler suite's decline for `year(dayofweek(date_add(d, off)))` flipped to `fuses` if the compiler half moves, or the reason requoted if it does not; every guarded shape task 52 and task 60 pin still declining, since the rule may only remove guards a bounded node stands under; `VarkaIrFuzzSuite` at a million iterations per width with the `chronoBound` check relaxed to match, which is the oracle that found it |
+| 76 | The validity helper choice, keyed on the loop body (section 2.38): task 46's width-specialised validity writer wins on the four-field shared method and loses 8-9% on single-field `year`, so the global default is right for one shape and wrong for another (task 70's review; see the debt register) | The sweep first, across the number of validity writes a masked loop body makes, at both widths and on the per-group reference arm where the writer is reached at all; then a rule in `planSlots` keyed on that count rather than a second global default, with the `VarkaEmitOptions` switch kept as the reference variant | The rule reproduces both committed points - specialised ahead on the four fields, general ahead on the single field - and no shape between them regresses; the byte identity of every served shape, which makes no per-group write and must not move; or a recorded decline if the sweep puts the single-field cost inside that row's noise |
+| 77 | The 128-bit compile cliff behind the per-group validity OR (section 2.39): the `fused, 64 ops` row fell from 273.2 to 8.8 M rows/s at 128-bit when the OR moved ahead of the compute, and task 70 only avoids it for the roots its pass serves (task 70's review; see the debt register) | The measurement first: that section in a fresh JVM and after the whole file, both widths, both `validityOrFirst` arms, read off `-XX:+PrintCompilation` and the compile queue rather than the times, and then the same over an unserved root of comparable size, which is where the exposure now lives. If the queue explains it, a rule for `validityOrFirst` keyed on what the sweep says, and a parity row over an unserved root so the file can see it next time | The mechanism named from the JVM's own output rather than inferred, with the two already-excluded causes not re-tested; a committed row that would have caught the collapse the day it landed; and either a rule with its numbers or a recorded decline with what was learned |
 
 ## 4. Files
 
@@ -2160,7 +2239,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   JVM, the condition `PLAN_TASK_11.md` section 6 names for it. Closing it means
   running that one section in a fresh JVM and against the rest of the file, at
   both widths and both arms, and reading the compile queue rather than the
-  times.
+  times. **Adopted as task 77** (section 2.39), which also carries the part
+  task 70 does not close: every unserved root still emits that OR ahead of the
+  compute, so the lowering is on the default path for those shapes.
 
 * **Task 46's width-named validity helpers are the right default for one shape
   and the wrong one for another (task 70's review).** With task 46's A/B arms
@@ -2178,7 +2259,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   the write count and a cost rule in `planSlots`, or a recorded decline saying
   the single-field case is too small to matter. The same shape-dependence is the
   argument in `SCOPE_MILESTONE_6.md` item 11 for choosing lowerings by cost
-  rather than by a global default.
+  rather than by a global default. **Adopted as task 76** (section 2.38).
 
 * **A guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the
   row never takes (task 60).** `emitGuardCollect` ANDs the out-of-range mask with the
