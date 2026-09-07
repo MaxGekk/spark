@@ -2021,6 +2021,35 @@ rewritten in the past tense with what the sweep found, never deleted.
   check as its section 2, and says plainly that a failed check closes the task with the
   finding recorded rather than widening the bound anyway.
 
+* **The guard walk does not stop at a node that re-bases the day, so a producer whose
+  value never reaches a decomposition is guarded on it anyway (task 70's fuzz run).
+  Adopted as task 73.** `Analysis.collectGuardedProducers` calls
+  `collectColumnOffsetProducers(chronoChild(node), ...)` for every `isChrono` node, and
+  that walk descends the entire subtree, adding every `AddDays`/`SubDays` with a column
+  offset it meets. It has no stopping rule. So in
+  `month(dayOfWeek(date_add(date_add(d, off), off)))` the producer is guarded against
+  `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` on its own value, although the value `month`
+  actually decomposes is the `dayOfWeek` result and is always 1 to 7. The same holds for
+  `weekday`, `dayofweek_iso` and `datediff` between the producer and the calendar node:
+  each bounds its output, and none of them stops the walk.
+  It is a debt rather than a bug because the answers stay right - the batch declines and
+  the row engine computes it - and its practical reach is small: through the compiler,
+  `dayRange` returns `Unknown` for a mod-7 child and declines the entry at compile time
+  anyway, so today the shape is residual either way and only direct IR reaches the
+  over-guard. What makes it worth recording is that it is the same family as task 69's
+  entry above - a conservative decline around a guarded producer - and that it was
+  invisible until the fuzzer ran at scale.
+  It was found on 7 September 2026 by 1.84 million `VarkaIrFuzzSuite` iterations across
+  twenty jobs, every one of which stopped on a shape of this shape; the shortest
+  reproducer is one iteration, seed 20260907005 iteration 61379, whose null pattern is
+  `null-free`, so it is unrelated to that task's poisoned null lanes. The suite's own
+  half of the mismatch - a `Gen.bound` of 7 on a mod-7 node hid the producers beneath it
+  from the `chronoBound` check - was fixed in the same PR, since the fuzzer is unusable
+  past about ten thousand iterations without it and task 70's risk 1 leans on it.
+  Closing the emitter half means giving the walk a stopping rule: descend only through
+  nodes that pass a day through to the decomposition, and stop at any node whose output
+  is a bounded quantity of its own.
+
 * **A guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the
   row never takes (task 60).** `emitGuardCollect` ANDs the out-of-range mask with the
   node's validity word and, in an epilogue, the bounds mask - but never with the

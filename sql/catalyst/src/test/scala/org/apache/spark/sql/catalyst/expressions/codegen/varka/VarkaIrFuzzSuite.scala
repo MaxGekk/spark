@@ -75,6 +75,83 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
   /** A generated node with a bound on the magnitude of the value it can take. */
   private case class Gen(node: VarkaVectorIR, bound: Long)
 
+  /**
+   * Two bounds for a built subtree: the magnitude the node's own value can reach, and the
+   * magnitude the *guarded day producers* inside it can reach. The second is not the first,
+   * and treating them as one is what let this suite generate shapes that decline correctly
+   * and then assert that they do not.
+   *
+   * `VarkaLoopEmitter`'s `collectGuardedProducers` puts task 52's range guard on every
+   * `AddDays`/`SubDays` with a column offset *anywhere* below a calendar node - the walk
+   * descends the whole subtree and does not stop at a node that re-bases the day. So
+   * `month(dayOfWeek(addDays(addDays(c, c), c)))` guards a producer whose value reaches
+   * three times `columnBound`, even though the value `month` actually decomposes is the
+   * `dayOfWeek` result and is always 1 to 7. With `columnBound` at 2.5 million that producer
+   * reaches 7.5 million, past `NARROW_MIN_DAYS`, and the batch is declined - correctly.
+   * A `Gen.bound` of 7 on the `dayOfWeek` hid it from the `chronoBound` check.
+   *
+   * Six million fuzz iterations on 7 September 2026 found this in twenty jobs out of twenty,
+   * and the shortest reproducer is one iteration: seed 20260907005, iteration 61379, whose
+   * pattern is `null-free`, so it has nothing to do with poisoned null lanes.
+   *
+   * Recomputed from the IR rather than threaded through `Shapes`, because threading is what
+   * a new arm forgets: every arm would have to carry it, including through `cond`, and one
+   * of the twenty failures had its producer inside an `IfElse` condition. The match is
+   * exhaustive over what the generator builds and fails loudly on anything else, so adding a
+   * node type to the generator without a rule here stops the suite rather than silently
+   * shrinking its coverage.
+   */
+  private def boundsOf(node: VarkaVectorIR): (Long, Long) = {
+    def v(n: VarkaVectorIR): Long = boundsOf(n)._1
+    def g(ns: VarkaVectorIR*): Long = ns.foldLeft(0L)((m, n) => math.max(m, boundsOf(n)._2))
+    def shift(days: VarkaVectorIR, offset: VarkaVectorIR): (Long, Long) = {
+      val own = v(days) + v(offset)
+      // A literal offset is folded at compile time and never guarded (requireOffsetShape);
+      // a column offset is exactly what collectGuardedProducers collects.
+      val guarded = if (offset.isInstanceOf[LiteralSlot]) 0L else own
+      (own, math.max(g(days, offset), guarded))
+    }
+    node match {
+      case _: ColumnRef => (columnBound, 0L)
+      case _: LiteralSlot => (literalBound, 0L)
+      case n: AddDays => shift(n.days(), n.offset())
+      case n: SubDays => shift(n.days(), n.offset())
+      case n: DateDiff => (v(n.end()) + v(n.start()), g(n.end(), n.start()))
+      case n: Greatest => (math.max(v(n.left()), v(n.right())), g(n.left(), n.right()))
+      case n: Least => (math.max(v(n.left()), v(n.right())), g(n.left(), n.right()))
+      case n: IfElse =>
+        (math.max(v(n.thenNode()), v(n.elseNode())), g(n.cond(), n.thenNode(), n.elseNode()))
+      // Conditions carry no day value of their own, but their operands hold producers.
+      case n: Compare => (0L, g(n.left(), n.right()))
+      case n: And => (0L, g(n.left(), n.right()))
+      case n: Or => (0L, g(n.left(), n.right()))
+      case n: Not => (0L, g(n.child()))
+      case n: IsNotNull => (0L, g(n.child()))
+      // The mod-7 family: exact for every int32 day, so the value is small whatever it is
+      // over - which is precisely why the producers underneath stay visible in the guard bound.
+      case n: DayOfWeek => (7L, g(n.days()))
+      case n: WeekDay => (6L, g(n.days()))
+      case n: DayOfWeekIso => (7L, g(n.days()))
+      case n: NextDay => (v(n.days()) + 8, g(n.days(), n.offset()))
+      case n: ThursdayOf => (v(n.days()) + 3, g(n.days()))
+      case n: WeekOfYear => (53L, g(n.days()))
+      case n: Year => (40000L, g(n.days()))
+      case n: Month => (12L, g(n.days()))
+      case n: DayOfMonth => (31L, g(n.days()))
+      case n: Quarter => (4L, g(n.days()))
+      case n: DayOfYear => (366L, g(n.days()))
+      case n: AddMonths => (v(n.days()) + v(n.months()) * 31, g(n.days(), n.months()))
+      case n: TruncDate => (v(n.days()), g(n.days()))
+      case n: LastDay => (v(n.days()) + 31, g(n.days()))
+      // make_date guards its own year, so its output is a date inside the column contract.
+      case n: MakeDate =>
+        (VarkaChrono.CONTRACT_MAX_DAYS.toLong, g(n.year(), n.month(), n.day()))
+      case other =>
+        fail(s"boundsOf has no rule for ${other.getClass.getSimpleName}: add one, or the " +
+          "calendar arms silently stop being placed over subtrees containing it")
+    }
+  }
+
   /** One iteration's shape generator; keeps a node budget so trees stay well inside the
    *  emitter's `MAX_FUSED_NODES` and `MAX_CHAIN_DEPTH`.
    *
@@ -87,6 +164,15 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
    *  generic leaf draws it, which over-approximates its real range in the safe direction. */
   private class Shapes(rnd: Random, numInputs: Int, numLiterals: Int, smallOrdinal: Int) {
     private var budget = 20
+
+    /**
+     * Whether a calendar node may sit over this subtree. Both bounds have to fit inside
+     * `chronoBound`: the value the node itself decomposes, and - see `boundsOf` - the value
+     * every guarded day producer underneath reaches, because task 52's guard is placed on
+     * those on their own values however far below the calendar node they sit.
+     */
+    private def fitsUnderChrono(a: Gen): Boolean =
+      a.bound <= chronoBound && boundsOf(a.node)._2 <= chronoBound
 
     private def leaf(): Gen =
       if (numLiterals > 0 && rnd.nextInt(4) == 0) {
@@ -141,7 +227,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
           // takes a literal day instead under the NULL form, where an invalid day is a null
           // output and the batch still runs.
           val a = value(depth - 1)
-          if (a.bound > chronoBound) return a
+          if (!fitsUnderChrono(a)) return a
           if (numLiterals > 0 && rnd.nextInt(3) == 0) {
             val k = literal()
             Gen(new MakeDate(new Year(a.node), new Month(a.node), k.node, false), a.bound + 31)
@@ -158,7 +244,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
           // over ThursdayOf only (the emitter refuses any other child), and the subtree has to
           // stay inside the narrowed range like every calendar node's.
           val a = value(depth - 1)
-          if (a.bound > chronoBound) return a
+          if (!fitsUnderChrono(a)) return a
           Gen(new WeekOfYear(new ThursdayOf(a.node)), 53)
         case 17 =>
           val a = value(depth - 1)
@@ -166,7 +252,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
         case n =>
           // The calendar family, over a subtree that stays inside the narrowed range.
           val a = value(depth - 1)
-          if (a.bound > chronoBound) return a
+          if (!fitsUnderChrono(a)) return a
           n match {
             case 9 => Gen(new Year(a.node), 40000)
             case 10 => Gen(new Month(a.node), 12)
