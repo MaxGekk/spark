@@ -40,6 +40,16 @@ Six tasks, in the dependency order milestone 4's plan already gave them:
   month start) factored the way task 32's prefix was, behind the same
   fragment mechanism. Pays only inside one lane group, so it follows task
   32's step B2 grouping decision, which it does not change.
+* **74, the validity-word algebra's missing axioms** - added 7 September
+  2026 (section 2.9) from the owner's question, over task 70's PR, of what
+  the word algebra is mathematically and which of its laws the emitter does
+  not yet use. Two it does not: the coalesce axiom and absorption. Not a
+  lane, but an emitter follow-up the owner placed in this milestone so that
+  milestone 4 can close.
+* **75, zero-copy validity for leaf words** - added the same day (section
+  2.10): an output whose word *is* an input's bitmap shares the buffer
+  instead of copying it. Small and bounded by a committed number, so it is
+  an admission check before it is a task.
 
 What stays true from milestone 4's plan and is not repeated here: the three
 invariants (one lane width per kernel, every value lane-shaped, no lane reads
@@ -93,6 +103,22 @@ Arrow's validity-style bitmap at the output boundary, and the three-valued
 rules holding there exactly as they hold in the interior - a null input
 produces a null output, never a false one. The differential runs every null
 pattern for exactly that reason.
+
+*Added 7 September 2026, from section 2.9's reading of task 70's word
+algebra.* A boolean output is where that algebra's domain ends, and the task
+has to say so in code. Task 70's bitmap pass serves a root whose validity is
+a pure function of the inputs' validity bitmaps, which holds for every date
+node because each is either strict (null in, null out) or null-skipping.
+SQL's connectives are neither: `a AND b` is *false*, not null, when one side
+is false and the other null, so the validity of a boolean output depends on
+the operands' values as well as their bitmaps - Kleene's three-valued
+lattice, not the bitmap lattice. `Analysis.pureOf` falls to `null` for any
+node without an arm, so a boolean root is fail-safe today by omission; task
+27 makes it fail-safe by statement: a test that every boolean root - a
+comparison, `And`, `Or`, `Not` over nullable operands - has no pure word and
+is never served, and a sentence in the emitter's algebra javadoc naming the
+boundary. Mask space, where 2.1 already keeps the connectives, is the right
+place for the known-true and known-false pair the connectives need.
 
 ### 2.2 Lane-width conversion (task 28, item 1)
 
@@ -493,12 +519,178 @@ and the per-timestamp zone offset once item 2's tzdata design lands. They are
 recorded in section 9's item 2 as the shape to design the fragment keys for,
 not as tasks.
 
+### 2.9 The validity-word algebra's missing axioms (task 74)
+
+*Added 7 September 2026. The owner, reading task 70's PR (#145), asked what
+the word algebra is from a mathematical point of view and whether known laws
+of that structure could be applied to more complex expressions. This section
+is the answer, with the census that turned it into a task.*
+
+**What the algebra is.** Task 70's `WordExpr` is the `{AND, OR, 1}`-reduct
+of a finite Boolean algebra: the validity bitmaps of a batch are the direct
+power of the two-element Boolean algebra over the batch's rows, and the
+emitter uses only the two lattice operations and the top element. For each
+operator alone that is a bounded semilattice - associative, commutative,
+idempotent, with `1` as AND's unit and OR's annihilator - and the free
+bounded semilattice on the input ordinals is exactly the set of leaves plus
+the operator that `BitmapPass` stores as a served root's normal form. The
+pass's soundness (`PLAN_TASK_70.md` 3.1) is the fact that a direct power's
+operations are componentwise, so evaluating a word per lane group and
+concatenating equals evaluating it over the whole batch. Two laws of the
+lattice the folding does not use: **absorption** (`x AND (x OR y) = x` and
+its dual) and the fact that `coalesce`, which the compiler builds as
+`IfElse(IsNotNull(x), x, y)`, denotes `x OR y` - the compiler's own comment
+on `compileCoalesce` proves this (`(kT AND v(x)) OR (NOT kT AND v(y))` with
+`kT = v(x)` reduces to `v(x) OR v(y)`), and `pureOf` still returns nothing
+for it because `IfElse` has no arm.
+
+**The census.** `VarkaWordCensus` (catalyst test scope,
+`dev/varka_word_census.sh`) classifies every value root of three corpora by
+its word today and under the two extensions, and checks its verdict against
+the emitter's by emitting each single-root shape with the pass on and off:
+a served root changes `loopMasked0`'s bytes. Run on 7 September 2026 over
+the `Surface` projections, sixteen composites on the operator boundary, and
+20000 shapes from the fuzzer's value grammar (seed 7): 6686 single-root
+shapes cross-checked, 0 disagreements. What it found:
+
+| corpus | leaf | chain | no expression | mixed |
+|---|---|---|---|---|
+| `Surface` projections (30) | 22 | 5 | 3 (`if`, `CASE`, `coalesce`) | 0 |
+| fuzzer grammar (39742 roots) | 25584 | 6405 | 6183 | 1570 |
+
+* **The coalesce axiom** turns `coalesce(d, d2)` - the one `Surface` entry
+  with no expression that is not a comparison blend - into an OR chain, and
+  with it `coalesce(d, d2, d3)` (a chain of three), `year(coalesce(d, d2))`
+  and `greatest(coalesce(d, d2), d3)`. In the fuzzer's grammar it gives a
+  word to 1674 of the 6183 roots that have none; the rest are comparison
+  blends and `make_date`, which are not pure and stay so.
+* **Absorption** turns `datediff(greatest(d, d2), d)` and
+  `greatest(date_add(d, i), d)` from mixed trees into a single leaf, and
+  `datediff(coalesce(d, d2), d)` likewise once the coalesce axiom is in. In
+  the grammar it resolves 1014 of the 1570 mixed roots. No `Surface` entry is
+  mixed, so on the inventory alone this law is worth nothing; it is two
+  rewrite rules, and it is what makes the coalesce axiom compose.
+* **What stays mixed** after both: 556 of 39742 grammar roots, 1.4%, and
+  composites such as `datediff(greatest(d, d2), greatest(d3, d4))` and
+  `date_add(greatest(d, d2), i)`. Their Strahler numbers are 2 or 3 in all
+  but two of the 40000; section 9's item 14 is the evaluator that would
+  serve them, and this census is its admission threshold.
+
+**Two things the reading found already done or not worth doing.** The unit
+and annihilator laws have a run-time half - a null-free column is the top
+element and drops out of an AND or decides an OR - and the engine's five
+pass entry points already resolve it per batch from the null counts, before
+touching a bitmap. And cross-output sharing, which the normal form makes
+exact (two roots want the same bitmap iff their leaf sets and operator
+agree), is not worth a mechanism: in the grammar's 13284 multi-root shapes
+only 403 served roots repeat a *non-leaf* form of a sibling and 62 pairs
+stand in the subset relation under one operator; a repeated leaf is already
+a copy. Recorded so that nobody designs it twice.
+
+**The design.** Two `pureOf` arms and two folding rules, no new node, no
+new option component:
+
+* `IfElse(IsNotNull(x), x, y)` denotes `or(w(x), w(y))`, matched
+  structurally (the condition's child is the then-branch, by reference).
+  `WordOwner` stays `Own` for the node, since the blend still computes its
+  slot when a consumer wants it; Theorem 1's one-directional check therefore
+  constrains nothing new. Liveness already demands both operand words for
+  the blend's known-true mask, so serving the root removes its write and
+  nothing else.
+* `andExpr(a, Or(p, q))` with `p == a` or `q == a` folds to `a`, and the
+  dual in `orExpr`. `andRef`, the slot-level folding, is deliberately left
+  without absorption: the emitter may stay more conservative than the
+  algebra (the plan's Theorem 1), and the agreement assertion already
+  allows an `Own` owner under any expression.
+
+Behind no switch of its own: both are extensions of `validityByBitmap`'s
+rule and ride its option. The census tool loses its mirror: task 74's first
+commit exposes the emitter's own classification through a test hook and
+re-runs the census through it, which is also the test that the mirror was
+right.
+
+**A third arm, held as a question.** A filter whose predicate is a null
+test - `WHERE d IS NOT NULL`, `IS NULL`, and their conjunctions - has a
+selection mask that is a pure function of the input bitmaps too, with
+complement: the `Cond` sub-algebra over `IsNotNull` leaves is the full
+Boolean algebra, De Morgan gives it a negation normal form, and the driver
+could write the selection with the same pass plus an and-not entry point.
+It is not in this task's deliverables because the filter's masked loop for
+that predicate is already a load and a store per group, and compaction, not
+the mask, is where the filter's time goes. Measured before it is built:
+one row in `VarkaFilterBenchmark`.
+
+**Validation.** `coalesce(d, d2)` served: `loopMasked0` and
+`epilogueMasked` byte-equal to the dense twins, the way task 70 pinned the
+four-field shape; the parity benchmark gains a `coalesce(d, d2)` A/B pair
+(pass on against the per-group reference arm) beside task 70's, both
+widths; the differential over the nullable fixtures for `coalesce` with two
+and three operands, `datediff(greatest(d, d2), d)` and
+`greatest(date_add(d, i), d)`, values byte-identical to the row engine over
+every null pattern; the fuzzer with both extensions randomised, two million
+shapes clean; the census re-run through the emitter's analysis with the
+composites' verdicts unchanged. Registered expectation: `coalesce(d, d2)`
+masked with mixed nulls lands on its dense row at both widths, as `year`
+and the four fields did; no other committed row moves.
+
+### 2.10 Zero-copy validity for leaf words (task 75)
+
+*Added 7 September 2026, from the same reading.*
+
+**The observation.** After task 70, 22 of the 30 `Surface` projections have
+a leaf word: the output's validity *is* one input's bitmap, and the driver's
+pass is a copy of it - `copyColumnValidity`, `(rows + 7) / 8` bytes per
+output per batch. Arrow lets a vector share a buffer instead: the fork's
+`ArrowCachedBatchSerializer` already hands vectors buffers it does not own,
+and `BaseFixedWidthVector.loadFieldBuffers` retains a foreign validity buffer
+through its `ReferenceManager` when the null count is strictly between zero
+and the row count (checked against `arrow-vector` 19.0.0's bytecode: the
+retain at the end of `BitVectorHelper.loadValidityBuffer`; the all-valid and
+all-null cases allocate a constant buffer instead). So an output with a leaf
+word can be assembled from a fresh data buffer and the input's own validity
+buffer, retained, and the copy disappears. The null count travels with it,
+which removes the second thing this task is about: Arrow's `getNullCount`
+is a scan of the bitmap on every call (`BitVectorHelper.getNullCount`, no
+cache in 19.0.0), and the evaluator asks for it once per input per batch in
+`extractMorsel` and once per compacted column in the filter - on a vector
+Varka itself just wrote, whose count the pass could have kept.
+
+**What it is worth, bounded before it is built.** The committed parity file
+after task 70 puts masked `year(d)` at 3328.5 M rows/s against its dense
+twin at 3444.8 at AVX-512 - a 3.4% gap on identical loop bytes, of which the
+copy pass is the visible driver-side difference - and at 1333.4 against
+1335.0 at 128-bit, no gap at all. The four-field shape's masked row sits
+*above* its dense row. So the ceiling is a few percent on the cheapest
+single-field kernels at the wide width and nothing elsewhere, and the null
+count scans are of the same order (a `popcount` per 64 rows). That is a
+probe, not a task, until the probe says otherwise.
+
+**The admission check.** In the parity harness, the masked `year(d)` row
+with the destination validity pre-filled and the copy skipped, against the
+row as committed, both widths, three runs, minimum best-time. Under 2% at
+AVX-512: decline, and the bound above goes to the debt register as the
+record. At or above: the task is the buffer sharing in `computeFused` (the
+leaf case of the pass resolved to a retained input buffer, keyed off the
+same `served` table the driver reads), a cached null count on
+`VarkaOwnedArrowColumnVector` for every output the pass wrote, and the
+filter's compaction reading it; validated by the differential over every
+null pattern (a shared buffer must never be written by the kernel - the
+loop's skipped write for a served root is what makes this safe, and a test
+asserts the output's validity address equals the input's) and by Arrow's
+allocator accounting closing to zero at task end with the retained buffers
+released.
+
+**Sequencing.** After #145 (task 70), which it reads; independent of task
+74, though the two share the driver's `served` table and merge trivially in
+either order.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
 the milestone; 29 and 30 follow it; 39 and 49 wait on 29; 27 can run at any
 point; 65 waits on nothing and is an admission check before it is a task; 66
-follows task 32's B2 grouping decision.
+follows task 32's B2 grouping decision; 74 and 75 follow #145 (task 70) and
+nothing else, 75 being an admission check before it is a task.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -510,6 +702,8 @@ follows task 32's B2 grouping decision.
 | 49 | Exact civil-from-days in long lanes. **Planned in section 2.19** (PR #69; there is no `PLAN_TASK_49.md`), blocked on task 29 | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division with a 64-bit low product and no correction carries, run for **both** decompositions - the three-division era/century/year form (146097, 36524, 365) and task 54's two-division Julian map (146097 on `4 * d + 3`, then 1461), which Ben Joffe's `fast64` shows reaching four multiplies for the whole date where Neri-Schneider needs seven; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it. Verified before starting (`SKILLS.md`, "Every operator the plans rely on"): `LongVector.mul` by a constant compiles to one `vpmullq` on this CPU (AVX-512DQ with VL), not the three-multiply emulation plain AVX2 gets, and unsigned long compares are one `vpcmpuq` into a k-mask. Plan B if the 0.75x gate fails: Joffe's bucket technique for a guard-free int-lane total - `bucket = (d + 2^31) >>> 20`, reduce by `bucket * 1022679`, add `bucket * 2800` to the year - about 14 ops against task 26's `TOTAL` at 16 and without the deliberate wrap; his `article_2_l1` variant replaces two of those multiplies with an eight-entry offset table, one lane permute on a 256-bit int species | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
 | 65 | Joffe's `fast32` civil-from-days in int lanes. **Scoped in section 2.7** (5 September 2026); independent of 29 | The admission check first: the two source files transcribed into `sql/varka/papers` with reading notes; a committed script deriving a low-32-bit magic and its exact range per stage and sweeping the chain against `LocalDate`; the dependent-stage count against the prefix's. If admitted, an emit-option variant, the A/B beside the task 53 and 54 pairs at both widths, the register and the `HugeMethodLimit` ladder re-pinned, and the default chosen from the numbers | Exact over at least the narrowed range, or declined; a shorter dependent chain than the prefix's, or declined; the A/B at or above 1.0x at both widths, or the numbers go to the debt register |
 | 66 | Second-level chrono fragments. **Scoped in section 2.8** (5 September 2026); after task 32's B2 grouping decision | `FragmentKind`s for the year parts, the January month, the month start and `floorMod(d, 7)`, keyed and planned as the prefix is; emitted once per lane group, elided when no consumer in the group reads them; the register and the `HugeMethodLimit` ladder re-pinned; the A/B beside task 32's shared rows at both widths | The matrix and the whole-range sweep under a widened group budget over every pair and triple of calendar outputs; the byte identity of every single-field kernel; the gate in 2.8 (at or above 1.05x at AVX-512 on both shapes), or the register goes to the debt register |
+| 74 | The validity-word algebra's missing axioms. **Scoped in section 2.9** (7 September 2026); after #145 | The coalesce axiom (`IfElse(IsNotNull(x), x, y)` denotes `x OR y`) and absorption in `pureOf`'s folding, behind task 70's switch; the census tool re-run through the emitter's own analysis rather than a mirror; the `coalesce(d, d2)` parity A/B pair | `coalesce(d, d2)` masked byte-equal to its dense twin and on its dense row at both widths; the differential over the nullable fixtures for two- and three-operand `coalesce`, `datediff(greatest(d, d2), d)` and `greatest(date_add(d, i), d)`; two million fuzz shapes with both extensions randomised; no other committed row moves |
+| 75 | Zero-copy validity for leaf words. **Scoped in section 2.10** (7 September 2026); after #145, an admission check before it is a task | The probe: masked `year(d)` with the copy skipped against the committed row, both widths. If admitted, the leaf case of the pass resolved to the input's validity buffer retained through Arrow's reference manager, a cached null count on Varka-owned output vectors, and the filter's compaction reading it | Under 2% at AVX-512 on the probe: declined on the record. Otherwise the differential over every null pattern with the output's validity address asserted equal to the input's, allocator accounting closing to zero with the retained buffers released, and the `year(d)` masked row on its dense row |
 
 ## 4. Files
 
@@ -521,7 +715,11 @@ member the first trapping node makes structural), `VarkaExpressionCompiler`
 vocabulary grows; in `sql/core`, the evaluators (int64 buffers, boolean output
 vectors) and `VarkaColumnarRule` (new eligible roots); in the engine module,
 hand-written reference kernels only where a parity anchor is needed for a new
-lane type, per the reference-code commenting rule.
+lane type, per the reference-code commenting rule. Tasks 74 and 75 touch
+`VarkaLoopEmitter`'s `Analysis` (two `pureOf` arms, two folding rules, a
+test hook for the census), `VarkaWordCensus` and `dev/varka_word_census.sh`
+in catalyst test scope, and, if 75 is admitted, `VarkaKernelEvaluator`'s
+output assembly and `VarkaOwnedArrowColumnVector`.
 
 ## 5. Verification
 
@@ -872,3 +1070,36 @@ UNBOUNDED PRECEDING AND CURRENT ROW`, `row_number` within a batch,
 batch boundaries, so the kernel needs carry-in and carry-out state and a
 visible partition boundary - a contract like milestone 3's selection vector,
 not a new IR node.
+
+### Item 14. A lockstep validity evaluator for arbitrary pure words
+
+*Added 7 September 2026 with section 2.9; the item that section's census
+declined to make a task.*
+
+**Design input.** Task 70's pass serves a root whose word is a chain of one
+operator, because the engine folds a chain into the destination bitmap in
+place and a tree that mixes AND and OR needs a second live intermediate. That
+restriction is an artefact of evaluating one operator at a time over the
+whole column. Walk every input bitmap in lockstep instead, evaluating the
+whole term word by word in registers, and the registers needed are the
+tree's Strahler number - Ershov's theorem gives it as the exact minimum, and
+the census (2.9) puts it at 2 or 3 for all but two of 40000 grammar shapes.
+Every pure term becomes servable in one pass with no scratch buffer; the
+chain evaluator is the case where the tree is left-leaning; and the same
+walk evaluates every root of a projection over one pass of the inputs, with
+shared subterms held in registers, which is the only form in which
+cross-output sharing (2.9) would pay. The emitted form is either a small
+interpreter over a postfix encoding of the term - a handful of opcodes, one
+dispatch per operator per 64 rows, negligible beside a kernel - or the loop
+emitted into the driver as bytecode, which the driver's `HugeMethodLimit`
+ladder (task 70 pinned it) would have to absorb.
+
+**Why it is an item and not a task.** After task 74, the words it would
+serve are 1.4% of the fuzzer grammar's roots and none of the `Surface`
+inventory; the shapes are `datediff(greatest(d, d2), greatest(d3, d4))`
+and `date_add(greatest(d, d2), i)` and their kin, which no corpus query in
+`SCOPE_MILESTONE_6.md`'s survey has. It enters when one does, with the
+census re-run over that corpus as its admission check, and it should then
+also take the `Cond` null-test predicates 2.9 holds as a question, since
+complement is one more opcode to the interpreter and a fourth entry point
+to the chain.
