@@ -814,8 +814,8 @@ trusting them, not just its ratios.
   Task 17's `GROUP_BUDGET` result (raising it to keep two outputs' cross-output CSE in one
   method lost 4119.9 against 2928.2 M rows/s in the parity file of the day) looked like
   the same effect - until the rows reversed when task 46 moved the validity OR ahead of
-  the vector work (the merged method now leads, 5799.7 against 4511.7 at AVX-512 and
-  2754.8 against 1700.1 at 128-bit), which says that loss was a refused call in the wider
+  the vector work (the merged method now leads, 5482.1 against 4385.5 at AVX-512 and
+  2566.5 against 1645.6 at 128-bit), which says that loss was a refused call in the wider
   method, not registers. Register pressure sets a ceiling on how much sharing can win; it
   does not decide the sign, a narrow-vector measurement is not optional for anything that
   shares live values, and a "known loss" is only known until the emitter around it moves.
@@ -860,6 +860,47 @@ trusting them, not just its ratios.
   Where side effects assign identities (ordinals, slots), compile in source order
   explicitly, then fold the already-compiled pieces.
 
+## A fixture that fills undefined memory decides what its whole matrix can catch
+
+- Arrow leaves the data under a null slot undefined, and the emitted loop loads every
+  column unmasked, so what a test harness writes there is what stands between a
+  lowering's garbage and its answer. For most of milestone 4 the suites wrote the
+  *drawn value* into a null lane and `VarkaIrFuzzSuite` still did in September 2026 -
+  values bounded by `columnBound` and `MONTH_ARITH_MAX_MONTHS` by construction, so a
+  null lane could never reach a range guard's condemning comparison. Every guard since
+  task 42 ANDs its mask with the row's validity word; nothing in either suite could
+  have failed if one of them stopped. Poisoning null lanes with `Int.MinValue` and
+  `Int.MaxValue` is what makes that AND load-bearing, and it costs nothing: the whole
+  matrix passed unchanged at both widths the day it went in, which is the evidence
+  that the ANDs are all there, not merely that the tests are green.
+- Key the alternation on the *null ordinal*, never on the row index. The null patterns
+  are themselves index predicates - `i % 2 == 1` is one of them - so an `i & 1` poison
+  silently writes one extreme in every null lane of that pattern, and a quarter of the
+  matrix only ever probes one side of every bound. Bounds here are asymmetric
+  (`MAKE_DATE_MIN_YEAR` against `MAKE_DATE_MAX_YEAR`; task 69 widens `dayRange`
+  upward only), so half a guard can go missing under a green suite.
+- And poison only the slots the caller did not choose. A guard test that pins a
+  boundary value at a lane it also marks null is testing that exact value; substituting
+  an extreme kept it passing while quietly turning one case into a duplicate of the one
+  beside it. `makeInputData`'s `poisonNulls = false` is for those, and the reason is in
+  its javadoc so the next person does not undo it.
+
+## A count of calls on an owner is not a count of the work you mean
+
+- `VarkaEmitterTestSupport.invocationCount(bytes, method, owner)` was the natural tool
+  for "how much validity work is in this method", and it cannot answer that question:
+  `loadSegment` emits `VarkaVectorSupport.ofAddress` for every segment a body touches,
+  in every body mode, so the count never reaches zero however much validity work is
+  removed. Task 70's plan had registered a table of targets of "0" against it - numbers
+  no run could have produced, which would have been discovered by whoever tried to
+  assert them and quietly replaced with a different metric than the milestone accepted.
+- The fix is an exclusion list, exact-matched (the helpers carry a lane-count suffix
+  since task 46, and `orValidityBitsAt` is a prefix of `orValidityBitsAt16`). The
+  general lesson: when a plan registers an op count, name the owner *and* what is
+  excluded, and check the tool can produce the target before the number is registered.
+  `dev/varka_emit.sh` now prints the validity count beside `IntVector` and `VectorMask`,
+  so the check is a command rather than an argument.
+
 ## Testing Under AQE
 
 - Every Varka suite session disables AQE for plan determinism, which silently leaves
@@ -869,6 +910,31 @@ trusting them, not just its ratios.
   `SparkPlan.collect`/`collectFirst` never descend into it, so a naive assertion
   reports "not fused" while the node is right there in `treeString`. Traverse with
   `AdaptiveSparkPlanHelper` in AQE tests.
+
+## The benchmark controls are necessary and not sufficient
+
+- `VarkaEmitterParityBenchmark` carries nine controls - per-row `LocalDate`, the scalar
+  `year` variants, the row-engine parsers - and the rule has been "if these moved, the
+  machine moved". In September 2026 a regeneration held every one of them within -0.2%
+  to +0.8% and was still unusable: its AVX-512 sub-microsecond dense rows had fallen
+  33.5% and 20.8% against the file before it while the 128-bit file's held. The controls
+  are all long-running cases at tens of nanoseconds per row. They are simply insensitive
+  to whatever perturbs a kernel that does a million rows in 0.08 us, so they can be flat
+  while the fastest third of the file is not.
+- Two checks catch what they miss, both free and both readable off the file itself
+  rather than off a second run. **A masked row may not beat its dense twin** - same
+  kernel, strictly less work on the dense side. **On a saturated dense shape a wide row
+  may not lose to its own 128-bit companion** - same code, more lanes. The disturbed
+  file broke both: `arithmetic depth 4, mixed nulls` led its own null-free row by 23.7%,
+  and the wide `greatest(d, d2), null-free` sat behind the narrow one. Either check
+  would have caught it the day it was written; instead it was committed, quoted into two
+  plans and a milestone section, and found in review.
+- When they fire, `dev/varka_bench_regen.sh`'s standing instruction applies - re-run the
+  base commit the same day - and it is worth the wall time. The re-run put `date_add
+  emitted loop, null-free` back to 19227.8 from the disturbed 12754.1, against the
+  19180.2 it had read before, so it returned to where it was rather than to somewhere
+  new. It also moved one figure a whole task was reasoning from by a factor of five: the
+  OR root's AVX-512 gap read 5.5% on the bad file and 27.7% on the good one.
 
 ## Write the Prediction Down, Then Measure
 

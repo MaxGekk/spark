@@ -238,6 +238,35 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
         }
+        // Task 70's baselines, committed before that task so its pass has numbers to move
+        // (PLAN_TASK_70.md 6). The OR root is the one shape where the pass computes an OR
+        // rather than a copy or an AND, and it had no committed row at all.
+        val greatest = emit(
+          Seq(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2, 0, loader, 930)
+        benchmark.addCase("greatest(d, d2), emitted loop, null-free") { _ =>
+          greatest.run(Array(nfData.address(), nf2Data.address()), Array(0L, 0L), Array(0, 0),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        benchmark.addCase("greatest(d, d2), emitted loop, mixed nulls") { _ =>
+          greatest.run(Array(mxData.address(), mx2Data.address()),
+            Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        // The third baseline: an input all-null - validity address 0L and a null count of every
+        // row, the morsel contract's spelling - which is the operand 2.3 folds away without
+        // dereferencing anything. It hangs off the OR root, not the AND one, on purpose. Under
+        // an AND root `DateDiff` satisfies the masked driver's all-null shortcut, so the batch
+        // returns straight after `zero(dstValidity)` and never reaches a loop: the row would
+        // time a 125 KB memset, could not move whatever the pass does, and would publish a
+        // meaningless Relative against the hand-written kernel above it. `Greatest` is
+        // null-skipping, so the shortcut declines it and the loop runs - and the OR of an
+        // all-null operand is exactly 2.3's degenerate case, where the pass copies the other
+        // input's bitmap rather than reading a bitmap that was never materialised.
+        benchmark.addCase("greatest(d, d2), emitted loop, first input all-null") { _ =>
+          greatest.run(Array(mxData.address(), mx2Data.address()),
+            Array(0L, mx2Validity.address()), Array(numRows, mx2Nulls),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
         benchmark.run()
       }
 
@@ -1703,6 +1732,13 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           benchmark.addCase(
             s"year+month+day+quarter, shared, chunk $chunk ($note), null-free") { _ =>
             chunkedCalendar(fourFieldsShared, chunk, mixed = false)
+          }
+          // The masked arm, added as task 70's baseline (PLAN_TASK_70.md 6, risk 2): the
+          // short-batch rows are where a per-batch bitmap pass could cost more than the
+          // per-group calls it replaces, and until now every four-field row here was null-free.
+          benchmark.addCase(
+            s"year+month+day+quarter, shared, chunk $chunk ($note), mixed nulls") { _ =>
+            chunkedCalendar(fourFieldsShared, chunk, mixed = true)
           }
         }
         benchmark.run()

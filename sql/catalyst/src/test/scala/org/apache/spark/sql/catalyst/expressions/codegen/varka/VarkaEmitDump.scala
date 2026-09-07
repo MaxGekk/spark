@@ -123,7 +123,8 @@ object VarkaEmitDump {
     val bytes = VarkaLoopEmitter.emit(className, fused.outputs.asJava, fused.inputOrdinals.size,
       fused.literals.size, null, null, options)
     report("")
-    report(f"${"method"}%-18s ${"bytes"}%6s ${"IntVector"}%9s ${"VectorMask"}%10s ${"lines"}%5s")
+    report(f"${"method"}%-18s ${"bytes"}%6s ${"IntVector"}%9s ${"VectorMask"}%10s " +
+      f"${"validity"}%8s ${"lines"}%5s")
     val methods = VarkaEmitterTestSupport.methodNames(bytes).asScala.filter(_ != "<init>").sorted
     methods.foreach { m =>
       val size = VarkaEmitterTestSupport.codeSize(bytes, m)
@@ -131,8 +132,13 @@ object VarkaEmitDump {
         VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.IntVector")
       val maskOps =
         VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.VectorMask")
+      // Validity work, which is the metric task 70 moves: everything the method invokes on
+      // VarkaVectorSupport except the segment mapping, which every body mode emits per segment
+      // and which would keep the count off zero however much validity work went away.
+      val validityOps = VarkaEmitterTestSupport.invocationCount(
+        bytes, m, "org.apache.spark.sql.varka.vector.VarkaVectorSupport", Seq("ofAddress").asJava)
       val lines = VarkaEmitterTestSupport.lineNumbers(bytes, m).size
-      report(f"$m%-18s $size%6d $vectorOps%9d $maskOps%10d $lines%5d")
+      report(f"$m%-18s $size%6d $vectorOps%9d $maskOps%10d $validityOps%8d $lines%5d")
     }
     VarkaDebugInfo.read(bytes).ifPresent { info =>
       report("")

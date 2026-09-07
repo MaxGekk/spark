@@ -141,17 +141,55 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private def makeInput(arena: Arena, length: Int, isNull: Int => Boolean): Col =
     makeInputData(arena, length, isNull, i => i * 31 - 7000)
 
+  /**
+   * A null slot's data is poisoned, not zeroed (task 70's harness change, made before that
+   * task's emitter work so the whole existing matrix runs against it first). Arrow leaves the
+   * data under a null slot undefined, the loop body loads every column unmasked, and the only
+   * things standing between a null lane's garbage and a wrong answer are the validity word -
+   * which the range guards AND with their condemning mask (tasks 42, 52, 60) - and the rule
+   * that no lowering traps on any int. Until this landed the harness wrote the caller's own
+   * value into a null slot - the same in-range day or count the valid rows carry - which
+   * cannot tell a kernel that honours the word from one that never had to: an in-range lane
+   * reaches no guard's condemning comparison whether it is masked or not. Alternating the two
+   * extremes can, and puts each on both sides of every guard's bound.
+   *
+   * <p>The alternation counts null slots, not row indices. Keying it on {@code i} would collide
+   * with the null patterns, which are themselves index predicates: under {@code alternating}
+   * ({@code i % 2 == 1}) every null row is odd, so an {@code i & 1} poison would write
+   * {@code Int.MaxValue} in every one of them and a quarter of the matrix would only ever see
+   * the upper side of a bound. The bounds are asymmetric - {@code MAKE_DATE_MIN_YEAR} against
+   * {@code MAKE_DATE_MAX_YEAR}, and task 69 widens {@code dayRange} in one direction only - so
+   * a mask applied to the {@code > MAX} comparison but not the {@code < MIN} one would stay
+   * green. Counting null slots alternates whatever the pattern is.
+   */
+  private def poison(nullOrdinal: Int): Int =
+    if ((nullOrdinal & 1) == 0) Int.MinValue else Int.MaxValue
+
+  /**
+   * @param poisonNulls false where the caller has deliberately placed a value at a row it also
+   *   marks null - the guard tests that pin a boundary value in a null lane and assert the batch
+   *   is not condemned. Poisoning those would substitute an extreme for the boundary the test
+   *   names, and one of them ({@code MAKE_DATE_MIN_YEAR - 1} under a null year) would silently
+   *   become a duplicate of the case above it. Every other caller leaves it on; the pattern
+   *   matrix, which is where a lowering that forgets to AND the guard with the word gets caught,
+   *   is entirely on the poisoned path.
+   */
   private def makeInputData(
-      arena: Arena, length: Int, isNull: Int => Boolean, value: Int => Int): Col = {
+      arena: Arena,
+      length: Int,
+      isNull: Int => Boolean,
+      value: Int => Int,
+      poisonNulls: Boolean = true): Col = {
     val data = alloc(arena, length * 4L)
     val validity = alloc(arena, (length + 7) / 8L)
     validity.fill(0.toByte)
     var nulls = 0
     for (i <- 0 until length) {
-      data.set(ValueLayout.JAVA_INT, i * 4L, value(i))
       if (isNull(i)) {
+        data.set(ValueLayout.JAVA_INT, i * 4L, if (poisonNulls) poison(nulls) else value(i))
         nulls += 1
       } else {
+        data.set(ValueLayout.JAVA_INT, i * 4L, value(i))
         val off = i / 8L
         val old = validity.get(ValueLayout.JAVA_BYTE, off)
         validity.set(ValueLayout.JAVA_BYTE, off, (old | (1 << (i % 8))).toByte)
@@ -928,9 +966,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           def pick(c: Int)(i: Int): Int = if (i == at) {
             if (c == 0) bad._1 else if (c == 1) bad._2 else bad._3
           } else tripleData(makeDateValid)(c, i)
-          val y = makeInputData(arena, length, nullY, pick(0))
-          val m = makeInputData(arena, length, nullM, pick(1))
-          val d = makeInputData(arena, length, nullD, pick(2))
+          // `pick` places `bad` at lane `at`, and these cases null that same lane on purpose,
+          // so the boundary value must survive rather than be replaced by a poison extreme.
+          val y = makeInputData(arena, length, nullY, pick(0), poisonNulls = false)
+          val m = makeInputData(arena, length, nullM, pick(1), poisonNulls = false)
+          val d = makeInputData(arena, length, nullD, pick(2), poisonNulls = false)
           runKernel3(k, y, m, d, makeOutput(arena, length), length)
         }
         val feb30 = (2024, 2, 30)
@@ -1868,7 +1908,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       val arena = Arena.ofConfined()
       try {
         def status(length: Int, isNull: Int => Boolean, day: Int => Int): Int = {
-          val in = makeInputData(arena, length, isNull, day)
+          // `day` pins an out-of-range value at one lane which a caller may also null.
+          val in = makeInputData(arena, length, isNull, day, poisonNulls = false)
           val outs = roots.map(_ => makeOutput(arena, length))
           kernel.run(
             Array(in.data.address()), Array(in.validity.address()), Array(in.nullCount),
@@ -1923,8 +1964,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
             if (i == at) { if (mirrored) day(i) - past else past - day(i) } else i % 5
           def status(k: VarkaFusedKernel, length: Int, at: Int,
               nullDate: Int => Boolean, nullOff: Int => Boolean): Int = {
-            val d = makeInputData(arena, length, nullDate, day)
-            val o = makeInputData(arena, length, nullOff, off(at))
+            // `off(at)` is chosen so `d + off` lands just past the range at lane `at`, and
+            // the cases below null that lane; poison would replace the sum being tested.
+            val d = makeInputData(arena, length, nullDate, day, poisonNulls = false)
+            val o = makeInputData(arena, length, nullOff, off(at), poisonNulls = false)
             runKernel2(k, d, o, makeOutput(arena, length), length)
           }
           val none = (_: Int) => false
@@ -2038,8 +2081,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         def count(at: Int, value: Int)(i: Int): Int = if (i == at) value else i % 11 - 5
         def status(k: VarkaFusedKernel, length: Int, at: Int, value: Int,
             nullDate: Int => Boolean, nullCount: Int => Boolean): Int = {
-          val d = makeInputData(arena, length, nullDate, day)
-          val m = makeInputData(arena, length, nullCount, count(at, value))
+          // Same as task 52's: the violating month count is pinned at a lane these cases null.
+          val d = makeInputData(arena, length, nullDate, day, poisonNulls = false)
+          val m = makeInputData(arena, length, nullCount, count(at, value), poisonNulls = false)
           runKernel2(k, d, m, makeOutput(arena, length), length)
         }
         val none = (_: Int) => false
@@ -2109,7 +2153,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         // directly: runKernel passes no literals.
         val dateLiteral = 19000
         def status(length: Int, at: Int, value: Int, nullCount: Int => Boolean): Int = {
-          val m = makeInputData(arena, length, nullCount, i => if (i == at) value else i % 7 - 3)
+          val m = makeInputData(arena, length, nullCount,
+            i => if (i == at) value else i % 7 - 3, poisonNulls = false)
           val out = makeOutput(arena, length)
           kernel.run(
             Array(m.data.address()), Array(m.validity.address()), Array(m.nullCount),

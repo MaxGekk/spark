@@ -300,6 +300,182 @@ public final class VarkaVectorSupport {
   }
 
   /**
+   * {@code dst = src} over exactly the low {@code rows} bits, and zero past them in the final
+   * byte - the single-input case of task 70's bitmap pass. Where a root's validity word is an
+   * alias of one input's (every calendar extraction over a column, the mod-7 family), the
+   * destination bitmap is that input's bitmap, whole-batch, and the loop's per-lane-group
+   * {@code orValidityBitsAt} was writing it sixteen rows at a time.
+   *
+   * <p>Same bit-exactness rule as {@link #setValid}: {@code assertSameOutput} compares this
+   * against the loop's own output byte for byte, and the loop leaves the bits past
+   * {@code rows} at zero. The whole bytes are {@link MemorySegment#copy}, which is one
+   * intrinsic and, unlike a hand-rolled ascending loop, is defined under any overlap; only
+   * the final partial byte is masked by hand.
+   *
+   * <p>See {@link #andValidity} for the aliasing contract the three share. It matters here in
+   * one extra way: {@code copyValidity(seg, seg, rows)} is not a no-op, because the tail write
+   * clears the bits above {@code rows} in {@code seg}'s final byte.
+   */
+  public static void copyValidity(MemorySegment dst, MemorySegment src, int rows) {
+    int wholeBytes = rows >>> 3;
+    if (wholeBytes > 0) {
+      MemorySegment.copy(src, 0L, dst, 0L, wholeBytes);
+    }
+    int tail = rows & 7;
+    if (tail != 0) {
+      dst.set(ValueLayout.JAVA_BYTE, wholeBytes,
+          (byte) (src.get(ValueLayout.JAVA_BYTE, wholeBytes) & ((1 << tail) - 1)));
+    }
+  }
+
+  /**
+   * {@code dst = a & b} over exactly the low {@code rows} bits, zero past them - the
+   * null-intolerant rule of task 11's word algebra ({@code AddDays}, {@code DateDiff},
+   * {@code AddMonths} with a column count, {@code next_day} and {@code trunc} with a derived
+   * column) taken over the whole batch at once.
+   *
+   * <p><b>The aliasing contract, shared by all three.</b> Each operand must be either disjoint
+   * from {@code dst} or exactly {@code dst} - the same segment at the same offset. Being
+   * allowed to be {@code dst} is what lets a nested expression be evaluated inner-first into
+   * the destination with no scratch buffer. Partial overlap is <i>not</i> supported and is not
+   * checked: the whole-byte loop runs ascending eight bytes at a time, so a destination one to
+   * seven bytes ahead of an operand in the same buffer would read back what it had already
+   * written. No caller can produce that - a validity bitmap is a whole buffer, mapped at its
+   * own base - and paying for a direction check on a per-batch call to rule out a shape the
+   * emitter cannot emit would be the wrong trade.
+   *
+   * <p>An operand that <i>is</i> the destination is written, not merely read, and the tail
+   * write clears the bits above {@code rows} in its final byte. Every other operand is left
+   * exactly as it was; {@code VarkaVectorSupportBitmapAlgebraTest} asserts that.
+   */
+  public static void andValidity(MemorySegment dst, MemorySegment a, MemorySegment b, int rows) {
+    int wholeBytes = rows >>> 3;
+    long i = 0;
+    for (; i + 8 <= wholeBytes; i += 8) {
+      dst.set(UNALIGNED_LONG, i, a.get(UNALIGNED_LONG, i) & b.get(UNALIGNED_LONG, i));
+    }
+    for (; i < wholeBytes; i++) {
+      dst.set(ValueLayout.JAVA_BYTE, i,
+          (byte) (a.get(ValueLayout.JAVA_BYTE, i) & b.get(ValueLayout.JAVA_BYTE, i)));
+    }
+    int tail = rows & 7;
+    if (tail != 0) {
+      dst.set(ValueLayout.JAVA_BYTE, wholeBytes, (byte) (a.get(ValueLayout.JAVA_BYTE, wholeBytes)
+          & b.get(ValueLayout.JAVA_BYTE, wholeBytes) & ((1 << tail) - 1)));
+    }
+  }
+
+  /**
+   * {@code dst = a | b} over exactly the low {@code rows} bits, zero past them - the
+   * null-skipping rule ({@code greatest}, {@code least}) over the whole batch. Same aliasing
+   * and tail contract as {@link #andValidity}, which states it.
+   */
+  public static void orValidity(MemorySegment dst, MemorySegment a, MemorySegment b, int rows) {
+    int wholeBytes = rows >>> 3;
+    long i = 0;
+    for (; i + 8 <= wholeBytes; i += 8) {
+      dst.set(UNALIGNED_LONG, i, a.get(UNALIGNED_LONG, i) | b.get(UNALIGNED_LONG, i));
+    }
+    for (; i < wholeBytes; i++) {
+      dst.set(ValueLayout.JAVA_BYTE, i,
+          (byte) (a.get(ValueLayout.JAVA_BYTE, i) | b.get(ValueLayout.JAVA_BYTE, i)));
+    }
+    int tail = rows & 7;
+    if (tail != 0) {
+      dst.set(ValueLayout.JAVA_BYTE, wholeBytes, (byte) ((a.get(ValueLayout.JAVA_BYTE, wholeBytes)
+          | b.get(ValueLayout.JAVA_BYTE, wholeBytes)) & ((1 << tail) - 1)));
+    }
+  }
+
+  /**
+   * The three helpers above take bitmaps. A column does not always have one, and whether it does
+   * is known only at runtime, so these are the entry points task 70's driver pass emits: a
+   * column's validity as the morsel contract spells it, an address beside a null count, with the
+   * three states resolved here rather than as a branch ladder in the emitted driver.
+   *
+   * <p>{@code nulls == 0} means the column has no null row and no bitmap was materialised - the
+   * operand is all ones. {@code nulls == rows} means every row is null, and the address is
+   * {@code 0L} by the same contract and must not be dereferenced - the operand is all zeros.
+   * Between the two the address is a bitmap, mapped here at exactly {@code (rows + 7) / 8}
+   * bytes, which is what restores the bound the {@link MemorySegment} operands carry for free:
+   * the raw {@code long} the driver holds does not, and milestone 1's finding 1 was a read one
+   * byte past a validity buffer.
+   *
+   * <p>All ones is the identity of an AND and annihilates an OR; all zeros is the reverse. That
+   * asymmetry is the whole reason these exist: an earlier draft of the plan had one rule for
+   * both operators, which on {@code greatest(d, d2)} with a null-free {@code d} would have
+   * marked null every row where {@code greatest} returns {@code d}'s value.
+   *
+   * <p>This one is the degenerate case, a single operand: {@code dst} is a copy of the column's
+   * bitmap, or all ones, or all zeros.
+   */
+  public static void copyColumnValidity(MemorySegment dst, long srcAddr, int srcNulls, int rows) {
+    if (srcNulls == 0) {
+      setValid(dst, rows);
+    } else if (srcNulls >= rows) {
+      zeroValidity(dst, rows);
+    } else {
+      copyValidity(dst, validityOf(srcAddr, rows), rows);
+    }
+  }
+
+  /**
+   * {@code dst = a & b} over two columns - the null-intolerant rule. An all-null operand decides
+   * the whole expression; an all-ones operand drops out of it, leaving the other alone, and if
+   * both drop out the answer is the constant {@link #setValid} writes.
+   *
+   * <p>The all-null test comes first so that a column with no bitmap is never mapped. See
+   * {@link #copyColumnValidity} for the contract the three states come from.
+   */
+  public static void andColumnValidity(
+      MemorySegment dst, long aAddr, int aNulls, long bAddr, int bNulls, int rows) {
+    if (aNulls >= rows || bNulls >= rows) {
+      zeroValidity(dst, rows);
+    } else if (aNulls == 0) {
+      copyColumnValidity(dst, bAddr, bNulls, rows);
+    } else if (bNulls == 0) {
+      copyColumnValidity(dst, aAddr, aNulls, rows);
+    } else {
+      andValidity(dst, validityOf(aAddr, rows), validityOf(bAddr, rows), rows);
+    }
+  }
+
+  /**
+   * {@code dst = a | b} over two columns - the null-skipping rule of {@code greatest} and
+   * {@code least}. Mirror of {@link #andColumnValidity}: an all-ones operand decides the whole
+   * expression and an all-null one drops out of it.
+   */
+  public static void orColumnValidity(
+      MemorySegment dst, long aAddr, int aNulls, long bAddr, int bNulls, int rows) {
+    if (aNulls == 0 || bNulls == 0) {
+      setValid(dst, rows);
+    } else if (aNulls >= rows) {
+      copyColumnValidity(dst, bAddr, bNulls, rows);
+    } else if (bNulls >= rows) {
+      copyColumnValidity(dst, aAddr, aNulls, rows);
+    } else {
+      orValidity(dst, validityOf(aAddr, rows), validityOf(bAddr, rows), rows);
+    }
+  }
+
+  /** A column's validity bitmap at exactly the bytes {@code rows} bits occupy, and no more. */
+  private static MemorySegment validityOf(long addr, int rows) {
+    return ofAddress(addr, (rows + 7) / 8);
+  }
+
+  /**
+   * Clears exactly the bytes {@code rows} bits occupy. Not {@link #zero}, which clears the whole
+   * segment: {@code dst} is mapped at the bitmap's size in every kernel today, so the two agree,
+   * and stating the length here keeps that an assumption these helpers do not depend on.
+   */
+  private static void zeroValidity(MemorySegment dst, int rows) {
+    int bitmapBytes = (rows + 7) / 8;
+    if (bitmapBytes > 0) {
+      dst.asSlice(0L, bitmapBytes).fill((byte) 0);
+    }
+  }
+
+  /**
    * Maps a raw address as a segment of exactly {@code bytes} bytes. The size is the whole point:
    * the caller passes a bare {@code long}, so this is where a kernel says how far it is entitled
    * to read, and the {@link MemorySegment} bounds check enforces it from there on.
