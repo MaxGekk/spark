@@ -1928,25 +1928,46 @@ selected.
 a projection that names one of them is the common shape, not a corner: it is
 what `SELECT a FROM t WHERE b < c` is, and the projection is doing no work
 that the filter has not already done. The 43.2 against 67.7 is the only place
-in the debt register where the answer to "should Varka have run here" is no,
-and the rule cannot see it, because the entry that would have carried the
-node has nothing to fuse.
+in the debt register where the answer to "should Varka have run here" is no.
 
-**The design, and it is small.** Two candidates, and the task picks one with
-a measurement rather than by argument. Either let `VarkaFilterExec` prune its
-output to the columns its parent requires, which removes the projection
-entirely and is where scope item 13's row-boundary work would rather find the
-plan; or let the rule take a forwarded-only projection above a Varka node,
-which keeps the plan shape and moves the narrowing into the existing
-merge-at-row pass. The first is cheaper at run time and touches the operator's
-output contract; the second is a rule change and touches nothing else.
+**The cause is two layers deep, and the second is the larger one.** The
+proximate cause is the rule: `isVarkaEligible` is `compilePartial(...).isDefined`
+and that returns `None` when no entry *fuses*, which a projection of bare
+forwarded columns never does, so a Janino `Project` is left above the filter
+and every selected row pays an interpreted `UnsafeProjection` and an operator
+boundary. Under it, though, is the floor: `VarkaFilterColumnarToRowExec` is
+deliberately not `CodegenSupport`, so it produces rows through a row iterator
+and a projection at task 19's ~25 ns per row, while stock plans
+`ColumnarToRowExec` - which *is* `CodegenSupport` - into one generated loop
+with the predicate, at 14.8 ns per input row for this query. Varka's kernel
+answers the predicate at 681.2 M rows/s and cannot pay for that difference,
+because the difference is not in the predicate.
+
+So removing the projection narrows the loss and does not close it: the shape
+loses whenever its consumer wants rows, whatever the rule does with the
+projection. Sizing which layer costs what is the task's first step, and it is
+one run of the throughput row with the projection removed by hand.
+
+**The design, in the order the numbers should decide it.** Three candidates,
+cheapest first. *Decline the shape*: teach the rule that a Varka filter under
+a row consumer with a forwarded-only projection above it is a losing plan and
+leave stock's plan alone - this recovers to 1.00x with no engineering risk and
+no new machinery, and task 19 could not do it because no plan-time signal
+separated its winners from its losers, whereas this shape is exactly such a
+signal. *Absorb the narrowing*: let `VarkaFilterExec` prune its output to the
+columns its parent requires, or let the rule take a forwarded-only projection
+above a Varka node - this removes an operator and the second row pass.
+*Fuse the boundary*: make the node `CodegenSupport`, which is scope item 13's
+first lever and the only one of the three that can put this shape above stock
+rather than beside it.
 
 **The gate.** The differential over `SELECT d FROM t WHERE d < d2` through
-both a row and a columnar consumer, and the throughput row that found it
-back above stock at 70% selected - and at 10% and 100%, since the read-back
-share moves with selectivity. Item 13's admission check should run first or
-alongside: if the row boundary itself is what makes this shape lose, the two
-fixes are the same fix.
+both a row and a columnar consumer, and the throughput row at or above 1.00x
+against stock at 10%, 70% and 100% selected, since the read-back share moves
+with selectivity. If the task takes only the first candidate, "at or above"
+means exactly 1.00x and the row should say so: declining is a repair, not a
+win. Item 13's admission check belongs beside this one, because the third
+candidate is that item's lever and the two would then be one piece of work.
 
 ### 2.41 The guard and the untaken arm (task 79)
 
@@ -2112,7 +2133,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 73 | A stopping rule for the guard walk (section 2.37): a column-offset day producer is guarded on its own value even when a mod-7 node between it and the calendar node has already re-based the day (task 70's fuzz run; see the debt register) | The admission check first - whether any SQL shape observes the difference, given that `dayRange` returns `Unknown` for a mod-7 child and declines the entry at compile time before the emitter is reached, which can legitimately close the task with the finding recorded. If it does: a stopping rule on `collectColumnOffsetProducers` that descends only through nodes passing a day to the decomposition and stops at any node whose output is bounded in itself, and the matching rule in `dayRange`, taken together so the two analyses cannot drift apart again | The reproducer from the fuzz run served rather than declined at both widths (seed 20260907005 iteration 61379's shape, and the nine siblings substituting `weekday`, `dayofweek_iso` and `datediff`); the compiler suite's decline for `year(dayofweek(date_add(d, off)))` flipped to `fuses` if the compiler half moves, or the reason requoted if it does not; every guarded shape task 52 and task 60 pin still declining, since the rule may only remove guards a bounded node stands under; `VarkaIrFuzzSuite` at a million iterations per width with the `chronoBound` check relaxed to match, which is the oracle that found it |
 | 76 | The validity helper choice, keyed on the loop body (section 2.38): task 46's width-specialised validity writer wins on the four-field shared method and loses 8-9% on single-field `year`, so the global default is right for one shape and wrong for another (task 70's review; see the debt register) | The sweep first, across the number of validity writes a masked loop body makes, at both widths and on the per-group reference arm where the writer is reached at all; then a rule in `planSlots` keyed on that count rather than a second global default, with the `VarkaEmitOptions` switch kept as the reference variant | The rule reproduces both committed points - specialised ahead on the four fields, general ahead on the single field - and no shape between them regresses; the byte identity of every served shape, which makes no per-group write and must not move; or a recorded decline if the sweep puts the single-field cost inside that row's noise |
 | 77 | The 128-bit compile cliff behind the per-group validity OR (section 2.39): the `fused, 64 ops` row fell from 273.2 to 8.8 M rows/s at 128-bit when the OR moved ahead of the compute, and task 70 only avoids it for the roots its pass serves (task 70's review; see the debt register) | The measurement first: that section in a fresh JVM and after the whole file, both widths, both `validityOrFirst` arms, read off `-XX:+PrintCompilation` and the compile queue rather than the times, and then the same over an unserved root of comparable size, which is where the exposure now lives. If the queue explains it, a rule for `validityOrFirst` keyed on what the sweep says, and a parity row over an unserved root so the file can see it next time | The mechanism named from the JVM's own output rather than inferred, with the two already-excluded causes not re-tested; a committed row that would have caught the collapse the day it landed; and either a rule with its numbers or a recorded decline with what was learned |
-| 78 | A forwarded-only projection over a Varka filter runs through rows (section 2.40): `SELECT d FROM t WHERE d < d2` reads 43.2 M rows/s against stock Spark's 67.7 at 70% selected, because the rule takes a projection only when an entry fuses and a forwarded-only projection has none (task 62's run; see the debt register) | One of two: `VarkaFilterExec` pruning its output to the columns its parent requires, or the rule taking a forwarded-only projection above a Varka node - chosen by measurement, not by argument, and run beside scope item 13's admission check in case the row boundary is the whole of it | The throughput row back above stock at 10%, 70% and 100% selected; the differential over that query through both a row and a columnar consumer; no other plan shape changing operator |
+| 78 | A forwarded-only projection over a Varka filter runs through rows (section 2.40): `SELECT d FROM t WHERE d < d2` reads 43.2 M rows/s against stock Spark's 67.7 at 70% selected, because the rule takes a projection only when an entry fuses and a forwarded-only projection has none (task 62's run; see the debt register) | The two layers separated first, by one run of that row with the projection removed by hand: the rule leaves a Janino `Project` because a forwarded-only projection fuses no entry, and under that the node is not `CodegenSupport`, so it produces rows at task 19's floor against stock's fused loop. Then one of three, cheapest first: decline the shape in the rule, which recovers to 1.00x with no new machinery; absorb the narrowing into `VarkaFilterExec` or the rule; or fuse the boundary by making the node `CodegenSupport`, which is scope item 13's lever and the only one that can win rather than draw | The throughput row back above stock at 10%, 70% and 100% selected; the differential over that query through both a row and a columnar consumer; no other plan shape changing operator |
 | 79 | The guard and the untaken arm (section 2.41): a guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the row never takes, so a user's own `BETWEEN` on the count cannot keep the shape fused (task 60's review; see the debt register) | Either the arm's condition mask ANDed into the guard, which keeps the shape fused and moves the guard after the condition, or the node excluded from the guarded set so the compiler declines it with a reason at compile time; an A/B, since either changes emitted bytes on a shape the parity file measures | The `CASE WHEN m BETWEEN ... THEN add_months(d, m)` differential fusing and answering correctly over a fixture whose extremes sit in the untaken arm; the emitted bytes of every shape without an `IfElse` unchanged; `Greatest`/`Least` explicitly out, with the reason in the code |
 | 80 | String-column compaction that keeps the Arrow layout (section 2.42): a derived int32 leaf over a string column is refused per batch when a fused Varka filter sits under it, because the filter's compaction leaves the column on-heap (task 59's review; see the debt register) | The compaction writing offsets and data buffers rather than materialising rows, on task 21's `filterCompact` pattern; sized before milestone 6's item 3 puts string columns under filters and group keys | The stacked `next_day(d, s)` over a Varka filter counting no `numFallbackBatchesNonArrow` at all on task 59's own fixture, answers unchanged, and the fixed-width compaction's numbers not moving |
 
