@@ -857,17 +857,22 @@ they answer a grouping question users answer with strings today.
 | `months_diff(d1, d2)` | `(year1 - year2) * 12 + month1 - month2`, an int | two prefixes | 3 ops past them, against Spark's double-valued `months_between` |
 | `iso_week_start(d)` | the Monday of the ISO week, `ThursdayOf(d) - 3` | task 37's shift | 1 op; `trunc(d, 'WEEK')` already gives it |
 
-Compositions users write for the same things today fuse only as far as the
-date lane goes: `trunc(d, 'WEEK')` for the previous Monday and
-`datediff(d, trunc(d, 'QUARTER'))` for the day of quarter are one kernel,
-but the `+ 1` after that, the `+ 2440588` that turns `unix_date(d)` into a
-Julian day number and the `/ 7 + 1` of a week of month are integer
-arithmetic over an output, which the compiler has no arm for - the entry
-declines whole and the row engine computes it. That is milestone 5's task
-30 (ANSI integer arithmetic), and it is also why task 57 gives
+Compositions users write for the same things now fuse further than this
+section first assumed. `trunc(d, 'WEEK')` for the previous Monday and
+`datediff(d, trunc(d, 'QUARTER'))` for the day of quarter were already one
+kernel, and since task 63 lowered int arithmetic the `+ 1` after that and the
+`+ 2440588` that turns `unix_date(d)` into a Julian day number are in the same
+kernel too - both are bounded operands, so ANSI needs no overflow check on
+them either. The `/ 7 + 1` of a week of month is still residual, because
+integer division has no arm; that part waits, though for `div` rather than for
+the arithmetic. This paragraph named milestone 5's task 30 (ANSI integer
+arithmetic) as what these were waiting for; task 63 delivered the arithmetic
+itself in milestone 4, and it is still why task 57 gives
 `extract(DAYOFWEEK_ISO)` a node of its own rather than lowering the
-`Add(WeekDay, 1)` the analyzer desugars it to. Until task 30 lands, the
-functions in the table are the only way to get these as one kernel.
+`Add(WeekDay, 1)` the analyzer desugars it to - the dedicated node is cheaper
+than the general arm, not a substitute for it. So the functions in the table
+are now a convenience and a shared-prefix saving rather than the only way to
+get these as one kernel.
 
 Two cautions. A string or double output leaves the int lane whatever the
 arithmetic costs, so `dayname`, `monthname` and `date_format` fields wait for

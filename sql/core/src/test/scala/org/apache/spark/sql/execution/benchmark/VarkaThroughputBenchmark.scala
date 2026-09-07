@@ -369,9 +369,23 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       runQueries(baseline, varka, "weekofyear", "SELECT weekofyear(d) AS w FROM varka_dates")
       runQueries(baseline, varka, "yearofweek",
         "SELECT extract(YEAROFWEEK FROM d) AS y FROM varka_dates")
+      // Task 63's int arithmetic, end to end. The composite key is the shape its plan is
+      // about: both operands are bounded by the calendar, so the compiler proves overflow
+      // out and emits no check even under ANSI, and the row engine decomposes the date twice
+      // where Varka decomposes it once. `datediff + 1` is the same arithmetic over a shape
+      // with almost no prefix, so it prices the add against the `datediff` row above it, and
+      // `try_add` is the mode that nulls the lane rather than condemning the batch.
+      runQueries(baseline, varka, "year * 100 + month (task 63)",
+        "SELECT year(d) * 100 + month(d) AS k FROM varka_dates")
+      runQueries(baseline, varka, "datediff + 1 (task 63)",
+        "SELECT datediff(d, DATE'2000-01-01') + 1 AS a FROM varka_dates")
+      runQueries(baseline, varka, "try_add over datediff (task 63)",
+        "SELECT try_add(datediff(d, DATE'2000-01-01'), i) AS a FROM varka_dates")
       // The residual entry is `i % 7` rather than `i + 1` because task 63 lowered int
       // arithmetic: `i + 1` fuses now, and this row is here to measure a projection that is
-      // only partly fused. `%` has no arm, so it still is one.
+      // only partly fused. `%` has no arm, so it still is one. What that change is worth is
+      // in PLAN_TASK_63.md 9: with `i + 1` this row reads 348.7 M rows/s against the 94.4 it
+      // committed while that entry was residual.
       runQueries(baseline, varka, "mixed projection (partial fusion)",
         "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates")
       // Chain-depth scaling (PLAN_TASK_14.md 2.3): the fused loop pays one load and one store

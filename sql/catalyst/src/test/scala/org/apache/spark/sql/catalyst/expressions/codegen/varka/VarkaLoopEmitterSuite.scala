@@ -1945,6 +1945,237 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       Array(a.nullCount, b.nullCount),
       Array(out._1.address()), Array(out._2.address()), Array.empty[Int], length)
 
+  // Task 63's int arithmetic. `checkOff` is the A/B arm the benchmark prices and the flag the
+  // emitter reads to drop the sign test; it is never a correct setting for an ANSI query.
+  private val checkOff = VarkaEmitOptions.DEFAULTS.withCheckIntOverflow(false)
+
+  /** Values that put the sign test under load: both extremes, their neighbours, and zero. */
+  private def extreme(col: Int, i: Int): Int = {
+    val vs = Array(Int.MaxValue, Int.MinValue, Int.MaxValue - 1, Int.MinValue + 1, 0, 1, -1,
+      100, -100, 7, Int.MaxValue / 2, Int.MinValue / 2)
+    vs((i + col * 5) % vs.length)
+  }
+
+  /** The same spread, kept small enough that no op over two of them can overflow. */
+  private def small(col: Int, i: Int): Int = {
+    val vs = Array(0, 1, -1, 7, -7, 100, -100, 30000, -30000, 46340, -46340)
+    vs((i + col * 3) % vs.length)
+  }
+
+  test("task 63: WRAP and NULL arithmetic match the reference over the extremes, and FAIL " +
+      "matches wherever it does not have to decline") {
+    val a = new ColumnRef(0)
+    val b = new ColumnRef(1)
+    val caseLengths = Seq(0, 1, 7, 8, 15, 16, 17, 33, 64, 65, 1000)
+    // WRAP and NULL are total over any input: WRAP wraps, NULL nulls the overflowing lane, and
+    // both leave the batch computed - so the extremes are fair game and the matrix asserts the
+    // status is 0 throughout. The reference computes the same two answers from Math.addExact
+    // and Java's wrapping operators, independently of the emitter's sign test.
+    for (mode <- Seq(Overflow.WRAP, Overflow.NULL); op <- Seq(IntOp.ADD, IntOp.SUB)) {
+      checkMatrix(Seq(new IntArith(op, mode, a, b)), 2, Array.empty[Int], caseLengths,
+        combos(2), data = extreme, ctx = s"$op $mode over the extremes")
+    }
+    // Multiply has no int-lane overflow test at all, so only the wrapping form exists. The
+    // compiler declines a checked one; the emitter refuses it, which is what keeps the two
+    // from drifting into a lowering that quietly wraps where ANSI says raise.
+    checkMatrix(Seq(new IntArith(IntOp.MUL, Overflow.WRAP, a, b)), 2, Array.empty[Int],
+      caseLengths, combos(2), data = extreme, ctx = "MUL WRAP over the extremes")
+    for (mode <- Seq(Overflow.FAIL, Overflow.NULL)) {
+      val refused = intercept[IllegalArgumentException] {
+        emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0)
+      }
+      assert(refused.getMessage.contains("checked multiply"), s"$mode: ${refused.getMessage}")
+    }
+    // Negation has only the two modes: Spark has no `try_negative`, and the emitter refuses a
+    // NULL one rather than lowering a form nothing can produce - pinned here, because a
+    // silently accepted one would multiply by -1 and answer Int.MinValue where the oracle
+    // says null.
+    checkMatrix(Seq[VarkaVectorIR](new IntNeg(Overflow.WRAP, a)), 1, Array.empty[Int],
+      caseLengths, Seq(Seq(nullPatterns(0)._2), Seq(nullPatterns(1)._2), Seq(nullPatterns(3)._2)),
+      data = extreme, ctx = "neg WRAP over the extremes")
+    val refused = intercept[IllegalArgumentException] {
+      emitMulti(Seq[VarkaVectorIR](new IntNeg(Overflow.NULL, a)), 1, 0)
+    }
+    assert(refused.getMessage.contains("IntNeg has no NULL mode"), refused.getMessage)
+    // FAIL condemns the batch instead of answering, so the matrix drives it over operands no
+    // op can push out of range - 46340 squared is under Int.MaxValue - and the status
+    // assertion inside checkMatrix is then the claim that it did not condemn one anyway.
+    for (op <- Seq(IntOp.ADD, IntOp.SUB)) {
+      checkMatrix(Seq(new IntArith(op, Overflow.FAIL, a, b)), 2, Array.empty[Int], caseLengths,
+        combos(2), data = small, ctx = s"$op FAIL inside the range")
+    }
+    checkMatrix(Seq[VarkaVectorIR](new IntNeg(Overflow.FAIL, a)), 1, Array.empty[Int],
+      caseLengths, Seq(Seq(nullPatterns(0)._2), Seq(nullPatterns(1)._2)),
+      data = small, ctx = "neg FAIL inside the range")
+    // Nested arithmetic over a fused field, which is where the composite key lives: bounded
+    // operands, so this is the shape the compiler emits as WRAP under ANSI.
+    checkMatrix(Seq[VarkaVectorIR](new IntArith(IntOp.ADD, Overflow.WRAP,
+      new IntArith(IntOp.MUL, Overflow.WRAP, new Year(a), new LiteralSlot(0)), new Month(a))),
+      1, Array(100), caseLengths,
+      Seq(Seq(nullPatterns(0)._2), Seq(nullPatterns(1)._2), Seq(nullPatterns(2)._2)),
+      ctx = "year(d) * 100 + month(d)")
+  }
+
+  test("task 63: a FAIL lane that overflows condemns the batch - in a loop lane, in an " +
+      "epilogue lane, not under a null, and not with the check off") {
+    val root = new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1))
+    val (kernel, loader) = load(emitMulti(Seq[VarkaVectorIR](root), 2, 0))
+    val (kernelOff, loaderOff) = load(emitMulti(Seq[VarkaVectorIR](root), 2, 0, checkOff))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        // Lane `at` overflows on the sum; every other lane is a small pair. Nulls are not
+        // poisoned here, because poison would replace the very sum under test.
+        def left(at: Int)(i: Int): Int = if (i == at) Int.MaxValue else i % 5
+        def right(at: Int)(i: Int): Int = if (i == at) 1 else i % 3
+        def status(k: VarkaFusedKernel, length: Int, at: Int,
+            nullL: Int => Boolean, nullR: Int => Boolean): Int = {
+          val l = makeInputData(arena, length, nullL, left(at), poisonNulls = false)
+          val r = makeInputData(arena, length, nullR, right(at), poisonNulls = false)
+          runKernel2(k, l, r, makeOutput(arena, length), length)
+        }
+        val none = (_: Int) => false
+        assert(status(kernel, 64, -1, none, none) === 0, "nothing overflows")
+        // A loop lane, then the same lane in the masked body, then a lane only the epilogue
+        // covers whatever the host's lane count is.
+        assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        // The overflowing lane under a null operand: the row is null, its data lanes are
+        // undefined, and a batch must not be condemned for arithmetic nobody asked for.
+        assert(status(kernel, 64, 3, none, _ == 3) === 0)
+        assert(status(kernel, 64, 3, _ == 3, none) === 0)
+        assert(status(kernel, 17, 16, none, _ == 16) === 0)
+        // With the check off the same batch is computed - wrongly, wrapping where ANSI says
+        // raise, which is why the flag is a benchmark arm and not a config.
+        assert(status(kernelOff, 64, 3, none, none) === 0)
+        assert(status(kernelOff, 17, 16, none, none) === 0)
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+      loaderOff.release()
+    }
+  }
+
+  test("task 63: the check costs bytes only where it is emitted, and none with it off") {
+    val a = new ColumnRef(0)
+    val b = new ColumnRef(1)
+    val bodies = Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")
+    def sizes(root: VarkaVectorIR, options: VarkaEmitOptions): Seq[Int] = {
+      val bytes = emitMulti(Seq(root), 2, 0, options)._2
+      bodies.map(VarkaEmitterTestSupport.codeSize(bytes, _))
+    }
+    // The A/B the benchmark prices: with the check off, the FAIL node is the WRAP node's
+    // bytes, method for method. This is what makes the two benchmark arms comparable - one
+    // measures the sign test and nothing else.
+    val wrap = new IntArith(IntOp.ADD, Overflow.WRAP, a, b)
+    val fail = new IntArith(IntOp.ADD, Overflow.FAIL, a, b)
+    assert(sizes(fail, checkOff) === sizes(wrap, VarkaEmitOptions.DEFAULTS))
+    // And with it on it costs bytes in every body that computes the node.
+    val checked = sizes(fail, VarkaEmitOptions.DEFAULTS)
+    val unchecked = sizes(wrap, VarkaEmitOptions.DEFAULTS)
+    assert(checked.zip(unchecked).forall { case (c, u) => c > u },
+      s"the check should add bytes to every body: $checked against $unchecked")
+    // A WRAP node is untouched by the flag - nothing else in the emitter reads it.
+    assert(sizes(wrap, checkOff) === sizes(wrap, VarkaEmitOptions.DEFAULTS))
+  }
+
+  test("task 63: a TRY node forfeits the dense body, and a checked one does not") {
+    val a = new ColumnRef(0)
+    val b = new ColumnRef(1)
+    // A NULL node can null a lane whose operands are both valid, so the analysis marks the
+    // kernel and the dispatcher never sends it a dense batch - there is no dense body to send
+    // it to. A FAIL node nulls nothing, so it keeps both.
+    val tryAdd = methodNames(emitMulti(Seq[VarkaVectorIR](
+      new IntArith(IntOp.ADD, Overflow.NULL, a, b)), 2, 0))
+    assert(!tryAdd.exists(_.startsWith("loopDense")), tryAdd.mkString(", "))
+    assert(!tryAdd.contains("epilogueDense"), tryAdd.mkString(", "))
+    assert(tryAdd.contains("loopMasked0") && tryAdd.contains("epilogueMasked"))
+    val failAdd = methodNames(emitMulti(Seq[VarkaVectorIR](
+      new IntArith(IntOp.ADD, Overflow.FAIL, a, b)), 2, 0))
+    assert(failAdd.contains("loopDense0") && failAdd.contains("epilogueDense"))
+  }
+
+  test("task 63: the composite key's masked body is its dense twin's bytes") {
+    // PLAN_TASK_63.md 6.1 prediction 6. `year(d) * 100 + month(d)` under WRAP has the word of
+    // a single input, so task 70's driver pass writes the whole output bitmap once per batch
+    // and every word in the loop dies - which leaves the masked method with nothing the dense
+    // one does not also do. Under FAIL the guard keeps a word alive and the two must differ,
+    // which is the other half of the claim and the reason the check's cost is not free in a
+    // masked body.
+    val d = new ColumnRef(0)
+    def key(mode: Overflow): VarkaVectorIR = new IntArith(IntOp.ADD, mode,
+      new IntArith(IntOp.MUL, Overflow.WRAP, new Year(d), new LiteralSlot(0)), new Month(d))
+    val wrapped = emitMulti(Seq(key(Overflow.WRAP)), 1, 1)._2
+    for ((masked, dense) <- Seq(("loopMasked0", "loopDense0"),
+        ("epilogueMasked", "epilogueDense"))) {
+      assert(VarkaEmitterTestSupport.codeSize(wrapped, masked) ===
+        VarkaEmitterTestSupport.codeSize(wrapped, dense), s"WRAP: $masked against $dense")
+    }
+    val checked = emitMulti(Seq(key(Overflow.FAIL)), 1, 1)._2
+    assert(VarkaEmitterTestSupport.codeSize(checked, "loopMasked0") >
+      VarkaEmitterTestSupport.codeSize(checked, "loopDense0"),
+      "FAIL: the masked loop carries the word the guard reads")
+  }
+
+  test("task 63: the registered op counts, and the controls that must not move") {
+    // PLAN_TASK_63.md 3.3, filled from the emitted bytes. The point of pinning these is that
+    // an arm that quietly emits twice the ops it should still passes every value test. The
+    // counts are `IntVector` calls in `loopDense0`, so they include the loop's unrolling -
+    // which is why they are read as one table rather than reasoned about one at a time.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    def denseOps(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int): Int =
+      VarkaEmitterTestSupport.invocationCount(emitMulti(roots, numInputs, numLiterals)._2,
+        "loopDense0", "jdk.incubator.vector.IntVector")
+    def arith(op: IntOp, mode: Overflow, l: VarkaVectorIR, r: VarkaVectorIR): VarkaVectorIR =
+      new IntArith(op, mode, l, r)
+    val lit = new LiteralSlot(0)
+    val actual = Seq(
+      "year(d) + 1, WRAP" ->
+        denseOps(Seq(arith(IntOp.ADD, Overflow.WRAP, new Year(d), lit)), 1, 1),
+      "year(d) + 1, FAIL" ->
+        denseOps(Seq(arith(IntOp.ADD, Overflow.FAIL, new Year(d), lit)), 1, 1),
+      "datediff + 1, WRAP" ->
+        denseOps(Seq(arith(IntOp.ADD, Overflow.WRAP, new DateDiff(d, d2), lit)), 2, 1),
+      "datediff + 1, FAIL" ->
+        denseOps(Seq(arith(IntOp.ADD, Overflow.FAIL, new DateDiff(d, d2), lit)), 2, 1),
+      "-i, WRAP" -> denseOps(Seq[VarkaVectorIR](new IntNeg(Overflow.WRAP, d)), 1, 0),
+      "-i, FAIL" -> denseOps(Seq[VarkaVectorIR](new IntNeg(Overflow.FAIL, d)), 1, 0),
+      "year * 100 + month" -> denseOps(Seq(arith(IntOp.ADD, Overflow.WRAP,
+        arith(IntOp.MUL, Overflow.WRAP, new Year(d), lit), new Month(d))), 1, 1),
+      "year, month (control)" ->
+        denseOps(Seq[VarkaVectorIR](new Year(d), new Month(d)), 1, 0),
+      "year (control)" -> denseOps(Seq[VarkaVectorIR](new Year(d)), 1, 0),
+      "datediff (control)" -> denseOps(Seq[VarkaVectorIR](new DateDiff(d, d2)), 2, 0),
+      "date_add(d, off) (control)" -> denseOps(Seq[VarkaVectorIR](new AddDays(d, d2)), 2, 0))
+    assert(actual === Seq(
+      "year(d) + 1, WRAP" -> 36,
+      "year(d) + 1, FAIL" -> 40,
+      "datediff + 1, WRAP" -> 6,
+      "datediff + 1, FAIL" -> 10,
+      "-i, WRAP" -> 3,
+      "-i, FAIL" -> 4,
+      "year * 100 + month" -> 42,
+      "year, month (control)" -> 40,
+      "year (control)" -> 34,
+      "datediff (control)" -> 4,
+      "date_add(d, off) (control)" -> 4))
+    // Three claims about those numbers, stated as differences so that a change to the shared
+    // year prefix moves both sides rather than the claim.
+    val by = actual.toMap
+    assert(by("year(d) + 1, FAIL") - by("year(d) + 1, WRAP") === 4 &&
+      by("datediff + 1, FAIL") - by("datediff + 1, WRAP") === 4,
+      "the add's check is four calls - two XOR, an AND and the compare - wherever it is emitted")
+    assert(by("-i, FAIL") - by("-i, WRAP") === 1,
+      "negation's check is one compare: it reads the operand, not the result")
+    assert(by("year * 100 + month") === by("year, month (control)") + 2,
+      "the key is the two fields plus its own two ops, so the year prefix is computed once")
+  }
+
   test("task 52: a column-offset producer under a calendar node declines the batch whose " +
       "result leaves the range - in a loop lane, in an epilogue lane, and not under a null") {
     val add = new Year(new AddDays(new ColumnRef(0), new ColumnRef(1)))
