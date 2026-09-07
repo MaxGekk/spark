@@ -76,6 +76,27 @@ public final class VarkaEmitterTestSupport {
    * not exist.
    */
   public static int invocationCount(byte[] bytes, String methodName, String owner) {
+    return invocationCount(bytes, methodName, owner, List.of());
+  }
+
+  /**
+   * {@link #invocationCount} with the named callees left out. The owner-wide count answers "how
+   * many lane ops", which is the right question for {@code jdk.incubator.vector.IntVector} and
+   * the wrong one for {@code VarkaVectorSupport}: {@code loadSegment} emits an
+   * {@code ofAddress} for every segment the body touches, in every body mode, so a count that
+   * includes it can never reach zero however much validity work is removed, and task 70's
+   * registered targets of "0" would be unreachable with the tool that is supposed to read them.
+   * Excluding {@code ofAddress} leaves exactly the validity work - the {@code validityBitsAt*}
+   * reads, the {@code orValidityBitsAt*} and {@code orPartialValidityBitsAt*} writes, and
+   * task 70's whole-batch {@code copyValidity}/{@code andValidity}/{@code orValidity}.
+   *
+   * <p>The match is exact, never a prefix, for {@link #invokedNames}' reason: the helpers carry
+   * a lane-count suffix since task 46, and {@code orValidityBitsAt} is a prefix of
+   * {@code orValidityBitsAt16}. An excluded name that the method does not invoke is not an
+   * error - the exclusion list says what the metric is, not what the body contains.
+   */
+  public static int invocationCount(
+      byte[] bytes, String methodName, String owner, List<String> excludedCallees) {
     int count = 0;
     for (java.lang.classfile.MethodModel method : ClassFile.of().parse(bytes).methods()) {
       if (!method.methodName().equalsString(methodName) || method.code().isEmpty()) {
@@ -83,7 +104,8 @@ public final class VarkaEmitterTestSupport {
       }
       for (java.lang.classfile.CodeElement element : method.code().get()) {
         if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
-            && invoke.owner().asInternalName().equals(owner.replace('.', '/'))) {
+            && invoke.owner().asInternalName().equals(owner.replace('.', '/'))
+            && !excludedCallees.contains(invoke.name().stringValue())) {
           count++;
         }
       }

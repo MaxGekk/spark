@@ -1,0 +1,706 @@
+# Task 70: Validity as bitmap algebra in the driver
+
+## 1. Where this came from
+
+`PLAN_MILESTONE_4.md` row 70 and section 2.34, opened out of task 46's
+admission check (`PLAN_TASK_46.md` 2.3 and 3.7), which priced one
+`orValidityBitsAt` call at 1.87 to 3.24 ns per lane group whatever the vector
+width, and observed that for most value roots the bits that call writes are a
+bytewise function of the input bitmaps over the whole batch - so they can be
+computed once per batch in the driver, the way task 45's `setValid` fills a
+constant, instead of once per lane group in the loop. Task 45 took the call
+off the dense path by knowing the answer in advance; task 46 made the calls
+that survive inline; this task removes most of what survives on the masked
+path. The numbers that motivate it are the masked rows of
+`sql/catalyst/benchmarks/VarkaEmitterParityBenchmark-jdk25-results.txt` and
+its `-128bit-` sibling as task 32 B2 regenerated them, quoted in section 2.4.
+
+## 2. The admission check, done
+
+Four things had to be true. Each was read off the emitter and the committed
+files on 7 September 2026, at `bbc91b7ec39`; none needed a probe.
+
+### 2.1 Every value node's word is an alias, an AND or an OR - except three
+
+`VarkaLoopEmitter.planWordRef` is the whole algebra. A `ColumnRef` is its
+input's word; a `LiteralSlot` is the all-true constant; `AddDays`, `SubDays`,
+`DateDiff`, `NextDay`, `AddMonths` and `TruncDateDynamic` are the AND of their
+two children's words; every calendar extraction, `ThursdayOf`, `DayOfWeek`,
+`WeekDay` and `DayOfWeekIso` alias their child's; `Greatest` and `Least` OR
+their children's; `IfElse` blends its two branches' words by the condition's
+known-true mask, which is computed per lane group; a `Cond` root's slot is a
+selection bitmap, not validity at all. So for every root whose tree holds no
+`IfElse` and is not a `Cond`, the destination bitmap is a bytewise AND/OR
+expression over the referenced inputs' bitmaps, and nothing about it varies
+per lane group.
+
+The one node that is null on valid inputs is the one the analysis already
+names: non-ANSI `make_date` sets `Analysis.nullsFromValidInputs`, and the
+dispatch takes the masked methods for every batch because of it. Task 63's
+`try_*` forms will be the next; the predicate this task adds is written as an
+exhaustive switch over the sealed IR so that a new node has to declare itself
+(the `chronoChild` / `tailReadsMarchMonth` pattern) rather than default to
+pure.
+
+The derived leaves make two nodes *more* regular, not less. `TruncLevelLeaf`
+turns a null, unrecognised or sub-day format into a null lane of the derived
+input and zeroes its data; `WeekdayLeaf` does the same for a bad weekday name
+(declining the batch in ANSI mode rather than nulling). So `trunc(d, fmt)` and
+`next_day(d, s)` reach the kernel as plain ANDs over two input bitmaps, with
+the nullness already in a bitmap.
+
+### 2.2 The word has a third consumer, which the milestone section did not list
+
+Section 2.34 counts two uses of a word in the masked body: the root's
+validity write and the blend. There is a third. `emitGuardCollect` ANDs a
+guard's condemning mask with the guarded node's word, so that a null lane -
+whose data slot holds whatever the buffer holds - cannot condemn the batch.
+That covers task 52's range guard on a `date_add`/`date_sub` with a column
+offset under a calendar consumer, and task 60's month-count guard on
+`add_months` with a column count. And the loop body already loads its
+columns unmasked (`emitValue`'s `ColumnRef` arm takes the masked
+`fromMemorySegment` only in the epilogue), so garbage in a null lane already
+flows through the arithmetic today; the word AND is the only thing keeping it
+out of the guard.
+
+The consequence for the design: the task has two separable effects, and the
+second has a stricter condition than 2.34 gave it.
+
+* Removing a root's per-group *write* is safe whenever its word is a pure
+  AND/OR expression (2.1). Per root.
+* Removing the per-group *reads* and the word locals is a liveness question,
+  per loop method: a word is emitted if and only if some node in the method
+  still consumes it - a guard, a blend, a `Cond` root's OR, or a root whose
+  validity the pass does not serve. "Every root qualifies" is neither
+  necessary (a method of `year(d), greatest(d, d2)` needs no word once both
+  roots are served by the pass) nor sufficient (a method of
+  `year(date_add(d, off))` alone has one qualifying root and still needs the
+  word for the guard).
+
+What this check would have rejected: a design that dropped the read
+whenever the roots qualified. On nullable data with a stray value in a null
+slot it would decline batches that today fuse - answers right, through the
+row engine, and the kernel's win gone on exactly the `year(date_add(d, off))`
+shape task 52 built the guard for.
+
+### 2.3 What the pass has to handle that `setValid` does not
+
+`setValid` writes a constant. The pass writes an expression, and not every
+operand is a bitmap. The three helpers the expression is built from -
+`VarkaVectorSupport.copyValidity`, `andValidity` and `orValidity`, each
+setting exactly `rows` bits, each allowing the destination to alias an
+operand - landed with this plan, ahead of any emitter work, with
+`VarkaVectorSupportBitmapAlgebraTest` holding them to the loop's own form
+bit for bit (the `setValid` test's pattern), the operands sliced to exactly
+the bitmap so an over-read fails the test rather than reaching a neighbouring
+Arrow buffer.
+
+An operand is in one of three runtime states, and the rule differs by
+operator. All ones is the identity of an AND and annihilates an OR; all zeros
+is the reverse:
+
+| operand state | in an AND | in an OR |
+|---|---|---|
+| a bitmap (`0 < nullCount < rows`) | read it | read it |
+| null count 0, no bitmap materialised | drop the operand | the whole expression is `setValid(dst, rows)` |
+| null count `rows`, validity address `0L` | the whole expression is `zero(dst)` | drop the operand |
+
+After dropping, an expression of two operands may be left with one, and then
+it is a `copyValidity`; left with none, it is the `setValid` or the `zero`
+that the operand's state already decided.
+
+**The earlier draft of this section had one rule for all of it, and it was
+wrong.** It said only that a null-free input "contributes an all-ones operand
+... so the pass skips it", with no AND/OR distinction. Applied to
+`greatest(d, d2)` where `d` is null-free and `d2` has nulls, skipping gives
+`copyValidity(dst, d2Validity, rows)`, which marks null every row where `d2`
+is null - rows on which `greatest` returns `d`'s value and the output is
+valid. The same reading left the degenerate case undefined: `year(d)` over a
+null-free `d` inside a masked kernel needs `setValid`, not a copy of a bitmap
+that was never materialised. Both states are reachable today, because
+`emitDispatch` takes `runMasked` as soon as *any* referenced input has nulls.
+
+**What that costs the API, which commit 2 decides.** The emitter knows an
+input's null count at emit time only for a literal; at runtime it arrives in
+the `nullCounts` argument, and step (4) of `emitBody` stores `aconst_null`
+into `srcValSeg[i]` for a null-free input and for an all-null one alike -
+there is no segment to pass in either state. So the segment-only helpers as
+landed force the emitter to generate the three-way choice above as bytecode,
+per operand, per served output. The alternative is an overload taking
+`(long address, int nullCount)` per operand, which puts the three states in
+the engine - two `if`s in Java instead of a bytecode diamond, and nine
+two-operand combinations a JUnit test can enumerate without emitting
+anything.
+
+The code-size argument does not decide this, and 6.1's prediction 6 has the
+measurement that says so: the two forms cost about +1.5 KB and +0.6 KB on the
+48-output driver, which is 4.2 KB against 3.2 KB in a method whose limit is
+8 KB and whose shape's epilogue has already crossed. What decides it is where
+a wrong branch can hide. These three states are the whole of where a silently
+wrong validity bitmap comes from - an all-ones operand annihilating an OR is
+not a crash, it is a null row that should have had a value - and the engine
+form puts every combination in a JUnit test that runs in milliseconds, where
+the bytecode form puts them in emitted kernels driven through `checkMatrix`
+with crafted null counts. The engine form also keeps the emitter smaller,
+which the delegation goal wants. Its one real cost is that a `long` address
+is not a `MemorySegment`, so the bounds check milestone 1's finding 1 is
+about has to be rebuilt inside the entry point with
+`ofAddress(addr, (rows + 7) / 8)` rather than being supplied by the caller;
+that is one `reinterpret` per operand per batch, and it must not be
+forgotten.
+
+**Decided, and landed with this plan.** The segment-taking helpers stay
+exactly as they are - they are the bit-exact primitives and
+`VarkaVectorSupportBitmapAlgebraTest` is their oracle - and
+`copyColumnValidity`, `andColumnValidity` and `orColumnValidity` sit beside
+them, taking `(long address, int nullCount)` per operand, resolving the three
+states and delegating. They map each operand at exactly `(rows + 7) / 8`
+bytes, which is what restores the bound the raw `long` does not carry.
+
+The emitter therefore emits one call per expression node whatever the runtime
+states are, with the arguments it already holds: `srcValidity[i]` and
+`nullCounts[i]` are parameters of the body, so an operand is
+`aload; ldc; laload` and `aload; ldc; iaload`, five bytes each.
+
+`columnEntryPointsResolveTheThreeOperandStates` covers all nine two-operand
+combinations for each operator and the three for the copy, at every length in
+the file's ladder, in milliseconds and with no bytecode involved. It was
+mutation-checked against the defect this whole section is about: giving the
+OR root the AND rule for a null-free operand fails it at
+`orColumnValidity[null-free, all-null]`.
+
+The bytecode-ladder form is **not** built as a live variant. It is the one
+place in this task where the `FloorMod7` discipline is deliberately not
+applied, and the reason is that the two forms differ in nothing a benchmark
+could measure - the pass runs once per batch, so both resolve the states in
+time that does not appear in any row - and the only dimension they differ on,
+emitted bytes, is settled above by measurement without building either. If a
+shape ever appears where the driver's size is binding, the ladder is the
+fallback and this section is the record of what it would cost.
+
+The final partial byte is masked to `length % 8` bits, the rule `setValid`'s
+javadoc records and `assertSameOutput` enforces byte for byte.
+
+### 2.4 The bound, from the current file
+
+Masked against dense, M rows/s, the parity file as this branch commits it
+(provenance `018228099ef`, 2026-09-07, both widths from one regeneration):
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `year` | 3002.5 / 3449.1 | 1191.6 / 1334.2 |
+| `year+month+day+quarter`, one loop method | 1056.2 / 1622.4 | 417.6 / 794.2 |
+| `next_day(d, k)`, column kernel | 6707.4 / 7887.1 | 2838.3 / 3542.7 |
+| `add_months(d, m)`, column count | 633.9 / 703.1 | 209.5 / 242.9 |
+| `add_months(d, 13)` | 730.8 / 728.1 | 254.9 / 255.6 |
+| `filter d < literal` (a `Cond` root; not served) | 21548.1 / 23815.4 | 4802.2 / 6371.0 |
+
+Task 46 took most of the single-field gap: `year` has 12.9% and 10.7% left.
+The prize is the multi-output method, 1.54x at AVX-512 and 1.90x at 128-bit
+on four fields, which is the shape B2 emits by default now, and the two-input
+node at 15.0% and 19.9%. `add_months` with a literal has nothing left - its
+81-op tail hides one write, and its masked row reads 0.4% *above* its dense
+one, which is where this file's noise floor sits - and the column-count form
+keeps its read for the guard (2.2) until task 64 takes the guard off the
+in-range case.
+
+**The baseline rows added with this plan** (the regeneration committed beside
+it, at both widths), masked against dense:
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `greatest(d, d2)` (an OR root) | 8539.1 / 11810.8 | 2648.3 / 10870.5 |
+| the same, first input all-null | 9793.4 | 3860.5 |
+| `year+month+day+quarter`, shared, chunk 4096 | 1322.7 / 2133.1 | 428.6 / 807.7 |
+| the same, chunk 4095 | 1314.5 / 2148.4 | 427.0 / 809.1 |
+| the same, chunk 64 | 897.8 / 1572.6 | 381.4 / 705.9 |
+| the same, chunk 63 | 700.2 / 1368.2 | 349.3 / 662.1 |
+
+The OR root is the largest mover in the file at both widths, and by a long
+way at the narrow one: 1.38x at AVX-512 and 4.10x at 128-bit, because a
+two-input masked body pays two reads, one write and its own OR word per
+group, and at four lanes a group is four rows. A narrow-vector measurement
+was not optional here, exactly as `SKILLS.md` says of anything that shares
+live values. Its all-null arm sits between the two, 9793.4 and 3860.5, so it
+does reach a loop and does have room to move - which the row it replaced did
+not, and that is most of why it was replaced. The chunk-64 and chunk-63 rows
+are risk 2's before-numbers: the masked four-field kernel runs at 0.57x and
+0.51x of its dense twin on short batches at AVX-512, and 0.54x and 0.53x at
+128-bit, which is the gap a per-batch pass has to close without costing more
+than the calls it replaces on an 8-byte bitmap.
+
+**Why this is the second regeneration of the same commit, and what the first
+one cost.** The file this branch first committed was taken on a disturbed
+machine, and the disturbance was invisible where the harness looks for it:
+all nine controls were flat, every one within -0.2% to +0.8%. What gave it
+away was arithmetic. Its AVX-512 sub-microsecond dense rows had fallen 33.5%
+(`date_add emitted loop, null-free`) and 20.8% (`sequential kernels, 9
+passes`) against the file before it while the 128-bit file's held, which left
+three orderings identical code cannot produce: the wide `greatest(d, d2),
+null-free` behind its own 128-bit companion, `arithmetic depth 4, null-free`
+likewise, and `arithmetic depth 4, mixed nulls` ahead of its own null-free
+row.
+
+This run, on the same commit, the same governor and epp, and a load of 0.63,
+puts all three back. `date_add emitted loop, null-free` reads 19227.8 against
+the disturbed 12754.1 - and against the 19180.2 the file had *before* the
+disturbed run, so it returned to where it was rather than to somewhere new.
+Wide `arithmetic depth 4, null-free` is 19283.8 against the narrow 19051.6,
+the right way round. And no masked row now beats its dense twin by more than
+4.1%, against the 23.7% inversion the disturbed file carried on `arithmetic
+depth 4`.
+
+`dev/varka_bench_regen.sh` already says to do this - if unrelated rows move
+together while the controls hold, re-run the base the same day before reading
+anything into it - and it is a step 0 in 8 rather than a footnote because the
+numbers it changed are not small: the OR root's AVX-512 gap read 5.5% off the
+disturbed file and is 27.7% here, a factor of five, and it is the row this
+task's largest predicted win is registered against.
+
+**What the register should take from it: the controls are necessary and not
+sufficient.** All nine are long-running row-engine and scalar cases at tens
+of nanoseconds per row, and they are insensitive to whatever perturbs a
+kernel that runs a million rows in 0.08 us. Two checks catch what they miss,
+both free and both on the file itself rather than on a second run: a masked
+row may not beat its dense twin, and on a saturated dense shape a wide row
+may not lose to its own 128-bit companion. Either one would have caught this
+file the day it was written.
+
+### 2.5 The pinned oracles
+
+`VarkaLoopEmitterSuite`'s `everyNode` fixture is an `IfElse` root over a tree
+holding non-ANSI `MakeDate`, so its root does not qualify and its masked body
+keeps every word: the pinned line map is predicted unmoved. `DEFAULTS`
+renders empty whichever way the new switch defaults, so no production shape
+hash moves. Both are asserted by the suites as they stand.
+
+## 3. The design
+
+### 3.1 The word expression, evaluated once per batch
+
+Two additions to the analysis and one to the driver, all behind
+`VarkaEmitOptions.validityByBitmap` (default decided in 8; off reproduces
+today's bytes exactly, the `FloorMod7` precedent).
+
+**The purity predicate.** `Analysis.pureWord(node)`: an exhaustive switch
+over the sealed IR returning, for a value node, the bitmap expression its
+word denotes - `Input(i)`, `AllTrue`, `And(a, b)`, `Or(a, b)` - or `null`
+where the word is computed (`IfElse`, any node with `nullsFromValidInputs`
+set, a `Cond`). It mirrors `planWordRef` case for case and the suite asserts
+the two agree on every node the fixtures build, so the algebra cannot drift
+from the emission.
+
+**Where the pass goes, which is narrower than it looks.** `emitBody` in
+`DRIVER` mode runs in five steps: (1-2) the prologue; (3) map each output's
+data and validity segment and `zero` the bitmap, or `setValid` it on a dense
+batch (task 45); (4) compute `dead[i]`, `hasNulls[i]` and `srcValSeg[i]` from
+the runtime null counts; (5) the all-null shortcut, which returns 0 for a
+batch whose every output is all-null. **The pass goes between (4) and (5)**,
+and neither neighbour will do.
+
+At (3) its inputs do not exist yet: 2.3's three operand states *are*
+`dead[i]` and `hasNulls[i]`, and those are written in (4). After (5) a batch
+that takes the shortcut returns with the destination bitmap never written,
+and the reused Arrow validity buffer keeps the previous batch's bits, which
+read as valid over undefined data. A two-output kernel makes that concrete:
+`datediff(d0, d1)` beside `year(d2)` with `d0` all-null does *not* take the
+shortcut, because output 2 reads no all-null column, so output 1's bitmap
+would simply never be written.
+
+Between (4) and (5) the pass *replaces* step (3)'s `zero`/`setValid` for the
+outputs it serves - step (3) keeps emitting it for the others. That is the
+only reading that holds step (3)'s stated invariant, "`zero(dstValidity)`
+before any return below": it is kept by the pass, not by leaving the zero in
+place and writing over it. An earlier draft of 2.3 assumed the opposite, that
+an all-null AND operand could lean on step (3)'s zero having already run.
+For a served output there is no step (3) zero to lean on, which is why 2.3's
+table gives that state its own `zero(dst)` call.
+
+**What it emits.** For each served output, one call into `VarkaVectorSupport`
+per node of the expression - `copyValidity(dst, src, rows)`,
+`andValidity(dst, a, b, rows)`, `orValidity(dst, a, b, rows)` - with 2.3's
+operand states resolved either as bytecode here or inside the helpers, which
+is the API question 2.3 leaves to commit 2. The helpers are the engine's,
+reached by name like `setValid`; each sets exactly `rows` bits.
+
+**Nesting, and where the destination alone stops being enough.** A
+left-leaning expression is emitted inner-first into the destination: every
+operand is then either an input bitmap or the destination itself, the
+destination may alias an operand, and no scratch buffer is needed. That is
+not every expression. `DateDiff` is the AND of its two children's words and
+`Greatest`/`Least` the OR of theirs, and both IR nodes are binary, so
+`datediff(greatest(d, d2), greatest(d3, d4))` denotes `And(Or(a, b),
+Or(c, d))` - two live intermediates, which two-operand destination-aliasing
+calls over one destination cannot evaluate in any order.
+`VarkaIrFuzzSuite` builds exactly this: `DateDiff`, `Greatest` and `Least`
+all take arbitrary `value(depth)` children, so the shape arrives whether the
+surface has it or not.
+
+Commit 2 handles it in two steps rather than by growing a scratch buffer.
+First, flatten: AND and OR are associative and commutative over bitmaps, so
+any tree of a *single* operator collapses to a left-leaning chain, which
+covers every shape today's surface produces. Second, where a genuinely mixed
+tree remains, decline to serve that root: it keeps its per-group write and
+its word stays live, which is today's behaviour and is always correct. A test
+asserts the declined-root count is zero over the suite's fixtures, so the
+safety net cannot quietly become the common path, and the fuzzer is what
+exercises the net itself.
+
+**Word liveness, per method.** `planSlots` today allocates a word local per
+referenced input and per own-word node. Under the switch it allocates them
+only for words some emitted consumer reads: a `guardTmp` node's word, an
+`IfElse`'s condition and branches, a `Cond` root's, a `Greatest`/`Least`
+whose own word feeds one of those, and any root the pass does not serve. A
+method with no live word skips the per-group `validityBitsAt` reads entirely,
+and an input whose word is dead in a method needs none of that method's
+null-state prologue either - no `srcValSeg`, no `dead`/`hasNulls` flags - so
+the lane-group body and the prologue are then the dense method's bytes, the
+one-body-not-two result, verified in 5 rather than assumed (6.1's prediction
+6 sizes what the epilogue keeps if the prologue is not dropped with the
+words).
+
+**Liveness is checked by the emission, not by the list in 2.2.** `loadWord` is
+the one call through which every consumer reads a word, so it counts each use
+in `Slots` as it emits, and the emitter asserts at the end of every method
+that a word the liveness pass declared dead was loaded zero times - an
+`IllegalStateException` at emit time, which `VarkaIrFuzzSuite` drives over
+random IR. The inventory in 2.2 is how the rule was designed; the counter is
+what keeps a future consumer from being missed silently.
+
+**The write.** `emitLaneGroup` skips the per-group `orValidityBitsAt` for a
+root the pass served, the way `fillsValidityOnce` skips it on a dense batch;
+the two decisions are taken in one place so the driver and the loop cannot
+disagree, which is the failure `fillsValidityOnce`'s javadoc names. The
+epilogue's per-output partial write goes with it: the pass covers every row
+of the batch, tail included.
+
+### 3.2 What is deliberately unchanged
+
+* The dense path and task 45's `setValid`: `denseValidityOnce` stays a live
+  option beside the new one rather than being folded into it.
+* The guards, their word AND and the status route (tasks 42, 52, 60): a guard
+  keeps its word, which is the whole of 2.2.
+* `Cond` roots and the filter path (task 21): a selection bitmap is computed,
+  not derived, and stays per group; task 46 is what made that call cheap.
+* The fragment mechanism, grouping, `GROUP_BUDGET` and `FUSED_CEILING`: the
+  validity calls were never counted as vector ops, so no *weight* moves and
+  no shape regroups. The driver's *bytes* do move, which is a different
+  question with a different limit behind it, and it is 6.1's prediction 6
+  rather than an item on this list.
+* Aliasing the output bitmap to an input's buffer (2.34's step two): an Arrow
+  ownership and lifetime question at the evaluator, scoped out of this task
+  and left in section 2.34.
+* Task 64's per-batch range check, which decides *whether* a guard is emitted;
+  this task decides what a body without a guard still has to read. 64 widens
+  what this task drops, and is the natural next task, not a prerequisite.
+
+### 3.3 Registered op counts
+
+The metric this task moves is not `IntVector` invocations - none is added or
+removed in any body - but the *validity work* per masked loop method: the
+`validityBitsAt*` reads and the `orValidityBitsAt*` and
+`orPartialValidityBitsAt*` writes today, the whole-batch helpers after.
+
+A plain owner-wide count will not express it, and the difference decides
+whether the table below can be asserted at all. `VarkaEmitterTestSupport`'s
+three-argument `invocationCount` counts every invocation on an owner inside a
+method, and `loadSegment` emits `VarkaVectorSupport.ofAddress` for each
+segment the body touches in *every* body mode - only the `zero`/`setValid`
+of step (3) is gated on `DRIVER`. So an owner-wide count of a masked loop
+method can never reach zero however much validity work goes away, and every
+"0" registered below would be unreachable with the tool named to read it.
+The four-argument overload landed with this plan takes an exclusion list;
+the metric is that count with `ofAddress` excluded, exact-matched rather than
+by prefix for the reason `invokedNames` documents - the helpers carry a
+lane-count suffix, and `orValidityBitsAt` is a prefix of
+`orValidityBitsAt16`. `dev/varka_emit.sh` prints the same number as a
+`validity` column beside `IntVector` and `VectorMask`, so a reviewer reads
+the before and after without writing a test.
+
+Registered from the emission sites in 2.2, to be asserted in 5:
+
+| shape | masked loop method, `VarkaVectorSupport` calls today | after |
+|---|---|---|
+| `year(d)` | 1 read + 1 write | 0 |
+| `year, month, dayofmonth, quarter` over `d` (one method) | 1 read + 4 writes | 0 |
+| `next_day(d, k)`, column kernel | 2 reads + 1 write | 0 |
+| `greatest(d, d2)` | 2 reads + 1 write | 0 |
+| `year(date_add(d, off))`, guarded | 2 reads + 1 write | 2 reads (the guard) + 0 |
+| `year(d)` beside `d < lit` (a `Cond` root, one method) | 1 read + 2 writes | 1 read + 1 write (the `Cond`) |
+| `if(d < d2, d, d2)` | 2 reads + 1 write | unchanged |
+
+`IntVector` counts per body are asserted unchanged for every shape above.
+
+## 4. Files
+
+| file | what |
+|---|---|
+| `sql/varka/engine/.../VarkaVectorSupport.java` | `copyValidity`, `andValidity`, `orValidity`, each setting exactly `rows` bits, and the `*ColumnValidity` entry points of 2.3 over them; tests in the engine module. Landed with this plan |
+| `sql/catalyst/.../varka/VarkaEmitOptions.java` | `validityByBitmap`, `withValidityByBitmap`, in `canonical()` |
+| `sql/catalyst/.../varka/VarkaLoopEmitter.java` | `Analysis.pureWord`, word liveness in `planSlots`, the pass in the driver, the skipped writes |
+| `sql/catalyst/.../varka/VarkaLoopEmitterSuite.scala` | the tests in 5; the poisoned `makeInputData` landed with this plan |
+| `sql/catalyst/.../varka/VarkaEmitterTestSupport.java` | `invocationCount`'s exclusion overload, 3.3's metric; landed with this plan |
+| `sql/catalyst/.../varka/VarkaEmitDump.scala` | the `validity` column, so `dev/varka_emit.sh` shows the metric; landed with this plan |
+| `sql/catalyst/.../varka/VarkaIrFuzzSuite.scala` | poisoned null lanes; landed with this plan |
+| `sql/core/.../VarkaDifferentialSuite.scala` | both switch settings over the nullable fixtures, both widths |
+| `sql/catalyst/.../VarkaEmitterParityBenchmark.scala` | the A/B rows in 6 |
+| `sql/catalyst/benchmarks/VarkaEmitterParityBenchmark-jdk25-*` | one regeneration |
+| `docs/sql-varka.md`, `SKILLS.md`, `PLAN_MILESTONE_4.md` | the validity paragraph, the lesson, row 70 and the 45/46/47 entries |
+
+## 5. Tests, and what each is for
+
+* **`pureWord` agrees with `planWordRef`** on every node of every fixture in
+  the suite, by construction: catches an algebra that drifts from the
+  emission.
+* **Byte-identical validity, both settings, both widths**: `checkMatrix` over
+  the calendar, arithmetic, `next_day`-column, `greatest`/`least` and
+  `datediff` shapes at `remainderLengths` (1, 13, 17, 63, 1001) plus 64 and
+  1000, every null pattern - the existing oracle; `assertSameOutput` holds on
+  the tail byte.
+* **The guard under nulls, with poisoned slots**: `year(date_add(d, off))`
+  and `add_months(d, m)` over data whose null lanes hold `Int.MIN_VALUE` and
+  `Int.MAX_VALUE`, asserting status 0 under both settings - the failure 2.2
+  describes. Until this plan the fixtures wrote the drawn value under a null
+  slot, in range by construction, so nothing could have provoked it.
+  `makeInputData` now poisons, and so does `VarkaIrFuzzSuite`, which draws
+  its columns inside `columnBound` and `MONTH_ARITH_MAX_MONTHS` and would
+  otherwise have kept every null lane in range for ever - the fuzzer being
+  named below as where an unlisted interaction shows. Two details the first
+  cut got wrong and section 9 records: the alternation counts null slots, not
+  row indices, because an `i & 1` poison collides with the `alternating` null
+  pattern and would have left a quarter of the matrix on one side of every
+  bound; and the handful of guard tests that deliberately place a boundary
+  value *at* a lane they also null pass `poisonNulls = false`, since
+  substituting an extreme there replaces the value the test names and turned
+  one of them into a duplicate of the case beside it. The change landed with
+  the plan rather than with the emitter work, so the whole existing matrix
+  ran against garbage in its null lanes first - for tasks 42, 52 and 60 as
+  much as for this one.
+* **The dead-word invariant fires**: a test that emits a shape with a
+  deliberately mis-marked word (through a test-only hook, the
+  `misdescribeAdd` pattern) and asserts the emit-time exception, so the
+  counter in 3.1 is known to be armed.
+* **An all-null input through the pass**: an OR root (`greatest(d, d2)` with
+  `d` all-null, output equal to `d2`'s bitmap, `0L` never dereferenced) and
+  the AND root beside it in a two-output kernel that keeps the driver's
+  all-null shortcut from firing (`datediff(d, d2)` with `year(d3)`), which is
+  the case 3.1 says the pass must run before step (5) to cover.
+* **A null-free input through the pass**: `greatest(d, d2)` with `d`
+  null-free and `d2` nullable, whose output must be valid on every row -
+  2.3's correction, and the one case the earlier rule got wrong. Beside it
+  `year(d)` over a null-free `d` in a masked kernel, whose output is
+  `setValid`, not a copy. The engine's own
+  `columnEntryPointsResolveTheThreeOperandStates` already covers every
+  combination of the three states; what these add is that the emitter passes
+  the right arguments to them, which is a different question and the only one
+  left once 2.3's API is in the engine.
+* **A mixed word tree declines rather than mis-evaluates**:
+  `datediff(greatest(d, d2), greatest(d3, d4))` keeps its per-group write and
+  its word; a single-operator tree of any depth is flattened and served. The
+  declined-root count over the suite's fixtures is asserted at zero.
+* **A mixed method**: `year(d)` beside `d < lit` in one loop method; the
+  `Cond` keeps its per-group OR and the read stays; the year's write goes.
+* **The liveness counts of 3.3**, asserted per method with
+  `invocationCount(bytes, method, owner, List.of("ofAddress"))`, and
+  `IntVector` counts unchanged.
+* **The driver's size, pinned on the same ladder as the epilogue**: 20, 21,
+  40, 44 and 48 outputs, both shared and unshared, asserted under
+  `HugeMethodLimit` with the margin recorded - 6.1's prediction 6. Nothing
+  measures the driver today, and it is the one method every batch runs.
+* **One body, not two**: for the shapes whose methods have no live word, the
+  masked loop method's code size equals the dense one's.
+* **Pinned oracles**: the line map and the shape hash unmoved (2.5), asserted
+  as the suites stand.
+* **`VarkaIrFuzzSuite`** at both settings, which is where an interaction
+  nobody listed would show.
+
+## 6. The measurement
+
+`VarkaEmitterParityBenchmark`, adjacent A/B pairs on shapes that already
+exist so the point is what the pass does to kernels that ship: the "year"
+section's `year, mixed nulls` and `year+month+day+quarter, shared, mixed
+nulls`, the `next_day(d, k)` column kernel's mixed-null row, the
+`add_months(d, m)` column-count mixed-null row (the control: its guard keeps
+the read, so it should move by the write alone), and `add_months(d, 13),
+mixed nulls` (the second control: predicted flat). Three rows the file did
+not have were added with this plan, per the rule that a baseline is
+committed before the change that moves it: `greatest(d, d2)` null-free and
+mixed nulls in the datediff section (the OR root - the one shape where the
+pass computes an OR), `greatest(d, d2)` with its first input all-null beside
+them (the `0L`-address operand, on the OR root because an AND root's batch
+takes the driver's all-null shortcut and never reaches a loop - 2.4), and the
+four-field shared kernel's mixed-null arm on every rung of the alignment
+ladder (chunks 4096, 4095, 64 and 63 - the short batches risk 2 is about,
+which had only null-free rows). Each with the switch on and off, both widths,
+one regeneration with `dev/varka_bench_regen.sh` on an idle machine. The
+dense rows are the bound: no masked row may pass its dense counterpart.
+
+### 6.1 Predictions, registered before the run
+
+Every threshold below is a fraction of the row's own gap in the file quoted in
+2.4 - the second regeneration of `018228099ef`, not the disturbed first one -
+so a later regeneration cannot invalidate a percentage that was pinned to a
+superseded run, which is how the first cut of this section went wrong.
+
+1. `year+month+day+quarter, shared, mixed nulls` closes at least two thirds
+   of its gap to the dense row at both widths: from 1056.2 towards 1622.4 and
+   from 417.6 towards 794.2. Reason: four writes and one read per group go,
+   and nothing else in that body differs from the dense one. Confidence
+   medium-high.
+2. `year, mixed nulls` closes the whole of its remaining gap to
+   `year, null-free` - one read and one write per group is all that separates
+   them - and is the smallest relative mover among the served shapes.
+   `greatest(d, d2), mixed nulls` is the largest relative mover at both
+   widths, closing at least half of its 4.10x gap at 128-bit (2648.3 towards
+   10870.5) and at least half of its 1.38x gap at AVX-512 (8539.1 towards
+   11810.8). The AVX-512 half of that could not be registered against the
+   disturbed file, where the same gap read 5.5%; it can be registered now,
+   and it is the prediction the re-run was worth making. Confidence high on
+   the ordering, medium on the halves.
+3. `add_months(d, 13), mixed nulls` moves within run noise (its dense row is
+   0.4% away). Confidence high. `add_months(d, m)` column count moves less
+   than `next_day(d, k)` column, because its read stays for the guard.
+   Confidence medium. The short-batch rows move with the long ones: the
+   four-field masked kernel at chunk 64 and 63 closes at least half of its
+   gap to the dense twin at both widths, and the pass is never the reason a
+   short-batch row is slower than before. Confidence medium - this is risk 2
+   measured. The all-null row moves with the other `greatest` rows, the
+   shortcut having declined a null-skipping root; the row it replaces could
+   not have moved at all, which is 2.4's reason for replacing it.
+4. No masked row passes its dense counterpart by more than this file's own
+   tie floor. That floor is +4.1%, on `year, validity OR-ed per group` at
+   128-bit - a task 45 reference variant, not a shipped shape - and six of
+   the eight ties in the file are under 1.5%, all on heavy-tail arithmetic
+   where one write is invisible. Confidence high; a miss above the floor is a
+   measurement error to explain, not a result. The bound is stated this way
+   because the disturbed file broke it by 23.7% on `arithmetic depth 4` and a
+   flat "never passes" would have read as a finding about the pass rather
+   than about the run (2.4).
+5. No pinned oracle moves and no dense committed number moves beyond noise.
+   Confidence high.
+6. **The epilogue's `HugeMethodLimit` crossing moves from 44 shared outputs
+   to 47, and from 21 unshared to 22.** Measured before the work rather than
+   discovered after, off `javap` of the classes the pinned crossing test
+   emits, at `bbc91b7ec39`: in `epilogueMasked` each served output's write is
+   one 12-byte sequence (`aload dst; iload i; i2l; lload word; iload lanes;
+   invokestatic orPartialValidityBitsAt`) and each input's word read is one
+   32-byte three-way block (dead, has nulls, null-free), and the ladder reads
+
+   | outputs (dates) | shared today | shared after | unshared today | unshared after |
+   |---|---|---|---|---|
+   | 20 (5) | 3575 | 3175 | 7670 | 7270 |
+   | 21 (6) | 4020 | 3576 | 8331 | 7887 |
+   | 40 (10) | 7082 | 6282 | 18396 | 17596 |
+   | 44 (11) | 8058 | 7178 | 20511 | 19631 |
+   | 45 (12) | 8726 | 7802 | | |
+   | 48 (12) | 9084 | 8124 | | |
+
+   where "after" subtracts 12 bytes per output and 32 per input. Interpolating
+   the shared column's 119 bytes per output inside a date, 46 outputs land
+   near 7909 and 47 near 8016 - sixteen bytes over the limit - so the shared
+   crossing is 47 or 48, and the pinned test re-pins to whichever it is;
+   unshared, 21 now fits and 22 crosses near 8377. **In the epilogue** the
+   crossing can only move outward, so nothing that compiles today stops
+   compiling there. Confidence medium-high on the direction and the 21-to-22
+   move, medium on 47 against 48. One more thing the same numbers say: after
+   the reads and writes go, the 44-output masked epilogue is still 7178 bytes
+   against the dense 6574, and that residue is the per-input null-state
+   prologue - which is why 3.1 drops it with the dead words; the prediction
+   for the one-body test in 5 is that with the prologue gone the two differ
+   by under a hundred bytes.
+
+   **The driver, which the ladder above does not cover - measured, because the
+   first version of this prediction guessed and guessed wrong.** Every byte
+   the pass adds lands in `emitBody`'s `DRIVER` mode, and the driver is one
+   method for all of a shape's outputs and the one method that runs on every
+   batch, so it looked like where a `HugeMethodLimit` crossing would hurt
+   most. `runMasked`'s code size over the same ladder says otherwise:
+
+   | outputs (dates) | `runMasked` | `epilogueMasked` |
+   |---|---|---|
+   | 4 (1) | 278 | 783 |
+   | 20 (5) | 1122 | 3575 |
+   | 40 (10) | 2194 | 7082 |
+   | 44 (11) | 2409 | 8058 (crosses) |
+   | 48 (12) | 2624 | 9084 |
+
+   and for two-input outputs, `greatest(d, d2)` per date: 272 at 2 outputs,
+   828 at 8, 1596 at 16, against an epilogue of 514, 1790 and 3518.
+
+   So at the output count where the epilogue crosses, the driver is at 2409
+   bytes with 5591 to spare, and it grows about 53 bytes per single-input
+   output against the epilogue's 216. Costing the pass per served output, net
+   of the step (3) `zero`/`setValid` it replaces: about +12 bytes with 2.3's
+   operand states resolved in the engine and about +32 with them resolved as
+   emitted bytecode, for a single-input output; about +22 and +73 for a
+   two-input one. On the 48-output rung that is +0.6 KB against +1.5 KB, so
+   the driver lands at 3.2 KB or 4.2 KB and **neither form crosses** - the
+   epilogue crosses first in both, four outputs earlier, which is the
+   constraint the pass is there to relieve.
+
+   Registered, therefore: the driver does not cross `HugeMethodLimit` under
+   either form of 2.3's API on any shape whose epilogue still compiles, and
+   the API is decided on the grounds in 2.3 rather than on this. Two things
+   still hold from the original worry. The driver must be pinned on this
+   ladder in 5, because nothing measures it today and a crossing would
+   surface only as an unexplained wide-shape regression. And if one ever does
+   cross, it is far cheaper than task 44's case: the driver holds no vector
+   work, so an interpreted driver boxes nothing and pays once per batch,
+   where an interpreted epilogue boxes vectors for up to `lanes - 1` rows of
+   every batch. Confidence high on the byte figures, which are read off the
+   class file rather than argued.
+
+The rule that decides the default: on, if prediction 4 holds and no served
+row is slower than before at either width.
+
+## 7. Risks
+
+1. **A consumer of the word nobody listed.** 2.2 found three by reading the
+   emitter; a fourth would show as a wrong answer under the differential or
+   the fuzz suite, or as a spurious decline under the poisoned-slot test.
+2. **The pass costs more than it saves on short batches.** At 64 rows the pass
+   is 8 bytes against four lane groups' calls; the alignment ladder's chunk-64
+   and chunk-63 rows show it either way.
+3. **Reads kept for a guard hide the write's saving.** The column-count
+   `add_months` control is there to show the write alone; if it does not
+   move, the write was not the cost on that shape.
+4. **Task 44's crossing moves again** - and it is not a risk to the shape or
+   the numbers, only to the record. The crossing is a measured property that
+   can only move outward here, it is pinned by a suite test that fails the
+   moment it moves, and 6.1's prediction 6 says where it lands, so the
+   re-pin in the same commit is a scored prediction rather than a surprise.
+   `PLAN_TASK_32.md` 7.1's ladder is requoted in 9.
+5. **A switch that defaults on changes the bytes of nearly every masked body
+   in the shape cache at once.** The differential and fuzz suites at both
+   settings are the oracle, the reference variant stays live, and the default
+   flips in the last commit per 8 - the same discipline every lowering change
+   here has followed, applied to the widest one so far.
+
+## 8. Sequencing
+
+0. **The base re-run, before any emitter work. Done** (`018228099ef`,
+   2026-09-07, load 0.63). The file this branch first committed was not a
+   sound baseline for the AVX-512 column of the fastest dense rows, and the
+   benchmark source had since changed - the `datediff` all-null row replaced
+   by the `greatest` one - so it no longer matched the harness that produced
+   it. One regeneration of the same commit settled both; 2.4 records what it
+   found and what it changed, and 2.4, the milestone's 2.34, `SKILLS.md`,
+   `GROUP_BUDGET`'s javadoc and 6.1's predictions are all requoted from it.
+   Everything below is measured against that file.
+1. `pureWord` with the agreement test, and the `loadWord` use counter with
+   its invariant asserted on today's emitter (every word loaded at least
+   once): no emitted byte changes. The engine helpers and their column-taking
+   entry points, the poisoned harness, `invocationCount`'s exclusion overload
+   and the baseline rows are already in, with this plan; so is 2.3's API
+   decision and the measurement behind 6.1's prediction 6, so commit 2 starts
+   with nothing left to choose.
+2. The pass, the liveness rule and the skipped writes behind the switch, off
+   by default; the tests of 5; both widths green. The driver pinned on the
+   output ladder here, since it is the commit that grows it.
+3. The A/B rows, one regeneration, section 9 with the predictions scored; the
+   default set by 6.1's rule; the docs and the milestone rows swept, including
+   what task 47 is left with.
+
+## 9. Outcome
+
+Filled in when the measurement lands.
