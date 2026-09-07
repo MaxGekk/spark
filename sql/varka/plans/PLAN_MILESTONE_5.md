@@ -54,8 +54,10 @@ Six tasks, in the dependency order milestone 4's plan already gave them:
   (section 2.11), from the owner's question about estimating test coverage:
   every oracle this project checks itself against, it also wrote, so the
   expressions Spark's own suites exercise are run over Arrow-cached fixtures in
-  both engines with the plan classified fused, partial or declined. Follows
-  task 74 and nothing else.
+  both engines with the plan classified fused, partial or declined. The
+  golden-file inputs are the first source, once each statement's literals are
+  rewritten into columns - without that they constant-fold and reach no
+  kernel. Follows task 74 and nothing else.
 
 What stays true from milestone 4's plan and is not repeated here: the three
 invariants (one lane width per kernel, every value lane-shaped, no lane reads
@@ -730,13 +732,44 @@ nothing. Making it work by rewriting every `LocalRelation` into a cached Arrow
 relation is a session-extension change wide enough to alter what the rest of
 the suite tests.
 
-So the task harvests instead: extract from those suites the date expressions and
-SQL they exercise, as a committed list, and run each over the differential
-suite's own Arrow-cached fixtures in both engines. `VarkaSharedSessions` already
-builds the pair of sessions and sets `SPARK_CACHE_SERIALIZER`; the corpus is the
-new part. A harvested entry that Varka cannot fuse is kept and marked, because
-the count of what is in and what is out is itself the coverage number this task
+So the task harvests instead: extract the date expressions and SQL the upstream
+tests exercise, as a committed list, and run each over the differential suite's
+own Arrow-cached fixtures in both engines. `VarkaSharedSessions` already builds
+the pair of sessions and sets `SPARK_CACHE_SERIALIZER`; the corpus is the new
+part. A harvested entry that Varka cannot fuse is kept and marked, because the
+count of what is in and what is out is itself the coverage number this task
 exists to produce - and unlike a percentage it says *which* expressions.
+
+**The golden files are the better source, and they need a rewrite step.**
+`sql-tests/inputs/date.sql` and its siblings are the same semantics corpus
+written as SQL text rather than Scala, which makes them far cheaper to harvest
+than a suite body: the statement is already a string and the expected answer is
+already committed beside it in the `.sql.out`. Seven date-family inputs carry
+254 `select` statements between them.
+
+They cannot be run under Varka as they stand, and it is worth writing down why
+so that nobody tries: **the files carry no data.** In `date.sql`, 94 of the 101
+statements are literal expressions - `make_date(2019, 1, 1)`, `date '2019-01-01'`
+- which constant folding evaluates during optimisation, so no scan, no columnar
+batch and no physical operator ever exists for the rule to rewrite. The seven
+that do read a relation read `date_view`, one row of two *string* columns built
+from literals. Across the seven files, 40 of 254 statements have a `FROM` at all,
+and those read views of the same kind. Running them under Varka today would
+exercise exactly zero kernels, and every test would pass.
+
+So the harvest's real work is a **rewrite**: turn each statement's literal
+operands into columns of an Arrow-cached fixture, so `make_date(2019, 1, 1)`
+becomes `make_date(y, m, d)` over a fixture whose rows include that triple. That
+rewrite is not incidental - it is precisely what moves an expression out of
+constant folding and into a kernel, which is the whole reason the corpus is
+worth having.
+
+One consequence to state plainly: **the golden `.sql.out` files stop being the
+oracle** once the operands become columns, because the answers change with the
+data. The oracle remains the row engine over the same fixture, as everywhere
+else in the differential suite. What the golden corpus contributes is the list
+of expressions and edge cases Spark's own maintainers thought worth pinning -
+the part this project cannot write for itself - not the expected values.
 
 **Asserting that Varka ran is half the task.** A declined entry falls back to
 the row engine and answers correctly, so a corpus run that only compares
@@ -779,7 +812,7 @@ nothing else, 75 being an admission check before it is a task; 81 follows 74.
 | 66 | Second-level chrono fragments. **Scoped in section 2.8** (5 September 2026); after task 32's B2 grouping decision | `FragmentKind`s for the year parts, the January month, the month start and `floorMod(d, 7)`, keyed and planned as the prefix is; emitted once per lane group, elided when no consumer in the group reads them; the register and the `HugeMethodLimit` ladder re-pinned; the A/B beside task 32's shared rows at both widths | The matrix and the whole-range sweep under a widened group budget over every pair and triple of calendar outputs; the byte identity of every single-field kernel; the gate in 2.8 (at or above 1.05x at AVX-512 on both shapes), or the register goes to the debt register |
 | 74 | The validity-word algebra's missing axioms. **Scoped in section 2.9** (7 September 2026); after #145 | The coalesce axiom (`IfElse(IsNotNull(x), x, y)` denotes `x OR y`) and absorption in `pureOf`'s folding, behind task 70's switch; the census tool re-run through the emitter's own analysis rather than a mirror; the `coalesce(d, d2)` parity A/B pair | `coalesce(d, d2)` masked byte-equal to its dense twin and on its dense row at both widths; the differential over the nullable fixtures for two- and three-operand `coalesce`, `datediff(greatest(d, d2), d)` and `greatest(date_add(d, i), d)`; two million fuzz shapes with both extensions randomised; no other committed row moves |
 | 75 | Zero-copy validity for leaf words. **Scoped in section 2.10** (7 September 2026); after #145, an admission check before it is a task | The probe: masked `year(d)` with the copy skipped against the committed row, both widths. If admitted, the leaf case of the pass resolved to the input's validity buffer retained through Arrow's reference manager, a cached null count on Varka-owned output vectors, and the filter's compaction reading it | Under 2% at AVX-512 on the probe: declined on the record. Otherwise the differential over every null pattern with the output's validity address asserted equal to the input's, allocator accounting closing to zero with the retained buffers released, and the `year(d)` masked row on its dense row |
-| 81 | Spark's own date tests as a differential corpus (section 2.11). **Scoped** (7 September 2026) | The harvest: a committed list of the date expressions and SQL that `DateFunctionsSuite` and `ColumnExpressionSuite` exercise, each run over the differential suite's Arrow-cached fixtures in both engines, with `DateExpressionsSuite` excluded on the record because `checkEvaluation` never reaches a physical plan. Per entry: the answers compared, and the plan classified fused, partial or declined on task 62's `Fusion` rule, so a declined entry cannot pass as a silent fallback | Every harvested entry agreeing with the row engine; the fused/partial/declined split committed as the coverage number, naming which expressions are out rather than a percentage; a harvest that is re-runnable rather than a hand-copied list; and the limits stated in the plan - a handful of rows per test reaches the epilogue and never a full lane group |
+| 81 | Spark's own date tests as a differential corpus (section 2.11). **Scoped** (7 September 2026) | The harvest, from the golden-file inputs first - `sql-tests/inputs/date.sql` and its six date-family siblings, 254 `select` statements already written as SQL text - and from `DateFunctionsSuite` and `ColumnExpressionSuite` after them; `DateExpressionsSuite` excluded on the record, because `checkEvaluation` never reaches a physical plan. Then the rewrite that makes the corpus reachable at all: each statement's literal operands turned into columns of an Arrow-cached fixture, since 94 of `date.sql`'s 101 statements are constant-folded before any operator exists and the rest read one row of strings. Per entry: the answers compared against the row engine on the same fixture, and the plan classified fused, partial or declined on task 62's `Fusion` rule, so a declined entry cannot pass as a silent fallback | Every harvested entry agreeing with the row engine; the fused/partial/declined split committed as the coverage number, naming which expressions are out rather than a percentage; a harvest and rewrite that are re-runnable rather than a hand-copied list, so an upstream statement added later is picked up; and the limits stated in the plan - the golden `.sql.out` files stop being the oracle once operands become columns, and a handful of rows per entry reaches the epilogue and never a full lane group |
 
 ## 4. Files
 
