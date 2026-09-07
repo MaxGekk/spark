@@ -86,9 +86,15 @@ shape task 52 built the guard for.
 ### 2.3 What the pass has to handle that `setValid` does not
 
 `setValid` writes a constant. The pass writes an expression, and two inputs
-are special. An input whose null count is zero contributes an all-ones
-operand, which the masked body already substitutes today (the `wNoNulls`
-branch stores `-1L` instead of reading), so the pass skips it rather than
+are special. The three helpers the expression is built from -
+`VarkaVectorSupport.copyValidity`, `andValidity` and `orValidity`, each
+setting exactly `rows` bits and each allowing the destination to alias an
+operand - landed with this plan, ahead of any emitter work, with
+`VarkaVectorSupportBitmapAlgebraTest` holding them to the loop's own form
+bit for bit (the `setValid` test's pattern). An input whose null count is
+zero contributes an all-ones operand, which the masked body already
+substitutes today (the `wNoNulls` branch stores `-1L` instead of reading),
+so the pass skips it rather than
 reading a bitmap that may not be materialised. An all-null input's validity
 address is `0L` by the morsel contract and must not be dereferenced; it is an
 all-zero operand, which for an AND root means the output is all-null (the
@@ -242,11 +248,12 @@ Registered from the emission sites in 2.2, to be asserted in 5:
 * **The guard under nulls, with poisoned slots**: `year(date_add(d, off))`
   and `add_months(d, m)` over data whose null lanes hold `Int.MIN_VALUE` and
   `Int.MAX_VALUE`, asserting status 0 under both settings - the failure 2.2
-  describes, which no existing test provokes because the fixtures zero their
-  null slots. And `checkMatrix`'s data generator fills every null slot with
-  those sentinels by default from this task on, so the whole existing matrix
-  becomes sensitive to garbage reaching a guard or a lowering's domain, for
-  tasks 42, 52 and 60 as well as this one.
+  describes. Until this plan the fixtures zeroed their null slots, so nothing
+  could have provoked it; `makeInputData` now poisons every null slot with
+  `Int.MinValue` and `Int.MaxValue`, alternating, and that change landed with
+  the plan rather than with the emitter work, so the whole existing matrix
+  ran against garbage in its null lanes first - for tasks 42, 52 and 60 as
+  much as for this one - and section 9 records what it found.
 * **The dead-word invariant fires**: a test that emits a shape with a
   deliberately mis-marked word (through a test-only hook, the
   `misdescribeAdd` pattern) and asserts the emit-time exception, so the
@@ -273,7 +280,14 @@ section's `year, mixed nulls` and `year+month+day+quarter, shared, mixed
 nulls`, the `next_day(d, k)` column kernel's mixed-null row, the
 `add_months(d, m)` column-count mixed-null row (the control: its guard keeps
 the read, so it should move by the write alone), and `add_months(d, 13),
-mixed nulls` (the second control: predicted flat). Each with the switch on
+mixed nulls` (the second control: predicted flat). Three rows the file did
+not have were added with this plan, per the rule that a baseline is
+committed before the change that moves it: `greatest(d, d2)` null-free and
+mixed nulls in the datediff section (the OR root - the one shape where the
+pass computes an OR), `datediff` with its first input all-null beside them
+(the `0L`-address operand), and the four-field shared kernel's mixed-null
+arm on every rung of the alignment ladder (chunks 4096, 4095, 64 and 63 -
+the short batches risk 2 is about, which had only null-free rows). Each with the switch on
 and off, both widths, one regeneration with `dev/varka_bench_regen.sh` on an
 idle machine. The dense rows are the bound: no masked row may pass its dense
 counterpart.
@@ -354,8 +368,10 @@ row is slower than before at either width.
 
 ## 8. Sequencing
 
-1. The engine helpers with their tests, and `pureWord` with the agreement
-   test: no emitted byte changes.
+1. `pureWord` with the agreement test, and the `loadWord` use counter with
+   its invariant asserted on today's emitter (every word loaded at least
+   once): no emitted byte changes. The engine helpers, the poisoned harness
+   and the baseline rows are already in, with this plan.
 2. The pass, the liveness rule and the skipped writes behind the switch, off
    by default; the tests of 5; both widths green.
 3. The A/B rows, one regeneration, section 9 with the predictions scored; the

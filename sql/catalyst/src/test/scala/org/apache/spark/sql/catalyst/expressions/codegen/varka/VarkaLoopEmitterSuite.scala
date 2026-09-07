@@ -141,6 +141,18 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private def makeInput(arena: Arena, length: Int, isNull: Int => Boolean): Col =
     makeInputData(arena, length, isNull, i => i * 31 - 7000)
 
+  /**
+   * A null slot's data is poisoned, not zeroed (task 70's harness change, made before that
+   * task's emitter work so the whole existing matrix runs against it first). Arrow leaves the
+   * data under a null slot undefined, the loop body loads every column unmasked, and the only
+   * things standing between a null lane's garbage and a wrong answer are the validity word -
+   * which the range guards AND with their condemning mask (tasks 42, 52, 60) - and the rule
+   * that no lowering traps on any int. A generator that wrote zeros there could not tell a
+   * kernel that honours those from one that happens to survive zeros; alternating the two
+   * extremes can, and puts each on both sides of every guard's bound.
+   */
+  private def poison(i: Int): Int = if ((i & 1) == 0) Int.MinValue else Int.MaxValue
+
   private def makeInputData(
       arena: Arena, length: Int, isNull: Int => Boolean, value: Int => Int): Col = {
     val data = alloc(arena, length * 4L)
@@ -148,10 +160,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     validity.fill(0.toByte)
     var nulls = 0
     for (i <- 0 until length) {
-      data.set(ValueLayout.JAVA_INT, i * 4L, value(i))
       if (isNull(i)) {
+        data.set(ValueLayout.JAVA_INT, i * 4L, poison(i))
         nulls += 1
       } else {
+        data.set(ValueLayout.JAVA_INT, i * 4L, value(i))
         val off = i / 8L
         val old = validity.get(ValueLayout.JAVA_BYTE, off)
         validity.set(ValueLayout.JAVA_BYTE, off, (old | (1 << (i % 8))).toByte)

@@ -238,6 +238,28 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
         }
+        // Task 70's baselines, committed before that task so its pass has numbers to move
+        // (PLAN_TASK_70.md 6): an AND root with one input all-null - validity address 0L and
+        // a null count of every row, the morsel contract's spelling, which the kernel answers
+        // with an all-zero word per group today and the bitmap pass will answer without
+        // dereferencing anything - and, below, an OR root under nulls, the one shape where the
+        // pass computes an OR rather than a copy or an AND, which had no committed row.
+        benchmark.addCase("emitted loop, first input all-null") { _ =>
+          diff.run(Array(mxData.address(), mx2Data.address()),
+            Array(0L, mx2Validity.address()), Array(numRows, mx2Nulls),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        val greatest = emit(
+          Seq(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2, 0, loader, 930)
+        benchmark.addCase("greatest(d, d2), emitted loop, null-free") { _ =>
+          greatest.run(Array(nfData.address(), nf2Data.address()), Array(0L, 0L), Array(0, 0),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        benchmark.addCase("greatest(d, d2), emitted loop, mixed nulls") { _ =>
+          greatest.run(Array(mxData.address(), mx2Data.address()),
+            Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
         benchmark.run()
       }
 
@@ -1703,6 +1725,13 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           benchmark.addCase(
             s"year+month+day+quarter, shared, chunk $chunk ($note), null-free") { _ =>
             chunkedCalendar(fourFieldsShared, chunk, mixed = false)
+          }
+          // The masked arm, added as task 70's baseline (PLAN_TASK_70.md 6, risk 2): the
+          // short-batch rows are where a per-batch bitmap pass could cost more than the
+          // per-group calls it replaces, and until now every four-field row here was null-free.
+          benchmark.addCase(
+            s"year+month+day+quarter, shared, chunk $chunk ($note), mixed nulls") { _ =>
+            chunkedCalendar(fourFieldsShared, chunk, mixed = true)
           }
         }
         benchmark.run()

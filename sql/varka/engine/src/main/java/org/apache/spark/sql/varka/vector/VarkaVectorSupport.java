@@ -300,6 +300,79 @@ public final class VarkaVectorSupport {
   }
 
   /**
+   * {@code dst = src} over exactly the low {@code rows} bits, and zero past them in the final
+   * byte - the single-input case of task 70's bitmap pass. Where a root's validity word is an
+   * alias of one input's (every calendar extraction over a column, the mod-7 family), the
+   * destination bitmap is that input's bitmap, whole-batch, and the loop's per-lane-group
+   * {@code orValidityBitsAt} was writing it sixteen rows at a time.
+   *
+   * <p>Same bit-exactness rule as {@link #setValid}: {@code assertSameOutput} compares this
+   * against the loop's own output byte for byte, and the loop leaves the bits past
+   * {@code rows} at zero. Whole bytes go eight at a time; {@code dst} may be {@code src}.
+   */
+  public static void copyValidity(MemorySegment dst, MemorySegment src, int rows) {
+    int wholeBytes = rows >>> 3;
+    long i = 0;
+    for (; i + 8 <= wholeBytes; i += 8) {
+      dst.set(UNALIGNED_LONG, i, src.get(UNALIGNED_LONG, i));
+    }
+    for (; i < wholeBytes; i++) {
+      dst.set(ValueLayout.JAVA_BYTE, i, src.get(ValueLayout.JAVA_BYTE, i));
+    }
+    int tail = rows & 7;
+    if (tail != 0) {
+      dst.set(ValueLayout.JAVA_BYTE, wholeBytes,
+          (byte) (src.get(ValueLayout.JAVA_BYTE, wholeBytes) & ((1 << tail) - 1)));
+    }
+  }
+
+  /**
+   * {@code dst = a & b} over exactly the low {@code rows} bits, zero past them - the
+   * null-intolerant rule of task 11's word algebra ({@code AddDays}, {@code DateDiff},
+   * {@code AddMonths} with a column count, {@code next_day} and {@code trunc} with a derived
+   * column) taken over the whole batch at once. {@code dst} may be {@code a} or {@code b}, which
+   * is how a nested expression is evaluated inner-first into the destination without scratch.
+   */
+  public static void andValidity(MemorySegment dst, MemorySegment a, MemorySegment b, int rows) {
+    int wholeBytes = rows >>> 3;
+    long i = 0;
+    for (; i + 8 <= wholeBytes; i += 8) {
+      dst.set(UNALIGNED_LONG, i, a.get(UNALIGNED_LONG, i) & b.get(UNALIGNED_LONG, i));
+    }
+    for (; i < wholeBytes; i++) {
+      dst.set(ValueLayout.JAVA_BYTE, i,
+          (byte) (a.get(ValueLayout.JAVA_BYTE, i) & b.get(ValueLayout.JAVA_BYTE, i)));
+    }
+    int tail = rows & 7;
+    if (tail != 0) {
+      dst.set(ValueLayout.JAVA_BYTE, wholeBytes, (byte) (a.get(ValueLayout.JAVA_BYTE, wholeBytes)
+          & b.get(ValueLayout.JAVA_BYTE, wholeBytes) & ((1 << tail) - 1)));
+    }
+  }
+
+  /**
+   * {@code dst = a | b} over exactly the low {@code rows} bits, zero past them - the
+   * null-skipping rule ({@code greatest}, {@code least}) over the whole batch. Same aliasing
+   * and tail contract as {@link #andValidity}.
+   */
+  public static void orValidity(MemorySegment dst, MemorySegment a, MemorySegment b, int rows) {
+    int wholeBytes = rows >>> 3;
+    long i = 0;
+    for (; i + 8 <= wholeBytes; i += 8) {
+      dst.set(UNALIGNED_LONG, i, a.get(UNALIGNED_LONG, i) | b.get(UNALIGNED_LONG, i));
+    }
+    for (; i < wholeBytes; i++) {
+      dst.set(ValueLayout.JAVA_BYTE, i,
+          (byte) (a.get(ValueLayout.JAVA_BYTE, i) | b.get(ValueLayout.JAVA_BYTE, i)));
+    }
+    int tail = rows & 7;
+    if (tail != 0) {
+      dst.set(ValueLayout.JAVA_BYTE, wholeBytes, (byte) ((a.get(ValueLayout.JAVA_BYTE, wholeBytes)
+          | b.get(ValueLayout.JAVA_BYTE, wholeBytes)) & ((1 << tail) - 1)));
+    }
+  }
+
+  /**
    * Maps a raw address as a segment of exactly {@code bytes} bytes. The size is the whole point:
    * the caller passes a bare {@code long}, so this is where a kernel says how far it is entitled
    * to read, and the {@link MemorySegment} bounds check enforces it from there on.
