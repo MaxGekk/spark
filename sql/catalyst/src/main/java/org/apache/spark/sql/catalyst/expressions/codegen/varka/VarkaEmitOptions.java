@@ -143,9 +143,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        selection, an {@code IfElse}'s blend, {@code make_date}'s validity test - and what
  *        still reads a word: task 52 and 60's guards, the pick's null substitution, every
  *        condition. On since task 70's measurement (PLAN_TASK_70.md 9): every served row
- *        faster at both widths, the four-field shape by 1.6x and 1.9x, and no masked row past
- *        its dense twin beyond run noise. Off reproduces the per-group bytes exactly and stays
- *        a reference variant the differential checks against, on {@link FloorMod7}'s precedent.
+ *        faster at both widths, the four-field shape by 1.59x at AVX-512 and 1.89x at 128-bit,
+ *        where it lands on its dense twin. One row reads past its dense twin by more than run
+ *        noise - {@code next_day} with a weekday column at 128-bit - on loop bytecode the tests
+ *        prove identical; it is an open harness question in the milestone's debt register, not
+ *        a property of the lowering. Off reproduces the per-group bytes exactly and stays a
+ *        reference variant the differential checks against, on {@link FloorMod7}'s precedent.
  * @param lanesOverride the lane count to emit for, or 0 to emit for the JVM's own
  *        {@code IntVector.SPECIES_PREFERRED} - which is what production always does, so
  *        {@link #DEFAULTS} renders empty and production hashes do not move. It exists because

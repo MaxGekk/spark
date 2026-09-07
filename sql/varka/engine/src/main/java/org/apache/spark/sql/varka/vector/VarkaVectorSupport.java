@@ -410,9 +410,10 @@ public final class VarkaVectorSupport {
    * bitmap, or all ones, or all zeros.
    */
   public static void copyColumnValidity(MemorySegment dst, long srcAddr, int srcNulls, int rows) {
+    requireNullCount(srcNulls, rows);
     if (srcNulls == 0) {
       setValid(dst, rows);
-    } else if (srcNulls >= rows) {
+    } else if (srcNulls == rows) {
       zeroValidity(dst, rows);
     } else {
       copyValidity(dst, validityOf(srcAddr, rows), rows);
@@ -429,7 +430,9 @@ public final class VarkaVectorSupport {
    */
   public static void andColumnValidity(
       MemorySegment dst, long aAddr, int aNulls, long bAddr, int bNulls, int rows) {
-    if (aNulls >= rows || bNulls >= rows) {
+    requireNullCount(aNulls, rows);
+    requireNullCount(bNulls, rows);
+    if (aNulls == rows || bNulls == rows) {
       zeroValidity(dst, rows);
     } else if (aNulls == 0) {
       copyColumnValidity(dst, bAddr, bNulls, rows);
@@ -447,11 +450,13 @@ public final class VarkaVectorSupport {
    */
   public static void orColumnValidity(
       MemorySegment dst, long aAddr, int aNulls, long bAddr, int bNulls, int rows) {
+    requireNullCount(aNulls, rows);
+    requireNullCount(bNulls, rows);
     if (aNulls == 0 || bNulls == 0) {
       setValid(dst, rows);
-    } else if (aNulls >= rows) {
+    } else if (aNulls == rows) {
       copyColumnValidity(dst, bAddr, bNulls, rows);
-    } else if (bNulls >= rows) {
+    } else if (bNulls == rows) {
       copyColumnValidity(dst, aAddr, aNulls, rows);
     } else {
       orValidity(dst, validityOf(aAddr, rows), validityOf(bAddr, rows), rows);
@@ -468,10 +473,11 @@ public final class VarkaVectorSupport {
    * which the aliasing contract allows and which is the whole reason no scratch is needed.
    */
   public static void andColumnValidityInto(MemorySegment dst, long bAddr, int bNulls, int rows) {
+    requireNullCount(bNulls, rows);
     if (bNulls == 0) {
       return;
     }
-    if (bNulls >= rows) {
+    if (bNulls == rows) {
       zeroValidity(dst, rows);
       return;
     }
@@ -484,11 +490,12 @@ public final class VarkaVectorSupport {
    * one drops out, a bitmap is ORed in place.
    */
   public static void orColumnValidityInto(MemorySegment dst, long bAddr, int bNulls, int rows) {
+    requireNullCount(bNulls, rows);
     if (bNulls == 0) {
       setValid(dst, rows);
       return;
     }
-    if (bNulls >= rows) {
+    if (bNulls == rows) {
       return;
     }
     orValidity(dst, dst, validityOf(bAddr, rows), rows);
@@ -497,6 +504,27 @@ public final class VarkaVectorSupport {
   /** A column's validity bitmap at exactly the bytes {@code rows} bits occupy, and no more. */
   private static MemorySegment validityOf(long addr, int rows) {
     return ofAddress(addr, (rows + 7) / 8);
+  }
+
+  /**
+   * The three-state contract these entry points read a column by: {@code 0 <= nulls <= rows},
+   * with the ends meaning all-ones and all-zeros and no bitmap materialised at either.
+   *
+   * <p>Checked rather than tolerated because the emitted driver encodes the same states with
+   * {@code nullCount == length} while an earlier form of these methods used {@code >= rows}:
+   * for a column reporting more nulls than the caller's row count the two disagreed, and one
+   * batch could then have reported a column all-null for a served output and per-row valid for
+   * an unserved one. The production caller cannot produce that - {@code extractMorsel}
+   * requires the vector's value count to equal the batch's length - but the engine's own
+   * {@code VarkaMorsel.extractDate} maps a prefix of a longer vector while reporting the whole
+   * vector's null count, so the shape exists at this module's public boundary and is refused
+   * here rather than answered two ways.
+   */
+  private static void requireNullCount(int nulls, int rows) {
+    if (nulls < 0 || nulls > rows) {
+      throw new IllegalArgumentException(
+          "null count " + nulls + " outside [0, " + rows + "]");
+    }
   }
 
   /**

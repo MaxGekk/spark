@@ -287,22 +287,31 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
   test("task 70: the bitmap pass answers what the per-group write answered, end to end, over " +
       "nulls on either side") {
     // The emitter suite holds the two settings byte-identical on hand-built batches; this holds
-    // them through the evaluator, the Arrow validity buffers and the fallback route, on the
-    // nullable fixture. One query per shape the pass treats differently: a copy (four fields
-    // over one date, one loop method), an AND under a guard that keeps its word, an OR root,
-    // an AND root, and a filter, whose selection bitmap is not a function of input bitmaps and
-    // stays per group either way.
+    // them through the evaluator, the Arrow validity buffers and the fallback route, on two
+    // nullable fixtures. One query per shape the pass treats differently: a copy (four fields
+    // over one date, one loop method), an AND under a guard that keeps its word, an AND root,
+    // a filter, whose selection bitmap is not a function of input bitmaps and stays per group
+    // either way, an OR root over two date columns, and - the one that reaches neither column
+    // entry point - a tree mixing the operators, which the pass declines and which therefore
+    // keeps the per-group write under both settings.
     cacheDatesNullableOffset(spark)
     cacheDatesNullableOffset(varkaSpark)
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
     val queries = Seq(
       "SELECT year(d) AS y, month(d) AS m, day(d) AS dd, quarter(d) AS q " +
         "FROM varka_dates_nullable_offset ORDER BY y, m, dd, q",
       "SELECT year(date_add(d, off)) AS y, dayofweek(d) AS w FROM varka_dates_nullable_offset " +
         "ORDER BY y, w",
+      // Or(In0, And(In0, In1)): a mixed tree, declined by BitmapPass.of - the absorption that
+      // would reduce it to In0 is not a law the folding applies (milestone 5's task 74).
       "SELECT greatest(d, date_add(d, off)) AS g FROM varka_dates_nullable_offset ORDER BY g",
       "SELECT datediff(d, date_add(d, off)) AS dd FROM varka_dates_nullable_offset ORDER BY dd",
       "SELECT d, off FROM varka_dates_nullable_offset WHERE date_add(d, off) > DATE'2000-01-01' " +
-        "ORDER BY d, off")
+        "ORDER BY d, off",
+      // Or(In0, In1) over two nullable date columns, each null on its own row: the served OR,
+      // and the only query here that reaches orColumnValidity through the evaluator.
+      "SELECT greatest(d, d2) AS g, least(d, d2) AS l FROM varka_date_pairs ORDER BY g, l")
     for (on <- Seq(true, false)) {
       VarkaColumnarToRowExec.setEmitOptionsForTesting(
         VarkaEmitOptions.DEFAULTS.withValidityByBitmap(on))
