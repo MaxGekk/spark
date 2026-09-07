@@ -21,7 +21,7 @@ import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
 import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, MakeDate, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, IntArith, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
@@ -354,9 +354,14 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val node = new DayOfWeekIso(new ColumnRef(0))
     assert(compiled.outputs === Seq(node, node))
     assert(compiled.outputTypes === Seq(IntegerType, IntegerType))
+    // Since task 63 these do compile - as int arithmetic over a fused field - so the claim
+    // this test defends is narrower than "nothing else fuses": no other Add becomes the
+    // dedicated DayOfWeekIso node, which is what would silently change the value.
     for (other <- Seq(Add(WeekDay(d), Literal(2)), Add(DayOfWeek(d), Literal(1)),
         Add(DateDiff(d, d2), Literal(1)))) {
-      assert(VarkaExpressionCompiler.compile(Seq(out(other)), childOutput).isEmpty, other)
+      val outs = VarkaExpressionCompiler.compile(Seq(out(other)), childOutput).get.outputs
+      assert(!outs.exists(_.isInstanceOf[DayOfWeekIso]), other)
+      assert(outs.forall(_.isInstanceOf[IntArith]), other)
     }
   }
 
@@ -950,7 +955,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(
         out(DateAdd(d, Literal(3))),
         i.asInstanceOf[NamedExpression],
-        out(Add(i, Literal(1))),
+        // Residual since task 63 for a narrower reason than before: an int column is
+        // unbounded, so a checked multiply over it has no int-lane overflow test. `i + 1`
+        // fuses now, with the check.
+        out(Multiply(i, Literal(7))),
         out(DateSub(d2, Literal(2)))),
       childOutput).get
     // The int column forwards - forwarding does not care about lane types - and the fused
@@ -974,13 +982,15 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
   }
 
   test("forwards and residuals alone are not eligible: nothing to fuse gains nothing") {
+    // `i * 7` under ANSI is the residual here: task 63 made `i + 1` fusible, but a checked
+    // multiply over an unbounded column still has no int-lane overflow test.
     assert(VarkaExpressionCompiler.compilePartial(
-      Seq(out(Add(i, Literal(1)))), childOutput).isEmpty)
+      Seq(out(Multiply(i, Literal(7)))), childOutput).isEmpty)
     assert(VarkaExpressionCompiler.compilePartial(
       Seq(d.asInstanceOf[NamedExpression], i.asInstanceOf[NamedExpression]),
       childOutput).isEmpty)
     assert(VarkaExpressionCompiler.compilePartial(
-      Seq(d.asInstanceOf[NamedExpression], out(Add(i, Literal(1)))), childOutput).isEmpty)
+      Seq(d.asInstanceOf[NamedExpression], out(Multiply(i, Literal(7)))), childOutput).isEmpty)
   }
 
   test("a declining entry rolls the shared tables back to their pre-entry state") {

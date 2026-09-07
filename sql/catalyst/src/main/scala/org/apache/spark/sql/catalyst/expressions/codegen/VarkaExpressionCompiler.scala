@@ -24,9 +24,9 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, And, Attribute, EvalMode, Multiply, Subtract, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, Month, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, IntArith, IntNeg, IntOp, Overflow, Greatest => IRGreatest, IfElse, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, StringType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -577,6 +577,19 @@ private[sql] object VarkaExpressionCompiler {
     // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO') (task 57): the analyzer spells them
     // Add(WeekDay(d), 1), and so does a hand-written weekday(d) + 1. One narrow arm, either
     // operand order, and nothing else: integer arithmetic over an output is task 30's.
+    // Task 63: int32 arithmetic over int-valued operands - a fused field, an IntegerType
+    // column, an int literal, or nested arithmetic. Placed after task 57's Add(WeekDay, 1)
+    // arm below so that shape keeps its cheaper dedicated node.
+    case a: Add if a.dataType == IntegerType && !isDayOfWeekIso(a) =>
+      intArith(IntOp.ADD, a.evalMode, a.left, a.right, a, inputs, literals, sink)
+    case a: Subtract if a.dataType == IntegerType =>
+      intArith(IntOp.SUB, a.evalMode, a.left, a.right, a, inputs, literals, sink)
+    case a: Multiply if a.dataType == IntegerType =>
+      intArith(IntOp.MUL, a.evalMode, a.left, a.right, a, inputs, literals, sink)
+    case n @ UnaryMinus(c, failOnError) if n.dataType == IntegerType =>
+      // Spark has no try_negative, so the mode is only ever WRAP or FAIL here.
+      intOperand(c, inputs, literals, sink).map(x =>
+        new IntNeg(if (failOnError) Overflow.FAIL else Overflow.WRAP, x))
     case Add(WeekDay(child), Literal(1, IntegerType), _) =>
       compileNode(child, inputs, literals, sink).map(new DayOfWeekIso(_))
     case Add(Literal(1, IntegerType), WeekDay(child), _) =>
@@ -738,6 +751,136 @@ private[sql] object VarkaExpressionCompiler {
           None
         case None => None
       }
+  }
+
+  /** Task 57's `extract(DAYOFWEEK_ISO)` shape, which keeps its own node rather than becoming
+   *  int arithmetic over a `weekday` output. Either operand order, exactly as that arm reads. */
+  private def isDayOfWeekIso(a: Add): Boolean = (a.left, a.right) match {
+    case (WeekDay(_), Literal(1, IntegerType)) => true
+    case (Literal(1, IntegerType), WeekDay(_)) => true
+    case _ => false
+  }
+
+  /** Spark's evaluation mode as the IR spells it. */
+  private def overflowOf(mode: EvalMode.Value): Overflow = mode match {
+    case EvalMode.LEGACY => Overflow.WRAP
+    case EvalMode.ANSI => Overflow.FAIL
+    case EvalMode.TRY => Overflow.NULL
+  }
+
+  /**
+   * An operand of int arithmetic (task 63): an `IntegerType` column becomes the leaf task 38
+   * introduced, an int literal a slot, and everything else goes through `compileNode` - which
+   * yields the fused int fields (`datediff`, the extractions, the ISO weekday) and nested
+   * arithmetic. A `DateType` operand is refused here rather than silently treated as a day
+   * count: `date + 1` is `DateAdd` and has its own arm.
+   */
+  private def intOperand(
+      e: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = e match {
+    case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
+    case Literal(v: Int, IntegerType) =>
+      Some(new LiteralSlot(literals.getOrElseUpdate(v, literals.size)))
+    case _ if e.dataType != IntegerType =>
+      sink.note(s"int arithmetic operand of type ${e.dataType.simpleString}", e)
+      None
+    case _ => compileNode(e, inputs, literals, sink)
+  }
+
+  /**
+   * How large an int-valued node's result can be in absolute value, or `None` where nothing
+   * bounds it. The calendar fields are bounded by their own definitions, a literal by its
+   * value, and `datediff` by the date contract; an `IntegerType` column is not bounded at all,
+   * and neither is anything built on one.
+   *
+   * This exists so a checked operation that provably cannot overflow needs no check - which is
+   * what makes `year(d) * 100 + month(d)` fuse under ANSI, the shape `PLAN_TASK_63.md` 6
+   * measures. The compiler can do this and the emitter cannot: a `LiteralSlot` carries a slot
+   * index, and the value behind it only arrives in `scalarArgs` at run time.
+   *
+   * Deliberately conservative. A bound is returned only where it is certain, so a `None` costs
+   * a check or a decline and never a wrong answer.
+   */
+  private def intBound(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]):
+      Option[Long] = {
+    def both(l: VarkaVectorIR, r: VarkaVectorIR)(f: (Long, Long) => Long): Option[Long] =
+      for (a <- intBound(l, literals); b <- intBound(r, literals)) yield f(a, b)
+    node match {
+      case slot: LiteralSlot => Some(math.abs(literals.keys.toIndexedSeq(slot.index()).toLong))
+      // The widest year a lowered date can carry: the narrowed range runs to year 33134, and
+      // a day producer's guard keeps every decomposed date inside it (task 52).
+      case _: IRYear => Some(40000L)
+      case _: IRMonth => Some(12L)
+      case _: IRDayOfMonth => Some(31L)
+      case _: IRQuarter => Some(4L)
+      case _: IRDayOfYear => Some(366L)
+      case _: IRWeekOfYear => Some(53L)
+      case _: IRDayOfWeek => Some(7L)
+      case _: IRWeekDay => Some(6L)
+      case _: DayOfWeekIso => Some(7L)
+      // Two dates from the contract range, so their difference is bounded by its width.
+      case _: IRDateDiff =>
+        Some(VarkaChrono.CONTRACT_MAX_DAYS.toLong - VarkaChrono.CONTRACT_MIN_DAYS.toLong)
+      case n: IntArith => n.op() match {
+        case IntOp.MUL => both(n.left(), n.right())(_ * _)
+        case _ => both(n.left(), n.right())(_ + _)
+      }
+      case n: IntNeg => intBound(n.child(), literals)
+      // A column, a date-valued node used as an int, anything else: unbounded.
+      case _ => None
+    }
+  }
+
+  /** Whether the operation on operands of these bounds cannot leave the int32 range. */
+  private def cannotOverflow(op: IntOp, l: VarkaVectorIR, r: VarkaVectorIR,
+      literals: mutable.LinkedHashMap[Int, Int]): Boolean =
+    (for (a <- intBound(l, literals); b <- intBound(r, literals)) yield {
+      val worst = if (op == IntOp.MUL) a * b else a + b
+      // `a` and `b` are absolute bounds, so the worst case is symmetric; compared against
+      // MIN_VALUE's magnitude, which is the tighter end.
+      worst >= 0 && worst <= math.abs(Int.MinValue.toLong)
+    }).getOrElse(false)
+
+  /**
+   * The shared body of the three binary arithmetic arms. A checked multiply declines unless
+   * the operands' bounds prove it cannot overflow: the overflow test for `*` needs the 64-bit
+   * product or a lane division, and the emitter has neither in int lanes, so an unprovable
+   * `ANSI` or `TRY` multiply stays on the row engine until milestone 5's long lanes arrive
+   * (`PLAN_TASK_63.md` 3.4).
+   */
+  private def intArith(
+      op: IntOp,
+      mode: EvalMode.Value,
+      l: Expression,
+      r: Expression,
+      whole: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = {
+    val mark = literals.size
+    val operands = for {
+      x <- intOperand(l, inputs, literals, sink)
+      y <- intOperand(r, inputs, literals, sink)
+    } yield (x, y)
+    operands match {
+      case None => None
+      case Some((x, y)) =>
+        val declared = overflowOf(mode)
+        // A checked operation whose operands' bounds rule out overflow needs no check at all,
+        // so it emits as WRAP - fewer ops, and the only way a checked multiply fuses.
+        val overflow =
+          if (declared != Overflow.WRAP && cannotOverflow(op, x, y, literals)) Overflow.WRAP
+          else declared
+        if (op == IntOp.MUL && overflow != Overflow.WRAP) {
+          truncate(literals, mark)
+          sink.note("checked int multiply whose operands do not rule out overflow", whole)
+          None
+        } else {
+          Some(new IntArith(op, overflow, x, y))
+        }
+    }
   }
 
   /**
