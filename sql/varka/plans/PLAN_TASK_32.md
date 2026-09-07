@@ -1058,7 +1058,7 @@ which is the guard that clause 2 reaches nothing but fragment reuse.
 
 The four-field mixed-null row reads 1124.0 at AVX-512 and 417.7 at 128-bit in
 the file this task committed (1050.7 and 408.7 in the file this branch started
-from, where it was already the shared shape under the rig; 1084.6 and 415.6 in
+from, where it was already the shared shape under the rig; 1056.2 and 417.6 in
 task 70's regeneration after it, which moved no calendar row beyond noise). The `year(d1), year(d2)` guard row is 1663.5
 and 662.4, and is not comparable to the 1606.6 / 658.3 before it: under the rig
 that kernel was one method holding two prefixes (clause 1 at a budget of 200),
@@ -1174,8 +1174,8 @@ ceiling on it.
   aef0b82260e (4237.4 against 5492.1) - task 46's second half, which moved the
   validity OR ahead of the vector work so that C2 inlines it. This regeneration
   reads the same way at both widths: 4511.7 against 5799.7 at AVX-512, 1700.1
-  against 2754.8 at 128-bit (task 70's regeneration after it reads 4520.7
-  against 5806.5, and 1648.2 against 2570.4 - the same finding, and the numbers
+  against 2754.8 at 128-bit (task 70's regeneration after it reads 4385.5
+  against 5482.1, and 1645.6 against 2566.5 - the same finding, and the numbers
   the milestone and `SKILLS.md` now quote). So the loss task 17 measured, and this file, the
   `GROUP_BUDGET` javadoc and `SKILLS.md` all cited as register pressure, was
   most plausibly the refused `orValidityBitsAt` call in the wider method (task

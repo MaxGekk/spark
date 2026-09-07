@@ -1662,20 +1662,22 @@ methods B2 now emits by default and at 128-bit:
 
 | shape, masked against dense (M rows/s) | AVX-512 | 128-bit |
 |---|---|---|
-| `year` | 2947.6 / 3385.2 | 1201.1 / 1334.8 |
-| `year+month+day+quarter`, one loop method | 1084.6 / 1757.2 | 415.6 / 791.8 |
-| `next_day(d, k)`, column kernel | 7245.4 / 7910.1 | 2851.6 / 3633.0 |
-| `add_months(d, m)`, column count (guarded) | 628.3 / 697.6 | 209.6 / 242.3 |
-| `add_months(d, 13)` | 724.9 / 727.4 | 254.8 / 254.8 |
+| `year` | 3002.5 / 3449.1 | 1191.6 / 1334.2 |
+| `year+month+day+quarter`, one loop method | 1056.2 / 1622.4 | 417.6 / 794.2 |
+| `next_day(d, k)`, column kernel | 6707.4 / 7887.1 | 2838.3 / 3542.7 |
+| `add_months(d, m)`, column count (guarded) | 633.9 / 703.1 | 209.5 / 242.9 |
+| `add_months(d, 13)` | 730.8 / 728.1 | 254.9 / 255.6 |
+| `greatest(d, d2)` (an OR root, the row task 70 added) | 8539.1 / 11810.8 | 2648.3 / 10870.5 |
 
-So the bound is 12.9% and 10.0% on a single field, 1.62x and 1.91x on four
-fields in one method, 8.4% and 21.5% on a two-input node, and nothing on a
-heavy tail such as `add_months` with a literal, where the arithmetic hides
-the write. `PLAN_TASK_70.md` 2.4 flags one caveat that these figures inherit:
-in the wide run behind them the sub-microsecond dense rows are depressed, so
-the AVX-512 column of the fastest shapes is a floor rather than a
-measurement, and the task re-runs the base commit and requotes both sections
-before its own measurement is scored. The
+So the bound is 12.9% and 10.7% on a single field, 1.54x and 1.90x on four
+fields in one method, 15.0% and 19.9% on a two-input calendar node, 1.38x and
+4.10x on the OR root - the largest of them, and the one shape the file had no
+row for until task 70 added one - and nothing on a heavy tail such as
+`add_months` with a literal, where the arithmetic hides the write. These come
+from the second regeneration of `018228099ef`; the first was taken on a
+disturbed machine that the nine controls did not catch, and
+`PLAN_TASK_70.md` 2.4 records how it was caught instead and what it moved -
+the OR root's AVX-512 gap by a factor of five. The
 per-batch bitmap pass costs 512 bytes per output per 4096-row batch against
 256 helper calls per input and per output today. The column-count
 `add_months` row keeps its word read whatever this task does, because task
@@ -1700,8 +1702,8 @@ parity file carried both rows ever since so that a retune would be measured
 rather than argued, and the rows have now measured the other way: in every
 regeneration from task 48 through task 61 the split led by ~1.4x, and since
 aef0b82260e - task 46's second half, which moved the validity OR ahead of the
-vector work so that C2 inlines it - the merged method leads, 5806.5 against
-4520.7 M rows/s at AVX-512 and 2570.4 against 1648.2 at 128-bit in the file as
+vector work so that C2 inlines it - the merged method leads, 5482.1 against
+4385.5 M rows/s at AVX-512 and 2566.5 against 1645.6 at 128-bit in the file as
 task 70's branch commits it.
 The most plausible reading is task 46's own: the loss was a refused
 `orValidityBitsAt` call in the wider method, which the order change let
@@ -2193,7 +2195,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   against "budget 24: one loop method, cross-output CSE kept" - read the split ahead by ~1.4x
   in every regeneration from task 48 through task 61, and the merged method ahead since
   aef0b82260e (task 46's second half, which moved the validity OR ahead of the vector work):
-  5806.5 against 4520.7 M rows/s at AVX-512 and 2570.4 against 1648.2 at 128-bit in the file as
+  5482.1 against 4385.5 M rows/s at AVX-512 and 2566.5 against 1645.6 at 128-bit in the file as
   task 70's branch commits it, and the same way round in the one task 32 B2 regenerated before
   it (`PLAN_TASK_32.md` 7.6). So the loss task 17 measured, cited since as
   register pressure, was most plausibly the refused `orValidityBitsAt` call in the wider

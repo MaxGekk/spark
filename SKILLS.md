@@ -814,8 +814,8 @@ trusting them, not just its ratios.
   Task 17's `GROUP_BUDGET` result (raising it to keep two outputs' cross-output CSE in one
   method lost 4119.9 against 2928.2 M rows/s in the parity file of the day) looked like
   the same effect - until the rows reversed when task 46 moved the validity OR ahead of
-  the vector work (the merged method now leads, 5806.5 against 4520.7 at AVX-512 and
-  2570.4 against 1648.2 at 128-bit), which says that loss was a refused call in the wider
+  the vector work (the merged method now leads, 5482.1 against 4385.5 at AVX-512 and
+  2566.5 against 1645.6 at 128-bit), which says that loss was a refused call in the wider
   method, not registers. Register pressure sets a ceiling on how much sharing can win; it
   does not decide the sign, a narrow-vector measurement is not optional for anything that
   shares live values, and a "known loss" is only known until the emitter around it moves.
@@ -910,6 +910,31 @@ trusting them, not just its ratios.
   `SparkPlan.collect`/`collectFirst` never descend into it, so a naive assertion
   reports "not fused" while the node is right there in `treeString`. Traverse with
   `AdaptiveSparkPlanHelper` in AQE tests.
+
+## The benchmark controls are necessary and not sufficient
+
+- `VarkaEmitterParityBenchmark` carries nine controls - per-row `LocalDate`, the scalar
+  `year` variants, the row-engine parsers - and the rule has been "if these moved, the
+  machine moved". In September 2026 a regeneration held every one of them within -0.2%
+  to +0.8% and was still unusable: its AVX-512 sub-microsecond dense rows had fallen
+  33.5% and 20.8% against the file before it while the 128-bit file's held. The controls
+  are all long-running cases at tens of nanoseconds per row. They are simply insensitive
+  to whatever perturbs a kernel that does a million rows in 0.08 us, so they can be flat
+  while the fastest third of the file is not.
+- Two checks catch what they miss, both free and both readable off the file itself
+  rather than off a second run. **A masked row may not beat its dense twin** - same
+  kernel, strictly less work on the dense side. **On a saturated dense shape a wide row
+  may not lose to its own 128-bit companion** - same code, more lanes. The disturbed
+  file broke both: `arithmetic depth 4, mixed nulls` led its own null-free row by 23.7%,
+  and the wide `greatest(d, d2), null-free` sat behind the narrow one. Either check
+  would have caught it the day it was written; instead it was committed, quoted into two
+  plans and a milestone section, and found in review.
+- When they fire, `dev/varka_bench_regen.sh`'s standing instruction applies - re-run the
+  base commit the same day - and it is worth the wall time. The re-run put `date_add
+  emitted loop, null-free` back to 19227.8 from the disturbed 12754.1, against the
+  19180.2 it had read before, so it returned to where it was rather than to somewhere
+  new. It also moved one figure a whole task was reasoning from by a factor of five: the
+  OR root's AVX-512 gap read 5.5% on the bad file and 27.7% on the good one.
 
 ## Write the Prediction Down, Then Measure
 

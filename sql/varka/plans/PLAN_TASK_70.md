@@ -141,81 +141,87 @@ javadoc records and `assertSameOutput` enforces byte for byte.
 ### 2.4 The bound, from the current file
 
 Masked against dense, M rows/s, the parity file as this branch commits it
-(provenance `64ada2b5db0`, 2026-09-07, both widths from one regeneration):
+(provenance `018228099ef`, 2026-09-07, both widths from one regeneration):
 
 | shape | AVX-512 | 128-bit |
 |---|---|---|
-| `year` | 2947.6 / 3385.2 | 1201.1 / 1334.8 |
-| `year+month+day+quarter`, one loop method | 1084.6 / 1757.2 | 415.6 / 791.8 |
-| `next_day(d, k)`, column kernel | 7245.4 / 7910.1 | 2851.6 / 3633.0 |
-| `add_months(d, m)`, column count | 628.3 / 697.6 | 209.6 / 242.3 |
-| `add_months(d, 13)` | 724.9 / 727.4 | 254.8 / 254.8 |
-| `filter d < literal` (a `Cond` root; not served) | 24229.9 / 24202.6 | 4762.7 / 6384.7 |
+| `year` | 3002.5 / 3449.1 | 1191.6 / 1334.2 |
+| `year+month+day+quarter`, one loop method | 1056.2 / 1622.4 | 417.6 / 794.2 |
+| `next_day(d, k)`, column kernel | 6707.4 / 7887.1 | 2838.3 / 3542.7 |
+| `add_months(d, m)`, column count | 633.9 / 703.1 | 209.5 / 242.9 |
+| `add_months(d, 13)` | 730.8 / 728.1 | 254.9 / 255.6 |
+| `filter d < literal` (a `Cond` root; not served) | 21548.1 / 23815.4 | 4802.2 / 6371.0 |
 
-Task 46 took most of the single-field gap: `year` has 12.9% and 10.0% left.
-The prize is the multi-output method, 1.62x at AVX-512 and 1.91x at 128-bit
+Task 46 took most of the single-field gap: `year` has 12.9% and 10.7% left.
+The prize is the multi-output method, 1.54x at AVX-512 and 1.90x at 128-bit
 on four fields, which is the shape B2 emits by default now, and the two-input
-node at 8.4% and 21.5%. `add_months` with a literal has nothing left - its
-81-op tail hides one write - and the column-count form keeps its read for
-the guard (2.2) until task 64 takes the guard off the in-range case.
+node at 15.0% and 19.9%. `add_months` with a literal has nothing left - its
+81-op tail hides one write, and its masked row reads 0.4% *above* its dense
+one, which is where this file's noise floor sits - and the column-count form
+keeps its read for the guard (2.2) until task 64 takes the guard off the
+in-range case.
 
-**The baseline rows added with this plan** (the regeneration committed
-beside it, at both widths), masked against dense:
+**The baseline rows added with this plan** (the regeneration committed beside
+it, at both widths), masked against dense:
 
 | shape | AVX-512 | 128-bit |
 |---|---|---|
-| `greatest(d, d2)` (an OR root) | 10725.7 / 11344.9 | 2671.2 / 12909.1 |
-| `year+month+day+quarter`, shared, chunk 4096 | 1378.8 / 2197.5 | 429.1 / 808.0 |
-| the same, chunk 4095 | 1329.2 / 2211.0 | 430.0 / 809.3 |
-| the same, chunk 64 | 898.5 / 1538.0 | 384.5 / 705.4 |
-| the same, chunk 63 | 718.0 / 1367.4 | 353.3 / 660.5 |
+| `greatest(d, d2)` (an OR root) | 8539.1 / 11810.8 | 2648.3 / 10870.5 |
+| the same, first input all-null | 9793.4 | 3860.5 |
+| `year+month+day+quarter`, shared, chunk 4096 | 1322.7 / 2133.1 | 428.6 / 807.7 |
+| the same, chunk 4095 | 1314.5 / 2148.4 | 427.0 / 809.1 |
+| the same, chunk 64 | 897.8 / 1572.6 | 381.4 / 705.9 |
+| the same, chunk 63 | 700.2 / 1368.2 | 349.3 / 662.1 |
 
-Two things these say that the earlier table did not. The OR root is the
-largest relative mover in the file at 128-bit - a 4.8x gap - because a
+The OR root is the largest mover in the file at both widths, and by a long
+way at the narrow one: 1.38x at AVX-512 and 4.10x at 128-bit, because a
 two-input masked body pays two reads, one write and its own OR word per
-group, and at four lanes a group is four rows; a narrow-vector measurement
+group, and at four lanes a group is four rows. A narrow-vector measurement
 was not optional here, exactly as `SKILLS.md` says of anything that shares
-live values. And the chunk-64 and chunk-63 rows are risk 2's before-numbers:
-the masked four-field kernel runs at 0.58x and 0.53x of its dense twin on
-short batches at AVX-512, and 0.55x and 0.53x at 128-bit, which is the gap a
-per-batch pass has to close without costing more than the calls it replaces
-on an 8-byte bitmap.
+live values. Its all-null arm sits between the two, 9793.4 and 3860.5, so it
+does reach a loop and does have room to move - which the row it replaced did
+not, and that is most of why it was replaced. The chunk-64 and chunk-63 rows
+are risk 2's before-numbers: the masked four-field kernel runs at 0.57x and
+0.51x of its dense twin on short batches at AVX-512, and 0.54x and 0.53x at
+128-bit, which is the gap a per-batch pass has to close without costing more
+than the calls it replaces on an 8-byte bitmap.
 
-**The wide file's fastest dense rows are not trustworthy, and this section
-says which claims that touches.** The regeneration's nine controls are flat -
-every one between -0.2% and +0.8% - but in the AVX-512 file the
-sub-microsecond dense rows fell hard against the previous file:
-`date_add emitted loop, null-free` -33.5%, `sequential kernels (9 passes)`
--20.8%, `datediff emitted loop, null-free` -8.9%, while the 128-bit file's
-same rows held or rose. That leaves orderings which cannot be true of
-identical code on a wider datapath: wide `greatest(d, d2), null-free` reads
-11344.9 against the narrow 12909.1, `arithmetic depth 4, null-free` 12495.5
-against 15443.8, and inside the wide file `arithmetic depth 4, mixed nulls`
-(15462.9) beats its own null-free row. These are the shortest cases in the
-harness, about 0.08 us per call over 1,000,000 rows, so it is variance on a
-timer-bound family rather than a bad build - every long row and every masked
-row in the file behaves, which is why the tables above stand.
+**Why this is the second regeneration of the same commit, and what the first
+one cost.** The file this branch first committed was taken on a disturbed
+machine, and the disturbance was invisible where the harness looks for it:
+all nine controls were flat, every one within -0.2% to +0.8%. What gave it
+away was arithmetic. Its AVX-512 sub-microsecond dense rows had fallen 33.5%
+(`date_add emitted loop, null-free`) and 20.8% (`sequential kernels, 9
+passes`) against the file before it while the 128-bit file's held, which left
+three orderings identical code cannot produce: the wide `greatest(d, d2),
+null-free` behind its own 128-bit companion, `arithmetic depth 4, null-free`
+likewise, and `arithmetic depth 4, mixed nulls` ahead of its own null-free
+row.
 
-Two consequences, both registered rather than worked around. The OR root's
-AVX-512 gap reads 5.5% in this file, and that divides a depressed dense row
-by a healthy masked one, so it is the machine and not the shape: it is
-described here and is deliberately *not* a prediction in 6.1. And prediction
-4's bound - no masked row passes its dense counterpart - is already violated
-by two rows of this file, `filter d < literal` and `arithmetic depth 4`, both
-at AVX-512 and both in that same family.
+This run, on the same commit, the same governor and epp, and a load of 0.63,
+puts all three back. `date_add emitted loop, null-free` reads 19227.8 against
+the disturbed 12754.1 - and against the 19180.2 the file had *before* the
+disturbed run, so it returned to where it was rather than to somewhere new.
+Wide `arithmetic depth 4, null-free` is 19283.8 against the narrow 19051.6,
+the right way round. And no masked row now beats its dense twin by more than
+4.1%, against the 23.7% inversion the disturbed file carried on `arithmetic
+depth 4`.
 
-`dev/varka_bench_regen.sh` prescribes a same-day re-run of the base commit in
-exactly this case, and none was made. The re-run is the last step of this
-branch, and it also picks up a source change made with these corrections: the
-`datediff, first input all-null` baseline is gone, replaced by
-`greatest(d, d2), emitted loop, first input all-null`. The old row never
-reached a loop - `DateDiff` satisfies the masked driver's all-null shortcut,
-so the batch returned straight after `zero(dstValidity)`, which is why it
-read 644329.9 M rows/s bit-identical at both widths, could not have moved
-whatever the pass does, and published a 135.5X Relative for a 125 KB memset.
-`Greatest` is null-skipping, the shortcut declines it, and the OR of an
-all-null operand is exactly 2.3's degenerate case. Section 9 records the
-re-run's file and requotes every figure in this section from it.
+`dev/varka_bench_regen.sh` already says to do this - if unrelated rows move
+together while the controls hold, re-run the base the same day before reading
+anything into it - and it is a step 0 in 8 rather than a footnote because the
+numbers it changed are not small: the OR root's AVX-512 gap read 5.5% off the
+disturbed file and is 27.7% here, a factor of five, and it is the row this
+task's largest predicted win is registered against.
+
+**What the register should take from it: the controls are necessary and not
+sufficient.** All nine are long-running row-engine and scalar cases at tens
+of nanoseconds per row, and they are insensitive to whatever perturbs a
+kernel that runs a million rows in 0.08 us. Two checks catch what they miss,
+both free and both on the file itself rather than on a second run: a masked
+row may not beat its dense twin, and on a saturated dense shape a wide row
+may not lose to its own 128-bit companion. Either one would have caught this
+file the day it was written.
 
 ### 2.5 The pinned oracles
 
@@ -484,26 +490,26 @@ dense rows are the bound: no masked row may pass its dense counterpart.
 
 ### 6.1 Predictions, registered before the run
 
-Every threshold below is a fraction of the row's own gap in the file the work
-is measured against, not a fixed percentage of today's numbers. 2.4 says why:
-this file is regenerated once more before the work starts, and a percentage
-pinned to a superseded run would be scored against a file that no longer says
-it.
+Every threshold below is a fraction of the row's own gap in the file quoted in
+2.4 - the second regeneration of `018228099ef`, not the disturbed first one -
+so a later regeneration cannot invalidate a percentage that was pinned to a
+superseded run, which is how the first cut of this section went wrong.
 
 1. `year+month+day+quarter, shared, mixed nulls` closes at least two thirds
-   of its gap to the dense row at both widths: from 1084.6 towards 1757.2 and
-   from 415.6 towards 791.8. Reason: four writes and one read per group go,
+   of its gap to the dense row at both widths: from 1056.2 towards 1622.4 and
+   from 417.6 towards 794.2. Reason: four writes and one read per group go,
    and nothing else in that body differs from the dense one. Confidence
    medium-high.
 2. `year, mixed nulls` closes the whole of its remaining gap to
    `year, null-free` - one read and one write per group is all that separates
    them - and is the smallest relative mover among the served shapes.
-   `greatest(d, d2), mixed nulls` is the largest relative mover at 128-bit,
-   closing at least half of its 4.8x gap (2671.2 towards 12909.1). Nothing is
-   registered for `greatest` at AVX-512: 2.4 shows that gap is the wide run's
-   depressed dense row, not the shape, and predicting against a number known
-   to be wrong would score either way and mean nothing. Confidence high on
-   the ordering, medium on the half.
+   `greatest(d, d2), mixed nulls` is the largest relative mover at both
+   widths, closing at least half of its 4.10x gap at 128-bit (2648.3 towards
+   10870.5) and at least half of its 1.38x gap at AVX-512 (8539.1 towards
+   11810.8). The AVX-512 half of that could not be registered against the
+   disturbed file, where the same gap read 5.5%; it can be registered now,
+   and it is the prediction the re-run was worth making. Confidence high on
+   the ordering, medium on the halves.
 3. `add_months(d, 13), mixed nulls` moves within run noise (its dense row is
    0.4% away). Confidence high. `add_months(d, m)` column count moves less
    than `next_day(d, k)` column, because its read stays for the guard.
@@ -514,14 +520,15 @@ it.
    measured. The all-null row moves with the other `greatest` rows, the
    shortcut having declined a null-skipping root; the row it replaces could
    not have moved at all, which is 2.4's reason for replacing it.
-4. No masked row passes its dense counterpart. Confidence high; a miss is a
-   measurement error to explain, not a result. Registered against the re-run
-   of 2.4, not against the file as committed here, where two rows already
-   violate it - `filter d < literal` (24229.9 masked against 24202.6 dense)
-   and `arithmetic depth 4` (15462.9 against 12495.5), both at AVX-512 and
-   both in the sub-microsecond family 2.4 flags. If the re-run leaves them
-   inverted, the bound is wrong about that family, and this says so before
-   the work rather than after it.
+4. No masked row passes its dense counterpart by more than this file's own
+   tie floor. That floor is +4.1%, on `year, validity OR-ed per group` at
+   128-bit - a task 45 reference variant, not a shipped shape - and six of
+   the eight ties in the file are under 1.5%, all on heavy-tail arithmetic
+   where one write is invisible. Confidence high; a miss above the floor is a
+   measurement error to explain, not a result. The bound is stated this way
+   because the disturbed file broke it by 23.7% on `arithmetic depth 4` and a
+   flat "never passes" would have read as a finding about the pass rather
+   than about the run (2.4).
 5. No pinned oracle moves and no dense committed number moves beyond noise.
    Confidence high.
 6. **The epilogue's `HugeMethodLimit` crossing moves from 44 shared outputs
@@ -603,14 +610,15 @@ row is slower than before at either width.
 
 ## 8. Sequencing
 
-0. **The base re-run, before any emitter work.** The parity file as this
-   branch commits it is not a sound baseline for the AVX-512 column of the
-   fastest dense rows (2.4), and the benchmark source has since changed - the
-   `datediff` all-null row replaced by the `greatest` one - so the committed
-   file no longer matches the harness that produced it. One regeneration of
-   this same commit on an idle machine settles both, and 2.4, the milestone's
-   2.34 and 6.1's predictions are requoted from it. Everything below is
-   measured against that file, not this one.
+0. **The base re-run, before any emitter work. Done** (`018228099ef`,
+   2026-09-07, load 0.63). The file this branch first committed was not a
+   sound baseline for the AVX-512 column of the fastest dense rows, and the
+   benchmark source had since changed - the `datediff` all-null row replaced
+   by the `greatest` one - so it no longer matched the harness that produced
+   it. One regeneration of the same commit settled both; 2.4 records what it
+   found and what it changed, and 2.4, the milestone's 2.34, `SKILLS.md`,
+   `GROUP_BUDGET`'s javadoc and 6.1's predictions are all requoted from it.
+   Everything below is measured against that file.
 1. `pureWord` with the agreement test, and the `loadWord` use counter with
    its invariant asserted on today's emitter (every word loaded at least
    once): no emitted byte changes. The engine helpers, the poisoned harness,
