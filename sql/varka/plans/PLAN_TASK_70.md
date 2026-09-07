@@ -424,12 +424,30 @@ Registered from the emission sites in 2.2, to be asserted in 5:
 | `year(d)` | 1 read + 1 write | 0 |
 | `year, month, dayofmonth, quarter` over `d` (one method) | 1 read + 4 writes | 0 |
 | `next_day(d, k)`, column kernel | 2 reads + 1 write | 0 |
-| `greatest(d, d2)` | 2 reads + 1 write | 0 |
+| `greatest(d, d2)` | 2 reads + 1 write | 2 reads (the pick's substitution) + 0 - registered as 0, corrected by the assertion; see below |
 | `year(date_add(d, off))`, guarded | 2 reads + 1 write | 2 reads (the guard) + 0 |
 | `year(d)` beside `d < lit` (a `Cond` root, one method) | 1 read + 2 writes | 1 read + 1 write (the `Cond`) |
 | `if(d < d2, d, d2)` | 2 reads + 1 write | unchanged |
 
 `IntVector` counts per body are asserted unchanged for every shape above.
+
+**One row was registered wrong, and the assertion is what found it.** The
+table was derived from 2.2's inventory of word consumers, and that inventory
+has a fourth entry 2.2 did not list: `emitPick`'s null substitution -
+`a.blend(b, ~validA)` and its mirror - reads *both operand words for the
+value*, whether or not the pick's own word is wanted afterwards. So for
+`greatest(d, d2)` the two reads stay and only the write goes: 2, not 0. The
+liveness pass in the emitter already knew this (its javadoc lists the
+substitution as the consumer the inventory missed, because the pass was
+written from the emission sites rather than from 2.2), and the test in 5 that
+asserts this table failed on exactly that row the first time it ran. The row
+above now says what the emitter does; the original registration is kept in
+this paragraph rather than overwritten, because the miss is itself the
+finding: an inventory made by reading is not the same as one made by
+counting, which is why the counters in 3.1 exist. It also bears on 6.1's
+prediction 2, which expected the OR root to be the largest mover and was
+reasoning from three calls removed rather than one; section 9 scores it as
+registered.
 
 ## 4. Files
 

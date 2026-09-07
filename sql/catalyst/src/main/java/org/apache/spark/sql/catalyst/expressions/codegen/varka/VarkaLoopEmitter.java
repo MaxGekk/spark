@@ -492,6 +492,21 @@ public final class VarkaLoopEmitter {
   /** {@code void VarkaVectorSupport.setValid(MemorySegment, int)}. */
   private static final MethodTypeDesc SET_VALID =
       MethodTypeDesc.of(ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_int);
+  /**
+   * Task 70's whole-batch pass, one call per node of a served root's word expression:
+   * {@code copyColumnValidity(MemorySegment dst, long addr, int nulls, int rows)} for a single
+   * input, {@code and|orColumnValidity(dst, aAddr, aNulls, bAddr, bNulls, rows)} for the first
+   * two of several, {@code and|orColumnValidityInto(dst, bAddr, bNulls, rows)} for each one
+   * after. The operand states - a bitmap, all ones, all zeros - are resolved inside the engine
+   * (PLAN_TASK_70.md 2.3), so the driver passes what it holds and emits no branch.
+   */
+  private static final MethodTypeDesc COPY_COLUMN_VALIDITY = MethodTypeDesc.of(
+      ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, ConstantDescs.CD_int,
+      ConstantDescs.CD_int);
+  private static final MethodTypeDesc COLUMN_VALIDITY_PAIR = MethodTypeDesc.of(
+      ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, ConstantDescs.CD_int,
+      ConstantDescs.CD_long, ConstantDescs.CD_int, ConstantDescs.CD_int);
+  private static final MethodTypeDesc COLUMN_VALIDITY_INTO = COPY_COLUMN_VALIDITY;
   /** {@code long VarkaVectorSupport.validityBitsAt(MemorySegment, long, int)}. */
   private static final MethodTypeDesc VALIDITY_BITS_AT = MethodTypeDesc.of(
       ConstantDescs.CD_long, MEMORY_SEGMENT, ConstantDescs.CD_long, ConstantDescs.CD_int);
@@ -586,6 +601,13 @@ public final class VarkaLoopEmitter {
 
   // The word-reference value meaning "constant all-true" (a literal-only subtree).
   private static final int WORD_ALL_TRUE = -1;
+  /**
+   * The word-reference value meaning "this word is dead in this body" (task 70): no consumer
+   * left in the method reads it, so it is neither allocated nor computed. Only an own word
+   * takes this value - an input's word keeps its slot for parity with the dense body's layout
+   * and is marked dead in {@link Slots#deadRefs} instead. {@link #loadWord} refuses both.
+   */
+  private static final int WORD_DEAD = -2;
 
   /**
    * The lane count this JVM's kernels run at, read once. An emitted class is defined by the
@@ -683,6 +705,7 @@ public final class VarkaLoopEmitter {
     }
     analysis.collectGuardedProducers();
     analysis.planWordAlgebra();
+    analysis.planBitmapPass(outputs);
 
     // Method layout, all sharing the seven-parameter shape so slots line up everywhere:
     // `run` dispatches per batch to a dense or masked *driver*; the driver zeroes the output
@@ -1303,6 +1326,58 @@ public final class VarkaLoopEmitter {
     record Or(WordExpr a, WordExpr b) implements WordExpr {}
   }
 
+  /**
+   * A served root's word expression flattened for the driver: the operator and the distinct
+   * input ordinals it ranges over, in first-appearance order. An empty list is the constant
+   * (the root is valid on every row, {@code setValid}); one ordinal is a copy; more is a chain
+   * of the operator. {@code op} is meaningless below two ordinals.
+   */
+  private record BitmapPass(boolean and, int[] ordinals) {
+    /** Null where the expression mixes AND and OR - see {@link Analysis#planBitmapPass}. */
+    static BitmapPass of(WordExpr pure) {
+      java.util.LinkedHashSet<Integer> ordinals = new java.util.LinkedHashSet<>();
+      Boolean and = flatten(pure, null, ordinals);
+      if (and == null && !(pure instanceof WordExpr.Input || pure == WordExpr.Const.ALL_TRUE)) {
+        return null;
+      }
+      return new BitmapPass(and != null && and,
+          ordinals.stream().mapToInt(Integer::intValue).toArray());
+    }
+
+    /** Collects leaves under one operator; returns that operator, or null for a leaf alone
+     *  or a mixed tree (told apart by the caller from the expression's shape). */
+    private static Boolean flatten(WordExpr e, Boolean op, java.util.LinkedHashSet<Integer> out) {
+      switch (e) {
+        case WordExpr.Input in -> {
+          out.add(in.ordinal());
+          return op;
+        }
+        case WordExpr.Const c -> {
+          return op;
+        }
+        case WordExpr.And a -> {
+          if (op != null && !op) {
+            return mixed(out);
+          }
+          Boolean l = flatten(a.a(), Boolean.TRUE, out);
+          return l == null ? null : flatten(a.b(), Boolean.TRUE, out);
+        }
+        case WordExpr.Or o -> {
+          if (op != null && op) {
+            return mixed(out);
+          }
+          Boolean l = flatten(o.a(), Boolean.FALSE, out);
+          return l == null ? null : flatten(o.b(), Boolean.FALSE, out);
+        }
+      }
+    }
+
+    private static Boolean mixed(java.util.LinkedHashSet<Integer> out) {
+      out.clear();
+      return null;
+    }
+  }
+
   private static final class Analysis {
     final int numInputs;
     final int numLiterals;
@@ -1370,6 +1445,17 @@ public final class VarkaLoopEmitter {
      * word ({@code IfElse}, {@code MakeDate}, or anything over one of those).
      */
     final Map<VarkaVectorIR, WordExpr> pureWord = new HashMap<>();
+
+    /**
+     * Task 70: per output position, the whole-batch bitmap expression the masked driver writes
+     * for that root, or null where the root keeps its per-group write - a {@code Cond}, a root
+     * whose word is computed, a root whose expression mixes AND and OR, or every root when
+     * {@link VarkaEmitOptions#validityByBitmap} is off. Filled by {@link #planBitmapPass}.
+     */
+    BitmapPass[] served;
+    /** How many value roots the pass declined for a mixed AND/OR tree - the safety net in
+     *  PLAN_TASK_70.md 3.1, which the suite holds at zero over its fixtures. */
+    int declinedBitmapRoots;
 
     /**
      * Whether some node turns valid inputs into a null output (task 42's non-ANSI
@@ -1463,6 +1549,39 @@ public final class VarkaLoopEmitter {
         if (pure != null) {
           pureWord.put(node, pure);
         }
+      }
+    }
+
+    /**
+     * Decides, per output, whether the masked driver writes that root's validity bitmap in
+     * one pass over whole input bitmaps (PLAN_TASK_70.md 3.1). A root qualifies when its word
+     * is a pure expression over input bitmaps that flattens to one operator: AND and OR are
+     * each associative and commutative over bitmaps, so a tree of either collapses to a
+     * left-leaning chain the engine's two-then-{@code Into} entry points evaluate into the
+     * destination with no scratch. A tree that mixes the two - {@code datediff(greatest(d, d2),
+     * greatest(d3, d4))} - needs a second live intermediate, and is declined rather than
+     * served: it keeps its per-group write and its word, which is today's path and always
+     * right. {@code Cond} roots are not values and are never served.
+     */
+    void planBitmapPass(List<VarkaVectorIR> outputs) {
+      served = new BitmapPass[outputs.size()];
+      if (!options.validityByBitmap()) {
+        return;
+      }
+      for (int o = 0; o < outputs.size(); o++) {
+        VarkaVectorIR root = outputs.get(o);
+        if (root instanceof Cond) {
+          continue;
+        }
+        WordExpr pure = pureWord.get(root);
+        if (pure == null) {
+          continue;
+        }
+        BitmapPass pass = BitmapPass.of(pure);
+        if (pass == null) {
+          declinedBitmapRoots++;
+        }
+        served[o] = pass;
       }
     }
 
@@ -1858,6 +1977,13 @@ public final class VarkaLoopEmitter {
      */
     final Map<Integer, Integer> wordUses = new HashMap<>();
     final Set<Integer> wordDefs = new HashSet<>();
+    /**
+     * Task 70: the input word slots this body never reads. Allocated all the same, so the
+     * masked layout stays the dense one's and a method whose every word is dead comes out
+     * byte-identical to its dense twin; never stored, and {@link #loadWord} refuses them.
+     * Empty when {@link VarkaEmitOptions#validityByBitmap} is off.
+     */
+    final Set<Integer> deadRefs = new HashSet<>();
 
     Slots(int numInputs, int numOutputs) {
       srcSeg = new int[numInputs];
@@ -1878,7 +2004,7 @@ public final class VarkaLoopEmitter {
    * method, neither for the driver, which runs only the shared prologue.
    */
   private static Slots planSlots(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
-      Analysis analysis, int numLiterals) {
+      List<Integer> outputIdx, Analysis analysis, int numLiterals) {
     int numInputs = analysis.numInputs;
     Slots s = new Slots(numInputs, outputs.size());
     int slot = 8;
@@ -1939,6 +2065,18 @@ public final class VarkaLoopEmitter {
     if (guarding) {
       s.guardAcc = slot++;
     }
+    // Task 70: which words this body still reads, or null for "all of them" - the pass off, or
+    // a dense body, which has no words. Decided before the allocation loop because it decides
+    // what the loop allocates.
+    Set<WordOwner> live = !dense && mode != BodyMode.DRIVER && analysis.options.validityByBitmap()
+        ? liveWords(outputs, outputIdx, analysis, producersGuarding, selfGuarding) : null;
+    if (live != null) {
+      for (int i = 0; i < numInputs; i++) {
+        if (referenced(analysis, i) && !live.contains(new WordOwner.Input(i))) {
+          s.deadRefs.add(s.word[i]);
+        }
+      }
+    }
 
     if (mode == BodyMode.EPILOGUE) {
       s.epilogueMask = slot++;
@@ -1957,12 +2095,21 @@ public final class VarkaLoopEmitter {
           if (!dense) {
             int ref = planWordRef(node, s);
             if (ref == Integer.MIN_VALUE) {
-              ref = slot;
-              slot += 2;
-              s.ownWord.add(node);
+              if (live == null || live.contains(new WordOwner.Own(node))) {
+                ref = slot;
+                slot += 2;
+                s.ownWord.add(node);
+              } else {
+                // Dead: no slot, no computation, and every alias of it inherits the sentinel
+                // through planWordRef - a parent of a dead word is dead, by the closure the
+                // liveness pass keeps (a live word demands its operands' words).
+                ref = WORD_DEAD;
+              }
             }
             s.wordRef.put(node, ref);
-            assertWordAlgebraAgrees(node, ref, s, analysis);
+            if (ref != WORD_DEAD) {
+              assertWordAlgebraAgrees(node, ref, s, analysis);
+            }
           }
           if (cse && analysis.useCount.get(node) > 1 && !(node instanceof LiteralSlot)) {
             s.sharedSlot.put(node, slot++);
@@ -2134,6 +2281,9 @@ public final class VarkaLoopEmitter {
   }
 
   private static int andRef(int a, int b) {
+    if (a == WORD_DEAD || b == WORD_DEAD) {
+      return WORD_DEAD;
+    }
     if (a == WORD_ALL_TRUE) {
       return b;
     }
@@ -2141,6 +2291,126 @@ public final class VarkaLoopEmitter {
       return a;
     }
     return Integer.MIN_VALUE;
+  }
+
+  /**
+   * Task 70's word liveness for one loop or epilogue body: the set of words some consumer in
+   * the body still reads once the bitmap pass has taken over the served roots' writes. A word
+   * is <i>demanded</i> by a consumer and then <i>propagated</i> to the operands its computation
+   * reads, to a fixpoint. The consumers, from PLAN_TASK_70.md 2.2 plus the one that inventory
+   * missed - the null-skipping pick's value substitution, which blends by the operands' words
+   * whether or not its own word is wanted:
+   * <ul>
+   *   <li>a value root the pass does not serve: its own word, for the per-group write;</li>
+   *   <li>a guarded producer (task 52) or self-guarding {@code AddMonths} (task 60): its own
+   *       word, which {@link #emitGuardCollect} ANDs with the condemning mask;</li>
+   *   <li>{@code MakeDate}: its own word, always - it stores it unconditionally and its guard
+   *       reads it - and so, by propagation, its three inputs';</li>
+   *   <li>{@code Greatest}/{@code Least}, emitted at all: both operands' words, for the value;</li>
+   *   <li>every {@code Compare} and {@code IsNotNull} reached, whether under an {@code IfElse}
+   *       or a {@code Cond} root: its operands' words, for the known-true/false pair.</li>
+   * </ul>
+   * Propagation: a demanded own word demands what its arm loads - both operands for the AND
+   * family and the picks, the two branches for {@code IfElse} (its condition's leaves are
+   * demanded by the walk already), the three inputs for {@code MakeDate}. Nothing is demanded
+   * for a served root's own write, which is the point. {@link #assertWordsLive} then checks
+   * the result against what the emission actually loaded, in both directions.
+   *
+   * <p>With {@link VarkaEmitOptions#misdescribeWordLiveness} the verdict is inverted word by
+   * word, so a test can watch each half of that invariant fail.
+   */
+  private static Set<WordOwner> liveWords(List<VarkaVectorIR> outputs, List<Integer> outputIdx,
+      Analysis analysis, boolean producersGuarding, boolean selfGuarding) {
+    Set<WordOwner> live = new HashSet<>();
+    java.util.ArrayDeque<VarkaVectorIR> work = new java.util.ArrayDeque<>();
+    java.util.function.Consumer<WordOwner> demand = owner -> {
+      if (owner instanceof WordOwner.Own own) {
+        if (live.add(owner)) {
+          work.add(own.node());
+        }
+      } else if (owner instanceof WordOwner.Input) {
+        live.add(owner);
+      }
+    };
+    // The walk: every node this body emits, roots and conditions included.
+    Set<VarkaVectorIR> reached = new HashSet<>();
+    java.util.ArrayDeque<VarkaVectorIR> walk = new java.util.ArrayDeque<>();
+    for (int o : outputIdx) {
+      VarkaVectorIR root = outputs.get(o);
+      walk.add(root);
+      if (!(root instanceof Cond) && analysis.served[o] == null) {
+        demand.accept(analysis.wordOwner.get(root));
+      }
+    }
+    while (!walk.isEmpty()) {
+      VarkaVectorIR n = walk.poll();
+      if (!reached.add(n)) {
+        continue;
+      }
+      for (VarkaVectorIR child : childrenOf(n)) {
+        walk.add(child);
+      }
+      switch (n) {
+        case Compare c -> {
+          demand.accept(analysis.wordOwner.get(c.left()));
+          demand.accept(analysis.wordOwner.get(c.right()));
+        }
+        case IsNotNull c -> demand.accept(analysis.wordOwner.get(c.child()));
+        case Greatest g -> {
+          demand.accept(analysis.wordOwner.get(g.left()));
+          demand.accept(analysis.wordOwner.get(g.right()));
+        }
+        case Least l -> {
+          demand.accept(analysis.wordOwner.get(l.left()));
+          demand.accept(analysis.wordOwner.get(l.right()));
+        }
+        case MakeDate m -> demand.accept(new WordOwner.Own(m));
+        default -> { }
+      }
+      boolean guarded = (producersGuarding && analysis.guardedProducers.contains(n))
+          || (selfGuarding && n instanceof AddMonths && analysis.selfGuarding.contains(n));
+      if (guarded) {
+        demand.accept(analysis.wordOwner.get(n));
+      }
+    }
+    // Propagation to the operands each own word's computation loads.
+    while (!work.isEmpty()) {
+      VarkaVectorIR n = work.poll();
+      switch (n) {
+        case AddDays x -> { demand.accept(analysis.wordOwner.get(x.days()));
+          demand.accept(analysis.wordOwner.get(x.offset())); }
+        case SubDays x -> { demand.accept(analysis.wordOwner.get(x.days()));
+          demand.accept(analysis.wordOwner.get(x.offset())); }
+        case NextDay x -> { demand.accept(analysis.wordOwner.get(x.days()));
+          demand.accept(analysis.wordOwner.get(x.offset())); }
+        case TruncDateDynamic x -> { demand.accept(analysis.wordOwner.get(x.days()));
+          demand.accept(analysis.wordOwner.get(x.level())); }
+        case AddMonths x -> { demand.accept(analysis.wordOwner.get(x.days()));
+          demand.accept(analysis.wordOwner.get(x.months())); }
+        case DateDiff x -> { demand.accept(analysis.wordOwner.get(x.end()));
+          demand.accept(analysis.wordOwner.get(x.start())); }
+        case Greatest x -> { demand.accept(analysis.wordOwner.get(x.left()));
+          demand.accept(analysis.wordOwner.get(x.right())); }
+        case Least x -> { demand.accept(analysis.wordOwner.get(x.left()));
+          demand.accept(analysis.wordOwner.get(x.right())); }
+        case IfElse x -> { demand.accept(analysis.wordOwner.get(x.thenNode()));
+          demand.accept(analysis.wordOwner.get(x.elseNode())); }
+        case MakeDate x -> { demand.accept(analysis.wordOwner.get(x.year()));
+          demand.accept(analysis.wordOwner.get(x.month()));
+          demand.accept(analysis.wordOwner.get(x.day())); }
+        default -> { }
+      }
+    }
+    if (analysis.options.misdescribeWordLiveness()) {
+      Set<WordOwner> inverted = new HashSet<>();
+      for (WordOwner owner : analysis.wordOwner.values()) {
+        if (owner != WordOwner.Const.ALL_TRUE && !live.contains(owner)) {
+          inverted.add(owner);
+        }
+      }
+      return inverted;
+    }
+    return live;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -2161,7 +2431,12 @@ public final class VarkaLoopEmitter {
       List<List<Integer>> groups) {
     int numInputs = analysis.numInputs;
     int numOutputs = outputs.size();
-    Slots s = planSlots(dense, mode, outputs, analysis, numLiterals);
+    List<Integer> all = new java.util.ArrayList<>();
+    for (int o = 0; o < numOutputs; o++) {
+      all.add(o);
+    }
+    List<Integer> bodyOutputs = mode == BodyMode.LOOP ? groups.get(group) : all;
+    Slots s = planSlots(dense, mode, outputs, bodyOutputs, analysis, numLiterals);
 
     // (1) if (length <= 0) return 0 - nothing ran, so there is nothing to report.
     Label nonEmpty = cb.newLabel();
@@ -2196,7 +2471,10 @@ public final class VarkaLoopEmitter {
         loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
       }
       loadSegment(cb, P_DST_VALIDITY, o, s.validityBytes, s.dstValSeg[o]);
-      if (mode == BodyMode.DRIVER) {
+      // Task 70: an output the bitmap pass serves is written whole between steps (4) and (5)
+      // below - after the null state it reads exists and before the shortcut can return - and
+      // that write is what keeps this step's invariant for it, not a zero it overwrites.
+      if (mode == BodyMode.DRIVER && !servedByPass(analysis, dense, o)) {
         cb.aload(s.dstValSeg[o]);
         if (fillsValidityOnce(analysis, dense, outputs.get(o))) {
           // Task 45: on a dense batch every value output is valid on every row, so the bits are
@@ -2218,7 +2496,10 @@ public final class VarkaLoopEmitter {
       if (!referenced(analysis, i)) {
         continue;
       }
-      if (dense) {
+      // Task 70: a loop or epilogue body whose every reader of this input's word is gone
+      // needs none of its null state either - only the driver, which runs the shortcut and
+      // the pass, still derives it. This is what makes such a body the dense one's bytes.
+      if (dense || s.deadRefs.contains(s.word[i])) {
         loadSegment(cb, P_SRC_DATA, i, s.dataBytes, s.srcSeg[i]);
         continue;
       }
@@ -2260,6 +2541,21 @@ public final class VarkaLoopEmitter {
       cb.astore(s.srcValSeg[i]);
       cb.labelBinding(stateDone);
       loadSegment(cb, P_SRC_DATA, i, s.dataBytes, s.srcSeg[i]);
+    }
+
+    // (4b) Task 70's bitmap pass (PLAN_TASK_70.md 3.1): for each served output, its validity
+    // written whole from the input bitmaps, here and not per lane group. Between (4) and (5)
+    // on purpose - the null counts it passes are read in (4), and a batch the shortcut returns
+    // from in (5) must already have every served bitmap written, since nothing after (5) runs
+    // for it. The engine resolves each operand's three states, so this is one call per node of
+    // the flattened expression and no branch: arguments straight from the kernel's parameters.
+    if (!dense && mode == BodyMode.DRIVER) {
+      for (int o = 0; o < numOutputs; o++) {
+        BitmapPass pass = analysis.served[o];
+        if (pass != null) {
+          emitBitmapPass(cb, s, o, pass);
+        }
+      }
     }
 
     // (5) All-null shortcut: return iff every output reads at least one all-null column.
@@ -2371,10 +2667,6 @@ public final class VarkaLoopEmitter {
         // One method for every output, not one per group: the epilogue runs a single pass per
         // batch, so GROUP_BUDGET - which exists to keep a *hot* method's C2 compile cheap -
         // has nothing to bound here. This is the same shape the scalar tail it replaces had.
-        List<Integer> all = new java.util.ArrayList<>();
-        for (int o = 0; o < numOutputs; o++) {
-          all.add(o);
-        }
         emitEpilogue(cb, dense, outputs, all, analysis, s);
         assertWordsLive(s, mode);
         emitStatusReturn(cb, s);
@@ -2560,7 +2852,7 @@ public final class VarkaLoopEmitter {
       // Each group-referenced input's validity word for this lane group: 0L when all-null, the
       // bitmap bits when it has nulls, -1L when null-free. All three branches leave one long.
       for (int i = 0; i < numInputs; i++) {
-        if ((groupColumns >>> i & 1L) == 0) {
+        if ((groupColumns >>> i & 1L) == 0 || s.deadRefs.contains(s.word[i])) {
           continue;
         }
         Label wNotDead = cb.newLabel();
@@ -2619,7 +2911,8 @@ public final class VarkaLoopEmitter {
       // NodeCountInliningCutoff: the caller is over C2's node budget by the time it reaches the
       // last call in program order, after the body's Vector API intrinsics have been parsed,
       // and no size of callee changes that. Parsed first, it is inlined.
-      boolean validityWritten = fillsValidityOnce(analysis, dense, root);
+      boolean validityWritten = fillsValidityOnce(analysis, dense, root)
+          || servedByPass(analysis, dense, o);
       boolean wordKnownEarly = analysis.options.validityOrFirst()
           && (dense || wordKnownBeforeCompute(analysis, s, root));
       if (!validityWritten && wordKnownEarly) {
@@ -2695,6 +2988,60 @@ public final class VarkaLoopEmitter {
     return analysis.options.denseValidityOnce() && dense && !(root instanceof Cond);
   }
 
+  /**
+   * Whether output {@code o}'s validity is written whole by the masked driver's bitmap pass
+   * (task 70), so the loop and epilogue skip its per-group OR. The same one-place discipline as
+   * {@link #fillsValidityOnce}, and for the same reason: the driver's write and the elided OR
+   * are decided by one predicate, read from both sides, so they cannot disagree.
+   */
+  private static boolean servedByPass(Analysis analysis, boolean dense, int o) {
+    return !dense && analysis.served[o] != null;
+  }
+
+  /**
+   * One served output's whole-batch write (PLAN_TASK_70.md 3.1): {@code setValid} for the
+   * constant, {@code copyColumnValidity} for one input, {@code and|orColumnValidity} for the
+   * first two of a chain and {@code and|orColumnValidityInto} for each further one - the
+   * left-leaning evaluation into the destination the engine's aliasing contract allows. Each
+   * operand is the address and null count the kernel was called with, five bytes apiece.
+   */
+  private static void emitBitmapPass(CodeBuilder cb, Slots s, int o, BitmapPass pass) {
+    int[] ords = pass.ordinals();
+    cb.aload(s.dstValSeg[o]);
+    if (ords.length == 0) {
+      cb.iload(P_LENGTH);
+      cb.invokestatic(SUPPORT, "setValid", SET_VALID);
+      return;
+    }
+    if (ords.length == 1) {
+      emitColumnOperand(cb, ords[0]);
+      cb.iload(P_LENGTH);
+      cb.invokestatic(SUPPORT, "copyColumnValidity", COPY_COLUMN_VALIDITY);
+      return;
+    }
+    String name = pass.and() ? "andColumnValidity" : "orColumnValidity";
+    emitColumnOperand(cb, ords[0]);
+    emitColumnOperand(cb, ords[1]);
+    cb.iload(P_LENGTH);
+    cb.invokestatic(SUPPORT, name, COLUMN_VALIDITY_PAIR);
+    for (int k = 2; k < ords.length; k++) {
+      cb.aload(s.dstValSeg[o]);
+      emitColumnOperand(cb, ords[k]);
+      cb.iload(P_LENGTH);
+      cb.invokestatic(SUPPORT, name + "Into", COLUMN_VALIDITY_INTO);
+    }
+  }
+
+  /** Pushes input {@code i}'s validity address and null count, as the kernel received them. */
+  private static void emitColumnOperand(CodeBuilder cb, int i) {
+    cb.aload(P_SRC_VALIDITY);
+    cb.loadConstant(i);
+    cb.laload();
+    cb.aload(P_NULL_COUNT);
+    cb.loadConstant(i);
+    cb.iaload();
+  }
+
   /** {@code local = VarkaVectorSupport.ofAddress(param[index], lload(bytes))}. */
   private static void loadSegment(
       CodeBuilder cb, int arrayParam, int index, int bytesSlot, int destSlot) {
@@ -2767,6 +3114,9 @@ public final class VarkaLoopEmitter {
   private static void loadWord(CodeBuilder cb, Slots s, int ref) {
     if (ref == WORD_ALL_TRUE) {
       cb.loadConstant(-1L);
+    } else if (ref == WORD_DEAD || s.deadRefs.contains(ref)) {
+      throw new IllegalStateException("a word the liveness pass declared dead is loaded: slot "
+          + ref + " - a consumer the inventory in liveWords does not list");
     } else {
       cb.lload(ref);
       s.wordUses.merge(ref, 1, Integer::sum);
@@ -2958,7 +3308,7 @@ public final class VarkaLoopEmitter {
           cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
         }
         cb.invokevirtual(INT_VECTOR, "blend", BLEND);
-        if (!dense) {
+        if (!dense && s.ownWord.contains(node)) {
           // valid = (kT & validThen) | (~kT & validElse), the chosen branch's validity.
           cb.lload(s.kt.get(n.cond()));
           loadWord(cb, s, s.wordRef.get(n.thenNode()));
@@ -3256,10 +3606,12 @@ public final class VarkaLoopEmitter {
     cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
     cb.invokevirtual(INT_VECTOR, "blend", BLEND);
     cb.invokevirtual(INT_VECTOR, op, LANEWISE_VV);
-    loadWord(cb, s, s.wordRef.get(left));
-    loadWord(cb, s, s.wordRef.get(right));
-    cb.lor();
-    storeWord(cb, s, s.wordRef.get(node));
+    if (s.ownWord.contains(node)) {
+      loadWord(cb, s, s.wordRef.get(left));
+      loadWord(cb, s, s.wordRef.get(right));
+      cb.lor();
+      storeWord(cb, s, s.wordRef.get(node));
+    }
   }
 
   /**

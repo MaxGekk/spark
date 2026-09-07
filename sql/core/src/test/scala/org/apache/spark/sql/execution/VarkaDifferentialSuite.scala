@@ -284,6 +284,38 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 70: the bitmap pass answers what the per-group write answered, end to end, over " +
+      "nulls on either side") {
+    // The emitter suite holds the two settings byte-identical on hand-built batches; this holds
+    // them through the evaluator, the Arrow validity buffers and the fallback route, on the
+    // nullable fixture. One query per shape the pass treats differently: a copy (four fields
+    // over one date, one loop method), an AND under a guard that keeps its word, an OR root,
+    // an AND root, and a filter, whose selection bitmap is not a function of input bitmaps and
+    // stays per group either way.
+    cacheDatesNullableOffset(spark)
+    cacheDatesNullableOffset(varkaSpark)
+    val queries = Seq(
+      "SELECT year(d) AS y, month(d) AS m, day(d) AS dd, quarter(d) AS q " +
+        "FROM varka_dates_nullable_offset ORDER BY y, m, dd, q",
+      "SELECT year(date_add(d, off)) AS y, dayofweek(d) AS w FROM varka_dates_nullable_offset " +
+        "ORDER BY y, w",
+      "SELECT greatest(d, date_add(d, off)) AS g FROM varka_dates_nullable_offset ORDER BY g",
+      "SELECT datediff(d, date_add(d, off)) AS dd FROM varka_dates_nullable_offset ORDER BY dd",
+      "SELECT d, off FROM varka_dates_nullable_offset WHERE date_add(d, off) > DATE'2000-01-01' " +
+        "ORDER BY d, off")
+    for (on <- Seq(true, false)) {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(
+        VarkaEmitOptions.DEFAULTS.withValidityByBitmap(on))
+      try {
+        for (query <- queries) {
+          checkDifferential(spark, varkaSpark, query, expectFused = true)
+        }
+      } finally {
+        VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+      }
+    }
+  }
+
   test("task 52: the producer guard reaches a filter predicate through the same route") {
     // The mask kernel shares the emitter and the evaluator's status route with the
     // projection; a calendar node over a column-offset producer in a WHERE clause declines the

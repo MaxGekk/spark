@@ -458,6 +458,42 @@ public final class VarkaVectorSupport {
     }
   }
 
+  /**
+   * {@code dst = dst & b} over one more column: the step task 70's pass takes for the third
+   * and later operands of a flattened AND, once the first two have been written by
+   * {@link #andColumnValidity(MemorySegment, long, int, long, int, int)}. The same three
+   * states, read against a destination that already holds exactly {@code rows} bits: an
+   * all-ones column leaves it as it is, an all-null one makes it all zeros, and a bitmap is
+   * ANDed in place - {@link #andValidity} with the destination as its own first operand,
+   * which the aliasing contract allows and which is the whole reason no scratch is needed.
+   */
+  public static void andColumnValidityInto(MemorySegment dst, long bAddr, int bNulls, int rows) {
+    if (bNulls == 0) {
+      return;
+    }
+    if (bNulls >= rows) {
+      zeroValidity(dst, rows);
+      return;
+    }
+    andValidity(dst, dst, validityOf(bAddr, rows), rows);
+  }
+
+  /**
+   * {@code dst = dst | b} over one more column - the OR chain's step, mirror of
+   * {@link #andColumnValidityInto}: an all-ones column decides the whole result, an all-null
+   * one drops out, a bitmap is ORed in place.
+   */
+  public static void orColumnValidityInto(MemorySegment dst, long bAddr, int bNulls, int rows) {
+    if (bNulls == 0) {
+      setValid(dst, rows);
+      return;
+    }
+    if (bNulls >= rows) {
+      return;
+    }
+    orValidity(dst, dst, validityOf(bAddr, rows), rows);
+  }
+
   /** A column's validity bitmap at exactly the bytes {@code rows} bits occupy, and no more. */
   private static MemorySegment validityOf(long addr, int rows) {
     return ofAddress(addr, (rows + 7) / 8);

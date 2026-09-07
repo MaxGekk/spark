@@ -132,6 +132,18 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        the <i>caller</i>, which no size of callee can satisfy - and ran as a real call in the
  *        hot loop. Emitted first, it inlines. Off reproduces the after-the-store order, the
  *        reference variant for the A/B that priced this, on {@link FloorMod7}'s precedent.
+ * @param validityByBitmap whether a value root whose validity word is a pure AND/OR over input
+ *        bitmaps has that bitmap written once per batch by the masked driver - a copy, an AND
+ *        or an OR of whole input bitmaps, through {@code VarkaVectorSupport}'s column-taking
+ *        entry points - instead of ORed in per lane group by the loop (task 70). With the write
+ *        gone, a word no consumer left in the method reads is not computed either: no input
+ *        word stored, no own word ANDed, and no null-state prologue for an input whose word is
+ *        dead, so a masked method whose every word is dead is the dense method's bytes. What
+ *        stays per group is what is not a function of input bitmaps - a {@code Cond} root's
+ *        selection, an {@code IfElse}'s blend, {@code make_date}'s validity test - and what
+ *        still reads a word: task 52 and 60's guards, the pick's null substitution, every
+ *        condition. Off reproduces the per-group bytes exactly and stays a reference variant
+ *        the differential checks against, on {@link FloorMod7}'s precedent.
  * @param lanesOverride the lane count to emit for, or 0 to emit for the JVM's own
  *        {@code IntVector.SPECIES_PREFERRED} - which is what production always does, so
  *        {@link #DEFAULTS} renders empty and production hashes do not move. It exists because
@@ -154,6 +166,13 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *                       the failure surfaces on first execution as a {@code NoSuchMethodError}
  *                       naming {@code IntVector.add}. The suite pins that, so a future descriptor
  *                       regression is diagnosable from the error alone.
+ * @param misdescribeWordLiveness inverts task 70's word-liveness verdict on every word: what
+ *        the rule declares dead is treated as live and stored, what it declares live is treated
+ *        as dead and never stored. A pure fault injector for the two halves of the emitter's own
+ *        invariant - a word stored but never loaded fails at the end of the body, a word loaded
+ *        but never stored fails at the load - so a test can prove both are armed rather than
+ *        assume it. Meaningful only with {@link #validityByBitmap} on; off, every word is live
+ *        already and the inversion has nothing to invert.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -167,10 +186,12 @@ public record VarkaEmitOptions(
     boolean guardDayProducers,
     boolean validityByWidth,
     boolean validityOrFirst,
+    boolean validityByBitmap,
     int lanesOverride,
     TruncDateForm truncDate,
     FloorMod7 floorMod7,
-    boolean misdescribeAdd) {
+    boolean misdescribeAdd,
+    boolean misdescribeWordLiveness) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -188,9 +209,9 @@ public record VarkaEmitOptions(
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
           VarkaLoopEmitter.GROUP_BUDGET, VarkaLoopEmitter.FUSED_CEILING,
-          true, true, true, true, true, true, true, true, true,
+          true, true, true, true, true, true, true, true, true, false,
           0,
-          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, false);
+          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, false, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -215,91 +236,120 @@ public record VarkaEmitOptions(
   public VarkaEmitOptions withGroupBudget(int budget) {
     return new VarkaEmitOptions(budget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7, misdescribeAdd,
+        misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withFusedCeiling(int ceiling) {
     return new VarkaEmitOptions(groupBudget, ceiling, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7, misdescribeAdd,
+        misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withCse(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, enabled, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withShareChronoPrefix(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, enabled, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7, misdescribeAdd,
+        misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withDenseValidityOnce(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix, enabled,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7, misdescribeAdd,
+        misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withElideChronoMonth(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, enabled, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withNeriSchneiderMonth(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, enabled, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7, misdescribeAdd,
+        misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withJulianMap(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, enabled, guardDayProducers,
-        validityByWidth, validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withGuardDayProducers(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, enabled,
-        validityByWidth, validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withValidityByWidth(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        enabled, validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        enabled, validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withValidityOrFirst(boolean enabled) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, enabled, lanesOverride, truncDate, floorMod7, misdescribeAdd);
+        validityByWidth, enabled, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
+  }
+
+  public VarkaEmitOptions withValidityByBitmap(boolean enabled) {
+    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
+        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
+        validityByWidth, validityOrFirst, enabled, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withLanesOverride(int lanes) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, lanes, truncDate, floorMod7, misdescribeAdd);
+        validityByWidth, validityOrFirst, validityByBitmap, lanes, truncDate, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withTruncDate(TruncDateForm form) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, lanesOverride, form, floorMod7, misdescribeAdd);
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, form, floorMod7,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withFloorMod7(FloorMod7 lowering) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, lanesOverride, truncDate, lowering, misdescribeAdd);
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, truncDate, lowering,
+        misdescribeAdd, misdescribeWordLiveness);
   }
 
   public VarkaEmitOptions withMisdescribeAdd(boolean misdescribe) {
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, lanesOverride, truncDate, floorMod7, misdescribe);
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribe, misdescribeWordLiveness);
+  }
+
+  public VarkaEmitOptions withMisdescribeWordLiveness(boolean misdescribe) {
+    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
+        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
+        validityByWidth, validityOrFirst, validityByBitmap, lanesOverride, truncDate, floorMod7,
+        misdescribeAdd, misdescribe);
   }
 
   public boolean isDefault() {
@@ -326,6 +376,7 @@ public record VarkaEmitOptions(
     return "opts(" + groupBudget + '|' + fusedCeiling + '|' + cse + '|' + shareChronoPrefix
         + '|' + denseValidityOnce + '|' + elideChronoMonth + '|' + neriSchneiderMonth + '|'
         + julianMap + '|' + guardDayProducers + '|' + validityByWidth + '|' + validityOrFirst
-        + '|' + lanesOverride + '|' + truncDate + '|' + floorMod7 + '|' + misdescribeAdd + ')';
+        + '|' + validityByBitmap + '|' + lanesOverride + '|' + truncDate + '|' + floorMod7 + '|'
+        + misdescribeAdd + '|' + misdescribeWordLiveness + ')';
   }
 }

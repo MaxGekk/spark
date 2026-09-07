@@ -323,6 +323,48 @@ public class VarkaVectorSupportBitmapAlgebraTest {
     }
   }
 
+  /**
+   * The chain step: a destination the two-column entry point has already written, folded with
+   * one more column in each of its three states, for both operators. Every combination of
+   * (first operand state, second operand state, third operand state) is covered, because the
+   * destination going in is itself each of the three states in turn.
+   */
+  @Test
+  public void intoEntryPointsFoldOneMoreColumnIntoAWrittenDestination() {
+    try (Arena arena = Arena.ofConfined()) {
+      for (int rows : ROWS) {
+        int bitmapBytes = (rows + 7) / 8;
+        MemorySegment bitmapA = mixedBitmap(arena, rows, rows * 31L + 11);
+        MemorySegment bitmapB = mixedBitmap(arena, rows, rows * 37L + 12);
+        MemorySegment bitmapC = mixedBitmap(arena, rows, rows * 41L + 13);
+        byte[] beforeC = bytes(bitmapC, bitmapBytes + 1);
+        String at = " at rows=" + rows;
+        for (ColumnState a : statesOf(bitmapA, rows)) {
+          for (ColumnState b : statesOf(bitmapB, rows)) {
+            for (ColumnState c : statesOf(bitmapC, rows)) {
+              String triple = "[" + a.label() + ", " + b.label() + ", " + c.label() + "]" + at;
+              MemorySegment and = bitmapWithGuard(arena, bitmapBytes);
+              VarkaVectorSupport.andColumnValidity(and.asSlice(0L, bitmapBytes),
+                  a.addr(), a.nulls(), b.addr(), b.nulls(), rows);
+              VarkaVectorSupport.andColumnValidityInto(and.asSlice(0L, bitmapBytes),
+                  c.addr(), c.nulls(), rows);
+              assertBits("andColumnValidityInto" + triple, and, bitmapBytes, rows,
+                  i -> a.valid().test(i) && b.valid().test(i) && c.valid().test(i));
+              MemorySegment or = bitmapWithGuard(arena, bitmapBytes);
+              VarkaVectorSupport.orColumnValidity(or.asSlice(0L, bitmapBytes),
+                  a.addr(), a.nulls(), b.addr(), b.nulls(), rows);
+              VarkaVectorSupport.orColumnValidityInto(or.asSlice(0L, bitmapBytes),
+                  c.addr(), c.nulls(), rows);
+              assertBits("orColumnValidityInto" + triple, or, bitmapBytes, rows,
+                  i -> a.valid().test(i) || b.valid().test(i) || c.valid().test(i));
+            }
+          }
+        }
+        assertUnchanged("operand c", beforeC, bitmapC, at);
+      }
+    }
+  }
+
   /** A destination of exactly the bitmap, with a guard byte after it, filled so any byte the
    *  call leaves alone is visible. */
   private static MemorySegment bitmapWithGuard(Arena arena, int bitmapBytes) {
