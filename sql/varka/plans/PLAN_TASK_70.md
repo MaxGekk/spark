@@ -126,14 +126,57 @@ the `nullCounts` argument, and step (4) of `emitBody` stores `aconst_null`
 into `srcValSeg[i]` for a null-free input and for an all-null one alike -
 there is no segment to pass in either state. So the segment-only helpers as
 landed force the emitter to generate the three-way choice above as bytecode,
-per operand, per served output, which is the cost 6.1's prediction 6 prices
-against the driver's `HugeMethodLimit`. The alternative is an overload taking
+per operand, per served output. The alternative is an overload taking
 `(long address, int nullCount)` per operand, which puts the three states in
 the engine - two `if`s in Java instead of a bytecode diamond, and nine
-two-operand combinations a JUnit test can enumerate. Commit 2 picks between
-them on the driver's emitted byte count for `year(d)` and `greatest(d, d2)`
-and records which; the overload is additive, so the helpers as landed are not
-wasted either way.
+two-operand combinations a JUnit test can enumerate without emitting
+anything.
+
+The code-size argument does not decide this, and 6.1's prediction 6 has the
+measurement that says so: the two forms cost about +1.5 KB and +0.6 KB on the
+48-output driver, which is 4.2 KB against 3.2 KB in a method whose limit is
+8 KB and whose shape's epilogue has already crossed. What decides it is where
+a wrong branch can hide. These three states are the whole of where a silently
+wrong validity bitmap comes from - an all-ones operand annihilating an OR is
+not a crash, it is a null row that should have had a value - and the engine
+form puts every combination in a JUnit test that runs in milliseconds, where
+the bytecode form puts them in emitted kernels driven through `checkMatrix`
+with crafted null counts. The engine form also keeps the emitter smaller,
+which the delegation goal wants. Its one real cost is that a `long` address
+is not a `MemorySegment`, so the bounds check milestone 1's finding 1 is
+about has to be rebuilt inside the entry point with
+`ofAddress(addr, (rows + 7) / 8)` rather than being supplied by the caller;
+that is one `reinterpret` per operand per batch, and it must not be
+forgotten.
+
+**Decided, and landed with this plan.** The segment-taking helpers stay
+exactly as they are - they are the bit-exact primitives and
+`VarkaVectorSupportBitmapAlgebraTest` is their oracle - and
+`copyColumnValidity`, `andColumnValidity` and `orColumnValidity` sit beside
+them, taking `(long address, int nullCount)` per operand, resolving the three
+states and delegating. They map each operand at exactly `(rows + 7) / 8`
+bytes, which is what restores the bound the raw `long` does not carry.
+
+The emitter therefore emits one call per expression node whatever the runtime
+states are, with the arguments it already holds: `srcValidity[i]` and
+`nullCounts[i]` are parameters of the body, so an operand is
+`aload; ldc; laload` and `aload; ldc; iaload`, five bytes each.
+
+`columnEntryPointsResolveTheThreeOperandStates` covers all nine two-operand
+combinations for each operator and the three for the copy, at every length in
+the file's ladder, in milliseconds and with no bytecode involved. It was
+mutation-checked against the defect this whole section is about: giving the
+OR root the AND rule for a null-free operand fails it at
+`orColumnValidity[null-free, all-null]`.
+
+The bytecode-ladder form is **not** built as a live variant. It is the one
+place in this task where the `FloorMod7` discipline is deliberately not
+applied, and the reason is that the two forms differ in nothing a benchmark
+could measure - the pass runs once per batch, so both resolve the states in
+time that does not appear in any row - and the only dimension they differ on,
+emitted bytes, is settled above by measurement without building either. If a
+shape ever appears where the driver's size is binding, the ladder is the
+fallback and this section is the record of what it would cost.
 
 The final partial byte is masked to `length % 8` bits, the rule `setValid`'s
 javadoc records and `assertSameOutput` enforces byte for byte.
@@ -392,7 +435,7 @@ Registered from the emission sites in 2.2, to be asserted in 5:
 
 | file | what |
 |---|---|
-| `sql/varka/engine/.../VarkaVectorSupport.java` | `copyValidity`, `andValidity`, `orValidity`, each setting exactly `rows` bits; tests in the engine module |
+| `sql/varka/engine/.../VarkaVectorSupport.java` | `copyValidity`, `andValidity`, `orValidity`, each setting exactly `rows` bits, and the `*ColumnValidity` entry points of 2.3 over them; tests in the engine module. Landed with this plan |
 | `sql/catalyst/.../varka/VarkaEmitOptions.java` | `validityByBitmap`, `withValidityByBitmap`, in `canonical()` |
 | `sql/catalyst/.../varka/VarkaLoopEmitter.java` | `Analysis.pureWord`, word liveness in `planSlots`, the pass in the driver, the skipped writes |
 | `sql/catalyst/.../varka/VarkaLoopEmitterSuite.scala` | the tests in 5; the poisoned `makeInputData` landed with this plan |
@@ -446,7 +489,11 @@ Registered from the emission sites in 2.2, to be asserted in 5:
   null-free and `d2` nullable, whose output must be valid on every row -
   2.3's correction, and the one case the earlier rule got wrong. Beside it
   `year(d)` over a null-free `d` in a masked kernel, whose output is
-  `setValid`, not a copy.
+  `setValid`, not a copy. The engine's own
+  `columnEntryPointsResolveTheThreeOperandStates` already covers every
+  combination of the three states; what these add is that the emitter passes
+  the right arguments to them, which is a different question and the only one
+  left once 2.3's API is in the engine.
 * **A mixed word tree declines rather than mis-evaluates**:
   `datediff(greatest(d, d2), greatest(d3, d4))` keeps its per-group write and
   its word; a single-operator tree of any depth is flattened and served. The
@@ -562,25 +609,46 @@ superseded run, which is how the first cut of this section went wrong.
    for the one-body test in 5 is that with the prologue gone the two differ
    by under a hundred bytes.
 
-   **The driver, which the ladder above does not cover and no test measures.**
-   Every byte the pass adds lands in `emitBody`'s `DRIVER` mode. The driver is
-   one method for all of a shape's outputs, and it is the one method that runs
-   on every batch, so a `HugeMethodLimit` crossing costs more there than
-   anywhere - task 44's failure mode, in the one direction the paragraph above
-   calls impossible. Per served output the driver gains an `invokestatic` with
-   its operand pushes, about 12 bytes, and loses step (3)'s `zero`/`setValid`,
-   about 6. What decides whether that is the whole story is 2.3's API
-   question: with the operand states resolved in bytecode it gains a
-   three-way block per operand on top - the same 32-byte shape priced above -
-   so about 70 bytes per two-input output rather than about 6, and on the
-   48-output rung 3.3 KB against 0.3 KB. Registered: with the states in the
-   engine the 48-output driver grows by under 500 bytes and crosses nothing;
-   with them in bytecode it is predicted to cross `HugeMethodLimit` somewhere
-   between 32 and 48 outputs. That is the measurement 2.3 says commit 2 picks
-   the API on, and 5 adds the driver to the pinned ladder either way, since
-   an unpinned driver would surface a crossing only as an unexplained
-   wide-shape regression. Confidence medium on the byte figures, high that
-   the driver has to be pinned.
+   **The driver, which the ladder above does not cover - measured, because the
+   first version of this prediction guessed and guessed wrong.** Every byte
+   the pass adds lands in `emitBody`'s `DRIVER` mode, and the driver is one
+   method for all of a shape's outputs and the one method that runs on every
+   batch, so it looked like where a `HugeMethodLimit` crossing would hurt
+   most. `runMasked`'s code size over the same ladder says otherwise:
+
+   | outputs (dates) | `runMasked` | `epilogueMasked` |
+   |---|---|---|
+   | 4 (1) | 278 | 783 |
+   | 20 (5) | 1122 | 3575 |
+   | 40 (10) | 2194 | 7082 |
+   | 44 (11) | 2409 | 8058 (crosses) |
+   | 48 (12) | 2624 | 9084 |
+
+   and for two-input outputs, `greatest(d, d2)` per date: 272 at 2 outputs,
+   828 at 8, 1596 at 16, against an epilogue of 514, 1790 and 3518.
+
+   So at the output count where the epilogue crosses, the driver is at 2409
+   bytes with 5591 to spare, and it grows about 53 bytes per single-input
+   output against the epilogue's 216. Costing the pass per served output, net
+   of the step (3) `zero`/`setValid` it replaces: about +12 bytes with 2.3's
+   operand states resolved in the engine and about +32 with them resolved as
+   emitted bytecode, for a single-input output; about +22 and +73 for a
+   two-input one. On the 48-output rung that is +0.6 KB against +1.5 KB, so
+   the driver lands at 3.2 KB or 4.2 KB and **neither form crosses** - the
+   epilogue crosses first in both, four outputs earlier, which is the
+   constraint the pass is there to relieve.
+
+   Registered, therefore: the driver does not cross `HugeMethodLimit` under
+   either form of 2.3's API on any shape whose epilogue still compiles, and
+   the API is decided on the grounds in 2.3 rather than on this. Two things
+   still hold from the original worry. The driver must be pinned on this
+   ladder in 5, because nothing measures it today and a crossing would
+   surface only as an unexplained wide-shape regression. And if one ever does
+   cross, it is far cheaper than task 44's case: the driver holds no vector
+   work, so an interpreted driver boxes nothing and pays once per batch,
+   where an interpreted epilogue boxes vectors for up to `lanes - 1` rows of
+   every batch. Confidence high on the byte figures, which are read off the
+   class file rather than argued.
 
 The rule that decides the default: on, if prediction 4 holds and no served
 row is slower than before at either width.
@@ -621,13 +689,14 @@ row is slower than before at either width.
    Everything below is measured against that file.
 1. `pureWord` with the agreement test, and the `loadWord` use counter with
    its invariant asserted on today's emitter (every word loaded at least
-   once): no emitted byte changes. The engine helpers, the poisoned harness,
-   `invocationCount`'s exclusion overload and the baseline rows are already
-   in, with this plan.
+   once): no emitted byte changes. The engine helpers and their column-taking
+   entry points, the poisoned harness, `invocationCount`'s exclusion overload
+   and the baseline rows are already in, with this plan; so is 2.3's API
+   decision and the measurement behind 6.1's prediction 6, so commit 2 starts
+   with nothing left to choose.
 2. The pass, the liveness rule and the skipped writes behind the switch, off
-   by default; the tests of 5; both widths green. 2.3's API question is
-   settled here, on the driver's emitted byte count, and 6.1's prediction 6
-   scored against it before the throughput run.
+   by default; the tests of 5; both widths green. The driver pinned on the
+   output ladder here, since it is the commit that grows it.
 3. The A/B rows, one regeneration, section 9 with the predictions scored; the
    default set by 6.1's rule; the docs and the milestone rows swept, including
    what task 47 is left with.

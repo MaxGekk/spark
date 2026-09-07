@@ -23,8 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Random;
+import java.util.function.IntPredicate;
 
 import org.junit.jupiter.api.Test;
 
@@ -223,6 +226,109 @@ public class VarkaVectorSupportBitmapAlgebraTest {
             "self-copy wrote past the bitmap at rows=" + rows);
       }
     }
+  }
+
+  /**
+   * One operand of the column-taking entry points: the address and null count the morsel
+   * contract gives the driver, beside what the operand means bit for bit.
+   */
+  private record ColumnState(String label, long addr, int nulls, IntPredicate valid) {}
+
+  /** A bitmap guaranteed to have a set bit and a clear bit inside {@code rows}, so its null
+   *  count really is strictly between zero and {@code rows} and its state really is mixed. */
+  private static MemorySegment mixedBitmap(Arena arena, int rows, long seed) {
+    int bitmapBytes = (rows + 7) / 8;
+    MemorySegment seg = random(arena, bitmapBytes, seed);
+    if (rows >= 2) {
+      seg.set(ValueLayout.JAVA_BYTE, 0L, (byte) ((seg.get(ValueLayout.JAVA_BYTE, 0L) | 1) & ~2));
+    }
+    return seg;
+  }
+
+  private static List<ColumnState> statesOf(MemorySegment bitmap, int rows) {
+    List<ColumnState> out = new ArrayList<>();
+    // No null row, so no bitmap was materialised and the address is 0L: an all-ones operand.
+    out.add(new ColumnState("null-free", 0L, 0, i -> true));
+    // Every row null, and the address is 0L again: an all-zeros operand, never dereferenced.
+    out.add(new ColumnState("all-null", 0L, rows, i -> false));
+    if (rows >= 2) {
+      int nulls = 0;
+      for (int i = 0; i < rows; i++) {
+        if (!bit(bitmap, i)) {
+          nulls++;
+        }
+      }
+      out.add(new ColumnState("mixed", bitmap.address(), nulls, i -> bit(bitmap, i)));
+    }
+    return out;
+  }
+
+  private static void assertBits(
+      String what, MemorySegment dst, int bitmapBytes, int rows, IntPredicate expected) {
+    for (int i = 0; i < bitmapBytes * 8; i++) {
+      assertEquals(i < rows && expected.test(i), bit(dst, i), what + ": bit " + i);
+    }
+    assertEquals(GUARD, dst.get(ValueLayout.JAVA_BYTE, bitmapBytes),
+        what + " wrote past the bitmap");
+  }
+
+  /**
+   * The three operand states, over both operators and every pairing of them - nine combinations
+   * for AND and nine for OR, three for the copy, at every length.
+   *
+   * <p>This is the test the whole API shape exists for. The emitter learns a column's null count
+   * only at runtime, so the alternative to resolving the states here was a branch ladder in the
+   * emitted driver, where the same nine combinations would need emitted kernels driven with
+   * crafted null counts to reach. The two rules are not symmetric - all ones is the identity of
+   * an AND and annihilates an OR, all zeros the reverse - and getting one of them backwards
+   * produces no crash, only a null row that should have carried a value.
+   *
+   * <p>The operands are the raw {@code long} addresses the driver holds, so this also covers the
+   * bound: the entry points map at exactly {@code (rows + 7) / 8} bytes, and a read past that
+   * would leave the mapped segment and throw rather than reach the guard byte after it.
+   */
+  @Test
+  public void columnEntryPointsResolveTheThreeOperandStates() {
+    try (Arena arena = Arena.ofConfined()) {
+      for (int rows : ROWS) {
+        int bitmapBytes = (rows + 7) / 8;
+        MemorySegment bitmapA = mixedBitmap(arena, rows, rows * 23L + 9);
+        MemorySegment bitmapB = mixedBitmap(arena, rows, rows * 29L + 10);
+        byte[] beforeA = bytes(bitmapA, bitmapBytes + 1);
+        byte[] beforeB = bytes(bitmapB, bitmapBytes + 1);
+        String at = " at rows=" + rows;
+        for (ColumnState a : statesOf(bitmapA, rows)) {
+          MemorySegment copy = bitmapWithGuard(arena, bitmapBytes);
+          VarkaVectorSupport.copyColumnValidity(
+              copy.asSlice(0L, bitmapBytes), a.addr(), a.nulls(), rows);
+          assertBits("copyColumnValidity[" + a.label() + "]" + at, copy, bitmapBytes, rows,
+              a.valid());
+          for (ColumnState b : statesOf(bitmapB, rows)) {
+            String pair = "[" + a.label() + ", " + b.label() + "]" + at;
+            MemorySegment and = bitmapWithGuard(arena, bitmapBytes);
+            VarkaVectorSupport.andColumnValidity(and.asSlice(0L, bitmapBytes),
+                a.addr(), a.nulls(), b.addr(), b.nulls(), rows);
+            assertBits("andColumnValidity" + pair, and, bitmapBytes, rows,
+                i -> a.valid().test(i) && b.valid().test(i));
+            MemorySegment or = bitmapWithGuard(arena, bitmapBytes);
+            VarkaVectorSupport.orColumnValidity(or.asSlice(0L, bitmapBytes),
+                a.addr(), a.nulls(), b.addr(), b.nulls(), rows);
+            assertBits("orColumnValidity" + pair, or, bitmapBytes, rows,
+                i -> a.valid().test(i) || b.valid().test(i));
+          }
+        }
+        assertUnchanged("operand a", beforeA, bitmapA, at);
+        assertUnchanged("operand b", beforeB, bitmapB, at);
+      }
+    }
+  }
+
+  /** A destination of exactly the bitmap, with a guard byte after it, filled so any byte the
+   *  call leaves alone is visible. */
+  private static MemorySegment bitmapWithGuard(Arena arena, int bitmapBytes) {
+    MemorySegment seg = arena.allocate(bitmapBytes + 1L, 8);
+    seg.fill(GUARD);
+    return seg;
   }
 
   /**
