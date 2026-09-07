@@ -308,16 +308,18 @@ public final class VarkaVectorSupport {
    *
    * <p>Same bit-exactness rule as {@link #setValid}: {@code assertSameOutput} compares this
    * against the loop's own output byte for byte, and the loop leaves the bits past
-   * {@code rows} at zero. Whole bytes go eight at a time; {@code dst} may be {@code src}.
+   * {@code rows} at zero. The whole bytes are {@link MemorySegment#copy}, which is one
+   * intrinsic and, unlike a hand-rolled ascending loop, is defined under any overlap; only
+   * the final partial byte is masked by hand.
+   *
+   * <p>See {@link #andValidity} for the aliasing contract the three share. It matters here in
+   * one extra way: {@code copyValidity(seg, seg, rows)} is not a no-op, because the tail write
+   * clears the bits above {@code rows} in {@code seg}'s final byte.
    */
   public static void copyValidity(MemorySegment dst, MemorySegment src, int rows) {
     int wholeBytes = rows >>> 3;
-    long i = 0;
-    for (; i + 8 <= wholeBytes; i += 8) {
-      dst.set(UNALIGNED_LONG, i, src.get(UNALIGNED_LONG, i));
-    }
-    for (; i < wholeBytes; i++) {
-      dst.set(ValueLayout.JAVA_BYTE, i, src.get(ValueLayout.JAVA_BYTE, i));
+    if (wholeBytes > 0) {
+      MemorySegment.copy(src, 0L, dst, 0L, wholeBytes);
     }
     int tail = rows & 7;
     if (tail != 0) {
@@ -330,8 +332,21 @@ public final class VarkaVectorSupport {
    * {@code dst = a & b} over exactly the low {@code rows} bits, zero past them - the
    * null-intolerant rule of task 11's word algebra ({@code AddDays}, {@code DateDiff},
    * {@code AddMonths} with a column count, {@code next_day} and {@code trunc} with a derived
-   * column) taken over the whole batch at once. {@code dst} may be {@code a} or {@code b}, which
-   * is how a nested expression is evaluated inner-first into the destination without scratch.
+   * column) taken over the whole batch at once.
+   *
+   * <p><b>The aliasing contract, shared by all three.</b> Each operand must be either disjoint
+   * from {@code dst} or exactly {@code dst} - the same segment at the same offset. Being
+   * allowed to be {@code dst} is what lets a nested expression be evaluated inner-first into
+   * the destination with no scratch buffer. Partial overlap is <i>not</i> supported and is not
+   * checked: the whole-byte loop runs ascending eight bytes at a time, so a destination one to
+   * seven bytes ahead of an operand in the same buffer would read back what it had already
+   * written. No caller can produce that - a validity bitmap is a whole buffer, mapped at its
+   * own base - and paying for a direction check on a per-batch call to rule out a shape the
+   * emitter cannot emit would be the wrong trade.
+   *
+   * <p>An operand that <i>is</i> the destination is written, not merely read, and the tail
+   * write clears the bits above {@code rows} in its final byte. Every other operand is left
+   * exactly as it was; {@code VarkaVectorSupportBitmapAlgebraTest} asserts that.
    */
   public static void andValidity(MemorySegment dst, MemorySegment a, MemorySegment b, int rows) {
     int wholeBytes = rows >>> 3;
@@ -353,7 +368,7 @@ public final class VarkaVectorSupport {
   /**
    * {@code dst = a | b} over exactly the low {@code rows} bits, zero past them - the
    * null-skipping rule ({@code greatest}, {@code least}) over the whole batch. Same aliasing
-   * and tail contract as {@link #andValidity}.
+   * and tail contract as {@link #andValidity}, which states it.
    */
   public static void orValidity(MemorySegment dst, MemorySegment a, MemorySegment b, int rows) {
     int wholeBytes = rows >>> 3;

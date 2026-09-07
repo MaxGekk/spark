@@ -239,16 +239,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
         }
         // Task 70's baselines, committed before that task so its pass has numbers to move
-        // (PLAN_TASK_70.md 6): an AND root with one input all-null - validity address 0L and
-        // a null count of every row, the morsel contract's spelling, which the kernel answers
-        // with an all-zero word per group today and the bitmap pass will answer without
-        // dereferencing anything - and, below, an OR root under nulls, the one shape where the
-        // pass computes an OR rather than a copy or an AND, which had no committed row.
-        benchmark.addCase("emitted loop, first input all-null") { _ =>
-          diff.run(Array(mxData.address(), mx2Data.address()),
-            Array(0L, mx2Validity.address()), Array(numRows, mx2Nulls),
-            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
-        }
+        // (PLAN_TASK_70.md 6). The OR root is the one shape where the pass computes an OR
+        // rather than a copy or an AND, and it had no committed row at all.
         val greatest = emit(
           Seq(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2, 0, loader, 930)
         benchmark.addCase("greatest(d, d2), emitted loop, null-free") { _ =>
@@ -258,6 +250,21 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("greatest(d, d2), emitted loop, mixed nulls") { _ =>
           greatest.run(Array(mxData.address(), mx2Data.address()),
             Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
+            Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
+        }
+        // The third baseline: an input all-null - validity address 0L and a null count of every
+        // row, the morsel contract's spelling - which is the operand 2.3 folds away without
+        // dereferencing anything. It hangs off the OR root, not the AND one, on purpose. Under
+        // an AND root `DateDiff` satisfies the masked driver's all-null shortcut, so the batch
+        // returns straight after `zero(dstValidity)` and never reaches a loop: the row would
+        // time a 125 KB memset, could not move whatever the pass does, and would publish a
+        // meaningless Relative against the hand-written kernel above it. `Greatest` is
+        // null-skipping, so the shortcut declines it and the loop runs - and the OR of an
+        // all-null operand is exactly 2.3's degenerate case, where the pass copies the other
+        // input's bitmap rather than reading a bitmap that was never materialised.
+        benchmark.addCase("greatest(d, d2), emitted loop, first input all-null") { _ =>
+          greatest.run(Array(mxData.address(), mx2Data.address()),
+            Array(0L, mx2Validity.address()), Array(numRows, mx2Nulls),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
         }
         benchmark.run()

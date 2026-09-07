@@ -320,9 +320,18 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
         v.fill(0.toByte)
         var nulls = 0
         for (i <- 0 until length) {
-          d.set(ValueLayout.JAVA_INT, i * 4L, data(c)(i))
-          if (patterns(c)(i)) nulls += 1
-          else {
+          if (patterns(c)(i)) {
+            // Poisoned, not left at the drawn value (task 70's harness rule, the same one
+            // VarkaLoopEmitterSuite.poison states). `data` is drawn inside `columnBound` and
+            // `MONTH_ARITH_MAX_MONTHS`, so a null lane holding its drawn value is in range by
+            // construction and can never reach a guard's condemning comparison - which is the
+            // one thing the fuzzer is here to reach. Alternating on the null ordinal puts each
+            // extreme on both sides of every bound whatever the null pattern is.
+            d.set(ValueLayout.JAVA_INT, i * 4L,
+              if ((nulls & 1) == 0) Int.MinValue else Int.MaxValue)
+            nulls += 1
+          } else {
+            d.set(ValueLayout.JAVA_INT, i * 4L, data(c)(i))
             val off = i / 8L
             v.set(ValueLayout.JAVA_BYTE, off,
               (v.get(ValueLayout.JAVA_BYTE, off) | (1 << (i % 8))).toByte)
