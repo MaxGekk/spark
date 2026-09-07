@@ -878,6 +878,140 @@ over the day, so a query mixing ISO and calendar fields pays two prefixes;
 `yearweek` avoids that by living on the Thursday side alone, which is another
 argument for it.
 
+### Item 13. The row boundary: 22 ns of every 25 are not the kernel
+
+*Recorded 7 September 2026, at the owner's request, from the reading of
+`VarkaThroughputBenchmark`'s committed file that followed task 70. Items 13
+and 14 are the two places the survey of that file puts the next order of
+magnitude; neither is a lane, an expression or a target, which is why they
+are catalogue items here rather than tasks in milestone 5.*
+
+**The number.** In `VarkaThroughputBenchmark-jdk25-results.txt` the row
+consumer costs the same whatever the kernel computed: `chain depth 1` 25.1
+ns/row, `chain depth 8` 25.0, `date_add` 25.2, `datediff` 26.2, `dayofweek`
+26.6, and the Janino baseline for `date_add` 27.0. The columnar consumer
+runs the same shapes at 2.4 to 6.9 ns/row, and the parity harness puts the
+`date_add` kernel itself near 0.1 ns/row. Task 19 measured this floor,
+named it (assemble-then-read, a flat ~25 ns/row), and recorded that
+fusing row consumers stays on because the heavy shapes still win against
+Janino's own 20 to 31 ns/row; it did not attack the floor, and said the
+question reopens when there is a reason to. The reason is that after task
+70 the kernels are fast enough that a row consumer sees none of it.
+
+**Where the 22 ns go.** `VarkaColumnarToRowExec` turns its fused batch
+into rows the way the stock transition does when codegen is off: a
+`ColumnarBatch.rowIterator()` whose row reads each field through an
+`ArrowColumnVector` accessor, and an interpreted `UnsafeProjection` that
+copies the row out. Per row that is one virtual accessor call per field,
+Arrow's bounds checks behind each, and one row write; per batch, nothing is
+amortised. The node is deliberately not `CodegenSupport` - its own doc says
+"correctness first, codegen support is a follow-up" - so whole-stage
+codegen splits at it, and the parent stage, which would otherwise read the
+vectors directly into its own variables, starts from rows instead. Spark's
+own `ColumnarToRowExec` is `CodegenSupport` and pays neither the iterator
+nor the projection; that its baseline still reads 27 ns/row here says the
+accessors and the `toRdd` boundary carry a good share of the cost too, which
+is what the first step below measures rather than assumes.
+
+**Two levers, in order.**
+
+1. *Join whole-stage codegen.* Make the node `CodegenSupport` the way
+   `ColumnarToRowExec` is, producing the fused outputs as the parent's input
+   variables straight from the kernel's vectors - the follow-up the node's
+   doc already names. For a codegen consumer, an aggregate or a `noop`
+   sink, no row is materialised at all; the fused columns are read once,
+   by the consumer, at the accessor's cost and nothing else. The mixed
+   projection's merge-at-row (task 12) becomes the residual expressions
+   evaluated inside the same generated loop, which is where Janino puts
+   them anyway. Correctness is the reason it was deferred: the node
+   carries the whole fused projection, and a codegen parent that reads a
+   vector after the evaluator released the batch reads freed memory, so the
+   batch lifetime has to follow the generated loop, not the iterator.
+2. *A bulk row writer for the consumers that stay rows.* Exchanges, sorts
+   and `toRdd` need `UnsafeRow`s. Every Varka output is fixed width, so
+   for a projection of fixed-width columns the row layout is fixed too - a
+   null word and eight bytes per field - and a whole batch's rows can be
+   written as one contiguous buffer by a column-to-row transpose that reads
+   the Arrow buffers directly, never through an accessor, with one reused
+   `UnsafeRow` pointed at successive offsets. That runs at memory bandwidth,
+   1 to 2 ns/row for three fields, against 22.
+
+**The admission check.** A JMH pair on one 10000-row two-column batch:
+the read-back as the node does it today, Spark's codegen read-back from the
+same `ArrowColumnVector`s, and the transpose from the raw buffers. It
+splits the 22 ns into accessor, projection and iterator shares and says
+which lever pays first; registered expectation, transpose under 3 ns/row
+and codegen read-back under 8. Then the throughput file's `row consumer`
+section is the gate: `chain depth 1, row consumer` from 25.1 ns/row to
+under 8, and `residual-heavy projection, row consumer` (50.5) no worse.
+
+**What it changes upstream of here.** Task 19's acceptance rests on the
+floor; with the floor at a third of Janino's cost the cheap chains stop
+losing at 0.8x and the rule's open cost-model question closes without a
+cost model. Item 5's aggregate wiring is the other way to remove the row
+boundary for the targets in section 3, and the two are complementary: item
+5 for the queries whose consumer Varka owns, this item for every other.
+
+### Item 14. The columnar floor: 2.5 ns/row around a 0.1 ns/row kernel
+
+*Recorded 7 September 2026 with item 13.*
+
+**The number.** Same file, columnar consumer: `chain depth 1` 2.5 ns/row,
+`chain depth 2` 2.5, `chain depth 4` 2.5, `chain depth 8` 2.4 - a kernel
+eight times the work costs nothing more end to end. `date_add` over the
+two-column `varka_dates` fixture reads 6.9, `date_sub` 5.4, the task 56
+control 5.0, `datediff` 3.6. Against a kernel the parity harness measures
+in tenths of a nanosecond, about 95% of the columnar path's time is spent
+around the kernel, and it moves with the fixture's column count more than
+with the expression.
+
+**What the code does per batch.** Three fixed costs are visible without a
+profile, none of them measured on its own:
+
+* Every scan re-decodes its cached batch. `ArrowCachedBatch` holds the
+  IPC bytes on the heap; `deserializeToRoot` reads them back through
+  `MessageSerializer` into freshly allocated off-heap buffers and
+  `VectorLoader.load`s a new root - a copy of every selected column, per
+  batch, per scan, with `spark.sql.execution.arrow.cache.prefetch.enabled`
+  off by default so it sits on the critical path. Spark's own
+  `InMemoryColumnarBenchmark` measures exactly this at 10.7 M rows/s for
+  the stock cache (item 8's table).
+* Every output vector is allocated fresh: `allocateVector` calls
+  `allocateNew(len)` per output per batch, and the driver zeroes the
+  validity again for any output the bitmap pass does not serve.
+* The batch is 10000 rows, `spark.sql.inMemoryColumnarStorage.batchSize`'s
+  default, chosen for the row cache's memory profile. At that size a
+  one-microsecond kernel runs beside allocator calls, iterator hops and
+  the decode above, and the kernel's share cannot be large whatever it
+  computes.
+
+**The admission check is a profile, not an argument.** An async-profiler
+flame graph of the columnar `chain depth 1` row, and the same row at batch
+sizes 10000, 65536 and 262144, on an idle machine, committed as a results
+file beside the throughput one. It attributes the 2.5 ns among decode,
+allocation, the sink and the kernel, and the sweep says how much of it is
+per-batch rather than per-row. Registered expectation: decode is the
+largest share and the sweep halves the floor by 65536 rows.
+
+**The levers the profile chooses between.** Retain decoded batches - keep
+the off-heap Arrow buffers rather than the IPC bytes for a hot cached
+relation, which is an accounting change in the cache's memory manager and
+turns the per-scan copy into a pointer; pool the output vectors per task,
+which task 70's whole-bitmap pass makes safe for served roots because the
+pass overwrites the validity it would otherwise have to zero; turn prefetch
+on by default if the profile shows decode on the critical path; and give
+the Arrow cache its own batch size rather than the row cache's. Item 7's
+frame-of-reference form of a date column belongs to the same decision:
+what a batch costs to *arrive* is now the number, not what the kernel does
+with it once it has.
+
+**What it changes upstream of here.** Every columnar relative in the
+throughput file - the 5x to 8x against Janino the README quotes - is
+bounded by this floor, not by the kernels; the parity harness's numbers are
+the kernels' own and stay as they are. The targets in section 3 run on
+Arrow-cached copies (item 7), so this floor is in every number this
+milestone will publish.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
@@ -908,6 +1042,13 @@ and aggregation spine. If that measurement comes back the way the single-field
 one did, it becomes a task in its own right and is scheduled then; if it does
 not, the catalogue entry is the record of why the idea was dropped, which is
 worth as much.
+
+Items 13 and 14 sit beside the table rather than in it: each opens with an
+admission check (a JMH pair, a profile and a batch-size sweep) that costs a
+day and needs nothing from the spine, and each bounds every number the spine
+can publish - item 14 the columnar relatives, item 13 the row-consumer ones.
+The checks belong before item 8's first regenerated file, so that file is
+measured against a floor the project has already looked at.
 
 ## 6. Explicitly out of milestone 6
 
@@ -946,3 +1087,10 @@ worth as much.
    columns whose Arrow encoding the evaluator refuses. The second column is
    what decides whether representation selection is a milestone 7 question or
    a milestone 6 one.
+6. **What are the two floors made of?** Items 13 and 14 each open with a
+   measurement because the record has none: the 25 ns/row of the row
+   consumer has never been split into accessor, projection and iterator
+   shares, and the 2.5 ns/row of the columnar consumer has never been split
+   into decode, allocation, sink and kernel. Until those two splits are
+   committed, every relative in the throughput file is a statement about
+   the pipeline around the kernels, and should be read as one.

@@ -1,7 +1,11 @@
 # Numbers quoted in the Varka documents that trace to no committed results file,
 # accepted with a reason. Read by dev/varka_quote_check.py; one line per number:
-# <document> <TAB> <number> <TAB> <reason>. This list is a ratchet - it should
-# only shrink. Everything below predates the tool (September 2026): the
+# <document> <TAB> <number> <TAB> <reason>. The list shrinks whenever a number
+# earns committed provenance, and grows only for the one case the tool cannot
+# help with by construction, described at the end of this header - which has
+# now happened three times, so "everything below predates the tool" is no
+# longer true of the whole file and each entry's reason says which kind it is.
+# Most of it does predate the tool (September 2026): the
 # narrow-width numbers came from scratch logs before dev/varka_bench_regen.sh
 # committed a 128-bit companion file, the "compared by minimums" figures were
 # computed from per-iteration output that was never committed, and the probe
@@ -12,6 +16,10 @@
 # the run behind it was superseded, where the superseding happened inside one PR, so the
 # intermediate commit that carried it never reached master and the squash-merge took its
 # provenance with it.
+# The task 70 entries below are that same category, from the third regeneration
+# the review of #145 forced: section 9 scores its predictions against the run the
+# default was decided from and records what two earlier runs read, and those runs
+# were committed on the task branch only.
 SKILLS.md	3573.9	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
 SKILLS.md	2379.8	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
 SKILLS.md	2368.3	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
@@ -86,3 +94,15 @@ sql/varka/plans/PLAN_TASK_70.md	3208.8	the first of task 70's two regenerations,
 sql/varka/plans/PLAN_TASK_70.md	3455.8	the first of task 70's two regenerations, on which the default was decided (PLAN_TASK_70.md 9.3); its results file was committed at 1f4d3e12404 inside PR's branch and does not survive the squash-merge
 sql/varka/plans/PLAN_TASK_70.md	1193.4	the first of task 70's two regenerations, on which the default was decided (PLAN_TASK_70.md 9.3); its results file was committed at 1f4d3e12404 inside PR's branch and does not survive the squash-merge
 sql/varka/plans/PLAN_TASK_70.md	1330.9	the first of task 70's two regenerations, on which the default was decided (PLAN_TASK_70.md 9.3); its results file was committed at 1f4d3e12404 inside PR's branch and does not survive the squash-merge
+sql/varka/plans/PLAN_TASK_70.md	3328.5	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	3444.8	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	4003.7	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	3494.3	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	10807.0	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	4371.0	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	12742.6	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	11492.5	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	1860.1	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_TASK_70.md	2046.4	task 70's section 9 quotes the regeneration it scored its predictions against, which the third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_MILESTONE_4.md	4003.7	the debt entry quotes the regeneration that opened it, which task 70's third regeneration superseded inside the same PR
+sql/varka/plans/PLAN_MILESTONE_4.md	3494.3	the debt entry quotes the regeneration that opened it, which task 70's third regeneration superseded inside the same PR
