@@ -42,6 +42,19 @@ public final class Surface {
       return new Entry(pred, null, pred, true);
     }
 
+    /**
+     * A filter the driver must not hold to {@code --expect-fused}: the Varka node is there and
+     * does the work, but a row-engine {@code Project} sits above it because the consumer wants
+     * fewer columns than the predicate reads. Every two-column predicate whose output is
+     * narrowed pays that today - {@code PLAN_TASK_62.md} 9.4 and the milestone's debt register
+     * - so the entry stays in the surface, measured and visible as the loss it is, and the
+     * flag records that the shape is expected to be partial rather than that the check was
+     * turned off. Flip these back to {@link #filter} when the debt closes.
+     */
+    static Entry residualFilter(String pred) {
+      return new Entry(pred, null, pred, false);
+    }
+
     static Entry both(String expr, String pred) {
       return new Entry(expr, expr, pred, true);
     }
@@ -67,8 +80,16 @@ public final class Surface {
       Entry.projection("weekday(d)"),
       Entry.projection("last_day(d)"),
       Entry.projection("next_day(d, 'MONDAY')"),
-      // Month arithmetic (task 40) and trunc (task 35).
+      // The week fold and the ISO fields (tasks 37, 57, 58).
+      Entry.projection("weekofyear(d)"),
+      Entry.projection("extract(DAYOFWEEK_ISO FROM d)"),
+      Entry.projection("extract(YEAROFWEEK FROM d)"),
+      // Month arithmetic (task 40) and trunc (task 35). The column count is task 60's, and
+      // `i` is 0..3649, inside VarkaChrono.MONTH_ARITH_MAX_MONTHS (24564), so no batch of it
+      // trips the guard - a declined batch here would measure the row engine under a fused
+      // row's name, which --expect-fused catches but the rate would not.
       Entry.projection("add_months(d, 3)"),
+      Entry.projection("add_months(d, i)"),
       Entry.projection("d + INTERVAL 3 MONTH"),
       Entry.projection("trunc(d, 'YEAR')"),
       Entry.projection("trunc(d, 'MONTH')"),
@@ -83,13 +104,13 @@ public final class Surface {
       // A fused chain: day arithmetic feeding a calendar field (task 52's guarded shape).
       Entry.projection("year(date_add(d, 30))"),
       // Predicates (tasks 8, 21, 24).
-      Entry.filter("d < d2"),
-      Entry.filter("d = d2"),
+      Entry.residualFilter("d < d2"),
+      Entry.residualFilter("d = d2"),
       Entry.filter("d BETWEEN DATE'2020-06-01' AND DATE'2021-06-01'"),
       Entry.filter("d IN (DATE'2020-01-01', DATE'2020-07-01', DATE'2021-01-01')"),
       Entry.filter("d IS NULL"),
       Entry.filter("d IS NOT NULL"),
-      Entry.filter("d < d2 AND month(d) = 6"));
+      Entry.residualFilter("d < d2 AND month(d) = 6"));
 
   private Surface() {}
 }
