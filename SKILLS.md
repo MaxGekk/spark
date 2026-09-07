@@ -1481,6 +1481,28 @@ record is handled, and the two that are not exhaustive (`tailReadsMarchMonth`, `
 throw at emit time on the first test. The hand-maintained lists are the ones to check by hand:
 the fuzzer's node generator and the two pinned fixtures.
 
+## A number superseded inside its own PR loses its provenance when the PR squash-merges
+
+- `dev/varka_quote_check.py` proves every number a document quotes traces to a committed
+  results file, and it searches those files' git history as well as their current contents.
+  That history is the branch's history only until the PR merges: vecbricks/varka
+  squash-merges, so a results file that was committed and then regenerated *within one PR*
+  reaches master in its final form alone, and the intermediate commit that carried the old
+  number is gone. A document sentence quoting the old number was traceable on the branch and
+  is an orphan on master.
+- This is not a corner case, it is what the benchmark discipline produces. Re-running a base
+  commit when the controls look flat but the fast rows moved (see "The benchmark controls are
+  necessary and not sufficient") means committing a run and then superseding it, and the
+  honest way to record the correction is to quote both numbers. Task 70 did exactly that for
+  `date_add emitted loop, null-free` - 19227.8 against the disturbed 12754.1 - and master
+  came out of the merge failing its own quote gate with exit code 2, in a PR whose own gate
+  had been green on every run.
+- So the check to make is on the *merge result*, not the branch: after a PR that regenerated
+  a results file more than once, run `dev/varka_quote_check.py` against master. Where the
+  orphan is a number the text quotes because it was wrong, the allowlist is the right home
+  for it - that is what a ratchet with reasons is for - and the reason should say the
+  provenance was squashed away, so nobody later hunts for a file that cannot exist.
+
 ## Repo Workflow (vecbricks/varka)
 
 - Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
