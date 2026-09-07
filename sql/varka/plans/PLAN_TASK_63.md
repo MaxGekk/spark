@@ -184,13 +184,84 @@ made and asserted by the register test:
 | `try_add(datediff(d2, d), i)` | declines | no dense loop (masked body only); the masked count registered instead |
 | `year(d)`, `datediff(d2, d)`, `date_add(d, i)` (controls) | as today | unmoved, asserted |
 
+### 3.4 What task 70 changed under this plan
+
+*Added 7 September 2026, after task 70 merged. Sections 3.1 to 3.3 were
+written before it and name the emitter as it was - `childrenOf`, `analyze`,
+`planWordRef`, `planSlots`. That list is no longer complete, and two of the
+additions are not optional: the code will not compile without them.*
+
+**The two liveness switches are exhaustive, on purpose.** `liveWords` walks a
+body twice - once over every node it emits, once over the queue of nodes whose
+own word is demanded - and since task 70's review both switches cover the
+sealed IR with no `default` arm, the discipline `childrenOf` and `analyze`
+already had. The reason is that a missing arm there is not a wrong answer but a
+silent one: the emitter throws, `VarkaKernelEvaluator` catches it as an
+emission failure, and every batch of that shape drops to the per-row path while
+EXPLAIN still claims fusion. So `IntArith` and `IntNeg` need arms in both, and
+the compiler will say so.
+
+* The consumer walk demands nothing for `WRAP` and `FAIL`, whose words are read
+  by their own root write or by the guard below, and demands the node's own
+  word for `NULL`, which stores it unconditionally - `MakeDate`'s arm is the
+  precedent and the reason.
+* The propagation loop demands both operands' words for `IntArith` and the
+  child's for `IntNeg`, which is what those arms load.
+
+**The overflow check extends one predicate, not two conditions.** 3.1 puts the
+`FAIL` mask into `s.guardAcc` and says the accumulator is allocated whenever the
+body has a `FAIL` node or a guarded producer. Since the review, "is this node
+guarded" is `guardedWord(analysis, node, producersGuarding, selfGuarding)`, read
+by `planSlots` for the temporary and by `liveWords` to keep the word alive,
+precisely so a third guarded node kind cannot be added to one and forgotten in
+the other. `IntArith` and `IntNeg` under `FAIL` are that third kind: extend
+`guardedWord`, do not add a condition beside it. Getting it wrong is loud rather
+than silent - `emitGuardCollect` refuses a word the liveness pass killed, with a
+message naming the missing consumer - but it is one edit either way.
+
+**The word algebra is where the free win is, and 3.3 does not have it.** Task 70
+added two views of a node's validity: `ownerOf`, naming the word a node's
+validity *is*, and `pureOf`, giving the bitmap expression that word denotes when
+it is a pure function of the input bitmaps. A root whose expression is a
+single-operator chain over input bitmaps has its whole validity bitmap written
+once per batch by the driver, and the loop then makes no per-group validity call
+at all; for a shape whose every word dies that way, the masked loop and epilogue
+are the dense ones' bytes.
+
+Under `WRAP` and `FAIL` this node's word is the AND of its operands', which is
+exactly such an expression, so both arms are worth adding:
+
+* `ownerOf`: `andOwner(node, left, right)` for `IntArith`, the child's owner for
+  `IntNeg`. Without an arm the node falls to `Own(node)`, which agrees with
+  `planWordRef`'s own default and passes the agreement assertion - so this is a
+  pessimisation rather than a failure. It costs a word slot and an AND on every
+  shape whose operands already share a word.
+* `pureOf`: `andExpr` of the operands' expressions for `IntArith`, the child's
+  for `IntNeg`, and **nothing for `NULL` mode**, whose word is that AND with an
+  overflow mask cleared - a function of values, not of bitmaps, the same
+  boundary `make_date` and `IfElse` sit on. The fail-safe default is already
+  null, so `NULL` needs no arm; it needs a test saying it is unserved on purpose.
+
+The consequence for 3.3 and for section 6: `year(d) * 100 + month(d)` over one
+date column has the word of a single input, so the bitmap pass serves it and its
+masked loop should be its dense loop's bytes. That is a byte count the register
+test can assert and a row the parity benchmark can show, and neither is in this
+plan as written.
+
+**Two smaller consequences.** `VarkaEmitOptions` gains `checkIntOverflow` as its
+eighteenth component, beside the two task 70 added. And
+`VarkaLoopEmitter.bitmapPassCounts`, the served-and-declined counter the review
+added as the pass's safety net, is pinned per shape by the emitter suite: this
+task's shapes belong in that test - served for the arithmetic over one date,
+unserved for `NULL` mode.
+
 ## 4. Files
 
 | file | what |
 |---|---|
 | `VarkaVectorIR.java` | `IntOp`, `Overflow`, `IntArith`, `IntNeg`; the renderings |
 | `VarkaEmitOptions.java` | `checkIntOverflow` |
-| `VarkaLoopEmitter.java` | the arms in `childrenOf`, `analyze`, `planWordRef`, `planSlots`, `weightOf`, `emitValue`; the check block factored from `emitRangeGuard`'s tail; `guardAcc` allocation widened; the `NULL` word; `nullsFromValidInputs` for `NULL` nodes; `requireOffsetShape` widened for `AddDays`/`SubDays` |
+| `VarkaLoopEmitter.java` | the arms in `childrenOf`, `analyze`, `planWordRef`, `planSlots`, `weightOf`, `emitValue`; the check block factored from `emitRangeGuard`'s tail; `guardAcc` allocation widened; the `NULL` word; `nullsFromValidInputs` for `NULL` nodes; `requireOffsetShape` widened for `AddDays`/`SubDays` | Since task 70 (3.4), also mandatory: `liveWords`' two exhaustive switches, `guardedWord` for the `FAIL` node, and `ownerOf`/`pureOf` for the word.
 | `VarkaReferenceEvaluator.scala` | the three modes per op: Scala's wrapping op, `Math.addExact` caught to a decline marker, and `None` |
 | `VarkaLoopEmitterSuite.scala` | the boundary matrices, the status tests, the `NULL` validity test, the register, both pinned fixtures re-pinned |
 | `VarkaIrFuzzSuite.scala` | arms for the three ops in `WRAP` over bounded operands, and `FAIL` over operands the bound keeps from overflowing |
@@ -276,6 +347,13 @@ per-row anchor computing the composite key with `Math.addExact` and
    `datediff` row's ratio within 10%.
 5. The overflow differential declines exactly the batches with an overflowing
    live row, and the ANSI error text is identical to the row engine's.
+6. *Added with 3.4.* `year(d) * 100 + month(d)` under `WRAP` lands on its dense
+   twin, because its word is one input's bitmap and task 70's pass writes that
+   once per batch: `loopMasked0` and `epilogueMasked` byte-equal to their dense
+   siblings, and the masked mixed-null parity row within the tie floor of the
+   null-free one. Under `FAIL` the guard keeps a word alive, so the two bodies
+   differ and the row does not - the split task 70 measured between `year(d)`
+   and `year(date_add(d, off))`.
 
 ## 7. Risks and open questions
 
