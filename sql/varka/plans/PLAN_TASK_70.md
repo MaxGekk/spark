@@ -123,6 +123,32 @@ node at 18% and 26%. `add_months` with a literal has nothing left - its
 81-op tail hides one write - and the column-count form keeps its read for
 the guard (2.2) until task 64 takes the guard off the in-range case.
 
+**The baseline rows added with this plan** (the regeneration committed
+beside it, at both widths), masked against dense:
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `greatest(d, d2)` (an OR root) | 10725.7 / 11344.9 | 2671.2 / 12909.1 |
+| `year+month+day+quarter`, shared, chunk 4096 | 1378.8 / 2197.5 | 429.1 / 808.0 |
+| the same, chunk 4095 | 1329.2 / 2211.0 | 430.0 / 809.3 |
+| the same, chunk 64 | 898.5 / 1538.0 | 384.5 / 705.4 |
+| the same, chunk 63 | 718.0 / 1367.4 | 353.3 / 660.5 |
+| `datediff`, first input all-null | 644329.9 | 644329.9 |
+
+Two things these say that the earlier table did not. The OR root is the
+largest relative mover in the file at 128-bit - a 4.8x gap, against 6% at
+AVX-512 - because a two-input masked body pays two reads, one write and its
+own OR word per group, and at four lanes a group is four rows; a
+narrow-vector measurement was not optional here, exactly as `SKILLS.md`
+says of anything that shares live values. And the all-null input costs
+nothing today: the driver's all-null shortcut returns before any loop runs,
+so for an AND root the pass's `0L` operand changes no work, only where the
+zero comes from. The chunk-64 and chunk-63 rows are risk 2's before-numbers:
+the masked four-field kernel runs at 0.58x and 0.53x of its dense twin on
+short batches at AVX-512, and 0.55x and 0.53x at 128-bit, which is the gap a
+per-batch pass has to close without costing more than the calls it replaces
+on an 8-byte bitmap.
+
 ### 2.5 The pinned oracles
 
 `VarkaLoopEmitterSuite`'s `everyNode` fixture is an `IfElse` root over a tree
@@ -301,11 +327,19 @@ counterpart.
    medium-high.
 2. `year, mixed nulls` moves by under 8% at AVX-512 and under 11% at 128-bit -
    the whole of its remaining gap - and is the smallest mover among the
-   served shapes. Confidence high.
+   served shapes. `greatest(d, d2), mixed nulls` is the largest relative
+   mover at 128-bit, closing at least half of its 4.8x gap (2671.2 towards
+   12909.1), and moves by under 6% at AVX-512, its whole gap there.
+   Confidence high on the ordering, medium on the half.
 3. `add_months(d, 13), mixed nulls` moves within run noise (its dense row is
    0.4% away). Confidence high. `add_months(d, m)` column count moves less
    than `next_day(d, k)` column, because its read stays for the guard.
-   Confidence medium.
+   Confidence medium. The short-batch rows move with the long ones: the
+   four-field masked kernel at chunk 64 and 63 closes at least half of its
+   gap to the dense twin at both widths, and the pass is never the reason a
+   short-batch row is slower than before. Confidence medium - this is risk 2
+   measured. The all-null row does not move at all: it is the driver's
+   shortcut, before and after.
 4. No masked row passes its dense counterpart. Confidence high; a miss is a
    measurement error to explain, not a result.
 5. No pinned oracle moves and no dense committed number moves beyond noise.
