@@ -26,6 +26,7 @@ import scala.util.Random
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
 
 /**
  * Random IR trees against the reference evaluator.
@@ -142,6 +143,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       case n: DayOfYear => (366L, g(n.days()))
       case n: AddMonths => (v(n.days()) + v(n.months()) * 31, g(n.days(), n.months()))
       case n: TruncDate => (v(n.days()), g(n.days()))
+      // The dynamic form moves the date down like the literal one, whatever the level; the
+      // level column contributes no day magnitude of its own, only whatever guarded producer
+      // might sit under it, which `g` picks up.
+      case n: TruncDateDynamic => (v(n.days()), g(n.days(), n.level()))
       case n: LastDay => (v(n.days()) + 31, g(n.days()))
       // make_date guards its own year, so its output is a date inside the column contract.
       case n: MakeDate =>
@@ -161,8 +166,17 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
    *  every batch and decline it - leaving the status-zero assertions nothing to check. Giving
    *  one ordinal a small range is what lets a *column* month count be fuzzed at all, and it is
    *  the operand shape task 63 will want too. Its `Gen` bound stays `columnBound` wherever the
-   *  generic leaf draws it, which over-approximates its real range in the safe direction. */
-  private class Shapes(rnd: Random, numInputs: Int, numLiterals: Int, smallOrdinal: Int) {
+   *  generic leaf draws it, which over-approximates its real range in the safe direction.
+   *
+   *  `levelOrdinal` is the same idea for task 61's `trunc` with a format column, or -1 when
+   *  this iteration has fewer than three inputs. `TruncLevelLeaf` hands the kernel
+   *  `DateTimeUtils.parseTruncLevel`'s codes - 6 (`WEEK`) to 9 (`YEAR`) - or a null lane, and
+   *  nothing else, so a level column drawn at day magnitude would be a lane the leaf can never
+   *  produce and the node would be fuzzed outside its contract. `runOne` draws this one from
+   *  the four codes instead, which is what lets `TruncDateDynamic` be generated at all - it
+   *  was the one IR node type this suite could not reach. */
+  private class Shapes(rnd: Random, numInputs: Int, numLiterals: Int, smallOrdinal: Int,
+      levelOrdinal: Int) {
     private var budget = 20
 
     /**
@@ -278,8 +292,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
                 // column-level form (task 61, TruncDateDynamic) stays out: its level column
                 // holds the leaf's codes 6..9, and the fuzzer's columns hold day-magnitude
                 // values, so every lane would be one the leaf never produces.
-                val levels = TruncLevel.values()
-                Gen(new TruncDate(a.node, levels(rnd.nextInt(levels.length))), a.bound)
+                if (levelOrdinal >= 0 && rnd.nextBoolean()) {
+                  // Task 61's column form, over the ordinal whose lanes hold the leaf's codes.
+                  Gen(new TruncDateDynamic(a.node, new ColumnRef(levelOrdinal)), a.bound)
+                } else {
+                  val levels = TruncLevel.values()
+                  Gen(new TruncDate(a.node, levels(rnd.nextInt(levels.length))), a.bound)
+                }
               case _ => Gen(new LastDay(a.node), a.bound + 31)
             }
           }
@@ -353,7 +372,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     // *column* month count can be fuzzed; see Shapes' doc. With a single input there is no
     // ordinal to spare - that one has to stay a day column for every other arm.
     val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
-    val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal)
+    // The second special column, and only when there are three: with two, taking one for
+    // trunc levels would leave a single day column and starve every other arm.
+    val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
+    val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
     val depth = 1 + rnd.nextInt(4)
     // Either a projection of value roots or one selection root: the two kinds of kernel
     // production emits, never mixed in one class.
@@ -373,7 +395,14 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     def draw(bound: Long): Int =
       (rnd.nextLong() % (2 * bound + 1) - bound).toInt.max(-bound.toInt).min(bound.toInt)
     val data = Array.tabulate(numInputs, length) { (c, _) =>
-      draw(if (c == smallOrdinal) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
+      if (c == levelOrdinal) {
+        // Exactly the codes TruncLevelLeaf produces; a value outside them is a lane the
+        // kernel's contract does not define, so the fuzzer must not invent one.
+        DateTimeUtils.TRUNC_TO_WEEK + rnd.nextInt(
+          DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
+      } else {
+        draw(if (c == smallOrdinal) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
+      }
     }
 
     val context = s"seed=$seed iteration=$iteration " +
@@ -461,6 +490,48 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       arena.close()
       loader.release()
     }
+  }
+
+  test("the generator reaches every IR node type") {
+    // A green fuzz run says nothing about a node type the generator cannot build: the shapes
+    // that would have exercised it are simply never drawn, and the suite reports success for
+    // the ones it did draw. That is not hypothetical - `TruncDateDynamic` was outside this
+    // generator from task 61 until this test was written, and the gap was found by reading the
+    // arms rather than by anything failing.
+    //
+    // So the reachable set is asserted rather than assumed, against the sealed hierarchy itself
+    // so a node type added to the IR fails here until the generator can build it. Generation
+    // only: no bytes are emitted and nothing runs, so this is cheap enough to draw far more
+    // shapes than the differential test does.
+    val permitted = {
+      def walk(c: Class[_]): Set[Class[_]] = {
+        val subs = Option(c.getPermittedSubclasses).map(_.toSet).getOrElse(Set.empty[Class[_]])
+        if (subs.isEmpty) Set(c) else subs.flatMap(walk)
+      }
+      walk(classOf[VarkaVectorIR]).filter(_.isRecord).map(_.getSimpleName)
+    }
+    val seen = scala.collection.mutable.Set.empty[String]
+    def collect(node: AnyRef): Unit = {
+      seen += node.getClass.getSimpleName
+      node.getClass.getRecordComponents.foreach { rc =>
+        val v = rc.getAccessor.invoke(node)
+        if (v != null && classOf[VarkaVectorIR].isInstance(v)) collect(v.asInstanceOf[AnyRef])
+      }
+    }
+    val rnd = new Random(seed)
+    for (_ <- 0 until 20000) {
+      val numInputs = 1 + rnd.nextInt(3)
+      val numLiterals = rnd.nextInt(3)
+      val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
+      val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
+      val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
+      val depth = 1 + rnd.nextInt(4)
+      if (rnd.nextInt(5) == 0) collect(shapes.cond(depth)) else collect(shapes.value(depth).node)
+    }
+    val missing = permitted -- seen
+    assert(missing.isEmpty,
+      s"the generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an arm, or " +
+        "state here why the node type is deliberately out of the fuzzer's reach")
   }
 
   test(s"random IR trees match the reference evaluator (seed $seed, $iterations iterations)") {
