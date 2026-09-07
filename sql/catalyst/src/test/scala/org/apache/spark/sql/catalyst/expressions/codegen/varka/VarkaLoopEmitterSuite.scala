@@ -2591,6 +2591,51 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       forceMasked = true, ctx = "forced-masked")
   }
 
+  test("task 70: the validity-word algebra agrees with planWordRef on the shapes the plan " +
+      "reasons about, and every word a body stores is loaded") {
+    // Two emit-time assertions arm this task before it changes a byte. planSlots asserts, on
+    // every masked body it plans, that the symbolic word algebra (Analysis.pureWord and
+    // wordOwner - what the bitmap pass will read) and the slot references planWordRef assigns
+    // describe the same word; and every loop or epilogue body asserts at its end that each
+    // word it stored was loaded at least once and each word it loaded was stored, through the
+    // one call every consumer reads a word by. Both run under every test in this suite and
+    // every fuzz iteration. This test exists so a failure names itself here first, on the
+    // shapes PLAN_TASK_70.md 3.3 registers op counts for, rather than inside whichever other
+    // test happens to build the shape - and so that the two corners the agreement check
+    // deliberately allows (greatest over two literals, greatest over one input twice: a slot
+    // written with `-1 | -1` where the algebra says the constant or the input) are exercised on
+    // purpose. Emission is the assertion.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val d3 = new ColumnRef(2)
+    val d4 = new ColumnRef(3)
+    val lit = new LiteralSlot(0)
+    def ymdq(c: VarkaVectorIR) = Seq[VarkaVectorIR](
+      new Year(c), new Month(c), new DayOfMonth(c), new Quarter(c))
+    val shapes: Seq[(String, Seq[VarkaVectorIR], Int)] = Seq(
+      ("year(d)", Seq(new Year(d)), 1),
+      ("year, month, dayofmonth, quarter over d", ymdq(d), 1),
+      ("next_day(d, k), column kernel", Seq(new NextDay(d, d2)), 2),
+      ("greatest(d, d2)", Seq(new Greatest(d, d2)), 2),
+      ("year(date_add(d, off)), guarded", Seq(new Year(new AddDays(d, d2))), 2),
+      ("year(d) beside d < lit", Seq(new Year(d), new Compare(CompareOp.LT, d, lit)), 1),
+      ("if(d < d2, d, d2)", Seq(new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)), 2),
+      ("datediff(greatest(d, d2), greatest(d3, d4)), the mixed tree",
+        Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4),
+      ("greatest(lit, lit) beside year(d)", Seq(new Greatest(lit, lit), new Year(d)), 1),
+      ("greatest(d, d)", Seq(new Greatest(d, d)), 1),
+      ("datediff(d, d)", Seq(new DateDiff(d, d)), 1),
+      ("make_date, both forms", Seq[VarkaVectorIR](
+        new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), false),
+        new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), true)), 1),
+      ("trunc(d, level column)", Seq(new TruncDateDynamic(d, d2)), 2),
+      ("add_months(d, m), column count, under year", Seq(new Year(new AddMonths(d, d2))), 2))
+    for ((name, roots, numInputs) <- shapes) {
+      val (_, bytes) = emitMulti(roots, numInputs, 1)
+      assert(bytes.nonEmpty, name)
+    }
+  }
+
   test("task 45: the driver's fill writes the bits the loop used to OR, exactly") {
     // The narrow claim: the dense path writes the same bits from a different place. So the
     // check is byte-for-byte identity against today's path, at every length where the last

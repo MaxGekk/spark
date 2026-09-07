@@ -682,6 +682,7 @@ public final class VarkaLoopEmitter {
       analysis.analyzeRoot(root);
     }
     analysis.collectGuardedProducers();
+    analysis.planWordAlgebra();
 
     // Method layout, all sharing the seven-parameter shape so slots line up everywhere:
     // `run` dispatches per batch to a dense or masked *driver*; the driver zeroes the output
@@ -1266,6 +1267,42 @@ public final class VarkaLoopEmitter {
    * schedule planSlots' validity aliasing depends on - and marks the null-skipping subtrees
    * the all-null shortcut must not reason about.
    */
+  // ---------------------------------------------------------------------------------------------
+  // The validity-word algebra (task 70).
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Which word a value node's validity <i>is</i>, stated before any slot exists: one input's
+   * bitmap word, the all-true constant a literal-only subtree has, or a word the node computes
+   * into a slot of its own. This is {@link #planWordRef} in symbolic form - the same aliasing
+   * rules over names instead of slot numbers - and {@link #planSlots} asserts the two agree on
+   * every node it plans, so the algebra {@link WordExpr} states cannot drift from the emission
+   * it describes. Task 70's bitmap pass and its word-liveness rule both read this map rather
+   * than the slot numbers, because they have to decide things before the slots are assigned.
+   */
+  private sealed interface WordOwner {
+    record Input(int ordinal) implements WordOwner {}
+    record Own(VarkaVectorIR node) implements WordOwner {}
+    enum Const implements WordOwner { ALL_TRUE }
+  }
+
+  /**
+   * The bitmap expression a value node's validity word denotes, where that word is a pure
+   * function of the inputs' bitmaps: an input's bitmap, the all-true constant, the AND of two
+   * (task 11's null-intolerant rule) or the OR of two ({@code greatest}/{@code least}'s
+   * null-skipping rule). A node whose word is computed from something other than input
+   * bitmaps - {@code IfElse}'s blend by the known-true mask, {@code make_date}'s validity
+   * test, a {@code Cond} - has no expression here. Folded as it is built: all-true is the
+   * identity of AND and the annihilator of OR, and equal operands collapse, which is exactly
+   * the folding {@link #andRef} does on slots, so the two views name the same thing.
+   */
+  private sealed interface WordExpr {
+    record Input(int ordinal) implements WordExpr {}
+    enum Const implements WordExpr { ALL_TRUE }
+    record And(WordExpr a, WordExpr b) implements WordExpr {}
+    record Or(WordExpr a, WordExpr b) implements WordExpr {}
+  }
+
   private static final class Analysis {
     final int numInputs;
     final int numLiterals;
@@ -1321,6 +1358,18 @@ public final class VarkaLoopEmitter {
      * correctness, not a producer's insurance.
      */
     final Set<VarkaVectorIR> selfGuarding = new HashSet<>();
+
+    /**
+     * Task 70: per value node, which word its validity is - see {@link WordOwner}. Filled by
+     * {@link #planWordAlgebra()} once every root is analyzed; {@code Cond} nodes have no entry.
+     */
+    final Map<VarkaVectorIR, WordOwner> wordOwner = new HashMap<>();
+    /**
+     * Task 70: per value node whose word is a pure function of the inputs' bitmaps, the
+     * expression it denotes - see {@link WordExpr}. A value node absent here has a computed
+     * word ({@code IfElse}, {@code MakeDate}, or anything over one of those).
+     */
+    final Map<VarkaVectorIR, WordExpr> pureWord = new HashMap<>();
 
     /**
      * Whether some node turns valid inputs into a null output (task 42's non-ANSI
@@ -1395,6 +1444,123 @@ public final class VarkaLoopEmitter {
         throw new IllegalArgumentException(
             "condition node " + node + " in a value position (" + position + ")");
       }
+    }
+
+    /**
+     * Fills {@link #wordOwner} and {@link #pureWord} over the topological order, children
+     * first, so every node sees its children's entries. The owner rules are
+     * {@link #planWordRef}'s, case for case; the purity rules are the word algebra each
+     * emission arm implements - AND for the null-intolerant nodes, OR for the null-skipping
+     * pick, an alias for every unary node, and nothing for a node that computes its word.
+     */
+    void planWordAlgebra() {
+      for (VarkaVectorIR node : topoOrder) {
+        if (node instanceof Cond) {
+          continue;
+        }
+        wordOwner.put(node, ownerOf(node));
+        WordExpr pure = pureOf(node);
+        if (pure != null) {
+          pureWord.put(node, pure);
+        }
+      }
+    }
+
+    private WordOwner ownerOf(VarkaVectorIR node) {
+      return switch (node) {
+        case ColumnRef c -> new WordOwner.Input(c.ordinal());
+        case LiteralSlot l -> WordOwner.Const.ALL_TRUE;
+        case AddDays n -> andOwner(node, n.days(), n.offset());
+        case SubDays n -> andOwner(node, n.days(), n.offset());
+        case NextDay n -> andOwner(node, n.days(), n.offset());
+        case TruncDateDynamic n -> andOwner(node, n.days(), n.level());
+        case AddMonths n -> andOwner(node, n.days(), n.months());
+        case DateDiff n -> andOwner(node, n.end(), n.start());
+        case DayOfWeek n -> wordOwner.get(n.days());
+        case WeekDay n -> wordOwner.get(n.days());
+        case DayOfWeekIso n -> wordOwner.get(n.days());
+        case ThursdayOf n -> wordOwner.get(n.days());
+        case Year n -> wordOwner.get(n.days());
+        case Month n -> wordOwner.get(n.days());
+        case DayOfMonth n -> wordOwner.get(n.days());
+        case Quarter n -> wordOwner.get(n.days());
+        case DayOfYear n -> wordOwner.get(n.days());
+        case LastDay n -> wordOwner.get(n.days());
+        case TruncDate n -> wordOwner.get(n.days());
+        case WeekOfYear n -> wordOwner.get(n.days());
+        // Greatest/Least (OR), IfElse (blend) and MakeDate always compute their own word.
+        default -> new WordOwner.Own(node);
+      };
+    }
+
+    /** {@link #andRef}'s folding over owners: all-true drops out, equal operands collapse. */
+    private WordOwner andOwner(VarkaVectorIR node, VarkaVectorIR a, VarkaVectorIR b) {
+      WordOwner wa = wordOwner.get(a);
+      WordOwner wb = wordOwner.get(b);
+      if (wa == WordOwner.Const.ALL_TRUE) {
+        return wb;
+      }
+      if (wb == WordOwner.Const.ALL_TRUE || wa.equals(wb)) {
+        return wa;
+      }
+      return new WordOwner.Own(node);
+    }
+
+    private WordExpr pureOf(VarkaVectorIR node) {
+      return switch (node) {
+        case ColumnRef c -> new WordExpr.Input(c.ordinal());
+        case LiteralSlot l -> WordExpr.Const.ALL_TRUE;
+        case AddDays n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
+        case SubDays n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
+        case NextDay n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
+        case TruncDateDynamic n -> andExpr(pureWord.get(n.days()), pureWord.get(n.level()));
+        case AddMonths n -> andExpr(pureWord.get(n.days()), pureWord.get(n.months()));
+        case DateDiff n -> andExpr(pureWord.get(n.end()), pureWord.get(n.start()));
+        case Greatest n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
+        case Least n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
+        case DayOfWeek n -> pureWord.get(n.days());
+        case WeekDay n -> pureWord.get(n.days());
+        case DayOfWeekIso n -> pureWord.get(n.days());
+        case ThursdayOf n -> pureWord.get(n.days());
+        case Year n -> pureWord.get(n.days());
+        case Month n -> pureWord.get(n.days());
+        case DayOfMonth n -> pureWord.get(n.days());
+        case Quarter n -> pureWord.get(n.days());
+        case DayOfYear n -> pureWord.get(n.days());
+        case LastDay n -> pureWord.get(n.days());
+        case TruncDate n -> pureWord.get(n.days());
+        case WeekOfYear n -> pureWord.get(n.days());
+        // A blend by the known-true mask, and a word ANDed with a computed validity test.
+        case IfElse n -> null;
+        case MakeDate n -> null;
+        default -> null;
+      };
+    }
+
+    private static WordExpr andExpr(WordExpr a, WordExpr b) {
+      if (a == null || b == null) {
+        return null;
+      }
+      if (a == WordExpr.Const.ALL_TRUE) {
+        return b;
+      }
+      if (b == WordExpr.Const.ALL_TRUE || a.equals(b)) {
+        return a;
+      }
+      return new WordExpr.And(a, b);
+    }
+
+    private static WordExpr orExpr(WordExpr a, WordExpr b) {
+      if (a == null || b == null) {
+        return null;
+      }
+      if (a == WordExpr.Const.ALL_TRUE || b == WordExpr.Const.ALL_TRUE) {
+        return WordExpr.Const.ALL_TRUE;
+      }
+      if (a.equals(b)) {
+        return a;
+      }
+      return new WordExpr.Or(a, b);
     }
 
     private void analyze(VarkaVectorIR node) {
@@ -1681,6 +1847,18 @@ public final class VarkaLoopEmitter {
     /** {@code MakeDate}'s {@link #MAKE_DATE_TMP_COUNT} locals (task 42). */
     final Map<VarkaVectorIR, int[]> makeDateTmp = new HashMap<>();
 
+    /**
+     * Task 70: the word slots this body stored ({@link #storeWord}) and how often it loaded
+     * each ({@link #loadWord}). {@link #assertWordsLive} reads them at the end of a loop or
+     * epilogue body: every word the body defines must be read at least once, and every word it
+     * reads must be one it defined. The inventory of word consumers in {@code PLAN_TASK_70.md}
+     * 2.2 is how the liveness rule was designed; these counters are what keep a consumer that
+     * inventory missed from being missed silently, since {@code loadWord} is the one call every
+     * consumer reads a word through.
+     */
+    final Map<Integer, Integer> wordUses = new HashMap<>();
+    final Set<Integer> wordDefs = new HashSet<>();
+
     Slots(int numInputs, int numOutputs) {
       srcSeg = new int[numInputs];
       srcValSeg = new int[numInputs];
@@ -1784,6 +1962,7 @@ public final class VarkaLoopEmitter {
               s.ownWord.add(node);
             }
             s.wordRef.put(node, ref);
+            assertWordAlgebraAgrees(node, ref, s, analysis);
           }
           if (cse && analysis.useCount.get(node) > 1 && !(node instanceof LiteralSlot)) {
             s.sharedSlot.put(node, slot++);
@@ -1900,6 +2079,58 @@ public final class VarkaLoopEmitter {
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
     };
+  }
+
+  /**
+   * Task 70: the slot reference {@link #planWordRef} assigned and the symbolic owner
+   * {@link Analysis#planWordAlgebra()} derived must name the same word, and the algebra
+   * {@link Analysis#pureWord} states must not contradict what the emission computes.
+   *
+   * <p>Two checks. The mirror is exact: an owner of input {@code i} is that input's slot, the
+   * constant is {@link #WORD_ALL_TRUE}, and an own word is the slot of the node that owns it -
+   * which may be a descendant, since every unary node and every AND over one non-constant
+   * operand aliases downward. The algebra check runs only in the direction that can be wrong.
+   * The two views fold differently on purpose: {@code greatest}/{@code least} always compute
+   * their own word, so over two literals or over one input twice the emitter owns a slot it
+   * writes with {@code -1 | -1} where the algebra says the constant or the input, and that
+   * slack propagates upward through every parent that ANDs with the pick's slot. So an owner
+   * that is a node's own word constrains the algebra not at all - not even by operator: two
+   * operands with different owners can have equal expressions, and then a pick's {@code l | r}
+   * folds to an AND, which is what the fuzzer found the first version of this check refusing -
+   * while an owner that is an input or the constant must be exactly what the algebra says, and
+   * a computed word can never be either. What this leaves unchecked - an arm whose
+   * {@code pureOf} rule was changed to the wrong operator - produces a wrong bitmap, which
+   * {@code checkMatrix}'s byte-for-byte validity comparison and the fuzzer catch at run time.
+   * An {@code IllegalStateException} here means one side moved without the other, which is the
+   * drift the bitmap pass cannot be allowed to inherit.
+   */
+  private static void assertWordAlgebraAgrees(VarkaVectorIR node, int ref, Slots s,
+      Analysis analysis) {
+    WordOwner owner = analysis.wordOwner.get(node);
+    WordExpr pure = analysis.pureWord.get(node);
+    String problem = switch (owner) {
+      case WordOwner.Input in -> ref != s.word[in.ordinal()]
+          ? "the owner is input " + in.ordinal() + " but the slot is " + ref
+          : !(pure instanceof WordExpr.Input pi && pi.ordinal() == in.ordinal())
+              ? "the owner is input " + in.ordinal() + " but the algebra says " + pure : null;
+      case WordOwner.Const c -> ref != WORD_ALL_TRUE
+          ? "the owner is the constant but the slot is " + ref
+          : pure != WordExpr.Const.ALL_TRUE
+              ? "the owner is the constant but the algebra says " + pure : null;
+      case WordOwner.Own o -> {
+        VarkaVectorIR n = o.node();
+        Integer ownRef = s.wordRef.get(n);
+        yield !s.ownWord.contains(n) || ownRef == null || ownRef != ref
+            ? "the owner is " + VarkaVectorIR.canonical(n) + "'s own word but the slot is "
+                + ref + " and that node's is " + ownRef
+            : null;
+      }
+    };
+    if (problem != null) {
+      throw new IllegalStateException("validity-word algebra disagrees with planWordRef on "
+          + VarkaVectorIR.canonical(node) + ": " + problem + " (pure=" + pure + ", owner="
+          + owner + ")");
+    }
   }
 
   private static int andRef(int a, int b) {
@@ -2133,6 +2364,7 @@ public final class VarkaLoopEmitter {
       }
       case LOOP -> {
         emitVectorLoop(cb, dense, outputs, groups.get(group), analysis, s);
+        assertWordsLive(s, mode);
         emitStatusReturn(cb, s);
       }
       case EPILOGUE -> {
@@ -2144,6 +2376,7 @@ public final class VarkaLoopEmitter {
           all.add(o);
         }
         emitEpilogue(cb, dense, outputs, all, analysis, s);
+        assertWordsLive(s, mode);
         emitStatusReturn(cb, s);
       }
     }
@@ -2348,7 +2581,7 @@ public final class VarkaLoopEmitter {
         cb.labelBinding(wNoNulls);
         cb.loadConstant(-1L);
         cb.labelBinding(wDone);
-        cb.lstore(s.word[i]);
+        storeWord(cb, s, s.word[i]);
       }
     }
 
@@ -2438,7 +2671,7 @@ public final class VarkaLoopEmitter {
     if (dense) {
       cb.loadConstant(-1L);
     } else {
-      loadWord(cb, s.wordRef.get(root));
+      loadWord(cb, s, s.wordRef.get(root));
     }
     emitValidityOr(cb, analysis, s);
   }
@@ -2527,12 +2760,46 @@ public final class VarkaLoopEmitter {
     }
   }
 
-  /** Pushes a validity word: a long local, or the all-true constant. */
-  private static void loadWord(CodeBuilder cb, int ref) {
+  /**
+   * Pushes a validity word: a long local, or the all-true constant. The one call every consumer
+   * of a word goes through, which is what makes {@link Slots#wordUses} a complete count.
+   */
+  private static void loadWord(CodeBuilder cb, Slots s, int ref) {
     if (ref == WORD_ALL_TRUE) {
       cb.loadConstant(-1L);
     } else {
       cb.lload(ref);
+      s.wordUses.merge(ref, 1, Integer::sum);
+    }
+  }
+
+  /** Stores the word on the stack into its slot, recording the definition. */
+  private static void storeWord(CodeBuilder cb, Slots s, int ref) {
+    cb.lstore(ref);
+    s.wordDefs.add(ref);
+  }
+
+  /**
+   * Task 70's invariant over one loop or epilogue body, checked when its lane group has been
+   * emitted: every word the body stored was loaded at least once, and every word it loaded was
+   * one it stored. The first half is what the liveness rule will make load-bearing - a word
+   * defined and never read is per-group work the pass was meant to remove; the second is a
+   * verifier error stated in the emitter's own terms. Both hold on the emitter as it stood
+   * before the pass, which the whole suite and the fuzzer establish by running.
+   */
+  private static void assertWordsLive(Slots s, BodyMode mode) {
+    for (int ref : s.wordDefs) {
+      if (!s.wordUses.containsKey(ref)) {
+        throw new IllegalStateException("word slot " + ref + " is stored but never loaded in a "
+            + mode + " body: a consumer the liveness inventory lists is not emitted, or the "
+            + "word is dead and should not have been computed");
+      }
+    }
+    for (int ref : s.wordUses.keySet()) {
+      if (!s.wordDefs.contains(ref)) {
+        throw new IllegalStateException("word slot " + ref + " is loaded but never stored in a "
+            + mode + " body: a consumer the liveness inventory missed");
+      }
     }
   }
 
@@ -2651,7 +2918,8 @@ public final class VarkaLoopEmitter {
         // both inputs' words, stored here as AddMonths does by hand; a literal weekday is the
         // all-true word and planWordRef aliases the date's, so nothing is stored.
         if (!dense && s.ownWord.contains(node)) {
-          emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
+          emitAndWord(cb, s, s.wordRef.get(node), s.wordRef.get(n.days()),
+              s.wordRef.get(n.offset()));
         }
       }
       case Year n -> emitChrono(cb, node, dense, analysis, s, computed);
@@ -2667,7 +2935,8 @@ public final class VarkaLoopEmitter {
         // A column level can be null on its own (task 61), so the node's word is the AND of
         // both inputs' words - NextDay's rule for its column weekday.
         if (!dense && s.ownWord.contains(node)) {
-          emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(n.days()), s.wordRef.get(n.level()));
+          emitAndWord(cb, s, s.wordRef.get(node), s.wordRef.get(n.days()),
+              s.wordRef.get(n.level()));
         }
       }
       case MakeDate n -> emitMakeDate(cb, n, dense, analysis, s, computed);
@@ -2692,15 +2961,15 @@ public final class VarkaLoopEmitter {
         if (!dense) {
           // valid = (kT & validThen) | (~kT & validElse), the chosen branch's validity.
           cb.lload(s.kt.get(n.cond()));
-          loadWord(cb, s.wordRef.get(n.thenNode()));
+          loadWord(cb, s, s.wordRef.get(n.thenNode()));
           cb.land();
           cb.lload(s.kt.get(n.cond()));
           cb.loadConstant(-1L);
           cb.lxor();
-          loadWord(cb, s.wordRef.get(n.elseNode()));
+          loadWord(cb, s, s.wordRef.get(n.elseNode()));
           cb.land();
           cb.lor();
-          cb.lstore(s.wordRef.get(node));
+          storeWord(cb, s, s.wordRef.get(node));
         }
       }
       case Cond c -> throw new IllegalStateException(
@@ -2714,11 +2983,11 @@ public final class VarkaLoopEmitter {
   }
 
   /** {@code lstore(own, ref(a) & ref(b))} - the null-intolerant word rule. */
-  private static void emitAndWord(CodeBuilder cb, int own, int a, int b) {
-    loadWord(cb, a);
-    loadWord(cb, b);
+  private static void emitAndWord(CodeBuilder cb, Slots s, int own, int a, int b) {
+    loadWord(cb, s, a);
+    loadWord(cb, s, b);
     cb.land();
-    cb.lstore(own);
+    storeWord(cb, s, own);
   }
 
   /**
@@ -2736,7 +3005,7 @@ public final class VarkaLoopEmitter {
     line(cb, analysis, node);
     cb.invokevirtual(INT_VECTOR, op, desc);
     if (!dense && s.ownWord.contains(node)) {
-      emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(left), s.wordRef.get(right));
+      emitAndWord(cb, s, s.wordRef.get(node), s.wordRef.get(left), s.wordRef.get(right));
     }
     Integer guardTmp = s.guardTmp.get(node);
     if (guardTmp != null) {
@@ -2814,7 +3083,7 @@ public final class VarkaLoopEmitter {
   private static void emitGuardCollect(CodeBuilder cb, Integer word, boolean dense, Slots s) {
     if (!dense && word != null && word != WORD_ALL_TRUE) {
       cb.aload(s.species);
-      loadWord(cb, word);
+      loadWord(cb, s, word);
       cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
@@ -2919,12 +3188,12 @@ public final class VarkaLoopEmitter {
     // The node's word: the inputs' AND, in a masked body.
     Integer own = dense ? null : s.wordRef.get(n);
     if (!dense) {
-      loadWord(cb, s.wordRef.get(n.year()));
-      loadWord(cb, s.wordRef.get(n.month()));
+      loadWord(cb, s, s.wordRef.get(n.year()));
+      loadWord(cb, s, s.wordRef.get(n.month()));
       cb.land();
-      loadWord(cb, s.wordRef.get(n.day()));
+      loadWord(cb, s, s.wordRef.get(n.day()));
       cb.land();
-      cb.lstore(own);
+      storeWord(cb, s, own);
     }
     // The decline mask: a year outside the limits, plus an invalid date under ANSI.
     cb.aload(okY);
@@ -2944,7 +3213,7 @@ public final class VarkaLoopEmitter {
       cb.aload(valid);
       cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
       cb.land();
-      cb.lstore(own);
+      storeWord(cb, s, own);
     }
   }
 
@@ -2973,7 +3242,7 @@ public final class VarkaLoopEmitter {
     cb.aload(tmp[0]);
     cb.aload(tmp[1]);
     cb.aload(s.species);
-    loadWord(cb, s.wordRef.get(left));
+    loadWord(cb, s, s.wordRef.get(left));
     cb.loadConstant(-1L);
     cb.lxor();
     cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
@@ -2981,16 +3250,16 @@ public final class VarkaLoopEmitter {
     cb.aload(tmp[1]);
     cb.aload(tmp[0]);
     cb.aload(s.species);
-    loadWord(cb, s.wordRef.get(right));
+    loadWord(cb, s, s.wordRef.get(right));
     cb.loadConstant(-1L);
     cb.lxor();
     cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
     cb.invokevirtual(INT_VECTOR, "blend", BLEND);
     cb.invokevirtual(INT_VECTOR, op, LANEWISE_VV);
-    loadWord(cb, s.wordRef.get(left));
-    loadWord(cb, s.wordRef.get(right));
+    loadWord(cb, s, s.wordRef.get(left));
+    loadWord(cb, s, s.wordRef.get(right));
     cb.lor();
-    cb.lstore(s.wordRef.get(node));
+    storeWord(cb, s, s.wordRef.get(node));
   }
 
   /**
@@ -3592,7 +3861,7 @@ public final class VarkaLoopEmitter {
     // from the emitValue call just above), so it moves here instead - earlier than task 40
     // needed it, but the AND itself is unchanged.
     if (!dense && s.ownWord.contains(node)) {
-      emitAndWord(cb, s.wordRef.get(node), s.wordRef.get(node.days()),
+      emitAndWord(cb, s, s.wordRef.get(node), s.wordRef.get(node.days()),
           s.wordRef.get(node.months()));
     }
     Integer monthsGuardTmp = s.guardTmp.get(node);
@@ -4387,17 +4656,17 @@ public final class VarkaLoopEmitter {
           cb.lstore(s.cmpTmp);
           // kT = cmp & validL & validR; kF = ~cmp & validL & validR.
           cb.lload(s.cmpTmp);
-          loadWord(cb, s.wordRef.get(n.left()));
+          loadWord(cb, s, s.wordRef.get(n.left()));
           cb.land();
-          loadWord(cb, s.wordRef.get(n.right()));
+          loadWord(cb, s, s.wordRef.get(n.right()));
           cb.land();
           cb.lstore(s.kt.get(node));
           cb.lload(s.cmpTmp);
           cb.loadConstant(-1L);
           cb.lxor();
-          loadWord(cb, s.wordRef.get(n.left()));
+          loadWord(cb, s, s.wordRef.get(n.left()));
           cb.land();
-          loadWord(cb, s.wordRef.get(n.right()));
+          loadWord(cb, s, s.wordRef.get(n.right()));
           cb.land();
           cb.lstore(s.kf.get(node));
         }
@@ -4467,9 +4736,9 @@ public final class VarkaLoopEmitter {
           // every consumer truncates (`fromLong` reads species-length bits,
           // `orValidityBitsAt` applies its lane mask) - the same invariant IfElse's ~kT
           // already relies on.
-          loadWord(cb, s.wordRef.get(n.child()));
+          loadWord(cb, s, s.wordRef.get(n.child()));
           cb.lstore(s.kt.get(node));
-          loadWord(cb, s.wordRef.get(n.child()));
+          loadWord(cb, s, s.wordRef.get(n.child()));
           cb.loadConstant(-1L);
           cb.lxor();
           cb.lstore(s.kf.get(node));
