@@ -466,3 +466,94 @@ one part in twenty between the two tables.
   4.2.0's; to be read before PR (C) quotes the row.
 * PR (B), the runner with the pinned Xeon and the datapath probe; PR (C),
   the README from the runner's files.
+
+## 10. Outcome, the 1B-row run: the size rule met, and three losses become wins
+
+9.4 left the laptop's run to be redone "after the stack (#123 to #130) lands
+and the surface gains its entries", because the 500M files broke the job-size
+rule of `PLAN_MILESTONE_4.md` 2.29 (5.1% to 9.6% fixed share on the Varka
+projection rows, passed only because the night script's gate was 15%) and
+because three of their four filter losses were shapes that declined at their
+int literal on a branch that predated task 37. Both are now done. The four
+files here are one sweep at 1,000,000,000 rows in one partition under a 32g
+driver, stock 4.2.0 on JDK 17, stock 4.2.0 on JDK 25, this fork with Varka
+off, and this fork with Varka on, in that order, on an idle laptop with the
+canary green and the datapath probe reading 1.00 (this machine's AVX-512 is
+256 bits wide - `SKILLS.md` - so every ratio here is a 256-bit-datapath one).
+
+**The size rule is met, with room.** Fifty Varka rows carry a fixed share; the
+worst two read 4.5%, the median 1.7%, and none exceeds the 5% rule. At 500M
+the same rows ran 5.1% to 9.6%. The rule can be checked from the committed
+file alone: every `# fixed share` line is in it.
+
+**Four entries were added to the surface**, the ones the existing table
+supports: `weekofyear(d)` (task 37), `extract(DAYOFWEEK_ISO FROM d)` and
+`extract(YEAROFWEEK FROM d)` (tasks 57 and 58), and `add_months(d, i)`, task
+60's column month count - `i` runs 0..3649, inside
+`VarkaChrono.MONTH_ARITH_MAX_MONTHS` (24564), so no batch trips the guard,
+which matters because a declined batch would measure the row engine under a
+fused row's name. Thirty-nine entries, fifty measured shapes, every one of
+them a Varka plan with zero fallback batches.
+
+| new entry | stock JDK 17 | Varka | ratio |
+|---|---|---|---|
+| `weekofyear(d)` | 24.6 | 835.3 | 33.96x |
+| `extract(DAYOFWEEK_ISO FROM d)` | 40.6 | 1613.8 | 39.75x |
+| `extract(YEAROFWEEK FROM d)` | 38.3 | 971.0 | 25.35x |
+| `add_months(d, i)` | 32.1 | 451.7 | 14.07x |
+
+**Three of the four losses are gone.** 9.1 reported `year(d) = 2021` at 0.69x,
+`dayofweek(d) = 1` at 0.85x and `d < d2 AND month(d) = 6` at 0.95x, and named
+the cause: the compiler admitted an int literal against a fused field only
+from task 37, so the Varka filter took `isnotnull(d)` alone and Janino filtered
+every row. With task 37 in, all three fuse and all three win, against stock on
+JDK 17:
+
+| shape | before (500M) | now, columnar | now, counted |
+|---|---|---|---|
+| `year(d) = 2021` | 0.69x | 9.47x | 2.16x |
+| `dayofweek(d) = 1` | 0.85x | 16.53x | 6.48x |
+| `d < d2 AND month(d) = 6` | 0.95x | 4.20x | 4.63x |
+
+**Two losses remain, and neither is a kernel loss.**
+
+* `d < d2` at 0.66x columnar and 0.57x counted: the column-narrowing debt of
+  9.4. `SELECT d FROM t WHERE d < d2` puts a Janino `Project` above the
+  row-producing filter because a projection with no fusable entry is not
+  eligible even when every entry is a forwarded column of a Varka child. The
+  same shape without the narrowing, `d = d2`, runs 6.95x.
+* `d IS NOT NULL`, counted, at 0.43x with 96.8% selected: task 19's read-back
+  floor, in the public table as the loss it is.
+
+The three shapes that are partial for that reason - `d < d2`, `d = d2` and
+`d < d2 AND month(d) = 6` - are now `Surface.residualFilter` rather than
+`Surface.filter`, so `--expect-fused` holds every other shape to full fusion
+and records these as expected-partial instead. The first sweep exited 3 on
+them, after writing all four files: the gate found what it exists to find, and
+the flag now says which shapes are known to be partial rather than turning the
+check off.
+
+**The projections, for the record.** Every one of the 32 projection rows is
+between 11.5x and 41.9x of stock on JDK 17. The extremes are `dayofweek(d)` at
+41.85x and `add_months(d, i)` at 14.07x, with `weekday(d)` 40.26x,
+`extract(DAYOFWEEK_ISO FROM d)` 39.75x, `weekofyear(d)` 33.96x and
+`trunc(d, 'QUARTER')` 30.65x above the rest. The plain day arithmetic sits
+near 24x and the calendar extractions near 20x against JDK 25.
+
+**The controls still say what they said.** The fork with Varka off tracks
+stock on JDK 25 within a couple of percent on every row but
+`trunc(d, 'QUARTER')` (38.4 against 27.9), which is 9.4's open item: the fork
+tracks master, whose `truncDate` may differ from 4.2.0's, and it is to be read
+before PR (C) quotes that row. Stock on JDK 25 against JDK 17 keeps the shape
+9.1 found - the date arithmetic within a few percent, the calendar rows well
+apart (`year(d)` 54.0 to 68.1) - so the JDK 17 column is what a reader
+upgrading from today's Spark sees and the JDK 25 column isolates Varka.
+
+**What this still does not do.** `make_date` and the column forms of
+`next_day` and `trunc` are not in the surface: each needs columns the table
+does not have, two of them strings, and at a billion rows those columns take
+the cached table from about 12 GB to about 42 GB. The house pattern is a
+narrow table per shape family, as `VarkaThroughputBenchmark` has, which is a
+driver change rather than a surface one and belongs with PR (B). PR (B), the
+pinned full-width runner, and PR (C), the README, are unchanged by this run
+except that they now have a laptop data point that meets the size rule.
