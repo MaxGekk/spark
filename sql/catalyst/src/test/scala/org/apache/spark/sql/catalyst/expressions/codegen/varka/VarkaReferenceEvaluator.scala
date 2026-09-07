@@ -113,6 +113,35 @@ object VarkaReferenceEvaluator {
     case n: AddMonths =>
       for (d <- evalValue(n.days(), row, lits); m <- evalValue(n.months(), row, lits))
         yield DateTimeUtils.dateAddMonths(d, m)
+    // Task 63. The oracle is Java's own arithmetic, not the emitter's sign test: Math.addExact
+    // and friends define overflow, and catching their throw is what says a lane overflowed.
+    // WRAP is the wrapping operator, which is what Spark's LEGACY mode and the JVM both do.
+    case n: IntArith =>
+      for (l <- evalValue(n.left(), row, lits); r <- evalValue(n.right(), row, lits); v <- {
+        def exact(f: (Int, Int) => Int): Option[Int] =
+          try Some(f(l, r)) catch { case _: ArithmeticException => None }
+        val wrapped = n.op() match {
+          case IntOp.ADD => l + r
+          case IntOp.SUB => l - r
+          case IntOp.MUL => l * r
+        }
+        n.mode() match {
+          case Overflow.WRAP => Some(wrapped)
+          // FAIL declines the batch rather than returning a value, so a row that overflows
+          // has no expected value at all; the suite asserts the status, and reaching this
+          // arm with an overflowing row means the kernel did not decline when it had to.
+          case Overflow.FAIL | Overflow.NULL => n.op() match {
+            case IntOp.ADD => exact(Math.addExact)
+            case IntOp.SUB => exact(Math.subtractExact)
+            case IntOp.MUL => exact(Math.multiplyExact)
+          }
+        }
+      }) yield v
+    case n: IntNeg =>
+      for (c <- evalValue(n.child(), row, lits); v <- n.mode() match {
+        case Overflow.WRAP => Some(-c)
+        case _ => if (c == Int.MinValue) None else Some(-c)
+      }) yield v
     case n: MakeDate =>
       // The definition: LocalDate.of, null (None) where the calendar rejects the triple - never
       // the length rule the emitter computes. The year limit is the kernel's business, not the
