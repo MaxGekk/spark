@@ -201,7 +201,12 @@ class has a deliberate method anatomy:
   epilogue are the dense ones' bytes. What stays per group is what is not a
   function of input bitmaps: a filter's selection bitmap, `IF`/`CASE`'s blend,
   `make_date`'s validity test, and every word a range guard or a comparison
-  still reads.
+  still reads. `greatest` and `least` are served for their own validity and
+  still read both operands' words per group, because that is how the value is
+  built - the null operand is substituted by the other - so they gain less
+  than the calendar shapes do. A tree that mixes the two operators, such as
+  `datediff(greatest(d, d2), greatest(d3, d4))`, is not served at all and
+  keeps its per-group write.
 * The vector walk is split into sibling loop methods of at most
   `GROUP_BUDGET` (16) IR nodes each - or up to `FUSED_CEILING` (400) vector
   ops where the outputs in a method share a calendar prefix (task 32) - one

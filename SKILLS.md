@@ -997,6 +997,50 @@ trusting them, not just its ratios.
   new. It also moved one figure a whole task was reasoning from by a factor of five: the
   OR root's AVX-512 gap read 5.5% on the bad file and 27.7% on the good one.
 
+## A `--rounds` probe with no nulls compiles only half the kernel
+
+- `dev/varka_emit.sh --rounds N` ran the emitted kernel hot with `Array.fill(numInputs)(0)`
+  as the null counts, and the emitted `run` dispatches a null-free batch to the *dense*
+  driver. So every `-XX:+PrintCompilation` and `-XX:CompileCommand=print` probe taken
+  through that tool had been looking at `loopDense0` and had no way to see the masked
+  body at all - which is the half that task 70 changed, that carries every validity
+  word, and that the parity file's mixed-null rows measure. The first probe of the
+  105x row came back "both arms compile identically" for exactly that reason, and the
+  reason was invisible: the tool prints method sizes for both bodies whether or not it
+  runs them. `--nulls N` now drives the masked path, and a probe that means to reason
+  about a mixed-null row has to pass it.
+- The general form: a diagnostic that *emits* everything but *executes* one path will
+  answer questions about the path it did not run, confidently and wrongly. When a probe
+  agrees with neither hypothesis, check what it actually executed before believing it.
+
+## Flipping a default silently retires every A/B built on `DEFAULTS`
+
+- An A/B pair in the parity benchmark is two kernels emitted from
+  `VarkaEmitOptions.DEFAULTS` and `DEFAULTS.with<Option>(false)`. That is exactly right
+  until some *other* option's default flips underneath it and removes the work the first
+  option governs. Task 70 turned `validityByBitmap` on, so a served root makes no
+  per-group validity call at all; task 46's three pairs - the width-named helpers and the
+  OR's position, both of which only change how that call is made - were left comparing two
+  byte-identical kernels, and the regenerated file committed three rows that priced
+  nothing while `VarkaEmitOptions`' javadoc still cited them as the evidence for those
+  options. The 128-bit numbers say it plainly in hindsight: the pair that had read -21%
+  against its comparand read -1.6% after the flip.
+- **The tests caught their half and the benchmark could not catch its own.** Task 46's
+  three *naming* tests assert that `orValidityBitsAt16` appears in the class, so they
+  failed the moment the call disappeared and were re-pinned on the reference arm in the
+  same commit as the flip. Its two *behavioural* tests compare results across the option
+  and passed, because two identical kernels do agree - and so did the benchmark, which
+  only prints numbers. An assertion fails when its subject vanishes; an A/B measurement
+  reports a tie.
+- The rule that follows: **build an A/B's arms from the variant they belong to, never
+  from `DEFAULTS`**, so the pair says which arm it rides and survives the next flip -
+  `perGroupWrite.withValidityByWidth(false)` rather than
+  `DEFAULTS.withValidityByWidth(false)`. And when a default does flip, walk every other
+  pair in the file and ask what work each one's option still governs; three of them here
+  had none left. The same is true one layer up: a *test* that compares two settings for
+  equality is not evidence that either setting does anything, so pair it with an
+  assertion on the emitted names, which is what fails when the work is gone.
+
 ## Write the Prediction Down, Then Measure
 
 - Three perf predictions in this repo's plans were reversed by measurement: "the

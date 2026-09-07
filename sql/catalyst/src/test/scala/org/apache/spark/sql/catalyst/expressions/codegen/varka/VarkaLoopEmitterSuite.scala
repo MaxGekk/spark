@@ -2781,6 +2781,48 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(validityOps(mixed, "loopMasked0") === 5, "four reads for the picks, one write")
   }
 
+  test("task 70: the served and declined root counts, per shape") {
+    // The safety net PLAN_TASK_70.md 3.1 promised. Without it a regression that stopped
+    // serving every root would revert the whole lowering to the per-group path and pass the
+    // suite: the byte-identity test compares the two settings, which agree when nothing is
+    // served; the differential compares against a reference evaluator, and the per-group path
+    // is correct; and every size assertion is an upper bound. So the counts are pinned per
+    // shape here, in both directions - what is served, and what is declined and why.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val d3 = new ColumnRef(2)
+    val d4 = new ColumnRef(3)
+    def counts(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int = 0,
+        options: VarkaEmitOptions = bitmapOn): (Int, Int) = {
+      val c = VarkaLoopEmitter.bitmapPassCounts(roots.asJava, numInputs, numLiterals, options)
+      (c(0), c(1))
+    }
+    // Served, and nothing declined: a leaf word, an AND chain, an OR chain, four fields over
+    // one date, and the shape the whole task is named for.
+    assert(counts(Seq(new Year(d)), 1) === (1, 0))
+    assert(counts(Seq(new DateDiff(new DateDiff(d, d2), d3)), 3) === (1, 0))
+    assert(counts(Seq(new Greatest(new Greatest(d, d2), d3)), 3) === (1, 0))
+    assert(counts(Seq(new Year(d), new Month(d), new DayOfMonth(d), new Quarter(d)), 1)
+      === (4, 0))
+    // Declined for a mixed tree - the one kind the counter is for.
+    assert(counts(Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4) === (0, 1))
+    // Unserved but not declined: a word the emission computes rather than folds. `IfElse`
+    // blends by the known-true mask and `make_date` tests its own validity, so neither has a
+    // pure expression at all and neither is a mixed tree.
+    val blend = new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)
+    assert(counts(Seq(blend), 2) === (0, 0))
+    assert(counts(Seq(new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), false)), 1)
+      === (0, 0))
+    // A `Cond` root is a selection bitmap, not a value: never served, never counted.
+    assert(counts(Seq(new Compare(CompareOp.LT, d, d2)), 2) === (0, 0))
+    // With the option off nothing is served and nothing is declined - the pass does not run,
+    // so a shape that would have been declined is not counted as one.
+    val off = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
+    assert(counts(Seq(new Year(d)), 1, 0, off) === (0, 0))
+    assert(counts(Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4, 0, off)
+      === (0, 0))
+  }
+
   test("task 70: the word-liveness invariant is armed, in both directions") {
     // misdescribeWordLiveness inverts the verdict on every word. year(d): its only word is
     // dead - the root is served and nothing else reads it - so the fault makes it live: stored
@@ -2798,9 +2840,22 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       emitMulti(Seq(new Year(new AddDays(d, d2))), 2, 0, fault)
     }
     assert(loaded.getMessage.contains("declared dead is loaded"), loaded.getMessage)
+    // make_date: its own word is demanded unconditionally, because its guard reads it, so the
+    // fault kills it and the guard's load is refused - the same direction as above, on the one
+    // node that reaches its word through neither the AND family nor a root write. Pinned
+    // because that arm read its slot directly until this task's review: a raw load reaches no
+    // refusal at all, and the emission died in the class-file writer with an invalid local
+    // index instead, which is not what this injector is documented to raise.
+    val makeDate = new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), false)
+    val guardLoad = intercept[IllegalStateException] {
+      emitMulti(Seq[VarkaVectorIR](makeDate), 1, 0, fault)
+    }
+    assert(guardLoad.getMessage.contains("declared dead is loaded"), guardLoad.getMessage)
     // With the pass off every word is live already, so the inversion has nothing to invert.
     assert(emitMulti(Seq(new Year(d)), 1, 0, bitmapOff.withMisdescribeWordLiveness(true))
       ._2.nonEmpty)
+    assert(emitMulti(Seq[VarkaVectorIR](makeDate), 1, 0,
+      bitmapOff.withMisdescribeWordLiveness(true))._2.nonEmpty)
   }
 
   test("task 70: a masked method whose every word is dead is its dense twin's bytes - one " +
@@ -2983,6 +3038,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // settings, at every null pattern and every length where the last byte is partial. The
     // helpers' own equivalence is pinned in the engine's VarkaVectorSupportWidthTest; this is
     // the emitted loop calling them with the rows and words it really produces.
+    // On the per-group reference arm, for the reason the naming tests above give: both of
+    // these roots are served by task 70's bitmap pass, so under the shipped default neither
+    // arm makes a per-group validity call and the two would be the same kernel - a
+    // self-comparison that could not fail. The default path's own coverage of these helpers
+    // is the declined-root test below, where the per-group write survives.
     val col = new ColumnRef(0)
     val roots = Seq[VarkaVectorIR](new Year(col), new DayOfWeek(col))
     val lengths = Seq(1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095)
@@ -2990,6 +3050,32 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     for (byWidth <- Seq(true, false)) {
       checkMatrix(roots, 1, Array.empty[Int], lengths, nullPatterns.map(p => Seq(p._2)),
         data = inRangeDays, ctx = s"validityByWidth=$byWidth",
+        options = VarkaEmitOptions.DEFAULTS.withValidityByWidth(byWidth)
+          .withValidityByBitmap(false))
+    }
+  }
+
+  test("task 46: the specialised helpers are still reached under task 70's default") {
+    // What the two A/B tests above cannot check once they run on the reference arm: that the
+    // width-specialised writer is still emitted, and still right, on the shipped default. A
+    // root the bitmap pass declines is what keeps a per-group write there - here a tree that
+    // mixes the two operators, which no chain of one operator can fold - so the helpers are
+    // named and the results compared with `validityByBitmap` left on.
+    val mixed = new DateDiff(new Greatest(new ColumnRef(0), new ColumnRef(1)),
+      new Greatest(new ColumnRef(2), new ColumnRef(3)))
+    assert(VarkaLoopEmitter.bitmapPassCounts(Seq[VarkaVectorIR](mixed).asJava, 4, 0,
+      VarkaEmitOptions.DEFAULTS) === Array(0, 1), "the fixture is meant to be declined")
+    for ((lanes, _) <- Seq(2 -> 64, 4 -> 128, 8 -> 256, 16 -> 512)) {
+      val bytes = emitMulti(Seq[VarkaVectorIR](mixed), 4, 0,
+        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))._2
+      val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
+      assert(called.contains(s"orValidityBitsAt$lanes"),
+        s"$lanes lanes: the default path lost the specialised writer: $called")
+    }
+    for (byWidth <- Seq(true, false)) {
+      checkMatrix(Seq(mixed), 4, Array.empty[Int], Seq(17, 64, 65, 1000, 4095),
+        nullPatterns.map(p => Seq(p._2, p._2, p._2, p._2)),
+        ctx = s"declined root, validityByWidth=$byWidth",
         options = VarkaEmitOptions.DEFAULTS.withValidityByWidth(byWidth))
     }
   }
@@ -3023,11 +3109,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val blend = new IfElse(new Compare(CompareOp.LT, col, lit), new AddDays(col, lit), col)
     val roots = Seq[VarkaVectorIR](new Year(col), new Year(blend), new Greatest(col, blend))
     def inRangeDays(c: Int, i: Int): Int = 19000 + (i % 9973)
+    // On the per-group reference arm: `validityOrFirst` moves the per-group OR, and under
+    // task 70's default the first root makes no such OR at all while the other two hold
+    // computed words that were never known before the compute - so all three arms would be
+    // one kernel and the comparison would be with itself.
     for (orFirst <- Seq(true, false)) {
       checkMatrix(roots, 1, Array(3), Seq(7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095),
         nullPatterns.map(p => Seq(p._2)), data = inRangeDays, forceMasked = true,
         ctx = s"validityOrFirst=$orFirst",
-        options = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(orFirst))
+        options = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(orFirst)
+          .withValidityByBitmap(false))
     }
   }
 

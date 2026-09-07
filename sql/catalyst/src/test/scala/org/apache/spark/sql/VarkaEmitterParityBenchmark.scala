@@ -598,7 +598,16 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // group, and the selection kernel below, which makes it in both bodies. The
         // null-free-with-per-group-OR pair isolates the write with no masked machinery around
         // it, and is directly comparable to the task 45 row beside it.
-        val generalHelpers = VarkaEmitOptions.DEFAULTS.withValidityByWidth(false)
+        // Both task 46 arms ride task 70's per-group reference variant. Under the shipped
+        // default a served root makes no per-group validity call at all, so on `year`, the
+        // four fields and `dayofweek` the width-named helper and the OR's position have
+        // nothing left to change and each pair would time one kernel against itself. On the
+        // reference arm the call is back and the pairs price what they are named for; their
+        // comparand is the "words per group (task 70 A/B)" row beside them, not the shipped
+        // one. The dense (null-free) arms and the filter kernel are unaffected either way -
+        // the pass rewrites only the masked body, and a `Cond` root is never served - so the
+        // same options serve them unchanged.
+        val generalHelpers = perGroupWrite.withValidityByWidth(false)
         val yearGeneral = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 892, generalHelpers)
         val yearPerGroupGeneral = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 893,
           generalHelpers.withDenseValidityOnce(false))
@@ -612,7 +621,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // The second half of task 46: the same kernels with the validity OR emitted after the
         // store, which is where it was until the compiled loop showed it as a real call in every
         // arm. Both sides carry the width-named helpers, so this pair prices the order alone.
-        val orAfter = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(false)
+        val orAfter = perGroupWrite.withValidityOrFirst(false)
         val yearOrAfter = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 887, orAfter)
         val fourSharedOrAfter = emit(fourFields, 1, 0, loader, 888, orAfter)
         val selectionRoot = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
@@ -653,14 +662,17 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("year, words per group (task 70 A/B), mixed nulls") { _ =>
           chunked(yearWordsPerGroup, true)
         }
-        benchmark.addCase("year, general validity helpers (task 46 A/B), mixed nulls") { _ =>
+        benchmark.addCase(
+          "year, per group + general validity helpers (task 46 A/B), mixed nulls") { _ =>
           chunked(yearGeneral, true)
         }
-        benchmark.addCase("year, validity OR after the store (task 46 A/B), mixed nulls") { _ =>
+        benchmark.addCase(
+          "year, per group + OR after the store (task 46 A/B), mixed nulls") { _ =>
           chunked(yearOrAfter, true)
         }
         benchmark.addCase("dayofweek, mixed nulls") { _ => chunked(dow, true) }
-        benchmark.addCase("dayofweek, general validity helpers (task 46 A/B), mixed nulls") { _ =>
+        benchmark.addCase(
+          "dayofweek, per group + general validity helpers (task 46 A/B), mixed nulls") { _ =>
           chunked(dowGeneral, true)
         }
         benchmark.addCase("filter d < literal, null-free") { _ =>
@@ -803,11 +815,13 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           chunked(fourSharedWordsPerGroup, true, outputs = 4)
         }
         benchmark.addCase(
-          "year+month+day+quarter, shared, general helpers (task 46 A/B), mixed nulls") { _ =>
+          "year+month+day+quarter, shared, per group + general helpers (task 46 A/B), " +
+            "mixed nulls") { _ =>
           chunked(fourSharedGeneral, true, outputs = 4)
         }
         benchmark.addCase(
-          "year+month+day+quarter, shared, OR after the store (task 46 A/B), mixed nulls") { _ =>
+          "year+month+day+quarter, shared, per group + OR after the store (task 46 A/B), " +
+            "mixed nulls") { _ =>
           chunked(fourSharedOrAfter, true, outputs = 4)
         }
         // The regression guard section 5.2 asks for: two chrono nodes over different dates

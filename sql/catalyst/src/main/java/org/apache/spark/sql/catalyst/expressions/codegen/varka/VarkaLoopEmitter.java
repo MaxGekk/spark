@@ -1208,6 +1208,41 @@ public final class VarkaLoopEmitter {
     return true;
   }
 
+  /**
+   * How the bitmap pass (task 70) classified the value roots of this shape under
+   * {@code options}: {@code [served, declined]}, where a declined root is one whose word is a
+   * pure expression that mixes AND and OR, which no chain of one operator can fold into the
+   * destination. Every other unserved root - a computed word, a {@code Cond}, the whole shape
+   * with {@link VarkaEmitOptions#validityByBitmap} off - is in neither count.
+   *
+   * <p>This is the safety net PLAN_TASK_70.md 3.1 and 5 promise and the counter alone did not
+   * provide: with only an increment inside a private class, a regression that stopped serving
+   * every root would revert the whole lowering to the per-group path and pass every test, since
+   * the byte-identity tests compare the two settings (equal when nothing is served), the
+   * differential compares against a reference evaluator (the per-group path is correct), and
+   * the size assertions are upper bounds. The suite pins both numbers per shape instead.
+   *
+   * <p>Runs the analysis and nothing else - no bytes are emitted, so it is safe to call on a
+   * shape whose emission would exceed a budget.
+   */
+  public static int[] bitmapPassCounts(List<VarkaVectorIR> outputs, int numInputs,
+      int numLiterals, VarkaEmitOptions options) {
+    Analysis analysis = new Analysis(numInputs, numLiterals, options);
+    for (VarkaVectorIR root : outputs) {
+      analysis.analyzeRoot(root);
+    }
+    analysis.collectGuardedProducers();
+    analysis.planWordAlgebra();
+    analysis.planBitmapPass(outputs);
+    int served = 0;
+    for (BitmapPass pass : analysis.served) {
+      if (pass != null) {
+        served++;
+      }
+    }
+    return new int[] {served, analysis.declinedBitmapRoots};
+  }
+
   /** The height of {@code node}, memoized per distinct node like {@code Analysis.height}. */
   private static int budgetWalk(VarkaVectorIR node,
       java.util.HashMap<VarkaVectorIR, Integer> heights, int[] opNodes) {
@@ -1278,18 +1313,6 @@ public final class VarkaLoopEmitter {
     cb.ireturn();
   }
 
-  // ---------------------------------------------------------------------------------------------
-  // Validation and DAG analysis.
-  // ---------------------------------------------------------------------------------------------
-
-  /**
-   * One walk over the output trees, before any bytecode exists: validates every node, counts
-   * uses on structural equality (the DAG view of trees the caller may have built
-   * independently), computes per node the referenced-column bitset and its height, collects a
-   * post-order (children-first) topological order - the line map's numbering, and the
-   * schedule planSlots' validity aliasing depends on - and marks the null-skipping subtrees
-   * the all-null shortcut must not reason about.
-   */
   // ---------------------------------------------------------------------------------------------
   // The validity-word algebra (task 70).
   // ---------------------------------------------------------------------------------------------
@@ -1378,6 +1401,18 @@ public final class VarkaLoopEmitter {
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Validation and DAG analysis.
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * One walk over the output trees, before any bytecode exists: validates every node, counts
+   * uses on structural equality (the DAG view of trees the caller may have built
+   * independently), computes per node the referenced-column bitset and its height, collects a
+   * post-order (children-first) topological order - the line map's numbering, and the
+   * schedule planSlots' validity aliasing depends on - and marks the null-skipping subtrees
+   * the all-null shortcut must not reason about.
+   */
   private static final class Analysis {
     final int numInputs;
     final int numLiterals;
@@ -2130,9 +2165,7 @@ public final class VarkaLoopEmitter {
           // column-count AddMonths guards itself and takes one whatever the option says.
           // MakeDate, the other self-guarding node, guards out of makeDateTmp and takes none -
           // allocating one for it would shift every later local and move the pinned bytes.
-          if ((producersGuarding && analysis.guardedProducers.contains(node))
-              || (selfGuarding && node instanceof AddMonths
-                  && analysis.selfGuarding.contains(node))) {
+          if (guardedWord(analysis, node, producersGuarding, selfGuarding)) {
             s.guardTmp.put(node, slot++);
           }
           if (node instanceof MakeDate) {
@@ -2294,6 +2327,20 @@ public final class VarkaLoopEmitter {
   }
 
   /**
+   * Whether {@code node} carries a range guard in this body, and so needs its own validity word
+   * for {@link #emitGuardCollect} to qualify the condemning mask with. The one place the two
+   * readers agree: {@link #planSlots} allocates the guard's temporary under it and
+   * {@link #liveWords} demands the word under it, and a third guarded node kind added to one
+   * and not the other would give that node a guard whose word the liveness pass had killed.
+   * Tasks 52 and 60 each added a kind; this is what makes the next one a single edit.
+   */
+  private static boolean guardedWord(Analysis analysis, VarkaVectorIR node,
+      boolean producersGuarding, boolean selfGuarding) {
+    return (producersGuarding && analysis.guardedProducers.contains(node))
+        || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node));
+  }
+
+  /**
    * Task 70's word liveness for one loop or epilogue body: the set of words some consumer in
    * the body still reads once the bitmap pass has taken over the served roots' writes. A word
    * is <i>demanded</i> by a consumer and then <i>propagated</i> to the operands its computation
@@ -2350,7 +2397,12 @@ public final class VarkaLoopEmitter {
       for (VarkaVectorIR child : childrenOf(n)) {
         walk.add(child);
       }
+      // Exhaustive over the sealed IR, like `childrenOf` and `Analysis.analyze`, and for the
+      // same reason: a node type added without an arm here is a word the emission loads and
+      // the liveness pass killed, which `loadWord` turns into an `IllegalStateException` that
+      // the evaluator can only report as a per-batch fallback. A compile error instead.
       switch (n) {
+        // The consumers: nodes that read a word other than for their own root write.
         case Compare c -> {
           demand.accept(analysis.wordOwner.get(c.left()));
           demand.accept(analysis.wordOwner.get(c.right()));
@@ -2365,17 +2417,46 @@ public final class VarkaLoopEmitter {
           demand.accept(analysis.wordOwner.get(l.right()));
         }
         case MakeDate m -> demand.accept(new WordOwner.Own(m));
-        default -> { }
+        // The rest read no word here. A value node's own word, where it needs one, is
+        // demanded by its root write, by a guard below, or by a consumer above it; a leaf
+        // owns no word at all; and `IfElse`'s blend reads its branches' words through the
+        // propagation loop, which is where the demand for its own word arrives.
+        case ColumnRef c -> { }
+        case LiteralSlot l -> { }
+        case AddDays x -> { }
+        case SubDays x -> { }
+        case DateDiff x -> { }
+        case DayOfWeek x -> { }
+        case WeekDay x -> { }
+        case DayOfWeekIso x -> { }
+        case NextDay x -> { }
+        case ThursdayOf x -> { }
+        case Year x -> { }
+        case Month x -> { }
+        case DayOfMonth x -> { }
+        case Quarter x -> { }
+        case DayOfYear x -> { }
+        case LastDay x -> { }
+        case TruncDate x -> { }
+        case TruncDateDynamic x -> { }
+        case WeekOfYear x -> { }
+        case AddMonths x -> { }
+        case IfElse x -> { }
+        case And x -> { }
+        case Or x -> { }
+        case Not x -> { }
       }
-      boolean guarded = (producersGuarding && analysis.guardedProducers.contains(n))
-          || (selfGuarding && n instanceof AddMonths && analysis.selfGuarding.contains(n));
-      if (guarded) {
+      if (guardedWord(analysis, n, producersGuarding, selfGuarding)) {
         demand.accept(analysis.wordOwner.get(n));
       }
     }
     // Propagation to the operands each own word's computation loads.
     while (!work.isEmpty()) {
       VarkaVectorIR n = work.poll();
+      // Exhaustive for the reason the walk's switch above is. Only a node whose owner is its
+      // own word ever reaches this queue, so the arms below it are unreachable rather than
+      // no-ops - but they are written out, not defaulted, so that a new node type has to say
+      // which it is.
       switch (n) {
         case AddDays x -> { demand.accept(analysis.wordOwner.get(x.days()));
           demand.accept(analysis.wordOwner.get(x.offset())); }
@@ -2398,7 +2479,28 @@ public final class VarkaLoopEmitter {
         case MakeDate x -> { demand.accept(analysis.wordOwner.get(x.year()));
           demand.accept(analysis.wordOwner.get(x.month()));
           demand.accept(analysis.wordOwner.get(x.day())); }
-        default -> { }
+        // A leaf owns no word; every unary node aliases its child's, so its owner is that
+        // child's and the child, not the alias, is what the queue holds; a `Cond` has no
+        // entry in `wordOwner` at all.
+        case ColumnRef x -> { }
+        case LiteralSlot x -> { }
+        case DayOfWeek x -> { }
+        case WeekDay x -> { }
+        case DayOfWeekIso x -> { }
+        case ThursdayOf x -> { }
+        case Year x -> { }
+        case Month x -> { }
+        case DayOfMonth x -> { }
+        case Quarter x -> { }
+        case DayOfYear x -> { }
+        case LastDay x -> { }
+        case TruncDate x -> { }
+        case WeekOfYear x -> { }
+        case Compare x -> { }
+        case And x -> { }
+        case Or x -> { }
+        case Not x -> { }
+        case IsNotNull x -> { }
       }
     }
     if (analysis.options.misdescribeWordLiveness()) {
@@ -2497,8 +2599,18 @@ public final class VarkaLoopEmitter {
         continue;
       }
       // Task 70: a loop or epilogue body whose every reader of this input's word is gone
-      // needs none of its null state either - only the driver, which runs the shortcut and
-      // the pass, still derives it. This is what makes such a body the dense one's bytes.
+      // needs none of its null state either. This is what makes such a body the dense one's
+      // bytes.
+      //
+      // The driver still derives all of it, and most of that is dead there: `hasNulls[i]`,
+      // `srcValSeg[i]` and `srcSeg[i]` are read only inside `emitLaneGroup` and `emitValue`,
+      // which only a loop or epilogue body calls, so in the masked driver they are written
+      // and never read; `dead[i]` is read by the all-null shortcut alone, and is dead too on
+      // any shape that emits no shortcut - a `Cond` root, a null-skipping root, an output
+      // over no column. The liveness pass this task added is what could remove it, but the
+      // driver is planned with `live = null` (see planSlots) and this is deliberately not
+      // that change: it is the residue PLAN_TASK_70.md 9.2 prediction 3 measures and leaves
+      // to task 47, which owns the driver.
       if (dense || s.deadRefs.contains(s.word[i])) {
         loadSegment(cb, P_SRC_DATA, i, s.dataBytes, s.srcSeg[i]);
         continue;
@@ -3431,6 +3543,14 @@ public final class VarkaLoopEmitter {
    * The batch falls back and the answers stay right; only the fusion is lost.
    */
   private static void emitGuardCollect(CodeBuilder cb, Integer word, boolean dense, Slots s) {
+    // WORD_DEAD is deliberately not screened here beside the all-true constant. A guarded node
+    // whose word the liveness pass killed is a bug in that pass, not a case to emit around:
+    // the AND is what keeps a null lane from condemning the batch, so skipping it quietly
+    // would turn a liveness error into spurious batch declines on nullable data. `loadWord`
+    // refuses instead, and that refusal is what {@code misdescribeWordLiveness} arms in the
+    // "loaded" direction. What makes the case unreachable is {@link #guardedWord}: one
+    // predicate, read by both the slot planner and the liveness pass, so neither can decide
+    // this node is guarded while the other decides its word is dead.
     if (!dense && word != null && word != WORD_ALL_TRUE) {
       cb.aload(s.species);
       loadWord(cb, s, word);
@@ -3535,9 +3655,14 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
     cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     cb.astore(okY);
-    // The node's word: the inputs' AND, in a masked body.
+    // The node's word: the inputs' AND, in a masked body. Gated on `ownWord` like every other
+    // arm rather than on `!dense` alone: liveness demands this word unconditionally today (the
+    // guard below reads it), so the two conditions agree, but a rule that stopped demanding it -
+    // a conditional guard, which is task 64's direction - would otherwise leave the store in
+    // with no reader and `assertWordsLive` would refuse a correct emission.
     Integer own = dense ? null : s.wordRef.get(n);
-    if (!dense) {
+    boolean ownLive = !dense && s.ownWord.contains(n);
+    if (ownLive) {
       loadWord(cb, s, s.wordRef.get(n.year()));
       loadWord(cb, s, s.wordRef.get(n.month()));
       cb.land();
@@ -3558,8 +3683,8 @@ public final class VarkaLoopEmitter {
     emitDaysFromCivil(cb, year, clamped, day, t[7], t[8], t[9], t[10], t[11], t[12], t[13],
         t[14], t[15], t[16], t[17]);
     // Under the NULL form an invalid date is a null output: the validity joins the word.
-    if (!dense && !n.failOnError()) {
-      cb.lload(own);
+    if (ownLive && !n.failOnError()) {
+      loadWord(cb, s, own);
       cb.aload(valid);
       cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
       cb.land();

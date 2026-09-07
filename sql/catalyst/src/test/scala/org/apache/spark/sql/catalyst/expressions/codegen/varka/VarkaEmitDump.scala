@@ -70,6 +70,7 @@ object VarkaEmitDump {
     var columns = defaultColumns
     var optionSpec = ""
     var rounds = 0
+    var nulls = 0
     var table = false
     var variants = Vector.empty[String]
     var i = 0
@@ -78,6 +79,7 @@ object VarkaEmitDump {
         case "--columns" => columns = args(i + 1); i += 2
         case "--options" => optionSpec = args(i + 1); i += 2
         case "--rounds" => rounds = args(i + 1).toInt; i += 2
+        case "--nulls" => nulls = args(i + 1).toInt; i += 2
         case "--table" => table = true; i += 1
         case "--variant" => variants :+= args(i + 1); i += 2
         case e => exprs :+= e; i += 1
@@ -86,7 +88,7 @@ object VarkaEmitDump {
     if (exprs.isEmpty) {
       // scalastyle:off println
       System.err.println("usage: VarkaEmitDump <sql expression>... " +
-        "[--columns d:date,i:int] [--options cse=false,...] [--rounds N]")
+        "[--columns d:date,i:int] [--options cse=false,...] [--rounds N] [--nulls N]")
       // scalastyle:on println
       System.exit(2)
     }
@@ -148,7 +150,7 @@ object VarkaEmitDump {
 
     if (rounds > 0) {
       runHot(bytes, fused.inputOrdinals.size, fused.outputs.size, fused.literals.toArray,
-        fused.inputOrdinals.map(childOutput), rounds)
+        fused.inputOrdinals.map(childOutput), rounds, nulls)
     }
   }
 
@@ -238,9 +240,15 @@ object VarkaEmitDump {
    *  `-XX:CompileCommand=print` on the loop method has something to print. `outputs` is the
    *  kernel's output count, passed in rather than inferred from its loop methods: since task
    *  32 step B2 one loop method can hold several outputs, and a destination array sized by
-   *  method count made the kernel index past it. */
+   *  method count made the kernel index past it.
+   *
+   *  `nulls` is how many rows of each input are null. Zero - the default - reports a null-free
+   *  batch, which the emitted `run` dispatches to the dense driver, so only the dense methods
+   *  are ever compiled; any positive count takes the masked path instead. Without it a
+   *  `--rounds` probe cannot see the masked body at all, which is what a
+   *  `-XX:+PrintCompilation` run of the task 70 review needed. */
   private def runHot(bytes: Array[Byte], numInputs: Int, outputs: Int, literals: Array[Int],
-      inputs: Seq[Attribute], rounds: Int): Unit = {
+      inputs: Seq[Attribute], rounds: Int, nulls: Int): Unit = {
     if (inputs.exists(a => a.dataType == ShortType || a.dataType == ByteType)) {
       report("(--rounds skipped: synthetic data is int32 only, and a short or byte column is read)")
       return
@@ -257,14 +265,28 @@ object VarkaEmitDump {
       src.foreach(s => (0 until rows).foreach(r => s.set(ValueLayout.JAVA_INT, r * 4L, 18000 + r)))
       val validity = buffer((rows + 7) / 8L)
       validity.fill(0xFF.toByte)
+      // Every `stride`-th row null, spread over the batch so both a full lane group and the
+      // epilogue's partial one see a null; the kernel reads the count, so the two must agree.
+      if (nulls > 0) {
+        val stride = math.max(1, rows / nulls)
+        var cleared = 0
+        var r = 0
+        while (r < rows && cleared < nulls) {
+          val byte = validity.get(ValueLayout.JAVA_BYTE, (r / 8).toLong)
+          validity.set(ValueLayout.JAVA_BYTE, (r / 8).toLong,
+            (byte & ~(1 << (r % 8))).toByte)
+          cleared += 1
+          r += stride
+        }
+      }
       val dst = Array.fill(outputs)(buffer(rows * 4L).address())
       val dstValidity = Array.fill(outputs)(buffer((rows + 7) / 8L).address())
       var status = 0
       for (_ <- 0 until rounds) {
         status |= kernel.run(src.map(_.address()), Array.fill(numInputs)(validity.address()),
-          Array.fill(numInputs)(0), dst, dstValidity, literals, rows)
+          Array.fill(numInputs)(nulls), dst, dstValidity, literals, rows)
       }
-      report(s"ran $rounds rounds of $rows rows; status $status")
+      report(s"ran $rounds rounds of $rows rows, $nulls null per input; status $status")
     } finally {
       arena.close()
     }
