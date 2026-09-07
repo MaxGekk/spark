@@ -206,7 +206,7 @@ public final class VarkaLoopEmitter {
    * through task 61. The reading was "recomputing eight ops in registers is cheaper than the
    * wider method's register pressure"; see the next paragraph for why it was probably not.
    * The parity benchmark keeps both cases so a future retune is measured rather than argued;
-   * the current file reads 4511.7 against 5799.7 at AVX-512 and 1700.1 against 2754.8 at
+   * the current file reads 4520.7 against 5806.5 at AVX-512 and 1648.2 against 2570.4 at
    * 128-bit, the merged method ahead.
    *
    * <p>Task 32 step B2 added the one exception, and it is not task 17's case: an output that

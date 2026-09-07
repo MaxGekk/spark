@@ -1623,22 +1623,35 @@ in the rest, with the final partial byte masked to `length % 8` bits, which
 is the bit-exactness rule `setValid` already documents and
 `assertSameOutput` already enforces.
 
-**What it removes.** For a qualifying root, the loop's per-group
-`orValidityBitsAt`. Where every root of a loop method qualifies, the
-per-group `validityBitsAt` read and the word locals go too, and the masked
-body becomes byte-identical to the dense one - so the shape needs one body
-rather than two, which is a code-size and compile-time result on top of the
-throughput one, and is the part of this task to verify rather than assume.
+**What it removes, and the correction the task's own plan made to it.** For
+a qualifying root, the loop's per-group `orValidityBitsAt`, per root. The
+per-group `validityBitsAt` read and the word locals are a separate and
+stricter question, per loop *method*: a word survives if and only if some
+node in that method still consumes it. This section first said "where every
+root of a loop method qualifies", and `PLAN_TASK_70.md` 2.2 shows that is
+neither necessary - a method of `year(d), greatest(d, d2)` needs no word once
+the pass serves both roots - nor sufficient, which is the half that would
+have been a bug: a method of `year(date_add(d, off))` alone has one
+qualifying root and still needs the word, because task 52's range guard ANDs
+its condemning mask with it. Built to the rule as first written, that shape
+would decline batches on nullable data with a stray value in a null slot -
+right answers through the row engine, and the kernel's win gone on exactly
+the shape the guard was built for. Where no word survives, the masked body
+does become byte-identical to the dense one, so the shape needs one body
+rather than two - a code-size and compile-time result on top of the
+throughput one, and the part of this task to verify rather than assume.
 
 **What it cannot serve, which is why it does not replace task 46.** A
 `Cond` root's slot is a selection bitmap computed from comparisons, not a
 function of input bitmaps; an `IfElse` blends two branches' words by the
-known-true mask, which is computed per group; and a node that can be null
+known-true mask, which is computed per group; a node that can be null
 on valid inputs - task 42's `make_date`, task 63's `try_*` forms - breaks
-the invariant the derivation rests on. Those keep their per-group call, and
-task 46 is what makes it cheap. The two compose; this one is measured on a
-tree that already has 46, and what is left over is what task 47 is finally
-worth.
+the invariant the derivation rests on; and a range guard (tasks 42, 52, 60)
+consumes the word of a node that may itself qualify, which is the third
+consumer above and the reason the two questions are separate. Those keep
+their per-group call, and task 46 is what makes it cheap. The two compose;
+this one is measured on a tree that already has 46, and what is left over is
+what task 47 is finally worth.
 
 **What it is worth, as a bound - requoted on 7 September 2026 from the parity
 file task 32 B2 regenerated, since the figures this section first carried
@@ -1649,15 +1662,20 @@ methods B2 now emits by default and at 128-bit:
 
 | shape, masked against dense (M rows/s) | AVX-512 | 128-bit |
 |---|---|---|
-| `year` | 3213.6 / 3460.4 | 1204.2 / 1335.0 |
-| `year+month+day+quarter`, one loop method | 1124.0 / 1762.6 | 417.7 / 792.5 |
-| `next_day(d, k)`, column kernel | 6935.0 / 8188.4 | 2858.6 / 3609.9 |
-| `add_months(d, m)`, column count (guarded) | 565.9 / 703.6 | 209.7 / 242.2 |
-| `add_months(d, 13)` | 731.1 / 733.7 | 254.7 / 254.9 |
+| `year` | 2947.6 / 3385.2 | 1201.1 / 1334.8 |
+| `year+month+day+quarter`, one loop method | 1084.6 / 1757.2 | 415.6 / 791.8 |
+| `next_day(d, k)`, column kernel | 7245.4 / 7910.1 | 2851.6 / 3633.0 |
+| `add_months(d, m)`, column count (guarded) | 628.3 / 697.6 | 209.6 / 242.3 |
+| `add_months(d, 13)` | 724.9 / 727.4 | 254.8 / 254.8 |
 
-So the bound is 8% and 11% on a single field, 1.57x and 1.90x on four fields
-in one method, 18% and 26% on a two-input node, and nothing on a heavy tail
-such as `add_months` with a literal, where the arithmetic hides the write. The
+So the bound is 12.9% and 10.0% on a single field, 1.62x and 1.91x on four
+fields in one method, 8.4% and 21.5% on a two-input node, and nothing on a
+heavy tail such as `add_months` with a literal, where the arithmetic hides
+the write. `PLAN_TASK_70.md` 2.4 flags one caveat that these figures inherit:
+in the wide run behind them the sub-microsecond dense rows are depressed, so
+the AVX-512 column of the fastest shapes is a floor rather than a
+measurement, and the task re-runs the base commit and requotes both sections
+before its own measurement is scored. The
 per-batch bitmap pass costs 512 bytes per output per 4096-row batch against
 256 helper calls per input and per output today. The column-count
 `add_months` row keeps its word read whatever this task does, because task
@@ -1682,8 +1700,9 @@ parity file carried both rows ever since so that a retune would be measured
 rather than argued, and the rows have now measured the other way: in every
 regeneration from task 48 through task 61 the split led by ~1.4x, and since
 aef0b82260e - task 46's second half, which moved the validity OR ahead of the
-vector work so that C2 inlines it - the merged method leads, 5799.7 against
-4511.7 M rows/s at AVX-512 and 2754.8 against 1700.1 at 128-bit in B2's file.
+vector work so that C2 inlines it - the merged method leads, 5806.5 against
+4520.7 M rows/s at AVX-512 and 2570.4 against 1648.2 at 128-bit in the file as
+task 70's branch commits it.
 The most plausible reading is task 46's own: the loss was a refused
 `orValidityBitsAt` call in the wider method, which the order change let
 inline, and register pressure was never the binding constraint at 24 ops.
@@ -1846,7 +1865,7 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 67 | Year-month interval columns in the date lane (section 2.32). **Planned** (`PLAN_TASK_67.md`) | `IntervalYearVector` admitted in `isArrowBacked` and `YearMonthIntervalType` in `allocateVector`; the interval column as a value leaf and the interval literal as a slot in the compiler; `d + ym` and `d - ym` with a column interval through task 60's guarded `AddMonths`; comparisons, `IN`, `BETWEEN`, `greatest`/`least`, `coalesce`, `IF`/`CASE` over intervals; the `MONTH`-unit casts as relabels; the interval entries in task 62's surface; the docs' type list. No IR node, no emitter byte | The differential over a cached table with columns of all three units, nulls and values past task 60's month bound, in both ANSI modes, through the projection and the filter, with zero fallbacks where the plan fuses and the declined metric where the bound trips; the evaluator suite with an `IntervalYearVector` input and output; both pinned fixtures unmoved; the compiler suite's shapes and declines (the `YEAR`-unit casts declined with their reason until task 63) |
 | 68 | Year-month interval algebra (section 2.33) | `make_ym_interval`, `extract(YEAR | MONTH FROM ym)` by literal-divisor magic, `ym * k` and `ym / k` with a literal, `ym +- ym`, `-ym`, `abs(ym)` on task 63's nodes with an interval output, the `YEAR`-unit casts; the literal-divisor node that section 2.30's note and scope item 11 both want | The admission check on the rounding of the literal division and the exactness range of the magic divisions over the whole int32 month range; the differential in both ANSI modes with the overflow rows raising the row engine's own error; a parity row per new node beside task 63's; both pinned fixtures re-pinned once |
 | 69 | An upward limit for the civil-from-days decomposition, so a shift over a guarded day producer stops declining conservatively (task 60's review; see the debt register). **Planned** (`PLAN_TASK_69.md`; its section 2 is an admission check that can legitimately close the task without a code change) | A `NARROW_DECOMPOSE_MAX_DAYS` beside `NARROW_MAX_DAYS`: the latter is the era step's shift-domain ceiling, `(1 << NARROW_ERA_K) - 1 - NARROW_BIAS`, while what binds above is the multiply, `w * NARROW_ERA_M < 2^31`. `dayRange` then tests the two directions against different constants, so `last_day`, `next_day` and a positive literal `date_add` over a column offset fuse again while the downward siblings (`trunc`, `ThursdayOf`, a negative literal) keep declining | The identity proved over the whole extended domain rather than the multiply merely not overflowing, and swept exhaustively against `java.time` the way `VarkaChrono`'s other limits are; the four pinned declines in `VarkaExpressionCompilerSuite` ("task 60 review: an upward shift ...") flipped to `fuses`, the downward ones unmoved; a differential over a column offset at the new ceiling and one past it; no emitted byte moves, since this is a compiler-side bound only |
-| 70 | Validity as bitmap algebra in the driver (section 2.34). **Planned** (`PLAN_TASK_70.md`) | The analysis that says whether a root's validity word is a pure AND/OR over input bitmaps (no `Cond`, no `IfElse`, no node that can be null on valid inputs); the driver's per-batch bitmap pass - a copy for one column, a bytewise AND or OR for several, the final partial byte masked to `length % 8` bits - behind its own switch; the per-group write, and where every root of a loop method qualifies the per-group read and the word locals, not emitted; the one-body-not-two consequence for such shapes verified rather than assumed | The differential at both widths and both switch settings with byte-identical validity, the existing suite as the oracle; `assertSameOutput` holding on the tail byte; the qualifying predicate tested against a `CASE WHEN`, a filter root and a null-on-valid-input node, each of which must not qualify; the masked parity rows measured on a tree that already carries task 46, with a registered bound that no masked row passes its dense counterpart |
+| 70 | Validity as bitmap algebra in the driver (section 2.34). **Planned** (`PLAN_TASK_70.md`) | The analysis that says whether a root's validity word is a pure AND/OR over input bitmaps (no `Cond`, no `IfElse`, no node that can be null on valid inputs); the driver's per-batch bitmap pass, emitted between the null-state prologue and the all-null shortcut - a copy for one column, a bytewise AND or OR for several, `setValid` or `zero` where an operand's null count decides the whole expression, the final partial byte masked to `length % 8` bits - behind its own switch; the per-group write not emitted per served root, and the per-group read and the word locals not emitted per loop method in which no consumer is left - a guard, a blend, a `Cond` root's OR or an unserved root, "every root qualifies" being neither necessary nor sufficient (`PLAN_TASK_70.md` 2.2); the one-body-not-two consequence for such shapes verified rather than assumed | The differential at both widths and both switch settings with byte-identical validity, the existing suite as the oracle; `assertSameOutput` holding on the tail byte; the qualifying predicate tested against a `CASE WHEN`, a filter root and a null-on-valid-input node, each of which must not qualify; `year(date_add(d, off))` over poisoned null slots keeping its word and declining nothing, which is the guard case the first draft of section 2.34 would have broken; a null-free operand under an OR root and an all-null one under both operators, the three states resolved rather than assumed; the driver's own code size pinned on the output ladder beside the epilogue's, since it is the method every batch runs; the masked parity rows measured on a tree that already carries task 46, with a registered bound that no masked row passes its dense counterpart |
 | 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25. **(A) done** (`PLAN_TASK_62.md` 9: the driver, its module and shell driver, and the laptop's four files at 500M rows); (B) the pinned runner and (C) the README open | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 | 71 | `GROUP_BUDGET` retuned on the emitter as it is (section 2.35): task 17's split-versus-merged rows reversed at task 46, and the budget rests on the reading they no longer support | A budget ladder (16 to 64) over the shapes a wider method changes, at both widths, with `-XX:+PrintCompilation` beside the throughput; C1's ~1900-byte refusal priced as a startup cost; whether B2's clause 2 widens from prefix reuse to "the marginal cost fits" decided on the same ladder | A committed number per budget per width; the pair that decides it read from the parity file rather than from a scratch run; the non-calendar byte-identity guard extended to assert that a budget change changes exactly the shapes it names; no calendar committed number moves |
 | 72 | Output order for prefix affinity (section 2.36): `year(d), year(d2), month(d)` takes three loop methods where the adjacent order takes two | The admission check first - no consumer of a group depends on contiguous output indices - then a two-pass grouping that gathers a calendar output into the group whose prefix it reuses wherever that group is; the evaluator and the line map untouched | The pinned limitation in `VarkaLoopEmitterSuite` flipped to two methods; the pinned oracles unmoved; the permuted and adjacent orders within noise in the parity harness at both widths; the differential suite green with the two orders |
@@ -2174,8 +2193,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   against "budget 24: one loop method, cross-output CSE kept" - read the split ahead by ~1.4x
   in every regeneration from task 48 through task 61, and the merged method ahead since
   aef0b82260e (task 46's second half, which moved the validity OR ahead of the vector work):
-  5799.7 against 4511.7 M rows/s at AVX-512 and 2754.8 against 1700.1 at 128-bit in the file
-  task 32 B2 regenerated (`PLAN_TASK_32.md` 7.6). So the loss task 17 measured, cited since as
+  5806.5 against 4520.7 M rows/s at AVX-512 and 2570.4 against 1648.2 at 128-bit in the file as
+  task 70's branch commits it, and the same way round in the one task 32 B2 regenerated before
+  it (`PLAN_TASK_32.md` 7.6). So the loss task 17 measured, cited since as
   register pressure, was most plausibly the refused `orValidityBitsAt` call in the wider
   method, and the budget's own retune is open again on evidence. Two more facts for whoever
   takes it: C1 refuses a loop method past about 1900 bytes ("out of virtual registers in
