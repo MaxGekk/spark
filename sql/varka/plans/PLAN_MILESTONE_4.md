@@ -1910,6 +1910,98 @@ size, or both - and a benchmark row over an unserved root so the file can see
 it next time. If it does not, the finding is recorded and the debt entry is
 swept with what was learned.
 
+### 2.40 A forwarded-only projection over a Varka filter (task 78)
+
+Added 7 September 2026, out of task 62's run (see the debt register). The one
+shape in the register where Varka is slower than stock Spark end to end.
+
+**The observation.** `SELECT d FROM t WHERE d < d2` plans a Janino
+`Project [d]` over the row-producing `VarkaFilterColumnarToRowExec`, because
+`VarkaColumnarRule` takes a projection only when at least one of its entries
+fuses, and a projection whose entries are all forwarded columns of a Varka
+child has none. So the filter's kernel runs, and then every selected row
+crosses the read-back floor anyway: 43.2 M rows/s against stock's 67.7 at 70%
+selected, on a predicate whose kernel alone runs at 681.2 when nothing is
+selected.
+
+**Why it matters more than its size suggests.** A two-column predicate under
+a projection that names one of them is the common shape, not a corner: it is
+what `SELECT a FROM t WHERE b < c` is, and the projection is doing no work
+that the filter has not already done. The 43.2 against 67.7 is the only place
+in the debt register where the answer to "should Varka have run here" is no,
+and the rule cannot see it, because the entry that would have carried the
+node has nothing to fuse.
+
+**The design, and it is small.** Two candidates, and the task picks one with
+a measurement rather than by argument. Either let `VarkaFilterExec` prune its
+output to the columns its parent requires, which removes the projection
+entirely and is where scope item 13's row-boundary work would rather find the
+plan; or let the rule take a forwarded-only projection above a Varka node,
+which keeps the plan shape and moves the narrowing into the existing
+merge-at-row pass. The first is cheaper at run time and touches the operator's
+output contract; the second is a rule change and touches nothing else.
+
+**The gate.** The differential over `SELECT d FROM t WHERE d < d2` through
+both a row and a columnar consumer, and the throughput row that found it
+back above stock at 70% selected - and at 10% and 100%, since the read-back
+share moves with selectivity. Item 13's admission check should run first or
+alongside: if the row boundary itself is what makes this shape lose, the two
+fixes are the same fix.
+
+### 2.41 The guard and the untaken arm (task 79)
+
+Added 7 September 2026, out of task 60's review (see the debt register).
+
+**The observation.** `emitGuardCollect` ANDs a guard's condemning mask with
+the node's validity word and, in an epilogue, the bounds mask - but never with
+an enclosing `IfElse`'s condition mask, and a vector body computes both
+branches whatever the condition says. So `CASE WHEN m BETWEEN -1000 AND 1000
+THEN add_months(d, m) ELSE NULL END` declines every batch holding one extreme
+`m`, which defeats exactly the range test the user wrote to keep the shape
+fused. Both `CaseWhen` and `If` over a column-count `AddMonths` fuse today, so
+it is reachable rather than theoretical. Answers stay correct, because the row
+engine recomputes the declined batch; what is lost is the fusion, on the shape
+a user reaches for when they know their data needs a bound.
+
+**The design.** Two ways, and they differ in what they give up. ANDing the
+arm's condition mask into the guard is the honest fix and keeps the shape
+fused, at the cost of a mask the guard does not carry today and of ordering:
+the condition is computed in the same body, so the guard has to move after it.
+Excluding a node under an `IfElse` arm from the guarded set is cheaper and
+gives the shape up - the compiler declines it at compile time instead, which
+is at least a decline with a reason rather than a per-batch surprise. Either
+changes emitted bytes on a shape the parity file measures, so the task carries
+an A/B rather than a quiet edit.
+
+`Greatest` and `Least` are unaffected and the task should say so where the
+rule is written: they are validity-driven, with no untaken arm.
+
+### 2.42 String-column compaction that keeps the Arrow layout (task 80)
+
+Added 7 September 2026, out of task 59's review (see the debt register).
+
+**The observation.** A derived int32 leaf (task 59's weekday, task 61's trunc
+level) reads its source through a `VarCharVector`. A fused Varka filter ahead
+of the projection hands it a compacted batch whose string columns went through
+the generic on-heap compaction, so the leaf's source is no longer Arrow-backed
+and the projection refuses the batch: a stacked `next_day(d, s)` over a Varka
+filter is counted in `numFallbackBatchesNonArrow` and computed on the row
+path, with correct answers.
+
+**Why it is a task now.** Every future derived leaf over a string column
+inherits it, and milestone 6's item 3 puts string columns under filters and
+group keys, so the shape stops being a corner exactly when that milestone
+starts. Fixing it late means fixing it under a benchmark rather than under a
+differential.
+
+**The design.** A string-column compaction that keeps the Arrow layout,
+writing offsets and data buffers rather than materialising rows - task 21's
+`filterCompact` for fixed-width columns is the pattern, and the shape of the
+work is one pass to sum the selected lengths, one to write offsets, one to
+copy bytes. Measured on the task 59 differential's own fixture, with the
+metric as the gate: the stacked shape must stop counting
+`numFallbackBatchesNonArrow` at all.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -2020,6 +2112,9 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 73 | A stopping rule for the guard walk (section 2.37): a column-offset day producer is guarded on its own value even when a mod-7 node between it and the calendar node has already re-based the day (task 70's fuzz run; see the debt register) | The admission check first - whether any SQL shape observes the difference, given that `dayRange` returns `Unknown` for a mod-7 child and declines the entry at compile time before the emitter is reached, which can legitimately close the task with the finding recorded. If it does: a stopping rule on `collectColumnOffsetProducers` that descends only through nodes passing a day to the decomposition and stops at any node whose output is bounded in itself, and the matching rule in `dayRange`, taken together so the two analyses cannot drift apart again | The reproducer from the fuzz run served rather than declined at both widths (seed 20260907005 iteration 61379's shape, and the nine siblings substituting `weekday`, `dayofweek_iso` and `datediff`); the compiler suite's decline for `year(dayofweek(date_add(d, off)))` flipped to `fuses` if the compiler half moves, or the reason requoted if it does not; every guarded shape task 52 and task 60 pin still declining, since the rule may only remove guards a bounded node stands under; `VarkaIrFuzzSuite` at a million iterations per width with the `chronoBound` check relaxed to match, which is the oracle that found it |
 | 76 | The validity helper choice, keyed on the loop body (section 2.38): task 46's width-specialised validity writer wins on the four-field shared method and loses 8-9% on single-field `year`, so the global default is right for one shape and wrong for another (task 70's review; see the debt register) | The sweep first, across the number of validity writes a masked loop body makes, at both widths and on the per-group reference arm where the writer is reached at all; then a rule in `planSlots` keyed on that count rather than a second global default, with the `VarkaEmitOptions` switch kept as the reference variant | The rule reproduces both committed points - specialised ahead on the four fields, general ahead on the single field - and no shape between them regresses; the byte identity of every served shape, which makes no per-group write and must not move; or a recorded decline if the sweep puts the single-field cost inside that row's noise |
 | 77 | The 128-bit compile cliff behind the per-group validity OR (section 2.39): the `fused, 64 ops` row fell from 273.2 to 8.8 M rows/s at 128-bit when the OR moved ahead of the compute, and task 70 only avoids it for the roots its pass serves (task 70's review; see the debt register) | The measurement first: that section in a fresh JVM and after the whole file, both widths, both `validityOrFirst` arms, read off `-XX:+PrintCompilation` and the compile queue rather than the times, and then the same over an unserved root of comparable size, which is where the exposure now lives. If the queue explains it, a rule for `validityOrFirst` keyed on what the sweep says, and a parity row over an unserved root so the file can see it next time | The mechanism named from the JVM's own output rather than inferred, with the two already-excluded causes not re-tested; a committed row that would have caught the collapse the day it landed; and either a rule with its numbers or a recorded decline with what was learned |
+| 78 | A forwarded-only projection over a Varka filter runs through rows (section 2.40): `SELECT d FROM t WHERE d < d2` reads 43.2 M rows/s against stock Spark's 67.7 at 70% selected, because the rule takes a projection only when an entry fuses and a forwarded-only projection has none (task 62's run; see the debt register) | One of two: `VarkaFilterExec` pruning its output to the columns its parent requires, or the rule taking a forwarded-only projection above a Varka node - chosen by measurement, not by argument, and run beside scope item 13's admission check in case the row boundary is the whole of it | The throughput row back above stock at 10%, 70% and 100% selected; the differential over that query through both a row and a columnar consumer; no other plan shape changing operator |
+| 79 | The guard and the untaken arm (section 2.41): a guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the row never takes, so a user's own `BETWEEN` on the count cannot keep the shape fused (task 60's review; see the debt register) | Either the arm's condition mask ANDed into the guard, which keeps the shape fused and moves the guard after the condition, or the node excluded from the guarded set so the compiler declines it with a reason at compile time; an A/B, since either changes emitted bytes on a shape the parity file measures | The `CASE WHEN m BETWEEN ... THEN add_months(d, m)` differential fusing and answering correctly over a fixture whose extremes sit in the untaken arm; the emitted bytes of every shape without an `IfElse` unchanged; `Greatest`/`Least` explicitly out, with the reason in the code |
+| 80 | String-column compaction that keeps the Arrow layout (section 2.42): a derived int32 leaf over a string column is refused per batch when a fused Varka filter sits under it, because the filter's compaction leaves the column on-heap (task 59's review; see the debt register) | The compaction writing offsets and data buffers rather than materialising rows, on task 21's `filterCompact` pattern; sized before milestone 6's item 3 puts string columns under filters and group keys | The stacked `next_day(d, s)` over a Varka filter counting no `numFallbackBatchesNonArrow` at all on task 59's own fixture, answers unchanged, and the fixed-width compaction's numbers not moving |
 
 ## 4. Files
 
@@ -2276,6 +2371,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   guarded set and letting the compiler decline it (cheaper, and gives up the shape).
   Either changes emitted bytes, so it wants a measurement rather than a quiet edit.
   `Greatest`/`Least` are unaffected: they are validity-driven, with no untaken arm.
+  **Adopted as task 79** (section 2.41).
 
 * **`GROUP_BUDGET` bounds one of the emitter's three method shapes.** **Adopted as tasks
   43 and 44 (see 2.16)**, both found by the review of task 26 rather than planned.
@@ -2422,6 +2518,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   future derived leaf over a string column inherits it; closing it takes a string-column
   compaction that keeps the Arrow layout (offsets and data buffers, task 21's `filterCompact`
   for fixed-width columns is the pattern), measured on the task 59 differential's fixture.
+  **Adopted as task 80** (section 2.42), before milestone 6's item 3 puts string columns
+  under filters and group keys.
 * **The week fold costs more than its op count (task 37).** `weekofyear` is 64
   dense-loop calls against `year`'s prefix-plus-tail, yet runs at 0.41x of `year`'s
   rate at 256 bits and 0.38x at 128 (`PLAN_TASK_37.md` section 9, prediction 2), a
@@ -2479,6 +2577,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   Closing it is small: let `VarkaFilterExec` prune its output to the parent's required
   columns, or let the rule take a forwarded-only projection above a Varka node; either way
   the differential over `SELECT d ... WHERE d < d2` through a columnar consumer is the gate.
+  **Adopted as task 78** (section 2.40); it is the one entry here where Varka is slower
+  than stock Spark end to end.
 
 ## 10. Scope catalogue
 
