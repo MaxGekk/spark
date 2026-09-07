@@ -1833,6 +1833,288 @@ mod-7 node hid the producers beneath it from the `chronoBound` check - was
 fixed with task 70, because the fuzzer is unusable past about ten thousand
 iterations without it.
 
+### 2.38 The validity helper choice, keyed on the loop body (task 76)
+
+Added 7 September 2026, out of task 70's review (see the debt register).
+
+**The observation.** Task 46 gave the per-group validity write a
+width-specialised writer - `orValidityBitsAt16` and its siblings - and made it
+the default, argued from a measurement on the four-field shared method. Task
+70 then turned the per-group write off for a served root, which left task 46's
+A/B arms comparing two byte-identical kernels; with the arms rebuilt on the
+per-group reference variant they measure again, and the answer splits by
+shape. On the four-field shared method the specialised writer wins, 1069.8
+against 922.5 at AVX-512 and 417.3 against 335.2 at 128-bit. On single-field
+`year` it loses, 3092.5 against 3366.0 and 1190.5 against 1281.6. Both figures
+are from the third regeneration in `PLAN_TASK_70.md` 9.6.
+
+So the shipped default is right for the shape it was argued from and costs 8
+to 9% on a masked single-field kernel that keeps its per-group write. That is
+a real cost on a real shape - after task 70 the roots that keep the per-group
+write are the unserved ones, an `IfElse` blend, `make_date`, a `Cond` root -
+and a global boolean cannot express it.
+
+**The design.** Not another global flip: a rule, read where `planSlots`
+decides the writer. The quantity that differs between the two shapes is how
+many validity writes the loop body makes, which the emitter knows before it
+writes a byte - one per unserved value root in the body's output group. The
+plausible rule is "specialised above one write, general at one", and the task
+is one measurement across the write count to place the threshold, then that
+rule and the `VarkaEmitOptions` switch kept as the reference variant it
+already is.
+
+**What could close it without code.** If the sweep shows the single-field
+case is the only one below the threshold and the cost there is inside the
+file's noise for that row, the honest outcome is a recorded decline and the
+debt entry swept in the past tense. The measurement decides.
+
+### 2.39 The 128-bit compile cliff behind the per-group validity OR (task 77)
+
+Added 7 September 2026, out of task 70's review (see the debt register).
+
+**The observation.** The parity file's `fused, 64 ops` case - four disjoint
+depth-16 chains, masked - read 270.4 to 273.2 M rows/s at 128-bit through
+every regeneration up to `00eeed82279`, then 8.8 at `aef0b82260e`, the commit
+that moved the per-group validity OR ahead of the compute. The same commit
+made the same row 1.8x *faster* at AVX-512, 988.6 to 1757.0, which is
+presumably why it read as a win. The row stayed at 8.8 and 9.2 until task 70's
+bitmap pass removed that call for a served root, and reads 966.6 and 961.6 in
+the two regenerations since - above the pre-regression baseline. At 8.8 the
+fused kernel was slower than the 64 sequential single-op passes it exists to
+beat, which is the signature of methods not running compiled.
+
+**Why task 70 does not close it.** The pass removes the per-group OR only for
+a root whose word is a pure single-operator expression over input bitmaps.
+Every unserved root still emits it, before the compute, exactly as
+`aef0b82260e` left it: an `IfElse` blend, `make_date`, a mixed AND/OR tree, a
+`Cond` root. So the lowering that put this shape over the edge is still on the
+default path for those shapes, and nothing in the file measures a large one.
+
+**What is already excluded**, so the task does not re-test it. Not a
+method-size cliff: the masked loop is 898 bytes with the pass off and 804 with
+it on, the masked epilogue 1477 and 1343, all far under `HugeMethodLimit`. Not
+a compile failure of those methods: under `-XX:+PrintCompilation` at four
+lanes, driven through the masked path by `VarkaEmitDump`'s `--nulls`, both
+arms take every masked method to tier 4 with no bailout, no `COMPILE SKIPPED`
+and no deoptimisation beyond the routine superseding of tier 3. In isolation
+the two arms behave identically.
+
+**The measurement was run on 7 September 2026, and it names the mechanism.**
+Two probes, both at four lanes.
+
+*In a fresh JVM the two arms are the same speed.* Driven through the masked
+path by `VarkaEmitDump`'s `--rounds` and `--nulls`, with the tool reporting a
+rate, the four-chain shape runs within 5% of itself with the pass on and off,
+the off arm marginally ahead. Whatever the file shows, the emitted code is not
+slower.
+
+*In the file the kernel never settles.* The parity benchmark run on master
+under `-XX:+PrintCompilation` reproduces the row at 9.0 M rows/s, and the
+compile record of its class explains it. Each of the four `loopMasked`
+methods is compiled to tier 4 six times, on-stack-replaced twice more, and
+**made not entrant thirteen times**, spread across the whole four-second
+window the section is timed over. A healthy kernel in the same run compiles
+each method to tier 4 once and is made not entrant once, inside about twenty
+milliseconds. A method being deoptimised and recompiled continuously spends
+that window in the interpreter and at tier 3, which is the whole of the 55x.
+
+So the debt entry's framing holds and is now specific: the collapse is a
+deoptimisation loop that the file's JVM state triggers and an isolated JVM
+does not. It is also not unique to this shape - one other kernel in the same
+run shows the same pattern, at nine tier-4 compiles and twenty
+deoptimisations - so whatever the cause is, the file has at least two
+instances of it and neither is visible in the committed numbers as anything
+but a slow row.
+
+**The reason, from `-XX:+LogCompilation`.** The same run again with the XML
+log on reproduces the row at 8.9 M rows/s and attributes the deoptimisations,
+through the globally unique compile ids of the kernel's own compiled methods.
+All four masked loop methods fail identically:
+
+| reason | action | per method | kernel total |
+|---|---|---|---|
+| `profile_predicate` | `maybe_recompile` | 9 | 36 |
+| `unstable_if` | `reinterpret` | 1 | 4 |
+
+A `profile_predicate` trap is C2 finding that a loop predicate it hoisted on
+the strength of the interpreter's profile does not hold, and `maybe_recompile`
+throws the method away and rebuilds it without that speculation. Nine per
+method, interleaved with the six tier-4 recompilations `PrintCompilation`
+counted, is the loop: the compiler speculates, the speculation fails, and the
+method spends the timed window being rebuilt rather than running.
+
+**So the cause is the profile, not this shape's code, and not the option that
+appeared to trigger it.** The predicate comes from the profile gathered before
+compilation, and in a fresh JVM the same bytes compile once and stay - which
+is exactly what the first probe measured. In the file this class is loaded
+into a JVM where roughly ninety earlier kernels have already profiled the
+shared Vector API templates, so what C2 speculates from is not this kernel's
+behaviour. `aef0b82260e` did not create that; it moved this shape across a
+threshold where the mis-speculation started to bite. The file carries 494
+`profile_predicate` traps in total, of which this kernel's 36 are one large
+cluster and the second bad kernel is another, so the phenomenon is the file's
+and not the shape's.
+
+**What the task should do with that.** Not a `validityOrFirst` rule, which is
+what this section proposed before the reason was known. Two candidates
+instead. Keep the profile out: fork a JVM per benchmark section, which is what
+the engine module's JMH harness already had to do for the same class of
+problem (the debt entry above it, closed by giving each runner `forks = 1`) -
+that would tell us what these kernels do without a polluted profile, and it
+changes the harness rather than the engine. Or reduce what there is to
+speculate about in the emitted loop, which is an emitter change and wants the
+first measurement before anyone attempts it. Whichever is taken, the parity
+file needs a row over an unserved root, because after task 70 that is where
+the per-group validity OR still lives and nothing in the file measures a
+large instance of it.
+
+**One caution for whoever picks this up.** The log is 883 MB for a single run,
+and its `<klass>` and `<method>` ids are scoped per compilation unit, not
+globally - resolving traps by those ids attributes them to whatever unrelated
+method happens to share an id, which is a mistake this investigation made on
+its first pass. Attribute through `<nmethod compile_id=...>`, whose ids are
+global, and reproduce the counts once before quoting them.
+
+### 2.40 A forwarded-only projection over a Varka filter (task 78)
+
+Added 7 September 2026, out of task 62's run (see the debt register). The one
+shape in the register where Varka is slower than stock Spark end to end.
+
+**The observation.** `SELECT d FROM t WHERE d < d2` plans a Janino
+`Project [d]` over the row-producing `VarkaFilterColumnarToRowExec`, because
+`VarkaColumnarRule` takes a projection only when at least one of its entries
+fuses, and a projection whose entries are all forwarded columns of a Varka
+child has none. So the filter's kernel runs, and then every selected row
+crosses the read-back floor anyway: 43.2 M rows/s against stock's 67.7 at 70%
+selected, on a predicate whose kernel alone runs at 681.2 when nothing is
+selected.
+
+**Why it matters more than its size suggests.** A two-column predicate under
+a projection that names one of them is the common shape, not a corner: it is
+what `SELECT a FROM t WHERE b < c` is, and the projection is doing no work
+that the filter has not already done. The 43.2 against 67.7 is the only place
+in the debt register where the answer to "should Varka have run here" is no.
+
+**The cause is two layers deep, and the second is the larger one.** The
+proximate cause is the rule: `isVarkaEligible` is `compilePartial(...).isDefined`
+and that returns `None` when no entry *fuses*, which a projection of bare
+forwarded columns never does, so a Janino `Project` is left above the filter
+and every selected row pays an interpreted `UnsafeProjection` and an operator
+boundary. Under it, though, is the floor: `VarkaFilterColumnarToRowExec` is
+deliberately not `CodegenSupport`, so it produces rows through a row iterator
+and a projection at task 19's ~25 ns per row, while stock plans
+`ColumnarToRowExec` - which *is* `CodegenSupport` - into one generated loop
+with the predicate, at 14.8 ns per input row for this query. Varka's kernel
+answers the predicate at 681.2 M rows/s and cannot pay for that difference,
+because the difference is not in the predicate.
+
+So removing the projection narrows the loss and does not close it: the shape
+loses whenever its consumer wants rows, whatever the rule does with the
+projection. Sizing which layer costs what is the task's first step, and it is
+one run of the throughput row with the projection removed by hand.
+
+**The design, in the order the numbers should decide it.** Three candidates,
+cheapest first. *Decline the shape*: teach the rule that a Varka filter under
+a row consumer with a forwarded-only projection above it is a losing plan and
+leave stock's plan alone - this recovers to 1.00x with no engineering risk and
+no new machinery, and task 19 could not do it because no plan-time signal
+separated its winners from its losers, whereas this shape is exactly such a
+signal. *Absorb the narrowing*: let `VarkaFilterExec` prune its output to the
+columns its parent requires, or let the rule take a forwarded-only projection
+above a Varka node - this removes an operator and the second row pass.
+*Fuse the boundary*: make the node `CodegenSupport`, which is scope item 13's
+first lever and the only one of the three that can put this shape above stock
+rather than beside it.
+
+**The gate.** The differential over `SELECT d FROM t WHERE d < d2` through
+both a row and a columnar consumer, and the throughput row at or above 1.00x
+against stock at 10%, 70% and 100% selected, since the read-back share moves
+with selectivity. If the task takes only the first candidate, "at or above"
+means exactly 1.00x and the row should say so: declining is a repair, not a
+win. Item 13's admission check belongs beside this one, because the third
+candidate is that item's lever and the two would then be one piece of work.
+
+### 2.41 The guard and the untaken arm (task 79)
+
+Added 7 September 2026, out of task 60's review (see the debt register).
+
+**The observation.** `emitGuardCollect` ANDs a guard's condemning mask with
+the node's validity word and, in an epilogue, the bounds mask - but never with
+an enclosing `IfElse`'s condition mask, and a vector body computes both
+branches whatever the condition says. So `CASE WHEN m BETWEEN -1000 AND 1000
+THEN add_months(d, m) ELSE NULL END` declines every batch holding one extreme
+`m`, which defeats exactly the range test the user wrote to keep the shape
+fused. Both `CaseWhen` and `If` over a column-count `AddMonths` fuse today, so
+it is reachable rather than theoretical. Answers stay correct, because the row
+engine recomputes the declined batch; what is lost is the fusion, on the shape
+a user reaches for when they know their data needs a bound.
+
+**The design.** Two ways, and they differ in what they give up. ANDing the
+arm's condition mask into the guard is the honest fix and keeps the shape
+fused. Excluding a node under an `IfElse` arm from the guarded set is cheaper
+and gives the shape up - the compiler declines it at compile time instead,
+which is at least a decline with a reason rather than a per-batch surprise.
+Either changes emitted bytes on a shape the parity file measures, so the task
+carries an A/B rather than a quiet edit.
+
+**Two things read out of the emitter while this row was written**, which move
+the cost of the honest fix from where the first draft of this section put it.
+
+*Ordering is already right, so that is not the cost.* `emitValue`'s `IfElse`
+arm emits `emitCond` first and the two branch values after it, so by the time
+a guarded node inside an arm is emitted, the condition's known-true word is in
+`s.kt` and its dense mask in `s.condMask`. The guard has nothing to wait for.
+What is missing is not the mask but the *context*: `emitGuardCollect` does not
+know which arm it is being emitted under, or with which polarity, so the fix
+is to thread an arm mask through the value walk - the then-branch takes `kT`,
+the else-branch its complement, and nested arms compose by AND.
+
+*Sharing is the cost, and it is a correctness question rather than a
+performance one.* `emitValue` memoises a node with a use count above one into
+`s.sharedSlot`, emitting it at its first use and reloading it afterwards. A
+guarded node can be shared between a use inside an arm and a use outside it -
+`CASE WHEN c THEN add_months(d, m) ELSE ... END` beside a bare
+`add_months(d, m)` in the same projection is enough - and then a guard
+qualified by the arm's mask would be emitted once, under that mask, and reused
+by the unconditional consumer, which would stop declining batches it must
+decline. Silently wrong, not slow. The sound rule is that a guarded node's
+mask is the disjunction over its use contexts, so a node used anywhere
+unconditionally keeps an unqualified guard, and only a node used solely under
+arms is narrowed; the analysis can compute that per node in the walk that
+already collects the guarded set. `SKILLS.md` records the same class of bug
+one level down, where task 32's prefix fragment had to be keyed on the guard's
+extra input rather than on the child alone; this is that lesson at the arm
+level, and the task should cite it rather than rediscover it.
+
+`Greatest` and `Least` are unaffected and the task should say so where the
+rule is written: they are validity-driven, with no untaken arm.
+
+### 2.42 String-column compaction that keeps the Arrow layout (task 80)
+
+Added 7 September 2026, out of task 59's review (see the debt register).
+
+**The observation.** A derived int32 leaf (task 59's weekday, task 61's trunc
+level) reads its source through a `VarCharVector`. A fused Varka filter ahead
+of the projection hands it a compacted batch whose string columns went through
+the generic on-heap compaction, so the leaf's source is no longer Arrow-backed
+and the projection refuses the batch: a stacked `next_day(d, s)` over a Varka
+filter is counted in `numFallbackBatchesNonArrow` and computed on the row
+path, with correct answers.
+
+**Why it is a task now.** Every future derived leaf over a string column
+inherits it, and milestone 6's item 3 puts string columns under filters and
+group keys, so the shape stops being a corner exactly when that milestone
+starts. Fixing it late means fixing it under a benchmark rather than under a
+differential.
+
+**The design.** A string-column compaction that keeps the Arrow layout,
+writing offsets and data buffers rather than materialising rows - task 21's
+`filterCompact` for fixed-width columns is the pattern, and the shape of the
+work is one pass to sum the selected lengths, one to write offsets, one to
+copy bytes. Measured on the task 59 differential's own fixture, with the
+metric as the gate: the stacked shape must stop counting
+`numFallbackBatchesNonArrow` at all.
+
 ## 3. Task breakdown
 
 Tasks 24-44 were the committed spine, in dependency order: 24 halves the
@@ -1941,6 +2223,11 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 71 | `GROUP_BUDGET` retuned on the emitter as it is (section 2.35): task 17's split-versus-merged rows reversed at task 46, and the budget rests on the reading they no longer support | A budget ladder (16 to 64) over the shapes a wider method changes, at both widths, with `-XX:+PrintCompilation` beside the throughput; C1's ~1900-byte refusal priced as a startup cost; whether B2's clause 2 widens from prefix reuse to "the marginal cost fits" decided on the same ladder | A committed number per budget per width; the pair that decides it read from the parity file rather than from a scratch run; the non-calendar byte-identity guard extended to assert that a budget change changes exactly the shapes it names; no calendar committed number moves |
 | 72 | Output order for prefix affinity (section 2.36): `year(d), year(d2), month(d)` takes three loop methods where the adjacent order takes two | The admission check first - no consumer of a group depends on contiguous output indices - then a two-pass grouping that gathers a calendar output into the group whose prefix it reuses wherever that group is; the evaluator and the line map untouched | The pinned limitation in `VarkaLoopEmitterSuite` flipped to two methods; the pinned oracles unmoved; the permuted and adjacent orders within noise in the parity harness at both widths; the differential suite green with the two orders |
 | 73 | A stopping rule for the guard walk (section 2.37): a column-offset day producer is guarded on its own value even when a mod-7 node between it and the calendar node has already re-based the day (task 70's fuzz run; see the debt register) | The admission check first - whether any SQL shape observes the difference, given that `dayRange` returns `Unknown` for a mod-7 child and declines the entry at compile time before the emitter is reached, which can legitimately close the task with the finding recorded. If it does: a stopping rule on `collectColumnOffsetProducers` that descends only through nodes passing a day to the decomposition and stops at any node whose output is bounded in itself, and the matching rule in `dayRange`, taken together so the two analyses cannot drift apart again | The reproducer from the fuzz run served rather than declined at both widths (seed 20260907005 iteration 61379's shape, and the nine siblings substituting `weekday`, `dayofweek_iso` and `datediff`); the compiler suite's decline for `year(dayofweek(date_add(d, off)))` flipped to `fuses` if the compiler half moves, or the reason requoted if it does not; every guarded shape task 52 and task 60 pin still declining, since the rule may only remove guards a bounded node stands under; `VarkaIrFuzzSuite` at a million iterations per width with the `chronoBound` check relaxed to match, which is the oracle that found it |
+| 76 | The validity helper choice, keyed on the loop body (section 2.38): task 46's width-specialised validity writer wins on the four-field shared method and loses 8-9% on single-field `year`, so the global default is right for one shape and wrong for another (task 70's review; see the debt register) | The sweep first, across the number of validity writes a masked loop body makes, at both widths and on the per-group reference arm where the writer is reached at all; then a rule in `planSlots` keyed on that count rather than a second global default, with the `VarkaEmitOptions` switch kept as the reference variant | The rule reproduces both committed points - specialised ahead on the four fields, general ahead on the single field - and no shape between them regresses; the byte identity of every served shape, which makes no per-group write and must not move; or a recorded decline if the sweep puts the single-field cost inside that row's noise |
+| 77 | The 128-bit compile cliff behind the per-group validity OR (section 2.39): the `fused, 64 ops` row fell from 273.2 to 8.8 M rows/s at 128-bit when the OR moved ahead of the compute, and task 70 only avoids it for the roots its pass serves (task 70's review; see the debt register) | The measurement is done and it names the cause (2.39). In a fresh JVM the two arms are within 5% of each other. In the file each of the kernel's four masked loop methods is compiled to tier 4 six times and made not entrant thirteen times across the timed window, where a healthy kernel compiles once, and `-XX:+LogCompilation` attributes that to nine `profile_predicate` traps with action `maybe_recompile` per method plus one `unstable_if`: C2 speculating on a loop predicate from a profile ninety earlier kernels wrote, the speculation failing, and the method being rebuilt instead of run. So the deliverable is not a `validityOrFirst` rule. It is one of: a JVM fork per benchmark section, the fix the engine module's JMH harness already took for the same class of problem, which says what these kernels do on an unpolluted profile; or a reduction in what the emitted loop offers to speculate about. Plus a parity row over an unserved root, where the per-group OR still lives and nothing measures a large instance | The mechanism named from the JVM's own output rather than inferred, with the two already-excluded causes not re-tested; a committed row that would have caught the collapse the day it landed; and either a rule with its numbers or a recorded decline with what was learned |
+| 78 | A forwarded-only projection over a Varka filter runs through rows (section 2.40): `SELECT d FROM t WHERE d < d2` reads 43.2 M rows/s against stock Spark's 67.7 at 70% selected, because the rule takes a projection only when an entry fuses and a forwarded-only projection has none (task 62's run; see the debt register) | The two layers separated first, by one run of that row with the projection removed by hand: the rule leaves a Janino `Project` because a forwarded-only projection fuses no entry, and under that the node is not `CodegenSupport`, so it produces rows at task 19's floor against stock's fused loop. Then one of three, cheapest first: decline the shape in the rule, which recovers to 1.00x with no new machinery; absorb the narrowing into `VarkaFilterExec` or the rule; or fuse the boundary by making the node `CodegenSupport`, which is scope item 13's lever and the only one that can win rather than draw | The throughput row back above stock at 10%, 70% and 100% selected; the differential over that query through both a row and a columnar consumer; no other plan shape changing operator |
+| 79 | The guard and the untaken arm (section 2.41): a guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the row never takes, so a user's own `BETWEEN` on the count cannot keep the shape fused (task 60's review; see the debt register) | Either the arm's condition mask ANDed into the guard, which keeps the shape fused, or the node excluded from the guarded set so the compiler declines it with a reason at compile time; an A/B, since either changes emitted bytes on a shape the parity file measures. The honest fix's cost is not ordering - the condition is emitted before the arms, so its mask is already in a slot - but sharing: a guarded node used both inside an arm and outside it is emitted once, so its mask must be the disjunction over its use contexts or an unconditional consumer silently stops declining (2.41) | The `CASE WHEN m BETWEEN ... THEN add_months(d, m)` differential fusing and answering correctly over a fixture whose extremes sit in the untaken arm; the emitted bytes of every shape without an `IfElse` unchanged; `Greatest`/`Least` explicitly out, with the reason in the code |
+| 80 | String-column compaction that keeps the Arrow layout (section 2.42): a derived int32 leaf over a string column is refused per batch when a fused Varka filter sits under it, because the filter's compaction leaves the column on-heap (task 59's review; see the debt register) | The compaction writing offsets and data buffers rather than materialising rows, on task 21's `filterCompact` pattern; sized before milestone 6's item 3 puts string columns under filters and group keys | The stacked `next_day(d, s)` over a Varka filter counting no `numFallbackBatchesNonArrow` at all on task 59's own fixture, answers unchanged, and the fixed-width compaction's numbers not moving |
 
 ## 4. Files
 
@@ -2160,7 +2447,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   JVM, the condition `PLAN_TASK_11.md` section 6 names for it. Closing it means
   running that one section in a fresh JVM and against the rest of the file, at
   both widths and both arms, and reading the compile queue rather than the
-  times.
+  times. **Adopted as task 77** (section 2.39), which also carries the part
+  task 70 does not close: every unserved root still emits that OR ahead of the
+  compute, so the lowering is on the default path for those shapes.
 
 * **Task 46's width-named validity helpers are the right default for one shape
   and the wrong one for another (task 70's review).** With task 46's A/B arms
@@ -2178,7 +2467,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   the write count and a cost rule in `planSlots`, or a recorded decline saying
   the single-field case is too small to matter. The same shape-dependence is the
   argument in `SCOPE_MILESTONE_6.md` item 11 for choosing lowerings by cost
-  rather than by a global default.
+  rather than by a global default. **Adopted as task 76** (section 2.38).
 
 * **A guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the
   row never takes (task 60).** `emitGuardCollect` ANDs the out-of-range mask with the
@@ -2195,6 +2484,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   guarded set and letting the compiler decline it (cheaper, and gives up the shape).
   Either changes emitted bytes, so it wants a measurement rather than a quiet edit.
   `Greatest`/`Least` are unaffected: they are validity-driven, with no untaken arm.
+  **Adopted as task 79** (section 2.41).
 
 * **`GROUP_BUDGET` bounds one of the emitter's three method shapes.** **Adopted as tasks
   43 and 44 (see 2.16)**, both found by the review of task 26 rather than planned.
@@ -2341,6 +2631,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   future derived leaf over a string column inherits it; closing it takes a string-column
   compaction that keeps the Arrow layout (offsets and data buffers, task 21's `filterCompact`
   for fixed-width columns is the pattern), measured on the task 59 differential's fixture.
+  **Adopted as task 80** (section 2.42), before milestone 6's item 3 puts
+  string columns under filters and group keys.
 * **The week fold costs more than its op count (task 37).** `weekofyear` is 64
   dense-loop calls against `year`'s prefix-plus-tail, yet runs at 0.41x of `year`'s
   rate at 256 bits and 0.38x at 128 (`PLAN_TASK_37.md` section 9, prediction 2), a
@@ -2398,6 +2690,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   Closing it is small: let `VarkaFilterExec` prune its output to the parent's required
   columns, or let the rule take a forwarded-only projection above a Varka node; either way
   the differential over `SELECT d ... WHERE d < d2` through a columnar consumer is the gate.
+  **Adopted as task 78** (section 2.40); it is the one entry here where Varka
+  is slower than stock Spark end to end.
 
 ## 10. Scope catalogue
 
