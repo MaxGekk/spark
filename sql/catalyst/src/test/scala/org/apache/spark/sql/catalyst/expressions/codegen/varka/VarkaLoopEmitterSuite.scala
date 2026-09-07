@@ -2537,7 +2537,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing from 21 outputs to 44") {
+  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing, and task 70 moves " +
+      "it again: unshared 21 to 22, shared 44 to 49") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
     // grows with the whole projection rather than with a group. Four fields over one date
@@ -2566,17 +2567,28 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     }
     val limit = 8000
-    // Unshared, 20 outputs fit and 21 do not.
-    assert(epilogueSize(fields(5), 12, unshared) < limit)
-    assert(epilogueSize(fields(6).take(21), 12, unshared) > limit)
-    // Shared, the same 20 fit with room to spare, and the boundary moves out to 44 outputs
-    // over eleven dates.
-    assert(epilogueSize(fields(5), 12, sharing) < limit)
-    assert(epilogueSize(fields(10), 12, sharing) < limit)
-    val past = epilogueSize(fields(11), 12, sharing)
+    // Task 70 (PLAN_TASK_70.md 9): with the bitmap pass on by default, every word in these
+    // methods is dead, so epilogueMasked is epilogueDense's bytes and the crossing is the
+    // dense epilogue's - unshared 21 fits (7563) and 22 crosses (8033); shared reaches
+    // 49. The per-group arm keeps the old boundaries, asserted beside.
+    assert(epilogueSize(fields(6).take(21), 12, unshared) < limit)
+    assert(epilogueSize(fields(6).take(22), 12, unshared) > limit)
+    assert(epilogueSize(fields(12), 12, sharing) < limit,
+      "forty-eight shared outputs fit under the pass; the boundary is further out")
+    assert(epilogueSize(fields((49 + 3) / 4).take(49 - 1), 13,
+      sharing) < limit)
+    val past = epilogueSize(fields((49 + 3) / 4).take(49), 13,
+      sharing)
     assert(past > limit,
-      s"forty-four shared calendar outputs now fit in $past bytes - sharing reaches further " +
-        "than this test records, so the ladder in PLAN_TASK_32.md section 7.1 is stale again")
+      s"49 shared calendar outputs now fit in $past bytes - the pass reaches " +
+        "further than this test records, so PLAN_TASK_70.md 9's ladder is stale")
+    // The reference variant: the boundaries task 54 left, 20/21 unshared and 44 shared.
+    val perGroupUnshared = unshared.withValidityByBitmap(false)
+    val perGroupShared = sharing.withValidityByBitmap(false)
+    assert(epilogueSize(fields(5), 12, perGroupUnshared) < limit)
+    assert(epilogueSize(fields(6).take(21), 12, perGroupUnshared) > limit)
+    assert(epilogueSize(fields(10), 12, perGroupShared) < limit)
+    assert(epilogueSize(fields(11), 12, perGroupShared) > limit)
   }
 
   test("the masked body agrees with the dense body on null-free data") {
@@ -2589,6 +2601,309 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     checkMatrix(Seq(root), 2, Array(3), Seq(17, 64, 65, 1000), nullFree, ctx = "dense")
     checkMatrix(Seq(root), 2, Array(3), Seq(17, 64, 65, 1000), nullFree,
       forceMasked = true, ctx = "forced-masked")
+  }
+
+  test("task 70: the validity-word algebra agrees with planWordRef on the shapes the plan " +
+      "reasons about, and every word a body stores is loaded") {
+    // Two emit-time assertions arm this task before it changes a byte. planSlots asserts, on
+    // every masked body it plans, that the symbolic word algebra (Analysis.pureWord and
+    // wordOwner - what the bitmap pass will read) and the slot references planWordRef assigns
+    // describe the same word; and every loop or epilogue body asserts at its end that each
+    // word it stored was loaded at least once and each word it loaded was stored, through the
+    // one call every consumer reads a word by. Both run under every test in this suite and
+    // every fuzz iteration. This test exists so a failure names itself here first, on the
+    // shapes PLAN_TASK_70.md 3.3 registers op counts for, rather than inside whichever other
+    // test happens to build the shape - and so that the two corners the agreement check
+    // deliberately allows (greatest over two literals, greatest over one input twice: a slot
+    // written with `-1 | -1` where the algebra says the constant or the input) are exercised on
+    // purpose. Emission is the assertion.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val d3 = new ColumnRef(2)
+    val d4 = new ColumnRef(3)
+    val lit = new LiteralSlot(0)
+    def ymdq(c: VarkaVectorIR): Seq[VarkaVectorIR] = Seq(
+      new Year(c), new Month(c), new DayOfMonth(c), new Quarter(c))
+    val shapes: Seq[(String, Seq[VarkaVectorIR], Int)] = Seq(
+      ("year(d)", Seq(new Year(d)), 1),
+      ("year, month, dayofmonth, quarter over d", ymdq(d), 1),
+      ("next_day(d, k), column kernel", Seq(new NextDay(d, d2)), 2),
+      ("greatest(d, d2)", Seq(new Greatest(d, d2)), 2),
+      ("year(date_add(d, off)), guarded", Seq(new Year(new AddDays(d, d2))), 2),
+      ("year(d) beside d < lit", Seq(new Year(d), new Compare(CompareOp.LT, d, lit)), 1),
+      ("if(d < d2, d, d2)", Seq(new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)), 2),
+      ("datediff(greatest(d, d2), greatest(d3, d4)), the mixed tree",
+        Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4),
+      ("greatest(lit, lit) beside year(d)", Seq(new Greatest(lit, lit), new Year(d)), 1),
+      ("greatest(d, d)", Seq(new Greatest(d, d)), 1),
+      ("datediff(d, d)", Seq(new DateDiff(d, d)), 1),
+      ("make_date, both forms", Seq[VarkaVectorIR](
+        new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), false),
+        new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), true)), 1),
+      ("trunc(d, level column)", Seq(new TruncDateDynamic(d, d2)), 2),
+      ("add_months(d, m), column count, under year", Seq(new Year(new AddMonths(d, d2))), 2))
+    for ((name, roots, numInputs) <- shapes) {
+      val (_, bytes) = emitMulti(roots, numInputs, 1)
+      assert(bytes.nonEmpty, name)
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Task 70: validity as bitmap algebra in the driver.
+  // ---------------------------------------------------------------------------------------------
+
+  private val bitmapOn = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(true)
+  private val bitmapOff = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
+  private val supportClass = "org.apache.spark.sql.varka.vector.VarkaVectorSupport"
+
+  /** The validity work in a method: every VarkaVectorSupport call but the segment mapping,
+   *  which every body mode emits per segment and which would keep this off zero for ever
+   *  (PLAN_TASK_70.md 3.3). */
+  private def validityOps(bytes: Array[Byte], method: String): Int =
+    VarkaEmitterTestSupport.invocationCount(bytes, method, supportClass, Seq("ofAddress").asJava)
+
+  private def supportNames(bytes: Array[Byte]): Set[String] =
+    VarkaEmitterTestSupport.invokedNames(bytes, supportClass).asScala.toSet
+
+  test("task 70: byte-identical validity with the bitmap pass on and off, every null pattern " +
+      "and length, over the shapes the plan names") {
+    // The existing oracle is the assertion: checkMatrix compares every output's validity byte
+    // for byte against the reference evaluator and asserts status 0, and makeInputData poisons
+    // every null lane, so this is also the guard-under-nulls test (PLAN_TASK_70.md 5) - a
+    // lowering that dropped a guard's word AND would decline a batch here. Each shape names
+    // the corner it is for.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val d3 = new ColumnRef(2)
+    val lit = new LiteralSlot(0)
+    val one = nullPatterns.map(p => Seq(p._2))
+    val shapes: Seq[(String, Seq[VarkaVectorIR], Int, Seq[Seq[Int => Boolean]])] = Seq(
+      ("year(d): a copy", Seq(new Year(d)), 1, one),
+      ("four fields over d, one method",
+        Seq(new Year(d), new Month(d), new DayOfMonth(d), new Quarter(d)), 1, one),
+      ("next_day(d, k), column kernel: an AND", Seq(new NextDay(d, d2)), 2, combos(2)),
+      // The OR root: with d all-null the output is d2's bitmap and 0L is never dereferenced;
+      // with d null-free every row is valid, the case 2.3's first rule got wrong.
+      ("greatest(d, d2): an OR", Seq(new Greatest(d, d2)), 2, combos(2)),
+      ("least(d, d2)", Seq(new Least(d, d2)), 2, combos(2)),
+      ("datediff(d, d2)", Seq(new DateDiff(d, d2)), 2, combos(2)),
+      // The guards keep their words (2.2): the producer's word stays live for the AND with the
+      // condemning mask, and a poisoned null lane must not decline the batch.
+      ("year(date_add(d, off)), guarded producer", Seq(new Year(new AddDays(d, d2))), 2,
+        combos(2)),
+      ("year(add_months(d, m)), guarded count", Seq(new Year(new AddMonths(d, d2))), 2,
+        combos(2)),
+      ("year(d) beside d < lit: a Cond root keeps the read",
+        Seq(new Year(d), new Compare(CompareOp.LT, d, lit)), 1, one),
+      ("if(d < d2, d, d2): a blend, not served",
+        Seq(new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)), 2, combos(2)),
+      // Two outputs where an all-null d does not fire the driver's shortcut, since year(d3)
+      // reads no all-null column: the AND root's bitmap has to be written by the pass, before
+      // step (5), or it is never written at all (3.1).
+      ("datediff(d, d2) beside year(d3): the AND root past the shortcut",
+        Seq(new DateDiff(d, d2), new Year(d3)), 3, combos(3)),
+      // A null-free input inside a masked kernel: year(d)'s bitmap is setValid, not a copy.
+      ("year(d) beside datediff(d2, d3): a null-free input under a masked driver",
+        Seq(new Year(d), new DateDiff(d2, d3)), 3, combos(3)),
+      // Three columns: the first two through the pair entry point, the third through Into.
+      ("datediff(datediff(d, d2), d3): a three-column AND chain",
+        Seq(new DateDiff(new DateDiff(d, d2), d3)), 3, combos(3)),
+      ("greatest(greatest(d, d2), d3): a three-column OR chain",
+        Seq(new Greatest(new Greatest(d, d2), d3)), 3, combos(3)),
+      // The mixed tree is declined and keeps today's per-group path; it must still be right.
+      ("datediff(greatest(d, d2), greatest(d, d3)): the mixed tree, declined",
+        Seq(new DateDiff(new Greatest(d, d2), new Greatest(d, d3))), 3, combos(3)))
+    for ((name, roots, n, patterns) <- shapes; on <- Seq(true, false)) {
+      checkMatrix(roots, n, Array(3), remainderLengths ++ Seq(64, 1000), patterns,
+        ctx = s"$name, validityByBitmap=$on", options = if (on) bitmapOn else bitmapOff)
+    }
+  }
+
+  test("task 70: the validity work per masked loop method, as PLAN_TASK_70.md 3.3 registered " +
+      "it, and no IntVector op moves") {
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val lit = new LiteralSlot(0)
+    // The Cond pair needs one method to be the mixed method the table describes: a Year weighs
+    // 38 against GROUP_BUDGET's 16, so at the default budget the two outputs split.
+    val oneMethod = VarkaEmitOptions.DEFAULTS.withGroupBudget(200)
+    val rows: Seq[(String, Seq[VarkaVectorIR], Int, VarkaEmitOptions, Int, Int)] = Seq(
+      ("year(d)", Seq(new Year(d)), 1, VarkaEmitOptions.DEFAULTS, 2, 0),
+      ("year, month, dayofmonth, quarter over d",
+        Seq(new Year(d), new Month(d), new DayOfMonth(d), new Quarter(d)), 1,
+        VarkaEmitOptions.DEFAULTS, 5, 0),
+      ("next_day(d, k), column kernel", Seq(new NextDay(d, d2)), 2, VarkaEmitOptions.DEFAULTS,
+        3, 0),
+      // The pick's null substitution reads both operand words for the value, whether or not
+      // its own word is wanted - the consumer PLAN_TASK_70.md 2.2 did not list - so its two
+      // reads stay and only the write goes. The plan's 3.3 registered 0 here off 2.2's
+      // inventory; this assertion is what corrected it.
+      ("greatest(d, d2)", Seq(new Greatest(d, d2)), 2, VarkaEmitOptions.DEFAULTS, 3, 2),
+      ("year(date_add(d, off)), guarded", Seq(new Year(new AddDays(d, d2))), 2,
+        VarkaEmitOptions.DEFAULTS, 3, 2),
+      ("year(d) beside d < lit, one method",
+        Seq(new Year(d), new Compare(CompareOp.LT, d, lit)), 1, oneMethod, 3, 2),
+      ("if(d < d2, d, d2)", Seq(new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)), 2,
+        VarkaEmitOptions.DEFAULTS, 3, 3))
+    for ((name, roots, n, base, today, after) <- rows) {
+      val off = emitMulti(roots, n, 1, base.withValidityByBitmap(false))._2
+      val on = emitMulti(roots, n, 1, base.withValidityByBitmap(true))._2
+      assert(validityOps(off, "loopMasked0") === today, s"$name, pass off: reads + writes today")
+      assert(validityOps(on, "loopMasked0") === after, s"$name, pass on: what is left")
+      assert(laneOps(on, "loopMasked0") === laneOps(off, "loopMasked0"),
+        s"$name: the pass moved an IntVector op, and it touches no lane op")
+    }
+  }
+
+  test("task 70: a single-operator word tree of any depth is served through the chain entry " +
+      "points; a mixed AND/OR tree is declined and keeps its per-group write") {
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val d3 = new ColumnRef(2)
+    val d4 = new ColumnRef(3)
+    val andChain = emitMulti(Seq(new DateDiff(new DateDiff(d, d2), d3)), 3, 0, bitmapOn)._2
+    assert(validityOps(andChain, "loopMasked0") === 0)
+    assert(supportNames(andChain).contains("andColumnValidity"), supportNames(andChain))
+    assert(supportNames(andChain).contains("andColumnValidityInto"), supportNames(andChain))
+    val orChain = emitMulti(Seq(new Greatest(new Greatest(d, d2), d3)), 3, 0, bitmapOn)._2
+    // The picks' value substitution still reads every operand word (2.2's missed consumer),
+    // so the reads stay; only the root's write goes.
+    assert(validityOps(orChain, "loopMasked0") === 3)
+    assert(supportNames(orChain).contains("orColumnValidity"), supportNames(orChain))
+    assert(supportNames(orChain).contains("orColumnValidityInto"), supportNames(orChain))
+    val single = emitMulti(Seq(new Year(d)), 1, 0, bitmapOn)._2
+    assert(supportNames(single).contains("copyColumnValidity"), supportNames(single))
+    // And(Or(0, 1), Or(2, 3)): two live intermediates, which two-operand calls over one
+    // destination cannot evaluate. Declined: no column entry point, today's reads and write.
+    val mixed = emitMulti(
+      Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4, 0, bitmapOn)._2
+    assert(!supportNames(mixed).exists(_.contains("ColumnValidity")), supportNames(mixed))
+    assert(validityOps(mixed, "loopMasked0") === 5, "four reads for the picks, one write")
+  }
+
+  test("task 70: the served and declined root counts, per shape") {
+    // The safety net PLAN_TASK_70.md 3.1 promised. Without it a regression that stopped
+    // serving every root would revert the whole lowering to the per-group path and pass the
+    // suite: the byte-identity test compares the two settings, which agree when nothing is
+    // served; the differential compares against a reference evaluator, and the per-group path
+    // is correct; and every size assertion is an upper bound. So the counts are pinned per
+    // shape here, in both directions - what is served, and what is declined and why.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val d3 = new ColumnRef(2)
+    val d4 = new ColumnRef(3)
+    def counts(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int = 0,
+        options: VarkaEmitOptions = bitmapOn): (Int, Int) = {
+      val c = VarkaLoopEmitter.bitmapPassCounts(roots.asJava, numInputs, numLiterals, options)
+      (c(0), c(1))
+    }
+    // Served, and nothing declined: a leaf word, an AND chain, an OR chain, four fields over
+    // one date, and the shape the whole task is named for.
+    assert(counts(Seq(new Year(d)), 1) === (1, 0))
+    assert(counts(Seq(new DateDiff(new DateDiff(d, d2), d3)), 3) === (1, 0))
+    assert(counts(Seq(new Greatest(new Greatest(d, d2), d3)), 3) === (1, 0))
+    assert(counts(Seq(new Year(d), new Month(d), new DayOfMonth(d), new Quarter(d)), 1)
+      === (4, 0))
+    // Declined for a mixed tree - the one kind the counter is for.
+    assert(counts(Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4) === (0, 1))
+    // Unserved but not declined: a word the emission computes rather than folds. `IfElse`
+    // blends by the known-true mask and `make_date` tests its own validity, so neither has a
+    // pure expression at all and neither is a mixed tree.
+    val blend = new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)
+    assert(counts(Seq(blend), 2) === (0, 0))
+    assert(counts(Seq(new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), false)), 1)
+      === (0, 0))
+    // A `Cond` root is a selection bitmap, not a value: never served, never counted.
+    assert(counts(Seq(new Compare(CompareOp.LT, d, d2)), 2) === (0, 0))
+    // With the option off nothing is served and nothing is declined - the pass does not run,
+    // so a shape that would have been declined is not counted as one.
+    val off = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
+    assert(counts(Seq(new Year(d)), 1, 0, off) === (0, 0))
+    assert(counts(Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4, 0, off)
+      === (0, 0))
+  }
+
+  test("task 70: the word-liveness invariant is armed, in both directions") {
+    // misdescribeWordLiveness inverts the verdict on every word. year(d): its only word is
+    // dead - the root is served and nothing else reads it - so the fault makes it live: stored
+    // at the top of the lane group, loaded by nobody, refused at the end of the body.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    val fault = bitmapOn.withMisdescribeWordLiveness(true)
+    val stored = intercept[IllegalStateException] {
+      emitMulti(Seq(new Year(d)), 1, 0, fault)
+    }
+    assert(stored.getMessage.contains("stored but never loaded"), stored.getMessage)
+    // year(date_add(d, off)): the guard reads the producer's word, so it and both inputs' are
+    // live; the fault makes them dead, and the guard's load is refused at the load.
+    val loaded = intercept[IllegalStateException] {
+      emitMulti(Seq(new Year(new AddDays(d, d2))), 2, 0, fault)
+    }
+    assert(loaded.getMessage.contains("declared dead is loaded"), loaded.getMessage)
+    // make_date: its own word is demanded unconditionally, because its guard reads it, so the
+    // fault kills it and the guard's load is refused - the same direction as above, on the one
+    // node that reaches its word through neither the AND family nor a root write. Pinned
+    // because that arm read its slot directly until this task's review: a raw load reaches no
+    // refusal at all, and the emission died in the class-file writer with an invalid local
+    // index instead, which is not what this injector is documented to raise.
+    val makeDate = new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), false)
+    val guardLoad = intercept[IllegalStateException] {
+      emitMulti(Seq[VarkaVectorIR](makeDate), 1, 0, fault)
+    }
+    assert(guardLoad.getMessage.contains("declared dead is loaded"), guardLoad.getMessage)
+    // With the pass off every word is live already, so the inversion has nothing to invert.
+    assert(emitMulti(Seq(new Year(d)), 1, 0, bitmapOff.withMisdescribeWordLiveness(true))
+      ._2.nonEmpty)
+    assert(emitMulti(Seq[VarkaVectorIR](makeDate), 1, 0,
+      bitmapOff.withMisdescribeWordLiveness(true))._2.nonEmpty)
+  }
+
+  test("task 70: a masked method whose every word is dead is its dense twin's bytes - one " +
+      "body, not two") {
+    // No per-group read, no per-group write, no null-state prologue, no own-word slot: what is
+    // left is the dense method. Asserted on size rather than on the byte string because the
+    // two methods differ in name inside the constant pool, not in code; a size match on both
+    // the loop and the epilogue is the claim 2.34 asked to have verified rather than assumed.
+    val d = new ColumnRef(0)
+    val d2 = new ColumnRef(1)
+    for ((name, roots, n) <- Seq(
+        ("year(d)", Seq[VarkaVectorIR](new Year(d)), 1),
+        ("four fields over d",
+          Seq[VarkaVectorIR](new Year(d), new Month(d), new DayOfMonth(d), new Quarter(d)), 1),
+        ("next_day(d, k), column kernel", Seq[VarkaVectorIR](new NextDay(d, d2)), 2),
+        ("datediff(d, d2)", Seq[VarkaVectorIR](new DateDiff(d, d2)), 2))) {
+      val bytes = emitMulti(roots, n, 0, bitmapOn)._2
+      for ((masked, dense) <- Seq(("loopMasked0", "loopDense0"),
+          ("epilogueMasked", "epilogueDense"))) {
+        assert(VarkaEmitterTestSupport.codeSize(bytes, masked) ===
+          VarkaEmitterTestSupport.codeSize(bytes, dense), s"$name: $masked against $dense")
+      }
+    }
+  }
+
+  test("task 70: the driver stays under HugeMethodLimit on the output ladder, with the pass " +
+      "on and off, and the pass costs the 48-output driver what prediction 6 said") {
+    // Nothing measured the driver before this task; it is one method for every output and the
+    // one method every batch runs. Measured before the work: 2409 bytes at 44 outputs against
+    // the epilogue's 8058, 2624 at 48 (PLAN_TASK_70.md 6.1). The pass adds about ten bytes
+    // per served single-input output - one call with its operand pushes, less the zero it
+    // replaces - so the 48-output driver was predicted under 500 bytes larger.
+    def fields(dates: Int): Seq[VarkaVectorIR] = (0 until dates).flatMap { c =>
+      val col = new ColumnRef(c)
+      Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
+    }
+    for (dates <- Seq(5, 11, 12); (base, layout) <- Seq((sharing, "shared"),
+        (unshared, "unshared")); on <- Seq(true, false)) {
+      val bytes = emitMulti(fields(dates), dates, 0, base.withValidityByBitmap(on))._2
+      val driver = VarkaEmitterTestSupport.codeSize(bytes, "runMasked")
+      assert(driver < 8000, s"$layout, $dates dates, pass=$on: runMasked is $driver bytes")
+    }
+    val off = VarkaEmitterTestSupport.codeSize(
+      emitMulti(fields(12), 12, 0, sharing.withValidityByBitmap(false))._2, "runMasked")
+    val on = VarkaEmitterTestSupport.codeSize(
+      emitMulti(fields(12), 12, 0, sharing.withValidityByBitmap(true))._2, "runMasked")
+    assert(on > off && on - off < 600,
+      s"48 outputs: the driver went from $off to $on bytes; prediction 6 said under 500 more")
   }
 
   test("task 45: the driver's fill writes the bits the loop used to OR, exactly") {
@@ -2661,8 +2976,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // "orValidityBitsAt16", so a substring test would pass on the form this task removes.
     val roots = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
     for ((lanes, bits) <- Seq(2 -> 64, 4 -> 128, 8 -> 256, 16 -> 512)) {
+      // Since task 70 the shipped year(d) makes no per-group validity call at all - its
+      // bitmap is copied once by the driver - so the helpers this test names are reached
+      // through the per-group reference variant, which is what the naming is pinned on.
       val bytes = emitMulti(roots, 1, 0,
-        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))._2
+        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withValidityByBitmap(false))._2
       val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
       assert(called.contains(s"validityBitsAt$lanes"), s"$lanes lanes: $called")
       assert(called.contains(s"orValidityBitsAt$lanes"), s"$lanes lanes: $called")
@@ -2683,8 +3001,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // 32 int lanes is a 1024-bit shape: SVE reaches it, the Vector API has no named species
     // constant for it, and VarkaVectorSupport has no pair. The fallback is what keeps such a
     // machine correct, so it is emitted and asserted rather than reasoned about.
+    // The per-group reference arm since task 70: the shipped year(d) makes no per-group
+    // validity call, and it is the general pair's naming this test pins.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
-      VarkaEmitOptions.DEFAULTS.withLanesOverride(32))._2
+      VarkaEmitOptions.DEFAULTS.withLanesOverride(32).withValidityByBitmap(false))._2
     val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
     assert(called.contains("validityBitsAt") && called.contains("orValidityBitsAt"), s"$called")
     assert(!called.exists(_.matches("(or)?ValidityBitsAt\\d+")), s"$called")
@@ -2695,8 +3015,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   test("task 46: with the option off the emission is the pre-task form") {
     // The A/B's other arm, and the reference variant: no width anywhere - not in a callee name
     // and not in the species - so what the benchmark compares against is what shipped before.
+    // Both of task 46's arms are reached through task 70's per-group reference arm now.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
-      VarkaEmitOptions.DEFAULTS.withValidityByWidth(false))._2
+      VarkaEmitOptions.DEFAULTS.withValidityByWidth(false).withValidityByBitmap(false))._2
     val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
     assert(called.contains("validityBitsAt") && called.contains("orValidityBitsAt"), s"$called")
     assert(!called.exists(_.matches("(or)?ValidityBitsAt\\d+")), s"$called")
@@ -2717,6 +3038,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // settings, at every null pattern and every length where the last byte is partial. The
     // helpers' own equivalence is pinned in the engine's VarkaVectorSupportWidthTest; this is
     // the emitted loop calling them with the rows and words it really produces.
+    // On the per-group reference arm, for the reason the naming tests above give: both of
+    // these roots are served by task 70's bitmap pass, so under the shipped default neither
+    // arm makes a per-group validity call and the two would be the same kernel - a
+    // self-comparison that could not fail. The default path's own coverage of these helpers
+    // is the declined-root test below, where the per-group write survives.
     val col = new ColumnRef(0)
     val roots = Seq[VarkaVectorIR](new Year(col), new DayOfWeek(col))
     val lengths = Seq(1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095)
@@ -2724,6 +3050,32 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     for (byWidth <- Seq(true, false)) {
       checkMatrix(roots, 1, Array.empty[Int], lengths, nullPatterns.map(p => Seq(p._2)),
         data = inRangeDays, ctx = s"validityByWidth=$byWidth",
+        options = VarkaEmitOptions.DEFAULTS.withValidityByWidth(byWidth)
+          .withValidityByBitmap(false))
+    }
+  }
+
+  test("task 46: the specialised helpers are still reached under task 70's default") {
+    // What the two A/B tests above cannot check once they run on the reference arm: that the
+    // width-specialised writer is still emitted, and still right, on the shipped default. A
+    // root the bitmap pass declines is what keeps a per-group write there - here a tree that
+    // mixes the two operators, which no chain of one operator can fold - so the helpers are
+    // named and the results compared with `validityByBitmap` left on.
+    val mixed = new DateDiff(new Greatest(new ColumnRef(0), new ColumnRef(1)),
+      new Greatest(new ColumnRef(2), new ColumnRef(3)))
+    assert(VarkaLoopEmitter.bitmapPassCounts(Seq[VarkaVectorIR](mixed).asJava, 4, 0,
+      VarkaEmitOptions.DEFAULTS) === Array(0, 1), "the fixture is meant to be declined")
+    for ((lanes, _) <- Seq(2 -> 64, 4 -> 128, 8 -> 256, 16 -> 512)) {
+      val bytes = emitMulti(Seq[VarkaVectorIR](mixed), 4, 0,
+        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))._2
+      val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
+      assert(called.contains(s"orValidityBitsAt$lanes"),
+        s"$lanes lanes: the default path lost the specialised writer: $called")
+    }
+    for (byWidth <- Seq(true, false)) {
+      checkMatrix(Seq(mixed), 4, Array.empty[Int], Seq(17, 64, 65, 1000, 4095),
+        nullPatterns.map(p => Seq(p._2, p._2, p._2, p._2)),
+        ctx = s"declined root, validityByWidth=$byWidth",
         options = VarkaEmitOptions.DEFAULTS.withValidityByWidth(byWidth))
     }
   }
@@ -2757,11 +3109,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val blend = new IfElse(new Compare(CompareOp.LT, col, lit), new AddDays(col, lit), col)
     val roots = Seq[VarkaVectorIR](new Year(col), new Year(blend), new Greatest(col, blend))
     def inRangeDays(c: Int, i: Int): Int = 19000 + (i % 9973)
+    // On the per-group reference arm: `validityOrFirst` moves the per-group OR, and under
+    // task 70's default the first root makes no such OR at all while the other two hold
+    // computed words that were never known before the compute - so all three arms would be
+    // one kernel and the comparison would be with itself.
     for (orFirst <- Seq(true, false)) {
       checkMatrix(roots, 1, Array(3), Seq(7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095),
         nullPatterns.map(p => Seq(p._2)), data = inRangeDays, forceMasked = true,
         ctx = s"validityOrFirst=$orFirst",
-        options = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(orFirst))
+        options = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(orFirst)
+          .withValidityByBitmap(false))
     }
   }
 

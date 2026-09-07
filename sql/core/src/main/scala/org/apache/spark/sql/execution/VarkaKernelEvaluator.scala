@@ -1066,8 +1066,11 @@ private[sql] class VarkaKernelEvaluator(
   /**
    * Allocates one destination Arrow vector: a `DateDayVector` for a date output, an `IntVector`
    * for a `datediff` day count. The fused loop writes its validity and data buffers directly
-   * (zero-copy); it zeroes every destination validity first, so only the valid rows get set
-   * bits, and null lanes of the data buffer are undefined, matching the engine contract.
+   * (zero-copy), and every valid row's bit is set exactly once per batch however the kernel
+   * gets there: since task 70 an output whose validity is a pure AND/OR of the input bitmaps
+   * has its whole bitmap written by the driver's bitmap pass, and the outputs that keep the
+   * per-group write have their validity zeroed by the driver first. Null lanes of the data
+   * buffer are undefined either way, matching the engine contract.
    */
   private def allocateVector(
       dataType: org.apache.spark.sql.types.DataType,
@@ -1152,9 +1155,12 @@ private[sql] class VarkaFilterEvaluator(
   override protected def identityEntries: Iterator[String] = Iterator(condition.toString)
 
   // The selection buffer, reused across batches and grown on demand; released by the
-  // task-completion listener before the allocator closes. The kernel zeroes the leading
-  // (len + 7) / 8 bytes itself (its driver zeroes every dstValidity segment), so a stale
-  // tail from a longer earlier batch is never read - the bitmap readers stop at `len` bits.
+  // task-completion listener before the allocator closes. The kernel writes the leading
+  // (len + 7) / 8 bytes itself, so a stale tail from a longer earlier batch is never read -
+  // the bitmap readers stop at `len` bits. Two facts keep that true since task 70, which
+  // stopped the driver from zeroing the validity of an output its bitmap pass serves: a
+  // filter's root is a `Cond`, which the pass never serves, so this buffer is still zeroed
+  // by the driver; and every pass arm writes exactly (len + 7) / 8 bytes anyway.
   private var maskBuf: ArrowBuf = null
 
   override protected def onTaskCleanup(): Unit = {

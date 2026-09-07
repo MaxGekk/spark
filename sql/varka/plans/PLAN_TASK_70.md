@@ -183,8 +183,10 @@ javadoc records and `assertSameOutput` enforces byte for byte.
 
 ### 2.4 The bound, from the current file
 
-Masked against dense, M rows/s, the parity file as this branch commits it
-(provenance `018228099ef`, 2026-09-07, both widths from one regeneration):
+Masked against dense, M rows/s, the parity file the plan committed before the
+work (provenance `018228099ef`, 2026-09-07, both widths from one regeneration;
+the numbers here are that file's on purpose, and section 9's are the file this
+task ships):
 
 | shape | AVX-512 | 128-bit |
 |---|---|---|
@@ -424,12 +426,30 @@ Registered from the emission sites in 2.2, to be asserted in 5:
 | `year(d)` | 1 read + 1 write | 0 |
 | `year, month, dayofmonth, quarter` over `d` (one method) | 1 read + 4 writes | 0 |
 | `next_day(d, k)`, column kernel | 2 reads + 1 write | 0 |
-| `greatest(d, d2)` | 2 reads + 1 write | 0 |
+| `greatest(d, d2)` | 2 reads + 1 write | 2 reads (the pick's substitution) + 0 - registered as 0, corrected by the assertion; see below |
 | `year(date_add(d, off))`, guarded | 2 reads + 1 write | 2 reads (the guard) + 0 |
 | `year(d)` beside `d < lit` (a `Cond` root, one method) | 1 read + 2 writes | 1 read + 1 write (the `Cond`) |
 | `if(d < d2, d, d2)` | 2 reads + 1 write | unchanged |
 
 `IntVector` counts per body are asserted unchanged for every shape above.
+
+**One row was registered wrong, and the assertion is what found it.** The
+table was derived from 2.2's inventory of word consumers, and that inventory
+has a fourth entry 2.2 did not list: `emitPick`'s null substitution -
+`a.blend(b, ~validA)` and its mirror - reads *both operand words for the
+value*, whether or not the pick's own word is wanted afterwards. So for
+`greatest(d, d2)` the two reads stay and only the write goes: 2, not 0. The
+liveness pass in the emitter already knew this (its javadoc lists the
+substitution as the consumer the inventory missed, because the pass was
+written from the emission sites rather than from 2.2), and the test in 5 that
+asserts this table failed on exactly that row the first time it ran. The row
+above now says what the emitter does; the original registration is kept in
+this paragraph rather than overwritten, because the miss is itself the
+finding: an inventory made by reading is not the same as one made by
+counting, which is why the counters in 3.1 exist. It also bears on 6.1's
+prediction 2, which expected the OR root to be the largest mover and was
+reasoning from three calls removed rather than one; section 9 scores it as
+registered.
 
 ## 4. Files
 
@@ -697,10 +717,326 @@ row is slower than before at either width.
 2. The pass, the liveness rule and the skipped writes behind the switch, off
    by default; the tests of 5; both widths green. The driver pinned on the
    output ladder here, since it is the commit that grows it.
-3. The A/B rows, one regeneration, section 9 with the predictions scored; the
-   default set by 6.1's rule; the docs and the milestone rows swept, including
-   what task 47 is left with.
+3. The A/B rows and one regeneration with the switch off, section 9's 9.1 and
+   the default decided by 6.1's rule (step 3a). Then, because the decision was
+   on: the default flipped, the variant rows renamed to the per-group reference
+   arm, the crossing test re-pinned, and a second regeneration so the committed
+   file's plain rows are the shipped bytes (step 3b); 9.2 onward scored from
+   it; the docs and the milestone rows swept, including what task 47 is left
+   with. The second regeneration was not in the plan as written: a default
+   decided *from* a regeneration invalidates that regeneration's labelling the
+   moment it is applied, and the next task that measures before it decides
+   should budget for two runs.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Two regenerations of one commit's kernels, and the second is the file that
+ships. The first, at `eb76f9a2418` with the switch off by default, measured
+the pass as a variant beside every shipped shape it changes, and the default
+was decided on it by 6.1's rule (9.3). The second, at `1f4d3e12404` with the
+switch on, is the committed file: its plain rows are the shipped bytes and its
+"words per group (task 70 A/B)" rows are the reference arm - the masked loop
+reading the input words and ORing the root's validity per lane group, which is
+what shipped until this task. Both ran on an idle machine (loads 0.88 and
+0.86; canaries within 0.7% and, for the second, compute +0.1%, cache +5.2%,
+memory -0.4%); the controls held within 2.8% in each. Every number below is
+the committed file's unless it says otherwise, and the few that are the first
+run's are on the allowlist for the reason 9.3 gives.
+
+### 9.1 The pairs: reference arm -> shipped, masked, mixed nulls, and the dense row
+
+*Requoted on 7 September 2026 from the third regeneration, which the review
+of this PR forced: task 46's A/B arms were built on `DEFAULTS` and so, once
+this task's default flipped, priced two byte-identical kernels (9.6). The
+numbers below are that run's; the two earlier runs' figures are in this
+file's history, and where a ratio moved between runs the text says so.*
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `year` | 3092.5 -> 3446.7 (1.11x), dense 3459.3 | 1190.5 -> 1332.5 (1.12x), dense 1331.4 |
+| `year+month+day+quarter`, one method | 1069.8 -> 1703.9 (1.59x), dense 1687.4 | 417.3 -> 790.1 (1.89x), dense 793.0 |
+| `next_day(d, k)`, column kernel | 7294.3 -> 7894.5 (1.08x), dense 7603.4 | 2832.3 -> 4086.8 (1.44x), dense 3571.3 |
+| `add_months(d, m)`, column count | 632.7 -> 690.1 (1.09x), dense 699.2 | 209.4 -> 238.9 (1.14x), dense 242.9 |
+| `add_months(d, 13)`, the control | 731.2 -> 732.0 (1.00x) | 254.6 -> 254.8 (1.00x) |
+| `greatest(d, d2)` | 9702.8 -> 10153.8 (1.05x), dense 12425.4 | 2622.7 -> 4241.4 (1.62x), dense 11347.5 |
+| the same, first input all-null | 10773.1 -> 11213.7 (1.04x) | 4182.2 -> 6044.9 (1.45x) |
+| four fields, chunk 4096 | 1359.2 -> 2199.7 (1.62x), dense 2199.7 | 421.2 -> 807.0 (1.92x), dense 807.8 |
+| four fields, chunk 4095 | 1318.3 -> 2195.1 (1.67x), dense 2212.1 | 421.7 -> 805.1 (1.91x), dense 809.7 |
+| four fields, chunk 64 | 906.4 -> 1174.6 (1.30x), dense 1544.8 | 378.3 -> 588.9 (1.56x), dense 714.8 |
+| four fields, chunk 63 | 713.7 -> 1018.4 (1.43x), dense 1367.1 | 347.8 -> 498.5 (1.43x), dense 676.7 |
+
+The four-field shape, which B2 emits by default, runs 1.59x and 1.89x faster
+than the arm that shipped before this task and lands on its dense twin - 1.0%
+above it at AVX-512, 0.4% below at 128-bit. Every served row is faster at
+both widths, and the control does not move.
+
+**What is stable across the three runs and what is not.** The four-field
+headline is (1.54x, 1.59x, 1.62x) at AVX-512 and (1.87x, 1.89x, 1.92x) at
+128-bit across the three regenerations, and `year` is (1.10x, 1.11x) and
+(1.11x, 1.12x): those two carry the task's claim and they hold. The picks and
+`next_day` do not: `greatest` read 1.19x at AVX-512 in run two and 1.05x in
+run three, because both of its rows moved by 6-7% in opposite directions,
+which is inside the file's own noise for a row at ten billion rows per second
+and outside anything a ratio of two such rows can resolve. Where this file
+reasons from `greatest`, it reasons from the byte counts in 9.4, not from the
+ratio.
+
+### 9.2 The predictions, scored as 6.1 registered them
+
+Gap closed means the fraction of the reference arm's distance to the dense row
+that the shipped row recovers.
+
+*The figures scored below are the second regeneration's - the run the default
+was decided from, and the one this section was written against. The third run
+(9.1, 9.6) requoted the table without changing any verdict here, but it moved
+two of the percentages enough to state: `greatest` closes 17% and 19% of its
+gap rather than 47% and 19%, so prediction 2's "not half" holds by more; and
+the short batches at AVX-512 close 42% at chunk 64 and 47% at chunk 63 rather
+than 26% and 10%, so prediction 3's width-dependent miss is much narrower than
+it read - close to the registered half at both widths rather than at one. The
+four-field and `year` figures are within a point of the run scored here.*
+
+1. **Four fields closes at least two thirds of its gap at both widths. Hit,
+   with margin.** 104% at AVX-512 (595.5 of 574.1) and 97% at 128-bit (363.1
+   of 374.0).
+2. **`year` closes its whole gap and is the smallest mover; `greatest` is the
+   largest at both widths and closes at least half its gap. One hit, three
+   misses - and the misses were on the record before the run.** `year` closes
+   99% at 128-bit and 72% at AVX-512 (3328.5 against 3444.8, 3.4% short), and
+   it is the smallest relative mover at 128-bit (+10.7%) but not at AVX-512,
+   where the all-null pick (+3.5%), the chunk-63 row (+8.3%) and the column
+   count (+9.2%) move less. `greatest` is not the largest mover at either
+   width - the four-field rows are, at +54.5% / +58.7% and +86.6% / +85.4% -
+   and it closes 47% of its gap at AVX-512 and 19% at 128-bit, not half. The
+   reason is 3.3's corrected row: the pick's null substitution reads both
+   operand words for the value, so the pass removes one of its three validity
+   calls rather than three of three, and the loop loses 17 bytes of 383 rather
+   than becoming its dense twin. The prediction reasoned from the inventory
+   that missed that consumer; the emitter did not.
+3. **The control is flat; the column count moves less than `next_day`; the
+   short batches close half their gap; the all-null row moves with its
+   sibling. Three hits and one width-dependent miss.** `add_months(d, 13)`
+   moves +0.9% and -0.0%. The column count moves less than `next_day(d, k)` at
+   both widths (+9.2% against +15.1%; +13.8% against +41.7%). The all-null
+   `greatest` row moves +3.5% and +48.5% beside its mixed-null sibling's +19.2%
+   and +62.9% - the same direction and a smaller step, since one operand's
+   contribution is a constant either way. The short batches close half their
+   gap at 128-bit - 64% at chunk 64, 52% at chunk 63 - and not at AVX-512,
+   where they close 26% and 10%. What is left there is not the loop. At 64
+   rows and sixteen lanes a batch is four lane groups, and the pass has removed
+   their four reads and sixteen writes; the residue between 1080.1 and the
+   dense 1549.6 is the masked *driver*, whose per-batch null-state prologue
+   runs in full for every referenced input on every batch and whose share of a
+   64-row batch is what it is. At four lanes the per-group work was the larger
+   share and the pass closed more. That residue is task 47's (9.5). The pass is
+   never the reason a short-batch row is slower: every one is faster.
+4. **No masked row past its dense twin by more than the tie floor. Hit on
+   every row but one, and the one is not the pass.** The largest genuine tie
+   is the four-field shape at AVX-512, 1.3% above dense (1689.1 against
+   1667.7), under the 4.1% floor. `next_day(d, k)` at 128-bit reads 4003.7
+   masked against 3494.3 dense, +14.6% - and read +12.3% in the first
+   regeneration too, so it is not a one-off. It is also not the pass: the
+   one-body test proves the two loop methods identical (257 bytes each),
+   `-XX:+PrintCompilation` shows both at 256 bytecode bytes reaching tier 4 the
+   same way, and timed interleaved under one JIT state over one L1-resident
+   buffer they run 4287 / 4319 / 4306 / 4278 M rows/s, within 1%. Identical
+   code at identical speed in the probe and 13-15% apart in the harness, at one
+   width only, across two runs: what differs between them is that the harness
+   streams two 80 MB columns from memory and the dense arm's pair (`nfData`
+   with `kData`) is not the masked arm's pair (`mxData` with `kData`), so the
+   relative placement of the two streams is not the same. That is the likely
+   mechanism and it is unverified; it is in the debt register as a harness
+   question, and it does not touch the decision, since the pass is faster than
+   its reference arm on this row at both widths whatever the dense row reads.
+5. **No pinned oracle moves; no dense number moves beyond noise. Hit, with the
+   noise measured rather than assumed.** The line map and shape hash tests are
+   as they were. The emitter's off-path bytes - the reference arm - were
+   compared method by method against master's on seven shapes and are
+   identical, so every non-A/B row in both runs is the same class file as
+   before; the sub-microsecond family still moved by up to 20% between the two
+   runs, in both directions, which is the noise 2.4 documented and the reason
+   this task's claims rest on adjacent pairs rather than on rows across files.
+6. **The epilogue crossing and the driver. Two hits, one miss in the good
+   direction, and one exact.** Unshared moves from 21 to 22 as predicted (7563
+   fits, 8033 crosses). Shared was predicted at 47 or 48 and is at 49 (48 fits
+   at 7464, 49 crosses at 8035), because what the prediction's last paragraph
+   allowed for happened in full: the null-state prologue went with the words,
+   and `epilogueMasked` is `epilogueDense`'s bytes on every rung of the ladder
+   rather than "within a hundred bytes" of it. The driver grows by 432 bytes
+   at 48 outputs (2624 to 3056), under the 500 registered, and crosses nothing
+   at either setting. The pinned crossing test carries the new boundaries and
+   the old ones under the reference arm.
+
+### 9.3 The default
+
+On. 6.1's rule was that prediction 4 holds and no served row is slower than
+before at either width. Every served row is faster at both widths in both
+runs; the control is flat; and prediction 4 holds on every row but one, which
+is identical bytecode running at identical speed when the JVM is asked
+directly - the "measurement error to explain" the prediction named, not a row
+the pass made worse.
+
+The decision was taken on the first regeneration, whose plain rows were the
+arm that shipped before this task: the four-field shape read 1034.6 -> 1644.5
+against a dense 1662.5 at AVX-512 and 420.1 -> 792.9 against 790.5 at 128-bit,
+`year` 3208.8 -> 3455.8 and 1193.4 -> 1330.9. Those numbers are on the
+allowlist because the commit that carried that file does not survive the
+squash-merge; the second regeneration says the same thing in the file a reader
+can open. The flip needed that second regeneration, which 8 did not
+anticipate: the committed file's plain rows must be the shipped bytes, and the
+moment the default moved those were the pass, so the variant rows became the
+per-group reference arm and the file was regenerated once more.
+
+### 9.4 Findings that were not predictions
+
+* **A fourth word consumer**, found by the assertion that pins 3.3 the first
+  time it ran (3.3, corrected in place with the original kept). It moved
+  prediction 2 from what was expected to what happened.
+* **The agreement check's operator arm was unsound**, and the fuzzer refused
+  it twenty jobs out of twenty on the first wave: two operands with different
+  owners can have equal expressions, and a pick's OR of two equal ANDs folds
+  to an AND. Removed in step 1; `SKILLS.md` has the lesson.
+* **One body, not two, exactly.** With the pass on, `loopMasked0` is the size
+  of `loopDense0` for `year(d)` (420), the four fields (626), `next_day(d, k)`
+  (257) and `datediff(d, d2)` (158), and the epilogues likewise (437, 649, 276,
+  177); the masked methods had been 514, 750, 442 and 343. `greatest(d, d2)`
+  keeps its substitution and goes 383 to 366; `year(date_add(d, off))` keeps
+  its guard and goes 691 to 681; `if(d < d2, d, d2)` is unserved and does not
+  move. On the output ladder every shared and unshared rung has the two
+  epilogues equal, which is why the crossing is the dense epilogue's now.
+* **The driver, measured**: 1122 / 2409 / 2624 bytes at 20 / 44 / 48 shared
+  outputs under the reference arm, 1282 / 2801 / 3056 under the pass; the
+  epilogue crossed first at every rung before this task and, at 49, still
+  does.
+* **The short-batch residue at AVX-512 is the driver's prologue** (prediction
+  3), which puts a number on what task 47 is now about.
+* **A default decided from a regeneration costs a second regeneration** (9.3;
+  8 is amended, and `SKILLS.md` has the lesson).
+* **The `next_day` dense row at 128-bit** (prediction 4): a harness question,
+  in the debt register.
+
+### 9.5 What task 47 is left with
+
+Per lane group, in the masked body: a `Cond` root's selection OR (the filter
+kernel), an `IfElse`'s blend, `make_date`'s validity test, the two reads a
+pick's substitution makes (`greatest(d, d2)` at 10807.0 and 4371.0 against its
+dense 12742.6 and 11492.5 - the widest gap left among the served shapes), and
+the read and AND a range guard keeps (`year(date_add(d, off))`,
+`add_months(d, m)` at 683.7 against 698.8 and 238.5 against 243.1). Per batch,
+in the masked driver: the null-state prologue for every referenced input,
+which is the whole of the gap left on a 64-row batch at AVX-512 (chunk 64 at
+1080.1 against 1549.6). Task 64 removes the guard from the in-range case and
+so widens what this task's rule drops; the prologue's share on short batches
+is a new item for 47's own plan.
+
+### 9.6 The review, and the third regeneration
+
+*Added 7 September 2026, after `/code-review max #145`. Fifteen findings
+survived verification; none was a wrong answer. What they changed:*
+
+**Three invariants this task introduced were not airtight.**
+
+* `emitMakeDate` read its own validity word with a raw `lload` rather than
+  through `loadWord`, so that read was outside the count the whole "every
+  word access goes through one call" claim rests on, and its two stores were
+  gated on `!dense` rather than on `ownWord` like every other arm. Harmless
+  today - the guard loads the same word a few instructions earlier - and not
+  harmless the moment `make_date`'s guard becomes conditional, which is task
+  64's direction. It also meant the fault injector was not armed for that
+  node: with the liveness verdict inverted the emission died in the class-file
+  writer with an invalid local index instead of the documented
+  `IllegalStateException`. Both fixed; the injector test now covers
+  `make_date` and asserts the message.
+* `liveWords`' two switches over the sealed IR ended in `default -> { }`
+  where `childrenOf` and `Analysis.analyze` are exhaustive on purpose. A node
+  type added without an arm would have produced an emit-time exception, which
+  `VarkaKernelEvaluator` catches as an emission failure - a silent per-row
+  fallback on every batch of a user query, with EXPLAIN still claiming
+  fusion. Both switches are exhaustive now, so it is a compile error.
+* The predicate deciding that a node carries a range guard was written out
+  twice, in `planSlots` and in `liveWords`. Tasks 52 and 60 each added a
+  guarded node kind; a third added to one and not the other would give that
+  node a guard whose word the liveness pass had killed. One `guardedWord`
+  helper, read by both. `emitGuardCollect` deliberately still refuses a dead
+  word rather than skipping the AND: that refusal is what the injector arms,
+  and skipping would turn a liveness bug into spurious batch declines on
+  nullable data.
+
+**The safety net 3.1 promised did not exist.** `declinedBitmapRoots` was
+incremented and read nowhere, and `Analysis` is private, so no suite could
+have read it. A regression that stopped serving every root would have
+reverted the whole lowering to the per-group path and passed the suite - the
+byte-identity tests compare the two settings, which agree when nothing is
+served; the differential compares against a reference evaluator, and the
+per-group path is correct; the size assertions are upper bounds. There is a
+public `bitmapPassCounts` now, and a test pins served and declined counts for
+nine shapes including the option-off case.
+
+**The measurement was pricing nothing, on three rows.** Task 46's A/B arms
+were built as `DEFAULTS.with<option>(false)`. Once this task's default turned
+the per-group validity call off for a served root, both arms of those pairs
+stopped making the call the option governs, and the regenerated file
+committed three rows comparing byte-identical kernels while
+`VarkaEmitOptions`' javadoc still cited them as the evidence for those
+options. The 128-bit file says it plainly: the pair that had read -21%
+against its comparand read -1.6% after the flip. Task 46's *naming* tests
+caught their half of this and were re-pinned in the same commit as the flip,
+because an assertion fails when its subject vanishes; its two *behavioural*
+tests and the benchmark did not, because two identical kernels do agree and a
+measurement reports a tie. The arms are built on `perGroupWrite` now, the
+rows say so in their labels, and `SKILLS.md` carries the rule.
+
+That fix required the third regeneration, which 9.1 is requoted from. With
+the arms on the reference arm the pairs measure again, and they do not say one
+thing: the OR's position confirms the shipped default at both widths and on
+both shapes (`year` 2652.6 against 3092.5, the four fields 963.5 against
+1069.8 at AVX-512; 953.5 against 1190.5 and 348.0 against 417.3 at 128-bit),
+while the width-named helpers win on the four fields (922.5 against 1069.8;
+335.2 against 417.3) and *lose* on single-field `year` (3366.0 against 3092.5;
+1281.6 against 1190.5). Task 46's default is right for the shape it was
+argued from and may not be for a single field. That is task 46's decision to
+revisit, not this task's, and it is in the debt register.
+
+**The 128-bit `fused, 64 ops` row moved by 105x, and prediction 5 said no
+dense number would.** The row is masked, so it is not a dense number, but the
+movement is far outside anything 9.2 accounts for and the reviewer was right
+that section 9 owed it an explanation. What the record shows:
+
+| commit | 128-bit | AVX-512 |
+|---|---|---|
+| `8fb18b355e2` .. `00eeed82279` | 270.4 .. 273.2 | 992.0 .. 988.6 |
+| `aef0b82260e` (master) | 8.8 | 1757.0 |
+| `1f4d3e12404` (step 3a) | 9.2 | 1860.1 |
+| `8ddc8afa642` (step 3b) | 966.6 | 2046.4 |
+| this commit (third run) | 961.6 | 2048.4 |
+
+So it is not this task inventing a number: a 30x regression landed on master
+with `aef0b82260e`, which moved the same row 1.8x the *other* way at AVX-512
+and was committed without being remarked on, and removing the per-group
+validity call undoes it and goes 3.5x past the pre-regression baseline. Two
+mechanisms are ruled out rather than argued about. It is not a method-size
+cliff: the masked loop is 898 bytes with the pass off and 804 with it on, the
+masked epilogue 1477 and 1343, all far under `HugeMethodLimit`. And it is not
+a compile failure of those methods: under `-XX:+PrintCompilation` at four
+lanes, driven through the masked path by the `--nulls` option this review
+added to `VarkaEmitDump`, both arms take every masked method to tier 4 with no
+bailout, no `COMPILE SKIPPED` and no deoptimisation beyond the routine
+superseding of the tier-3 versions. In isolation the two arms compile the
+same way; the 105x appears only in the file, where this case runs after about
+a hundred other kernels have been compiled in the same JVM. That is the
+condition `PLAN_TASK_11.md` section 6 already names for this very case, and it
+belongs in the debt register as a harness question beside the `next_day` one,
+not as a claim about the lowering.
+
+**Six corrections to text that had drifted from the code**, none of them
+behavioural: the user-facing per-group list in `docs/sql-varka.md` reproduced
+the three-consumer inventory that 3.3 had already corrected; the
+`validityByBitmap` javadoc claimed 1.6x and 1.9x where the file said 1.54x and
+1.87x, and claimed no masked row passes its dense twin, which the `next_day`
+row contradicts; two comments in `VarkaKernelEvaluator` still asserted that
+the driver zeroes every destination validity, which is exactly what the pass
+stopped doing for a served root; the differential's "an OR root" query was a
+mixed tree the pass declines, so no end-to-end test had ever reached
+`orColumnValidity` - there is a served OR over `varka_date_pairs` now; and the
+new algebra section had been inserted between the `Analysis` javadoc and the
+class, orphaning it.

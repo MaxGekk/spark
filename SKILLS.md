@@ -901,6 +901,67 @@ trusting them, not just its ratios.
   `dev/varka_emit.sh` now prints the validity count beside `IntVector` and `VectorMask`,
   so the check is a command rather than an argument.
 
+## An inventory made by reading is not an inventory made by counting
+
+- Task 70's plan listed the consumers of a validity word in the masked body by reading the
+  emitter: the root's per-group write, `IfElse`'s blend, and - the correction the review
+  added - the range guards' AND with their condemning mask. Three, and the plan's op-count
+  table in 3.3 was derived from the three. There is a fourth: `emitPick`'s null substitution
+  reads *both operand words for the value* (`a.blend(b, ~validA)` and its mirror), whether
+  or not the pick's own word is wanted afterwards. The liveness pass had it, because it was
+  written from the emission sites; the registered count did not, because it was written
+  from the list; and the test that asserts the table failed on `greatest(d, d2)` the first
+  time it ran - 2 calls left, not 0.
+- The fix that matters is not the corrected row, it is the mechanism that found it: since
+  step 1 every word load goes through one call that counts, every store through another,
+  and each body asserts at its end that the two sets agree. A list of consumers made by
+  reading is a design aid; the count is the record. Whenever a plan registers a number
+  derived from an inventory of emission sites, arrange for the emission to count itself and
+  assert the number, and expect the first run to correct the plan.
+- The same session had the mirror lesson from the other direction. A first version of the
+  algebra-agreement check also held a word expression's *operator* to the class of the node
+  owning it - an AND must be owned by a node that ANDs, an OR by a pick. Twenty fuzz jobs
+  out of twenty refused it: `least(month(dayOfWeek(date_add(d, off))), weekday(datediff(
+  thursdayOf(d), dayofyear(off))))` has two operands whose words are both `w_d & w_off`, so
+  the pick's OR of two equal ANDs folds to that AND, and a `Least` legitimately owns an AND.
+  Structural folding makes the top operator a property of the *expression*, not of the node
+  that computes it. A check that reads plausibly from the emitter's own rules can still be
+  wrong about what those rules produce; the fuzzer at a million iterations is the tool that
+  says so before a plan does.
+
+## What "the masked method is the dense method's bytes" actually took
+
+- Task 70's one-body result - a masked loop or epilogue method whose every validity word is
+  dead comes out byte-identical to its dense twin - held on the first run for `year(d)`, the
+  four shared fields and `next_day(d, k)`, on the loop and the epilogue both. It needed three
+  things to be true at once, and two of them are about slots rather than instructions. The
+  per-group read and write and the null-state prologue have to go, which is the visible
+  part. A dead *own* word must not get a slot, because the dense body allocates none and
+  every later local would shift by two. And a dead *input* word must keep its slot, because
+  the dense body allocates that one too - the prologue's `srcValSeg`/`dead`/`hasNulls`/`word`
+  quartet is planned per referenced input in every body, dense included, and has been since
+  task 24. So liveness drives what is emitted for an input word and what is allocated for an
+  own word, and they are deliberately not the same rule. Byte identity is a layout property
+  as much as a code property; the emitter suite asserts it on size because the two methods
+  differ in name in the constant pool and nowhere else.
+
+## A default decided from a regeneration costs a second regeneration
+
+- Task 70's plan said "one regeneration, section 9 with the predictions scored; the default set
+  by 6.1's rule". Those two clauses cannot both be true of one run. The committed results
+  file's plain rows are, by the repo's rule, the shipped bytes; the run that decides the default
+  is taken with the old default, so its plain rows are the old bytes and its variant rows the
+  new; and the moment the default moves, that file's labelling is wrong - the row called
+  "shipped" is the reference arm and the row called "(task N A/B)" is what ships. There is no
+  way to relabel it honestly, because the two arms were not measured under the names they
+  would now carry. So the sequence is: measure with the variant, decide, flip, rename the
+  variant to the reference arm (task 45's "validity OR-ed per group" is the model), and
+  regenerate again. Forty minutes of idle machine, and the plan should budget it.
+- Keep the first run's numbers out of the plan except for the few the decision rests on, and
+  allowlist those with the reason: the commit that carried the first file is squashed away on
+  merge, which is the provenance trap from earlier the same day. Score every prediction from
+  the second file, since that is the one a reader can open.
+
 ## Testing Under AQE
 
 - Every Varka suite session disables AQE for plan determinism, which silently leaves
@@ -935,6 +996,50 @@ trusting them, not just its ratios.
   19180.2 it had read before, so it returned to where it was rather than to somewhere
   new. It also moved one figure a whole task was reasoning from by a factor of five: the
   OR root's AVX-512 gap read 5.5% on the bad file and 27.7% on the good one.
+
+## A `--rounds` probe with no nulls compiles only half the kernel
+
+- `dev/varka_emit.sh --rounds N` ran the emitted kernel hot with `Array.fill(numInputs)(0)`
+  as the null counts, and the emitted `run` dispatches a null-free batch to the *dense*
+  driver. So every `-XX:+PrintCompilation` and `-XX:CompileCommand=print` probe taken
+  through that tool had been looking at `loopDense0` and had no way to see the masked
+  body at all - which is the half that task 70 changed, that carries every validity
+  word, and that the parity file's mixed-null rows measure. The first probe of the
+  105x row came back "both arms compile identically" for exactly that reason, and the
+  reason was invisible: the tool prints method sizes for both bodies whether or not it
+  runs them. `--nulls N` now drives the masked path, and a probe that means to reason
+  about a mixed-null row has to pass it.
+- The general form: a diagnostic that *emits* everything but *executes* one path will
+  answer questions about the path it did not run, confidently and wrongly. When a probe
+  agrees with neither hypothesis, check what it actually executed before believing it.
+
+## Flipping a default silently retires every A/B built on `DEFAULTS`
+
+- An A/B pair in the parity benchmark is two kernels emitted from
+  `VarkaEmitOptions.DEFAULTS` and `DEFAULTS.with<Option>(false)`. That is exactly right
+  until some *other* option's default flips underneath it and removes the work the first
+  option governs. Task 70 turned `validityByBitmap` on, so a served root makes no
+  per-group validity call at all; task 46's three pairs - the width-named helpers and the
+  OR's position, both of which only change how that call is made - were left comparing two
+  byte-identical kernels, and the regenerated file committed three rows that priced
+  nothing while `VarkaEmitOptions`' javadoc still cited them as the evidence for those
+  options. The 128-bit numbers say it plainly in hindsight: the pair that had read -21%
+  against its comparand read -1.6% after the flip.
+- **The tests caught their half and the benchmark could not catch its own.** Task 46's
+  three *naming* tests assert that `orValidityBitsAt16` appears in the class, so they
+  failed the moment the call disappeared and were re-pinned on the reference arm in the
+  same commit as the flip. Its two *behavioural* tests compare results across the option
+  and passed, because two identical kernels do agree - and so did the benchmark, which
+  only prints numbers. An assertion fails when its subject vanishes; an A/B measurement
+  reports a tie.
+- The rule that follows: **build an A/B's arms from the variant they belong to, never
+  from `DEFAULTS`**, so the pair says which arm it rides and survives the next flip -
+  `perGroupWrite.withValidityByWidth(false)` rather than
+  `DEFAULTS.withValidityByWidth(false)`. And when a default does flip, walk every other
+  pair in the file and ask what work each one's option still governs; three of them here
+  had none left. The same is true one layer up: a *test* that compares two settings for
+  equality is not evidence that either setting does anything, so pair it with an
+  assertion on the emitted names, which is what fails when the work is gone.
 
 ## Write the Prediction Down, Then Measure
 
