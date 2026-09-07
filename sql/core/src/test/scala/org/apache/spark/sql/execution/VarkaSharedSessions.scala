@@ -150,6 +150,46 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   }
 
   /**
+   * Builds and caches a `varka_ints_overflow` temp view for task 63: a date `d` beside two int
+   * columns, `i` holding ordinary magnitudes and `big` holding values at and beside the int32
+   * extremes, each nullable. `big`'s rows are what make a checked add or subtract overflow -
+   * `Int.MaxValue` plus a positive `i` is the whole point - while `i` alone keeps a batch that
+   * cannot overflow, so a test can separate "the kernel declined" from "the kernel is wrong".
+   *
+   * The date rides along so a shape can mix a fused calendar field with the arithmetic, which
+   * is where the compile-time bound matters: `year(d) * 100` needs no check and `big + i` does.
+   */
+  protected def cacheIntsOverflow(session: SparkSession): Unit = {
+    val rows = Seq(
+      (date("2024-01-01"), Int.box(1), Int.box(Int.MaxValue)),
+      (date("2024-06-15"), Int.box(-1), Int.box(Int.MinValue)),
+      (date("1999-12-31"), Int.box(7), Int.box(Int.MaxValue - 3)),
+      (date("2024-02-29"), Int.box(0), Int.box(0)),
+      (date("2024-03-01"), null: java.lang.Integer, Int.box(Int.MaxValue)),
+      (null: java.sql.Date, Int.box(5), null: java.lang.Integer))
+    session.createDataFrame(rows).toDF("d", "i", "big").coalesce(1)
+      .createOrReplaceTempView("varka_ints_overflow")
+    session.catalog.cacheTable("varka_ints_overflow")
+  }
+
+  /**
+   * Builds and caches a `varka_ints_safe` temp view for task 63: the same shape as
+   * `varka_ints_overflow` with every value small, so no checked operation can fire and a test
+   * asserting "fused, nothing declined, answers equal" has a fixture that stays that way.
+   */
+  protected def cacheIntsSafe(session: SparkSession): Unit = {
+    val rows = Seq(
+      (date("2024-01-01"), Int.box(1), Int.box(10)),
+      (date("2024-06-15"), Int.box(-3), Int.box(-20)),
+      (date("1999-12-31"), Int.box(7), Int.box(30)),
+      (date("2024-02-29"), null: java.lang.Integer, Int.box(40)),
+      (null: java.sql.Date, Int.box(5), null: java.lang.Integer))
+    session.createDataFrame(rows).toDF("d", "i", "big").coalesce(1)
+      .createOrReplaceTempView("varka_ints_safe")
+    session.catalog.cacheTable("varka_ints_safe")
+  }
+
+  /**
    * Builds and caches a `varka_dates_nullable_offset` temp view: a date column `d` and an int
    * column `off`, each nullable independently of the other. `cacheDates`'s `i` column is never
    * null (it comes from `zipWithIndex`), which is fine for a literal offset - always valid -

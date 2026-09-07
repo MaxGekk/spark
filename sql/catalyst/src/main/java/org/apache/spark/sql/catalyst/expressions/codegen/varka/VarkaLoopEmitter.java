@@ -468,6 +468,14 @@ public final class VarkaLoopEmitter {
       ClassDesc.of("jdk.incubator.vector.VectorOperators");
   private static final ClassDesc VO_COMPARISON =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Comparison;");
+  /**
+   * {@code VectorOperators.Associative}, which is what {@code AND}, {@code OR} and {@code XOR}
+   * are declared as - not {@code Binary}, though it extends it. A {@code getstatic} carries the
+   * field's own descriptor, so reading them as {@code Binary} links cleanly and then throws
+   * {@code NoSuchFieldError} the first time the kernel runs (task 63 met exactly that).
+   */
+  private static final ClassDesc VO_ASSOCIATIVE =
+      ClassDesc.of("jdk.incubator.vector.VectorOperators$Associative");
   private static final ClassDesc VO_BINARY =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Binary;");
   private static final ClassDesc SUPPORT =
@@ -1486,6 +1494,9 @@ public final class VarkaLoopEmitter {
      * correctness, not a producer's insurance.
      */
     final Set<VarkaVectorIR> selfGuarding = new HashSet<>();
+    /** Task 63: the int arithmetic nodes whose mode emits an overflow check, which condemns
+     *  the batch through the same accumulator task 52's guard uses. */
+    final Set<VarkaVectorIR> checkedArith = new HashSet<>();
 
     /**
      * Task 70: per value node, which word its validity is - see {@link WordOwner}. Filled by
@@ -1836,6 +1847,9 @@ public final class VarkaLoopEmitter {
           // above sets it for the same reason, and the dispatcher reads it to refuse a dense
           // batch, since a dense body has no validity to clear.
           analyzeOp(node, false, n.left(), n.right());
+          if (n.mode() != Overflow.WRAP && n.op() != IntOp.MUL) {
+            checkedArith.add(node);
+          }
           if (n.mode() == Overflow.NULL) {
             nullsFromValidInputs = true;
           }
@@ -1845,6 +1859,9 @@ public final class VarkaLoopEmitter {
           // emitted as a form nothing can produce (VarkaVectorIR.IntNeg).
           if (n.mode() == Overflow.NULL) {
             throw new IllegalArgumentException("IntNeg has no NULL mode: " + node);
+          }
+          if (n.mode() == Overflow.FAIL) {
+            checkedArith.add(node);
           }
           analyzeOp(node, false, n.child());
         }
@@ -2148,7 +2165,14 @@ public final class VarkaLoopEmitter {
     // A self-guarding node (task 42) needs the accumulator whatever the option says.
     boolean selfGuarding = mode != BodyMode.DRIVER && !analysis.selfGuarding.isEmpty()
         && outputs.stream().anyMatch(o -> reaches(o, analysis.selfGuarding));
-    boolean guarding = producersGuarding || selfGuarding;
+    // Task 63: a checked int operation condemns the batch through the same accumulator, so a
+    // body holding one needs it allocated whether or not anything else is guarded. The scratch
+    // slots for the check itself are allocated in the node loop below; this is the accumulator
+    // they fold into, and missing it is an emit-time failure rather than a wrong answer -
+    // which is how it was found.
+    boolean checkedArith = mode != BodyMode.DRIVER && analysis.options.checkIntOverflow()
+        && outputs.stream().anyMatch(o -> reaches(o, analysis.checkedArith));
+    boolean guarding = producersGuarding || selfGuarding || checkedArith;
     if (guarding) {
       s.guardAcc = slot++;
     }
@@ -2156,7 +2180,8 @@ public final class VarkaLoopEmitter {
     // a dense body, which has no words. Decided before the allocation loop because it decides
     // what the loop allocates.
     Set<WordOwner> live = !dense && mode != BodyMode.DRIVER && analysis.options.validityByBitmap()
-        ? liveWords(outputs, outputIdx, analysis, producersGuarding, selfGuarding) : null;
+        ? liveWords(outputs, outputIdx, analysis, producersGuarding, selfGuarding, checkedArith)
+        : null;
     if (live != null) {
       for (int i = 0; i < numInputs; i++) {
         if (referenced(analysis, i) && !live.contains(new WordOwner.Input(i))) {
@@ -2225,7 +2250,7 @@ public final class VarkaLoopEmitter {
           // column-count AddMonths guards itself and takes one whatever the option says.
           // MakeDate, the other self-guarding node, guards out of makeDateTmp and takes none -
           // allocating one for it would shift every later local and move the pinned bytes.
-          if (guardedWord(analysis, node, producersGuarding, selfGuarding)) {
+          if (guardedWord(analysis, node, producersGuarding, selfGuarding, checkedArith)) {
             s.guardTmp.put(node, slot++);
           }
           if (node instanceof MakeDate) {
@@ -2401,9 +2426,13 @@ public final class VarkaLoopEmitter {
    * Tasks 52 and 60 each added a kind; this is what makes the next one a single edit.
    */
   private static boolean guardedWord(Analysis analysis, VarkaVectorIR node,
-      boolean producersGuarding, boolean selfGuarding) {
+      boolean producersGuarding, boolean selfGuarding, boolean checkedArith) {
     return (producersGuarding && analysis.guardedProducers.contains(node))
-        || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node));
+        || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node))
+        // Task 63: a checked int operation reads its own word so a null lane cannot condemn
+        // the batch, which is the same contract task 52's guard has and the reason this
+        // predicate is one function rather than three conditions.
+        || (checkedArith && analysis.checkedArith.contains(node));
   }
 
   /**
@@ -2433,7 +2462,8 @@ public final class VarkaLoopEmitter {
    * word, so a test can watch each half of that invariant fail.
    */
   private static Set<WordOwner> liveWords(List<VarkaVectorIR> outputs, List<Integer> outputIdx,
-      Analysis analysis, boolean producersGuarding, boolean selfGuarding) {
+      Analysis analysis, boolean producersGuarding, boolean selfGuarding,
+      boolean checkedArith) {
     Set<WordOwner> live = new HashSet<>();
     java.util.ArrayDeque<VarkaVectorIR> work = new java.util.ArrayDeque<>();
     java.util.function.Consumer<WordOwner> demand = owner -> {
@@ -2522,7 +2552,7 @@ public final class VarkaLoopEmitter {
         case Or x -> { }
         case Not x -> { }
       }
-      if (guardedWord(analysis, n, producersGuarding, selfGuarding)) {
+      if (guardedWord(analysis, n, producersGuarding, selfGuarding, checkedArith)) {
         demand.accept(analysis.wordOwner.get(n));
       }
     }
@@ -3584,12 +3614,12 @@ public final class VarkaLoopEmitter {
     }
     // The two XORs, whose operands differ between ADD and SUB, then the AND and the sign test.
     cb.aload(a);
-    cb.getstatic(VECTOR_OPERATORS, "XOR", VO_BINARY);
+    cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? r : b);
     cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
-    cb.getstatic(VECTOR_OPERATORS, "AND", VO_BINARY);
+    cb.getstatic(VECTOR_OPERATORS, "AND", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? b : a);
-    cb.getstatic(VECTOR_OPERATORS, "XOR", VO_BINARY);
+    cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(r);
     cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
     cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
