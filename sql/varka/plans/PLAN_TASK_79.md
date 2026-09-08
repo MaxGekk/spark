@@ -13,9 +13,11 @@ engine recomputes the declined batch; the fusion is what is lost.
 
 ## 2. The admission check, done
 
-Three things were checked against master (`5448fe05f62`) with
-`dev/varka_emit.sh`. One confirms 2.41's design hazard, one refutes 2.41's
-motivating example, and together they change which fix is worth building.
+Checked against master (`5448fe05f62`) with `dev/varka_emit.sh`, and in one
+place by patching the compiler and reverting. 2.1 confirms 2.41's design hazard.
+2.2 finds that 2.41's motivating example is unreachable today, and how far away
+it is. 2.3 pins the shapes that are reachable. Together they settle which fix is
+worth building, and they narrow the sharing rule the fix depends on.
 
 ### 2.1 The sharing hazard is real, and two lines of SQL reach it
 
@@ -36,12 +38,13 @@ the emitter's line map has seven nodes and `(addMonths 1 4)` appears once:
 
 `sharedSlot` is keyed on `analysis.useCount > 1` with no notion of arm, and
 `emitValue` reloads on `computed.contains(node)` alone; its own javadoc says
-sharing crosses outputs "since the loop body is one straight line". So the
-disjunction rule 2.41 states - a node used anywhere unconditionally keeps an
-unqualified guard, and only a node used solely under arms is narrowed - is
-mandatory for the honest fix, not a refinement of it.
+sharing crosses outputs "since the loop body is one straight line". So a
+sharing rule of the kind 2.41 states - a node used anywhere unconditionally
+keeps an unqualified guard - is mandatory for the honest fix, not a refinement
+of it; 3.3 has the form this task builds, which is narrower than 2.41's, and
+why.
 
-### 2.2 The motivating example does not fuse, and cannot
+### 2.2 The motivating example does not fuse today, and what stands between
 
 2.41 motivates the task with
 
@@ -63,8 +66,8 @@ what a user can currently express is "a condition about something else", not
 *Extended on 8 September 2026, after the paragraph above was first written and
 the obvious follow-up question was asked: could those shapes fuse?* They could,
 and the distance is short, which matters for how this task is argued rather than
-for what it builds. Two independent blockers, both established by patching the
-compiler experimentally and reverting:
+for what it builds. One blocker, and one thing that looked like a blocker and is
+not; both established by patching the compiler experimentally and reverting:
 
 * **A bare int column has no arm in comparison operand position.** `compare`'s
   local `operand` admits an int *literal* directly - that is what makes
@@ -133,25 +136,46 @@ cliff are reachable through them:
       -> (if (cmp:LT col:0 lit:0) (int:ADD:FAIL col:1 lit:1) (year col:0)), fused,
          with the ANSI check's mask going through the same collect.
 
-Both fuse today and both decline a batch for a row the condition discards. That
-is the task's whole surface: a guarded node under an arm, with a condition that
-cannot mention the thing being guarded.
+    year(CASE WHEN d < DATE'2020-01-01' THEN date_add(d, off) ELSE d END)
+      -> task 52's guarded day producer under an arm, with the calendar node that
+         the guard protects sitting *outside* the arm and reading the blend.
+
+The third is the task's original instance and the one with the soundness
+argument worth writing down (3.3): the guard belongs to the producer but exists
+for the consumer, and the consumer is outside the arm - yet narrowing the guard
+to the arm is still sound, because on an untaken-arm lane the blend hands the
+consumer the other branch's value and the producer's out-of-range day never
+reaches it.
+
+All three fuse today and all three decline a batch for a row the condition
+discards. That is the task's whole surface: a guarded node under an arm, with a
+condition that cannot mention the thing being guarded.
 
 ### 2.4 What the check would have rejected
 
 That the sharing hazard was theoretical (it is two lines of SQL); that the
-user's own bound is what the cliff defeats (the user cannot express it); and
-that the cheap fix is obviously better (2.2 removes its main argument - see
-3.2).
+user's own bound is what the cliff defeats today (the user cannot express it
+until task 86); that a guard's arm mask can always be assembled where the guard
+is emitted (it cannot when the node's uses span two conditions - 3.3); and that
+the cheap fix is obviously better (2.2 removes its main argument - see 3.1).
 
 ## 3. The design
 
 ### 3.1 What the two candidates are worth, after 2.2
 
 2.41 offers two. *AND the arm's condition mask into the guard* keeps the shape
-fused and needs 2.1's disjunction rule. *Exclude a node under an arm from the
-guarded set* is cheaper and makes the shape decline at compile time with a
-reason instead.
+fused and needs 3.3's sharing rule. *Decline a guarded node under an arm at
+compile time* is cheaper and gives the shape up with a reason instead.
+
+That second one has to be said precisely, because 2.41's phrasing - "exclude
+the node from the guarded set" - describes a wrong answer if it is read as an
+emitter change. A node the *emitter* leaves out of its guarded set is not
+declined; it is unguarded, and computes silently wrong on an out-of-range lane -
+the bug task 52 exists to prevent. The fallback, if it is ever built, lives in
+the *compiler*: `dayRange` and `intBound` refuse a guarded producer or a checked
+node whenever it sits under an `IfElse` arm, so the entry is residual with a
+reason and no kernel runs. The emitter's guarded set is never the place to
+implement a decline.
 
 2.2 cuts the second one's argument down, and cuts it twice. It was attractive
 while the story was "the user wrote a bound and we ignored it", because then a
@@ -165,7 +189,7 @@ the cheap candidate is worse again for the opposite reason: it would decline the
 very shape a user wrote a bound to keep.
 
 **So this task builds the honest fix**, and the cheap one is recorded here as
-the fallback if 3.3's measurement says the arm mask costs more than the
+the fallback if section 6's measurement says the arm mask costs more than the
 declines it prevents.
 
 ### 3.2 Threading the arm context
@@ -176,19 +200,59 @@ by the time a node inside an arm is emitted (2.41 read this out and it holds).
 What is missing is context, not the mask: `emitGuardCollect` does not know which
 arm it is under or with which polarity.
 
-The change is an arm mask threaded through the value walk - the then-branch
-takes `kT`, the else-branch its complement, nested arms compose by AND - and
+The change is an arm context threaded through the value walk, and
 `emitGuardCollect` ANDs it in beside the node's word and the epilogue mask.
+
+Its polarity follows SQL's `CASE`, in which an unknown condition falls to
+`ELSE`. So the then-arm's context is `kT` (known-true) and the else-arm's is
+`NOT kT` - which is known-false *plus unknown*, not `kF`. Using `kF` for the
+else arm would exclude the unknown-condition lanes that SQL routes to `ELSE`,
+and a guarded node there would stop condemning a batch it must condemn. Nested
+arms compose by AND of their contexts.
+
+The context has one representation per body kind, because the two bodies keep
+the condition differently: in the masked body it is a word, `s.kt` and its
+complement, ANDed with the node's word before the collect; in the dense body it
+is a `VectorMask`, `s.condMask` and its `not()`, ANDed into the guard's mask
+before `toLong`. `emitGuardCollect` already takes both a word and a mask, so the
+context joins whichever side its body uses.
+
+A guarded node in the *condition itself* - `CASE WHEN add_months(d, m) < ...
+THEN ... END` - is computed and needed on every lane, and its context is
+unconditional: condition position counts as "outside any arm" for the rule in
+3.3, and the plan says so here because the phrase "under an `IfElse`" would
+otherwise be read to include it.
 
 ### 3.3 The rule that keeps sharing sound
 
-Per node, over the walk that already collects the guarded set: the guard's
-qualifying mask is the **disjunction over the node's use contexts**. A node used
-anywhere outside an arm has an unqualified guard; only a node used solely under
-arms is narrowed, and then by the OR of those arms' masks. `SKILLS.md` records
-this class one level down - task 32's prefix fragment had to be keyed on the
-guard's extra input rather than the child alone - and this task cites it rather
-than rediscovering it.
+Per node, over the walk that already collects the guarded set. 2.41 stated the
+rule as a disjunction - a node used under several arms takes the OR of their
+masks - and that is not implementable as written, for an ordering reason the
+first draft of this plan repeated. A shared node is emitted at its first textual
+use, and its guard with it. If its uses sit under two *different* conditions,
+the second condition's `kT` may not have been computed yet when the node is
+first emitted under the first, so the OR is not available where the guard has to
+be built.
+
+The rule this task builds is the conservative one that has no such dependency:
+**a guarded node's context is narrowed only when every use of the node sits
+under one and the same innermost arm chain**. A node with a use outside any arm
+(condition position included, per 3.2), or with uses under different arms, or
+with one use inside an arm and another bare, keeps an unqualified guard exactly
+as today. That gives up the multi-arm case, which nothing in 2.3 needs, and
+keeps the property that matters: no guard is ever narrower than the set of
+lanes whose value can reach a consumer.
+
+The soundness argument for the case 2.3's third shape raises - the producer in
+the arm, the consumer outside it - is the same property from the consumer's
+side. The consumer reads the blend. On a lane where the arm is untaken the blend
+holds the other branch's value, so the producer's out-of-range day is never what
+the consumer decomposes, and a guard confined to the arm's lanes misses nothing
+the consumer could see.
+
+`SKILLS.md` records this class one level down - task 32's prefix fragment had to
+be keyed on the guard's extra input rather than the child alone - and this task
+cites it rather than rediscovering it.
 
 `Greatest` and `Least` are unaffected and the rule should say so where it is
 written: they are validity-driven, with no untaken arm.
@@ -198,25 +262,33 @@ written: they are validity-driven, with no untaken arm.
 | file | what |
 |---|---|
 | `VarkaLoopEmitter.java` | the arm mask threaded through `emitValue`; `emitGuardCollect` taking it; the per-node use-context disjunction in the guarded-set walk |
-| `VarkaLoopEmitterSuite.scala` | 2.3's two shapes as status matrices; the shared-node case of 2.1 asserted to keep declining; the `codeSize` deltas |
-| `VarkaDifferentialSuite.scala` | both shapes end to end, with the declined metric at zero where the extreme rows are all in the untaken arm |
-| `VarkaEmitterParityBenchmark.scala` + results | 3.4's A/B, since the emitted bytes move |
+| `VarkaLoopEmitterSuite.scala` | 2.3's three shapes as status matrices; the shared-node and two-condition cases of 3.3 asserted to keep declining; a guarded node in condition position asserted unqualified; the `codeSize` deltas |
+| `VarkaDifferentialSuite.scala` | all three shapes end to end over a fixture whose extreme rows are routed to the untaken arm, with the declined metric at zero |
+| `VarkaEmitterParityBenchmark.scala` + results | section 6's A/B, since the emitted bytes move |
 | `PLAN_MILESTONE_4.md`, this file | row 79, section 2.41's motivating example corrected per 2.2, section 9 |
 
 ## 5. Tests, and what each is for
 
-* **The status matrix**, over 2.3's two shapes: a batch whose only out-of-range
-  row is sent to the untaken arm returns 0 instead of declining - the whole
-  point - while a batch whose out-of-range row is in the *taken* arm still
-  declines. The second half is what fails if the arm mask is ANDed with the
-  wrong polarity.
-* **The sharing case**, from 2.1: the guarded node used both inside an arm and
-  bare in the same projection keeps declining. This is the silent-wrong-answer
-  test, and it should be written before the fix so it fails first.
+* **The status matrix**, over 2.3's three shapes: a batch whose only
+  out-of-range row is sent to the untaken arm returns 0 instead of declining -
+  the whole point - while a batch whose out-of-range row is in the *taken* arm
+  still declines. The second half is what fails if the arm context is built with
+  the wrong polarity. A third column sends the out-of-range row through an
+  *unknown* condition (a null in the condition's column), which SQL routes to
+  `ELSE`: a guarded node in the else arm must still decline on that row, which
+  is what fails if `kF` was used where `NOT kT` belongs (3.2).
+* **The cases that must keep declining**, from 3.3, each written before the fix
+  so it fails first: the guarded node used inside an arm and bare in the same
+  projection (2.1's shape); the guarded node used under two different
+  conditions; and the guarded node in condition position. These are the
+  silent-wrong-answer tests.
 * **Nested arms**, one `CASE` inside another's arm, composing by AND.
-* **The differential**, both shapes, with `numFallbackBatchesDeclined` at zero
-  where today it is positive, and answers equal either way - answers cannot
-  move, since only the decline route changes.
+* **The differential**, all three shapes, with `numFallbackBatchesDeclined` at
+  zero where today it is positive, and answers equal either way - answers cannot
+  move, since only the decline route changes. The fixture is `varka_date_months`'
+  shape with the extreme counts placed on rows whose `d` is on or after
+  `DATE'2020-01-01'`, so the `d < DATE'2020-01-01'` condition routes every one
+  of them to the arm without the guarded node.
 * **Every unguarded shape byte-identical**, which is the assertion that the
   thread reached only the guards.
 
@@ -238,21 +310,27 @@ the declines it prevents, which the differential counts rather than times.
 
 ## 7. Risks
 
-1. **Polarity.** The else-branch takes the complement of `kT`, and a
-   three-valued condition makes "not known-true" and "known-false" different
-   sets. The rule must use the arm's own mask, not the negation of the other's.
+1. **Polarity.** A three-valued condition makes "not known-true" and
+   "known-false" different sets, and SQL sends the unknown lanes to `ELSE`. The
+   else arm's context is therefore `NOT kT`, never `kF`; using `kF` drops the
+   unknown lanes from the else arm's guard and is silently wrong. 3.2 states it
+   and 5's third status-matrix column tests it.
 2. **The sharing rule** (2.1, 3.3), which is the one that is silently wrong if
-   it is got wrong; its test is written first.
+   it is got wrong. The first draft of this plan carried 2.41's OR-of-arms form,
+   which cannot be built at the point the guard is emitted; the same-arm-chain
+   rule replaces it, and its three keep-declining tests are written first.
 3. **Nested arms composing by AND** and the epilogue mask still being ANDed in.
 4. **A guarded node under a `Coalesce`**, which compiles to `IfElse` - the rule
    must treat it as an arm like any other, and the test list says so.
 
 ## 8. Sequencing
 
-1. This plan and the milestone row; 2.41's motivating example corrected in place
-   with a note saying what replaced it.
-2. The failing tests: 5's sharing case and the status matrix.
-3. The use-context disjunction in the analysis, then the arm mask in the walk.
+1. This plan and the milestone row, with 2.41's motivating example corrected in
+   place - done in the PR that carries the plan.
+2. The failing tests: 5's three keep-declining cases and the status matrix,
+   including its unknown-condition column.
+3. The same-arm-chain analysis in the guarded-set walk, then the arm context
+   threaded through `emitValue` and into `emitGuardCollect`.
 4. The A/B, section 9, row 79.
 
 ## 9. Outcome

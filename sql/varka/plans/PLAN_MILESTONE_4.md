@@ -2104,7 +2104,15 @@ decline. Silently wrong, not slow. The sound rule is that a guarded node's
 mask is the disjunction over its use contexts, so a node used anywhere
 unconditionally keeps an unqualified guard, and only a node used solely under
 arms is narrowed; the analysis can compute that per node in the walk that
-already collects the guarded set. `SKILLS.md` records the same class of bug
+already collects the guarded set.
+
+*Narrowed on 8 September 2026 by `PLAN_TASK_79.md` 3.3.* The disjunction is
+sound but not buildable where the guard is emitted: a shared node is emitted at
+its first textual use, and if its uses sit under two different conditions the
+second condition's mask may not exist yet at that point. The task builds the
+conservative form - narrow only when every use sits under one and the same
+innermost arm chain; anything else keeps an unqualified guard - which gives up
+the multi-arm case that no reachable shape needs. `SKILLS.md` records the same class of bug
 one level down, where task 32's prefix fragment had to be keyed on the guard's
 extra input rather than on the child alone; this is that lesson at the arm
 level, and the task should cite it rather than rediscover it.
