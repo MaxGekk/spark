@@ -53,15 +53,19 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LastDay;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Or;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Quarter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.SubDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ThursdayOf;
@@ -464,6 +468,14 @@ public final class VarkaLoopEmitter {
       ClassDesc.of("jdk.incubator.vector.VectorOperators");
   private static final ClassDesc VO_COMPARISON =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Comparison;");
+  /**
+   * {@code VectorOperators.Associative}, which is what {@code AND}, {@code OR} and {@code XOR}
+   * are declared as - not {@code Binary}, though it extends it. A {@code getstatic} carries the
+   * field's own descriptor, so reading them as {@code Binary} links cleanly and then throws
+   * {@code NoSuchFieldError} the first time the kernel runs (task 63 met exactly that).
+   */
+  private static final ClassDesc VO_ASSOCIATIVE =
+      ClassDesc.of("jdk.incubator.vector.VectorOperators$Associative");
   private static final ClassDesc VO_BINARY =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Binary;");
   private static final ClassDesc SUPPORT =
@@ -567,6 +579,10 @@ public final class VarkaLoopEmitter {
   /** {@code IntVector IntVector.add/sub(int, VectorMask)}. */
   private static final MethodTypeDesc LANEWISE_VI_MASKED =
       MethodTypeDesc.of(INT_VECTOR, ConstantDescs.CD_int, VECTOR_MASK);
+  /** {@code IntVector IntVector.lanewise(VectorOperators.Binary, Vector)} - XOR and AND, which
+   *  the integral vectors expose only through {@code lanewise} (task 63's overflow check). */
+  private static final MethodTypeDesc LANEWISE_BINARY_V =
+      MethodTypeDesc.of(INT_VECTOR, VO_BINARY, VECTOR);
   /** {@code IntVector IntVector.lanewise(VectorOperators.Binary, int)} - the shifts. */
   private static final MethodTypeDesc LANEWISE_BINARY_I =
       MethodTypeDesc.of(INT_VECTOR, VO_BINARY, ConstantDescs.CD_int);
@@ -971,6 +987,14 @@ public final class VarkaLoopEmitter {
     if (node instanceof DayOfYear) {
       return DAY_OF_YEAR_WEIGHT;
     }
+    if (node instanceof IntArith n) {
+      // One lanewise op, plus the four the sign test costs where there is one.
+      return n.mode() == Overflow.WRAP ? 1 : 5;
+    }
+    if (node instanceof IntNeg n) {
+      // The multiply by -1, plus one compare where the mode checks.
+      return n.mode() == Overflow.WRAP ? 1 : 2;
+    }
     if (node instanceof WeekOfYear) {
       return WEEK_OF_YEAR_WEIGHT;
     }
@@ -1179,6 +1203,8 @@ public final class VarkaLoopEmitter {
       case Or n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Not n -> new VarkaVectorIR[] {n.child()};
       case IsNotNull n -> new VarkaVectorIR[] {n.child()};
+      case IntArith n -> new VarkaVectorIR[] {n.left(), n.right()};
+      case IntNeg n -> new VarkaVectorIR[] {n.child()};
     };
   }
 
@@ -1468,6 +1494,10 @@ public final class VarkaLoopEmitter {
      * correctness, not a producer's insurance.
      */
     final Set<VarkaVectorIR> selfGuarding = new HashSet<>();
+    /** Task 63: the int arithmetic nodes whose overflow check condemns the batch through the
+     *  same accumulator task 52's guard uses - the FAIL ones. A NULL node checks too but
+     *  disposes of the mask into its own validity word, so it is not one of these. */
+    final Set<VarkaVectorIR> checkedArith = new HashSet<>();
 
     /**
      * Task 70: per value node, which word its validity is - see {@link WordOwner}. Filled by
@@ -1630,6 +1660,10 @@ public final class VarkaLoopEmitter {
         case TruncDateDynamic n -> andOwner(node, n.days(), n.level());
         case AddMonths n -> andOwner(node, n.days(), n.months());
         case DateDiff n -> andOwner(node, n.end(), n.start());
+        case IntArith n -> n.mode() == Overflow.NULL
+            ? new WordOwner.Own(node)
+            : andOwner(node, n.left(), n.right());
+        case IntNeg n -> wordOwner.get(n.child());
         case DayOfWeek n -> wordOwner.get(n.days());
         case WeekDay n -> wordOwner.get(n.days());
         case DayOfWeekIso n -> wordOwner.get(n.days());
@@ -1670,6 +1704,14 @@ public final class VarkaLoopEmitter {
         case TruncDateDynamic n -> andExpr(pureWord.get(n.days()), pureWord.get(n.level()));
         case AddMonths n -> andExpr(pureWord.get(n.days()), pureWord.get(n.months()));
         case DateDiff n -> andExpr(pureWord.get(n.end()), pureWord.get(n.start()));
+        // WRAP and FAIL are a pure AND of the operands' bitmaps, so the driver's pass can
+        // write such a root's validity once per batch. NULL is not a function of the input
+        // bitmaps at all - its overflow mask comes from the values - which is the boundary
+        // IfElse and MakeDate sit on, and the null below is what keeps it off the pass.
+        case IntArith n -> n.mode() == Overflow.NULL
+            ? null
+            : andExpr(pureWord.get(n.left()), pureWord.get(n.right()));
+        case IntNeg n -> pureWord.get(n.child());
         case Greatest n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case Least n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case DayOfWeek n -> pureWord.get(n.days());
@@ -1750,11 +1792,11 @@ public final class VarkaLoopEmitter {
           skipping.put(node, false);
         }
         case AddDays n -> {
-          requireOffsetShape(n.offset(), "date_add's day offset");
+          requireDayOffsetShape(n.offset(), "date_add's day offset");
           analyzeOp(node, false, n.days(), n.offset());
         }
         case SubDays n -> {
-          requireOffsetShape(n.offset(), "date_sub's day offset");
+          requireDayOffsetShape(n.offset(), "date_sub's day offset");
           analyzeOp(node, false, n.days(), n.offset());
         }
         case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
@@ -1798,6 +1840,35 @@ public final class VarkaLoopEmitter {
           if (!n.failOnError()) {
             nullsFromValidInputs = true;
           }
+        }
+        case IntArith n -> {
+          // skips = false: a null operand nulls the result, the null-intolerant rule. Under
+          // NULL mode the node can also null a lane whose operands are both valid, which is
+          // the other direction and is what nullsFromValidInputs states - MakeDate's arm
+          // above sets it for the same reason, and the dispatcher reads it to refuse a dense
+          // batch, since a dense body has no validity to clear.
+          analyzeOp(node, false, n.left(), n.right());
+          // FAIL only: this set exists to allocate the condemning accumulator and to keep the
+          // word the collect reads alive, and a NULL node writes neither - it narrows its own
+          // word instead, and liveWords demands that word through its own arm. Including NULL
+          // here parked a guardAcc and a guardTmp that nothing ever read.
+          if (n.mode() == Overflow.FAIL && n.op() != IntOp.MUL) {
+            checkedArith.add(node);
+          }
+          if (n.mode() == Overflow.NULL) {
+            nullsFromValidInputs = true;
+          }
+        }
+        case IntNeg n -> {
+          // Spark has no try_negative, so NULL never reaches here; refused rather than
+          // emitted as a form nothing can produce (VarkaVectorIR.IntNeg).
+          if (n.mode() == Overflow.NULL) {
+            throw new IllegalArgumentException("IntNeg has no NULL mode: " + node);
+          }
+          if (n.mode() == Overflow.FAIL) {
+            checkedArith.add(node);
+          }
+          analyzeOp(node, false, n.child());
         }
         case Greatest n -> analyzeOp(node, true, n.left(), n.right());
         case Least n -> analyzeOp(node, true, n.left(), n.right());
@@ -1855,10 +1926,10 @@ public final class VarkaLoopEmitter {
 
     // task 38 widened the offset from LiteralSlot-only to a literal or a column, but it is
     // still not an arbitrary subtree - VarkaExpressionCompiler only ever emits one of these
-    // two shapes, and this check fails fast if a future IR producer emits anything else. This
-    // now guards four operands of three kinds: AddDays/SubDays' day offset (task 38),
-    // NextDay's weekday (task 59) and AddMonths' month count (task 60), the stricter
-    // requireLiteralOffset that used to cover the latter two having no caller left. {@code
+    // two shapes, and this check fails fast if a future IR producer emits anything else. It
+    // guards NextDay's weekday (task 59) and AddMonths' month count (task 60), the stricter
+    // requireLiteralOffset that used to cover them having no caller left; the day offset it
+    // also guarded took a third kind in task 63 and moved to requireDayOffsetShape. {@code
     // position} names the operand that failed, because one message shared across operands is
     // exactly what sent the IR fuzzer's first failure (#110) hunting for a next_day the shape
     // did not contain - the reason the check requireLiteralOffset replaced carried the name too.
@@ -1866,6 +1937,25 @@ public final class VarkaLoopEmitter {
       if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)) {
         throw new IllegalArgumentException(
             position + " must be a literal slot or a column, got " + offset);
+      }
+    }
+
+    /**
+     * The day offset of {@code AddDays}/{@code SubDays}, which task 63 widened by one kind:
+     * a literal slot, a column, or int arithmetic over those - {@code date_add(d, i * 7)}.
+     * Not every node, which is the point of keeping a check here at all: a date-valued
+     * subtree in this position would be read as a day count and produce a plausible wrong
+     * date, and the calendar operands next door still take the stricter
+     * {@link #requireOffsetShape}, because {@code next_day}'s weekday and
+     * {@code add_months}' month count carry runtime bounds a derived value cannot declare.
+     * `VarkaExpressionCompiler.compileOffset` admits exactly these three kinds; the two are
+     * meant to be read together.
+     */
+    private static void requireDayOffsetShape(VarkaVectorIR offset, String position) {
+      if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)
+          && !(offset instanceof IntArith) && !(offset instanceof IntNeg)) {
+        throw new IllegalArgumentException(
+            position + " must be a literal slot, a column or int arithmetic, got " + offset);
       }
     }
 
@@ -1929,6 +2019,9 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, Integer> sharedSlot = new HashMap<>();
     /** Per Greatest/Least (masked): the two operand temporaries the substitution needs. */
     final Map<VarkaVectorIR, int[]> pairTmp = new HashMap<>();
+    /** Task 63: the left operand, the right operand and the result of a checked
+     *  {@link IntArith}, parked so the overflow mask can read all three. */
+    final Map<VarkaVectorIR, int[]> intArithTmp = new HashMap<>();
     /** Per DayOfWeek/WeekDay/NextDay: {@code emitFloorMod7}'s own original-value and fold
      * temporaries. NextDay needs no third slot for the date it reuses after the mod - its
      * emitValue arm keeps that copy on the operand stack instead (dup/swap). */
@@ -2096,7 +2189,14 @@ public final class VarkaLoopEmitter {
     // A self-guarding node (task 42) needs the accumulator whatever the option says.
     boolean selfGuarding = mode != BodyMode.DRIVER && !analysis.selfGuarding.isEmpty()
         && outputs.stream().anyMatch(o -> reaches(o, analysis.selfGuarding));
-    boolean guarding = producersGuarding || selfGuarding;
+    // Task 63: a checked int operation condemns the batch through the same accumulator, so a
+    // body holding one needs it allocated whether or not anything else is guarded. The scratch
+    // slots for the check itself are allocated in the node loop below; this is the accumulator
+    // they fold into, and missing it is an emit-time failure rather than a wrong answer -
+    // which is how it was found.
+    boolean checkedArith = mode != BodyMode.DRIVER && analysis.options.checkIntOverflow()
+        && outputs.stream().anyMatch(o -> reaches(o, analysis.checkedArith));
+    boolean guarding = producersGuarding || selfGuarding || checkedArith;
     if (guarding) {
       s.guardAcc = slot++;
     }
@@ -2104,7 +2204,8 @@ public final class VarkaLoopEmitter {
     // a dense body, which has no words. Decided before the allocation loop because it decides
     // what the loop allocates.
     Set<WordOwner> live = !dense && mode != BodyMode.DRIVER && analysis.options.validityByBitmap()
-        ? liveWords(outputs, outputIdx, analysis, producersGuarding, selfGuarding) : null;
+        ? liveWords(outputs, outputIdx, analysis, producersGuarding, selfGuarding, checkedArith)
+        : null;
     if (live != null) {
       for (int i = 0; i < numInputs; i++) {
         if (referenced(analysis, i) && !live.contains(new WordOwner.Input(i))) {
@@ -2152,6 +2253,14 @@ public final class VarkaLoopEmitter {
           if (!dense && (node instanceof Greatest || node instanceof Least)) {
             s.pairTmp.put(node, new int[] {slot++, slot++});
           }
+          // Task 63's overflow check reads both operands and the result after the lanewise
+          // op has consumed the operands off the stack, so all three are parked. Allocated in
+          // both bodies, unlike pairTmp: a dense batch overflows exactly as a masked one does,
+          // and the check is what the mode asks for, not what the null state asks for.
+          if (analysis.options.checkIntOverflow() && node instanceof IntArith n
+              && n.mode() != Overflow.WRAP) {
+            s.intArithTmp.put(node, new int[] {slot++, slot++, slot++});
+          }
           if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay
               || node instanceof TruncDateDynamic || node instanceof ThursdayOf
               || node instanceof DayOfWeekIso) {
@@ -2165,7 +2274,7 @@ public final class VarkaLoopEmitter {
           // column-count AddMonths guards itself and takes one whatever the option says.
           // MakeDate, the other self-guarding node, guards out of makeDateTmp and takes none -
           // allocating one for it would shift every later local and move the pinned bytes.
-          if (guardedWord(analysis, node, producersGuarding, selfGuarding)) {
+          if (guardScratch(analysis, node, producersGuarding, selfGuarding)) {
             s.guardTmp.put(node, slot++);
           }
           if (node instanceof MakeDate) {
@@ -2256,6 +2365,12 @@ public final class VarkaLoopEmitter {
       case WeekOfYear n -> s.wordRef.get(n.days());
       case AddMonths n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.months()));
       case DateDiff n -> andRef(s.wordRef.get(n.end()), s.wordRef.get(n.start()));
+      // WRAP and FAIL alias the operands' AND like any null-intolerant node; NULL narrows that
+      // AND with its overflow mask afterwards, so it needs a slot of its own to narrow.
+      case IntArith n -> n.mode() == Overflow.NULL
+          ? Integer.MIN_VALUE
+          : andRef(s.wordRef.get(n.left()), s.wordRef.get(n.right()));
+      case IntNeg n -> s.wordRef.get(n.child());
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
     };
@@ -2327,14 +2442,31 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Whether {@code node} carries a range guard in this body, and so needs its own validity word
-   * for {@link #emitGuardCollect} to qualify the condemning mask with. The one place the two
-   * readers agree: {@link #planSlots} allocates the guard's temporary under it and
-   * {@link #liveWords} demands the word under it, and a third guarded node kind added to one
-   * and not the other would give that node a guard whose word the liveness pass had killed.
-   * Tasks 52 and 60 each added a kind; this is what makes the next one a single edit.
+   * Whether {@code node} condemns the batch from this body, and so needs its own validity word
+   * kept alive for {@link #emitGuardCollect} to qualify the condemning mask with. Read by
+   * {@link #liveWords}: a node that collects into the accumulator without its word surviving
+   * the liveness pass would fail loudly in {@code loadWord}, which is the failure this one
+   * predicate exists to make impossible for the next kind added. Tasks 52 and 60 added the
+   * first two kinds, task 63 the third.
    */
   private static boolean guardedWord(Analysis analysis, VarkaVectorIR node,
+      boolean producersGuarding, boolean selfGuarding, boolean checkedArith) {
+    return (producersGuarding && analysis.guardedProducers.contains(node))
+        || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node))
+        || (checkedArith && analysis.checkedArith.contains(node));
+  }
+
+  /**
+   * Whether {@code node} needs {@link Slots#guardTmp}, the scratch local a guard parks its
+   * value in before testing it. A subset of {@link #guardedWord}, and deliberately not the
+   * same question: a guarded day producer's value is on the stack when the guard runs
+   * ({@code emitValue} stores it) and {@code AddMonths} guards its count the same way, but
+   * task 63's checked arithmetic already parks its operands and result in
+   * {@link Slots#intArithTmp}, and {@code emitIntNeg} reads its operand back with {@code dup},
+   * so neither ever loads this slot. Allocating one for them reserved a local nothing read and
+   * shifted every later local in the body.
+   */
+  private static boolean guardScratch(Analysis analysis, VarkaVectorIR node,
       boolean producersGuarding, boolean selfGuarding) {
     return (producersGuarding && analysis.guardedProducers.contains(node))
         || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node));
@@ -2367,7 +2499,8 @@ public final class VarkaLoopEmitter {
    * word, so a test can watch each half of that invariant fail.
    */
   private static Set<WordOwner> liveWords(List<VarkaVectorIR> outputs, List<Integer> outputIdx,
-      Analysis analysis, boolean producersGuarding, boolean selfGuarding) {
+      Analysis analysis, boolean producersGuarding, boolean selfGuarding,
+      boolean checkedArith) {
     Set<WordOwner> live = new HashSet<>();
     java.util.ArrayDeque<VarkaVectorIR> work = new java.util.ArrayDeque<>();
     java.util.function.Consumer<WordOwner> demand = owner -> {
@@ -2441,12 +2574,22 @@ public final class VarkaLoopEmitter {
         case TruncDateDynamic x -> { }
         case WeekOfYear x -> { }
         case AddMonths x -> { }
+        // Under NULL the node stores its own word - the operands' AND with the overflowing
+        // lanes cleared - so that word is demanded whether or not anything above wants it,
+        // exactly as MakeDate's arm demands its own. Under WRAP and FAIL nothing is read
+        // here: the word is the plain AND, demanded by a root write or by the guard.
+        case IntArith x -> {
+          if (x.mode() == Overflow.NULL) {
+            demand.accept(new WordOwner.Own(x));
+          }
+        }
+        case IntNeg x -> { }
         case IfElse x -> { }
         case And x -> { }
         case Or x -> { }
         case Not x -> { }
       }
-      if (guardedWord(analysis, n, producersGuarding, selfGuarding)) {
+      if (guardedWord(analysis, n, producersGuarding, selfGuarding, checkedArith)) {
         demand.accept(analysis.wordOwner.get(n));
       }
     }
@@ -2496,6 +2639,11 @@ public final class VarkaLoopEmitter {
         case LastDay x -> { }
         case TruncDate x -> { }
         case WeekOfYear x -> { }
+        case IntArith x -> { demand.accept(analysis.wordOwner.get(x.left()));
+          demand.accept(analysis.wordOwner.get(x.right())); }
+        // IntNeg aliases its child's word (ownerOf), so it never reaches this queue - the
+        // child does. Written out rather than defaulted, per this switch's own rule.
+        case IntNeg x -> { }
         case Compare x -> { }
         case And x -> { }
         case Or x -> { }
@@ -3315,6 +3463,8 @@ public final class VarkaLoopEmitter {
       }
       case SubDays n -> emitAndValidatedOp(cb, node, n.days(), n.offset(), "sub", LANEWISE_VV,
           dense, analysis, s, computed);
+      case IntArith n -> emitIntArith(cb, n, dense, analysis, s, computed);
+      case IntNeg n -> emitIntNeg(cb, n, dense, analysis, s, computed);
       case DateDiff n -> emitAndValidatedOp(cb, node, n.end(), n.start(), "sub", LANEWISE_VV,
           dense, analysis, s, computed);
       case DayOfWeek n -> {
@@ -3442,6 +3592,149 @@ public final class VarkaLoopEmitter {
       cb.astore(shared);
       computed.add(node);
     }
+  }
+
+  /**
+   * Task 63's {@code IntArith}: the lanewise op, then - in `FAIL` and `NULL` - the overflow
+   * check. The check is the standard sign-based test, which needs both operands and the
+   * result, and the lanewise call has consumed the operands off the stack by the time the
+   * result exists, so all three are parked in {@link Slots#intArithTmp} first. `emitRangeGuard`
+   * parks its one value for the same reason.
+   *
+   * <p>{@code ADD} overflows exactly where the operands share a sign that the result does not:
+   * {@code ((a ^ r) & (b ^ r)) < 0}. {@code SUB} overflows where the operands differ in sign
+   * and the result differs from the left: {@code ((a ^ b) & (a ^ r)) < 0}. Both are four
+   * lanewise ops and a compare, and neither branches.
+   *
+   * <p>{@code MUL} has no such test in int lanes - the honest check needs the 64-bit product,
+   * or a division the lane loop must not do (PLAN_TASK_11.md priced lanewise DIV at 8x) - so
+   * the compiler declines a checked multiply outright and only {@code WRAP} reaches here.
+   * That is wider than PLAN_TASK_63.md 3.3 assumed; see the correction there.
+   *
+   * <p>Where the mask goes is what separates the two checked modes. {@code FAIL} folds it into
+   * the batch's condemning accumulator through {@link #emitGuardCollect}, so the batch declines
+   * and the row engine raises Spark's own error. {@code NULL} clears those lanes from the
+   * node's own validity word instead, so the row is null and the batch runs on - which is why
+   * `analyze` marks a `NULL` node as one that nulls valid inputs.
+   *
+   * <p>The {@code FAIL} route inherits {@link #emitGuardCollect}'s untaken-arm cliff, which is
+   * milestone 4's task 79: the mask is ANDed with the node's word and the epilogue mask but
+   * not with an enclosing {@code IfElse}'s condition, and a vector body computes both arms, so
+   * a checked node under a {@code CASE} arm condemns the batch from a lane the condition would
+   * have sent the other way. Answers stay right - the row engine recomputes the batch - and
+   * only the fusion is lost, on exactly the data the check exists for.
+   */
+  private static void emitIntArith(CodeBuilder cb, IntArith n, boolean dense, Analysis analysis,
+      Slots s, Set<VarkaVectorIR> computed) {
+    String op = switch (n.op()) {
+      case ADD -> "add";
+      case SUB -> "sub";
+      case MUL -> "mul";
+    };
+    // Before the scratch-slot test, because the refusal is about the node and not about how
+    // this body was configured: with `checkIntOverflow` off there is no scratch, and a checked
+    // multiply would otherwise slip through as a plain wrapping one - the A/B switch silently
+    // changing semantics rather than only cost.
+    if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP) {
+      throw new IllegalArgumentException("a checked multiply has no int-lane overflow test: " + n);
+    }
+    int[] tmp = s.intArithTmp.get(n);
+    if (tmp == null) {
+      // WRAP, or the check switched off for the A/B: the plain lanewise op, whose word is the
+      // operands' AND like every other null-intolerant binary node.
+      emitAndValidatedOp(cb, n, n.left(), n.right(), op, LANEWISE_VV, dense, analysis, s,
+          computed);
+      return;
+    }
+    int a = tmp[0];
+    int b = tmp[1];
+    int r = tmp[2];
+    emitValue(cb, n.left(), dense, analysis, s, computed);
+    emitValue(cb, n.right(), dense, analysis, s, computed);
+    line(cb, analysis, n);
+    cb.dup2();
+    cb.invokevirtual(INT_VECTOR, op, LANEWISE_VV);
+    cb.astore(r);
+    cb.astore(b);
+    cb.astore(a);
+    if (!dense && s.ownWord.contains(n)) {
+      emitAndWord(cb, s, s.wordRef.get(n), s.wordRef.get(n.left()), s.wordRef.get(n.right()));
+    }
+    // The two XORs, whose operands differ between ADD and SUB, then the AND and the sign test.
+    cb.aload(a);
+    cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
+    cb.aload(n.op() == IntOp.ADD ? r : b);
+    cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
+    cb.getstatic(VECTOR_OPERATORS, "AND", VO_ASSOCIATIVE);
+    cb.aload(n.op() == IntOp.ADD ? b : a);
+    cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
+    cb.aload(r);
+    cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
+    cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
+    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+    cb.loadConstant(0);
+    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    emitOverflowMask(cb, n.mode(), n, dense, s);
+    cb.aload(r);
+  }
+
+  /**
+   * Task 63's {@code IntNeg}, emitted as a multiply by -1 so it needs no unary descriptor: the
+   * two agree on every lane, {@link Integer#MIN_VALUE} included, where both return the input.
+   * That single value is the whole of the overflow test, so the check is one compare rather
+   * than the four ops {@link #emitIntArith} needs, and it reads the operand rather than the
+   * result - no scratch slot at all.
+   */
+  private static void emitIntNeg(CodeBuilder cb, IntNeg n, boolean dense, Analysis analysis,
+      Slots s, Set<VarkaVectorIR> computed) {
+    emitValue(cb, n.child(), dense, analysis, s, computed);
+    line(cb, analysis, n);
+    boolean checked = n.mode() == Overflow.FAIL && analysis.options.checkIntOverflow();
+    if (checked) {
+      cb.dup();
+      cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
+      cb.loadConstant(Integer.MIN_VALUE);
+      cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+      emitOverflowMask(cb, n.mode(), n, dense, s);
+    }
+    cb.loadConstant(-1);
+    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+  }
+
+  /**
+   * Consumes a {@code VectorMask} of overflowing lanes and disposes of it as the mode says:
+   * {@code FAIL} condemns the batch through the shared accumulator, {@code NULL} clears those
+   * lanes from the node's own validity word. The {@code NULL} arm is the only place in the
+   * emitter that narrows a word after it was stored, which is what makes such a node able to
+   * null a lane whose inputs were both valid.
+   */
+  private static void emitOverflowMask(CodeBuilder cb, Overflow mode, VarkaVectorIR node,
+      boolean dense, Slots s) {
+    if (mode == Overflow.FAIL) {
+      emitGuardCollect(cb, dense ? null : s.wordRef.get(node), dense, s);
+      return;
+    }
+    // NULL: word &= ~overflow. A dense body has no word to narrow, and `emit` builds none at
+    // all for a kernel whose analysis set nullsFromValidInputs - which every NULL node does -
+    // so reaching here dense means that invariant broke. Refused rather than papered over with
+    // a pop, which would silently drop the check and answer where Spark returns null; the
+    // sibling impossibilities (a NULL IntNeg, a checked multiply) are refused the same way.
+    if (dense) {
+      throw new IllegalArgumentException(
+          "a NULL-mode overflow mask reached a dense body, which has no word to narrow: " + node);
+    }
+    // Not ANDed with the epilogue mask, unlike the FAIL arm's collect: a tail lane above the
+    // row count can test as overflowing (a literal operand is broadcast to every lane while a
+    // column's is zero-filled by the masked load), and clearing its validity bit is harmless
+    // because no consumer reads a bit past the row count - the store is masked too. The FAIL
+    // arm cannot be so relaxed: its mask leaves the lane group in the accumulator and would
+    // condemn the whole batch from a row that does not exist.
+    cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
+    cb.loadConstant(-1L);
+    cb.lxor();
+    loadWord(cb, s, s.wordRef.get(node));
+    cb.land();
+    storeWord(cb, s, s.wordRef.get(node));
   }
 
   /** {@code lstore(own, ref(a) & ref(b))} - the null-intolerant word rule. */

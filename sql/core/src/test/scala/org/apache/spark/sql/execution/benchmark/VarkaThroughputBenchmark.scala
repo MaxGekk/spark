@@ -369,8 +369,28 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       runQueries(baseline, varka, "weekofyear", "SELECT weekofyear(d) AS w FROM varka_dates")
       runQueries(baseline, varka, "yearofweek",
         "SELECT extract(YEAROFWEEK FROM d) AS y FROM varka_dates")
-      runQueries(baseline, varka, "mixed projection (partial fusion)",
+      // Task 63's int arithmetic, end to end. The composite key is the shape its plan is
+      // about: both operands are bounded by the calendar, so the compiler proves overflow
+      // out and emits no check even under ANSI, and the row engine decomposes the date twice
+      // where Varka decomposes it once. `datediff + 1` is the same arithmetic over a shape
+      // with almost no prefix, so it prices the add against the `datediff` row above it, and
+      // `try_add` is the mode that nulls the lane rather than condemning the batch.
+      runQueries(baseline, varka, "year * 100 + month (task 63)",
+        "SELECT year(d) * 100 + month(d) AS k FROM varka_dates")
+      runQueries(baseline, varka, "datediff + 1 (task 63)",
+        "SELECT datediff(d, DATE'2000-01-01') + 1 AS a FROM varka_dates")
+      runQueries(baseline, varka, "try_add over datediff (task 63)",
+        "SELECT try_add(datediff(d, DATE'2000-01-01'), i) AS a FROM varka_dates")
+      // The same projection twice, which is the end-to-end worth of lowering arithmetic.
+      // The first row is what this case measured until task 63: one fused date entry, one
+      // forwarded column, one residual - except that `i + 1` fuses now, so the projection is
+      // whole and the row prices that. The second keeps a residual entry by using an operator
+      // no arm lowers, so the partial-fusion shape the file has always tracked is still
+      // tracked. Read together they say what the residual entry costs the whole projection.
+      runQueries(baseline, varka, "mixed projection, arithmetic entry fused (task 63)",
         "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
+      runQueries(baseline, varka, "mixed projection (partial fusion)",
+        "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates")
       // Chain-depth scaling (PLAN_TASK_14.md 2.3): the fused loop pays one load and one store
       // whatever the depth; Janino pays per-row per-op overhead. Columnar consumer here, the
       // same chains through the row consumer below - their crossing is the break-even depth
@@ -388,11 +408,11 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       runRowQueries(baseline, varka, "date_add, row consumer",
         "SELECT date_add(d, 3) AS a FROM varka_dates")
       runRowQueries(baseline, varka, "mixed projection, row consumer",
-        "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
+        "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates")
       // Residual-heavy: the shape where merge-at-row would win if the extra materialisation
       // of assemble-then-read costs anything worth building it for.
       runRowQueries(baseline, varka, "residual-heavy projection, row consumer",
-        "SELECT date_add(d, 3) AS a, i + 1 AS r1, i + 2 AS r2, i + 3 AS r3, i + 4 AS r4 " +
+        "SELECT date_add(d, 3) AS a, i % 7 AS r1, i % 9 AS r2, i % 11 AS r3, i % 13 AS r4 " +
           "FROM varka_dates")
       // The heavy-op row twins (task 19): every row-consumer case above fuses only cheap
       // adds, where the ~6 ns/row read-back is most likely to dominate - deciding the

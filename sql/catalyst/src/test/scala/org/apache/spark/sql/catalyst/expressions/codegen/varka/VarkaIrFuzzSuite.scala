@@ -69,6 +69,18 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
 
   private val columnBound = 2500000L
   private val literalBound = 4000
+
+  // The generator's magnitude bounds saturate rather than wrap. Four nested multiplies of a
+  // column's own bound pass 2^63, and a bound that came back negative would let
+  // `fitsUnderChrono` admit an out-of-range subtree under a calendar node - at which point the
+  // kernel declines the batch, correctly, and the suite fails asserting a zero status. A
+  // saturated bound is always an over-approximation, which is the safe direction here.
+  private def satAdd(a: Long, b: Long): Long =
+    try Math.addExact(a, b) catch { case _: ArithmeticException => Long.MaxValue }
+  private def satMul(a: Long, b: Long): Long =
+    try Math.multiplyExact(a, math.max(1L, b)) catch {
+      case _: ArithmeticException => Long.MaxValue
+    }
   /** A calendar node may sit over a subtree whose value cannot leave this magnitude. */
   private val chronoBound = 5000000L
   private val lengths = Seq(1, 3, 7, 15, 16, 17, 33, 64, 65, 100, 257, 1000)
@@ -143,6 +155,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       case n: DayOfYear => (366L, g(n.days()))
       case n: AddMonths => (v(n.days()) + v(n.months()) * 31, g(n.days(), n.months()))
       case n: TruncDate => (v(n.days()), g(n.days()))
+      // Task 63: wrapping arithmetic can leave the day range entirely, which is what the
+      // bound is for - a calendar node over such a subtree is refused by fitsUnderChrono.
+      case n: IntArith => n.op() match {
+        case IntOp.MUL => (satMul(v(n.left()), v(n.right())), g(n.left(), n.right()))
+        case _ => (satAdd(v(n.left()), v(n.right())), g(n.left(), n.right()))
+      }
+      case n: IntNeg => (v(n.child()), g(n.child()))
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `g` picks up.
@@ -202,7 +221,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     def value(depth: Int): Gen = {
       if (depth == 0 || budget <= 1) return leaf()
       budget -= 1
-      rnd.nextInt(18) match {
+      rnd.nextInt(20) match {
         case 0 =>
           val a = value(depth - 1); val b = literal()
           Gen(new AddDays(a.node, b.node), a.bound + b.bound)
@@ -263,6 +282,27 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
         case 17 =>
           val a = value(depth - 1)
           Gen(new DayOfWeekIso(a.node), 7)
+        case 18 =>
+          // Task 63's int arithmetic. Only WRAP is fuzzed against the reference evaluator by
+          // value: FAIL declines the batch on an overflowing lane, which the differential and
+          // the emitter suite's status tests cover, and a random tree here would decline most
+          // batches and leave the value comparison nothing to check - the same reason the
+          // month count is drawn small. The operands are whatever the generator has built, so
+          // the bound is the sum or product of theirs, kept inside `columnBound` by the
+          // literal draw below rather than by luck.
+          val a = value(depth - 1)
+          val b = literal()
+          rnd.nextInt(3) match {
+            case 0 => Gen(new IntArith(IntOp.ADD, Overflow.WRAP, a.node, b.node),
+              satAdd(a.bound, b.bound))
+            case 1 => Gen(new IntArith(IntOp.SUB, Overflow.WRAP, a.node, b.node),
+              satAdd(a.bound, b.bound))
+            case _ => Gen(new IntArith(IntOp.MUL, Overflow.WRAP, a.node, b.node),
+              satMul(a.bound, b.bound))
+          }
+        case 19 =>
+          val a = value(depth - 1)
+          Gen(new IntNeg(Overflow.WRAP, a.node), a.bound)
         case n =>
           // The calendar family, over a subtree that stays inside the narrowed range.
           val a = value(depth - 1)

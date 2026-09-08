@@ -40,9 +40,10 @@ output is the selection bitmap, and the batch is compacted - or its rows
 skipped at the row boundary - by that mask.
 
 The supported expression surface, over `DateType` columns (stored as `INT`
-days since epoch) and day offsets that are either a foldable integer literal
-or an `IntegerType` column (task 38; a `ShortType`/`ByteType` offset column
-still declines), including that column spelled as a day interval,
+days since epoch) and day offsets that are a foldable integer literal, an
+`IntegerType` column (task 38; a `ShortType`/`ByteType` offset column still
+declines) or int arithmetic over those (task 63), including that column
+spelled as a day interval,
 `d + CAST(i AS INTERVAL DAY)` and `d - CAST(i AS INTERVAL DAY)` (task 56; a
 literal interval folds to `date_add` before planning). The cast throws past
 106751991 days in every mode, so the evaluator checks the offset column per
@@ -128,8 +129,10 @@ becomes timestamp arithmetic) decline:
   `MONTH` of the same date decomposes twice, once per side.
 * `EXTRACT(DAYOFWEEK_ISO FROM d)` / `DATE_PART('DOW_ISO', d)` (task 57),
   Monday 1 to Sunday 7, as one node: the analyzer spells it `weekday(d) + 1`,
-  and that spelling by hand fuses the same way; any other integer arithmetic
-  over a field, such as `weekday(d) + 2`, stays residual (milestone 5).
+  and that spelling by hand fuses the same way. Since task 63 any other
+  integer arithmetic over a field fuses too, but as arithmetic over the
+  weekday rather than as this node, so `weekday(d) + 2` answers 2 more than
+  the weekday and not 1.
 * `TRUNC(date, fmt)` at the date levels. With a literal format (task 35),
   `YEAR`/`YYYY`/`YY`, `MONTH`/`MON`/`MM` and `QUARTER` are one node each with
   the level as part of the kernel's shape, and `WEEK` is rewritten onto
@@ -150,6 +153,21 @@ becomes timestamp arithmetic) decline:
   new node and no emitted code (task 41); the paired `DATE_FROM_UNIX_DATE`
   compiles the same way but still declines, since its child is an integer
   column and only a `date_add`/`date_sub` offset position reads one (task 38).
+* `+`, `-`, `*` and unary `-` over int32 values (task 63): an `IntegerType`
+  column, an int literal, any fused int field (`YEAR`, `MONTH`, `DATEDIFF`,
+  the weekday family) or nested arithmetic over those. The evaluation mode
+  travels with the node. Under `LEGACY` the lanes wrap, as `DATE_ADD` always
+  has. Under ANSI a sign test marks the overflowing lanes and the batch is
+  recomputed on the row engine, which raises Spark's own
+  `ARITHMETIC_OVERFLOW`; `TRY_ADD`, `TRY_SUBTRACT` and `TRY_MULTIPLY` clear
+  those lanes from the output's validity instead and the batch runs on. Where
+  the operands' own ranges prove the result cannot leave int32 - the calendar
+  bounds every field, and the date contract bounds `DATEDIFF` - the check is
+  not emitted at all, which is what lets `YEAR(d) * 100 + MONTH(d)` fuse under
+  ANSI. A checked multiply whose operands carry no such bound declines: an
+  int32 lane has no cheap overflow test for `*`, so it stays on the row engine
+  rather than wrapping silently. `DIV`, `%` and the float and long types are
+  not lowered.
 * Common subtrees shared *across* outputs are computed once per lane group
   (DAG-CSE), which no per-row engine can keep in a vector register.
 
@@ -158,7 +176,8 @@ untouched input columns are forwarded zero-copy, and the remaining entries run
 the standard row path per row, merged with the kernel outputs (task 12).
 
 Explicitly out of scope are `CalendarInterval` (months/years), strings,
-decimals and nested/complex types. Only integer day offsets are supported.
+decimals and nested/complex types. Day offsets are int32, whether a literal, a
+column or arithmetic over them.
 
 Varka is designed as a drop-in, zero-risk replacement: every Varka path falls
 back to the standard row engine on any failure, so results are always correct.
@@ -235,8 +254,12 @@ class has a deliberate method anatomy:
   (64) distinct ops and `MAX_INPUTS` (64) input columns per kernel; anything
   beyond falls back.
 
-Int32 arithmetic wraps on overflow, matching Spark's `DateAdd`/`DateSub`
-non-ANSI semantics. The rows past `loopBound` are one more iteration of the
+Date arithmetic wraps on overflow, matching Spark's `DateAdd`/`DateSub`,
+which check nothing in any mode. The int arithmetic nodes task 63 added are
+the exception and carry their evaluation mode instead, described in the
+surface list above; where a checked one is emitted, the sign test's mask joins
+the same accumulator task 52's range guard uses, so both kinds of refusal
+leave the loop through one status bit. The rows past `loopBound` are one more iteration of the
 same lane-group body under the mask `VectorSpecies.indexInRange` builds for a
 partial group (task 24): the loop stays unmasked, only the epilogue's loads and
 stores take their masked overloads, and the lane count becomes the remainder so
@@ -366,9 +389,12 @@ attributes alone did not answer:
   type ..." - in the query's own column names. Since task 38, a `date_add`/
   `date_sub` day offset that is neither a foldable literal nor a supported
   column gets its own reasons: "non-integer day offset column of type ..."
-  for a `ShortType`/`ByteType` column, "day offset is not a foldable
-  literal or an integer column" for anything else (e.g. a computed
-  expression). Since task 59, a `next_day` whose weekday is neither a literal
+  for a `ShortType`/`ByteType` column, "day offset is not a foldable literal,
+  an integer column or int arithmetic" for anything else (e.g. `i % 7`, whose
+  operator no arm lowers). Since task 63, "checked int multiply whose operands
+  do not rule out overflow" names an ANSI or TRY `*` the compile-time bound
+  cannot prove safe, and "int arithmetic operand of type ..." an operand that
+  is not int32. Since task 59, a `next_day` whose weekday is neither a literal
   nor a stored string column reports "next_day with a weekday that is neither
   a literal nor a column"; a `trunc` whose format is neither foldable nor a
   stored string column keeps task 35's "trunc with a non-foldable format"
@@ -743,4 +769,5 @@ build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaCodege
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaInExpressionBenchmark"
 build/sbt "sql/test:runMain org.apache.spark.sql.execution.benchmark.VarkaFilterBenchmark"
 build/sbt "catalyst/test:runMain org.apache.spark.sql.VarkaEmitterParityBenchmark"
+build/sbt "catalyst/test:runMain org.apache.spark.sql.VarkaArithmeticBenchmark"
 ```

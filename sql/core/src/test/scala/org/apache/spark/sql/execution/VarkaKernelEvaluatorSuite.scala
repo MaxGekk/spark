@@ -26,7 +26,7 @@ import org.apache.arrow.vector.{DateDayVector, VarCharVector}
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, If, In, LessThan, Literal, NamedExpression, NextDay, TruncDate, Year}
+import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
@@ -56,10 +56,12 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
   private val childOutput = Seq(attrD, intAttr)
 
   // One fused entry, one forwarded, one residual - the task's canonical mixed projection.
+  // The residual one was `i + 1` until task 63 lowered int arithmetic and it started fusing;
+  // `i % 7` is the same shape built from an operator that is still nobody's arm.
   private val mixedList: Seq[NamedExpression] = Seq(
     Alias(DateAdd(attrD, Literal(3)), "a")(),
     intAttr,
-    Alias(Add(intAttr, Literal(1)), "inc")())
+    Alias(Remainder(intAttr, Literal(7)), "inc")())
 
   private val dates: Seq[java.lang.Integer] = Seq(0, null, -5, 20000)
   private val ints: Seq[java.lang.Integer] = Seq(10, 11, null, 13)
@@ -107,7 +109,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
         Seq(
           if (d == null) null else Int.box(d + 3),
           i,
-          if (i == null) null else Int.box(i + 1))
+          if (i == null) null else Int.box(i % 7))
       }
       assert(actual === expected)
       kernels.release(out)
@@ -230,10 +232,11 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
   }
 
   test("task 16: a declined offset and a missing ELSE report their own reasons") {
-    // A bare int column offset fuses since task 38; `i + 1` is still a non-foldable,
-    // non-column offset expression, which stays declined.
+    // A bare int column offset fuses since task 38 and int arithmetic over one since task 63,
+    // so the declining shape here is `i % 7`: an offset expression built from an operator
+    // neither task lowered, which is what still reaches this reason.
     val nonLiteralOffset = Seq[NamedExpression](
-      Alias(DateAdd(attrD, Add(intAttr, Literal(1))), "shifted")(),
+      Alias(DateAdd(attrD, Remainder(intAttr, Literal(7))), "shifted")(),
       Alias(DateAdd(attrD, Literal(1)), "fused")())
     val offsetLines = VarkaFusionReport.lines(nonLiteralOffset, childOutput)
     assert(offsetLines(0).contains("day offset is not a foldable literal"), offsetLines(0))

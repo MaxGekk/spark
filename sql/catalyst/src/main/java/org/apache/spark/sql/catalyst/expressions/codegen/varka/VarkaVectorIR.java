@@ -52,7 +52,8 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.IfElse, VarkaVectorIR.Greatest, VarkaVectorIR.Least,
             VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.DayOfWeekIso,
             VarkaVectorIR.NextDay, VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono,
-            VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate, VarkaVectorIR.Cond {
+            VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate,
+            VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.Cond {
 
   /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
   enum LaneType { INT }
@@ -70,6 +71,23 @@ public sealed interface VarkaVectorIR
    * onto {@link NextDay} over {@link SubDays} rather than giving it a lowering of its own.
    */
   enum TruncLevel { YEAR, MONTH, QUARTER }
+
+  /** The lane-wise integer operation an {@link IntArith} performs (task 63). */
+  enum IntOp { ADD, SUB, MUL }
+
+  /**
+   * What an integer operation does when its result leaves the int32 range (task 63), which is
+   * Spark's {@code EvalMode} under a different name: {@code WRAP} is {@code LEGACY}, where the
+   * lane wraps exactly as the JVM's own {@code iadd} does and as Spark's non-ANSI arithmetic
+   * does; {@code FAIL} is {@code ANSI}, where an overflowing live lane declines the batch so
+   * the row engine can raise Spark's own error; {@code NULL} is {@code TRY}, where an
+   * overflowing lane becomes a null output and the batch runs on.
+   *
+   * <p>The mode rides the node rather than the emit options because it is semantics, not a
+   * lowering choice: two projections that differ only in it must not share a kernel, which is
+   * what putting it in {@link #canonical} and so in the shape hash guarantees.
+   */
+  enum Overflow { WRAP, FAIL, NULL }
 
   /**
    * A mask-valued node (task 11): per lane group it evaluates to a known-true and a
@@ -117,6 +135,34 @@ public sealed interface VarkaVectorIR
    * the compiler tracks per output so the evaluator allocates the right vector.
    */
   record DateDiff(VarkaVectorIR end, VarkaVectorIR start) implements VarkaVectorIR {}
+
+  /**
+   * {@code left OP right} over two int32 lanes (task 63): Spark's {@code Add}, {@code Subtract}
+   * and {@code Multiply} where both operands and the result are {@code IntegerType}. The
+   * operands are int-valued nodes - a fused field such as {@link Year} or {@link DateDiff}, an
+   * {@code IntegerType} column, an int literal, or nested arithmetic - never a date, which is
+   * what separates this from {@link AddDays}, whose left operand is a date and whose result is
+   * one.
+   *
+   * <p>{@code mode} carries the overflow behaviour and is part of the node's identity; see
+   * {@link Overflow} for why it belongs here rather than in the emit options. Under
+   * {@code WRAP} and {@code FAIL} the result's validity is the AND of the operands', the
+   * null-intolerant rule every other binary node follows; under {@code NULL} it is that AND
+   * with the overflowing lanes cleared, which makes this the second node after
+   * {@link MakeDate} that can null a lane both of whose inputs are valid.
+   */
+  record IntArith(IntOp op, Overflow mode, VarkaVectorIR left, VarkaVectorIR right)
+      implements VarkaVectorIR {}
+
+  /**
+   * {@code -child} over an int32 lane (task 63), Spark's {@code UnaryMinus}. Only
+   * {@link Overflow#WRAP} and {@link Overflow#FAIL} occur: Spark has no {@code try_negative},
+   * so a negation never nulls a valid lane, and the emitter rejects {@link Overflow#NULL}
+   * here rather than emitting a form nothing can produce.
+   *
+   * <p>The one overflowing input is {@link Integer#MIN_VALUE}, whose negation is itself.
+   */
+  record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
 
   /**
    * {@code left OP right} over two date-valued operands (task 11). Null-intolerant: the result
@@ -383,6 +429,9 @@ public sealed interface VarkaVectorIR
           "(addMonths " + canonical(n.days()) + " " + canonical(n.months()) + ")";
       case MakeDate n -> "(makeDate:" + (n.failOnError() ? "ANSI" : "NULL") + " "
           + canonical(n.year()) + " " + canonical(n.month()) + " " + canonical(n.day()) + ")";
+      case IntArith n -> "(int:" + n.op().name() + ":" + n.mode().name() + " "
+          + canonical(n.left()) + " " + canonical(n.right()) + ")";
+      case IntNeg n -> "(neg:" + n.mode().name() + " " + canonical(n.child()) + ")";
     };
   }
 
@@ -454,6 +503,9 @@ public sealed interface VarkaVectorIR
       case MakeDate n -> "(makeDate:" + (n.failOnError() ? "ANSI" : "NULL") + " "
           + lineOf.applyAsInt(n.year()) + " " + lineOf.applyAsInt(n.month()) + " "
           + lineOf.applyAsInt(n.day()) + ")";
+      case IntArith n -> "(int:" + n.op().name() + ":" + n.mode().name() + " "
+          + lineOf.applyAsInt(n.left()) + " " + lineOf.applyAsInt(n.right()) + ")";
+      case IntNeg n -> "(neg:" + n.mode().name() + " " + lineOf.applyAsInt(n.child()) + ")";
     };
   }
 }

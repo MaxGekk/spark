@@ -39,12 +39,16 @@ reading four bytes per row and touching no output - and task 56 already runs
 exactly that pass, on exactly a `date_add(d, i)` kernel, for the interval
 bound. Its price is the committed throughput pair
 (`sql/core/benchmarks/VarkaThroughputBenchmark-jdk25-results.txt`): the
-control `date_add, column offset (task 56 control)` at 199.2 M rows/s (5.0
+control `date_add, column offset (task 56 control)` at 204.9 M rows/s (4.9
 ns/row) and `date + CAST(i AS INTERVAL DAY), bound checked (task 56)` at
-211.6 M rows/s (4.7 ns/row) over 2M Arrow-cached rows; at 128 bits 197.7
-against 204.4. The checked row is *faster* in both files, by less than the
-rows' 2-3 ms standard deviation, so the pass is below the noise floor of an
-end-to-end row whose kernel is the cheapest shape there is. The guard, by
+230.6 M rows/s (4.3 ns/row) over 2M Arrow-cached rows; at 128 bits 199.8
+against 210.6. *Requoted on 8 September 2026 from task 63's regeneration of
+that file, which moved the pair by 2.9% and 9.0%; the figures this paragraph
+first carried - 199.2 against 211.6, and 197.7 against 204.4 - are in the
+file's history.* The reading is unchanged and is in fact firmer: the checked
+row is *faster* in both files, by less than the rows' 2-3 ms standard
+deviation, so the pass is below the noise floor of an end-to-end row whose
+kernel is the cheapest shape there is. The guard, by
 contrast, is 10-15% of a kernel measured at the parity harness's resolution
 (section 1). A pass that cannot be seen against a 5 ns/row query is cheaper
 than a guard that costs 0.05-0.14 ns/row of kernel time (`PLAN_TASK_52.md`

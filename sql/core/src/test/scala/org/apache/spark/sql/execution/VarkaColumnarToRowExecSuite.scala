@@ -24,7 +24,7 @@ import org.apache.spark.{Partition, TaskContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{QueryTest, Row}
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Ascending, Attribute, AttributeReference, DateAdd, DateDiff, DateSub, LeafExpression, Literal, NamedExpression, SortOrder}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Ascending, Attribute, AttributeReference, DateAdd, DateDiff, DateSub, LeafExpression, Literal, NamedExpression, Remainder, SortOrder}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.plans.physical.{HashPartitioning, Partitioning, UnknownPartitioning}
 import org.apache.spark.sql.execution.metric.SQLMetrics
@@ -135,11 +135,12 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
   test("ineligible projection is never rewritten and falls back") {
     val child = TestColumnarBatchPlan(
       Seq(BatchSpec("onheap", Seq(Seq[java.lang.Integer](100, 101, 102)))), Seq(intAttr))
-    // `i + 1` is not a Varka date op, so no entry fuses and every batch goes through the
-    // per-row projection.
+    // `i % 7` is not a Varka op, so no entry fuses and every batch goes through the per-row
+    // projection. It replaced `i + 1` here when task 63 lowered int arithmetic and that shape
+    // started fusing.
     val node = VarkaColumnarToRowExec(
-      project(Alias(Add(intAttr, Literal(1)), "add")()), child)
-    assert(run(node).map(_.getInt(0)) === Seq(101, 102, 103))
+      project(Alias(Remainder(intAttr, Literal(7)), "add")()), child)
+    assert(run(node).map(_.getInt(0)) === Seq(2, 3, 4))
     assert(node.metrics("numVarkaBatches").value === 0)
   }
 
@@ -152,13 +153,13 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
       project(
         Alias(DateAdd(attrD, Literal(3)), "a")(),
         intAttr,
-        Alias(Add(intAttr, Literal(1)), "inc")()),
+        Alias(Remainder(intAttr, Literal(7)), "inc")()),
       child)
     val rows = run(node)
     val cell = (r: Row, c: Int) => if (r.isNullAt(c)) null else Int.box(r.getInt(c))
     assert(rows.map(cell(_, 0)).toSeq === dates.map(d => if (d == null) null else Int.box(d + 3)))
     assert(rows.map(cell(_, 1)).toSeq === ints)
-    assert(rows.map(cell(_, 2)).toSeq === ints.map(i => if (i == null) null else Int.box(i + 1)))
+    assert(rows.map(cell(_, 2)).toSeq === ints.map(i => if (i == null) null else Int.box(i % 7)))
     assert(node.metrics("numVarkaBatches").value === 1)
   }
 
@@ -171,14 +172,14 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
       project(
         Alias(DateAdd(attrD, Literal(3)), "a")(),
         intAttr,
-        Alias(Add(intAttr, Literal(1)), "inc")()),
+        Alias(Remainder(intAttr, Literal(7)), "inc")()),
       child)
     VarkaColumnarToRowExec.setFailKernelForTesting(true)
     try {
       val rows = run(node)
       assert(rows.map(_.getInt(0)).toSeq === dates.map(_ + 3))
       assert(rows.map(r => if (r.isNullAt(2)) null else Int.box(r.getInt(2))).toSeq ===
-        ints.map(i => if (i == null) null else Int.box(i + 1)))
+        ints.map(i => if (i == null) null else Int.box(i % 7)))
       assert(node.metrics("numVarkaBatches").value === 0)
     } finally {
       VarkaColumnarToRowExec.setFailKernelForTesting(false)
@@ -422,11 +423,11 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
       project(
         Alias(DateAdd(attrD, Literal(3)), "add")(),
         intAttr,
-        Alias(Add(intAttr, Literal(1)), "inc")()),
+        Alias(Remainder(intAttr, Literal(7)), "inc")()),
       ColumnarToRowExec(child))
     // Nothing fuses: an all-residual projection gains nothing and stays on Janino.
     val ineligible = ProjectExec(
-      project(Alias(Add(intAttr, Literal(1)), "inc")()),
+      project(Alias(Remainder(intAttr, Literal(7)), "inc")()),
       ColumnarToRowExec(child))
 
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
@@ -449,9 +450,9 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
       project(
         Alias(DateAdd(attrD, Literal(3)), "add")(),
         intAttr,
-        Alias(Add(intAttr, Literal(1)), "inc")()),
+        Alias(Remainder(intAttr, Literal(7)), "inc")()),
       child)
-    val ineligible = ProjectExec(project(Alias(Add(intAttr, Literal(1)), "inc")()), child)
+    val ineligible = ProjectExec(project(Alias(Remainder(intAttr, Literal(7)), "inc")()), child)
     // A child that only produces rows has nothing for the kernels to read.
     val rowChild = ProjectExec(
       project(Alias(DateAdd(attrD, Literal(3)), "add")()), ColumnarToRowExec(child))

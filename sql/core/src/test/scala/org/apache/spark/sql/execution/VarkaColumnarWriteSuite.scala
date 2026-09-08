@@ -101,9 +101,10 @@ class VarkaColumnarWriteSuite extends QueryTest with VarkaSharedSessions {
 
   test("an ineligible projection is written as rows, as it was before") {
     cacheDates(varkaSpark)
-    // A bare int column offset fuses since task 38; `i + 1` is still a non-foldable, non-column
-    // offset expression, which stays ineligible.
-    val plan = writeToNoop(varkaSpark, "SELECT date_add(d, i + 1) AS a FROM varka_dates")
+    // A bare int column offset fuses since task 38 and int arithmetic over one since task 63,
+    // so the ineligible shape here is `i % 7`: an offset built from an operator neither task
+    // lowered.
+    val plan = writeToNoop(varkaSpark, "SELECT date_add(d, i % 7) AS a FROM varka_dates")
     val write = writeNode(plan)
     assert(!write.child.supportsColumnar,
       s"a projection the kernels cannot serve took the columnar path:\n${plan.treeString}")

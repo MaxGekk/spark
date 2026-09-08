@@ -388,8 +388,233 @@ per-row anchor computing the composite key with `Math.addExact` and
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+The task shipped in six commits on `varka-task-63`. Sections 9.1 to 9.4 are
+the measurement, 9.5 scores 6.1's predictions, and 9.6 records what moved that
+this plan did not list - which, this time, is most of the work.
+
+The numbers are `VarkaArithmeticBenchmark`'s, a file of its own rather than
+the section in `VarkaEmitterParityBenchmark` that section 6 asked for; 9.6
+gives the reason. It was measured at `6722db54e31` on an idle machine (load
+0.76, canary compute +0.1%, cache +3.8%, memory -1.2%) at both widths in one
+run of `dev/varka_bench_regen.sh`. `VarkaThroughputBenchmark` was regenerated
+separately, for a reason that is not this task's arithmetic at all (9.6).
+
+### 9.1 What the ANSI check costs, as an A/B on one node
+
+The check is the sign test: four lanewise ops and a compare for `+` and `-`,
+one compare for unary minus, which reads its operand rather than its result.
+Each row below is the same IR emitted twice, with `checkIntOverflow` on and
+off, so the difference is the check and nothing else. The emitter suite pins
+that: with the flag off a `FAIL` node is byte-identical to the `WRAP` node,
+method for method.
+
+| shape | AVX-512 | 128-bit |
+|---|---|---|
+| `i + 1`, checked -> off | 18412.5 -> 18936.5 (2.8%) | 14127.9 -> 19019.4 (25.7%) |
+| `i + 1`, mixed nulls | 14706.5 -> 18147.5 (19.0%) | 6459.9 -> 18986.9 (66.0%) |
+| `i - 1`, checked -> off | 18297.6 -> 18737.1 (2.3%) | 13737.0 -> 19302.4 (28.8%) |
+| `-i`, checked -> off | 18371.5 -> 18723.1 (1.9%) | 11813.6 -> 19243.0 (38.6%) |
+| `try_add(i, 1)` against `LEGACY`, mixed | 13774.9 against 17563.6 | 4098.7 against 19224.5 |
+
+**The width decides, and the mask decides more.** In the wide lanes the check
+is a rounding error on a memory-bound loop; in the narrow ones it costs a
+quarter to a third of the throughput, because the same five ops are a much
+larger share of a four-lane group's work. And in a masked body it stops being
+a surcharge at all: 66% at 128-bit for an addition whose arithmetic did not
+change. What the mask arm adds is the disposal - `emitGuardCollect` converts
+the overflow mask to a `long`, ANDs it with the node's validity word and ORs
+it into the batch accumulator - and those conversions do not vectorize the way
+the lane ops do. `try_add`, which disposes of the same mask by narrowing the
+word instead, is slower again. This is a finding, not a prediction that came
+true; 9.6 says where it goes.
+
+### 9.2 The composite key, where the bound removes the check
+
+| shape (null-free unless said) | AVX-512 | 128-bit |
+|---|---|---|
+| `year(d) * 100 + month(d)`, as shipped | 2648.5 | 998.7 |
+| the same with its outer add checked | 2413.5 (8.9% slower) | 905.2 (9.4% slower) |
+| the same, mixed nulls | 2593.5 | 1000.3 |
+| `year(d)` alone (control) | 3462.7 | 1351.8 |
+| `year(d)`, `month(d)`, no arithmetic (control) | 2806.5 | 1059.0 |
+| `datediff(d, d2) + 1`, as shipped | 11905.2 | 12193.2 |
+| the same, checked | 10942.0 (8.1% slower) | 9512.4 (22.0% slower) |
+
+Both operands of the key are bounded - the calendar bounds every field, the
+date contract bounds `datediff` - so the compiler proves the result cannot
+leave int32 and emits every node as `WRAP`. The shipped row is therefore the
+unchecked one, and the checked row beside it is what the emitter would have
+produced without the bound analysis. There is no third arm with the multiply
+checked, because there is no such kernel: an int lane has no cheap overflow
+test for `*`, the compiler declines a checked one, and without the bound the
+whole expression would be residual rather than 9% slower.
+
+The mixed-null row is the interesting one: it lands within 2.1% of the
+null-free row at AVX-512 and 0.2% above it at 128-bit, which is 6.1's
+prediction 6 and the emitter suite pins the byte equality behind it.
+
+### 9.3 End to end, against the row engine
+
+`VarkaThroughputBenchmark`, 2 million Arrow-cached rows, the whole query
+through the planner in the default (ANSI) session, so these rows include
+everything the kernel-level file above leaves out.
+
+| query | AVX-512 | 128-bit |
+|---|---|---|
+| `year(d) * 100 + month(d)` | 334.7 against 35.9, **9.3x** | 280.9 against 35.4, **7.9x** |
+| `datediff(d, DATE'2000-01-01') + 1` | 407.2 against 44.8, **9.1x** | 403.9 against 43.7, **9.2x** |
+| `try_add(datediff(...), i)` | 358.7 against 33.1, **10.8x** | 319.8 against 32.4, **9.9x** |
+| `datediff(d, d2)` alone (control) | 259.1 against 38.8, 6.7x | 244.3 against 39.6, 6.2x |
+
+**The arithmetic improves the ratio rather than spending it.** `datediff + 1`
+beats `datediff` alone - 9.1x against 6.7x - because the extra operation costs
+the row engine a per-row add and the kernel one lanewise call on a value
+already in a register. The same reading explains the composite key: the row
+engine decomposes the date once per field and Varka once for both.
+
+**And one residual entry costs a projection more than the arithmetic ever
+saves it.** The file now carries the same three-entry projection twice, and the
+pair is the clearest end-to-end statement of what this task did:
+
+| `SELECT date_add(d, 3), i, <entry>` | AVX-512 | 128-bit |
+|---|---|---|
+| `i + 1`, which fuses since this task | 346.7, **10.8x** | 327.4, **10.0x** |
+| `i % 7`, which does not | 76.1, 2.3x | 84.7, 2.6x |
+
+One entry the compiler cannot lower drops the whole projection from 10.8x to
+2.3x, because every batch pays the per-row path for that column and the merge
+around it. That is 4.6x on a query whose other two entries did not change, and
+it is the argument for lowering the next expression family as much as any
+kernel number here.
+
+### 9.4 What the emitter emits
+
+Pinned by the register test as one table of `IntVector` calls in `loopDense0`,
+with the claims stated as differences so a change to the shared year prefix
+moves both sides rather than the claim. The absolute numbers include the
+loop's unrolling, which is why `datediff(d, d2)` reads 4 rather than 1:
+
+* the add's check is four calls on top of the op, the same in `year(d) + 1`
+  (36 -> 40) and in `datediff(d, d2) + 1` (6 -> 10) - two `XOR`, an `AND` and
+  the compare;
+* the negation's check is one call (3 -> 4), because it reads its operand
+  rather than its result;
+* the composite key is the two fields' 40 calls plus two, so the year prefix
+  is computed once for both tails;
+* `year(d)` (34), `datediff(d, d2)` (4) and `date_add(d, off)` (4) are
+  unmoved.
+
+A `TRY` node has no dense body at all - it can null a lane whose operands were
+both valid, so the dispatcher never sends it a dense batch - and a `FAIL` node
+keeps both. Both are asserted on the emitted method list.
+
+### 9.5 The predictions, scored as 6.1 registered them
+
+1. **The register: hit on the differences, and 3.3's absolute numbers were
+   the wrong unit.** The check costs what 3.3 said it would, with one
+   correction: it wrote five calls counting the mask OR, and the OR is a
+   `VectorMask` call rather than an `IntVector` one, so the pinned difference
+   is four. The absolute counts are larger than 3.3's arithmetic suggests
+   because `loopDense0` is unrolled, which that table did not account for -
+   `datediff(d, d2)` alone is 4 calls, not 1. The three controls are unmoved,
+   which is the part of the row that was load-bearing.
+2. **The check under 5% on the key at both widths: not applicable as
+   written, and the second half is a partial hit.** The prediction assumed the
+   key would carry a check that the bound in fact removes, so there is no
+   checked shipped row to score. Against the deliberately checked arm the cost
+   is 8.9% and 9.4%, above the 5% the prediction expected of a
+   latency-bound prefix. On `datediff + 1` the prediction said 10-25%: 22.0%
+   at 128-bit is inside it, 8.1% at AVX-512 is below it.
+3. **`NULL` at 0.6x-0.8x of `WRAP`: hit at AVX-512, badly wrong at 128-bit,
+   and measured on a different shape.** `try_add(i, 1)` runs at 0.78x of the
+   wrapping add at AVX-512, inside the range. At 128-bit it is 0.21x. The
+   prediction reasoned from the forfeited dense body alone and missed the
+   mask-to-long disposal, which is the larger cost in narrow lanes (9.1).
+4. **Throughput: both halves missed, in the same direction.** The composite
+   key was predicted at 3x-6x Janino and reads 9.3x and 7.9x. `datediff + 1`
+   was predicted within 10% of the `datediff` row's ratio and reads 9.1x
+   against that row's 6.7x, and 9.2x against 6.2x - 36% and 48% above it. Both
+   misses have one cause the prediction did not allow for: an added lanewise
+   operation is nearly free in the kernel and is a whole per-row operation in
+   Janino, so lengthening a fused expression *raises* the ratio.
+5. **The overflow differential: hit.** Under ANSI the overflowing batch
+   declines, the row engine raises, and the condition and message are equal to
+   the row engine's own for `+`, `-` and unary minus; `try_*` nulls exactly
+   those lanes with no decline; `LEGACY` wraps value for value with no
+   decline. All asserted in `VarkaDifferentialSuite`.
+6. **The composite key on its dense twin: hit.** `loopMasked0` and
+   `epilogueMasked` are byte-equal to their dense siblings under `WRAP`, and
+   the mixed-null row is within 2.1% and 0.2% of the null-free one (9.2).
+   Under `FAIL` the masked loop is larger, as the same prediction said it
+   would be.
+
+### 9.6 What moved that the plan did not list
+
+**The benchmark is its own file.** Section 6 put these rows in
+`VarkaEmitterParityBenchmark`. The owner's instruction during the work was to
+give a new expression family its own benchmark class and its own results
+files, so `VarkaArithmeticBenchmark` and its three files are what shipped. The
+practical gain is that this task's numbers regenerate in four minutes rather
+than inside a file whose other rows it never touched.
+
+**`i + 1` stopped being residual, and nine places depended on it.** Six
+suites and three benchmark cases used it as the entry the compiler would
+refuse. Two failed once the arm landed; the rest kept passing while asserting
+or measuring something else, including three committed throughput rows
+labelled "partial fusion" over a query that was now fully fused. They use
+`i % 7` now. This is why `VarkaThroughputBenchmark` was regenerated at all:
+not because this task's arithmetic changed those numbers, but because the
+queries behind three of its rows had to change to keep meaning what their
+labels say. It also gained four rows - the three task 63 queries and the
+fully fused twin of the mixed projection - so the pair in 9.3 is two committed
+rows of one file rather than a comparison against a number in a scratch log.
+The lesson is written up in `SKILLS.md`.
+
+**A checked multiply declines, which is wider than 3.3 assumed.** The plan
+expected `i * 7` under ANSI to fuse with a check. There is no int-lane
+overflow test for `*` that does not need the 64-bit product or a lane
+division, so the compiler declines unless the operands' bounds prove the
+product safe. `year(d) * 100` fuses; `i * 3` under ANSI does not.
+
+**The bound analysis was not in the plan and does most of the work.** 3.1
+described a check on every ANSI node. What shipped computes an absolute bound
+per node - literals by value, calendar fields by their definitions, `datediff`
+by the contract width - and emits `WRAP` where the bound rules overflow out.
+That is what makes the composite key fuse under ANSI at all, and it is why the
+`i * 7` case above is a decline rather than a wrong answer.
+
+**Three emitter bugs the differential found, which the unit tests had not.**
+The accumulator was never allocated for a checked node with no other guarded
+producer; the guard's word was killed by task 70's liveness pass, so
+`guardedWord` had to learn about this third guarded node kind; and `AND`, `OR`
+and `XOR` are declared `Associative` rather than `Binary` in the Vector API,
+so the emitted `getstatic` needed a different descriptor and failed at link
+time until it got one.
+
+**The day offset took arithmetic too.** Step 4 widened `compileOffset` and
+`compileIntOperand`, so `date_add(d, off * 7)` and `make_date(y + 1, m, d)`
+fuse. A calendar node over such a producer is guarded rather than declined,
+because task 52's range analysis already reads any non-literal offset as a
+column shift.
+
+### 9.7 What this leaves for later
+
+* **A checked node under a `CASE` arm condemns the batch from the untaken arm.** The
+  `FAIL` mask goes through `emitGuardCollect`, which ANDs the node's word and the
+  epilogue mask but not the enclosing `IfElse`'s condition, and a vector body computes
+  both arms - so `CASE WHEN d < DATE'2020-01-01' THEN i + 1 ELSE year(d) END` falls
+  back on a batch whose overflowing row the condition sends to the `ELSE` arm. The
+  answers stay right and only the fusion is lost, on exactly the data the check is
+  there for. This is milestone 4's task 79, which owned the cliff for guarded day
+  producers and `add_months`; this task adds a third node kind to it, and that row is
+  widened rather than a new one opened. A user cannot even write the natural guard
+  (`i < 2147483647`) as the condition, because a bare int column does not compile in
+  predicate position - so the reachable shapes are date- or field-driven conditions.
+* **The masked check's mask-to-long disposal** (9.1) costs 66% at 128-bit on
+  a shape whose arithmetic is one add. That is a kernel-level finding about
+  `emitGuardCollect`, which task 52's range guard shares, so it is worth its
+  own task rather than a note here.
+* `/`, `div`, `%` and the int64 lane stay out, as 3.2 said.
+* The status bit is still shared with the calendar range guard, so telemetry
+  cannot tell an overflow decline from a range decline (7.4). Unchanged, and
+  still the owner's call.

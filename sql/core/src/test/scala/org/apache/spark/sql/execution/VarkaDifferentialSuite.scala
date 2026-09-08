@@ -565,11 +565,12 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
   test("a mixed-eligibility projection fuses partially and matches the row engine") {
     // Pinned as "not fused" until task 12: one ineligible entry used to poison the whole
     // projection. Now the date entry runs on the kernels, the bare `i` forwards zero-copy, and
-    // `i + 1` is evaluated per row beside them.
+    // `i % 7` is evaluated per row beside them. The residual entry was `i + 1` until task 63
+    // lowered int arithmetic, which left this test with nothing residual in it.
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
-      "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates ORDER BY a",
+      "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates ORDER BY a",
       expectFused = true)
   }
 
@@ -578,7 +579,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
-      "SELECT i, i + 1 AS inc FROM varka_dates ORDER BY i",
+      "SELECT i, i % 7 AS inc FROM varka_dates ORDER BY i",
       expectFused = false)
   }
 
@@ -586,7 +587,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     checkDifferential(spark, varkaSpark,
-      "SELECT CASE WHEN d < d2 THEN date_add(d, 1) ELSE d2 END AS a, i, i + 1 AS inc " +
+      "SELECT CASE WHEN d < d2 THEN date_add(d, 1) ELSE d2 END AS a, i, i % 7 AS inc " +
         "FROM varka_date_pairs ORDER BY a, i",
       expectFused = true)
   }
@@ -977,9 +978,11 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
         "weekday(d) + 1 AS c, dayofweek(d) AS e, weekday(d) AS f FROM varka_dates " +
         "ORDER BY a, b, c, e, f",
       expectFused = true)
-    // weekday(d) + 2 is not the node and stays residual: the arm is the constant one only.
+    // weekday(d) + 2 is not this node: since task 63 it fuses too, but as int arithmetic over
+    // the weekday field rather than as the dedicated ISO node, and the value is what says so.
+    // Reading the +1 arm as "any Add over a weekday" would silently answer +1 here.
     checkDifferential(spark, varkaSpark,
-      "SELECT weekday(d) + 2 AS a FROM varka_dates ORDER BY a", expectFused = false)
+      "SELECT weekday(d) + 2 AS a FROM varka_dates ORDER BY a", expectFused = true)
   }
 
   test("the calendar extractions match the row engine across the Gregorian range") {
@@ -1230,6 +1233,165 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 63: int arithmetic fuses in all three modes and agrees with the row engine") {
+    cacheIntsSafe(spark)
+    cacheIntsSafe(varkaSpark)
+    // Values that cannot overflow, so every mode takes the same path and the only question is
+    // whether the arithmetic is right - over nulls in either operand, in both orders.
+    val queries = Seq(
+      "SELECT i + 1 AS a, i - 1 AS b, big + i AS c FROM varka_ints_safe ORDER BY a, b, c",
+      "SELECT -i AS a, -big AS b FROM varka_ints_safe ORDER BY a, b",
+      "SELECT year(d) * 100 + month(d) AS k FROM varka_ints_safe ORDER BY k",
+      "SELECT datediff(d, DATE'2000-01-01') + 1 AS a FROM varka_ints_safe ORDER BY a")
+    for (ansi <- Seq(false, true)) {
+      withAnsi(ansi) {
+        for (query <- queries) {
+          val plan = checkDifferential(spark, varkaSpark, query, expectFused = true)
+          assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L, query)
+        }
+      }
+    }
+  }
+
+  test("task 63: a multiply fuses only where the operands' bounds rule out overflow") {
+    cacheIntsSafe(spark)
+    cacheIntsSafe(varkaSpark)
+    // The boundary the compile-time bound draws. `year(d) * 100` is provably safe whatever
+    // the data, because the calendar field is bounded by the narrowed range, so it fuses in
+    // both modes with no check at all. `i * 3` is not: an int column is unbounded, and a
+    // checked multiply has no int-lane overflow test, so ANSI leaves it on the row engine
+    // rather than wrapping it silently - which would be a wrong answer, not a slow one.
+    val bounded = "SELECT year(d) * 100 AS a FROM varka_ints_safe ORDER BY a"
+    val unbounded = "SELECT i * 3 AS a FROM varka_ints_safe ORDER BY a"
+    withAnsi(false) {
+      checkDifferential(spark, varkaSpark, bounded, expectFused = true)
+      checkDifferential(spark, varkaSpark, unbounded, expectFused = true)
+    }
+    withAnsi(true) {
+      checkDifferential(spark, varkaSpark, bounded, expectFused = true)
+      // Not fused, and the answers still have to match: the row engine computes it whole.
+      checkDifferential(spark, varkaSpark, unbounded, expectFused = false)
+    }
+  }
+
+  test("task 63: under ANSI an overflowing row raises the row engine's own error") {
+    cacheIntsOverflow(spark)
+    cacheIntsOverflow(varkaSpark)
+    withAnsi(true) {
+      // The kernel's sign test condemns the batch, the row engine recomputes it and raises
+      // ARITHMETIC_OVERFLOW for the same row: one error, from two engines.
+      val q = "SELECT big + i AS a FROM varka_ints_overflow ORDER BY a"
+      val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
+      val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
+      assert(actual.getCondition === expected.getCondition)
+      assert(actual.getMessage === expected.getMessage)
+      // Negation overflows on exactly one value, and the same holds there.
+      val nq = "SELECT -big AS a FROM varka_ints_overflow ORDER BY a"
+      val nExpected = intercept[SparkArithmeticException](spark.sql(nq).collect())
+      val nActual = intercept[SparkArithmeticException](varkaSpark.sql(nq).collect())
+      assert(nActual.getCondition === nExpected.getCondition)
+      assert(nActual.getMessage === nExpected.getMessage)
+    }
+  }
+
+  test("task 63: the shapes whose bound was a fiction raise the row engine's error, not an " +
+      "answer") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    withAnsi(true) {
+      // Each of these used to have its ANSI check removed by a bound that was wrong, so the
+      // kernel wrapped and returned a number where Spark raises. The assertion is the one that
+      // matters for a silent-wrong-answer bug: both engines must fail the same way.
+      //
+      //  - `quarter(d) * 536870912`: the bound is 4 * 2^29 = 2^31 exactly, one past the
+      //    largest int, which the old comparison admitted.
+      //  - `datediff(date_add(d, 2147483647), d) + 1`: the shift wraps the int32 lane, so the
+      //    contract width was never this datediff's bound.
+      for (q <- Seq(
+          "SELECT quarter(d) * 536870912 AS a FROM varka_dates ORDER BY a",
+          "SELECT datediff(date_add(d, 2147483647), d) + 1 AS a FROM varka_dates ORDER BY a")) {
+        val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
+        val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
+        assert(actual.getCondition === expected.getCondition, q)
+        assert(actual.getMessage === expected.getMessage, q)
+      }
+    }
+    withAnsi(false) {
+      // Under LEGACY there is no check to remove, and both engines wrap identically - which is
+      // what says the fix narrowed the bound rather than changing the arithmetic.
+      checkDifferential(spark, varkaSpark,
+        "SELECT quarter(d) * 536870912 AS a, datediff(date_add(d, 2147483647), d) + 1 AS b " +
+          "FROM varka_dates ORDER BY a, b",
+        expectFused = true)
+    }
+  }
+
+  test("task 63: try_add gives NULL for the row that would have raised, and the batch runs on") {
+    cacheIntsOverflow(spark)
+    cacheIntsOverflow(varkaSpark)
+    for (ansi <- Seq(false, true)) {
+      withAnsi(ansi) {
+        // The TRY mode nulls the overflowing lane rather than declining, so the batch is
+        // fused end to end and nothing falls back - the one shape where the kernel nulls a
+        // row whose inputs were both valid.
+        val plan = checkDifferential(spark, varkaSpark,
+          "SELECT try_add(big, i) AS a, try_subtract(big, i) AS b FROM varka_ints_overflow " +
+            "ORDER BY a, b",
+          expectFused = true)
+        assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
+        assert(varkaMetric(plan, "numFallbackBatchesKernel") === 0L)
+      }
+    }
+  }
+
+  test("task 63: without ANSI an overflowing row wraps exactly as the row engine wraps") {
+    cacheIntsOverflow(spark)
+    cacheIntsOverflow(varkaSpark)
+    withAnsi(false) {
+      // LEGACY is the JVM's own wrapping, and the kernel has no check at all here, so this is
+      // the arm where a wrong lowering shows up as a wrong value rather than as a decline.
+      val plan = checkDifferential(spark, varkaSpark,
+        "SELECT big + i AS a, big - i AS b, -big AS c FROM varka_ints_overflow ORDER BY a, b, c",
+        expectFused = true)
+      assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
+    }
+  }
+
+  test("task 63: arithmetic is admitted as a day offset, and a calendar node over it is " +
+      "guarded rather than declined") {
+    cacheDatesNullableOffset(spark)
+    cacheDatesNullableOffset(varkaSpark)
+    for (ansi <- Seq(false, true)) {
+      withAnsi(ansi) {
+        // The offset is no longer only a leaf. A null in either operand still nulls the row,
+        // which is the null-intolerant rule the whole date lane runs on.
+        checkDifferential(spark, varkaSpark,
+          "SELECT date_add(d, off + 1) AS a, date_sub(d, off - 1) AS b " +
+            "FROM varka_dates_nullable_offset ORDER BY a, b",
+          expectFused = true)
+        // A calendar node over such a producer fuses too: the compiler cannot bound the day
+        // it produces, so it leans on the emitter's runtime range guard exactly as it does
+        // for a bare column offset (task 52), rather than declining the shape.
+        checkDifferential(spark, varkaSpark,
+          "SELECT year(date_add(d, off + 1)) AS a FROM varka_dates_nullable_offset ORDER BY a",
+          expectFused = true)
+      }
+    }
+    // A multiplied offset is the same shape one step further, and the evaluation mode decides
+    // it: LEGACY wraps and fuses, ANSI wants a check the int lanes cannot do over an unbounded
+    // column, so the entry stays on the row engine. Both answers still have to match.
+    withAnsi(false) {
+      checkDifferential(spark, varkaSpark,
+        "SELECT date_add(d, off * 7) AS a FROM varka_dates_nullable_offset ORDER BY a",
+        expectFused = true)
+    }
+    withAnsi(true) {
+      checkDifferential(spark, varkaSpark,
+        "SELECT date_add(d, off * 7) AS a FROM varka_dates_nullable_offset ORDER BY a",
+        expectFused = false)
+    }
+  }
+
   test("task 59: a collated weekday column is admitted and parsed the same way") {
     cacheDatesWeekdayCollated(spark)
     cacheDatesWeekdayCollated(varkaSpark)
@@ -1267,7 +1429,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDates(varkaSpark)
     varkaSpark.conf.set(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key, "true")
     try {
-      val query = "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates ORDER BY a"
+      val query = "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates ORDER BY a"
       val expected = spark.sql(query)
       val actual = varkaSpark.sql(query)
       checkAnswer(actual, expected)
@@ -1351,7 +1513,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     cacheDates(varkaSpark)
     VarkaColumnarToRowExec.setFailKernelForTesting(true)
     try {
-      val q = "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates ORDER BY a"
+      val q = "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates ORDER BY a"
       val expected = spark.sql(q)
       val actual = varkaSpark.sql(q)
       val plan = actual.queryExecution.executedPlan
@@ -1501,8 +1663,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     // only this harness can plan the Varka node - and asserts on the status store, the same
     // surface the SQL tab renders.
     cacheDates(varkaSpark)
-    // One fused entry keeps the projection eligible; the int arithmetic is residual.
-    varkaSpark.sql("SELECT date_add(d, 1) AS a, i + 1 AS b FROM varka_dates").collect()
+    // One fused entry keeps the projection eligible; `i % 7` is residual beside it.
+    varkaSpark.sql("SELECT date_add(d, 1) AS a, i % 7 AS b FROM varka_dates").collect()
     varkaSpark.sparkContext.listenerBus.waitUntilEmpty()
     val statusStore = varkaSpark.sharedState.statusStore
     val executionId = statusStore.executionsList().reverse

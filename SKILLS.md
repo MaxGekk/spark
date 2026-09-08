@@ -2109,3 +2109,64 @@ Four things that cost time and are not obvious:
 **Never take a number from this JVM.** fastdebug keeps the assertions, so absolute throughput
 is not comparable with the product build and nothing measured on it belongs in a committed
 results file. It is for reading what C2 did, not how fast it did it.
+
+## The shape a test picked because nothing lowered it
+
+Six suites and three benchmark cases in this repo used `i + 1` as their
+residual entry. None of them cared about addition: they needed one entry the
+compiler would refuse, so the mixed-projection machinery - fused beside
+forwarded beside residual - had something to be mixed about. `i + 1` was the
+shortest expression that qualified, and it stayed the shortest one for
+fourteen tasks.
+
+Task 63 lowered int arithmetic, and every one of those nine places quietly
+started asserting something else. Two failed outright (`assertNotFused` on a
+plan that now fuses, and a value expectation). The rest kept passing while
+measuring or checking a different thing: a projection with nothing residual in
+it, an "ineligible" plan that was now eligible, and three committed benchmark
+rows labelled "partial fusion" over a fully fused query. The last kind is the
+expensive one, because a passing test that measures the wrong thing publishes
+a number nobody re-reads.
+
+The lesson generalises past this instance: **a fixture chosen for what the
+compiler cannot do has a hidden dependency on the compiler's frontier**, and
+that frontier is exactly what each task moves. The grep that finds them is not
+"which tests fail" - it is "which tests name a shape as unsupported". Before
+lowering a new expression kind, search the suites for that kind spelled out,
+including in SQL strings and in comments, and look at every hit even when the
+suite is green. Comments matter as much as code here: the sentence "`i + 1` is
+still a non-foldable, non-column offset expression" is how the next reader
+learns the fixture's purpose, and a stale one teaches the wrong thing.
+
+When you replace such a fixture, pick the replacement from the far side of the
+frontier and say so in the comment: `i % 7` is residual because integer
+division has no arm, and the comment says that rather than "not a kernel op",
+so the next task to lower `%` finds a sentence that tells it to look.
+
+## An overflow check is nearly free in wide lanes and expensive in narrow ones
+
+Task 63's ANSI check is a sign test: four lanewise ops and a compare for `+`
+and `-`, one compare for unary minus. `VarkaArithmeticBenchmark` prices it as
+an A/B on one node - `checkIntOverflow` on against off, the same IR either way
+- and the two vector widths disagree about what it costs.
+
+At AVX-512 the checked add runs at 18412.5 M rows/s against 18936.5 unchecked,
+which is under 3%. At 128 bits the same pair is 14127.9 against 19019.4, about
+26%. Unary minus, which is one compare rather than five ops, still costs 39% at
+128 bits (11813.6 against 19243.0) and nothing measurable at AVX-512.
+
+The masked bodies are where it becomes the dominant cost rather than a
+surcharge. A checked add over a column with nulls runs at 6459.9 M rows/s at
+128 bits against 18986.9 with the check off - the arithmetic and its check are
+unchanged, so what the mask arm adds is the disposal: `emitGuardCollect` turns
+the overflow mask into a `long`, ANDs it with the node's validity word and ORs
+it into the batch accumulator, and those mask-to-long conversions do not
+vectorize the way the lane ops do. `try_add`, which disposes of the same mask
+by narrowing the word instead, is slower again (4098.7 at 128 bits).
+
+Two things follow. First, the width matters more than the op count when you
+predict what a mask-producing addition to a kernel will cost, so predict for
+both widths or say which one you predicted for. Second, a check that costs 3%
+in the wide lanes can cost a third of the throughput in the narrow ones, and
+the narrow number is the one that tells you whether the mask disposal - not the
+test itself - is what you built.
