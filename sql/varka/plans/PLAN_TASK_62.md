@@ -520,8 +520,17 @@ JDK 17:
 * `d < d2` at 0.66x columnar and 0.57x counted: the column-narrowing debt of
   9.4. `SELECT d FROM t WHERE d < d2` puts a Janino `Project` above the
   row-producing filter because a projection with no fusable entry is not
-  eligible even when every entry is a forwarded column of a Varka child. The
-  same shape without the narrowing, `d = d2`, runs 6.95x.
+  eligible even when every entry is a forwarded column of a Varka child.
+
+  *Corrected on 8 September 2026, by `PLAN_TASK_78.md` 2.3's admission check:
+  this bullet read "the same shape without the narrowing, `d = d2`, runs
+  6.95x". `d = d2` is `Surface.residualFilter` and carries exactly the same
+  narrowing `Project` - this run classifies it `PARTIAL` for that reason - so
+  it is not a control for the narrowing at all. What separates the two rows is
+  selectivity: an equality between two independent date columns selects almost
+  nothing, `<` selects about 70%, and the read-back cost is per selected row.
+  The sentence was read as pricing the projection at 6.3x, and nothing here
+  prices the projection; task 78 measures it against a fixed selectivity.*
 * `d IS NOT NULL`, counted, at 0.43x with 96.8% selected: task 19's read-back
   floor, in the public table as the loss it is.
 

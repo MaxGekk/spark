@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.execution
 
-import org.apache.spark.sql.catalyst.expressions.{And, Attribute, Expression, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.internal.SQLConf
@@ -96,6 +96,14 @@ object VarkaColumnarRule extends ColumnarRule {
           } else {
             project
           }
+        // Task 78: a projection that only narrows a Varka filter's columns, absorbed into the
+        // filter node rather than left above it. This runs after the arm above rather than
+        // instead of it, so a projection with anything to fuse still becomes a Varka
+        // projection node; what reaches here fuses nothing, because forwarding a column is
+        // not fusing it. See `isForwardedNarrowing` for why the shape is worth a case at all.
+        case ProjectExec(projectList, filter: VarkaFilterColumnarToRowExec)
+            if filter.narrowing.isEmpty && isForwardedNarrowing(projectList, filter.output) =>
+          filter.copy(narrowing = Some(projectList))
         case filter @ FilterExec(condition, child) =>
           // A filter the pre stage did not see, sitting over a to-row transition it should
           // absorb, never wrap (the columnar-transition wiring lesson). This also revisits
@@ -123,6 +131,32 @@ object VarkaColumnarRule extends ColumnarRule {
   private def isVarkaEligible(
       projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Boolean = {
     VarkaExpressionCompiler.compilePartial(projectList, childOutput).isDefined
+  }
+
+  /**
+   * Whether `projectList` only forwards and narrows `childOutput`: every entry is a column of
+   * the child, or a rename of one, and nothing is computed.
+   *
+   * This is task 78's plan-time signal, and the shape it selects is narrower than its name
+   * suggests. Spark's own column pruning has already run: for a one-column predicate the
+   * pruned child output is that column, the projection above it is redundant, and the
+   * optimizer removed it long before this rule saw the plan. What survives to here is a
+   * predicate that reads more columns than its consumer wants - `SELECT d FROM t WHERE
+   * d < d2` and nothing else - which is why absorbing it moves only the shapes that were
+   * losing and leaves every shape that already fused byte for byte as it was.
+   *
+   * `false` for an entry that computes anything, because such an entry belongs to the
+   * eligibility test above: it may fuse, and a fused entry wants a projection node with a
+   * kernel, not a wider `UnsafeProjection` in the filter.
+   */
+  private def isForwardedNarrowing(
+      projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Boolean = {
+    val childIds = childOutput.map(_.exprId).toSet
+    projectList.nonEmpty && projectList.forall {
+      case a: Attribute => childIds.contains(a.exprId)
+      case Alias(a: Attribute, _) => childIds.contains(a.exprId)
+      case _ => false
+    }
   }
 
   /**
