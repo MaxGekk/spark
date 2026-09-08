@@ -2199,3 +2199,86 @@ matter. And when a review calls something dead code, the honest response is to
 regenerate the numbers that describe the bytecode it was in - `sql/varka/AGENTS.md`
 already says so, and here it was the difference between a real finding and an
 attribution that was mostly an artifact.
+
+## A checklist for the next node type or mode, from what three reviews found in this one
+
+Task 63 (int32 arithmetic) shipped, was reviewed twice more after it shipped,
+and each review found real bugs in the fixes the previous one produced. Twenty
+or so findings sort into six categories, and each has a concrete habit that
+would have caught its instance before a review had to. The unifying pattern:
+every wrong-answer bug lived in an analysis whose own boundary was never
+tested directly - only observed transitively, through a downstream matrix that
+trusted the analysis to have fed it a true bound.
+
+**1. Any bound, range or "how large can this get" computation uses checked
+arithmetic and gets its own property test.** `cannotOverflow` compared against
+`abs(Int.MinValue)` instead of `Int.MaxValue`, off by one; `intBound`'s
+`datediff` arm assumed the date contract unconditionally, wrong the moment an
+operand's own lane could wrap; nested bounds were combined with plain `+`/`*`,
+so a value past `2^63` came back small and positive and "proved" anything
+safe. All three were wrong answers, not declines, and none was caught by the
+emitter's boundary-value matrix, because that matrix tests values, not the
+bound-computation logic that decided whether a check was needed at all. Use
+`Math.addExact`/`multiplyExact` by construction wherever bounds combine -
+overflow computing a bound means "no bound" (`None`), never a wrapped number -
+and write the property test directly: over random IR, the interval a node
+reports must contain the value the reference evaluator computes, for every
+lane pattern. That test does not exist for today's `intBound`; it is scoped
+for the lattice that replaces it (`PLAN_MILESTONE_5.md` 2.15, task 84), but it
+should exist for any hand-written bound function before that lands.
+
+**2. Never state one admission rule in two places.** `compileOffset` and
+`requireDayOffsetShape` each independently enumerated which node kinds a day
+offset may be, in two languages, and they drifted: `date_add(d, weekday(d2) +
+1)` was admitted by one and refused by the other, and the refusal fired only
+at emit time, as a silent per-batch fallback under an EXPLAIN that still
+claimed fusion. If a rule must be checked on both sides of the compiler/emitter
+boundary, put it in one shared predicate both call (`isDayOffsetShape` is what
+that looked like here), or write a test that enumerates the positions and
+asserts the two accepted sets are the same set.
+
+**3. Before extending a predicate with more than one reader, list the readers
+and their exact question.** `guardedWord` was read by `planSlots` for "does
+this node need a scratch local" and by `liveWords` for "must this node's word
+stay alive," and task 63 assumed a third guarded kind would answer both the
+same way. It answered no and yes: checked arithmetic parks its own values in
+`intArithTmp` and never touches the shared scratch slot, so every checked node
+reserved a local nothing read. Do not add a case to a shared predicate by
+inspection; check what each existing call site actually does with the answer.
+
+**4. A changed invariant is corrected in prose everywhere it was stated, in
+the same commit.** The most dangerous single finding across all three reviews
+was not in code: `PLAN_TASK_63.md` still told the next editor "extend
+`guardedWord`, do not add a condition beside it," which had become false and
+whose failure mode had gone from a loud `emitGuardCollect` refusal to a silent
+wrong date. Scaladocs and a sibling plan (`PLAN_TASK_70.md`) said the same
+superseded thing. Whenever a predicate, invariant or bound rule changes, grep
+the repo - docs and comments included, not just call sites - for its old
+description before considering the change done. This is the same discipline
+`dev/varka_quote_check.py` already enforces for numbers, just not yet for
+prose that states a rule.
+
+**5. A new mode is atomic with widening every automated net that should
+exercise it.** The IR fuzzer built `IntArith`/`IntNeg` with `Overflow.WRAP`
+only, so every emitter path task 63 added - the FAIL-only accumulator
+membership, the scratch-slot split, both arms of the mask disposal - sat
+outside the project's differential oracle from the day it shipped to the day
+a review noticed. A differential test that only `intercept`s an exception on
+both engines is compatible with the fused path it exists to protect quietly
+becoming residual; pin the plan shape (`assertFused`/`assertNotFused`)
+alongside the exception, the way the sibling tests already did. And a change
+that removes a dead local moves emitted bytecode exactly as a value change
+does - regenerate the committed benchmark, don't reason that "it was unused so
+it can't matter" (it moved one row 24.9% and left its sibling width
+untouched).
+
+**6. Call the authoritative predicate; do not reconstruct a look-alike.** The
+`guardsBelow` fix for the `datediff` bound covered `last_day`, `trunc` and the
+dynamic `trunc` and missed `add_months`, because the fix was reasoned from the
+`Chrono` sealed interface rather than from `VarkaLoopEmitter.isChrono`, which
+is `Chrono` *plus* `AddMonths` and is the actual predicate that decides
+whether a producer gets task 52's guard. Whenever new logic must agree with an
+existing rule elsewhere in the codebase, grep for that rule's real definition
+and call or copy it exactly; a hand-derived approximation of a sealed
+interface's membership is not the same question as "what does the emitter
+actually treat as a calendar consumer."
