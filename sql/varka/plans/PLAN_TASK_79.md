@@ -140,6 +140,12 @@ cliff are reachable through them:
       -> task 52's guarded day producer under an arm, with the calendar node that
          the guard protects sitting *outside* the arm and reading the blend.
 
+    CASE WHEN d < DATE'2020-01-01' THEN make_date(y, m, dd) ELSE d END
+      -> task 42's make_date, which is *always* in `selfGuarding` - its year-range
+         check, and under ANSI its invalid-date check, condemn the batch through
+         the same collect. Found by 2.4, not by 2.41: the pinned `everyNode`
+         fixture already has two of them under an arm.
+
 The third is the task's original instance and the one with the soundness
 argument worth writing down (3.3): the guard belongs to the producer but exists
 for the consumer, and the consumer is outside the arm - yet narrowing the guard
@@ -147,11 +153,75 @@ to the arm is still sound, because on an untaken-arm lane the blend hands the
 consumer the other branch's value and the producer's out-of-range day never
 reaches it.
 
-All three fuse today and all three decline a batch for a row the condition
-discards. That is the task's whole surface: a guarded node under an arm, with a
-condition that cannot mention the thing being guarded.
+All four fuse today and all four decline a batch for a row the condition
+discards. That is the task's whole surface: a batch-condemning node under an
+arm, with a condition that cannot mention the thing being guarded. Four node
+kinds, then, not the three the milestone row counts: tasks 52, 60, 63 and 42.
 
-### 2.4 What the check would have rejected
+### 2.4 Verified after the plan's review, before any code
+
+Four things the first draft asserted or left open were checked in the emitter.
+All four resolve without a design change; one of them adds a node kind (2.3's
+fourth shape) and one removes a whole mode from scope.
+
+**The condition's slots are per node and outlive the arms, so no context stack
+is needed.** `s.kt`, `s.kf` and `s.condMask` are `Map<VarkaVectorIR, Integer>`:
+every condition owns its own local, and `emitValue`'s `IfElse` arm emits the
+condition, then the else branch, then the then branch, and only then loads
+`kt.get(n.cond())` for the blend. So the condition's word is live across both
+arms by construction, a nested condition takes a different slot and cannot
+clobber the outer one, and the arm context for a node under nested arms is
+simply the AND of each enclosing condition's own `kt` or its complement, all of
+them still in their slots. The emission order also settles a detail of 3.3: the
+*else* arm is emitted first, so a node shared by both arms of one `IfElse` meets
+its first textual use under the else context - and the rule gives it an
+unqualified guard anyway, since then and else are different chains.
+
+**Reading `kT` in the guard creates no liveness demand.** Task 70's pass governs
+the words that go through `storeWord`/`loadWord`, which record into
+`wordDefs`/`wordUses` and are what `assertWordsLive` reconciles. The condition's
+`kt` is stored with a bare `lstore` and loaded with a bare `lload`, outside that
+bookkeeping, and the same holds for the dense body's `condMask`. So
+`emitGuardCollect` can load the arm context without a new demand edge and
+without tripping the invariant. The word the collect already ANDs in - the
+node's own - keeps the demand it has today.
+
+**`NULL`-mode disposal has no cliff and is out of this task.** The `IfElse` word
+blend is `(kT & validThen) | (~kT & validElse)`, read straight off the emitted
+bytes: the untaken arm's word is masked out entirely. A `try_add` under an
+untaken arm clears a validity bit in a word the blend then discards, so nothing
+is lost and nothing declines. Task 79 is about the batch-condemning disposals
+only - `FAIL` and the three runtime guards - and 5's tests do not include a
+`NULL`-mode case. The same line is the direct evidence for 3.2's polarity: the
+else arm's share of the blend is `~kT`, not `kF`.
+
+**The pinned oracles do not move, but the pinned fixture is a guarded shape.**
+The pinned line map and the shape hash in `VarkaShapeCacheSuite`
+(`1661b1b146818e6a`) are both derived from the IR, and this task adds no node
+type, so neither moves. But `everyNode` holds two `MakeDate`s under its else
+arm, and `MakeDate` is always in `selfGuarding`, so `everyNode`'s *emitted
+bytes* change under this task - each `MakeDate` is a distinct node used once
+under one chain, so both guards narrow. No `codeSize` is pinned on `everyNode`,
+so no test breaks; 6.1's prediction 2 is reworded to say what actually holds.
+`everyNode`'s `AddMonths` has a literal count and is not guarded.
+
+**The parity benchmark's `CASE` rows do not move.** Its `IfElse` case (ids 400
+and 401) blends two `AddDays`/`SubDays` chains with literal offsets - no guarded
+producer in either arm - so its bytes are unchanged and section 6 adds rows
+rather than requoting those.
+
+**What 2.5 did not settle, and is the implementation's first design decision:
+where the use-context analysis lives.** Three sites collect guarded nodes -
+`collectColumnOffsetProducers` under each calendar node, the `selfGuarding`
+additions for `AddMonths` and `MakeDate`, and `checkedArith` in `analyze()` -
+and none records *where* a node is used. `analyze()`'s traversal does visit
+every use, through `analyzeOp(node, true, cond, then, else)` for `IfElse`, so a
+context stack there can record per node the chain of each use, and
+`collectGuardedProducers`, which runs after every root is analyzed, can read one
+shared per-node answer. That is the shape 3.3 assumes; the alternative - a
+fourth walk - is what to avoid.
+
+### 2.5 What the check would have rejected
 
 That the sharing hazard was theoretical (it is two lines of SQL); that the
 user's own bound is what the cliff defeats today (the user cannot express it
@@ -210,12 +280,19 @@ else arm would exclude the unknown-condition lanes that SQL routes to `ELSE`,
 and a guarded node there would stop condemning a batch it must condemn. Nested
 arms compose by AND of their contexts.
 
-The context has one representation per body kind, because the two bodies keep
-the condition differently: in the masked body it is a word, `s.kt` and its
-complement, ANDed with the node's word before the collect; in the dense body it
+The context needs no stack: every condition owns its own `kt`/`condMask` slot
+and those slots outlive the arms (2.4), so a nested context is the AND of the
+enclosing conditions' own slots. It has one representation per body kind,
+because the two bodies keep the condition differently: in the masked body it is
+a word, `s.kt` and its complement, ANDed with the node's word before the
+collect; in the dense body it
 is a `VectorMask`, `s.condMask` and its `not()`, ANDed into the guard's mask
 before `toLong`. `emitGuardCollect` already takes both a word and a mask, so the
 context joins whichever side its body uses.
+
+`NULL`-mode disposal is not touched: the blend discards the untaken arm's word,
+so a `try_add` there loses nothing (2.4). Only the batch-condemning collect
+takes the context.
 
 A guarded node in the *condition itself* - `CASE WHEN add_months(d, m) < ...
 THEN ... END` - is computed and needed on every lane, and its context is
@@ -250,6 +327,12 @@ holds the other branch's value, so the producer's out-of-range day is never what
 the consumer decomposes, and a guard confined to the arm's lanes misses nothing
 the consumer could see.
 
+The context adds no liveness demand: the condition's `kt` and `condMask` live
+outside task 70's `wordDefs`/`wordUses` bookkeeping (2.4), so the guard can load
+them without a new edge in `liveWords` and without disturbing `assertWordsLive`.
+Where the per-node use-context is computed is 2.4's last paragraph: a context
+stack in `analyze()`'s existing traversal, read by `collectGuardedProducers`.
+
 `SKILLS.md` records this class one level down - task 32's prefix fragment had to
 be keyed on the guard's extra input rather than the child alone - and this task
 cites it rather than rediscovering it.
@@ -262,14 +345,14 @@ written: they are validity-driven, with no untaken arm.
 | file | what |
 |---|---|
 | `VarkaLoopEmitter.java` | the arm mask threaded through `emitValue`; `emitGuardCollect` taking it; the per-node use-context disjunction in the guarded-set walk |
-| `VarkaLoopEmitterSuite.scala` | 2.3's three shapes as status matrices; the shared-node and two-condition cases of 3.3 asserted to keep declining; a guarded node in condition position asserted unqualified; the `codeSize` deltas |
-| `VarkaDifferentialSuite.scala` | all three shapes end to end over a fixture whose extreme rows are routed to the untaken arm, with the declined metric at zero |
+| `VarkaLoopEmitterSuite.scala` | 2.3's four shapes as status matrices; the shared-node and two-condition cases of 3.3 asserted to keep declining; a guarded node in condition position asserted unqualified; the `codeSize` deltas |
+| `VarkaDifferentialSuite.scala` | all four shapes end to end over a fixture whose extreme rows are routed to the untaken arm, with the declined metric at zero |
 | `VarkaEmitterParityBenchmark.scala` + results | section 6's A/B, since the emitted bytes move |
 | `PLAN_MILESTONE_4.md`, this file | row 79, section 2.41's motivating example corrected per 2.2, section 9 |
 
 ## 5. Tests, and what each is for
 
-* **The status matrix**, over 2.3's three shapes: a batch whose only
+* **The status matrix**, over 2.3's four shapes: a batch whose only
   out-of-range row is sent to the untaken arm returns 0 instead of declining -
   the whole point - while a batch whose out-of-range row is in the *taken* arm
   still declines. The second half is what fails if the arm context is built with
@@ -283,7 +366,7 @@ written: they are validity-driven, with no untaken arm.
   conditions; and the guarded node in condition position. These are the
   silent-wrong-answer tests.
 * **Nested arms**, one `CASE` inside another's arm, composing by AND.
-* **The differential**, all three shapes, with `numFallbackBatchesDeclined` at
+* **The differential**, all four shapes, with `numFallbackBatchesDeclined` at
   zero where today it is positive, and answers equal either way - answers cannot
   move, since only the decline route changes. The fixture is `varka_date_months`'
   shape with the extreme counts placed on rows whose `d` is on or after
@@ -303,8 +386,10 @@ the declines it prevents, which the differential counts rather than times.
 
 1. The arm mask costs under 3% at both widths on the `CASE` shapes, and nothing
    measurable on the shapes without an `IfElse`.
-2. No unguarded shape's bytes move; the pinned line map and shape hash are
-   unchanged for every shape with no guarded node under an arm.
+2. The pinned line map and the shape hash do not move, being IR-derived; no
+   shape without a batch-condemning node under an arm changes a byte, the
+   parity file's existing `CASE` rows included; and `everyNode`'s bytes *do*
+   change, since its two `MakeDate`s are guarded and under an arm (2.4).
 3. On a fixture where every out-of-range row falls in the untaken arm, the
    declined count goes from positive to zero, and the answers do not move.
 
