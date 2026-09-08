@@ -853,6 +853,188 @@ mixed-null `i + 1` row at 128-bit by more than 10% without moving the dense
 rows or any unguarded shape's bytes, and `VarkaEmitterParityBenchmark`'s
 task 52 guard pair has to move with it or the change is not what it claims.
 
+### 2.13 What a new node type costs, and which of it is avoidable (tasks 83 to 86)
+
+*Added 8 September 2026, from what task 63 cost to build and what its review
+found afterwards.*
+
+**The observation, measured rather than remembered.** Task 63 added two node
+types to a mature emitter, which makes it a natural experiment in where the
+cost of a new type actually falls. The emitter holds **seventeen switches over
+the IR: ten exhaustive, seven carrying a `default`**. Sorting task 63's own
+mistakes by where the decision lived predicts what each cost almost exactly:
+
+| where the decision lives | a missing arm | what it cost this task |
+|---|---|---|
+| an exhaustive switch - `childrenOf`, `analyze`, `emitValue`, `liveWords` twice, `assertWordAlgebraAgrees` | a compile error | minutes, at the keyboard |
+| a switch with a `default` - `ownerOf`, `pureOf`, `planWordRef`, `chronoChild`, `emitChrono`, `tailReadsMarchMonth`, `collectColumnOffsetProducers` | a silent pessimisation: right answer, worse code | never noticed; found by reading |
+| **no switch at all** - the bound analysis, and `requireDayOffsetShape` against `compileOffset` | **a wrong answer, or a ghost fallback** | a max-effort review, after the PR was open |
+
+All three of task 63's wrong answers and its one ghost fallback came from the
+last row. That is the ranking rule these four tasks are ordered by: not how
+much code a refactor removes, but how far the decision it touches sits from an
+exhaustive match. The rule matters twice over because the expression-porting
+work is meant to be delegated to cheaper agents - the "recipe for a cheap
+agent" shape tasks 33, 39 and 40 are written in, and the reason task 70 chose
+the form that "keeps the emitter smaller, which the delegation goal wants"
+(`PLAN_TASK_70.md` 3). For that reader the goal is not that a weak model
+writes less, it is that a weak model **cannot fail quietly**; `SKILLS.md`'s
+"a recipe for a cheap agent ages at the rate of the emitter" is the same
+lesson from the other side.
+
+**What is deliberately not here.** The chrono fragment machinery. Thirty-odd
+lane ops behind a shared prefix is genuinely unlike every other node, and
+folding it into a general scheme would cost more than it returns - the same
+judgement `VarkaVectorIR`'s own javadoc already records.
+
+### 2.14 One refusal, instead of four (task 83)
+
+**The observation.** Four node kinds now refuse lanes at run time: task 42's
+`make_date` year check, task 52's range guard on a column-offset day producer,
+task 60's month-count guard, and task 63's overflow check. Each arrived with
+its own analysis set - `guardedProducers`, `selfGuarding`, `checkedArith` -
+its own slot rule, and its own arm in `planSlots`, and all four dispose of
+their mask through the same `emitGuardCollect` into the same accumulator and
+report the same `STATUS_CHRONO_RANGE`.
+
+The accretion is visible in one predicate. `guardedWord` was written for task
+52, gained a disjunct for task 60, gained a third for task 63, and its javadoc
+argued that keeping it single is what stops the next kind being added to one
+reader and forgotten in the other. Task 63's review then found that the two
+readers were asking different questions - `planSlots` wants "does this node
+need a scratch local", `liveWords` wants "must this node's word stay alive" -
+and that checked arithmetic answers yes to the second and no to the first, so
+every checked node had been reserving a local nothing ever loaded. The
+predicate had to split, which is the argument for a real abstraction rather
+than a fourth disjunct.
+
+The shared status bit is the same story at the telemetry end: an ANSI overflow
+decline reports "chrono range", and `VarkaFusedKernel`'s own javadoc invites a
+new lowering to take its own bit. Task 63 left this registered rather than
+fixed (`PLAN_TASK_63.md` 9.7, from its 7.4).
+
+**The shape.** Refusal becomes a property a node declares - the mask it
+computes, the word that qualifies it, and the reason it refuses - with one
+analysis set, one slot rule, one collect, and a status bit per reason. A fifth
+refusing node is then one arm, and the "which of the four fired" question that
+telemetry cannot answer today becomes free.
+
+**The admission check.** No emitted byte moves for any shape that exists
+today: the pinned line map, the shape hash and every `codeSize` assertion hold
+unchanged, and `dev/varka_emit.sh --table` shows the same op counts for
+`year(date_add(d, off))`, `add_months(d, m)`, `make_date` and `i + 1` under
+ANSI. That is the whole check - this task buys legibility and a status bit,
+not speed, and if it moves a byte it has changed something it should not have.
+
+### 2.15 One value-range lattice, instead of two overlapping analyses (task 84)
+
+**The observation.** Two analyses compute overlapping facts about what a node
+can hold. `dayRange` answers "which epoch days can this subtree produce", for
+admitting a calendar node's child (task 52). `intBound` answers "how large can
+this int be in absolute value", for removing an overflow check (task 63). They
+disagree about what a runtime guard proves, they duplicate the literal-slot
+lookup, and task 63 had to bridge them - `intBound`'s `datediff` arm now calls
+`dayRange` with a flag that turns the guard assumption off.
+
+That bridge is where the bugs were. Of the three wrong answers task 63's
+review found, two were in exactly this seam: `datediff`'s bound assumed the
+date contract for operands that a literal shift had already pushed out of int
+range, and nested bounds were combined with wrapping `Long` arithmetic, so a
+bound that passed 2^63 came back small and positive and proved anything at all
+safe. The third was an off-by-one in the comparison the bound feeds. Three
+bugs, one region, and none of them reachable by a missing switch arm - which
+is why they survived to a review.
+
+**The shape.** One interval domain over lane values, with the two questions as
+queries on it rather than as separate traversals. Two properties do the work.
+The lattice's operations saturate by construction, so the `Math.addExact`
+discipline task 63 had to add by hand is not something a later arm can forget.
+And "what does a runtime guard prove" becomes an explicit parameter of a query
+rather than a fact baked into one traversal's arms, because that is the
+distinction both the calendar admission and the overflow check need and only
+one of them had.
+
+It is also the natural first piece of the compiler to write in Java: a sealed
+interval type and its lattice operations are pure data, with no Catalyst
+surface to speak of.
+
+**The admission check.** Every shape the compiler admits or declines today is
+admitted or declined identically - the compiler suite's decline reasons and
+fused shapes are the oracle, unchanged - and the differential's fusion
+classification does not move on any committed query. Then one new property
+test the current code cannot pass: over randomly generated IR, the interval a
+node reports contains the value the reference evaluator computes, for every
+lane pattern. If that test is not written, the task has not been done, because
+it is the only thing standing where three bugs already stood.
+
+### 2.16 Lane type as a parameter (task 85)
+
+**The observation.** `INT_VECTOR` appears **204 times** in
+`VarkaLoopEmitter.java`, beside sixteen four-byte stride assumptions and
+eighteen species references. Every one is a place int64, boolean or decimal
+lanes have to reach, and milestone 5's own headline tasks - 28's lane-width
+conversion and 29's int64 lanes - are blocked behind exactly this.
+
+The IR does not carry a lane type at all: `ColumnRef(int ordinal)` names a
+column and nothing else, and the emitter supplies int32 by assumption. That
+worked while every node was int32 and will not survive the second lane.
+
+**The forcing function, which is cheap and already wanted.** Year-month
+intervals are int32 months - the *same* physical lane as DATE and INT (the
+owner's standing interest, `PLAN_MILESTONE_4.md` 2.x). Three logical types
+over one physical lane is precisely the case that decides the design question:
+it shows that the lane belongs to the node's physical representation and not
+to its Spark type, which is also what `SCOPE_MILESTONE_6.md`'s "several
+representations per logical type" will need. So that type can land before this
+refactor and be its test rather than wait behind it.
+
+**The option space.** (a) Parameterise the emitter on a lane descriptor -
+vector class, species field, byte stride, load and store descriptors - and
+switch on it at the sites that genuinely differ. (b) Generate a per-lane
+emitter from a template. (c) Duplicate the emitter per lane. The count above
+is the argument: of 204 sites most are mechanical and roughly twenty carry
+real per-lane behaviour, which favours (a); (b) and (c) both re-create the
+"two copies drift" failure this milestone is trying to remove. Measure before
+committing, since (a) risks a megamorphic descriptor call in the hot path and
+that is a benchmark question, not an argument.
+
+**The admission check.** The int32 lane's emitted bytes are unchanged - the
+pinned oracles again - and a second lane type reaches the same green
+differential and fuzz matrices as the first, at both vector widths. The fuzz
+suite's reachability test, which today asserts the generator can build every
+node type in the sealed hierarchy, is widened to node type times lane type;
+that test is what will fail when a later type arrives without an arm, and it
+is the cheapest thing in this whole section.
+
+### 2.17 One operand admission, stated once (task 86)
+
+**The observation.** Four near-copies decide whether an expression may be an
+operand: `intOperand`, `compileIntOperand`, `compileOffset` and `compare`'s
+own `operand`. Task 63's review found them independently and called them
+duplicated. Worse, the emitter restates their conclusions in four
+`require*Shape` helpers, and those are a second, independent statement of the
+same rule.
+
+They drifted, exactly as a second statement does. Task 63 widened
+`compileOffset` to admit arithmetic but `requireDayOffsetShape` admits only
+three node kinds, so `date_add(d, weekday(d2) + 1)` - which lowers to task
+57's `DayOfWeekIso` - was accepted by the compiler, marked fused in EXPLAIN,
+and then refused at emit time, where the evaluator turns the refusal into a
+silent per-batch fallback. That is the ghost fallback `sql/varka/AGENTS.md`
+forbids, and it shipped in the PR until a review found it.
+
+**The shape.** One admission function taking what the position accepts, and an
+emitter check *derived from the same table* rather than written beside it -
+so that widening the compiler either widens the emitter or fails to compile.
+The check's fail-fast value is worth keeping; what is not worth keeping is
+stating the rule twice in two languages.
+
+**The admission check.** A test that enumerates the operand positions and,
+for each, asserts that the set the compiler admits and the set the emitter
+accepts are the same set - the assertion whose absence let the drift above
+ship. Then every decline reason in the compiler suite unchanged, since this
+task is meant to move no shape from fused to residual or back.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
@@ -860,6 +1042,10 @@ the milestone; 29 and 30 follow it; 39 and 49 wait on 29; 27 can run at any
 point; 65 waits on nothing and is an admission check before it is a task; 66
 follows task 32's B2 grouping decision; 74 and 75 follow #145 (task 70) and
 nothing else, 75 being an admission check before it is a task; 81 follows 74.
+83 to 86 are the engine refactors task 63 argued for (section 2.13), ordered by how
+far the decision each touches sits from an exhaustive match rather than by size: 84
+before 85, because the lattice is what makes a new lane safe and the lane parameter
+only makes one possible; 83 and 86 are independent of both and of each other.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
@@ -875,6 +1061,10 @@ nothing else, 75 being an admission check before it is a task; 81 follows 74.
 | 75 | Zero-copy validity for leaf words. **Scoped in section 2.10**, and **the bound moved under it** (7 September 2026): task 70's third regeneration puts the masked-against-dense gap on `year(d)` at 0.4% at AVX-512 and below zero at 128-bit, under this task's own 2% decline line, so the zero-copy half is answered before the probe runs and what may survive is the cached null count, which that gap does not measure | The probe: masked `year(d)` with the copy skipped against the committed row, both widths. If admitted, the leaf case of the pass resolved to the input's validity buffer retained through Arrow's reference manager, a cached null count on Varka-owned output vectors, and the filter's compaction reading it | Under 2% at AVX-512 on the probe: declined on the record. Otherwise the differential over every null pattern with the output's validity address asserted equal to the input's, allocator accounting closing to zero with the retained buffers released, and the `year(d)` masked row on its dense row |
 | 81 | Spark's own date tests as a differential corpus (section 2.11). **Scoped** (7 September 2026) | The harvest, from the golden-file inputs first - `sql-tests/inputs/date.sql` and its six date-family siblings, 254 `select` statements already written as SQL text - and from `DateFunctionsSuite` and `ColumnExpressionSuite` after them; `DateExpressionsSuite` excluded on the record, because `checkEvaluation` never reaches a physical plan. Then the rewrite that makes the corpus reachable at all: each statement's literal operands turned into columns of an Arrow-cached fixture, since 94 of `date.sql`'s 101 statements are constant-folded before any operator exists and the rest read one row of strings. Per entry: the answers compared against the row engine on the same fixture, and the plan classified fused, partial or declined on task 62's `Fusion` rule, so a declined entry cannot pass as a silent fallback | Every harvested entry agreeing with the row engine; the fused/partial/declined split committed as the coverage number, naming which expressions are out rather than a percentage; a harvest and rewrite that are re-runnable rather than a hand-copied list, so an upstream statement added later is picked up; and the limits stated in the plan - the golden `.sql.out` files stop being the oracle once operands become columns, and a handful of rows per entry reaches the epilogue and never a full lane group |
 | 82 | The mask-to-long disposal in a checked kernel (section 2.12). **Scoped** (8 September 2026); reads task 63's committed numbers and shares its ground with task 64 | `emitGuardCollect`'s per-lane-group `VectorMask.toLong`, the AND with the node's word and the OR into the accumulator, which every runtime refusal shares - task 52's range guard, task 42's year check, task 60's month-count check and task 63's overflow check; the candidates are a mask-typed accumulator converted once per batch, skipping the AND where the algebra says the word is dead or all-ones, and hoisting the collect where the batch's statistics prove the mask empty | The checked mixed-null `i + 1` row at 128-bit moves by more than 10% while the dense rows and every unguarded shape's bytes do not, and task 52's guard pair in the parity file moves with it |
+| 83 | One refusal, instead of four (section 2.14). **Scoped** (8 September 2026), from task 63's review; independent of 84 to 86 | The four runtime refusals - task 42's `make_date` year check, task 52's range guard, task 60's month count, task 63's overflow check - behind one node property carrying its mask, its qualifying word and its reason, with one analysis set, one slot rule, one collect and a status bit per reason, replacing `guardedProducers`/`selfGuarding`/`checkedArith`, the `guardedWord`/`guardScratch` pair and the shared `STATUS_CHRONO_RANGE` | No emitted byte moves for any shape that exists today: the pinned line map, the shape hash, every `codeSize` assertion and `dev/varka_emit.sh --table`'s op counts for `year(date_add(d, off))`, `add_months(d, m)`, `make_date` and ANSI `i + 1` all unchanged - this task buys a status bit and legibility, not speed |
+| 84 | One value-range lattice (section 2.15). **Scoped** (8 September 2026), from the three bugs task 63's review found in the seam between `dayRange` and `intBound`; before 85 | One saturating interval domain over lane values, with the calendar admission (task 52) and the overflow check (task 63) as queries on it rather than two traversals, and "what a runtime guard proves" as an explicit parameter of a query rather than a fact baked into one traversal's arms; written in Java, being pure data | Every shape the compiler admits or declines today unchanged, decline reasons included, and the differential's fusion classification unmoved; plus the property test the current code cannot pass - over random IR, the interval a node reports contains the value the reference evaluator computes, for every lane pattern |
+| 85 | Lane type as a parameter (section 2.16). **Scoped** (8 September 2026); after 84, and blocking milestone 5's own tasks 28 and 29 | The emitter parameterised on a lane descriptor - vector class, species, byte stride, load and store descriptors - against the 204 `INT_VECTOR` references, 16 four-byte stride assumptions and 18 species references it carries today; the lane on the node's physical representation rather than inferred from the Spark type, with year-month intervals (int32 months, the same lane as DATE and INT) as the forcing function that can land first; measured against a generated-per-lane emitter, since a descriptor risks a megamorphic call in the hot path | The int32 lane's emitted bytes unchanged against the pinned oracles; a second lane type reaching the same green differential and fuzz matrices at both vector widths; and the fuzz reachability test widened from every node type to node type times lane type |
+| 86 | One operand admission, stated once (section 2.17). **Scoped** (8 September 2026), from the ghost fallback task 63's review found; independent of 83 to 85 | `intOperand`, `compileIntOperand`, `compileOffset` and `compare`'s `operand` as one function taking what the position accepts, and the emitter's four `require*Shape` checks derived from that same table rather than restated beside it, so widening the compiler either widens the emitter or fails to compile | A test enumerating the operand positions and asserting that the set the compiler admits and the set the emitter accepts are the same set - the assertion whose absence let `date_add(d, weekday(d2) + 1)` ship as fused in EXPLAIN and a silent per-batch fallback at run time; every compiler decline reason unchanged, since no shape may move |
 
 ## 4. Files
 
