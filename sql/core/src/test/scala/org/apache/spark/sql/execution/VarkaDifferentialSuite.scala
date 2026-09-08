@@ -177,6 +177,46 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 78: a projection that only narrows a Varka filter leaves no Project above it") {
+    // The milestone's one shape where Varka was slower than stock Spark end to end. The
+    // predicate reads two columns and the consumer wants one, so Spark's column pruning
+    // cannot drop the projection - it is not redundant - and before task 78 a Janino
+    // `Project [d]` sat above the row-producing filter: an operator boundary out of the
+    // node's row iterator, and a row conversion over `d2` as well as `d` whose second column
+    // the projection immediately discarded.
+    cacheDatePairs(spark)
+    cacheDatePairs(varkaSpark)
+    try {
+      val q = "SELECT d FROM varka_date_pairs WHERE d < d2"
+      val actual = varkaSpark.sql(q)
+      val plan = actual.queryExecution.executedPlan
+      assertFused(plan)
+      checkAnswer(actual, spark.sql(q))
+
+      val filterNode = plan.collectFirst { case f: VarkaFilterColumnarToRowExec => f }
+      assert(filterNode.isDefined, s"expected the row-out Varka filter:\n${plan.treeString}")
+      assert(filterNode.get.narrowing.isDefined,
+        s"expected the projection absorbed into the filter:\n${plan.treeString}")
+      assert(plan.collectFirst { case p: ProjectExec => p }.isEmpty,
+        s"no row Project should remain above the filter:\n${plan.treeString}")
+      assert(filterNode.get.output.map(_.name) === Seq("d"))
+      assert(filterNode.get.metrics("numFallbackBatchesKernel").value === 0L)
+
+      // The one-column predicate is the control: its projection was already redundant and
+      // Spark removed it before any columnar rule ran, so there is nothing to absorb and the
+      // node is the one task 21 shipped. This is the assertion that task 78 moved only the
+      // shape that was losing.
+      val control = varkaSpark.sql("SELECT d FROM varka_date_pairs WHERE d < DATE'2024-02-01'")
+      val controlPlan = control.queryExecution.executedPlan
+      checkAnswer(control, spark.sql("SELECT d FROM varka_date_pairs WHERE d < DATE'2024-02-01'"))
+      assert(controlPlan.collectFirst { case f: VarkaFilterColumnarToRowExec => f }
+        .exists(_.narrowing.isEmpty),
+        s"the one-column predicate should need no narrowing:\n${controlPlan.treeString}")
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_date_pairs"))
+    }
+  }
+
   test("task 52: a literal day shift past the calendar range is residual, with its reason, " +
       "and an in-range one fuses") {
     // The compile-time half of the range guard: `year(date_add(d, 20000000))` is the query

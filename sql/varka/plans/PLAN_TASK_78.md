@@ -128,6 +128,16 @@ Nothing is built before section 6's A/B runs. Section 2.40 offers three
 candidates and says the numbers should order them; sections 2.2 and 2.3 above
 say what the numbers have to separate, which the current surface does not.
 
+*Amended on 8 September 2026, by the owner's direction: candidate B is built
+first and the A/B runs after it, when the machine that can run it is free. The
+inversion is recorded rather than the paragraph rewritten, per
+`sql/varka/AGENTS.md` - a plan is a record. What it costs is that the
+measurement now validates a choice instead of making one; what makes that
+acceptable is that B removes work rather than moving it (2.2's layer 3), so it
+cannot be slower than what it replaces, and candidate A stays available if the
+numbers say B does not reach 1.00x. What is given up is the chance to learn
+that A was enough.*
+
 ### 3.2 Candidate A: decline the shape
 
 Teach the rule that a Varka filter under a row consumer, whose output is wider
@@ -156,6 +166,22 @@ conversion becomes `UnsafeProjection.create(required, childOutput)`. The
 `VarkaFilterExec` both have to carry the required set, or a stripped transition
 silently widens the output again - the same class of bug task 21 found when a
 stripped transition silently dropped the filter.
+
+**As built.** `VarkaFilterColumnarToRowExec` gained
+`narrowing: Option[Seq[NamedExpression]]`, defaulting to `None`. `output` is the
+projected schema when it is set; the `UnsafeProjection` the node already built
+is created over `narrowing.getOrElse(childOutput)`, so the narrowed shape costs
+nothing extra and the unnarrowed one is unchanged expression for expression;
+and `columnarSibling` wraps the columnar filter in a `VarkaProjectExec` carrying
+the same list, which is what keeps the cache serializer's swap honest.
+
+The rule arm sits *after* the eligibility arm, so a projection with anything to
+fuse still becomes a Varka projection node and only a forwarded-only one reaches
+here - `isForwardedNarrowing` accepts a column or a rename of one and refuses
+anything computed. It also refuses to fire on a node that already has a
+narrowing, so the pass is idempotent. Nothing is absorbed across a residual
+`FilterExec`, which falls out of the match shape rather than needing a test: the
+residual predicate reads columns the narrowing would have removed.
 
 ### 3.4 Candidate C: fuse the boundary
 

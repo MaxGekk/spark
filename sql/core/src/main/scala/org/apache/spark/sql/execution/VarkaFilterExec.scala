@@ -23,7 +23,7 @@ import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkExc
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -291,13 +291,43 @@ private[sql] class VarkaFilterEvaluatorFactory(
  * semantics-free: machinery that strips a topmost transition must convert this node to
  * [[VarkaFilterExec]] instead (the cache serializer does), or it silently drops the filter -
  * the wrong-cached-view bug task 21 found and fixed.
+ *
+ * `narrowing` is task 78: the projection above this node, absorbed, when its consumer wants
+ * fewer columns than the predicate reads. A filter forwards every column it was given, so
+ * `SELECT d FROM t WHERE d < d2` leaves a `Project [d]` above this node - Spark's column
+ * pruning cannot remove it, because with two columns below it is not redundant - and that
+ * projection cost twice over: an operator boundary out of this node's row iterator, and a
+ * row conversion over `d2` as well as `d`, whose result the projection immediately discarded.
+ * Holding the list here pays neither: [[output]] is the projected schema, and the one
+ * `UnsafeProjection` this node already built converts exactly the columns asked for.
+ *
+ * It is `None` whenever the shapes are equal - a one-column predicate's projection is
+ * redundant and Spark removed it long before this rule ran - so every shape that fused before
+ * task 78 plans and runs exactly as it did.
  */
-case class VarkaFilterColumnarToRowExec(condition: Expression, child: SparkPlan)
+case class VarkaFilterColumnarToRowExec(
+    condition: Expression,
+    child: SparkPlan,
+    narrowing: Option[Seq[NamedExpression]] = None)
     extends VarkaFilterExecBase
     with VarkaFusedTransition
     with SafeForKWayMerge {
 
-  override def columnarSibling: SparkPlan = VarkaFilterExec(condition, child)
+  // The projected schema when this node absorbed a projection, and the filter's own otherwise.
+  override def output: Seq[Attribute] =
+    narrowing.map(_.map(_.toAttribute)).getOrElse(super.output)
+
+  /**
+   * The columnar-out node computing what this one computes, which after task 78 has to carry
+   * the absorbed projection too: a sibling that dropped it would hand the cache a wider
+   * schema than the plan promised, which is the same class of error as task 21's dropped
+   * filter and is why [[VarkaFusedTransition]] asks for "exactly what this transition
+   * computes" rather than "the kernels this transition runs".
+   */
+  override def columnarSibling: SparkPlan = {
+    val filter = VarkaFilterExec(condition, child)
+    narrowing.map(VarkaProjectExec(_, filter)).getOrElse(filter)
+  }
 
   override protected def withNewChildInternal(newChild: SparkPlan): VarkaFilterColumnarToRowExec = {
     copy(child = newChild)
@@ -312,6 +342,7 @@ case class VarkaFilterColumnarToRowExec(condition: Expression, child: SparkPlan)
     val evaluatorFactory = new VarkaFilterToRowEvaluatorFactory(
       condition,
       child.output,
+      narrowing,
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
@@ -330,6 +361,7 @@ case class VarkaFilterColumnarToRowExec(condition: Expression, child: SparkPlan)
 private[sql] class VarkaFilterToRowEvaluatorFactory(
     condition: Expression,
     childOutput: Seq[Attribute],
+    narrowing: Option[Seq[NamedExpression]],
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
@@ -352,7 +384,11 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     // The emitted rows hold their own bytes (an UnsafeProjection copy), so they outlive the
     // input batch exactly as VarkaColumnarToRowExec's rows do; the fallback predicate is the
     // per-row form of the same condition. Both lazy (task 15).
-    private lazy val toUnsafe = UnsafeProjection.create(childOutput, childOutput)
+    // Task 78: the absorbed projection's expressions where there is one, and the identity over
+    // every child column otherwise - the same object either way, so the narrowed shape costs
+    // nothing extra and the unnarrowed one is byte for byte what it was.
+    private lazy val toUnsafe =
+      UnsafeProjection.create(narrowing.getOrElse(childOutput), childOutput)
     private lazy val fallbackPredicate: BasePredicate = {
       val predicate = Predicate.create(condition, childOutput)
       predicate.initialize(partitionIdx)

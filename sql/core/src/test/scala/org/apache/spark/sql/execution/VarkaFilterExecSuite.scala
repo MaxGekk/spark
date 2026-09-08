@@ -64,6 +64,25 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     }.collect().toSeq
   }
 
+  /**
+   * Runs the row node over `specs` and reads every emitted row into a tuple of its columns -
+   * the multi-column counterpart of [[rowValues]], which task 78 needs because the point of a
+   * narrowing is which columns come out, not what the first one holds.
+   */
+  private def rowNodeRows(
+      condition: org.apache.spark.sql.catalyst.expressions.Expression,
+      specs: Seq[BatchSpec],
+      output: Seq[Attribute],
+      narrowing: Option[Seq[org.apache.spark.sql.catalyst.expressions.NamedExpression]] = None)
+      : Seq[Seq[Any]] = {
+    val node = VarkaFilterColumnarToRowExec(
+      condition, TestColumnarBatchPlan(specs, output), narrowing)
+    val width = node.output.size
+    node.execute().map { row =>
+      (0 until width).map(c => if (row.isNullAt(c)) null else Int.box(row.getInt(c))).toList
+    }.collect().toSeq
+  }
+
   /** Runs the row node and reads its rows' first column. */
   private def rowValues(node: VarkaFilterColumnarToRowExec): Seq[Any] = {
     node.execute().map { row =>
@@ -438,6 +457,65 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
       val transition = ColumnarToRowExec(VarkaFilterExec(dLess10, child))
       assert(VarkaColumnarRule.postColumnarTransitions(transition) === transition)
     }
+  }
+
+  test("task 78: a narrowing projection is absorbed into the row-out filter") {
+    val child = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr))
+    withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
+      // `SELECT d FROM t WHERE d < ...` after transitions: a Project the optimizer could not
+      // remove, because the predicate reads two columns and the consumer wants one.
+      val plan = ProjectExec(Seq(attrD), VarkaFilterColumnarToRowExec(dLess10, child))
+      val rewritten = VarkaColumnarRule.postColumnarTransitions(plan)
+      assert(rewritten === VarkaFilterColumnarToRowExec(dLess10, child, Some(Seq(attrD))),
+        s"expected the projection absorbed, got:\n$rewritten")
+      // The absorbed node answers with the projected schema, not the filter's own.
+      assert(rewritten.output.map(_.name) === Seq("d"))
+
+      // A rename rides along; anything computed does not, because a computed entry belongs to
+      // the eligibility test above this arm - it may fuse, and then it wants a kernel.
+      val renamed = ProjectExec(Seq(Alias(attrD, "day")()),
+        VarkaFilterColumnarToRowExec(dLess10, child))
+      assert(VarkaColumnarRule.postColumnarTransitions(renamed)
+        .isInstanceOf[VarkaFilterColumnarToRowExec])
+      val computed = ProjectExec(Seq(Alias(DateAdd(attrD, Literal(3)), "add")()),
+        VarkaFilterColumnarToRowExec(dLess10, child))
+      assert(VarkaColumnarRule.postColumnarTransitions(computed).isInstanceOf[ProjectExec])
+
+      // Idempotent: a second pass over an already-absorbed node leaves it alone rather than
+      // nesting a second narrowing inside the first.
+      assert(VarkaColumnarRule.postColumnarTransitions(rewritten) === rewritten)
+    }
+  }
+
+  test("task 78: the absorbed projection travels to the columnar sibling") {
+    // VarkaFusedTransition promises "the columnar-out node computing exactly what this fused
+    // transition computes", and the cache serializer swaps one for the other when a cached
+    // view's top is this node. A sibling that dropped the narrowing would hand the cache a
+    // two-column schema where the plan promised one - the same class of error as task 21's
+    // dropped filter, which is why this is asserted rather than assumed.
+    val child = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr))
+    val narrowed = VarkaFilterColumnarToRowExec(dLess10, child, Some(Seq(attrD)))
+    val sibling = narrowed.columnarSibling
+    assert(sibling.output.map(_.name) === Seq("d"))
+    assert(sibling.isInstanceOf[VarkaProjectExec])
+    assert(sibling.children.head.isInstanceOf[VarkaFilterExec])
+    // Without a narrowing the sibling is what it always was.
+    assert(VarkaFilterColumnarToRowExec(dLess10, child).columnarSibling ===
+      VarkaFilterExec(dLess10, child))
+  }
+
+  test("task 78: the row node emits only the narrowed columns, values unchanged") {
+    val dates = Seq(Int.box(1), Int.box(50), Int.box(3))
+    val ints = Seq(Int.box(7), Int.box(8), Int.box(9))
+    // Unnarrowed, the node emits both columns; narrowed to `d`, only the first - and the same
+    // rows either way, since the predicate is untouched.
+    assert(rowNodeRows(dLess10, Seq(BatchSpec("arrow", Seq(dates, ints))),
+      Seq(attrD, intAttr)) === Seq(Seq(1, 7), Seq(3, 9)))
+    assert(rowNodeRows(dLess10, Seq(BatchSpec("arrow", Seq(dates, ints))),
+      Seq(attrD, intAttr), Some(Seq(attrD))) === Seq(Seq(1), Seq(3)))
+    // The narrowing may also reorder and drop, which is what a projection is.
+    assert(rowNodeRows(dLess10, Seq(BatchSpec("arrow", Seq(dates, ints))),
+      Seq(attrD, intAttr), Some(Seq(intAttr, attrD))) === Seq(Seq(7, 1), Seq(9, 3)))
   }
 
   test("VarkaColumnarRule: a Varka projection stacks on a Varka filter in one pre pass") {
