@@ -927,6 +927,37 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("date_add(d, off) alone, guard option off (task 52 control), null-free") {
           _ => chunkedTwo(addAloneGuardOff, false)
         }
+        // Task 79's pair, on the same producer as task 52's above and with the same two
+        // streams: the guarded `year(date_add(d, off))` wrapped in a CASE whose condition is a
+        // comparison of the two columns, priced with the arm context on and off. What the
+        // delta contains is one mask AND per guarded node per lane group - the context - and
+        // nothing else: both arms, both loads and the blend are in each case. `off`'s values
+        // keep every sum in range, so no batch declines under either setting and this prices
+        // the qualification rather than the declines it prevents, which the differential
+        // counts instead.
+        val armOff = VarkaEmitOptions.DEFAULTS.withGuardUnderArm(false)
+        val guardedUnderArm = new IfElse(
+          new Compare(CompareOp.LT, col0, new ColumnRef(1)),
+          new Year(offsetAdd),
+          new Year(col0))
+        val armOn = emit(Seq(guardedUnderArm), 2, 0, loader, 960)
+        val armless = emit(Seq(guardedUnderArm), 2, 0, loader, 961, armOff)
+        benchmark.addCase(
+            "CASE over year(date_add(d, off)), arm context on (task 79 A/B), null-free") {
+          _ => chunkedTwo(armOn, false)
+        }
+        benchmark.addCase(
+            "CASE over year(date_add(d, off)), arm context off (task 79 A/B), null-free") {
+          _ => chunkedTwo(armless, false)
+        }
+        benchmark.addCase(
+            "CASE over year(date_add(d, off)), arm context on (task 79 A/B), mixed nulls") {
+          _ => chunkedTwo(armOn, true)
+        }
+        benchmark.addCase(
+            "CASE over year(date_add(d, off)), arm context off (task 79 A/B), mixed nulls") {
+          _ => chunkedTwo(armless, true)
+        }
         // Task 60's pair, the same guard block on a heavier producer: add_months' own month
         // count, widened from a literal to a column, with a runtime guard against
         // MONTH_ARITH_MIN/MAX_MONTHS in place of task 40's compile-time bound. nf2Data/mx2Data
@@ -950,7 +981,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // coupling this task's review removed - see PLAN_TASK_60.md 9.
         val addMonthsCol = new AddMonths(col0, new ColumnRef(1))
         val addMonthsLit = new AddMonths(col0, new LiteralSlot(0))
-        val addMonthsColGuarded = emit(Seq(addMonthsCol), 2, 0, loader, 854)
+        val addMonthsColGuarded = emit(Seq(addMonthsCol), 2, 0, loader, 950)
         val addMonthsLitControl = emit(Seq(addMonthsLit), 2, 1, loader, 855)
         val addMonthsColPerGroup = emit(Seq(addMonthsCol), 2, 0, loader, 943, perGroupWrite)
         val addMonthsLitPerGroup = emit(Seq(addMonthsLit), 2, 1, loader, 944, perGroupWrite)

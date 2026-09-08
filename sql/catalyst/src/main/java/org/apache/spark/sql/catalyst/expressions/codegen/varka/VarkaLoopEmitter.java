@@ -249,6 +249,14 @@ public final class VarkaLoopEmitter {
    */
   public static final int MAX_INPUTS = 64;
 
+  /**
+   * Task 79: one step of an arm chain - an {@code IfElse} and which of its two arms. The
+   * condition it names is what the guard is qualified by, taken as-is for the then arm and
+   * complemented for the else arm; see {@link #emitArmContext} for why the complement and not
+   * the known-false word.
+   */
+  record ArmStep(IfElse node, boolean thenBranch) { }
+
   // ---------------------------------------------------------------------------------------------
   // What a calendar node weighs: one shared civil-from-days prefix plus the node's own tail.
   // ---------------------------------------------------------------------------------------------
@@ -719,6 +727,7 @@ public final class VarkaLoopEmitter {
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
+    analysis.collectArmContexts(outputs);
     analysis.collectGuardedProducers();
     analysis.planWordAlgebra();
     analysis.planBitmapPass(outputs);
@@ -1257,6 +1266,7 @@ public final class VarkaLoopEmitter {
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
+    analysis.collectArmContexts(outputs);
     analysis.collectGuardedProducers();
     analysis.planWordAlgebra();
     analysis.planBitmapPass(outputs);
@@ -1500,6 +1510,19 @@ public final class VarkaLoopEmitter {
     final Set<VarkaVectorIR> checkedArith = new HashSet<>();
 
     /**
+     * Task 79: for each node, the chain of {@code IfElse} arms every one of its uses sits
+     * under, innermost last - or the empty list where its uses do not agree on one, which
+     * includes a use outside any arm and a use in a condition. A guard on a node with a
+     * non-empty chain condemns the batch only on the lanes that chain selects; a guard on a
+     * node with the empty chain condemns as it always has.
+     *
+     * <p>Empty rather than absent is the unqualified answer, and the two are different: absent
+     * means the walk has not reached the node. {@link #collectArmContexts} fills it once every
+     * root is analyzed, and only {@link #armChainOf} reads it.
+     */
+    final Map<VarkaVectorIR, List<ArmStep>> armChain = new HashMap<>();
+
+    /**
      * Task 70: per value node, which word its validity is - see {@link WordOwner}. Filled by
      * {@link #planWordAlgebra()} once every root is analyzed; {@code Cond} nodes have no entry.
      */
@@ -1564,6 +1587,72 @@ public final class VarkaLoopEmitter {
      * the guard would vanish while the compile-time bound stayed, which is a wrong answer
      * rather than a slower one.
      */
+    /**
+     * Task 79's context walk: assigns every node the arm chain its uses agree on, by the rule
+     * in {@code PLAN_TASK_79.md} 3.3 - narrow only where every use sits under one and the same
+     * innermost arm chain, and keep the unqualified guard for anything else.
+     *
+     * <p>It is its own walk rather than a stack in {@link #analyze}, because that one memoises
+     * on {@code useCount} and returns on a repeated node without descending: a node used twice
+     * would have its subtree's context recorded from the first use only. Here a node whose
+     * recorded chain disagrees with the chain it is reached by is demoted to the empty list and
+     * the demotion is pushed down its subtree, so a shared subtree under two different arms
+     * ends unqualified all the way down. That terminates because a node's state only ever moves
+     * unvisited -&gt; a chain -&gt; empty, so each is rewritten at most twice.
+     *
+     * <p>A condition's subtree is entered with the empty chain, never the enclosing one: an
+     * {@code IfElse} computes its condition on every lane it is itself computed on, so a guard
+     * inside a condition must stay unqualified. That is 3.2's rule and it falls out here rather
+     * than being checked at the guard.
+     */
+    void collectArmContexts(List<VarkaVectorIR> outputs) {
+      for (VarkaVectorIR root : outputs) {
+        assignArmChain(root, List.of());
+      }
+    }
+
+    private void assignArmChain(VarkaVectorIR node, List<ArmStep> chain) {
+      List<ArmStep> existing = armChain.get(node);
+      if (existing != null) {
+        if (existing.isEmpty() || existing.equals(chain)) {
+          return;
+        }
+        chain = List.of();
+      }
+      armChain.put(node, chain);
+      if (node instanceof IfElse n) {
+        assignArmChain(n.cond(), List.of());
+        assignArmChain(n.thenNode(), extend(chain, n, true));
+        assignArmChain(n.elseNode(), extend(chain, n, false));
+      } else {
+        for (VarkaVectorIR child : childrenOf(node)) {
+          assignArmChain(child, chain);
+        }
+      }
+    }
+
+    private static List<ArmStep> extend(List<ArmStep> chain, IfElse node, boolean thenBranch) {
+      if (chain.isEmpty()) {
+        return List.of(new ArmStep(node, thenBranch));
+      }
+      List<ArmStep> longer = new ArrayList<>(chain);
+      longer.add(new ArmStep(node, thenBranch));
+      return List.copyOf(longer);
+    }
+
+    /**
+     * The arm chain to qualify {@code node}'s guard by: empty where the guard stays
+     * unqualified. Behind {@link VarkaEmitOptions#guardUnderArm} so the change is measurable
+     * against its own absence, the way every other guard decision here is.
+     */
+    List<ArmStep> armChainOf(VarkaVectorIR node) {
+      if (!options.guardUnderArm()) {
+        return List.of();
+      }
+      List<ArmStep> chain = armChain.get(node);
+      return chain == null ? List.of() : chain;
+    }
+
     void collectGuardedProducers() {
       for (VarkaVectorIR node : topoOrder) {
         if (isChrono(node)) {
@@ -3713,7 +3802,7 @@ public final class VarkaLoopEmitter {
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
     cb.loadConstant(0);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-    emitOverflowMask(cb, n.mode(), n, dense, s);
+    emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     cb.aload(r);
   }
 
@@ -3734,7 +3823,7 @@ public final class VarkaLoopEmitter {
       cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
       cb.loadConstant(Integer.MIN_VALUE);
       cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
-      emitOverflowMask(cb, n.mode(), n, dense, s);
+      emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     }
     cb.loadConstant(-1);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
@@ -3756,9 +3845,9 @@ public final class VarkaLoopEmitter {
    * stay findable from each other, which is what this paragraph and its twin there are for.
    */
   private static void emitOverflowMask(CodeBuilder cb, Overflow mode, VarkaVectorIR node,
-      boolean dense, Slots s) {
+      boolean dense, Analysis analysis, Slots s) {
     if (mode == Overflow.FAIL) {
-      emitGuardCollect(cb, dense ? null : s.wordRef.get(node), dense, s);
+      emitGuardCollect(cb, node, dense ? null : s.wordRef.get(node), dense, analysis, s);
       return;
     }
     // NULL: word &= ~overflow. A dense body has no word to narrow, and `emit` builds none at
@@ -3826,7 +3915,7 @@ public final class VarkaLoopEmitter {
     Integer guardTmp = s.guardTmp.get(node);
     if (guardTmp != null) {
       // Task 52 guards this node's own result, so the word that qualifies it is this node's.
-      emitRangeGuard(cb, dense ? null : s.wordRef.get(node), guardTmp, dense, s,
+      emitRangeGuard(cb, node, dense ? null : s.wordRef.get(node), guardTmp, dense, analysis, s,
           VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS);
     }
   }
@@ -3867,8 +3956,8 @@ public final class VarkaLoopEmitter {
    * CSE, guard included; with CSE off it is re-emitted per use, which repeats the guard -
    * correct, merely redundant, and not a shape production emits.
    */
-  private static void emitRangeGuard(CodeBuilder cb, Integer word, int guardTmp,
-      boolean dense, Slots s, int lo, int hi) {
+  private static void emitRangeGuard(CodeBuilder cb, VarkaVectorIR node, Integer word,
+      int guardTmp, boolean dense, Analysis analysis, Slots s, int lo, int hi) {
     cb.dup();
     cb.astore(guardTmp);
     cb.aload(guardTmp);
@@ -3880,7 +3969,7 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(hi);
     cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    emitGuardCollect(cb, word, dense, s);
+    emitGuardCollect(cb, node, word, dense, analysis, s);
   }
 
   /**
@@ -3890,13 +3979,14 @@ public final class VarkaLoopEmitter {
    * epilogue's bounds mask when there is one, ORed into {@code guardAcc}. The tail of task
    * 52's producer guard, shared with task 42's self-guarding node.
    *
-   * <p>Not ANDed with an enclosing {@code IfElse}'s condition mask, which is a known cliff (the
-   * milestone debt register): a vector body computes both arms, so a guarded node under a
-   * {@code CASE} arm condemns the batch on a lane whose condition would have sent it down the
-   * other arm - a user's own {@code BETWEEN} test on the count cannot keep the shape fused.
-   * The batch falls back and the answers stay right; only the fusion is lost.
+   * <p>Since task 79 it is also ANDed with the enclosing {@code IfElse} arms' condition, where
+   * {@code node}'s uses all sit under the same chain of them ({@link #emitArmContext}). A vector
+   * body computes both arms and a guard condemns rather than producing a value the blend can
+   * discard, so without that a lane the condition sends to the other arm declines the batch it
+   * is in. The batch fell back and the answers stayed right; the fusion was what was lost.
    */
-  private static void emitGuardCollect(CodeBuilder cb, Integer word, boolean dense, Slots s) {
+  private static void emitGuardCollect(CodeBuilder cb, VarkaVectorIR node, Integer word,
+      boolean dense, Analysis analysis, Slots s) {
     // WORD_DEAD is deliberately not screened here beside the all-true constant. A guarded node
     // whose word the liveness pass killed is a bug in that pass, not a case to emit around:
     // the AND is what keeps a null lane from condemning the batch, so skipping it quietly
@@ -3913,6 +4003,7 @@ public final class VarkaLoopEmitter {
       cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
+    emitArmContext(cb, node, dense, analysis, s);
     if (s.epilogueMask != null) {
       cb.aload(s.epilogueMask);
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
@@ -3920,6 +4011,47 @@ public final class VarkaLoopEmitter {
     cb.aload(s.guardAcc);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     cb.astore(s.guardAcc);
+  }
+
+  /**
+   * Task 79: ANDs the condemning mask on the stack with the arms {@code node} sits under, where
+   * its uses agree on one chain of them. Nothing is emitted for the empty chain, which is what
+   * every shape had before this task and what {@link VarkaEmitOptions#guardUnderArm} off
+   * restores.
+   *
+   * <p>Polarity follows SQL's {@code CASE}, in which an <em>unknown</em> condition falls to
+   * {@code ELSE}: the then arm's mask is the condition's known-true set and the else arm's is
+   * its complement - known-false <em>plus unknown</em> - never the known-false word. Taking
+   * {@code kF} there would drop the unknown-condition lanes from the else arm's guard and stop
+   * it condemning a batch it must condemn.
+   *
+   * <p>The condition is read from the slot it already owns, per body: a word in the masked body
+   * ({@code kt}, complemented by XOR), a {@code VectorMask} in the dense one ({@code condMask},
+   * complemented by {@code not()}). Both are per-condition-node maps, so a nested arm reads its
+   * own and cannot clobber the enclosing one, and both are set by {@code emitCond} before either
+   * arm's values are emitted. Neither goes through {@link #loadWord}, so task 70's liveness
+   * bookkeeping is untouched.
+   */
+  private static void emitArmContext(CodeBuilder cb, VarkaVectorIR node, boolean dense,
+      Analysis analysis, Slots s) {
+    for (ArmStep step : analysis.armChainOf(node)) {
+      VarkaVectorIR cond = step.node().cond();
+      if (dense) {
+        cb.aload(s.condMask.get(cond));
+        if (!step.thenBranch()) {
+          cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+        }
+      } else {
+        cb.aload(s.species);
+        cb.lload(s.kt.get(cond));
+        if (!step.thenBranch()) {
+          cb.loadConstant(-1L);
+          cb.lxor();
+        }
+        cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+      }
+      cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+    }
   }
 
   /**
@@ -4034,7 +4166,7 @@ public final class VarkaLoopEmitter {
       cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
       cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     }
-    emitGuardCollect(cb, own, dense, s);
+    emitGuardCollect(cb, n, own, dense, analysis, s);
     // The value, over the clamped month; garbage where a mask said so.
     emitDaysFromCivil(cb, year, clamped, day, t[7], t[8], t[9], t[10], t[11], t[12], t[13],
         t[14], t[15], t[16], t[17]);
@@ -4706,7 +4838,8 @@ public final class VarkaLoopEmitter {
       // both children's, stored just above: a lane whose date is null is not out of range even
       // if its count is, and the row is null either way.
       line(cb, analysis, node);
-      emitRangeGuard(cb, dense ? null : s.wordRef.get(node), monthsGuardTmp, dense, s,
+      emitRangeGuard(cb, node, dense ? null : s.wordRef.get(node), monthsGuardTmp, dense,
+          analysis, s,
           VarkaChrono.MONTH_ARITH_MIN_MONTHS, VarkaChrono.MONTH_ARITH_MAX_MONTHS);
     }
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);

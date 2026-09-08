@@ -1936,6 +1936,185 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   // producer the compiler cannot bound - a date_add/date_sub whose offset is a column.
   private val guardOff = VarkaEmitOptions.DEFAULTS.withGuardDayProducers(false)
 
+  // Task 79's A/B arm: the arm context off, which is what every shape emitted before it.
+  private val armOff = VarkaEmitOptions.DEFAULTS.withGuardUnderArm(false)
+
+  test("task 79: a guarded producer under a CASE arm no longer condemns from the untaken arm") {
+    // `CASE WHEN c < 1 THEN year(date_add(d, off)) ELSE year(d) END`, on the day-producer guard
+    // task 52 built. Whether a lane is out of range and which arm it takes are set by two
+    // different columns - `off` and `c` - so a lane index chooses one without deciding the
+    // other. The first version of this test derived the arm from the lane's parity, which made
+    // the index carry both, and the two epilogue cases inherited the wrong arm; the expected
+    // status is also computed from `takesThen` now rather than written beside each index, so
+    // the fixture and the assertion cannot disagree about a fact the fixture determines.
+    val producer = new Year(new AddDays(new ColumnRef(0), new ColumnRef(1)))
+    val root = new IfElse(
+      new Compare(CompareOp.LT, new ColumnRef(2), new LiteralSlot(0)),
+      producer,
+      new Year(new ColumnRef(0)))
+    val (kernel, loader) = load(emitMulti(Seq(root), 3, 1))
+    val (kernelOff, loaderOff) = load(emitMulti(Seq(root), 3, 1, armOff))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        def day(i: Int): Int = 100
+        // Lane `at` is pushed one day past the range; every other lane stays a small shift.
+        def off(at: Int)(i: Int): Int =
+          if (i == at) VarkaChrono.NARROW_MAX_DAYS + 1 - day(i) else i % 5
+        // The arm column, and the one function both the data and the expectation read.
+        def takesThen(i: Int): Boolean = i % 3 == 0
+        def cond(i: Int): Int = if (takesThen(i)) 0 else 7
+        def status(k: VarkaFusedKernel, length: Int, at: Int): Int = {
+          val d = makeInputData(arena, length, _ => false, day, poisonNulls = false)
+          val o = makeInputData(arena, length, _ => false, off(at), poisonNulls = false)
+          val c = makeInputData(arena, length, _ => false, cond, poisonNulls = false)
+          val out = makeOutput(arena, length)
+          k.run(
+            Array(d.data.address(), o.data.address(), c.data.address()),
+            Array(d.validityAddress(length), o.validityAddress(length),
+              c.validityAddress(length)),
+            Array(d.nullCount, o.nullCount, c.nullCount),
+            Array(out._1.address()), Array(out._2.address()), Array(1), length)
+        }
+        /** What the guard must do for an out-of-range lane at `at`: fire iff that lane's own
+         *  condition takes the arm the producer is in. Derived, not restated. */
+        def expected(at: Int): Int =
+          if (at >= 0 && takesThen(at)) VarkaFusedKernel.STATUS_CHRONO_RANGE else 0
+        // A loop lane in each arm, and a lane only the epilogue covers in each arm - four
+        // cases whose arm and whose body are now chosen independently.
+        for ((length, at) <- Seq((64, 3), (64, 4), (17, 15), (17, 16))) {
+          assert(status(kernel, length, at) === expected(at),
+            s"length $length lane $at: takesThen=${takesThen(at)}")
+          // Off, the arm is ignored and every out-of-range lane condemns: the cliff, and the
+          // reference arm the A/B prices against.
+          assert(status(kernelOff, length, at) === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+            s"length $length lane $at: with the context off this must decline either way")
+        }
+        // Nothing out of range: 0 under both settings.
+        assert(status(kernel, 64, -1) === expected(-1))
+        assert(status(kernelOff, 64, -1) === 0)
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+      loaderOff.release()
+    }
+  }
+
+  test("task 79: an unknown condition sends its lane to ELSE, and the guard there still fires") {
+    // The polarity test. SQL's CASE routes an *unknown* condition to ELSE, so the else arm's
+    // context is NOT known-true - known-false plus unknown - and never the known-false word.
+    // Here the condition's own column is null on the out-of-range lane, so the condition is
+    // unknown there; the guarded producer is in the ELSE arm and must condemn the batch. Had
+    // the emitter used kF, that lane would fall outside the else context and the batch would
+    // wrongly survive.
+    val root = new IfElse(
+      new Compare(CompareOp.LT, new ColumnRef(2), new LiteralSlot(0)),
+      new Year(new ColumnRef(0)),
+      new Year(new AddDays(new ColumnRef(0), new ColumnRef(1))))
+    val (kernel, loader) = load(emitMulti(Seq(root), 3, 1))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        val at = 3
+        def day(i: Int): Int = 100
+        def off(i: Int): Int = if (i == at) VarkaChrono.NARROW_MAX_DAYS + 1 - day(i) else i % 5
+        val length = 64
+        val d = makeInputData(arena, length, _ => false, day, poisonNulls = false)
+        val o = makeInputData(arena, length, _ => false, off, poisonNulls = false)
+        // The condition column is null exactly on the out-of-range lane: unknown -> ELSE.
+        val c = makeInputData(arena, length, _ == at, _ => 0, poisonNulls = false)
+        val out = makeOutput(arena, length)
+        val status = kernel.run(
+          Array(d.data.address(), o.data.address(), c.data.address()),
+          Array(d.validityAddress(length), o.validityAddress(length), c.validityAddress(length)),
+          Array(d.nullCount, o.nullCount, c.nullCount),
+          Array(out._1.address()), Array(out._2.address()), Array(1), length)
+        assert(status === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+          "an unknown condition takes ELSE, so the guard in the ELSE arm must condemn")
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
+  test("task 79: a guard whose node's uses do not agree on one arm stays unqualified") {
+    // The three shapes 3.3 refuses to narrow, each asserted to keep declining on a lane the
+    // arm would have excused. These are the silent-wrong-answer cases: narrowing any of them
+    // would stop a batch declining that must decline.
+    val producer = new Year(new AddDays(new ColumnRef(0), new ColumnRef(1)))
+    val cond = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
+    val shapes = Seq(
+      // (a) used inside an arm and bare in a second output: CSE emits one node, and the bare
+      // use needs the guard on every lane.
+      "in an arm and bare" ->
+        Seq(new IfElse(cond, producer, new Year(new ColumnRef(0))), producer),
+      // (b) used under two different conditions: the second condition's word does not exist
+      // where the node is first emitted, which is why the rule refuses the disjunction.
+      "under two conditions" -> Seq(
+        new IfElse(cond, producer, new Year(new ColumnRef(0))),
+        new IfElse(new Compare(CompareOp.GT, new ColumnRef(0), new LiteralSlot(0)),
+          producer, new Year(new ColumnRef(0)))),
+      // (c) in condition position: computed on every lane the IfElse is, so unconditional.
+      "in a condition" -> Seq(new IfElse(
+        new Compare(CompareOp.LT, producer, new LiteralSlot(0)),
+        new Year(new ColumnRef(0)),
+        new Month(new ColumnRef(0)))))
+    for ((name, roots) <- shapes) {
+      val (kernel, loader) = load(emitMulti(roots, 2, 1))
+      try {
+        val arena = Arena.ofConfined()
+        try {
+          val at = 1
+          val cut = 5000
+          def day(i: Int): Int = if (i % 2 == 0) 100 else cut + 100
+          def off(i: Int): Int =
+            if (i == at) VarkaChrono.NARROW_MAX_DAYS + 1 - day(i) else i % 5
+          val length = 64
+          val d = makeInputData(arena, length, _ => false, day, poisonNulls = false)
+          val o = makeInputData(arena, length, _ => false, off, poisonNulls = false)
+          val outs = roots.indices.map(_ => makeOutput(arena, length))
+          val status = kernel.run(
+            Array(d.data.address(), o.data.address()),
+            Array(d.validityAddress(length), o.validityAddress(length)),
+            Array(d.nullCount, o.nullCount),
+            outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
+            Array(cut), length)
+          assert(status === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+            s"$name: the guard must stay unqualified, and lane $at must decline the batch")
+        } finally {
+          arena.close()
+        }
+      } finally {
+        loader.release()
+      }
+    }
+  }
+
+  test("task 79: a shape with no guarded node under an arm is byte-identical either way") {
+    // The assertion that the context reached only the guards: every shape without a
+    // batch-condemning node under an arm emits exactly what it did before task 79.
+    val shapes = Seq(
+      "plain year" -> (Seq(new Year(new ColumnRef(0))), 1, 0),
+      "guarded producer, no arm" ->
+        (Seq(new Year(new AddDays(new ColumnRef(0), new ColumnRef(1)))), 2, 0),
+      "CASE over unguarded arms" -> (Seq(new IfElse(
+        new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0)),
+        new Year(new ColumnRef(0)), new Month(new ColumnRef(0)))), 1, 1))
+    for ((name, (roots, inputs, literals)) <- shapes) {
+      val on = emitMulti(roots, inputs, literals)._2
+      val off = emitMulti(roots, inputs, literals, armOff)._2
+      for (body <- Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")) {
+        assert(VarkaEmitterTestSupport.codeSize(on, body) ===
+          VarkaEmitterTestSupport.codeSize(off, body), s"$name: $body moved")
+      }
+    }
+  }
+
+
   /** Runs a two-input kernel with one output, returning the batch status. */
   private def runKernel2(kernel: VarkaFusedKernel, a: Col, b: Col,
       out: (MemorySegment, MemorySegment), length: Int): Int =
