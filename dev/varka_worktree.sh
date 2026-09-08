@@ -45,7 +45,12 @@ removable=()
 while IFS= read -r line; do
   path="${line%% *}"
   [ -d "$path" ] || continue
-  branch="$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+  # `rev-parse --abbrev-ref HEAD` prints the literal "HEAD" for a detached worktree and
+  # exits 0, so the `|| echo detached` fallback never fired and the guard below never
+  # matched: gc then ran `git branch -D HEAD`, which fails, and under `set -e` that aborted
+  # the whole removal loop - leaving every worktree after the detached one in place.
+  # `symbolic-ref` fails cleanly when there is no branch, which is the question being asked.
+  branch="$(git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null || echo detached)"
   head="$(git -C "$path" rev-parse HEAD)"
   merged=no
   if git -C "$root" merge-base --is-ancestor "$head" "$base"; then merged=yes
@@ -62,12 +67,25 @@ done < <(git -C "$root" worktree list | awk '{ print $1 }')
 [ "$cmd" = gc ] || exit 0
 echo
 if [ "${#removable[@]}" -eq 0 ]; then echo "nothing to remove"; exit 0; fi
+failed=0
 for entry in "${removable[@]}"; do
   path="${entry%%:*}"; branch="${entry#*:}"
   if [ "$yes" -eq 1 ]; then
-    git -C "$root" worktree remove "$path" && git -C "$root" branch -D "$branch" -q
+    # One failure must not abort the rest: before this, a single unremovable entry took
+    # every later worktree down with it, and the failure looked like a clean stop.
+    if ! git -C "$root" worktree remove "$path"; then
+      echo "could not remove $path; left in place" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+    if ! git -C "$root" branch -D "$branch" -q; then
+      echo "removed $path but could not delete branch $branch" >&2
+      failed=$((failed + 1))
+      continue
+    fi
     echo "removed $path ($branch)"
   else
     echo "would remove $path ($branch); pass --yes"
   fi
 done
+[ "$failed" -eq 0 ] || { echo "$failed worktree(s) could not be removed" >&2; exit 1; }
