@@ -1045,7 +1045,11 @@ nothing else, 75 being an admission check before it is a task; 81 follows 74.
 83 to 86 are the engine refactors task 63 argued for (section 2.13), ordered by how
 far the decision each touches sits from an exhaustive match rather than by size: 84
 before 85, because the lattice is what makes a new lane safe and the lane parameter
-only makes one possible; 83 and 86 are independent of both and of each other.
+only makes one possible - **the owner confirmed that order on 8 September 2026**,
+against the alternative of taking 85 first to unblock tasks 28 and 29 sooner and
+following it with 84, which would have ported today's two bound functions into a
+third and let the next lane inherit the bugs task 63's review found. 83 and 86 are
+independent of both and of each other.
 
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
