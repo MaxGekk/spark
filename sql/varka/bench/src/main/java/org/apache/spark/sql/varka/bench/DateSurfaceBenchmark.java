@@ -250,7 +250,13 @@ public final class DateSurfaceBenchmark {
         "SELECT CASE WHEN id %% 31 = 0 THEN NULL"
             + " ELSE date_add(DATE'2020-01-01', CAST(id %% 1460 AS INT)) END AS d,"
             + " date_add(DATE'2021-01-01', CAST(id %% 1500 AS INT)) AS d2,"
-            + " CAST(id %% 3650 AS INT) AS i"
+            + " CAST(id %% 3650 AS INT) AS i,"
+            // Task 67: one year-month interval column per unit, over counts inside the
+            // emitter's MONTH_ARITH range so every row fuses and the rows measure the kernel
+            // rather than the guard's decline path.
+            + " CAST(CAST(id %% 240 AS INT) AS INTERVAL MONTH) AS ymm,"
+            + " CAST(CAST(id %% 20 AS INT) AS INTERVAL YEAR) AS ymy,"
+            + " make_ym_interval(CAST(id %% 20 AS INT), CAST(id %% 12 AS INT)) AS ym"
             + " FROM range(0, %d, 1, %d)", rows, partitions))
         .createOrReplaceTempView("varka_dates");
     spark.catalog().cacheTable("varka_dates");

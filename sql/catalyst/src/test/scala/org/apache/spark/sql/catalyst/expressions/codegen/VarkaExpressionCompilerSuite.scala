@@ -41,7 +41,24 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
   private val i = AttributeReference("i", IntegerType)()
   private val sh = AttributeReference("sh", ShortType)()
   private val by = AttributeReference("by", ByteType)()
+  // Task 67: one column per year-month unit. The stored value is a month count in all three,
+  // so they differ only in the Spark type the analyzer reasons with and the compiler carries
+  // out - which is exactly what the tests below check the compiler does not confuse.
+  private val ymm = AttributeReference("ymm",
+    YearMonthIntervalType(YearMonthIntervalType.MONTH, YearMonthIntervalType.MONTH))()
+  private val ymy = AttributeReference("ymy",
+    YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.YEAR))()
+  private val ym = AttributeReference("ym",
+    YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.MONTH))()
+
   private val childOutput: Seq[Attribute] = Seq(d, d2, i, sh, by)
+
+  /**
+   * `childOutput` plus the interval columns, as its own list rather than three more entries in
+   * it: several suites here append their own column to `childOutput` and assert the ordinal it
+   * lands on, so widening the shared list renumbers them.
+   */
+  private val withIntervals: Seq[Attribute] = childOutput ++ Seq(ymm, ymy, ym)
 
   private def out(e: org.apache.spark.sql.catalyst.expressions.Expression): NamedExpression =
     Alias(e, "c")()
@@ -421,19 +438,20 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(compiled.outputTypes === Seq(DateType, DateType))
   }
 
-  test("task 60 declines: a YEAR-end interval cast, the negated MONTH cast, a further-folded " +
-      "count, and a stored year-month interval column, each with its own reason") {
+  test("task 60 declines: a YEAR-end interval cast, the negated MONTH cast and a " +
+      "further-folded count, each with its own reason") {
     val monthInterval = YearMonthIntervalType(YearMonthIntervalType.MONTH,
       YearMonthIntervalType.MONTH)
     val yearInterval = YearMonthIntervalType(YearMonthIntervalType.YEAR,
       YearMonthIntervalType.YEAR)
     // CAST(i AS INTERVAL YEAR) is 12 * i (Cast.intToYearMonthInterval), so the column under it
-    // is not the month count and it is not admitted the way the MONTH cast is. The reason names
-    // the factor, not the throw the multiply can also raise: a future reader who bounds the
-    // column the way task 56 bounds its day cast would silence the throw and ship a wrong
-    // answer, so the string has to say what actually disqualifies it.
+    // is not the month count and it is not admitted the way the MONTH cast is. Task 63 supplies
+    // the multiply this once waited for, and task 67 re-pinned the reason on what still refuses
+    // it: the emitter's month-count position takes a literal or a column, so an IntArith there
+    // would be fusion the emitter declines to emit. Task 68 widens both together.
     assert(declineReason(DateAddYMInterval(d, Cast(i, yearInterval))) ===
-      "month count is a year-interval cast, whose value is 12 times the column")
+      "month count is a year-interval cast, whose 12x multiply the month-count position " +
+        "cannot hold: it takes a literal or a column")
     // date - INTERVAL m MONTH arrives as UnaryMinus over the cast; not matched until task 63's
     // negate composes with it.
     assert(declineReason(DateAddYMInterval(d, UnaryMinus(Cast(i, monthInterval)))) ===
@@ -442,11 +460,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // compileMonths matches; it is not foldable either, so it declines the same way.
     assert(declineReason(AddMonths(d, Add(i, Literal(1)))) ===
       "month count is neither a foldable literal nor an integer column")
-    // A stored YearMonthIntervalType column: the Arrow cache holds it as an IntervalYearVector,
-    // unreadable by isArrowBacked, so it declines by name rather than fusing and refusing.
-    val ym = AttributeReference("ym", monthInterval)()
-    assert(declineReason(DateAddYMInterval(d, ym), childOutput :+ ym) ===
-      "year-month interval column is not readable by the int32 lanes")
+    // The stored year-month interval column used to decline here, because isArrowBacked would
+    // not read an IntervalYearVector. Task 67 admits it end to end, so the case moved to that
+    // task's own test rather than being deleted: this comment is the pointer, since a reader
+    // chasing "why did add_months stop declining an interval" should land somewhere.
     // A Short/Byte count: AddMonths.inputTypes demands IntegerType exactly, so the analyzer
     // wraps the column in a widening cast and the bare-column arm never sees it. The reason
     // names the column's real type rather than reporting it as "neither literal nor column",
@@ -528,6 +545,66 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(out(e), out(DateAdd(d, Literal(1)))), output).get
     assert(partial.declines.contains(0), s"$e fused; expected it to decline")
     partial.declines(0).reason
+  }
+
+  test("task 67: a year-month interval column is a date-lane leaf, whatever its unit") {
+    // The stored value is a count of months in every unit, so `d + ym` is task 60's
+    // column-count AddMonths with no conversion - one arm, three units, the same IR. The unit
+    // survives only on the Spark type, which is what `outputTypes` carries.
+    for (col <- Seq(ymm, ymy, ym)) {
+      val compiled = VarkaExpressionCompiler.compile(
+        Seq(out(DateAddYMInterval(d, col))), withIntervals).get
+      assert(compiled.outputs === Seq(new IRAddMonths(new ColumnRef(0), new ColumnRef(1))),
+        s"unit ${col.dataType.simpleString} did not compile to a column-count add_months")
+      assert(compiled.outputTypes === Seq(DateType))
+    }
+    // The leaf and the literal, in the positions Spark's typing lets an interval reach: an
+    // ordered comparison, and a same-typed coalesce whose output is the interval itself.
+    val months = Literal(6, YearMonthIntervalType(YearMonthIntervalType.MONTH,
+      YearMonthIntervalType.MONTH))
+    // Through the predicate path, not as a projected value: a boolean projection output is
+    // scope item 5 and no interval makes it one.
+    val cmp = VarkaExpressionCompiler.compilePredicate(GreaterThan(ymm, months), withIntervals).get
+    assert(cmp.fusedConjuncts.size === 1)
+    val coalesced = VarkaExpressionCompiler.compile(
+      Seq(out(Coalesce(Seq(ymm, months)))), withIntervals).get
+    assert(coalesced.outputTypes === Seq(ymm.dataType),
+      "the fused output keeps the interval type, which is what allocateVector reads")
+  }
+
+  test("task 67: the MONTH-unit casts are relabels, and the YEAR-unit ones decline") {
+    // `intToYearMonthInterval` returns its operand unchanged for a MONTH end field and
+    // `yearMonthIntervalToInt` does the same for a MONTH-ended interval, so both directions
+    // are the identity on the lane and neither emits a node - the `unix_date` pattern.
+    val toInterval = VarkaExpressionCompiler.compile(
+      Seq(out(Cast(i, ymm.dataType))), withIntervals).get
+    assert(toInterval.outputs === Seq(new ColumnRef(0)))
+    assert(toInterval.outputTypes === Seq(ymm.dataType))
+    val toInt = VarkaExpressionCompiler.compile(
+      Seq(out(Cast(ymm, IntegerType))), withIntervals).get
+    assert(toInt.outputs === Seq(new ColumnRef(0)))
+    assert(toInt.outputTypes === Seq(IntegerType))
+
+    // The YEAR unit is neither direction's identity: 12x one way, /12 the other. The month
+    // count's reason names the position rather than the multiply, because task 63 supplies
+    // the multiply and the emitter's month-count check is what refuses it (PLAN_TASK_67.md
+    // 2.1); the reverse direction is a division, which nothing lowers.
+    assert(declineReason(DateAddYMInterval(d, Cast(i, ymy.dataType)), withIntervals) ===
+      "month count is a year-interval cast, whose 12x multiply the month-count position " +
+        "cannot hold: it takes a literal or a column")
+    assert(declineReason(Cast(ymy, IntegerType), withIntervals).nonEmpty)
+  }
+
+  test("task 67: `d - ym` declines, and its reason is the month-count position") {
+    // Spark rewrites `d - ym` to DateAddYMInterval(d, UnaryMinus(ym)), so the count is a
+    // negated column. Task 63 lowers that negation - but into an IntNeg, and the emitter's
+    // month-count check takes a literal slot or a column and nothing else, so admitting it
+    // here would be a compiler claiming fusion the emitter refuses. It goes to task 68 with
+    // the cast above, blocked on the same check. This test is what fails if someone widens
+    // the compiler without widening `requireOffsetShape` with it.
+    val reason = declineReason(DateAddYMInterval(d, UnaryMinus(ymm, false)), withIntervals)
+    assert(reason === "month count is neither a foldable literal nor an integer column",
+      s"unexpected reason: $reason")
   }
 
   test("task 52: a literal day shift fuses at the bound and declines one day past it") {
@@ -850,7 +927,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val withNull = out(If(In(d, Seq(Literal(1, DateType), Literal(null, DateType))), d, d2))
     val p2 = VarkaExpressionCompiler.compilePartial(
       Seq(withNull, out(DateAdd(d, Literal(1)))), childOutput).get
-    assert(p2.declines(0).reason === "IN list has a null or non-literal date element")
+    assert(p2.declines(0).reason === "IN list has a null or non-literal element")
   }
 
   test("task 20: coalesce lowers onto the validity condition; guarded operands are columns") {

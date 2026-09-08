@@ -210,6 +210,39 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   }
 
   /**
+   * Builds and caches `varka_dates_intervals` for task 67: a date `d` beside one year-month
+   * interval column per unit - `ymm` (MONTH), `ymy` (YEAR) and `ym` (YEAR TO MONTH) - built
+   * from an int month count so the rows are legible as counts. The counts straddle task 60's
+   * `MONTH_ARITH_MIN/MAX_MONTHS` guard: 24565 is one past the maximum and -300000 far below
+   * the minimum, so the batch declines and the row engine answers, while the rest are ordinary
+   * in-range counts. Nulls sit in `d` and in the interval columns on different rows, so a null
+   * on either side of `d + ym` is covered.
+   *
+   * Built through SQL rather than `createDataFrame` because a year-month interval column has
+   * no plain Scala literal: the units come from the casts and `make_ym_interval`, which is
+   * also the shape a user writes.
+   */
+  protected def cacheDatesIntervals(session: SparkSession): Unit = {
+    session.sql(
+      """SELECT d,
+        |       CAST(m AS INTERVAL MONTH) AS ymm,
+        |       CAST(y AS INTERVAL YEAR) AS ymy,
+        |       make_ym_interval(y, mm) AS ym,
+        |       m
+        |FROM VALUES
+        |  (DATE'2024-01-31',  3,     1,  2),
+        |  (DATE'2024-02-29', -14,   -2,  0),
+        |  (DATE'2020-05-05',  24565, 3,  1),
+        |  (DATE'1969-12-31', -300000, 0, 11),
+        |  (DATE'2024-01-01',  NULL,  1,  1),
+        |  (NULL,              7,     2,  3),
+        |  (DATE'9999-12-01',  1,     0,  1)
+        |AS t(d, m, y, mm)""".stripMargin)
+      .createOrReplaceTempView("varka_dates_intervals")
+    session.catalog.cacheTable("varka_dates_intervals")
+  }
+
+  /**
    * Builds and caches a `varka_dates_far_offset` temp view for task 52: dates `d` and `d2`, an
    * int offset `off` whose two extreme rows push `date_add(d, off)` twenty million days past
    * the range the calendar lowering is exact over - the value the removed task-26 differential

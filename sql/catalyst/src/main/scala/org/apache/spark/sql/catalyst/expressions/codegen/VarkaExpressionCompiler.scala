@@ -464,6 +464,22 @@ private[sql] object VarkaExpressionCompiler {
       sink: DeclineSink): Option[VarkaVectorIR] = expr match {
     case br: BoundReference if br.dataType == DateType =>
       Some(columnRef(br, inputs))
+    // Task 67: a year-month interval column, on the same lane. Its value is a count of months
+    // in every unit, so nothing about the lowering changes; what makes widening the leaf safe
+    // rather than a repeat of task 38's "do not open it wider" is that Spark's own typing
+    // decides where the value may appear. An interval only type-checks into DateAddYMInterval,
+    // the ordered comparisons and IN, the same-typed Least/Greatest/Coalesce/If/CaseWhen, and
+    // Cast - never into date_add's offset, datediff, a calendar extraction or AddMonths' date
+    // operand, all of which are typed DateType or IntegerType. So an interval in a date
+    // position is a type error the analyzer rejected before the compiler ran, and the leaf
+    // cannot put one there.
+    case br: BoundReference if br.dataType.isInstanceOf[YearMonthIntervalType] =>
+      Some(columnRef(br, inputs))
+    // The interval literal, beside the date literal and for the same reason: the value is
+    // already the int the lane holds, so `ym > INTERVAL '6' MONTH` and
+    // `coalesce(ym, INTERVAL '0' MONTH)` become a slot rather than a decline.
+    case Literal(months: Int, _: YearMonthIntervalType) =>
+      Some(new LiteralSlot(literals.getOrElseUpdate(months, literals.size)))
     // A date literal's value is already an epoch-day int, so it takes a slot in the shared
     // per-distinct-value table like a folded day offset does (task 11) - what makes
     // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. `days: Int` does not
@@ -491,6 +507,19 @@ private[sql] object VarkaExpressionCompiler {
     case UnixDate(child) =>
       compileNode(child, inputs, literals, sink)
     case DateFromUnixDate(child) =>
+      compileNode(child, inputs, literals, sink)
+    // Task 67's relabels, on `unix_date`'s pattern above: a cast that returns its operand
+    // unchanged is the child alone, with no node emitted. `intToYearMonthInterval` returns `v`
+    // for a MONTH end field and `yearMonthIntervalToInt` returns `v` for a MONTH-ended
+    // interval, so both directions of the MONTH unit are the identity on the lane; only the
+    // Spark type on the outside differs, and that rides on `outputTypes`. The YEAR unit is
+    // neither direction's identity - it multiplies or divides by twelve - and is not here.
+    case Cast(child, YearMonthIntervalType(_, YearMonthIntervalType.MONTH), _, _)
+        if child.dataType == IntegerType =>
+      compileIntOperand(child, "the month count", inputs, literals, sink)
+    case Cast(child, IntegerType, _, _)
+        if child.dataType == YearMonthIntervalType(YearMonthIntervalType.MONTH,
+          YearMonthIntervalType.MONTH) =>
       compileNode(child, inputs, literals, sink)
     case DateAdd(child, days) =>
       // The date child compiles before the offset, matching CaseWhen's rule a few cases below:
@@ -1103,21 +1132,31 @@ private[sql] object VarkaExpressionCompiler {
             Some(columnRef(br, inputs))
           case MonthIntervalOffset(br) =>
             Some(columnRef(br, inputs))
-          // `Cast.intToYearMonthInterval` returns `12 * v` for a YEAR end field, so the column
-          // under this cast is a count of years, not the month count the node needs - unlike
-          // the MONTH-end cast MonthIntervalOffset matches, which returns `v` unchanged. The
-          // reason names that factor rather than the throw the multiply can also raise: bounding
-          // the column the way task 56 bounds its day cast would silence the throw and leave
-          // the kernel computing add_months(d, m) where the row engine computes
-          // add_months(d, 12 * m). Admitting it needs the multiply in the lane, not a bound.
+          // `Cast.intToYearMonthInterval` returns `12 * v` for a YEAR end field, so the value
+          // under this cast is a count of years and the node needs months - unlike the MONTH-end
+          // cast MonthIntervalOffset matches, which returns `v` unchanged.
+          //
+          // Task 63 supplies the multiply this arm once said it was waiting for, and it still
+          // declines - for a reason one layer down, which task 67's section 2.1 records. The
+          // month-count position is checked by the emitter's `requireOffsetShape`, which admits
+          // a literal slot or a column and nothing else, so an `IntArith` here would be a
+          // compiler that claims fusion and an emitter that refuses it: a ghost fallback, the
+          // failure `sql/varka/AGENTS.md` names. A foldable year count never reaches this arm
+          // anyway - `foldDaysOffset` above already folds `CAST(5 AS INTERVAL YEAR)` to 60 - so
+          // what is left here is only the derived operand the position cannot hold. Widening it
+          // is task 68's, together with `-ym`, which is blocked on exactly the same check.
           case Cast(br: BoundReference, YearMonthIntervalType(YearMonthIntervalType.YEAR,
               YearMonthIntervalType.YEAR), _, _) if br.dataType == IntegerType =>
-            sink.note("month count is a year-interval cast, whose value is 12 times the column",
-              months)
+            sink.note("month count is a year-interval cast, whose 12x multiply the month-count " +
+              "position cannot hold: it takes a literal or a column", months)
             None
+          // Task 67: `d + ym_col`. The stored value is the month count in every unit, so this
+          // is task 60's column-count AddMonths exactly, with the same runtime guard on the
+          // count's lanes - the guard reads the value and not the column's Spark type. It
+          // declined until now only because the evaluator would not read the vector, and the
+          // evaluator would not read it because no arm asked.
           case br: BoundReference if br.dataType.isInstanceOf[YearMonthIntervalType] =>
-            sink.note("year-month interval column is not readable by the int32 lanes", br)
-            None
+            Some(columnRef(br, inputs))
           // AddMonths.inputTypes is Seq(DateType, IntegerType) exactly - unlike DateAdd, which
           // accepts a TypeCollection - so the analyzer widens a Short/Byte count with a cast and
           // a bare non-integer column never reaches here. The cast is what arrives, and it gets
@@ -1423,9 +1462,12 @@ private[sql] object VarkaExpressionCompiler {
     // IN over date literals (task 20): an EQ chain joined by OR, which the mask algebra
     // makes exactly SQL's IN inside a condition - a null value leaves every comparison
     // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
-    case in @ In(value, list) if value.dataType == DateType =>
+    case in @ In(value, list)
+        if value.dataType == DateType || value.dataType.isInstanceOf[YearMonthIntervalType] =>
       compileInList(value, list.map(literalDays), in, inputs, literals, sink)
-    case inSet: InSet if inSet.child.dataType == DateType =>
+    case inSet: InSet
+        if inSet.child.dataType == DateType
+          || inSet.child.dataType.isInstanceOf[YearMonthIntervalType] =>
       // InSet's set is unordered; compileInList sorts, which is what keeps the literal
       // slots and the shape hash deterministic across runs.
       compileInList(inSet.child,
@@ -1457,9 +1499,15 @@ private[sql] object VarkaExpressionCompiler {
       None
   }
 
-  /** The epoch-day value of a date literal, or `None` for anything else (null included). */
+  /**
+   * The int a date or year-month interval literal holds - epoch days for one, a month count
+   * for the other - or `None` for anything else (null included). Both are int32 lanes and an
+   * `IN` list is type-homogeneous, so one function serves both; the type gate is on the `In`
+   * arms, which is where the value's own type decides.
+   */
   private def literalDays(e: Expression): Option[Int] = e match {
     case Literal(days: Int, DateType) => Some(days)
+    case Literal(months: Int, _: YearMonthIntervalType) => Some(months)
     case _ => None
   }
 
@@ -1480,7 +1528,7 @@ private[sql] object VarkaExpressionCompiler {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[Cond] = {
     if (elements.isEmpty || elements.exists(_.isEmpty)) {
-      sink.note("IN list has a null or non-literal date element", whole)
+      sink.note("IN list has a null or non-literal element", whole)
       None
     } else {
       val days = elements.flatten.distinct.sorted

@@ -90,6 +90,14 @@ public final class Surface {
       Entry.projection("add_months(d, 3)"),
       Entry.projection("add_months(d, i)"),
       Entry.projection("d + INTERVAL 3 MONTH"),
+      // Task 67: the year-month interval column, one entry per unit, plus the two relabel
+      // casts. The `d + ym` rows are the same kernel as `add_months(d, i)` above with the
+      // count arriving as an interval, which is the point: the type costs nothing.
+      Entry.projection("d + ymm"),
+      Entry.projection("d + ymy"),
+      Entry.projection("d + ym"),
+      Entry.projection("CAST(i AS INTERVAL MONTH)"),
+      Entry.projection("CAST(ymm AS INT)"),
       Entry.projection("trunc(d, 'YEAR')"),
       Entry.projection("trunc(d, 'MONTH')"),
       Entry.projection("trunc(d, 'QUARTER')"),

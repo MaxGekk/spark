@@ -157,6 +157,24 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
   }
 
   /**
+   * Task 67's fixture: `cacheDatesMonthCounts`' generator exactly, plus the same count spelled
+   * as a `MONTH`-unit interval. Its own table rather than a column added to
+   * `varka_date_months`, so task 60's committed rows keep the fixture they were measured on -
+   * a cached table with one more column is not the same cached table, even for a query that
+   * never reads it.
+   */
+  private def cacheDatesIntervalCounts(session: SparkSession): Unit = {
+    session.sql(
+      """select date_add(date'2020-01-01', cast(id as int) % 1460) as d,
+        |       cast(pmod(id, 241) - 120 as int) as m,
+        |       cast(cast(pmod(id, 241) - 120 as int) as interval month) as ym
+        |from range(0, 2000000)""".stripMargin)
+      .createOrReplaceTempView("varka_date_interval_counts")
+    session.catalog.cacheTable("varka_date_interval_counts")
+    session.sql("select count(*) from varka_date_interval_counts").collect()
+  }
+
+  /**
    * `varka_dates_weekday` for task 59: dates `d` and `d2` beside a weekday name `s` cycling
    * through the 21 spellings in three case styles, every name valid, so the derived leaf's
    * parse is the whole of the pre-pass and nothing declines.
@@ -298,6 +316,8 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       cacheRandomDatePairs(varka)
       cacheDatesMonthCounts(baseline)
       cacheDatesMonthCounts(varka)
+      cacheDatesIntervalCounts(baseline)
+      cacheDatesIntervalCounts(varka)
       cacheDatesWeekday(baseline)
       cacheDatesWeekday(varka)
       cacheDatesTruncFormats(baseline)
@@ -323,6 +343,16 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
         "SELECT add_months(d, 13) AS a FROM varka_date_months")
       runQueries(baseline, varka, "add_months, column count (task 60)",
         "SELECT add_months(d, m) AS a FROM varka_date_months")
+      // Task 67's pair, and what it is for: the same count, once as an int column and once as
+      // a MONTH-unit interval, on one fixture holding both. The two compile to the identical
+      // node over the identical lanes - a year-month interval is a month count in an int32
+      // buffer - so the rows should agree, and the measurement is that admitting the type
+      // costs nothing rather than that it is fast. A gap between them is a finding about the
+      // Arrow read path, not about the lane.
+      runQueries(baseline, varka, "add_months, int count (task 67 control)",
+        "SELECT add_months(d, m) AS a FROM varka_date_interval_counts")
+      runQueries(baseline, varka, "d + interval column (task 67)",
+        "SELECT d + ym AS a FROM varka_date_interval_counts")
       // Task 42: a date built from three int columns, under the session's default (ANSI) mode.
       runQueries(baseline, varka, "make_date",
         "SELECT make_date(y, m, dd) AS a FROM varka_date_parts")

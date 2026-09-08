@@ -111,9 +111,18 @@ as an invitation it is not. The reason string and that comment are corrected in
 this task even though the outcome does not move, because the next reader of that
 arm will otherwise try the multiply and find out the hard way.
 
-A bounded operand would now fuse: `CAST(year(d) AS INTERVAL YEAR)` has
-`intBound` 40000, and 40000 * 12 is inside int32. That is a real widening this
-task can take for free, since it is the existing arm plus a bound query.
+*Corrected during implementation, the same day.* This paragraph first said a
+bounded operand would now fuse - `CAST(year(d) AS INTERVAL YEAR)`, bounded at
+40000, whose 12x stays inside int32 - and that the widening was free. It is not,
+and the reason is the one three paragraphs above: the multiply would be an
+`IntArith` in the month-count position, which `requireOffsetShape` refuses. The
+compiler would have claimed fusion and the emitter refused it, which is a ghost
+fallback and not a widening. The arm was written that way and reverted before it
+compiled. `d - ym_col` and this cast are blocked by the same check, they go to
+task 68 together, and the fact that this plan diagnosed the blocker two
+paragraphs earlier and still walked into it is the argument for milestone 5's
+task 86: one operand admission, stated once, so the compiler cannot widen a
+position the emitter has not.
 
 **`CAST(ym AS INT)` on a `YEAR`-ended interval is unchanged**, and correctly so:
 `yearMonthIntervalToInt` is `v / MONTHS_PER_YEAR`, and task 63 lowers no
@@ -263,8 +272,89 @@ interval entries join task 62's surface for its next run.
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+### 9.1 The pair, and what the instrument could not answer
+
+`VarkaThroughputBenchmark`, on one fixture holding the same count twice - as an
+int column and as a `MONTH`-unit interval - so the two rows differ in the
+operand's Spark type and nothing else.
+
+| row (varka side, M rows/s) | AVX-512 | 128-bit |
+|---|---|---|
+| `add_months(d, m)`, int count, the control | 184.9 | 119.6 |
+| `d + ym`, interval count | 191.9 | 120.6 |
+| `add_months(d, m)` on task 60's own fixture | 182.0 | 120.0 |
+
+The control lands within 1.6% of task 60's existing row at both widths, which
+is the check that the new fixture measures the same thing as the old one.
+
+**Prediction 1 is confirmed at 128 bits and unanswerable at AVX-512, and the
+second half of that is about the instrument.** It asked the two rows to agree
+within 3%, with a larger gap being a finding about the Arrow read path. At 128
+bits they agree to 0.8%, and to 1.5% in a first run. At AVX-512 the gap is 3.8%
+here and was 8.4% in the first run - not stable, in the direction of the
+interval being *faster*, which is not what a read-path cost looks like. The
+control row moved 0.6% between those runs and the interval row 3.7%, so the
+movement is in the measurement rather than in either shape.
+
+That is worth stating plainly rather than filed as a miss: this file's
+run-to-run spread on this machine reaches 19% on rows this task does not touch
+(`trunc, literal format` moved 19.2%, `dayofweek` 11.6%, `datediff` 10.3%,
+`case when, predictable` -6.3%), so a 3% question cannot be put to it here. The
+claim the task actually needs - that admitting the type costs the kernel
+nothing - is carried by the 128-bit rows and by the fact that both spellings
+compile to the identical IR, which `VarkaExpressionCompilerSuite` asserts
+directly and for all three units. A 3% claim at AVX-512 needs the pinned runner
+task 62 uses.
+
+**Prediction 2, "no committed number moves", is missed** - and by the same
+noise. Twenty-four rows moved by more than 3% between the two regenerations, in
+both directions, none of them touching an interval. The prediction was written
+expecting a code change that moves bytes; this task adds a fixture and two rows
+and changes no emitted byte, so what it actually predicted was stability the
+instrument does not have.
+
+**Prediction 3 is confirmed.** The differential's far counts - 24565, one past
+`MONTH_ARITH_MAX_MONTHS`, and -300000 - decline their batch through task 60's
+guard with `numFallbackBatchesDeclined > 0` and `numFallbackBatchesKernel == 0`,
+and the row engine answers every row correctly, exactly as it does for an int
+count. The guard reads the count's lanes and not the column's Spark type, which
+is what made this free.
+
+### 9.2 What moved that the plan did not list
+
+**`IN` needed widening, and it was not in section 4's file list.** The arm was
+gated on `value.dataType == DateType`, so `ymm IN (INTERVAL '3' MONTH, ...)`
+declined although section 3.1 promised it. `literalDays` now reads an interval
+literal as well as a date one - both are int32 lanes and an `IN` list is
+type-homogeneous, so one function serves both and the type gate stays on the
+arm. Its decline reason lost the word "date"; the one test pinning that string
+moved with it.
+
+**Three shapes that were declined are now the task's own tests**, rather than
+being deleted from where they were pinned. Task 60's decline test loses the
+stored-interval-column case and keeps a comment saying where it went, because a
+reader chasing "why did `add_months` stop declining an interval" should land
+somewhere.
+
+**A fixture lesson, for the third time in one day.** Adding the interval columns
+to `VarkaExpressionCompilerSuite`'s shared `childOutput` renumbered `dow` from
+ordinal 5 to 8 and broke four task-59 and task-61 tests that assert the ordinal
+their appended column lands on. The intervals got their own `withIntervals` list
+instead. The same trap produced `VarkaNarrowingBenchmark` as a separate file
+under task 78 and `varka_date_interval_counts` as a separate fixture here: a
+shared fixture is an interface, and widening it is a change to every test that
+reads it.
+
+### 9.3 What this leaves for later
+
+Both go to task 68, and both are blocked on the same thing rather than on
+arithmetic: `d - ym_col` and the `YEAR`-unit casts need an `IntArith`/`IntNeg`
+in `add_months`' month-count position, which the emitter's `requireOffsetShape`
+refuses. 2.1 records that the refusal's stated reason - a runtime bound a
+derived value cannot declare - is true of `next_day`'s weekday and not of the
+month count, which is guarded on its value by task 60 and would cover a derived
+count. Task 68 should split the two positions rather than believe the shared
+comment.
+
+The 3% question at AVX-512, for the pinned runner, if anyone still wants it
+answered.

@@ -22,16 +22,16 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
 import org.apache.arrow.memory.{BufferAllocator, OutOfMemoryException}
-import org.apache.arrow.vector.{DateDayVector, VarCharVector}
+import org.apache.arrow.vector.{DateDayVector, IntervalYearVector, VarCharVector}
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
+import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, DateAddYMInterval, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.test.SharedSparkSession
-import org.apache.spark.sql.types.{DateType, IntegerType, StringType}
+import org.apache.spark.sql.types.{DateType, IntegerType, StringType, YearMonthIntervalType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
 import org.apache.spark.unsafe.types.UTF8String
@@ -218,6 +218,50 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
         assert(VarkaDebugInfoReader.ir(Files.readAllBytes(dumped.toPath)).contains("(addDays "))
         completeTask()
       }
+    }
+  }
+
+  test("task 67: an interval column serves the kernel, and an interval output is allocated") {
+    // Both sides of the admission in one run: `IntervalYearVector` accepted as an input by
+    // `isArrowBacked`, and `YearMonthIntervalType` allocated as an output by
+    // `allocateVector`. Nothing between them changes - the value is a month count in an int32
+    // buffer either way - so what this test really pins is that the two allowlists agree.
+    val ymAttr = AttributeReference("ym",
+      YearMonthIntervalType(YearMonthIntervalType.MONTH, YearMonthIntervalType.MONTH))()
+    val output = Seq(attrD, ymAttr)
+    val months: Seq[java.lang.Integer] = Seq(1, 12, null, -3)
+    val initial = ArrowUtils.rootAllocator.getAllocatedMemory
+    val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-test-ym", 0, Long.MaxValue)
+    val context = TaskContext.empty()
+    TaskContext.setTaskContext(context)
+    try {
+      val input = VarkaColumnarToRowExecSuite.buildBatch(
+        BatchSpec("arrow", Seq(dates, months)), output, allocator)
+      // A date output over the interval count, and the interval itself forwarded through a
+      // combinator so the output vector is interval-typed rather than merely forwarded.
+      val projectList: Seq[NamedExpression] = Seq(
+        Alias(DateAddYMInterval(attrD, ymAttr), "a")(),
+        Alias(Coalesce(Seq(ymAttr, Literal(0, ymAttr.dataType))), "b")())
+      val kernels = new VarkaKernelEvaluator(projectList, output,
+        offHeapColumnVectorEnabled = false, operatorName = "Test", None)
+      assert(kernels.canRun(input), "an IntervalYearVector input should be servable")
+      val out = kernels.project(input)
+      assert(out.numCols() === 2)
+      assert(out.numRows() === dates.length)
+      // The second output really is an interval vector, which is `allocateVector`'s arm.
+      val second = out.column(1).asInstanceOf[ArrowColumnVector].getValueVector()
+      assert(second.isInstanceOf[IntervalYearVector],
+        s"expected an IntervalYearVector output, got ${second.getClass.getSimpleName}")
+      // coalesce over a null interval gives the literal; the null date row stays null.
+      assert(out.column(1).getInt(2) === 0)
+      assert(out.column(0).isNullAt(1))
+      context.markTaskCompleted(None)
+      input.close()
+      assert(ArrowUtils.rootAllocator.getAllocatedMemory === initial,
+        "the interval output leaked Arrow memory")
+    } finally {
+      TaskContext.unset()
+      allocator.close()
     }
   }
 

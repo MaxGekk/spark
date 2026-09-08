@@ -217,6 +217,64 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 67: a year-month interval column fuses in every unit, and its far counts decline") {
+    // The type's admission, end to end. The stored value is a month count whatever the unit,
+    // so `d + ym` is task 60's column-count add_months with the same runtime guard - which is
+    // why two of the fixture's rows sit outside MONTH_ARITH_MIN/MAX_MONTHS: the batch has to
+    // decline and the row engine has to answer, exactly as it does for an int count.
+    cacheDatesIntervals(spark)
+    cacheDatesIntervals(varkaSpark)
+    try {
+      for (col <- Seq("ymm", "ymy", "ym")) {
+        val q = s"SELECT d + $col AS a FROM varka_dates_intervals"
+        val actual = varkaSpark.sql(q)
+        assertFused(actual.queryExecution.executedPlan)
+        checkAnswer(actual, spark.sql(q))
+      }
+      // The guard fires on the count's lanes, so the far rows decline the batch rather than
+      // answering wrongly - counted, and never a kernel failure.
+      val far = varkaSpark.sql("SELECT d + ymm AS a FROM varka_dates_intervals")
+      far.queryExecution.toRdd.count()
+      val node = far.queryExecution.executedPlan.collectFirst {
+        case v: VarkaColumnarToRowExec => v
+      }
+      assert(node.isDefined, "expected a fused Varka projection")
+      assert(node.get.metrics("numFallbackBatchesDeclined").value > 0L,
+        "the out-of-range counts should decline their batch")
+      assert(node.get.metrics("numFallbackBatchesKernel").value === 0L)
+
+      // The rest of the surface the type reaches, by Spark's own typing: a comparison and IN
+      // in the filter, the same-typed combinators in the projection, and both MONTH relabels.
+      for (q <- Seq(
+          "SELECT d FROM varka_dates_intervals WHERE ymm > INTERVAL '6' MONTH",
+          "SELECT d FROM varka_dates_intervals WHERE ymm IN (INTERVAL '3' MONTH, " +
+            "INTERVAL '7' MONTH)",
+          "SELECT greatest(ymm, INTERVAL '0' MONTH) AS a FROM varka_dates_intervals",
+          "SELECT coalesce(ymm, INTERVAL '0' MONTH) AS a FROM varka_dates_intervals",
+          "SELECT CASE WHEN d < DATE'2024-01-01' THEN ymm ELSE INTERVAL '1' MONTH END AS a " +
+            "FROM varka_dates_intervals",
+          "SELECT CAST(m AS INTERVAL MONTH) AS a FROM varka_dates_intervals",
+          "SELECT CAST(ymm AS INT) AS a FROM varka_dates_intervals")) {
+        val actual = varkaSpark.sql(q)
+        assertFused(actual.queryExecution.executedPlan)
+        checkAnswer(actual, spark.sql(q))
+      }
+
+      // And the two shapes task 67 leaves declined, asserted as residual rather than left to
+      // be discovered: both are blocked on the emitter's month-count position, not on the
+      // arithmetic, and both belong to task 68 (PLAN_TASK_67.md 2.1).
+      for (q <- Seq(
+          "SELECT d - ymm AS a FROM varka_dates_intervals",
+          "SELECT d + CAST(m AS INTERVAL YEAR) AS a FROM varka_dates_intervals")) {
+        val actual = varkaSpark.sql(q)
+        assertNotFused(actual.queryExecution.executedPlan)
+        checkAnswer(actual, spark.sql(q))
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_intervals"))
+    }
+  }
+
   test("task 52: a literal day shift past the calendar range is residual, with its reason, " +
       "and an in-range one fuses") {
     // The compile-time half of the range guard: `year(date_add(d, 20000000))` is the query
