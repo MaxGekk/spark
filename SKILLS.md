@@ -2150,19 +2150,19 @@ and `-`, one compare for unary minus. `VarkaArithmeticBenchmark` prices it as
 an A/B on one node - `checkIntOverflow` on against off, the same IR either way
 - and the two vector widths disagree about what it costs.
 
-At AVX-512 the checked add runs at 19011.8 M rows/s against 19388.5 unchecked,
-which is under 2%. At 128 bits the same pair is 13790.1 against 19228.2, about
-28%. Unary minus, which is one compare rather than five ops, still costs 39% at
-128 bits (11524.3 against 18860.8) and nothing measurable at AVX-512.
+At AVX-512 the checked add runs at 19180.2 M rows/s against 19449.2 unchecked,
+which is under 2%. At 128 bits the same pair is 13780.6 against 18776.2, about
+27%. Unary minus, which is one compare rather than five ops, still costs 32% at
+128 bits (12759.0 against 18768.8) and about 1% at AVX-512.
 
 The masked body at 128 bits is where it stops being a surcharge. A checked add
-over a column with nulls runs at 6607.1 M rows/s against 18177.5 with the check
+over a column with nulls runs at 6522.9 M rows/s against 19073.8 with the check
 off - the arithmetic and its check are unchanged, so what the masked arm adds is
 the disposal: `emitGuardCollect` turns the overflow mask into a `long`, ANDs it
 with the node's validity word and ORs it into the batch accumulator, and those
 mask-to-long conversions do not vectorize the way the lane ops do. `try_add`,
 which disposes of the same mask by narrowing the word instead, is slower again
-(3761.7 at 128 bits).
+(3780.6 at 128 bits).
 
 Two things follow. First, the width matters more than the op count when you
 predict what a mask-producing addition to a kernel will cost, so predict for
@@ -2173,7 +2173,7 @@ itself - is what you built.
 
 ## A local nothing reads is not free, and its cost is width-dependent
 
-The measurement above says 3.5% for the AVX-512 masked check. The first run of
+The measurement above says 3.9% for the AVX-512 masked check. The first run of
 the same benchmark said 19.0%, and this file said so, and the difference is one
 local variable that no instruction ever loaded.
 
@@ -2184,8 +2184,8 @@ The arithmetic emitter does not: it parks its operands and result in
 node reserved a slot, shifted every local after it, and used none of it. A
 review found it by reading, not by measuring, and called it dead code.
 
-Removing it moved the AVX-512 masked row 24.9% - from 14706.5 to 18368.2 M
-rows/s - and the 128-bit row not at all (6459.9 to 6607.1, inside the run-to-run
+Removing it moved the AVX-512 masked row 26.1% - from 14706.5 to 18542.2 M
+rows/s - and the 128-bit row not at all (6459.9 to 6522.9, inside the run-to-run
 band). A dead local costing fifteen points of throughput at one width and
 nothing at the other is a register-pressure signature: the wide body holds more
 live vector values, so it is the one with no headroom, and one more local is

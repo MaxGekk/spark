@@ -817,19 +817,19 @@ first. Independent of everything else in this milestone.
 *Added 8 September 2026, from task 63's measurement.*
 
 **The observation.** Task 63's ANSI overflow check is five lanewise
-operations, and in a dense body it costs what five operations cost: 1.9% on
-`i + 1` at AVX-512 and 28.3% at 128-bit (`VarkaArithmeticBenchmark`, requoted
-from `cbb76f6a801`). In a masked body at 128 bits the same node costs 63.7% -
-6607.1 M rows/s against 18177.5 with the check off - on arithmetic that did not
-change. At AVX-512 the masked cost is 3.5%: the first run read 19.0% there, and
+operations, and in a dense body it costs what five operations cost: 1.4% on
+`i + 1` at AVX-512 and 26.6% at 128-bit (`VarkaArithmeticBenchmark`, requoted
+from `80d06a51560`). In a masked body at 128 bits the same node costs 65.8% -
+6522.9 M rows/s against 19073.8 with the check off - on arithmetic that did not
+change. At AVX-512 the masked cost is 3.9%: the first run read 19.0% there, and
 that turned out to be a dead local slot rather than the disposal, so this task
 is a 128-bit finding and the wide width is not evidence for it. The
 difference is not the sign test. It is what happens to the mask afterwards:
 `emitGuardCollect` converts it to a `long` through `VectorMask.toLong`, ANDs
 it with the node's validity word, and ORs the result into the batch
 accumulator, once per lane group. `try_add`, which disposes of the same mask
-by narrowing the word rather than accumulating it, is slower again - 3761.7
-against the wrapping add's 18233.9 at 128-bit.
+by narrowing the word rather than accumulating it, is slower again - 3780.6
+against the wrapping add's 18946.9 at 128-bit.
 
 **Why it is worth its own task.** `emitGuardCollect` is not task 63's code.
 Task 52's range guard on a column-offset day producer uses the same helper and

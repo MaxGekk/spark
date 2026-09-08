@@ -1,86 +1,86 @@
 Narrow-width companion of VarkaArithmeticBenchmark-jdk25-results.txt: the same benchmark under
 -XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
   benchmark:   org.apache.spark.sql.VarkaArithmeticBenchmark
-  commit:      cbb76f6a801
-  date:        2026-09-08T11:16:56Z
+  commit:      80d06a51560 (working tree dirty)
+  date:        2026-09-08T13:17:25Z
   jdk:         OpenJDK Runtime Environment (build 25.0.4+7-1-26.04-Ubuntu)
   kernel:      7.0.0-31-generic
   cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
   power:       governor=performance epp=performance profile=performance
-  load at start: 0.73
-  canary:      ok (compute +0.2% cache +2.7% memory -0.8% )
+  load at start: 0.54
+  canary:      ok (compute +0.2% cache +4.0% memory -0.4% )
   wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaArithmeticBenchmark
   narrow run:  build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaArithmeticBenchmark"
 
 Running benchmark: one output over 1000000 rows
   Running case: i + 1, ANSI, checked
-  Stopped after 24315 iterations, 2000 ms
+  Stopped after 25687 iterations, 2000 ms
   Running case: i + 1, ANSI, check off
-  Stopped after 30600 iterations, 2000 ms
+  Stopped after 31661 iterations, 2000 ms
   Running case: i + 1, LEGACY wrapping
-  Stopped after 28875 iterations, 2000 ms
+  Stopped after 32162 iterations, 2000 ms
   Running case: i + 1, ANSI, checked, mixed nulls
-  Stopped after 12409 iterations, 2000 ms
+  Stopped after 12834 iterations, 2000 ms
   Running case: i + 1, ANSI, check off, mixed nulls
-  Stopped after 30027 iterations, 2000 ms
+  Stopped after 33145 iterations, 2000 ms
   Running case: i - 1, ANSI, checked
-  Stopped after 26311 iterations, 2000 ms
+  Stopped after 24990 iterations, 2000 ms
   Running case: i - 1, ANSI, check off
-  Stopped after 30862 iterations, 2000 ms
+  Stopped after 31041 iterations, 2000 ms
   Running case: -i, ANSI, checked
-  Stopped after 22589 iterations, 2000 ms
+  Stopped after 22605 iterations, 2000 ms
   Running case: -i, ANSI, check off
-  Stopped after 30526 iterations, 2000 ms
+  Stopped after 31797 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one output over 1000000 rows:             Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-i + 1, ANSI, checked                                  0              0           0      13790.1           0.1       1.0X
-i + 1, ANSI, check off                                0              0           0      19228.2           0.1       1.4X
-i + 1, LEGACY wrapping                                0              0           0      19295.0           0.1       1.4X
-i + 1, ANSI, checked, mixed nulls                     0              0           0       6607.1           0.2       0.5X
-i + 1, ANSI, check off, mixed nulls                   0              0           0      18177.5           0.1       1.3X
-i - 1, ANSI, checked                                  0              0           0      13423.0           0.1       1.0X
-i - 1, ANSI, check off                                0              0           0      18705.6           0.1       1.4X
--i, ANSI, checked                                     0              0           0      11524.3           0.1       0.8X
--i, ANSI, check off                                   0              0           0      18860.8           0.1       1.4X
+i + 1, ANSI, checked                                  0              0           0      13780.6           0.1       1.0X
+i + 1, ANSI, check off                                0              0           0      18776.2           0.1       1.4X
+i + 1, LEGACY wrapping                                0              0           0      19217.1           0.1       1.4X
+i + 1, ANSI, checked, mixed nulls                     0              0           0       6522.9           0.2       0.5X
+i + 1, ANSI, check off, mixed nulls                   0              0           0      19073.8           0.1       1.4X
+i - 1, ANSI, checked                                  0              0           0      13412.0           0.1       1.0X
+i - 1, ANSI, check off                                0              0           0      18635.9           0.1       1.4X
+-i, ANSI, checked                                     0              0           0      12759.0           0.1       0.9X
+-i, ANSI, check off                                   0              0           0      18768.8           0.1       1.4X
 Running benchmark: one output over 1000000 rows
   Running case: i + 1, ANSI, checked (mask condemns the batch)
-  Stopped after 12229 iterations, 2000 ms
+  Stopped after 12598 iterations, 2000 ms
   Running case: try_add(i, 1) (mask clears the lane's validity)
-  Stopped after 7434 iterations, 2000 ms
+  Stopped after 7486 iterations, 2000 ms
   Running case: i + 1, LEGACY wrapping (no mask)
-  Stopped after 29974 iterations, 2000 ms
+  Stopped after 32802 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one output over 1000000 rows:                    Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------
-i + 1, ANSI, checked (mask condemns the batch)               0              0           0       6310.5           0.2       1.0X
-try_add(i, 1) (mask clears the lane's validity)              0              0           0       3761.7           0.3       0.6X
-i + 1, LEGACY wrapping (no mask)                             0              0           0      18233.9           0.1       2.9X
+i + 1, ANSI, checked (mask condemns the batch)               0              0           0       6434.6           0.2       1.0X
+try_add(i, 1) (mask clears the lane's validity)              0              0           0       3780.6           0.3       0.6X
+i + 1, LEGACY wrapping (no mask)                             0              0           0      18946.9           0.1       2.9X
 Running benchmark: one output over 1000000 rows
   Running case: year(d) * 100 + month(d), bound proved, no check
-  Stopped after 1993 iterations, 2000 ms
+  Stopped after 1989 iterations, 2000 ms
   Running case: year(d) * 100 + month(d), add checked
-  Stopped after 1801 iterations, 2000 ms
+  Stopped after 1794 iterations, 2000 ms
   Running case: year(d) * 100 + month(d), no check, mixed nulls
   Stopped after 1995 iterations, 2000 ms
   Running case: year(d) alone
-  Stopped after 2676 iterations, 2000 ms
+  Stopped after 2666 iterations, 2000 ms
   Running case: year(d), month(d), no arithmetic
-  Stopped after 2105 iterations, 2000 ms
+  Stopped after 2096 iterations, 2000 ms
   Running case: datediff(d, d2) + 1, bound proved, no check
-  Stopped after 16779 iterations, 2000 ms
+  Stopped after 19826 iterations, 2000 ms
   Running case: datediff(d, d2) + 1, checked
-  Stopped after 16357 iterations, 2000 ms
+  Stopped after 16175 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one output over 1000000 rows:                     Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 --------------------------------------------------------------------------------------------------------------------------------
-year(d) * 100 + month(d), bound proved, no check              1              1           0        999.2           1.0       1.0X
-year(d) * 100 + month(d), add checked                         1              1           0        907.4           1.1       0.9X
-year(d) * 100 + month(d), no check, mixed nulls               1              1           0        999.9           1.0       1.0X
-year(d) alone                                                 1              1           0       1351.6           0.7       1.4X
-year(d), month(d), no arithmetic                              1              1           0       1060.2           0.9       1.1X
-datediff(d, d2) + 1, bound proved, no check                   0              0           0      10902.5           0.1      10.9X
-datediff(d, d2) + 1, checked                                  0              0           0       8600.8           0.1       8.6X
+year(d) * 100 + month(d), bound proved, no check              1              1           0        996.7           1.0       1.0X
+year(d) * 100 + month(d), add checked                         1              1           0        904.7           1.1       0.9X
+year(d) * 100 + month(d), no check, mixed nulls               1              1           0        999.3           1.0       1.0X
+year(d) alone                                                 1              1           0       1345.4           0.7       1.3X
+year(d), month(d), no arithmetic                              1              1           0       1058.8           0.9       1.1X
+datediff(d, d2) + 1, bound proved, no check                   0              0           0      10974.4           0.1      11.0X
+datediff(d, d2) + 1, checked                                  0              0           0       9209.5           0.1       9.2X

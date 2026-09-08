@@ -426,26 +426,32 @@ off, so the difference is the check and nothing else. The emitter suite pins
 that: with the flag off a `FAIL` node is byte-identical to the `WRAP` node,
 method for method.
 
-*Requoted on 8 September 2026 from the regeneration at `cbb76f6a801`, which the
-review forced: dropping the dead scratch local (9.7) changed the emitted
-bytecode of every checked row. The move is not cosmetic and it corrects one of
-this section's claims - see below. The superseded figures are in this file's
+*Requoted on 8 September 2026 from the regeneration at `80d06a51560`. Two
+reviews forced two regenerations: the second review, because dropping the dead
+scratch local (9.7) changed the emitted bytecode of every checked row, and the
+third, because the benchmark's second column was filled by a second call to the
+same helper with the same arguments and so was a bit-for-bit copy of the first,
+which made every `datediff` case here a disguised `datediff(x, x)` (9.7). The
+first of those moves corrects one of this section's claims - see below - and the
+second moves only the two-input rows, which is the evidence that it was a
+fixture bug and not a measurement one. The superseded figures are in this file's
 history and in the results files'.*
 
 | shape | AVX-512 | 128-bit |
 |---|---|---|
-| `i + 1`, checked -> off | 19011.8 -> 19388.5 (1.9%) | 13790.1 -> 19228.2 (28.3%) |
-| `i + 1`, mixed nulls | 18368.2 -> 19026.6 (3.5%) | 6607.1 -> 18177.5 (63.7%) |
-| `i - 1`, checked -> off | 18900.4 -> 19254.1 (1.8%) | 13423.0 -> 18705.6 (28.2%) |
-| `-i`, checked -> off | 19358.8 -> 19370.1 (0.1%) | 11524.3 -> 18860.8 (38.9%) |
-| `try_add(i, 1)` against `LEGACY`, mixed | 16828.8 against 18779.3 | 3761.7 against 18233.9 |
+| `i + 1`, checked -> off | 19180.2 -> 19449.2 (1.4%) | 13780.6 -> 18776.2 (26.6%) |
+| `i + 1`, mixed nulls | 18542.2 -> 19295.0 (3.9%) | 6522.9 -> 19073.8 (65.8%) |
+| `i - 1`, checked -> off | 19033.8 -> 19415.2 (2.0%) | 13412.0 -> 18635.9 (28.0%) |
+| `-i`, checked -> off | 19176.2 -> 19419.0 (1.3%) | 12759.0 -> 18768.8 (32.0%) |
+| `try_add(i, 1)` against `LEGACY`, mixed | 16866.3 against 19381.3 | 3780.6 against 18946.9 |
 
 **The width decides, and in the narrow lanes the mask decides more.** At
 AVX-512 the check is a rounding error on a memory-bound loop, masked or not -
-1.9% and 3.5%, and unary minus is free outright. At 128 bits the same five ops
-are a much larger share of a four-lane group's work and cost a quarter to a
-third; and there the masked body is a different story again, 63.7% for an
-addition whose arithmetic did not change. What the masked arm adds is the
+1.4% and 3.9%, and unary minus, which reads its operand rather than its result
+and so tests one value instead of three, is the cheapest at 1.3%. At 128 bits
+the same five ops are a much larger share of a four-lane group's work and cost a
+quarter to a third; and there the masked body is a different story again, 65.8%
+for an addition whose arithmetic did not change. What the masked arm adds is the
 disposal - `emitGuardCollect` converts the overflow mask to a `long`, ANDs it
 with the node's validity word and ORs it into the batch accumulator - and those
 conversions do not vectorize the way the lane ops do. `try_add`, which disposes
@@ -454,8 +460,8 @@ of the same mask by narrowing the word instead, is slower again.
 **One claim here was wrong, and the requote is what found it.** The first run
 put the AVX-512 masked cost at 19.0% and this section attributed it to the same
 disposal. It was mostly a *dead local slot*: the scratch temporary every checked
-node reserved and no instruction read (9.7). Removing it moved that row 24.9%
-and left the disposal 3.5% - so at AVX-512 the disposal is nearly free and only
+node reserved and no instruction read (9.7). Removing it moved that row 26.1%
+and left the disposal 3.9% - so at AVX-512 the disposal is nearly free and only
 the 128-bit figure ever supported the claim. An unused local costing fifteen
 points of throughput at one width and nothing at the other is itself worth
 knowing, and `SKILLS.md` records it; the wide body carries more live vector
@@ -463,15 +469,23 @@ values, so it is the one with no register headroom to spare.
 
 ### 9.2 The composite key, where the bound removes the check
 
-| shape (null-free unless said; requoted from `cbb76f6a801`) | AVX-512 | 128-bit |
+| shape (null-free unless said; requoted from `80d06a51560`) | AVX-512 | 128-bit |
 |---|---|---|
-| `year(d) * 100 + month(d)`, as shipped | 2691.4 | 999.2 |
-| the same with its outer add checked | 2447.0 (9.1% slower) | 907.4 (9.2% slower) |
-| the same, mixed nulls | 2688.4 | 999.9 |
-| `year(d)` alone (control) | 3560.5 | 1351.6 |
-| `year(d)`, `month(d)`, no arithmetic (control) | 2839.4 | 1060.2 |
-| `datediff(d, d2) + 1`, as shipped | 12092.6 | 10902.5 |
-| the same, checked | 11408.5 (5.7% slower) | 8600.8 (21.1% slower) |
+| `year(d) * 100 + month(d)`, as shipped | 2674.9 | 996.7 |
+| the same with its outer add checked | 2433.8 (9.0% slower) | 904.7 (9.2% slower) |
+| the same, mixed nulls | 2676.2 | 999.3 |
+| `year(d)` alone (control) | 3517.0 | 1345.4 |
+| `year(d)`, `month(d)`, no arithmetic (control) | 2825.0 | 1058.8 |
+| `datediff(d, d2) + 1`, as shipped | 12301.3 | 10974.4 |
+| the same, checked | 11841.6 (3.7% slower) | 9209.5 (16.1% slower) |
+
+The two `datediff` rows are the only ones the third review's fixture fix moved,
+and they moved because they are the only two-input rows in the file: the
+difference they compute was zero for every lane until the second column stopped
+being a copy of the first. The bytes read, the lanes issued and the kernel
+emitted were the same either way, which is why the check's cost at 128 bits
+moved from 21.1% to 16.1% rather than to something unrecognisable - a real
+subtraction and a subtraction of equals are the same instruction.
 
 Both operands of the key are bounded - the calendar bounds every field, the
 date contract bounds `datediff` - so the compiler proves the result cannot
@@ -482,9 +496,9 @@ checked, because there is no such kernel: an int lane has no cheap overflow
 test for `*`, the compiler declines a checked one, and without the bound the
 whole expression would be residual rather than 9% slower.
 
-The mixed-null row is the interesting one: it lands within 0.1% of the
-null-free row at AVX-512 and 0.07% above it at 128-bit, which is 6.1's
-prediction 6 and the emitter suite pins the byte equality behind it.
+The mixed-null row is the interesting one: it lands 0.05% above the null-free
+row at AVX-512 and 0.26% above it at 128-bit, which is 6.1's prediction 6 and
+the emitter suite pins the byte equality behind it.
 
 ### 9.3 End to end, against the row engine
 
@@ -693,7 +707,7 @@ not.** Splitting that predicate removed a `guardTmp` slot every checked node had
 reserved and no instruction had read - dead code, and reported as tidiness. But
 a slot change moves the emitted bytecode, so `sql/varka/AGENTS.md` requires the
 results files be regenerated rather than the figures patched, and that
-regeneration moved the AVX-512 masked row 24.9%, from 14706.5 to 18368.2 M
+regeneration moved the AVX-512 masked row 26.1%, from 14706.5 to 18542.2 M
 rows/s. The 128-bit row did not move at all. So an unused local was costing
 fifteen points of throughput at one width and nothing at the other - a register
 pressure signature, the wide body having more live vector values and no headroom
@@ -716,6 +730,35 @@ unfixed half of the fixed bug class, and both are what
 `PLAN_MILESTONE_5.md` 2.15 (task 84) exists to answer: one lattice in which
 "what does a runtime guard prove" is an explicit parameter rather than a fact
 baked into a constant.
+
+**A third review, over the fixes.** It found no wrong answer - the two rounds
+before it took those - but it found one test the suite never had and one
+benchmark that could not have caught itself being wrong.
+
+The test: `compileIntOperand`'s own doc says `make_date(y + 1, m, d)` fuses and
+`VarkaExpressionCompilerSuite` pins the IR that widening produces, but nothing
+had ever emitted that IR, run it, or checked a value it computed - the fuzzer's
+`make_date` arm reads a date's own fields back and never arithmetic over one of
+them. So the shape this task documents as its widest reach was, at the level
+where a wrong answer would appear, untested. It is a value matrix now, over
+every null pattern and both widths, against the reference evaluator; its triples
+exclude `MAKE_DATE_MAX_YEAR` and every February 29, both of which a `+1`
+correctly *declines*, and both of which belong to task 42's decline test.
+
+The benchmark: `fill` was called twice with the same arguments to make two
+columns, so the second was a bit-for-bit copy of the first and every `datediff`
+case here computed `datediff(x, x)`. The throughput it published was real - the
+same bytes, the same lanes, the same emitted kernel - which is exactly why
+nothing caught it and why the requoted rows move so little. But a benchmark
+whose second column is a copy of its first can never be extended into a value
+check, because nothing it computes can be wrong; the fixture now takes a shift,
+and 9.1's note records which rows that moved.
+
+And four sentences that had stopped describing the code beside them, including
+`emitOverflowMask`'s claim to be the only place in the emitter that narrows a
+word after storing it - `emitMakeDate`'s non-ANSI tail does the same thing. That
+is the same category as the corrected instruction above and the same reason it
+matters: prose is what the next editor reads before deciding what is safe.
 
 ### 9.8 What this leaves for later
 
