@@ -1033,11 +1033,46 @@ so that widening the compiler either widens the emitter or fails to compile.
 The check's fail-fast value is worth keeping; what is not worth keeping is
 stating the rule twice in two languages.
 
+**A widening this task carries, added 8 September 2026 from task 79's admission
+check.** `compare`'s `operand` admits an int *literal* - which is what makes
+`month(d) = 6` fuse - and sends everything else to `compileNode`, whose value
+leaf is `DateType` and the year-month interval, so a bare `IntegerType` column
+in predicate position declines. One case for an `IntegerType` `BoundReference`
+fuses `CASE WHEN m > 0 THEN d ELSE d2 END` and
+`CASE WHEN m >= -1000 AND m <= 1000 THEN add_months(d, m) ELSE ... END`,
+verified by patching the compiler and reverting; `PLAN_TASK_79.md` 2.2 has the
+IR.
+
+It belongs here rather than in a row of its own precisely because it is a
+widening of one of the four copies. Doing it standalone is the move that
+produced the ghost fallback this task exists to prevent, and the reasoning that
+it is safe standalone - `Compare` takes arbitrary IR operands, both lanes are
+int32, so the emitter probably needs nothing - is the same shape of reasoning
+that was wrong last time. Under this task the table decides and the enumeration
+test proves it. It is also the natural first exercise of the unified table: a
+position gains a kind, and nothing else in the file has to be touched for the
+emitter to agree.
+
+`BETWEEN` comes along for free and needs no arm of its own, which is worth
+saying because the first reading of it said the opposite. `Between`'s
+replacement is `With(input) { ref => And(...) }`, and the compiler has no arm
+for `With`/`CommonExpressionRef` - so `dev/varka_emit.sh` declines it. That tool
+resolves names and functions and nothing else; it never optimizes, and
+`RewriteWithExpression` inlines a binding whose child is `CollapseProject.isCheap`,
+which an `Attribute` or `BoundReference` is. `d BETWEEN <lit> AND <lit>` fusing
+whole at 7.96x in task 62's run is the standing proof. A `BETWEEN` over an input
+`isCheap` refuses is a different question - the rewrite hoists it into a
+`Project` rather than inlining - and nobody has looked at it.
+
+Int arithmetic in predicate position stays out and where task 63's comment put
+it, since a widened *leaf* is not a widened *tree*.
+
 **The admission check.** A test that enumerates the operand positions and,
 for each, asserts that the set the compiler admits and the set the emitter
 accepts are the same set - the assertion whose absence let the drift above
-ship. Then every decline reason in the compiler suite unchanged, since this
-task is meant to move no shape from fused to residual or back.
+ship. Then every decline reason in the compiler suite unchanged *except* the
+one the widening above removes, which is the single shape this task is allowed
+to move from residual to fused, and which its own test names.
 
 ### 2.18 The epilogue is the one method no budget bounds (task 87)
 
@@ -1130,7 +1165,7 @@ independent of both and of each other.
 | 83 | One refusal, instead of four (section 2.14). **Scoped** (8 September 2026), from task 63's review; independent of 84 to 86 | The four runtime refusals - task 42's `make_date` year check, task 52's range guard, task 60's month count, task 63's overflow check - behind one node property carrying its mask, its qualifying word and its reason, with one analysis set, one slot rule, one collect and a status bit per reason, replacing `guardedProducers`/`selfGuarding`/`checkedArith`, the `guardedWord`/`guardScratch` pair and the shared `STATUS_CHRONO_RANGE` | No emitted byte moves for any shape that exists today: the pinned line map, the shape hash, every `codeSize` assertion and `dev/varka_emit.sh --table`'s op counts for `year(date_add(d, off))`, `add_months(d, m)`, `make_date` and ANSI `i + 1` all unchanged - this task buys a status bit and legibility, not speed |
 | 84 | One value-range lattice (section 2.15). **Scoped** (8 September 2026), from the three bugs task 63's review found in the seam between `dayRange` and `intBound`; before 85 | One saturating interval domain over lane values, with the calendar admission (task 52) and the overflow check (task 63) as queries on it rather than two traversals, and "what a runtime guard proves" as an explicit parameter of a query rather than a fact baked into one traversal's arms; written in Java, being pure data | Every shape the compiler admits or declines today unchanged, decline reasons included, and the differential's fusion classification unmoved; plus the property test the current code cannot pass - over random IR, the interval a node reports contains the value the reference evaluator computes, for every lane pattern |
 | 85 | Lane type as a parameter (section 2.16). **Scoped** (8 September 2026); after 84, and blocking milestone 5's own tasks 28 and 29 | The emitter parameterised on a lane descriptor - vector class, species, byte stride, load and store descriptors - against the 204 `INT_VECTOR` references, 16 four-byte stride assumptions and 18 species references it carries today; the lane on the node's physical representation rather than inferred from the Spark type, with year-month intervals (int32 months, the same lane as DATE and INT) as the forcing function that can land first; measured against a generated-per-lane emitter, since a descriptor risks a megamorphic call in the hot path | The int32 lane's emitted bytes unchanged against the pinned oracles; a second lane type reaching the same green differential and fuzz matrices at both vector widths; and the fuzz reachability test widened from every node type to node type times lane type |
-| 86 | One operand admission, stated once (section 2.17). **Scoped** (8 September 2026), from the ghost fallback task 63's review found; independent of 83 to 85 | `intOperand`, `compileIntOperand`, `compileOffset` and `compare`'s `operand` as one function taking what the position accepts, and the emitter's four `require*Shape` checks derived from that same table rather than restated beside it, so widening the compiler either widens the emitter or fails to compile | A test enumerating the operand positions and asserting that the set the compiler admits and the set the emitter accepts are the same set - the assertion whose absence let `date_add(d, weekday(d2) + 1)` ship as fused in EXPLAIN and a silent per-batch fallback at run time; every compiler decline reason unchanged, since no shape may move |
+| 86 | One operand admission, stated once (section 2.17). **Scoped** (8 September 2026), from the ghost fallback task 63's review found; independent of 83 to 85 | `intOperand`, `compileIntOperand`, `compileOffset` and `compare`'s `operand` as one function taking what the position accepts, and the emitter's four `require*Shape` checks derived from that same table rather than restated beside it, so widening the compiler either widens the emitter or fails to compile; carrying one widening as the table's first exercise - a bare `IntegerType` column in comparison operand position, which declines today and which task 79's admission check verified fuses with one case added, and which is folded in here rather than taken alone because widening one copy in isolation is what produced the ghost fallback | A test enumerating the operand positions and asserting that the set the compiler admits and the set the emitter accepts are the same set - the assertion whose absence let `date_add(d, weekday(d2) + 1)` ship as fused in EXPLAIN and a silent per-batch fallback at run time; every compiler decline reason unchanged, since no shape may move |
 | 87 | The epilogue is the one method no budget bounds (section 2.18). **Scoped** (8 September 2026), from a 35-million-iteration fuzz run; independent of 83 to 86 | The epilogue emitted as one method holding every group, so a tree inside `MAX_FUSED_NODES` can pass 65535 bytes and the Class-File API refuses the class - `epilogueMasked` at 67244 bytes for nested `make_date`, replaying at `-Dvarka.fuzz.seed=2026092800 -Dvarka.fuzz.only=73411`; either partition it as the loop is partitioned or give the emitter a byte budget, and in both cases decline with a reason rather than throw | The pinned fuzz iteration declining with a reason instead of throwing; every shape that fits today emitting identical bytes against the pinned line map and the `codeSize` assertions; and `MAX_FUSED_NODES`' javadoc no longer claiming a per-method guarantee it only has for the loop |
 
 ## 4. Files
