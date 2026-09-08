@@ -451,10 +451,11 @@ private[sql] object VarkaExpressionCompiler {
   /**
    * The recursive node compiler. `None` anywhere fails the enclosing entry, whose caller rolls
    * the tables back to their pre-entry state. Shapes that
-   * cannot be served stay unmatched by construction: an integer `Add` over a `datediff` result
-   * is not a date expression (and ANSI overflow cannot throw row-accurately from a lane), and a
-   * `date_add` over a `datediff` result only type-checks through a `Cast`, which compiles to
-   * nothing here.
+   * cannot be served stay unmatched by construction: a `date_add` over a `datediff` result
+   * only type-checks through a `Cast`, which compiles to nothing here. Integer arithmetic over
+   * a `datediff` result was in that list until task 63, which lowered it - a SIMD lane still
+   * cannot throw row-accurately, so an ANSI overflow condemns the batch and the row engine
+   * raises it instead.
    */
   private def compileNode(
       expr: Expression,
@@ -796,8 +797,9 @@ private[sql] object VarkaExpressionCompiler {
   /**
    * How large an int-valued node's result can be in absolute value, or `None` where nothing
    * bounds it. The calendar fields are bounded by their own definitions, a literal by its
-   * value, and `datediff` by the date contract; an `IntegerType` column is not bounded at all,
-   * and neither is anything built on one.
+   * value, and `datediff` by its two operands' own day ranges - not by the date contract
+   * alone, which is true of a date column but not of every operand a `datediff` accepts. An
+   * `IntegerType` column is not bounded at all, and neither is anything built on one.
    *
    * This exists so a checked operation that provably cannot overflow needs no check - which is
    * what makes `year(d) * 100 + month(d)` fuse under ANSI, the shape `PLAN_TASK_63.md` 6
@@ -815,7 +817,8 @@ private[sql] object VarkaExpressionCompiler {
     def both(l: VarkaVectorIR, r: VarkaVectorIR)(f: (Long, Long) => Long): Option[Long] =
       for (a <- intBound(l, literals); b <- intBound(r, literals); v <- exactly(f(a, b))) yield v
     node match {
-      case slot: LiteralSlot => Some(math.abs(literals.keys.toIndexedSeq(slot.index()).toLong))
+      case slot: LiteralSlot =>
+        Some(math.abs(literals.keysIterator.drop(slot.index()).next().toLong))
       // The widest year a lowered date can carry: the narrowed range runs to year 33134, and
       // a day producer's guard keeps every decomposed date inside it (task 52).
       case _: IRYear => Some(40000L)
@@ -831,10 +834,11 @@ private[sql] object VarkaExpressionCompiler {
       // width is the answer for two date columns, but not for every `datediff`: `date_add(d,
       // 2147483647)` is a legal operand whose int32 lane wraps, and a contract-width bound
       // over it would be a fiction that removes the very check that would have caught it. So
-      // both operands are asked for their own day interval, with no runtime guard assumed -
-      // `datediff` is not a calendar node, so nothing arms task 52's guard on its operands -
-      // and an interval that leaves the int range is refused, because a lane that produced it
-      // wrapped on the way in.
+      // both operands are asked for their own day interval with no guard assumed at the top,
+      // because a `datediff` is not a calendar node and so arms none itself; a calendar node
+      // *inside* an operand still does, which `shifted`'s `guardsBelow` restores. An interval
+      // that leaves the int range is refused, because a lane that produced it wrapped on the
+      // way in.
       case n: IRDateDiff =>
         (dayRange(n.end(), literals, guarded = false),
             dayRange(n.start(), literals, guarded = false)) match {
@@ -1005,18 +1009,22 @@ private[sql] object VarkaExpressionCompiler {
           // the two stay a matched pair rather than one silently outgrowing the other.
           case arith @ (_: Add | _: Subtract | _: Multiply | _: UnaryMinus)
               if arith.dataType == IntegerType =>
-            // The compiled root has to be one of the two arithmetic nodes, not merely built
-            // from an arithmetic expression: `weekday(d) + 1` is an `Add` that lowers to task
-            // 57's `DayOfWeekIso`, which `requireDayOffsetShape` refuses. Admitting it here
-            // would put an entry through `compilePartial` as fused and let the refusal fire at
-            // emit time, where the evaluator turns it into a silent per-batch fallback while
-            // EXPLAIN still claims fusion - the ghost fallback `sql/varka/AGENTS.md` forbids.
-            compileNode(arith, inputs, literals, sink).flatMap {
-              case n @ (_: IntArith | _: IntNeg) => Some(n)
-              case _ =>
+            // The compiled root has to be a shape the offset position takes, not merely
+            // something built from an arithmetic expression: `weekday(d) + 1` is an `Add` that
+            // lowers to task 57's `DayOfWeekIso`, which the offset position does not accept.
+            // Admitting it here would put an entry through `compilePartial` as fused and let
+            // the emitter's refusal fire at emit time, where the evaluator turns it into a
+            // silent per-batch fallback while EXPLAIN still claims fusion - the ghost fallback
+            // `sql/varka/AGENTS.md` forbids. The test is the emitter's own predicate rather
+            // than a copy of its list, so the two cannot drift apart again.
+            compileNode(arith, inputs, literals, sink).flatMap { n =>
+              if (VarkaLoopEmitter.isDayOffsetShape(n)) {
+                Some(n)
+              } else {
                 sink.note("day offset arithmetic that lowers to a node the offset " +
                   "position does not take", arith)
                 None
+              }
             }
           case other =>
             sink.note(
@@ -1166,16 +1174,31 @@ private[sql] object VarkaExpressionCompiler {
    *  - `greatest`/`least`/`if`/`coalesce` (the last compiles to `IfElse`) take the hull of
    *    their date operands.
    *
+   * `guarded` says whether the caller is a calendar consumer, which is what arms task 52's
+   * runtime guard on a column-offset producer: with it on, such a producer answers the
+   * narrowed range on the strength of that guard, and with it off it answers `Unknown`,
+   * because nothing keeps it in range. It has no default on purpose - the safe value is not
+   * the one a caller gets by forgetting - and it turns back on below a calendar node in the
+   * subtree, which `shifted`'s `guardsBelow` does.
+   *
    * Values are `Long` so two literals of two billion cannot wrap the sum. A field-typed output
    * (`year`, `dayofweek`, `datediff`...) never reaches here as a calendar node's child - the
    * Spark type gate forbids it - and anything else is `Unknown`. The literal table is keyed by
    * value in slot order and untyped, so a slot's value is read by its IR position only.
    */
   private def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int],
-      guarded: Boolean = true): DayRange = {
+      guarded: Boolean): DayRange = {
     def literalValue(slot: LiteralSlot): Long = literals.keysIterator.drop(slot.index).next().toLong
-    def shifted(child: VarkaVectorIR, lo: Long, hi: Long): DayRange =
-      dayRange(child, literals, guarded) match {
+    // `guardsBelow` marks a node that is itself a calendar consumer - which is
+    // `VarkaLoopEmitter.isChrono`'s set, the `Chrono` interface *plus* `AddMonths`, not the
+    // interface alone. Task 52's guard is armed on every column-offset producer under one, so
+    // the subtree below it is guarded even when the caller above is not a calendar node.
+    // Without this, `datediff(last_day(date_add(d, i)), d2)` would report its operand
+    // unbounded although the `last_day` over it does arm the guard - a bound lost, and a check
+    // emitted, for a shape that is in fact provably in range.
+    def shifted(child: VarkaVectorIR, lo: Long, hi: Long,
+        guardsBelow: Boolean = false): DayRange =
+      dayRange(child, literals, guarded || guardsBelow) match {
         case Bounded(clo, chi) => Bounded(clo + lo, chi + hi)
         case other => other
       }
@@ -1222,7 +1245,8 @@ private[sql] object VarkaExpressionCompiler {
       case n: IRAddMonths => n.months() match {
         case slot: LiteralSlot =>
           val m = literalValue(slot)
-          shifted(n.days(), math.min(28 * m, 31 * m), math.max(28 * m, 31 * m))
+          shifted(n.days(), math.min(28 * m, 31 * m), math.max(28 * m, 31 * m),
+            guardsBelow = true)
         // A column count is bounded by the emitter's own runtime guard (task 60) to
         // [MONTH_ARITH_MIN_MONTHS, MONTH_ARITH_MAX_MONTHS], so the day it can produce is
         // bounded too - by the same 31-day-month over-approximation the literal arm uses, at
@@ -1231,15 +1255,16 @@ private[sql] object VarkaExpressionCompiler {
         // runtime-bounded count still yields a `Bounded` day range, which composes with the
         // interval a guarded day offset contributes and needs no second guard of its own.
         case _ => shifted(n.days(),
-          31L * VarkaChrono.MONTH_ARITH_MIN_MONTHS, 31L * VarkaChrono.MONTH_ARITH_MAX_MONTHS)
+          31L * VarkaChrono.MONTH_ARITH_MIN_MONTHS, 31L * VarkaChrono.MONTH_ARITH_MAX_MONTHS,
+          guardsBelow = true)
       }
-      case n: IRLastDay => shifted(n.days(), 0, 30)
+      case n: IRLastDay => shifted(n.days(), 0, 30, guardsBelow = true)
       // A truncated date (task 35) is its input or an earlier day of the same period: at most
       // 365 back, the 31st of December of a leap year truncated to its year.
-      case n: IRTruncDate => shifted(n.days(), -365, 0)
+      case n: IRTruncDate => shifted(n.days(), -365, 0, guardsBelow = true)
       // The same bound for the level-column form (task 61): its week result is at most six
       // days back, its year result the same 365.
-      case n: IRTruncDateDynamic => shifted(n.days(), -365, 0)
+      case n: IRTruncDateDynamic => shifted(n.days(), -365, 0, guardsBelow = true)
       // make_date publishes only whole years of the narrow range (task 42): every date it
       // answers lies inside it, and a year outside declines the batch before any consumer.
       case n: IRMakeDate => Bounded(
@@ -1282,7 +1307,7 @@ private[sql] object VarkaExpressionCompiler {
       calendar: Expression,
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = {
-    dayRange(node, literals) match {
+    dayRange(node, literals, guarded = true) match {
       case Bounded(lo, hi)
           if lo >= VarkaChrono.NARROW_MIN_DAYS && hi <= VarkaChrono.NARROW_MAX_DAYS =>
         Some(node)

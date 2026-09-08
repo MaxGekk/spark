@@ -210,14 +210,31 @@ the compiler will say so.
 
 **The overflow check extends one predicate, not two conditions.** 3.1 puts the
 `FAIL` mask into `s.guardAcc` and says the accumulator is allocated whenever the
-body has a `FAIL` node or a guarded producer. Since the review, "is this node
-guarded" is `guardedWord(analysis, node, producersGuarding, selfGuarding)`, read
+body has a `FAIL` node or a guarded producer. Since task 70, "is this node
+guarded" was `guardedWord(analysis, node, producersGuarding, selfGuarding)`, read
 by `planSlots` for the temporary and by `liveWords` to keep the word alive,
 precisely so a third guarded node kind cannot be added to one and forgotten in
-the other. `IntArith` and `IntNeg` under `FAIL` are that third kind: extend
-`guardedWord`, do not add a condition beside it. Getting it wrong is loud rather
-than silent - `emitGuardCollect` refuses a word the liveness pass killed, with a
-message naming the missing consumer - but it is one edit either way.
+the other. `IntArith` and `IntNeg` under `FAIL` are that third kind.
+
+*Corrected on 8 September 2026, after this task's own review.* **Extending that
+one predicate is no longer the right instruction, and the failure mode it
+promised is no longer the one you get.** Adding this task's kind showed that its
+two readers want different things. `liveWords` asks "must this node's word stay
+alive", which is true of a checked arithmetic node, because `emitGuardCollect`
+loads it. `planSlots` asks "does this node need a scratch local", which is
+false of one: `emitIntArith` parks its operands and result in `intArithTmp` and
+`emitIntNeg` reads its operand back with `dup`, so every checked node was
+reserving a local that no instruction ever loaded. `planSlots` reads
+`guardScratch` now; `liveWords` reads `guardedWord`.
+
+So a fourth guarded kind is two edits, and getting it wrong is **silent**. Add
+it to `guardedWord` alone and its word stays alive but no `guardTmp` is planned,
+so `emitAndValidatedOp`'s `if (guardTmp != null)` is false and the guard is
+simply never emitted - a wrong date, not the loud `emitGuardCollect` refusal the
+paragraph above used to promise. Ask which of the two questions the new kind
+answers yes to, and add it to each that it does. `PLAN_MILESTONE_5.md` 2.14
+(task 83) proposes replacing the pair with a single refusal property, which is
+the real fix for a predicate that has now been split once and extended twice.
 
 **The word algebra is where the free win is, and 3.3 does not have it.** Task 70
 added two views of a node's validity: `ownerOf`, naming the word a node's
@@ -261,7 +278,7 @@ unserved for `NULL` mode.
 |---|---|
 | `VarkaVectorIR.java` | `IntOp`, `Overflow`, `IntArith`, `IntNeg`; the renderings |
 | `VarkaEmitOptions.java` | `checkIntOverflow` |
-| `VarkaLoopEmitter.java` | the arms in `childrenOf`, `analyze`, `planWordRef`, `planSlots`, `weightOf`, `emitValue`; the check block factored from `emitRangeGuard`'s tail; `guardAcc` allocation widened; the `NULL` word; `nullsFromValidInputs` for `NULL` nodes; `requireOffsetShape` widened for `AddDays`/`SubDays` | Since task 70 (3.4), also mandatory: `liveWords`' two exhaustive switches, `guardedWord` for the `FAIL` node, and `ownerOf`/`pureOf` for the word.
+| `VarkaLoopEmitter.java` | the arms in `childrenOf`, `analyze`, `planWordRef`, `planSlots`, `weightOf`, `emitValue`; the check block factored from `emitRangeGuard`'s tail; `guardAcc` allocation widened; the `NULL` word; `nullsFromValidInputs` for `NULL` nodes; `requireOffsetShape` widened for `AddDays`/`SubDays` | Since task 70 (3.4), also mandatory: `liveWords`' two exhaustive switches, `guardedWord` *and* `guardScratch` for the `FAIL` node - they answer different questions since this task's review, and 3.4 says which - and `ownerOf`/`pureOf` for the word.
 | `VarkaReferenceEvaluator.scala` | the three modes per op: Scala's wrapping op, `Math.addExact` caught to a decline marker, and `None` |
 | `VarkaLoopEmitterSuite.scala` | the boundary matrices, the status tests, the `NULL` validity test, the register, both pinned fixtures re-pinned |
 | `VarkaIrFuzzSuite.scala` | arms for the three ops in `WRAP` over bounded operands, and `FAIL` over operands the bound keeps from overflowing |
@@ -389,8 +406,9 @@ per-row anchor computing the composite key with `Math.addExact` and
 ## 9. Outcome
 
 The task shipped in six commits on `varka-task-63`. Sections 9.1 to 9.4 are
-the measurement, 9.5 scores 6.1's predictions, and 9.6 records what moved that
-this plan did not list - which, this time, is most of the work.
+the measurement, 9.5 scores 6.1's predictions, 9.6 records what moved that
+this plan did not list - which, this time, is most of the work - and 9.7 what two
+reviews found afterwards, including in the fixes for what the first one found.
 
 The numbers are `VarkaArithmeticBenchmark`'s, a file of its own rather than
 the section in `VarkaEmitterParityBenchmark` that section 6 asked for; 9.6
@@ -570,6 +588,11 @@ fully fused twin of the mixed projection - so the pair in 9.3 is two committed
 rows of one file rather than a comparison against a number in a scratch log.
 The lesson is written up in `SKILLS.md`.
 
+**The bound analysis shipped unsound, and the review caught it.** The three
+ways are recorded in 9.7 with the fixes; the shortest statement is that a
+bound must be exact, must not assume a runtime guard that nothing arms, and
+must be compared against `Int.MaxValue` rather than `MIN_VALUE`'s magnitude.
+
 **A checked multiply declines, which is wider than 3.3 assumed.** The plan
 expected `i * 7` under ANSI to fuse with a check. There is no int-lane
 overflow test for `*` that does not need the 64-bit product or a lane
@@ -581,12 +604,16 @@ described a check on every ANSI node. What shipped computes an absolute bound
 per node - literals by value, calendar fields by their definitions, `datediff`
 by the contract width - and emits `WRAP` where the bound rules overflow out.
 That is what makes the composite key fuse under ANSI at all, and it is why the
-`i * 7` case above is a decline rather than a wrong answer.
+`i * 7` case above is a decline rather than a wrong answer. *The `datediff`
+clause is corrected in 9.7: the contract width is that node's bound only where
+both of its operands are themselves bounded, which the review found it was not
+asking. What the sentence describes is what shipped, not what stands.*
 
 **Three emitter bugs the differential found, which the unit tests had not.**
 The accumulator was never allocated for a checked node with no other guarded
 producer; the guard's word was killed by task 70's liveness pass, so
-`guardedWord` had to learn about this third guarded node kind; and `AND`, `OR`
+`guardedWord` had to learn about this third guarded node kind (and was later split from
+`guardScratch`, 3.4); and `AND`, `OR`
 and `XOR` are declared `Associative` rather than `Binary` in the Vector API,
 so the emitted `getstatic` needed a different descriptor and failed at link
 time until it got one.
@@ -597,7 +624,70 @@ fuse. A calendar node over such a producer is guarded rather than declined,
 because task 52's range analysis already reads any non-literal offset as a
 column shift.
 
-### 9.7 What this leaves for later
+### 9.7 What the review found, after the task was written up
+
+*Added 8 September 2026. Two max-effort reviews ran on this PR: one over the
+task, one over the fixes that first one produced. Together they found four
+bugs in code this task added and four more in the fixes, and the pattern in
+them is what `PLAN_MILESTONE_5.md` 2.13 is built on.*
+
+**Three wrong answers, all in the bound analysis of 9.6.** The bound was
+compared against `abs(Int.MinValue)`, so a magnitude of exactly 2^31 - one past
+the largest int - proved an operation safe: `quarter(d) * 536870912` answered
+-2147483648 under ANSI where Spark raises. `intBound`'s `datediff` arm returned
+the contract width for every `IRDateDiff`, but `date_add(d, 2147483647)` is a
+legal operand whose int32 lane wraps, and over one the contract width is a
+fiction. And nested bounds were combined with wrapping `Long` arithmetic, so a
+bound past 2^63 came back small and positive and proved anything at all. None
+of the three was reachable by a missing switch arm, which is why all three
+survived to a review rather than to a compile error.
+
+**One ghost fallback.** `compileOffset` admitted any int-typed `Add` as a day
+offset, and `weekday(d2) + 1` lowers to task 57's `DayOfWeekIso`, which
+`requireDayOffsetShape` does not take - so the entry was fused in EXPLAIN and
+refused at emit time, where the evaluator turns the refusal into a silent
+per-batch fallback. Two independent statements of one admission rule, drifting,
+which is what `PLAN_MILESTONE_5.md` 2.17 (task 86) proposes to end.
+
+**Then four more, in the fixes themselves**, which is the part worth reading
+twice:
+
+* The `datediff` fix was made one node deep. Asking an operand for its day
+  range "with no guard assumed" is right at the top of a `datediff` and wrong
+  inside it: a calendar node *within* the operand does arm task 52's guard on
+  the producers below it, so `datediff(last_day(date_add(d, i)), d2) + 1` lost
+  a bound it correctly had and gained a check it does not need. Guard
+  dependence descends: `dayRange`'s `guardsBelow` turns it back on under a
+  calendar node.
+* The same flag defaulted to the unsafe value, so a future caller would
+  reintroduce the fixed bug by omitting an argument rather than by writing one.
+  The default is gone; both call sites say which mode they mean.
+* The fuzzer's own bounds had the identical `Long` wrap, and the first fix
+  saturated only the arms that can reach 2^63 unaided - which is not enough,
+  because `Long.MaxValue` wraps negative the moment a parent adds anything to
+  it. Every arm that combines two bounds saturates now, in `boundsOf` and in
+  the generator.
+* And 3.4's instruction to "extend `guardedWord`, do not add a condition beside
+  it" had become the wrong advice, with a silent failure mode rather than the
+  loud one it promised. Corrected in place, because a plan that tells the next
+  editor to do the thing that produces a wrong date is worse than no plan.
+
+**What is registered rather than fixed.** `intBound`'s calendar constants
+(`IRYear` 40000 and its siblings) hold because task 52's guard fires, and that
+guard sits behind `VarkaEmitOptions.guardDayProducers`. With that option off -
+never in production, and the option's own javadoc already says a lane is then
+"computed wrongly rather than declined" - the constants are fiction and an ANSI
+check can come off a shape that needs it. So this task gave that switch a
+second job: it no longer only decides whether a date field is right, it decides
+whether an overflow check exists. The same is true of the date-column contract
+itself, which is a declared assumption nothing enforces at ingestion
+(`docs/sql-varka.md`) and which now also gates overflow checks. Both are the
+unfixed half of the fixed bug class, and both are what
+`PLAN_MILESTONE_5.md` 2.15 (task 84) exists to answer: one lattice in which
+"what does a runtime guard prove" is an explicit parameter rather than a fact
+baked into a constant.
+
+### 9.8 What this leaves for later
 
 * **A checked node under a `CASE` arm condemns the batch from the untaken arm.** The
   `FAIL` mask goes through `emitGuardCollect`, which ANDs the node's word and the

@@ -1307,10 +1307,23 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       //    largest int, which the old comparison admitted.
       //  - `datediff(date_add(d, 2147483647), d) + 1`: the shift wraps the int32 lane, so the
       //    contract width was never this datediff's bound.
-      for (q <- Seq(
-          "SELECT quarter(d) * 536870912 AS a FROM varka_dates ORDER BY a",
-          "SELECT datediff(date_add(d, 2147483647), d) + 1 AS a FROM varka_dates ORDER BY a")) {
+      //
+      // Each carries a plan assertion beside the error, because the error alone cannot tell
+      // the two engines apart: if a later change made these residual, both sides would raise
+      // from the row path and the test would stay green while the fused ANSI path it exists to
+      // protect had quietly gone.
+      for ((q, fused) <- Seq(
+          // The multiply declines - a checked `*` has no int-lane test - so this entry is
+          // residual and no Varka kernel runs. That is the outcome under test: the compiler
+          // refusing, rather than a kernel wrapping.
+          ("SELECT quarter(d) * 536870912 AS a FROM varka_dates ORDER BY a", false),
+          // The add fuses, with the check the bound no longer removes, and the kernel condemns
+          // the batch so the row engine can raise. This is the row that would go silent.
+          ("SELECT datediff(date_add(d, 2147483647), d) + 1 AS a FROM varka_dates ORDER BY a",
+            true))) {
         val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
+        val plan = varkaSpark.sql(q).queryExecution.executedPlan
+        if (fused) assertFused(plan) else assertNotFused(plan)
         val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
         assert(actual.getCondition === expected.getCondition, q)
         assert(actual.getMessage === expected.getMessage, q)

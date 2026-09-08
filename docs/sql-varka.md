@@ -161,10 +161,15 @@ becomes timestamp arithmetic) decline:
   recomputed on the row engine, which raises Spark's own
   `ARITHMETIC_OVERFLOW`; `TRY_ADD`, `TRY_SUBTRACT` and `TRY_MULTIPLY` clear
   those lanes from the output's validity instead and the batch runs on. Where
-  the operands' own ranges prove the result cannot leave int32 - the calendar
-  bounds every field, and the date contract bounds `DATEDIFF` - the check is
-  not emitted at all, which is what lets `YEAR(d) * 100 + MONTH(d)` fuse under
-  ANSI. A checked multiply whose operands carry no such bound declines: an
+  the operands' own ranges prove the result cannot leave int32 the check is not
+  emitted at all, which is what lets `YEAR(d) * 100 + MONTH(d)` fuse under
+  ANSI. The calendar bounds every field; `DATEDIFF` is bounded only where both
+  of its operands are, so a `DATE_ADD` with an offset large enough to wrap the
+  int32 day, or one shifted by a column with no calendar function over it,
+  leaves the difference unbounded and the check in place. Both of those rest on
+  the stored-date contract below, which nothing enforces at ingestion: a date
+  column holding a day outside 0001..9999 can carry a bound that is not true of
+  it. A checked multiply whose operands carry no such bound declines: an
   int32 lane has no cheap overflow test for `*`, so it stays on the row engine
   rather than wrapping silently. `DIV`, `%` and the float and long types are
   not lowered.
@@ -393,8 +398,13 @@ attributes alone did not answer:
   an integer column or int arithmetic" for anything else (e.g. `i % 7`, whose
   operator no arm lowers). Since task 63, "checked int multiply whose operands
   do not rule out overflow" names an ANSI or TRY `*` the compile-time bound
-  cannot prove safe, and "int arithmetic operand of type ..." an operand that
-  is not int32. Since task 59, a `next_day` whose weekday is neither a literal
+  cannot prove safe, and "day offset arithmetic that lowers to a node the offset
+  position does not take" names arithmetic in a `date_add`/`date_sub` offset
+  that lowers to something other than an arithmetic node - `weekday(d) + 1`,
+  which is task 57's own node. (`intOperand` carries a third, "int arithmetic
+  operand of type ...", which a resolved plan cannot reach: Spark requires both
+  operands of an `Add` to share a type, so an `IntegerType` one has two int
+  operands by construction.) Since task 59, a `next_day` whose weekday is neither a literal
   nor a stored string column reports "next_day with a weekday that is neither
   a literal nor a column"; a `trunc` whose format is neither foldable nor a
   stored string column keeps task 35's "trunc with a non-foldable format"
@@ -726,10 +736,13 @@ The real current edges, stated with their numbers where they have one:
   `CalendarInterval`, strings, decimals, timestamps or nested types, and a
   day offset must be a foldable integer literal or an `IntegerType` column -
   `ShortType`/`ByteType` offset columns decline (task 38).
-* **ANSI arithmetic over `datediff` outputs is excluded by design**: an
-  integer `Add` over a `datediff` result is not a date expression, and ANSI
-  overflow cannot throw row-accurately from a SIMD lane, so such entries stay
-  residual.
+* **A SIMD lane cannot throw row-accurately**, which shapes how ANSI overflow
+  works rather than excluding it. Task 63 fuses integer arithmetic over a
+  `datediff` result and over the calendar fields; where the operands' ranges do
+  not rule overflow out, the kernel marks the overflowing lanes and declines the
+  batch, and the row engine recomputes it and raises. So the error is Spark's
+  own, from the engine that can attribute it to a row - at the cost of one
+  fallback for the batch that contains it.
 * **The row-consumer read-back can cost more than fusion saves**: cheap
   chains commit at 0.8x and residual-heavy at 0.6x, while heavy shapes win
   through rows (`dayofweek` 1.2x, `CASE WHEN` 1.1x) - the ~25 ns/row

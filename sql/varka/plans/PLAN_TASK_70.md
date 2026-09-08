@@ -350,7 +350,7 @@ exercises the net itself.
 
 **Word liveness, per method.** `planSlots` today allocates a word local per
 referenced input and per own-word node. Under the switch it allocates them
-only for words some emitted consumer reads: a `guardTmp` node's word, an
+only for words some emitted consumer reads: a guarded node's word, an
 `IfElse`'s condition and branches, a `Cond` root's, a `Greatest`/`Least`
 whose own word feeds one of those, and any root the pass does not serve. A
 method with no live word skips the per-group `validityBitsAt` reads entirely,
@@ -957,7 +957,13 @@ survived verification; none was a wrong answer. What they changed:*
   twice, in `planSlots` and in `liveWords`. Tasks 52 and 60 each added a
   guarded node kind; a third added to one and not the other would give that
   node a guard whose word the liveness pass had killed. One `guardedWord`
-  helper, read by both. `emitGuardCollect` deliberately still refuses a dead
+  helper, read by both. *Superseded on 8 September 2026 by task 63's review:
+  the two readers turned out to ask different questions - `planSlots` wants
+  "does this node need a scratch local", `liveWords` wants "must this node's
+  word stay alive" - and a checked arithmetic node answers no and yes. They
+  are `guardScratch` and `guardedWord` now, the first written into the second
+  so the containment is structural rather than a coincidence; the lesson holds
+  in the form "the two must not disagree", not in the form "one helper".* `emitGuardCollect` deliberately still refuses a dead
   word rather than skipping the AND: that refusal is what the injector arms,
   and skipping would turn a liveness bug into spurious batch declines on
   nullable data.

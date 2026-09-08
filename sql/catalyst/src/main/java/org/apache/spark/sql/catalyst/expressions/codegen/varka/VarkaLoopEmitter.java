@@ -1952,8 +1952,7 @@ public final class VarkaLoopEmitter {
      * meant to be read together.
      */
     private static void requireDayOffsetShape(VarkaVectorIR offset, String position) {
-      if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)
-          && !(offset instanceof IntArith) && !(offset instanceof IntNeg)) {
+      if (!isDayOffsetShape(offset)) {
         throw new IllegalArgumentException(
             position + " must be a literal slot, a column or int arithmetic, got " + offset);
       }
@@ -2256,7 +2255,11 @@ public final class VarkaLoopEmitter {
           // Task 63's overflow check reads both operands and the result after the lanewise
           // op has consumed the operands off the stack, so all three are parked. Allocated in
           // both bodies, unlike pairTmp: a dense batch overflows exactly as a masked one does,
-          // and the check is what the mode asks for, not what the null state asks for.
+          // and the check is what the mode asks for, not what the null state asks for. That
+          // reads as true of both modes and is true of FAIL: a NULL node has no dense body at
+          // all, because `analyze` sets nullsFromValidInputs for it and `emit` then builds
+          // none, so its dense slots are planned and never used. Harmless, and worth knowing
+          // before counting dense locals against a method budget.
           if (analysis.options.checkIntOverflow() && node instanceof IntArith n
               && n.mode() != Overflow.WRAP) {
             s.intArithTmp.put(node, new int[] {slot++, slot++, slot++});
@@ -2449,10 +2452,25 @@ public final class VarkaLoopEmitter {
    * predicate exists to make impossible for the next kind added. Tasks 52 and 60 added the
    * first two kinds, task 63 the third.
    */
+  /**
+   * The node kinds a {@code date_add}/{@code date_sub} day offset may be. Public because
+   * `VarkaExpressionCompiler` gates its offset arm on exactly this: the compiler deciding what
+   * to build and the emitter deciding what to accept are one rule, and stating it twice is how
+   * `date_add(d, weekday(d2) + 1)` came to be fused in EXPLAIN and refused at emit time, which
+   * the evaluator turns into a silent per-batch fallback. Widen this and both move together.
+   */
+  public static boolean isDayOffsetShape(VarkaVectorIR offset) {
+    return offset instanceof LiteralSlot || offset instanceof ColumnRef
+        || offset instanceof IntArith || offset instanceof IntNeg;
+  }
+
   private static boolean guardedWord(Analysis analysis, VarkaVectorIR node,
       boolean producersGuarding, boolean selfGuarding, boolean checkedArith) {
-    return (producersGuarding && analysis.guardedProducers.contains(node))
-        || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node))
+    // Written as "everything that needs a scratch, plus the kinds that need only the word", so
+    // that guardScratch being a subset of this is structural rather than two copies of two
+    // clauses agreeing by inspection. A kind added to guardScratch alone would otherwise get a
+    // slot and a word the liveness pass had killed.
+    return guardScratch(analysis, node, producersGuarding, selfGuarding)
         || (checkedArith && analysis.checkedArith.contains(node));
   }
 
@@ -3633,8 +3651,14 @@ public final class VarkaLoopEmitter {
     };
     // Before the scratch-slot test, because the refusal is about the node and not about how
     // this body was configured: with `checkIntOverflow` off there is no scratch, and a checked
-    // multiply would otherwise slip through as a plain wrapping one - the A/B switch silently
-    // changing semantics rather than only cost.
+    // multiply would otherwise slip through as a plain wrapping one.
+    //
+    // Note what the argument is not. That switch *does* change meaning for the other checked
+    // nodes, deliberately: with it off a `FAIL` add wraps and a `NULL` add answers the wrapped
+    // number where Spark returns null, which is what its own javadoc promises and what makes
+    // it a reference arm rather than a setting. `MUL` is different in kind - there is no
+    // correct checked emission for it at all, so "off" cannot mean "the same node, cheaper".
+    // A reader who generalises this into the `NULL` and `IntNeg` arms breaks the benchmark.
     if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP) {
       throw new IllegalArgumentException("a checked multiply has no int-lane overflow test: " + n);
     }
@@ -3719,6 +3743,13 @@ public final class VarkaLoopEmitter {
     // so reaching here dense means that invariant broke. Refused rather than papered over with
     // a pop, which would silently drop the check and answer where Spark returns null; the
     // sibling impossibilities (a NULL IntNeg, a checked multiply) are refused the same way.
+    //
+    // "Refused" is a claim about this class, not about a running query: `VarkaKernelEvaluator`
+    // catches an IllegalArgumentException out of `emit` as an emission failure and drops the
+    // whole task to the row path, so in production a broken invariant is a warned
+    // de-optimisation and not a crash. What makes these refusals load-bearing is that the
+    // emitter suite asserts each of them; the throw is how the assertion has something to
+    // catch, not a runtime guarantee.
     if (dense) {
       throw new IllegalArgumentException(
           "a NULL-mode overflow mask reached a dense body, which has no word to narrow: " + node);
@@ -3841,9 +3872,11 @@ public final class VarkaLoopEmitter {
     // the AND is what keeps a null lane from condemning the batch, so skipping it quietly
     // would turn a liveness error into spurious batch declines on nullable data. `loadWord`
     // refuses instead, and that refusal is what {@code misdescribeWordLiveness} arms in the
-    // "loaded" direction. What makes the case unreachable is {@link #guardedWord}: one
-    // predicate, read by both the slot planner and the liveness pass, so neither can decide
-    // this node is guarded while the other decides its word is dead.
+    // "loaded" direction. What makes the case unreachable is {@link #guardedWord}, which the
+    // liveness pass reads and which contains {@link #guardScratch}, the slot planner's
+    // predicate, by construction - so the planner cannot decide this node is guarded while the
+    // liveness pass decides its word is dead. It was one predicate until task 63 found that
+    // its two readers ask different questions; the containment is what preserves the property.
     if (!dense && word != null && word != WORD_ALL_TRUE) {
       cb.aload(s.species);
       loadWord(cb, s, word);

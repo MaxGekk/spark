@@ -1982,8 +1982,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       caseLengths, combos(2), data = extreme, ctx = "MUL WRAP over the extremes")
     for (mode <- Seq(Overflow.FAIL, Overflow.NULL); options <- Seq(VarkaEmitOptions.DEFAULTS,
         checkOff)) {
-      // Under `checkOff` too: that switch is the benchmark's reference arm and may only change
-      // what a kernel costs, never what it means. It used to gate this refusal, so a checked
+      // Under `checkOff` too. Not because that switch never changes meaning - for a checked
+      // add it does, deliberately, which is what makes it a reference arm - but because a
+      // multiply has no correct checked emission at all, so there is no cheaper version of
+      // the same node for "off" to select. It used to gate this refusal, and a checked
       // multiply emitted there as a plain wrapping one.
       val refused = intercept[IllegalArgumentException] {
         emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0, options)
