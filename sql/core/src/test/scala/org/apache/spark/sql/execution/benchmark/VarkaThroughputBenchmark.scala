@@ -381,11 +381,14 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
         "SELECT datediff(d, DATE'2000-01-01') + 1 AS a FROM varka_dates")
       runQueries(baseline, varka, "try_add over datediff (task 63)",
         "SELECT try_add(datediff(d, DATE'2000-01-01'), i) AS a FROM varka_dates")
-      // The residual entry is `i % 7` rather than `i + 1` because task 63 lowered int
-      // arithmetic: `i + 1` fuses now, and this row is here to measure a projection that is
-      // only partly fused. `%` has no arm, so it still is one. What that change is worth is
-      // in PLAN_TASK_63.md 9: with `i + 1` this row reads 348.7 M rows/s against the 94.4 it
-      // committed while that entry was residual.
+      // The same projection twice, which is the end-to-end worth of lowering arithmetic.
+      // The first row is what this case measured until task 63: one fused date entry, one
+      // forwarded column, one residual - except that `i + 1` fuses now, so the projection is
+      // whole and the row prices that. The second keeps a residual entry by using an operator
+      // no arm lowers, so the partial-fusion shape the file has always tracked is still
+      // tracked. Read together they say what the residual entry costs the whole projection.
+      runQueries(baseline, varka, "mixed projection, arithmetic entry fused (task 63)",
+        "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates")
       runQueries(baseline, varka, "mixed projection (partial fusion)",
         "SELECT date_add(d, 3) AS a, i, i % 7 AS inc FROM varka_dates")
       // Chain-depth scaling (PLAN_TASK_14.md 2.3): the fused loop pays one load and one store

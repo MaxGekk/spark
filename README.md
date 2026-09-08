@@ -141,7 +141,9 @@ task, each with a recorded outcome:
   epilogue and took the filter's compaction to `compress(mask)` with it -
   leaving `year` and the extraction family, boolean outputs, lane-width
   conversion, int64 lanes for `TimestampNTZ`, and ANSI-correct integer
-  arithmetic, plus two tasks that add no vocabulary at all: one asking how
+  arithmetic - of which the int32 half has since shipped as task 63, checked
+  where the operands' own ranges cannot rule overflow out and unchecked where
+  they can - plus two tasks that add no vocabulary at all: one asking how
   many independent chains the emitted loop should carry, since a superscalar
   core has vector ports that a single dependency chain leaves idle, and one
   asserting the *instructions* the kernels compile to rather than inferring
@@ -152,8 +154,9 @@ task, each with a recorded outcome:
   the tasks milestone 4 planned for every lane but the date's int32, moved out
   when milestone 4 was re-scoped to the date family and the emitter under it -
   boolean outputs, lane-width conversion, int64 lanes (`TimestampNTZ`,
-  `bigint`), ANSI integer arithmetic, `date - date`, and civil-from-days in
-  long lanes.
+  `bigint`), the rest of ANSI integer arithmetic (`/`, `div`, `%` and the
+  int64 forms; the int32 add, subtract, multiply and negate came back to
+  milestone 4 as task 63), `date - date`, and civil-from-days in long lanes.
 * **Milestone 6**: *coverage* - the scope catalogue is in
   [`sql/varka/plans/SCOPE_MILESTONE_6.md`](sql/varka/plans/SCOPE_MILESTONE_6.md),
   driven by a census of TPC-DS, TPC-H and the New York taxi benchmark. What that

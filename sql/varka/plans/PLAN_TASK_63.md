@@ -388,16 +388,16 @@ per-row anchor computing the composite key with `Math.addExact` and
 
 ## 9. Outcome
 
-The task shipped in six commits on `varka-task-63`. Sections 9.1 to 9.3 are
-the measurement, 9.4 scores 6.1's predictions, and 9.5 records what moved that
+The task shipped in six commits on `varka-task-63`. Sections 9.1 to 9.4 are
+the measurement, 9.5 scores 6.1's predictions, and 9.6 records what moved that
 this plan did not list - which, this time, is most of the work.
 
 The numbers are `VarkaArithmeticBenchmark`'s, a file of its own rather than
-the section in `VarkaEmitterParityBenchmark` that section 6 asked for; 9.5
+the section in `VarkaEmitterParityBenchmark` that section 6 asked for; 9.6
 gives the reason. It was measured at `6722db54e31` on an idle machine (load
 0.76, canary compute +0.1%, cache +3.8%, memory -1.2%) at both widths in one
 run of `dev/varka_bench_regen.sh`. `VarkaThroughputBenchmark` was regenerated
-separately, for a reason that is not this task's arithmetic at all (9.5).
+separately, for a reason that is not this task's arithmetic at all (9.6).
 
 ### 9.1 What the ANSI check costs, as an A/B on one node
 
@@ -426,7 +426,7 @@ the overflow mask to a `long`, ANDs it with the node's validity word and ORs
 it into the batch accumulator - and those conversions do not vectorize the way
 the lane ops do. `try_add`, which disposes of the same mask by narrowing the
 word instead, is slower again. This is a finding, not a prediction that came
-true; 9.5 says where it goes.
+true; 9.6 says where it goes.
 
 ### 9.2 The composite key, where the bound removes the check
 
@@ -453,7 +453,41 @@ The mixed-null row is the interesting one: it lands within 2.1% of the
 null-free row at AVX-512 and 0.2% above it at 128-bit, which is 6.1's
 prediction 6 and the emitter suite pins the byte equality behind it.
 
-### 9.3 What the emitter emits
+### 9.3 End to end, against the row engine
+
+`VarkaThroughputBenchmark`, 2 million Arrow-cached rows, the whole query
+through the planner in the default (ANSI) session, so these rows include
+everything the kernel-level file above leaves out.
+
+| query | AVX-512 | 128-bit |
+|---|---|---|
+| `year(d) * 100 + month(d)` | 334.7 against 35.9, **9.3x** | 280.9 against 35.4, **7.9x** |
+| `datediff(d, DATE'2000-01-01') + 1` | 407.2 against 44.8, **9.1x** | 403.9 against 43.7, **9.2x** |
+| `try_add(datediff(...), i)` | 358.7 against 33.1, **10.8x** | 319.8 against 32.4, **9.9x** |
+| `datediff(d, d2)` alone (control) | 259.1 against 38.8, 6.7x | 244.3 against 39.6, 6.2x |
+
+**The arithmetic improves the ratio rather than spending it.** `datediff + 1`
+beats `datediff` alone - 9.1x against 6.7x - because the extra operation costs
+the row engine a per-row add and the kernel one lanewise call on a value
+already in a register. The same reading explains the composite key: the row
+engine decomposes the date once per field and Varka once for both.
+
+**And one residual entry costs a projection more than the arithmetic ever
+saves it.** The file now carries the same three-entry projection twice, and the
+pair is the clearest end-to-end statement of what this task did:
+
+| `SELECT date_add(d, 3), i, <entry>` | AVX-512 | 128-bit |
+|---|---|---|
+| `i + 1`, which fuses since this task | 346.7, **10.8x** | 327.4, **10.0x** |
+| `i % 7`, which does not | 76.1, 2.3x | 84.7, 2.6x |
+
+One entry the compiler cannot lower drops the whole projection from 10.8x to
+2.3x, because every batch pays the per-row path for that column and the merge
+around it. That is 4.6x on a query whose other two entries did not change, and
+it is the argument for lowering the next expression family as much as any
+kernel number here.
+
+### 9.4 What the emitter emits
 
 Pinned by the register test as one table of `IntVector` calls in `loopDense0`,
 with the claims stated as differences so a change to the shared year prefix
@@ -474,7 +508,7 @@ A `TRY` node has no dense body at all - it can null a lane whose operands were
 both valid, so the dispatcher never sends it a dense batch - and a `FAIL` node
 keeps both. Both are asserted on the emitted method list.
 
-### 9.4 The predictions, scored as 6.1 registered them
+### 9.5 The predictions, scored as 6.1 registered them
 
 1. **The register: hit on the differences, and 3.3's absolute numbers were
    the wrong unit.** The check costs what 3.3 said it would, with one
@@ -496,7 +530,13 @@ keeps both. Both are asserted on the emitted method list.
    wrapping add at AVX-512, inside the range. At 128-bit it is 0.21x. The
    prediction reasoned from the forfeited dense body alone and missed the
    mask-to-long disposal, which is the larger cost in narrow lanes (9.1).
-4. **Throughput: see the table below.**
+4. **Throughput: both halves missed, in the same direction.** The composite
+   key was predicted at 3x-6x Janino and reads 9.3x and 7.9x. `datediff + 1`
+   was predicted within 10% of the `datediff` row's ratio and reads 9.1x
+   against that row's 6.7x, and 9.2x against 6.2x - 36% and 48% above it. Both
+   misses have one cause the prediction did not allow for: an added lanewise
+   operation is nearly free in the kernel and is a whole per-row operation in
+   Janino, so lengthening a fused expression *raises* the ratio.
 5. **The overflow differential: hit.** Under ANSI the overflowing batch
    declines, the row engine raises, and the condition and message are equal to
    the row engine's own for `+`, `-` and unary minus; `try_*` nulls exactly
@@ -508,7 +548,7 @@ keeps both. Both are asserted on the emitted method list.
    Under `FAIL` the masked loop is larger, as the same prediction said it
    would be.
 
-### 9.5 What moved that the plan did not list
+### 9.6 What moved that the plan did not list
 
 **The benchmark is its own file.** Section 6 put these rows in
 `VarkaEmitterParityBenchmark`. The owner's instruction during the work was to
@@ -525,7 +565,10 @@ labelled "partial fusion" over a query that was now fully fused. They use
 `i % 7` now. This is why `VarkaThroughputBenchmark` was regenerated at all:
 not because this task's arithmetic changed those numbers, but because the
 queries behind three of its rows had to change to keep meaning what their
-labels say. The lesson is written up in `SKILLS.md`.
+labels say. It also gained four rows - the three task 63 queries and the
+fully fused twin of the mixed projection - so the pair in 9.3 is two committed
+rows of one file rather than a comparison against a number in a scratch log.
+The lesson is written up in `SKILLS.md`.
 
 **A checked multiply declines, which is wider than 3.3 assumed.** The plan
 expected `i * 7` under ANSI to fuse with a check. There is no int-lane
@@ -554,7 +597,7 @@ fuse. A calendar node over such a producer is guarded rather than declined,
 because task 52's range analysis already reads any non-literal offset as a
 column shift.
 
-### 9.6 What this leaves for later
+### 9.7 What this leaves for later
 
 * **The masked check's mask-to-long disposal** (9.1) costs 66% at 128-bit on
   a shape whose arithmetic is one add. That is a kernel-level finding about
