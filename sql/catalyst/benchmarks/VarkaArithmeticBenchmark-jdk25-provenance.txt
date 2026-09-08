@@ -1,11 +1,11 @@
 benchmark:   org.apache.spark.sql.VarkaArithmeticBenchmark
-commit:      6722db54e31
-date:        2026-09-07T23:06:56Z
+commit:      cbb76f6a801
+date:        2026-09-08T11:16:56Z
 jdk:         OpenJDK Runtime Environment (build 25.0.4+7-1-26.04-Ubuntu)
 kernel:      7.0.0-31-generic
 cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 power:       governor=performance epp=performance profile=performance
-load at start: 0.76
-canary:      ok (compute +0.1% cache +3.8% memory -1.2% )
+load at start: 0.73
+canary:      ok (compute +0.2% cache +2.7% memory -0.8% )
 wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaArithmeticBenchmark
 narrow run:  build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaArithmeticBenchmark"

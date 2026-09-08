@@ -426,37 +426,52 @@ off, so the difference is the check and nothing else. The emitter suite pins
 that: with the flag off a `FAIL` node is byte-identical to the `WRAP` node,
 method for method.
 
+*Requoted on 8 September 2026 from the regeneration at `cbb76f6a801`, which the
+review forced: dropping the dead scratch local (9.7) changed the emitted
+bytecode of every checked row. The move is not cosmetic and it corrects one of
+this section's claims - see below. The superseded figures are in this file's
+history and in the results files'.*
+
 | shape | AVX-512 | 128-bit |
 |---|---|---|
-| `i + 1`, checked -> off | 18412.5 -> 18936.5 (2.8%) | 14127.9 -> 19019.4 (25.7%) |
-| `i + 1`, mixed nulls | 14706.5 -> 18147.5 (19.0%) | 6459.9 -> 18986.9 (66.0%) |
-| `i - 1`, checked -> off | 18297.6 -> 18737.1 (2.3%) | 13737.0 -> 19302.4 (28.8%) |
-| `-i`, checked -> off | 18371.5 -> 18723.1 (1.9%) | 11813.6 -> 19243.0 (38.6%) |
-| `try_add(i, 1)` against `LEGACY`, mixed | 13774.9 against 17563.6 | 4098.7 against 19224.5 |
+| `i + 1`, checked -> off | 19011.8 -> 19388.5 (1.9%) | 13790.1 -> 19228.2 (28.3%) |
+| `i + 1`, mixed nulls | 18368.2 -> 19026.6 (3.5%) | 6607.1 -> 18177.5 (63.7%) |
+| `i - 1`, checked -> off | 18900.4 -> 19254.1 (1.8%) | 13423.0 -> 18705.6 (28.2%) |
+| `-i`, checked -> off | 19358.8 -> 19370.1 (0.1%) | 11524.3 -> 18860.8 (38.9%) |
+| `try_add(i, 1)` against `LEGACY`, mixed | 16828.8 against 18779.3 | 3761.7 against 18233.9 |
 
-**The width decides, and the mask decides more.** In the wide lanes the check
-is a rounding error on a memory-bound loop; in the narrow ones it costs a
-quarter to a third of the throughput, because the same five ops are a much
-larger share of a four-lane group's work. And in a masked body it stops being
-a surcharge at all: 66% at 128-bit for an addition whose arithmetic did not
-change. What the mask arm adds is the disposal - `emitGuardCollect` converts
-the overflow mask to a `long`, ANDs it with the node's validity word and ORs
-it into the batch accumulator - and those conversions do not vectorize the way
-the lane ops do. `try_add`, which disposes of the same mask by narrowing the
-word instead, is slower again. This is a finding, not a prediction that came
-true; 9.6 says where it goes.
+**The width decides, and in the narrow lanes the mask decides more.** At
+AVX-512 the check is a rounding error on a memory-bound loop, masked or not -
+1.9% and 3.5%, and unary minus is free outright. At 128 bits the same five ops
+are a much larger share of a four-lane group's work and cost a quarter to a
+third; and there the masked body is a different story again, 63.7% for an
+addition whose arithmetic did not change. What the masked arm adds is the
+disposal - `emitGuardCollect` converts the overflow mask to a `long`, ANDs it
+with the node's validity word and ORs it into the batch accumulator - and those
+conversions do not vectorize the way the lane ops do. `try_add`, which disposes
+of the same mask by narrowing the word instead, is slower again.
+
+**One claim here was wrong, and the requote is what found it.** The first run
+put the AVX-512 masked cost at 19.0% and this section attributed it to the same
+disposal. It was mostly a *dead local slot*: the scratch temporary every checked
+node reserved and no instruction read (9.7). Removing it moved that row 24.9%
+and left the disposal 3.5% - so at AVX-512 the disposal is nearly free and only
+the 128-bit figure ever supported the claim. An unused local costing fifteen
+points of throughput at one width and nothing at the other is itself worth
+knowing, and `SKILLS.md` records it; the wide body carries more live vector
+values, so it is the one with no register headroom to spare.
 
 ### 9.2 The composite key, where the bound removes the check
 
-| shape (null-free unless said) | AVX-512 | 128-bit |
+| shape (null-free unless said; requoted from `cbb76f6a801`) | AVX-512 | 128-bit |
 |---|---|---|
-| `year(d) * 100 + month(d)`, as shipped | 2648.5 | 998.7 |
-| the same with its outer add checked | 2413.5 (8.9% slower) | 905.2 (9.4% slower) |
-| the same, mixed nulls | 2593.5 | 1000.3 |
-| `year(d)` alone (control) | 3462.7 | 1351.8 |
-| `year(d)`, `month(d)`, no arithmetic (control) | 2806.5 | 1059.0 |
-| `datediff(d, d2) + 1`, as shipped | 11905.2 | 12193.2 |
-| the same, checked | 10942.0 (8.1% slower) | 9512.4 (22.0% slower) |
+| `year(d) * 100 + month(d)`, as shipped | 2691.4 | 999.2 |
+| the same with its outer add checked | 2447.0 (9.1% slower) | 907.4 (9.2% slower) |
+| the same, mixed nulls | 2688.4 | 999.9 |
+| `year(d)` alone (control) | 3560.5 | 1351.6 |
+| `year(d)`, `month(d)`, no arithmetic (control) | 2839.4 | 1060.2 |
+| `datediff(d, d2) + 1`, as shipped | 12092.6 | 10902.5 |
+| the same, checked | 11408.5 (5.7% slower) | 8600.8 (21.1% slower) |
 
 Both operands of the key are bounded - the calendar bounds every field, the
 date contract bounds `datediff` - so the compiler proves the result cannot
@@ -467,8 +482,8 @@ checked, because there is no such kernel: an int lane has no cheap overflow
 test for `*`, the compiler declines a checked one, and without the bound the
 whole expression would be residual rather than 9% slower.
 
-The mixed-null row is the interesting one: it lands within 2.1% of the
-null-free row at AVX-512 and 0.2% above it at 128-bit, which is 6.1's
+The mixed-null row is the interesting one: it lands within 0.1% of the
+null-free row at AVX-512 and 0.07% above it at 128-bit, which is 6.1's
 prediction 6 and the emitter suite pins the byte equality behind it.
 
 ### 9.3 End to end, against the row engine
@@ -540,14 +555,15 @@ keeps both. Both are asserted on the emitted method list.
    written, and the second half is a partial hit.** The prediction assumed the
    key would carry a check that the bound in fact removes, so there is no
    checked shipped row to score. Against the deliberately checked arm the cost
-   is 8.9% and 9.4%, above the 5% the prediction expected of a
-   latency-bound prefix. On `datediff + 1` the prediction said 10-25%: 22.0%
-   at 128-bit is inside it, 8.1% at AVX-512 is below it.
-3. **`NULL` at 0.6x-0.8x of `WRAP`: hit at AVX-512, badly wrong at 128-bit,
-   and measured on a different shape.** `try_add(i, 1)` runs at 0.78x of the
-   wrapping add at AVX-512, inside the range. At 128-bit it is 0.21x. The
-   prediction reasoned from the forfeited dense body alone and missed the
-   mask-to-long disposal, which is the larger cost in narrow lanes (9.1).
+   is 9.1% and 9.2%, above the 5% the prediction expected of a
+   latency-bound prefix. On `datediff + 1` the prediction said 10-25%: 21.1%
+   at 128-bit is inside it, 5.7% at AVX-512 is below it.
+3. **`NULL` at 0.6x-0.8x of `WRAP`: missed at both widths, in opposite
+   directions, and measured on a different shape.** `try_add(i, 1)` runs at
+   0.90x of the wrapping add at AVX-512, above the range; at 128-bit it is
+   0.21x, far below it. The prediction reasoned from the forfeited dense body
+   alone and missed the mask-to-long disposal, which is the larger cost in
+   narrow lanes and nearly free in wide ones (9.1).
 4. **Throughput: both halves missed, in the same direction.** The composite
    key was predicted at 3x-6x Janino and reads 9.3x and 7.9x. `datediff + 1`
    was predicted within 10% of the `datediff` row's ratio and reads 9.1x
@@ -562,7 +578,7 @@ keeps both. Both are asserted on the emitted method list.
    decline. All asserted in `VarkaDifferentialSuite`.
 6. **The composite key on its dense twin: hit.** `loopMasked0` and
    `epilogueMasked` are byte-equal to their dense siblings under `WRAP`, and
-   the mixed-null row is within 2.1% and 0.2% of the null-free one (9.2).
+   the mixed-null row is within 0.1% and 0.07% of the null-free one (9.2).
    Under `FAIL` the masked loop is larger, as the same prediction said it
    would be.
 
@@ -671,6 +687,20 @@ twice:
   it" had become the wrong advice, with a silent failure mode rather than the
   loud one it promised. Corrected in place, because a plan that tells the next
   editor to do the thing that produces a wrong date is worse than no plan.
+
+**The dead local was not free, which the regeneration found and the review did
+not.** Splitting that predicate removed a `guardTmp` slot every checked node had
+reserved and no instruction had read - dead code, and reported as tidiness. But
+a slot change moves the emitted bytecode, so `sql/varka/AGENTS.md` requires the
+results files be regenerated rather than the figures patched, and that
+regeneration moved the AVX-512 masked row 24.9%, from 14706.5 to 18368.2 M
+rows/s. The 128-bit row did not move at all. So an unused local was costing
+fifteen points of throughput at one width and nothing at the other - a register
+pressure signature, the wide body having more live vector values and no headroom
+- and 9.1's original attribution of that cost to the mask disposal was wrong at
+AVX-512, though it stands at 128 bits. The lesson is in `SKILLS.md`; the
+consequence for task 82 is that it is a 128-bit task, and its own scope section
+now says so.
 
 **What is registered rather than fixed.** `intBound`'s calendar constants
 (`IRYear` 40000 and its siblings) hold because task 52's guard fires, and that
