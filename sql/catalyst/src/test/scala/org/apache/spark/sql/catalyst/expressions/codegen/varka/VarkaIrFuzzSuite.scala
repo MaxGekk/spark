@@ -69,6 +69,18 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
 
   private val columnBound = 2500000L
   private val literalBound = 4000
+
+  // The generator's magnitude bounds saturate rather than wrap. Four nested multiplies of a
+  // column's own bound pass 2^63, and a bound that came back negative would let
+  // `fitsUnderChrono` admit an out-of-range subtree under a calendar node - at which point the
+  // kernel declines the batch, correctly, and the suite fails asserting a zero status. A
+  // saturated bound is always an over-approximation, which is the safe direction here.
+  private def satAdd(a: Long, b: Long): Long =
+    try Math.addExact(a, b) catch { case _: ArithmeticException => Long.MaxValue }
+  private def satMul(a: Long, b: Long): Long =
+    try Math.multiplyExact(a, math.max(1L, b)) catch {
+      case _: ArithmeticException => Long.MaxValue
+    }
   /** A calendar node may sit over a subtree whose value cannot leave this magnitude. */
   private val chronoBound = 5000000L
   private val lengths = Seq(1, 3, 7, 15, 16, 17, 33, 64, 65, 100, 257, 1000)
@@ -146,8 +158,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       // Task 63: wrapping arithmetic can leave the day range entirely, which is what the
       // bound is for - a calendar node over such a subtree is refused by fitsUnderChrono.
       case n: IntArith => n.op() match {
-        case IntOp.MUL => (v(n.left()) * math.max(1L, v(n.right())), g(n.left(), n.right()))
-        case _ => (v(n.left()) + v(n.right()), g(n.left(), n.right()))
+        case IntOp.MUL => (satMul(v(n.left()), v(n.right())), g(n.left(), n.right()))
+        case _ => (satAdd(v(n.left()), v(n.right())), g(n.left(), n.right()))
       }
       case n: IntNeg => (v(n.child()), g(n.child()))
       // The dynamic form moves the date down like the literal one, whatever the level; the
@@ -282,11 +294,11 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
           val b = literal()
           rnd.nextInt(3) match {
             case 0 => Gen(new IntArith(IntOp.ADD, Overflow.WRAP, a.node, b.node),
-              a.bound + b.bound)
+              satAdd(a.bound, b.bound))
             case 1 => Gen(new IntArith(IntOp.SUB, Overflow.WRAP, a.node, b.node),
-              a.bound + b.bound)
+              satAdd(a.bound, b.bound))
             case _ => Gen(new IntArith(IntOp.MUL, Overflow.WRAP, a.node, b.node),
-              a.bound * math.max(1L, b.bound))
+              satMul(a.bound, b.bound))
           }
         case 19 =>
           val a = value(depth - 1)

@@ -1494,8 +1494,9 @@ public final class VarkaLoopEmitter {
      * correctness, not a producer's insurance.
      */
     final Set<VarkaVectorIR> selfGuarding = new HashSet<>();
-    /** Task 63: the int arithmetic nodes whose mode emits an overflow check, which condemns
-     *  the batch through the same accumulator task 52's guard uses. */
+    /** Task 63: the int arithmetic nodes whose overflow check condemns the batch through the
+     *  same accumulator task 52's guard uses - the FAIL ones. A NULL node checks too but
+     *  disposes of the mask into its own validity word, so it is not one of these. */
     final Set<VarkaVectorIR> checkedArith = new HashSet<>();
 
     /**
@@ -1847,7 +1848,11 @@ public final class VarkaLoopEmitter {
           // above sets it for the same reason, and the dispatcher reads it to refuse a dense
           // batch, since a dense body has no validity to clear.
           analyzeOp(node, false, n.left(), n.right());
-          if (n.mode() != Overflow.WRAP && n.op() != IntOp.MUL) {
+          // FAIL only: this set exists to allocate the condemning accumulator and to keep the
+          // word the collect reads alive, and a NULL node writes neither - it narrows its own
+          // word instead, and liveWords demands that word through its own arm. Including NULL
+          // here parked a guardAcc and a guardTmp that nothing ever read.
+          if (n.mode() == Overflow.FAIL && n.op() != IntOp.MUL) {
             checkedArith.add(node);
           }
           if (n.mode() == Overflow.NULL) {
@@ -2269,7 +2274,7 @@ public final class VarkaLoopEmitter {
           // column-count AddMonths guards itself and takes one whatever the option says.
           // MakeDate, the other self-guarding node, guards out of makeDateTmp and takes none -
           // allocating one for it would shift every later local and move the pinned bytes.
-          if (guardedWord(analysis, node, producersGuarding, selfGuarding, checkedArith)) {
+          if (guardScratch(analysis, node, producersGuarding, selfGuarding)) {
             s.guardTmp.put(node, slot++);
           }
           if (node instanceof MakeDate) {
@@ -2437,21 +2442,34 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Whether {@code node} carries a range guard in this body, and so needs its own validity word
-   * for {@link #emitGuardCollect} to qualify the condemning mask with. The one place the two
-   * readers agree: {@link #planSlots} allocates the guard's temporary under it and
-   * {@link #liveWords} demands the word under it, and a third guarded node kind added to one
-   * and not the other would give that node a guard whose word the liveness pass had killed.
-   * Tasks 52 and 60 each added a kind; this is what makes the next one a single edit.
+   * Whether {@code node} condemns the batch from this body, and so needs its own validity word
+   * kept alive for {@link #emitGuardCollect} to qualify the condemning mask with. Read by
+   * {@link #liveWords}: a node that collects into the accumulator without its word surviving
+   * the liveness pass would fail loudly in {@code loadWord}, which is the failure this one
+   * predicate exists to make impossible for the next kind added. Tasks 52 and 60 added the
+   * first two kinds, task 63 the third.
    */
   private static boolean guardedWord(Analysis analysis, VarkaVectorIR node,
       boolean producersGuarding, boolean selfGuarding, boolean checkedArith) {
     return (producersGuarding && analysis.guardedProducers.contains(node))
         || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node))
-        // Task 63: a checked int operation reads its own word so a null lane cannot condemn
-        // the batch, which is the same contract task 52's guard has and the reason this
-        // predicate is one function rather than three conditions.
         || (checkedArith && analysis.checkedArith.contains(node));
+  }
+
+  /**
+   * Whether {@code node} needs {@link Slots#guardTmp}, the scratch local a guard parks its
+   * value in before testing it. A subset of {@link #guardedWord}, and deliberately not the
+   * same question: a guarded day producer's value is on the stack when the guard runs
+   * ({@code emitValue} stores it) and {@code AddMonths} guards its count the same way, but
+   * task 63's checked arithmetic already parks its operands and result in
+   * {@link Slots#intArithTmp}, and {@code emitIntNeg} reads its operand back with {@code dup},
+   * so neither ever loads this slot. Allocating one for them reserved a local nothing read and
+   * shifted every later local in the body.
+   */
+  private static boolean guardScratch(Analysis analysis, VarkaVectorIR node,
+      boolean producersGuarding, boolean selfGuarding) {
+    return (producersGuarding && analysis.guardedProducers.contains(node))
+        || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node));
   }
 
   /**
@@ -3598,6 +3616,13 @@ public final class VarkaLoopEmitter {
    * and the row engine raises Spark's own error. {@code NULL} clears those lanes from the
    * node's own validity word instead, so the row is null and the batch runs on - which is why
    * `analyze` marks a `NULL` node as one that nulls valid inputs.
+   *
+   * <p>The {@code FAIL} route inherits {@link #emitGuardCollect}'s untaken-arm cliff, which is
+   * milestone 4's task 79: the mask is ANDed with the node's word and the epilogue mask but
+   * not with an enclosing {@code IfElse}'s condition, and a vector body computes both arms, so
+   * a checked node under a {@code CASE} arm condemns the batch from a lane the condition would
+   * have sent the other way. Answers stay right - the row engine recomputes the batch - and
+   * only the fusion is lost, on exactly the data the check exists for.
    */
   private static void emitIntArith(CodeBuilder cb, IntArith n, boolean dense, Analysis analysis,
       Slots s, Set<VarkaVectorIR> computed) {
@@ -3606,6 +3631,13 @@ public final class VarkaLoopEmitter {
       case SUB -> "sub";
       case MUL -> "mul";
     };
+    // Before the scratch-slot test, because the refusal is about the node and not about how
+    // this body was configured: with `checkIntOverflow` off there is no scratch, and a checked
+    // multiply would otherwise slip through as a plain wrapping one - the A/B switch silently
+    // changing semantics rather than only cost.
+    if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP) {
+      throw new IllegalArgumentException("a checked multiply has no int-lane overflow test: " + n);
+    }
     int[] tmp = s.intArithTmp.get(n);
     if (tmp == null) {
       // WRAP, or the check switched off for the A/B: the plain lanewise op, whose word is the
@@ -3613,9 +3645,6 @@ public final class VarkaLoopEmitter {
       emitAndValidatedOp(cb, n, n.left(), n.right(), op, LANEWISE_VV, dense, analysis, s,
           computed);
       return;
-    }
-    if (n.op() == IntOp.MUL) {
-      throw new IllegalArgumentException("a checked multiply has no int-lane overflow test: " + n);
     }
     int a = tmp[0];
     int b = tmp[1];
@@ -3685,13 +3714,21 @@ public final class VarkaLoopEmitter {
       emitGuardCollect(cb, dense ? null : s.wordRef.get(node), dense, s);
       return;
     }
-    // NULL: word &= ~overflow. A dense body has no word to narrow, and the dispatcher never
-    // sends a dense batch to a kernel whose analysis set nullsFromValidInputs, so this arm
-    // only ever runs masked - the mask is dropped rather than silently ignored if it does.
+    // NULL: word &= ~overflow. A dense body has no word to narrow, and `emit` builds none at
+    // all for a kernel whose analysis set nullsFromValidInputs - which every NULL node does -
+    // so reaching here dense means that invariant broke. Refused rather than papered over with
+    // a pop, which would silently drop the check and answer where Spark returns null; the
+    // sibling impossibilities (a NULL IntNeg, a checked multiply) are refused the same way.
     if (dense) {
-      cb.pop();
-      return;
+      throw new IllegalArgumentException(
+          "a NULL-mode overflow mask reached a dense body, which has no word to narrow: " + node);
     }
+    // Not ANDed with the epilogue mask, unlike the FAIL arm's collect: a tail lane above the
+    // row count can test as overflowing (a literal operand is broadcast to every lane while a
+    // column's is zero-filled by the masked load), and clearing its validity bit is harmless
+    // because no consumer reads a bit past the row count - the store is masked too. The FAIL
+    // arm cannot be so relaxed: its mask leaves the lane group in the accumulator and would
+    // condemn the whole batch from a row that does not exist.
     cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
     cb.loadConstant(-1L);
     cb.lxor();

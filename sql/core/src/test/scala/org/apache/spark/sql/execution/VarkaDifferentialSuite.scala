@@ -1294,6 +1294,38 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 63: the shapes whose bound was a fiction raise the row engine's error, not an " +
+      "answer") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    withAnsi(true) {
+      // Each of these used to have its ANSI check removed by a bound that was wrong, so the
+      // kernel wrapped and returned a number where Spark raises. The assertion is the one that
+      // matters for a silent-wrong-answer bug: both engines must fail the same way.
+      //
+      //  - `quarter(d) * 536870912`: the bound is 4 * 2^29 = 2^31 exactly, one past the
+      //    largest int, which the old comparison admitted.
+      //  - `datediff(date_add(d, 2147483647), d) + 1`: the shift wraps the int32 lane, so the
+      //    contract width was never this datediff's bound.
+      for (q <- Seq(
+          "SELECT quarter(d) * 536870912 AS a FROM varka_dates ORDER BY a",
+          "SELECT datediff(date_add(d, 2147483647), d) + 1 AS a FROM varka_dates ORDER BY a")) {
+        val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
+        val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
+        assert(actual.getCondition === expected.getCondition, q)
+        assert(actual.getMessage === expected.getMessage, q)
+      }
+    }
+    withAnsi(false) {
+      // Under LEGACY there is no check to remove, and both engines wrap identically - which is
+      // what says the fix narrowed the bound rather than changing the arithmetic.
+      checkDifferential(spark, varkaSpark,
+        "SELECT quarter(d) * 536870912 AS a, datediff(date_add(d, 2147483647), d) + 1 AS b " +
+          "FROM varka_dates ORDER BY a, b",
+        expectFused = true)
+    }
+  }
+
   test("task 63: try_add gives NULL for the row that would have raised, and the batch runs on") {
     cacheIntsOverflow(spark)
     cacheIntsOverflow(varkaSpark)

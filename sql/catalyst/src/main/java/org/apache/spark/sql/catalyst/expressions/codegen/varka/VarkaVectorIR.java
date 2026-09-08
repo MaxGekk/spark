@@ -137,6 +137,34 @@ public sealed interface VarkaVectorIR
   record DateDiff(VarkaVectorIR end, VarkaVectorIR start) implements VarkaVectorIR {}
 
   /**
+   * {@code left OP right} over two int32 lanes (task 63): Spark's {@code Add}, {@code Subtract}
+   * and {@code Multiply} where both operands and the result are {@code IntegerType}. The
+   * operands are int-valued nodes - a fused field such as {@link Year} or {@link DateDiff}, an
+   * {@code IntegerType} column, an int literal, or nested arithmetic - never a date, which is
+   * what separates this from {@link AddDays}, whose left operand is a date and whose result is
+   * one.
+   *
+   * <p>{@code mode} carries the overflow behaviour and is part of the node's identity; see
+   * {@link Overflow} for why it belongs here rather than in the emit options. Under
+   * {@code WRAP} and {@code FAIL} the result's validity is the AND of the operands', the
+   * null-intolerant rule every other binary node follows; under {@code NULL} it is that AND
+   * with the overflowing lanes cleared, which makes this the second node after
+   * {@link MakeDate} that can null a lane both of whose inputs are valid.
+   */
+  record IntArith(IntOp op, Overflow mode, VarkaVectorIR left, VarkaVectorIR right)
+      implements VarkaVectorIR {}
+
+  /**
+   * {@code -child} over an int32 lane (task 63), Spark's {@code UnaryMinus}. Only
+   * {@link Overflow#WRAP} and {@link Overflow#FAIL} occur: Spark has no {@code try_negative},
+   * so a negation never nulls a valid lane, and the emitter rejects {@link Overflow#NULL}
+   * here rather than emitting a form nothing can produce.
+   *
+   * <p>The one overflowing input is {@link Integer#MIN_VALUE}, whose negation is itself.
+   */
+  record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
+
+  /**
    * {@code left OP right} over two date-valued operands (task 11). Null-intolerant: the result
    * is known (true or false) exactly where both operands are valid, unknown elsewhere.
    */
@@ -349,34 +377,6 @@ public sealed interface VarkaVectorIR
    * value. See {@link Year} for what a chrono node costs and why.
    */
   record WeekOfYear(VarkaVectorIR days) implements Chrono {}
-
-  /**
-   * {@code left OP right} over two int32 lanes (task 63): Spark's {@code Add}, {@code Subtract}
-   * and {@code Multiply} where both operands and the result are {@code IntegerType}. The
-   * operands are int-valued nodes - a fused field such as {@link Year} or {@link DateDiff}, an
-   * {@code IntegerType} column, an int literal, or nested arithmetic - never a date, which is
-   * what separates this from {@link AddDays}, whose left operand is a date and whose result is
-   * one.
-   *
-   * <p>{@code mode} carries the overflow behaviour and is part of the node's identity; see
-   * {@link Overflow} for why it belongs here rather than in the emit options. Under
-   * {@code WRAP} and {@code FAIL} the result's validity is the AND of the operands', the
-   * null-intolerant rule every other binary node follows; under {@code NULL} it is that AND
-   * with the overflowing lanes cleared, which makes this the second node after
-   * {@link MakeDate} that can null a lane both of whose inputs are valid.
-   */
-  record IntArith(IntOp op, Overflow mode, VarkaVectorIR left, VarkaVectorIR right)
-      implements VarkaVectorIR {}
-
-  /**
-   * {@code -child} over an int32 lane (task 63), Spark's {@code UnaryMinus}. Only
-   * {@link Overflow#WRAP} and {@link Overflow#FAIL} occur: Spark has no {@code try_negative},
-   * so a negation never nulls a valid lane, and the emitter rejects {@link Overflow#NULL}
-   * here rather than emitting a form nothing can produce.
-   *
-   * <p>The one overflowing input is {@link Integer#MIN_VALUE}, whose negation is itself.
-   */
-  record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
 
   /**
    * A canonical rendering of a node, pinned by hand because the shape hash (task 18) is

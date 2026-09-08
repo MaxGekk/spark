@@ -862,8 +862,10 @@ section first assumed. `trunc(d, 'WEEK')` for the previous Monday and
 `datediff(d, trunc(d, 'QUARTER'))` for the day of quarter were already one
 kernel, and since task 63 lowered int arithmetic the `+ 1` after that and the
 `+ 2440588` that turns `unix_date(d)` into a Julian day number are in the same
-kernel too - both are bounded operands, so ANSI needs no overflow check on
-them either. The `/ 7 + 1` of a week of month is still residual, because
+kernel too. Only the first of them loses its ANSI check, though: `datediff` is
+bounded by the date contract, while `unix_date(d)` is the date column relabelled
+(task 41 gives it no node of its own), and a column carries no bound - so that
+one fuses with the check rather than without it. The `/ 7 + 1` of a week of month is still residual, because
 integer division has no arm; that part waits, though for `div` rather than for
 the arithmetic. This paragraph named milestone 5's task 30 (ANSI integer
 arithmetic) as what these were waiting for; task 63 delivered the arithmetic

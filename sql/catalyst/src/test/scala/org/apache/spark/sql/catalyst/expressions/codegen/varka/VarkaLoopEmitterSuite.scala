@@ -1980,9 +1980,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // from drifting into a lowering that quietly wraps where ANSI says raise.
     checkMatrix(Seq(new IntArith(IntOp.MUL, Overflow.WRAP, a, b)), 2, Array.empty[Int],
       caseLengths, combos(2), data = extreme, ctx = "MUL WRAP over the extremes")
-    for (mode <- Seq(Overflow.FAIL, Overflow.NULL)) {
+    for (mode <- Seq(Overflow.FAIL, Overflow.NULL); options <- Seq(VarkaEmitOptions.DEFAULTS,
+        checkOff)) {
+      // Under `checkOff` too: that switch is the benchmark's reference arm and may only change
+      // what a kernel costs, never what it means. It used to gate this refusal, so a checked
+      // multiply emitted there as a plain wrapping one.
       val refused = intercept[IllegalArgumentException] {
-        emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0)
+        emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0, options)
       }
       assert(refused.getMessage.contains("checked multiply"), s"$mode: ${refused.getMessage}")
     }

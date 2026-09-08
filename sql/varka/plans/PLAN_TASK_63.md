@@ -599,6 +599,17 @@ column shift.
 
 ### 9.7 What this leaves for later
 
+* **A checked node under a `CASE` arm condemns the batch from the untaken arm.** The
+  `FAIL` mask goes through `emitGuardCollect`, which ANDs the node's word and the
+  epilogue mask but not the enclosing `IfElse`'s condition, and a vector body computes
+  both arms - so `CASE WHEN d < DATE'2020-01-01' THEN i + 1 ELSE year(d) END` falls
+  back on a batch whose overflowing row the condition sends to the `ELSE` arm. The
+  answers stay right and only the fusion is lost, on exactly the data the check is
+  there for. This is milestone 4's task 79, which owned the cliff for guarded day
+  producers and `add_months`; this task adds a third node kind to it, and that row is
+  widened rather than a new one opened. A user cannot even write the natural guard
+  (`i < 2147483647`) as the condition, because a bare int column does not compile in
+  predicate position - so the reachable shapes are date- or field-driven conditions.
 * **The masked check's mask-to-long disposal** (9.1) costs 66% at 128-bit on
   a shape whose arithmetic is one add. That is a kernel-level finding about
   `emitGuardCollect`, which task 52's range guard shares, so it is worth its

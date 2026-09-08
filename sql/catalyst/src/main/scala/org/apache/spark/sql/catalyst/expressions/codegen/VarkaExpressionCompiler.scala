@@ -587,9 +587,13 @@ private[sql] object VarkaExpressionCompiler {
     case a: Multiply if a.dataType == IntegerType =>
       intArith(IntOp.MUL, a.evalMode, a.left, a.right, a, inputs, literals, sink)
     case n @ UnaryMinus(c, failOnError) if n.dataType == IntegerType =>
-      // Spark has no try_negative, so the mode is only ever WRAP or FAIL here.
-      intOperand(c, inputs, literals, sink).map(x =>
-        new IntNeg(if (failOnError) Overflow.FAIL else Overflow.WRAP, x))
+      // Spark has no try_negative, so the mode is only ever WRAP or FAIL here. Negation
+      // overflows on exactly one value, `Int.MinValue`, so any bound at all rules it out and
+      // the check comes off - the same reasoning the binary arms use, on a narrower fact.
+      intOperand(c, inputs, literals, sink).map { x =>
+        val checked = failOnError && !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+        new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
+      }
     case Add(WeekDay(child), Literal(1, IntegerType), _) =>
       compileNode(child, inputs, literals, sink).map(new DayOfWeekIso(_))
     case Add(Literal(1, IntegerType), WeekDay(child), _) =>
@@ -805,8 +809,11 @@ private[sql] object VarkaExpressionCompiler {
    */
   private def intBound(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]):
       Option[Long] = {
+    // Exact, because a bound that wraps is worse than no bound at all: two nested bounds whose
+    // product passes 2^63 would come back a small non-negative number and "prove" a checked
+    // operation safe. `None` is the conservative answer and costs only a check.
     def both(l: VarkaVectorIR, r: VarkaVectorIR)(f: (Long, Long) => Long): Option[Long] =
-      for (a <- intBound(l, literals); b <- intBound(r, literals)) yield f(a, b)
+      for (a <- intBound(l, literals); b <- intBound(r, literals); v <- exactly(f(a, b))) yield v
     node match {
       case slot: LiteralSlot => Some(math.abs(literals.keys.toIndexedSeq(slot.index()).toLong))
       // The widest year a lowered date can carry: the narrowed range runs to year 33134, and
@@ -820,12 +827,25 @@ private[sql] object VarkaExpressionCompiler {
       case _: IRDayOfWeek => Some(7L)
       case _: IRWeekDay => Some(6L)
       case _: DayOfWeekIso => Some(7L)
-      // Two dates from the contract range, so their difference is bounded by its width.
-      case _: IRDateDiff =>
-        Some(VarkaChrono.CONTRACT_MAX_DAYS.toLong - VarkaChrono.CONTRACT_MIN_DAYS.toLong)
+      // A difference of two days, bounded only where both of those days are. The contract
+      // width is the answer for two date columns, but not for every `datediff`: `date_add(d,
+      // 2147483647)` is a legal operand whose int32 lane wraps, and a contract-width bound
+      // over it would be a fiction that removes the very check that would have caught it. So
+      // both operands are asked for their own day interval, with no runtime guard assumed -
+      // `datediff` is not a calendar node, so nothing arms task 52's guard on its operands -
+      // and an interval that leaves the int range is refused, because a lane that produced it
+      // wrapped on the way in.
+      case n: IRDateDiff =>
+        (dayRange(n.end(), literals, guarded = false),
+            dayRange(n.start(), literals, guarded = false)) match {
+          case (Bounded(elo, ehi), Bounded(slo, shi)) if withinInt(elo) && withinInt(ehi) &&
+              withinInt(slo) && withinInt(shi) =>
+            exactly(math.max(math.abs(ehi - slo), math.abs(elo - shi)))
+          case _ => None
+        }
       case n: IntArith => n.op() match {
-        case IntOp.MUL => both(n.left(), n.right())(_ * _)
-        case _ => both(n.left(), n.right())(_ + _)
+        case IntOp.MUL => both(n.left(), n.right())(Math.multiplyExact)
+        case _ => both(n.left(), n.right())(Math.addExact)
       }
       case n: IntNeg => intBound(n.child(), literals)
       // A column, a date-valued node used as an int, anything else: unbounded.
@@ -833,14 +853,25 @@ private[sql] object VarkaExpressionCompiler {
     }
   }
 
+  /** `Some(v)` unless computing it overflowed `Long`, which makes the bound meaningless. */
+  private def exactly(v: => Long): Option[Long] =
+    try Some(v) catch { case _: ArithmeticException => None }
+
+  /** Whether a day count fits an int32 lane, so producing it cannot have wrapped. */
+  private def withinInt(v: Long): Boolean = v >= Int.MinValue.toLong && v <= Int.MaxValue.toLong
+
   /** Whether the operation on operands of these bounds cannot leave the int32 range. */
   private def cannotOverflow(op: IntOp, l: VarkaVectorIR, r: VarkaVectorIR,
       literals: mutable.LinkedHashMap[Int, Int]): Boolean =
-    (for (a <- intBound(l, literals); b <- intBound(r, literals)) yield {
-      val worst = if (op == IntOp.MUL) a * b else a + b
-      // `a` and `b` are absolute bounds, so the worst case is symmetric; compared against
-      // MIN_VALUE's magnitude, which is the tighter end.
-      worst >= 0 && worst <= math.abs(Int.MinValue.toLong)
+    (for {
+      a <- intBound(l, literals)
+      b <- intBound(r, literals)
+      worst <- exactly(if (op == IntOp.MUL) Math.multiplyExact(a, b) else Math.addExact(a, b))
+    } yield {
+      // `a` and `b` are absolute bounds, so the result lies in `[-worst, worst]` and the
+      // binding end is the positive one: `Int.MaxValue`, not `MIN_VALUE`'s magnitude, which is
+      // one larger and would admit a result of exactly 2^31 - the first value that overflows.
+      worst >= 0 && worst <= Int.MaxValue.toLong
     }).getOrElse(false)
 
   /**
@@ -974,7 +1005,19 @@ private[sql] object VarkaExpressionCompiler {
           // the two stay a matched pair rather than one silently outgrowing the other.
           case arith @ (_: Add | _: Subtract | _: Multiply | _: UnaryMinus)
               if arith.dataType == IntegerType =>
-            compileNode(arith, inputs, literals, sink)
+            // The compiled root has to be one of the two arithmetic nodes, not merely built
+            // from an arithmetic expression: `weekday(d) + 1` is an `Add` that lowers to task
+            // 57's `DayOfWeekIso`, which `requireDayOffsetShape` refuses. Admitting it here
+            // would put an entry through `compilePartial` as fused and let the refusal fire at
+            // emit time, where the evaluator turns it into a silent per-batch fallback while
+            // EXPLAIN still claims fusion - the ghost fallback `sql/varka/AGENTS.md` forbids.
+            compileNode(arith, inputs, literals, sink).flatMap {
+              case n @ (_: IntArith | _: IntNeg) => Some(n)
+              case _ =>
+                sink.note("day offset arithmetic that lowers to a node the offset " +
+                  "position does not take", arith)
+                None
+            }
           case other =>
             sink.note(
               "day offset is not a foldable literal, an integer column or int arithmetic",
@@ -1128,15 +1171,16 @@ private[sql] object VarkaExpressionCompiler {
    * Spark type gate forbids it - and anything else is `Unknown`. The literal table is keyed by
    * value in slot order and untyped, so a slot's value is read by its IR position only.
    */
-  private def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]): DayRange = {
+  private def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int],
+      guarded: Boolean = true): DayRange = {
     def literalValue(slot: LiteralSlot): Long = literals.keysIterator.drop(slot.index).next().toLong
     def shifted(child: VarkaVectorIR, lo: Long, hi: Long): DayRange =
-      dayRange(child, literals) match {
+      dayRange(child, literals, guarded) match {
         case Bounded(clo, chi) => Bounded(clo + lo, chi + hi)
         case other => other
       }
     def hull(a: VarkaVectorIR, b: VarkaVectorIR): DayRange =
-      (dayRange(a, literals), dayRange(b, literals)) match {
+      (dayRange(a, literals, guarded), dayRange(b, literals, guarded)) match {
         case (Unknown, _) | (_, Unknown) => Unknown
         case (Bounded(alo, ahi), Bounded(blo, bhi)) =>
           Bounded(math.min(alo, blo), math.max(ahi, bhi))
@@ -1148,10 +1192,19 @@ private[sql] object VarkaExpressionCompiler {
     // widened one, where treating the subtree as unbounded-but-guarded would let a shift above
     // the producer carry the day back out of the range with nothing left to catch it. The child
     // still has to be a shape the analysis knows, or the offset is added to an unknown day.
-    def columnShifted(child: VarkaVectorIR): DayRange = dayRange(child, literals) match {
-      case Unknown => Unknown
-      case _ => Bounded(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS)
-    }
+    def columnShifted(child: VarkaVectorIR): DayRange =
+      if (!guarded) {
+        // `guarded = false` asks what this node produces with no runtime guard behind it. The
+        // narrowed range below is true only because a calendar consumer arms task 52's guard
+        // on the producer; a caller that is not one - `datediff`, which `intBound` bounds -
+        // gets no such promise, so the honest answer there is that nothing bounds it.
+        Unknown
+      } else {
+        dayRange(child, literals, guarded) match {
+          case Unknown => Unknown
+          case _ => Bounded(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS)
+        }
+      }
     node match {
       case _: ColumnRef => Bounded(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS)
       case slot: LiteralSlot =>

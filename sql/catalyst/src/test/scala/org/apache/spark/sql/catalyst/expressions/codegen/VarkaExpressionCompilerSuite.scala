@@ -965,8 +965,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
         i.asInstanceOf[NamedExpression],
         // Residual since task 63 for a narrower reason than before: an int column is
         // unbounded, so a checked multiply over it has no int-lane overflow test. `i + 1`
-        // fuses now, with the check.
-        out(Multiply(i, Literal(7))),
+        // fuses now, with the check. The mode is spelled out rather than taken from
+        // `SQLConf.get`, which this suite never sets: under `SPARK_ANSI_SQL_MODE=false` the
+        // ambient default is LEGACY, the multiply fuses, and the test would fail for a reason
+        // that has nothing to do with what it checks.
+        out(Multiply(i, Literal(7), EvalMode.ANSI)),
         out(DateSub(d2, Literal(2)))),
       childOutput).get
     // The int column forwards - forwarding does not care about lane types - and the fused
@@ -993,12 +996,13 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // `i * 7` under ANSI is the residual here: task 63 made `i + 1` fusible, but a checked
     // multiply over an unbounded column still has no int-lane overflow test.
     assert(VarkaExpressionCompiler.compilePartial(
-      Seq(out(Multiply(i, Literal(7)))), childOutput).isEmpty)
+      Seq(out(Multiply(i, Literal(7), EvalMode.ANSI))), childOutput).isEmpty)
     assert(VarkaExpressionCompiler.compilePartial(
       Seq(d.asInstanceOf[NamedExpression], i.asInstanceOf[NamedExpression]),
       childOutput).isEmpty)
     assert(VarkaExpressionCompiler.compilePartial(
-      Seq(d.asInstanceOf[NamedExpression], out(Multiply(i, Literal(7)))), childOutput).isEmpty)
+      Seq(d.asInstanceOf[NamedExpression], out(Multiply(i, Literal(7), EvalMode.ANSI))),
+      childOutput).isEmpty)
   }
 
   test("a declining entry rolls the shared tables back to their pre-entry state") {
@@ -1190,23 +1194,107 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(out(Multiply(i, Literal(3), EvalMode.LEGACY))), childOutput).isDefined)
   }
 
-  test("task 63 declines: a long add, a short column, a divide, and a modulo") {
-    for ((e, reason) <- Seq(
-        Add(Cast(i, LongType), Literal(1L), EvalMode.LEGACY) ->
-          "unsupported expression",
-        Add(sh, Literal(1.toShort), EvalMode.LEGACY) -> "unsupported expression",
-        Divide(i, Literal(2), EvalMode.LEGACY) -> "unsupported expression")) {
+  test("task 63: the bound is refused where it would be a fiction, not merely large") {
+    // Three ways the bound analysis was unsound, each of which removed a check that Spark's
+    // row engine performs, so the kernel answered where Spark raises. Every case below must
+    // keep its declared mode - FAIL for add and subtract, a decline for multiply.
+
+    // (1) A bound of exactly 2^31 is one past the largest int, so it may not pass. The old
+    // test compared against MIN_VALUE's magnitude and admitted it.
+    assert(VarkaExpressionCompiler.compilePartial(
+      Seq(out(Multiply(Quarter(d), Literal(536870912), EvalMode.ANSI)), out(DateAdd(d,
+        Literal(1)))), childOutput).get.declines(0).reason ===
+      "checked int multiply whose operands do not rule out overflow",
+      "a bound of 4 * 2^29 = 2^31 overflows and must not prove the multiply safe")
+    // One below it still fuses, so the boundary is where it should be and not merely moved.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Multiply(Quarter(d), Literal(536870911), EvalMode.ANSI))), childOutput).isDefined)
+
+    // (2) `datediff` is bounded by the date contract only when its operands are. A literal
+    // shift big enough to wrap an int32 lane makes the difference anything at all, and the
+    // contract width would be a fiction over it.
+    val wrapped = DateDiff(DateAdd(d, Literal(2147483647)), d2)
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Add(wrapped, Literal(1), EvalMode.ANSI))), childOutput).get.outputs.head
+      .asInstanceOf[IntArith].mode() === Overflow.FAIL,
+      "a datediff over a wrapping shift is unbounded, so the check has to stay")
+    // The ordinary shapes still lose their check: two date columns, and a bounded shift.
+    for (shape <- Seq(DateDiff(d, d2), DateDiff(DateAdd(d, Literal(30)), d2))) {
+      assert(VarkaExpressionCompiler.compile(
+        Seq(out(Add(shape, Literal(1), EvalMode.ANSI))), childOutput).get.outputs.head
+        .asInstanceOf[IntArith].mode() === Overflow.WRAP, s"$shape should still be bounded")
+    }
+    // A column offset is not bounded here either: task 52's guard is armed by a calendar
+    // consumer, and `datediff` is not one, so nothing keeps its operand in range.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Add(DateDiff(DateAdd(d, i), d2), Literal(1), EvalMode.ANSI))), childOutput)
+      .get.outputs.head.asInstanceOf[IntArith].mode() === Overflow.FAIL,
+      "an unguarded column-shifted operand leaves the datediff unbounded")
+
+    // (3) Bounds are computed exactly: one that wraps `Long` used to come back small and
+    // positive, and prove anything at all. This chain's product of bounds passes 2^63.
+    val wide = Subtract(Add(DateDiff(d, d2), Literal(2147483647), EvalMode.LEGACY),
+      Literal(2143831591), EvalMode.LEGACY)
+    assert(VarkaExpressionCompiler.compilePartial(
+      Seq(out(Multiply(wide, wide, EvalMode.ANSI)), out(DateAdd(d, Literal(1)))), childOutput)
+      .get.declines(0).reason ===
+      "checked int multiply whose operands do not rule out overflow",
+      "a bound that wraps Long must not prove a multiply safe")
+  }
+
+  test("task 63: a bounded negation needs no check, and an unbounded one keeps it") {
+    // Negation overflows on exactly one value, so any bound rules it out. `-month(d)` was
+    // emitted checked, which is the mask disposal for nothing.
+    for (bounded <- Seq(Month(d), DateDiff(d, d2), Add(Multiply(Year(d), Literal(100),
+        EvalMode.ANSI), Month(d), EvalMode.ANSI))) {
+      assert(VarkaExpressionCompiler.compile(
+        Seq(out(UnaryMinus(bounded, true))), childOutput).get.outputs.head
+        .asInstanceOf[IntNeg].mode() === Overflow.WRAP, s"-($bounded) cannot overflow")
+    }
+    // An int column carries no bound, so its negation keeps the check.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(UnaryMinus(i, true))), childOutput).get.outputs.head
+      .asInstanceOf[IntNeg].mode() === Overflow.FAIL)
+  }
+
+  test("task 63: a day offset that lowers to a non-arithmetic node declines rather than " +
+      "reaching the emitter") {
+    // `weekday(d2) + 1` is an Add, but it lowers to task 57's dedicated DayOfWeekIso node,
+    // which the emitter's day-offset check does not take. Admitting it here would mark the
+    // entry fused and let the refusal fire at emit time, where it becomes a silent per-batch
+    // fallback under an EXPLAIN that still claims fusion.
+    for (offset <- Seq(Add(WeekDay(d2), Literal(1)), Add(Literal(1), WeekDay(d2)))) {
+      val partial = VarkaExpressionCompiler.compilePartial(
+        Seq(out(DateAdd(d, offset)), out(DateAdd(d, Literal(1)))), childOutput).get
+      assert(partial.specs === Seq(ResidualOutput, FusedOutput(0)), s"$offset should decline")
+      assert(partial.declines(0).reason ===
+        "day offset arithmetic that lowers to a node the offset position does not take")
+    }
+    // The arithmetic that does lower to an arithmetic node is unaffected.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY)))), childOutput).isDefined)
+  }
+
+  test("task 63 declines: a long add, a short column, a divide, a modulo and a mixed operand") {
+    // All four reach the same reason, and that is the point: the arms are guarded on
+    // `dataType == IntegerType`, so anything else never enters them and declines as the
+    // unsupported expression it is, rather than through an arithmetic-specific message.
+    for (e <- Seq(
+        Add(Cast(i, LongType), Literal(1L), EvalMode.LEGACY),
+        Add(sh, Literal(1.toShort), EvalMode.LEGACY),
+        Divide(i, Literal(2), EvalMode.LEGACY),
+        Remainder(i, Literal(7)),
+        // An operand of the wrong type inside an arm the compiler does take. `intOperand` has
+        // a reason of its own for this ("int arithmetic operand of type ..."), but a resolved
+        // tree cannot reach it: `BinaryOperator` requires both operands to share a type, so an
+        // `Add` of `IntegerType` has two int operands by construction. The cast is what
+        // declines, one level down.
+        Add(i, Cast(d, IntegerType), EvalMode.LEGACY))) {
       val partial = VarkaExpressionCompiler.compilePartial(
         Seq(out(e), out(DateAdd(d, Literal(1)))), childOutput).get
       assert(partial.specs === Seq(ResidualOutput, FusedOutput(0)), s"$e should be residual")
-      assert(partial.declines(0).reason === reason, s"$e")
+      assert(partial.declines(0).reason === "unsupported expression", s"$e")
     }
-    // An int operand of the wrong type inside an arm the compiler does take: the reason names
-    // the operand's type rather than the whole expression.
-    val mixed = VarkaExpressionCompiler.compilePartial(
-      Seq(out(Add(i, Cast(d, IntegerType), EvalMode.LEGACY)), out(DateAdd(d, Literal(1)))),
-      childOutput).get
-    assert(mixed.declines(0).reason === "unsupported expression")
   }
 
   test("task 63: int arithmetic is admitted as a day offset, and a calendar node over it is " +
