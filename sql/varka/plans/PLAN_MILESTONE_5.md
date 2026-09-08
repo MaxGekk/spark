@@ -1039,6 +1039,64 @@ accepts are the same set - the assertion whose absence let the drift above
 ship. Then every decline reason in the compiler suite unchanged, since this
 task is meant to move no shape from fused to residual or back.
 
+### 2.18 The epilogue is the one method no budget bounds (task 87)
+
+*Added 8 September 2026, from a 35-million-iteration fuzz run.*
+
+**The observation.** `VarkaLoopEmitter.emit` built a 67244-byte
+`epilogueMasked` for a nested `make_date` tree and the Class-File API refused
+it: the JVM caps a method at 65535 bytes. It reproduces as one iteration,
+`-Dvarka.fuzz.seed=2026092800 -Dvarka.fuzz.only=73411`, and the tree that
+produced it contains no arithmetic node at all - this is a date-op finding that
+predates task 63 and was reached by volume rather than by anything new.
+
+**Why the existing caps did not catch it.** There are three, and each bounds
+something other than the bytes of the method that failed. `MAX_CHAIN_DEPTH` (16)
+bounds the depth of one output. `MAX_FUSED_NODES` (64) bounds the distinct ops
+in the whole kernel after CSE. `GROUP_BUDGET` (16) bounds the weight of one
+*loop* method, and the emitter partitions the loop into `loopDense<g>` and
+`loopMasked<g>` accordingly - which is exactly what `MAX_FUSED_NODES`' javadoc
+leans on when it says the ops "are spread over loop methods of at most
+GROUP_BUDGET ops each, so this caps the kernel, not any one compiled method".
+
+The epilogue is not partitioned. `emitBody` is called once for it with
+`group = -1`, so every group's ops land in a single `epilogueMasked`, and the
+one bound that was supposed to keep a method small is the one that does not
+apply to it. The claim quoted above is therefore true of the loop methods and
+false of the epilogue, which is the sentence to correct along with the code.
+
+Weight is also not bytes, and `make_date` is where the two diverge most:
+`MAKE_DATE_WEIGHT` is 60 against a `GROUP_BUDGET` of 16, so a single
+`make_date` already exceeds a group on its own and rides the `FUSED_CEILING`
+escape. Sixty-four of the heaviest op the emitter has, all in one method, is
+about 67KB - which is the number observed. A budget counted in weight cannot
+bound bytes unless the weight-to-bytes ratio is bounded too, and across the op
+set it spans more than an order of magnitude.
+
+**What a user sees today, which is why this is not urgent.** Nothing wrong.
+`VarkaKernelEvaluator.fusedRunner` catches the emission failure by name - its
+comment already says "an IR shape past the emitter's caps" - logs a warning,
+counts `numEmissionFailures`, emits an `EMISSION_FAILURE` fallback event, and
+every batch takes the per-row path. Answers are the row engine's. The costs are
+that the kernel is built and thrown away once per task, and that a shape inside
+the documented caps degrades silently rather than being declined at compile
+time with a reason, which is the outcome the ghost-fallback contract in
+`sql/varka/AGENTS.md` asks for everywhere else.
+
+**The task.** Either partition the epilogue the way the loop is partitioned, or
+give the emitter a byte budget it can check before it hands the class to the
+Class-File API - and in both cases turn the failure into a decline with a
+reason rather than an exception the evaluator has to catch. The choice is worth
+measuring rather than arguing: partitioning adds a call per group to a body that
+runs once per batch, and the epilogue is the tail, so the per-batch cost lands
+on short batches hardest.
+
+**The admission check.** The fuzz iteration above, as a pinned emitter test,
+declining with a reason instead of throwing; every shape that fits today
+emitting the same bytes, against the pinned line map and the `codeSize`
+assertions; and `MAX_FUSED_NODES`' javadoc corrected to say which methods its
+guarantee covers.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
@@ -1073,6 +1131,7 @@ independent of both and of each other.
 | 84 | One value-range lattice (section 2.15). **Scoped** (8 September 2026), from the three bugs task 63's review found in the seam between `dayRange` and `intBound`; before 85 | One saturating interval domain over lane values, with the calendar admission (task 52) and the overflow check (task 63) as queries on it rather than two traversals, and "what a runtime guard proves" as an explicit parameter of a query rather than a fact baked into one traversal's arms; written in Java, being pure data | Every shape the compiler admits or declines today unchanged, decline reasons included, and the differential's fusion classification unmoved; plus the property test the current code cannot pass - over random IR, the interval a node reports contains the value the reference evaluator computes, for every lane pattern |
 | 85 | Lane type as a parameter (section 2.16). **Scoped** (8 September 2026); after 84, and blocking milestone 5's own tasks 28 and 29 | The emitter parameterised on a lane descriptor - vector class, species, byte stride, load and store descriptors - against the 204 `INT_VECTOR` references, 16 four-byte stride assumptions and 18 species references it carries today; the lane on the node's physical representation rather than inferred from the Spark type, with year-month intervals (int32 months, the same lane as DATE and INT) as the forcing function that can land first; measured against a generated-per-lane emitter, since a descriptor risks a megamorphic call in the hot path | The int32 lane's emitted bytes unchanged against the pinned oracles; a second lane type reaching the same green differential and fuzz matrices at both vector widths; and the fuzz reachability test widened from every node type to node type times lane type |
 | 86 | One operand admission, stated once (section 2.17). **Scoped** (8 September 2026), from the ghost fallback task 63's review found; independent of 83 to 85 | `intOperand`, `compileIntOperand`, `compileOffset` and `compare`'s `operand` as one function taking what the position accepts, and the emitter's four `require*Shape` checks derived from that same table rather than restated beside it, so widening the compiler either widens the emitter or fails to compile | A test enumerating the operand positions and asserting that the set the compiler admits and the set the emitter accepts are the same set - the assertion whose absence let `date_add(d, weekday(d2) + 1)` ship as fused in EXPLAIN and a silent per-batch fallback at run time; every compiler decline reason unchanged, since no shape may move |
+| 87 | The epilogue is the one method no budget bounds (section 2.18). **Scoped** (8 September 2026), from a 35-million-iteration fuzz run; independent of 83 to 86 | The epilogue emitted as one method holding every group, so a tree inside `MAX_FUSED_NODES` can pass 65535 bytes and the Class-File API refuses the class - `epilogueMasked` at 67244 bytes for nested `make_date`, replaying at `-Dvarka.fuzz.seed=2026092800 -Dvarka.fuzz.only=73411`; either partition it as the loop is partitioned or give the emitter a byte budget, and in both cases decline with a reason rather than throw | The pinned fuzz iteration declining with a reason instead of throwing; every shape that fits today emitting identical bytes against the pinned line map and the `codeSize` assertions; and `MAX_FUSED_NODES`' javadoc no longer claiming a per-method guarantee it only has for the loop |
 
 ## 4. Files
 
