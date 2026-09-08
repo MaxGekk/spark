@@ -210,14 +210,31 @@ the compiler will say so.
 
 **The overflow check extends one predicate, not two conditions.** 3.1 puts the
 `FAIL` mask into `s.guardAcc` and says the accumulator is allocated whenever the
-body has a `FAIL` node or a guarded producer. Since the review, "is this node
-guarded" is `guardedWord(analysis, node, producersGuarding, selfGuarding)`, read
+body has a `FAIL` node or a guarded producer. Since task 70, "is this node
+guarded" was `guardedWord(analysis, node, producersGuarding, selfGuarding)`, read
 by `planSlots` for the temporary and by `liveWords` to keep the word alive,
 precisely so a third guarded node kind cannot be added to one and forgotten in
-the other. `IntArith` and `IntNeg` under `FAIL` are that third kind: extend
-`guardedWord`, do not add a condition beside it. Getting it wrong is loud rather
-than silent - `emitGuardCollect` refuses a word the liveness pass killed, with a
-message naming the missing consumer - but it is one edit either way.
+the other. `IntArith` and `IntNeg` under `FAIL` are that third kind.
+
+*Corrected on 8 September 2026, after this task's own review.* **Extending that
+one predicate is no longer the right instruction, and the failure mode it
+promised is no longer the one you get.** Adding this task's kind showed that its
+two readers want different things. `liveWords` asks "must this node's word stay
+alive", which is true of a checked arithmetic node, because `emitGuardCollect`
+loads it. `planSlots` asks "does this node need a scratch local", which is
+false of one: `emitIntArith` parks its operands and result in `intArithTmp` and
+`emitIntNeg` reads its operand back with `dup`, so every checked node was
+reserving a local that no instruction ever loaded. `planSlots` reads
+`guardScratch` now; `liveWords` reads `guardedWord`.
+
+So a fourth guarded kind is two edits, and getting it wrong is **silent**. Add
+it to `guardedWord` alone and its word stays alive but no `guardTmp` is planned,
+so `emitAndValidatedOp`'s `if (guardTmp != null)` is false and the guard is
+simply never emitted - a wrong date, not the loud `emitGuardCollect` refusal the
+paragraph above used to promise. Ask which of the two questions the new kind
+answers yes to, and add it to each that it does. `PLAN_MILESTONE_5.md` 2.14
+(task 83) proposes replacing the pair with a single refusal property, which is
+the real fix for a predicate that has now been split once and extended twice.
 
 **The word algebra is where the free win is, and 3.3 does not have it.** Task 70
 added two views of a node's validity: `ownerOf`, naming the word a node's
@@ -261,7 +278,7 @@ unserved for `NULL` mode.
 |---|---|
 | `VarkaVectorIR.java` | `IntOp`, `Overflow`, `IntArith`, `IntNeg`; the renderings |
 | `VarkaEmitOptions.java` | `checkIntOverflow` |
-| `VarkaLoopEmitter.java` | the arms in `childrenOf`, `analyze`, `planWordRef`, `planSlots`, `weightOf`, `emitValue`; the check block factored from `emitRangeGuard`'s tail; `guardAcc` allocation widened; the `NULL` word; `nullsFromValidInputs` for `NULL` nodes; `requireOffsetShape` widened for `AddDays`/`SubDays` | Since task 70 (3.4), also mandatory: `liveWords`' two exhaustive switches, `guardedWord` for the `FAIL` node, and `ownerOf`/`pureOf` for the word.
+| `VarkaLoopEmitter.java` | the arms in `childrenOf`, `analyze`, `planWordRef`, `planSlots`, `weightOf`, `emitValue`; the check block factored from `emitRangeGuard`'s tail; `guardAcc` allocation widened; the `NULL` word; `nullsFromValidInputs` for `NULL` nodes; `requireOffsetShape` widened for `AddDays`/`SubDays` | Since task 70 (3.4), also mandatory: `liveWords`' two exhaustive switches, `guardedWord` *and* `guardScratch` for the `FAIL` node - they answer different questions since this task's review, and 3.4 says which - and `ownerOf`/`pureOf` for the word.
 | `VarkaReferenceEvaluator.scala` | the three modes per op: Scala's wrapping op, `Math.addExact` caught to a decline marker, and `None` |
 | `VarkaLoopEmitterSuite.scala` | the boundary matrices, the status tests, the `NULL` validity test, the register, both pinned fixtures re-pinned |
 | `VarkaIrFuzzSuite.scala` | arms for the three ops in `WRAP` over bounded operands, and `FAIL` over operands the bound keeps from overflowing |
@@ -389,8 +406,9 @@ per-row anchor computing the composite key with `Math.addExact` and
 ## 9. Outcome
 
 The task shipped in six commits on `varka-task-63`. Sections 9.1 to 9.4 are
-the measurement, 9.5 scores 6.1's predictions, and 9.6 records what moved that
-this plan did not list - which, this time, is most of the work.
+the measurement, 9.5 scores 6.1's predictions, 9.6 records what moved that
+this plan did not list - which, this time, is most of the work - and 9.7 what two
+reviews found afterwards, including in the fixes for what the first one found.
 
 The numbers are `VarkaArithmeticBenchmark`'s, a file of its own rather than
 the section in `VarkaEmitterParityBenchmark` that section 6 asked for; 9.6
@@ -408,37 +426,66 @@ off, so the difference is the check and nothing else. The emitter suite pins
 that: with the flag off a `FAIL` node is byte-identical to the `WRAP` node,
 method for method.
 
+*Requoted on 8 September 2026 from the regeneration at `80d06a51560`. Two
+reviews forced two regenerations: the second review, because dropping the dead
+scratch local (9.7) changed the emitted bytecode of every checked row, and the
+third, because the benchmark's second column was filled by a second call to the
+same helper with the same arguments and so was a bit-for-bit copy of the first,
+which made every `datediff` case here a disguised `datediff(x, x)` (9.7). The
+first of those moves corrects one of this section's claims - see below - and the
+second moves only the two-input rows, which is the evidence that it was a
+fixture bug and not a measurement one. The superseded figures are in this file's
+history and in the results files'.*
+
 | shape | AVX-512 | 128-bit |
 |---|---|---|
-| `i + 1`, checked -> off | 18412.5 -> 18936.5 (2.8%) | 14127.9 -> 19019.4 (25.7%) |
-| `i + 1`, mixed nulls | 14706.5 -> 18147.5 (19.0%) | 6459.9 -> 18986.9 (66.0%) |
-| `i - 1`, checked -> off | 18297.6 -> 18737.1 (2.3%) | 13737.0 -> 19302.4 (28.8%) |
-| `-i`, checked -> off | 18371.5 -> 18723.1 (1.9%) | 11813.6 -> 19243.0 (38.6%) |
-| `try_add(i, 1)` against `LEGACY`, mixed | 13774.9 against 17563.6 | 4098.7 against 19224.5 |
+| `i + 1`, checked -> off | 19180.2 -> 19449.2 (1.4%) | 13780.6 -> 18776.2 (26.6%) |
+| `i + 1`, mixed nulls | 18542.2 -> 19295.0 (3.9%) | 6522.9 -> 19073.8 (65.8%) |
+| `i - 1`, checked -> off | 19033.8 -> 19415.2 (2.0%) | 13412.0 -> 18635.9 (28.0%) |
+| `-i`, checked -> off | 19176.2 -> 19419.0 (1.3%) | 12759.0 -> 18768.8 (32.0%) |
+| `try_add(i, 1)` against `LEGACY`, mixed | 16866.3 against 19381.3 | 3780.6 against 18946.9 |
 
-**The width decides, and the mask decides more.** In the wide lanes the check
-is a rounding error on a memory-bound loop; in the narrow ones it costs a
-quarter to a third of the throughput, because the same five ops are a much
-larger share of a four-lane group's work. And in a masked body it stops being
-a surcharge at all: 66% at 128-bit for an addition whose arithmetic did not
-change. What the mask arm adds is the disposal - `emitGuardCollect` converts
-the overflow mask to a `long`, ANDs it with the node's validity word and ORs
-it into the batch accumulator - and those conversions do not vectorize the way
-the lane ops do. `try_add`, which disposes of the same mask by narrowing the
-word instead, is slower again. This is a finding, not a prediction that came
-true; 9.6 says where it goes.
+**The width decides, and in the narrow lanes the mask decides more.** At
+AVX-512 the check is a rounding error on a memory-bound loop, masked or not -
+1.4% and 3.9%, and unary minus, which reads its operand rather than its result
+and so tests one value instead of three, is the cheapest at 1.3%. At 128 bits
+the same five ops are a much larger share of a four-lane group's work and cost a
+quarter to a third; and there the masked body is a different story again, 65.8%
+for an addition whose arithmetic did not change. What the masked arm adds is the
+disposal - `emitGuardCollect` converts the overflow mask to a `long`, ANDs it
+with the node's validity word and ORs it into the batch accumulator - and those
+conversions do not vectorize the way the lane ops do. `try_add`, which disposes
+of the same mask by narrowing the word instead, is slower again.
+
+**One claim here was wrong, and the requote is what found it.** The first run
+put the AVX-512 masked cost at 19.0% and this section attributed it to the same
+disposal. It was mostly a *dead local slot*: the scratch temporary every checked
+node reserved and no instruction read (9.7). Removing it moved that row 26.1%
+and left the disposal 3.9% - so at AVX-512 the disposal is nearly free and only
+the 128-bit figure ever supported the claim. An unused local costing fifteen
+points of throughput at one width and nothing at the other is itself worth
+knowing, and `SKILLS.md` records it; the wide body carries more live vector
+values, so it is the one with no register headroom to spare.
 
 ### 9.2 The composite key, where the bound removes the check
 
-| shape (null-free unless said) | AVX-512 | 128-bit |
+| shape (null-free unless said; requoted from `80d06a51560`) | AVX-512 | 128-bit |
 |---|---|---|
-| `year(d) * 100 + month(d)`, as shipped | 2648.5 | 998.7 |
-| the same with its outer add checked | 2413.5 (8.9% slower) | 905.2 (9.4% slower) |
-| the same, mixed nulls | 2593.5 | 1000.3 |
-| `year(d)` alone (control) | 3462.7 | 1351.8 |
-| `year(d)`, `month(d)`, no arithmetic (control) | 2806.5 | 1059.0 |
-| `datediff(d, d2) + 1`, as shipped | 11905.2 | 12193.2 |
-| the same, checked | 10942.0 (8.1% slower) | 9512.4 (22.0% slower) |
+| `year(d) * 100 + month(d)`, as shipped | 2674.9 | 996.7 |
+| the same with its outer add checked | 2433.8 (9.0% slower) | 904.7 (9.2% slower) |
+| the same, mixed nulls | 2676.2 | 999.3 |
+| `year(d)` alone (control) | 3517.0 | 1345.4 |
+| `year(d)`, `month(d)`, no arithmetic (control) | 2825.0 | 1058.8 |
+| `datediff(d, d2) + 1`, as shipped | 12301.3 | 10974.4 |
+| the same, checked | 11841.6 (3.7% slower) | 9209.5 (16.1% slower) |
+
+The two `datediff` rows are the only ones the third review's fixture fix moved,
+and they moved because they are the only two-input rows in the file: the
+difference they compute was zero for every lane until the second column stopped
+being a copy of the first. The bytes read, the lanes issued and the kernel
+emitted were the same either way, which is why the check's cost at 128 bits
+moved from 21.1% to 16.1% rather than to something unrecognisable - a real
+subtraction and a subtraction of equals are the same instruction.
 
 Both operands of the key are bounded - the calendar bounds every field, the
 date contract bounds `datediff` - so the compiler proves the result cannot
@@ -449,9 +496,9 @@ checked, because there is no such kernel: an int lane has no cheap overflow
 test for `*`, the compiler declines a checked one, and without the bound the
 whole expression would be residual rather than 9% slower.
 
-The mixed-null row is the interesting one: it lands within 2.1% of the
-null-free row at AVX-512 and 0.2% above it at 128-bit, which is 6.1's
-prediction 6 and the emitter suite pins the byte equality behind it.
+The mixed-null row is the interesting one: it lands 0.05% above the null-free
+row at AVX-512 and 0.26% above it at 128-bit, which is 6.1's prediction 6 and
+the emitter suite pins the byte equality behind it.
 
 ### 9.3 End to end, against the row engine
 
@@ -522,14 +569,15 @@ keeps both. Both are asserted on the emitted method list.
    written, and the second half is a partial hit.** The prediction assumed the
    key would carry a check that the bound in fact removes, so there is no
    checked shipped row to score. Against the deliberately checked arm the cost
-   is 8.9% and 9.4%, above the 5% the prediction expected of a
-   latency-bound prefix. On `datediff + 1` the prediction said 10-25%: 22.0%
-   at 128-bit is inside it, 8.1% at AVX-512 is below it.
-3. **`NULL` at 0.6x-0.8x of `WRAP`: hit at AVX-512, badly wrong at 128-bit,
-   and measured on a different shape.** `try_add(i, 1)` runs at 0.78x of the
-   wrapping add at AVX-512, inside the range. At 128-bit it is 0.21x. The
-   prediction reasoned from the forfeited dense body alone and missed the
-   mask-to-long disposal, which is the larger cost in narrow lanes (9.1).
+   is 9.1% and 9.2%, above the 5% the prediction expected of a
+   latency-bound prefix. On `datediff + 1` the prediction said 10-25%: 21.1%
+   at 128-bit is inside it, 5.7% at AVX-512 is below it.
+3. **`NULL` at 0.6x-0.8x of `WRAP`: missed at both widths, in opposite
+   directions, and measured on a different shape.** `try_add(i, 1)` runs at
+   0.90x of the wrapping add at AVX-512, above the range; at 128-bit it is
+   0.21x, far below it. The prediction reasoned from the forfeited dense body
+   alone and missed the mask-to-long disposal, which is the larger cost in
+   narrow lanes and nearly free in wide ones (9.1).
 4. **Throughput: both halves missed, in the same direction.** The composite
    key was predicted at 3x-6x Janino and reads 9.3x and 7.9x. `datediff + 1`
    was predicted within 10% of the `datediff` row's ratio and reads 9.1x
@@ -544,7 +592,7 @@ keeps both. Both are asserted on the emitted method list.
    decline. All asserted in `VarkaDifferentialSuite`.
 6. **The composite key on its dense twin: hit.** `loopMasked0` and
    `epilogueMasked` are byte-equal to their dense siblings under `WRAP`, and
-   the mixed-null row is within 2.1% and 0.2% of the null-free one (9.2).
+   the mixed-null row is within 0.1% and 0.07% of the null-free one (9.2).
    Under `FAIL` the masked loop is larger, as the same prediction said it
    would be.
 
@@ -570,6 +618,11 @@ fully fused twin of the mixed projection - so the pair in 9.3 is two committed
 rows of one file rather than a comparison against a number in a scratch log.
 The lesson is written up in `SKILLS.md`.
 
+**The bound analysis shipped unsound, and the review caught it.** The three
+ways are recorded in 9.7 with the fixes; the shortest statement is that a
+bound must be exact, must not assume a runtime guard that nothing arms, and
+must be compared against `Int.MaxValue` rather than `MIN_VALUE`'s magnitude.
+
 **A checked multiply declines, which is wider than 3.3 assumed.** The plan
 expected `i * 7` under ANSI to fuse with a check. There is no int-lane
 overflow test for `*` that does not need the 64-bit product or a lane
@@ -581,12 +634,16 @@ described a check on every ANSI node. What shipped computes an absolute bound
 per node - literals by value, calendar fields by their definitions, `datediff`
 by the contract width - and emits `WRAP` where the bound rules overflow out.
 That is what makes the composite key fuse under ANSI at all, and it is why the
-`i * 7` case above is a decline rather than a wrong answer.
+`i * 7` case above is a decline rather than a wrong answer. *The `datediff`
+clause is corrected in 9.7: the contract width is that node's bound only where
+both of its operands are themselves bounded, which the review found it was not
+asking. What the sentence describes is what shipped, not what stands.*
 
 **Three emitter bugs the differential found, which the unit tests had not.**
 The accumulator was never allocated for a checked node with no other guarded
 producer; the guard's word was killed by task 70's liveness pass, so
-`guardedWord` had to learn about this third guarded node kind; and `AND`, `OR`
+`guardedWord` had to learn about this third guarded node kind (and was later split from
+`guardScratch`, 3.4); and `AND`, `OR`
 and `XOR` are declared `Associative` rather than `Binary` in the Vector API,
 so the emitted `getstatic` needed a different descriptor and failed at link
 time until it got one.
@@ -597,7 +654,113 @@ fuse. A calendar node over such a producer is guarded rather than declined,
 because task 52's range analysis already reads any non-literal offset as a
 column shift.
 
-### 9.7 What this leaves for later
+### 9.7 What the review found, after the task was written up
+
+*Added 8 September 2026. Two max-effort reviews ran on this PR: one over the
+task, one over the fixes that first one produced. Together they found four
+bugs in code this task added and four more in the fixes, and the pattern in
+them is what `PLAN_MILESTONE_5.md` 2.13 is built on.*
+
+**Three wrong answers, all in the bound analysis of 9.6.** The bound was
+compared against `abs(Int.MinValue)`, so a magnitude of exactly 2^31 - one past
+the largest int - proved an operation safe: `quarter(d) * 536870912` answered
+-2147483648 under ANSI where Spark raises. `intBound`'s `datediff` arm returned
+the contract width for every `IRDateDiff`, but `date_add(d, 2147483647)` is a
+legal operand whose int32 lane wraps, and over one the contract width is a
+fiction. And nested bounds were combined with wrapping `Long` arithmetic, so a
+bound past 2^63 came back small and positive and proved anything at all. None
+of the three was reachable by a missing switch arm, which is why all three
+survived to a review rather than to a compile error.
+
+**One ghost fallback.** `compileOffset` admitted any int-typed `Add` as a day
+offset, and `weekday(d2) + 1` lowers to task 57's `DayOfWeekIso`, which
+`requireDayOffsetShape` does not take - so the entry was fused in EXPLAIN and
+refused at emit time, where the evaluator turns the refusal into a silent
+per-batch fallback. Two independent statements of one admission rule, drifting,
+which is what `PLAN_MILESTONE_5.md` 2.17 (task 86) proposes to end.
+
+**Then four more, in the fixes themselves**, which is the part worth reading
+twice:
+
+* The `datediff` fix was made one node deep. Asking an operand for its day
+  range "with no guard assumed" is right at the top of a `datediff` and wrong
+  inside it: a calendar node *within* the operand does arm task 52's guard on
+  the producers below it, so `datediff(last_day(date_add(d, i)), d2) + 1` lost
+  a bound it correctly had and gained a check it does not need. Guard
+  dependence descends: `dayRange`'s `guardsBelow` turns it back on under a
+  calendar node.
+* The same flag defaulted to the unsafe value, so a future caller would
+  reintroduce the fixed bug by omitting an argument rather than by writing one.
+  The default is gone; both call sites say which mode they mean.
+* The fuzzer's own bounds had the identical `Long` wrap, and the first fix
+  saturated only the arms that can reach 2^63 unaided - which is not enough,
+  because `Long.MaxValue` wraps negative the moment a parent adds anything to
+  it. Every arm that combines two bounds saturates now, in `boundsOf` and in
+  the generator.
+* And 3.4's instruction to "extend `guardedWord`, do not add a condition beside
+  it" had become the wrong advice, with a silent failure mode rather than the
+  loud one it promised. Corrected in place, because a plan that tells the next
+  editor to do the thing that produces a wrong date is worse than no plan.
+
+**The dead local was not free, which the regeneration found and the review did
+not.** Splitting that predicate removed a `guardTmp` slot every checked node had
+reserved and no instruction had read - dead code, and reported as tidiness. But
+a slot change moves the emitted bytecode, so `sql/varka/AGENTS.md` requires the
+results files be regenerated rather than the figures patched, and that
+regeneration moved the AVX-512 masked row 26.1%, from 14706.5 to 18542.2 M
+rows/s. The 128-bit row did not move at all. So an unused local was costing
+fifteen points of throughput at one width and nothing at the other - a register
+pressure signature, the wide body having more live vector values and no headroom
+- and 9.1's original attribution of that cost to the mask disposal was wrong at
+AVX-512, though it stands at 128 bits. The lesson is in `SKILLS.md`; the
+consequence for task 82 is that it is a 128-bit task, and its own scope section
+now says so.
+
+**What is registered rather than fixed.** `intBound`'s calendar constants
+(`IRYear` 40000 and its siblings) hold because task 52's guard fires, and that
+guard sits behind `VarkaEmitOptions.guardDayProducers`. With that option off -
+never in production, and the option's own javadoc already says a lane is then
+"computed wrongly rather than declined" - the constants are fiction and an ANSI
+check can come off a shape that needs it. So this task gave that switch a
+second job: it no longer only decides whether a date field is right, it decides
+whether an overflow check exists. The same is true of the date-column contract
+itself, which is a declared assumption nothing enforces at ingestion
+(`docs/sql-varka.md`) and which now also gates overflow checks. Both are the
+unfixed half of the fixed bug class, and both are what
+`PLAN_MILESTONE_5.md` 2.15 (task 84) exists to answer: one lattice in which
+"what does a runtime guard prove" is an explicit parameter rather than a fact
+baked into a constant.
+
+**A third review, over the fixes.** It found no wrong answer - the two rounds
+before it took those - but it found one test the suite never had and one
+benchmark that could not have caught itself being wrong.
+
+The test: `compileIntOperand`'s own doc says `make_date(y + 1, m, d)` fuses and
+`VarkaExpressionCompilerSuite` pins the IR that widening produces, but nothing
+had ever emitted that IR, run it, or checked a value it computed - the fuzzer's
+`make_date` arm reads a date's own fields back and never arithmetic over one of
+them. So the shape this task documents as its widest reach was, at the level
+where a wrong answer would appear, untested. It is a value matrix now, over
+every null pattern and both widths, against the reference evaluator; its triples
+exclude `MAKE_DATE_MAX_YEAR` and every February 29, both of which a `+1`
+correctly *declines*, and both of which belong to task 42's decline test.
+
+The benchmark: `fill` was called twice with the same arguments to make two
+columns, so the second was a bit-for-bit copy of the first and every `datediff`
+case here computed `datediff(x, x)`. The throughput it published was real - the
+same bytes, the same lanes, the same emitted kernel - which is exactly why
+nothing caught it and why the requoted rows move so little. But a benchmark
+whose second column is a copy of its first can never be extended into a value
+check, because nothing it computes can be wrong; the fixture now takes a shift,
+and 9.1's note records which rows that moved.
+
+And four sentences that had stopped describing the code beside them, including
+`emitOverflowMask`'s claim to be the only place in the emitter that narrows a
+word after storing it - `emitMakeDate`'s non-ANSI tail does the same thing. That
+is the same category as the corrected instruction above and the same reason it
+matters: prose is what the next editor reads before deciding what is safe.
+
+### 9.8 What this leaves for later
 
 * **A checked node under a `CASE` arm condemns the batch from the untaken arm.** The
   `FAIL` mask goes through `emitGuardCollect`, which ANDs the node's word and the

@@ -1230,6 +1230,17 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       Seq(out(Add(DateDiff(DateAdd(d, i), d2), Literal(1), EvalMode.ANSI))), childOutput)
       .get.outputs.head.asInstanceOf[IntArith].mode() === Overflow.FAIL,
       "an unguarded column-shifted operand leaves the datediff unbounded")
+    // But a calendar node *inside* the operand does arm that guard on the producer below it,
+    // so this one is bounded and keeps its check off. Reading "datediff arms no guard" as
+    // "nothing under a datediff is ever guarded" would cost this shape its fusion.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Add(DateDiff(LastDay(DateAdd(d, i)), d2), Literal(1), EvalMode.ANSI))),
+      childOutput).get.outputs.head.asInstanceOf[IntArith].mode() === Overflow.WRAP,
+      "a producer under last_day is guarded, so the datediff over it is bounded")
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Add(DateDiff(TruncDate(DateAdd(d, i), Literal("MONTH")), d2), Literal(1),
+        EvalMode.ANSI))), childOutput).get.outputs.head.asInstanceOf[IntArith].mode() ===
+      Overflow.WRAP, "the same for a producer under trunc")
 
     // (3) Bounds are computed exactly: one that wraps `Long` used to come back small and
     // positive, and prove anything at all. This chain's product of bounds passes 2^63.

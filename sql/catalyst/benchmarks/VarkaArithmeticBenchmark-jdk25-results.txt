@@ -6,15 +6,15 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one output over 1000000 rows:             Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-i + 1, ANSI, checked                                  0              0           0      18412.5           0.1       1.0X
-i + 1, ANSI, check off                                0              0           0      18936.5           0.1       1.0X
-i + 1, LEGACY wrapping                                0              0           0      18886.1           0.1       1.0X
-i + 1, ANSI, checked, mixed nulls                     0              0           0      14706.5           0.1       0.8X
-i + 1, ANSI, check off, mixed nulls                   0              0           0      18147.5           0.1       1.0X
-i - 1, ANSI, checked                                  0              0           0      18297.6           0.1       1.0X
-i - 1, ANSI, check off                                0              0           0      18737.1           0.1       1.0X
--i, ANSI, checked                                     0              0           0      18371.5           0.1       1.0X
--i, ANSI, check off                                   0              0           0      18723.1           0.1       1.0X
+i + 1, ANSI, checked                                  0              0           0      19180.2           0.1       1.0X
+i + 1, ANSI, check off                                0              0           0      19449.2           0.1       1.0X
+i + 1, LEGACY wrapping                                0              0           0      19407.3           0.1       1.0X
+i + 1, ANSI, checked, mixed nulls                     0              0           0      18542.2           0.1       1.0X
+i + 1, ANSI, check off, mixed nulls                   0              0           0      19295.0           0.1       1.0X
+i - 1, ANSI, checked                                  0              0           0      19033.8           0.1       1.0X
+i - 1, ANSI, check off                                0              0           0      19415.2           0.1       1.0X
+-i, ANSI, checked                                     0              0           0      19176.2           0.1       1.0X
+-i, ANSI, check off                                   0              0           0      19419.0           0.1       1.0X
 
 
 ================================================================================================
@@ -25,9 +25,9 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one output over 1000000 rows:                    Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------
-i + 1, ANSI, checked (mask condemns the batch)               0              0           0      17340.9           0.1       1.0X
-try_add(i, 1) (mask clears the lane's validity)              0              0           0      13774.9           0.1       0.8X
-i + 1, LEGACY wrapping (no mask)                             0              0           0      17563.6           0.1       1.0X
+i + 1, ANSI, checked (mask condemns the batch)               0              0           0      18480.5           0.1       1.0X
+try_add(i, 1) (mask clears the lane's validity)              0              0           0      16866.3           0.1       0.9X
+i + 1, LEGACY wrapping (no mask)                             0              0           0      19381.3           0.1       1.0X
 
 
 ================================================================================================
@@ -38,12 +38,12 @@ OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one output over 1000000 rows:                     Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 --------------------------------------------------------------------------------------------------------------------------------
-year(d) * 100 + month(d), bound proved, no check              0              0           0       2648.5           0.4       1.0X
-year(d) * 100 + month(d), add checked                         0              0           0       2413.5           0.4       0.9X
-year(d) * 100 + month(d), no check, mixed nulls               0              0           0       2593.5           0.4       1.0X
-year(d) alone                                                 0              0           0       3462.7           0.3       1.3X
-year(d), month(d), no arithmetic                              0              0           0       2806.5           0.4       1.1X
-datediff(d, d2) + 1, bound proved, no check                   0              0           0      11905.2           0.1       4.5X
-datediff(d, d2) + 1, checked                                  0              0           0      10942.0           0.1       4.1X
+year(d) * 100 + month(d), bound proved, no check              0              0           0       2674.9           0.4       1.0X
+year(d) * 100 + month(d), add checked                         0              0           0       2433.8           0.4       0.9X
+year(d) * 100 + month(d), no check, mixed nulls               0              0           0       2676.2           0.4       1.0X
+year(d) alone                                                 0              0           0       3517.0           0.3       1.3X
+year(d), month(d), no arithmetic                              0              0           0       2825.0           0.4       1.1X
+datediff(d, d2) + 1, bound proved, no check                   0              0           0      12301.3           0.1       4.6X
+datediff(d, d2) + 1, checked                                  0              0           0      11841.6           0.1       4.4X
 
 

@@ -1982,8 +1982,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       caseLengths, combos(2), data = extreme, ctx = "MUL WRAP over the extremes")
     for (mode <- Seq(Overflow.FAIL, Overflow.NULL); options <- Seq(VarkaEmitOptions.DEFAULTS,
         checkOff)) {
-      // Under `checkOff` too: that switch is the benchmark's reference arm and may only change
-      // what a kernel costs, never what it means. It used to gate this refusal, so a checked
+      // Under `checkOff` too. Not because that switch never changes meaning - for a checked
+      // add it does, deliberately, which is what makes it a reference arm - but because a
+      // multiply has no correct checked emission at all, so there is no cheaper version of
+      // the same node for "off" to select. It used to gate this refusal, and a checked
       // multiply emitted there as a plain wrapping one.
       val refused = intercept[IllegalArgumentException] {
         emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0, options)
@@ -2178,6 +2180,33 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "negation's check is one compare: it reads the operand, not the result")
     assert(by("year * 100 + month") === by("year, month (control)") + 2,
       "the key is the two fields plus its own two ops, so the year prefix is computed once")
+  }
+
+  test("task 63: make_date over a shifted year - the documented compile-time shape - " +
+      "actually runs and matches the reference") {
+    // `compileIntOperand`'s own doc says `make_date(y + 1, m, d)` fuses, and
+    // `VarkaExpressionCompilerSuite` pins the IR that widening produces - but nothing had ever
+    // emitted it, run it, or checked its value: the fuzzer's make_date arm only ever reads a
+    // date's own fields back, never arithmetic over one of them. This is that gap closed.
+    //
+    // The shift is +1, over triples chosen to stay valid after it: MAKE_DATE_MAX_YEAR is
+    // excluded, since a +1 there is the one shift this file's plain triples would push out of
+    // range, and every Feb 29 is excluded too, since a leap day is invalid the moment +1 lands
+    // it on a non-leap year (2024-02-29 -> 2025-02-29, which does not exist) - both are real
+    // declines, correctly, and belong to task 42's own decline test rather than this one, which
+    // is about the value on the path that does compute.
+    val safeTriples: Array[(Int, Int, Int)] = makeDateValid.filterNot { case (y, m, d) =>
+      y == VarkaChrono.MAKE_DATE_MAX_YEAR || (m == 2 && d == 29)
+    }
+    val y = new ColumnRef(0)
+    val m = new ColumnRef(1)
+    val d = new ColumnRef(2)
+    val shiftedYear = new IntArith(IntOp.ADD, Overflow.WRAP, y, new LiteralSlot(0))
+    for (ansi <- Seq(false, true)) {
+      checkMatrix(Seq(new MakeDate(shiftedYear, m, d, ansi)), 3, Array(1),
+        Seq(1, 13, 17, 64, 1000), combos(3), data = tripleData(safeTriples),
+        ctx = s"make_date(y + 1, m, d), ansi=$ansi")
+    }
   }
 
   test("task 52: a column-offset producer under a calendar node declines the batch whose " +

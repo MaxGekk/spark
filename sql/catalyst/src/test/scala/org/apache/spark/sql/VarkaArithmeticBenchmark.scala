@@ -100,18 +100,24 @@ object VarkaArithmeticBenchmark extends BenchmarkBase {
   }
 
   /**
-   * One int32 column, the same shape the parity benchmark fills: values within +-10000, so
-   * they are dates when a calendar node reads them and ordinary integers when the arithmetic
-   * does, and nowhere near the extremes either way. No case here can therefore overflow, which
-   * is what makes the checked and unchecked arms comparable - both run every lane to the end.
+   * One int32 column, the same shape the parity benchmark fills: values within +-10000 of
+   * `shift`, so they are dates when a calendar node reads them and ordinary integers when the
+   * arithmetic does, and nowhere near the extremes either way. No case here can therefore
+   * overflow, which is what makes the checked and unchecked arms comparable - both run every
+   * lane to the end. `shift` is what makes a second column genuinely a second column: two
+   * calls with `shift = 0` produce bit-identical data, which made every two-input case here a
+   * disguised `datediff(x, x)` until this was added - a benchmark whose own column was a copy
+   * of the first still measures real bytes and real throughput, but it could never have been
+   * extended into a value check, since nothing it computed could ever be wrong.
    */
-  private def fill(arena: Arena, isNull: Int => Boolean): (MemorySegment, MemorySegment, Int) = {
+  private def fill(arena: Arena, isNull: Int => Boolean, shift: Int = 0):
+      (MemorySegment, MemorySegment, Int) = {
     val data = arena.allocate(numRows * 4L, 8)
     val validity = arena.allocate((numRows + 7) / 8L, 8)
     validity.fill(0.toByte)
     var nulls = 0
     for (i <- 0 until numRows) {
-      data.set(ValueLayout.JAVA_INT, i * 4L, i % 20000 - 10000)
+      data.set(ValueLayout.JAVA_INT, i * 4L, i % 20000 - 10000 + shift)
       if (isNull(i)) {
         nulls += 1
       } else {
@@ -129,8 +135,11 @@ object VarkaArithmeticBenchmark extends BenchmarkBase {
     try {
       val (nfData, _, _) = fill(arena, _ => false)
       val (mxData, mxValidity, mxNulls) = fill(arena, i => i % 7 == 0)
-      val (nf2Data, _, _) = fill(arena, _ => false)
-      val (mx2Data, mx2Validity, mx2Nulls) = fill(arena, i => i % 11 == 0)
+      // Shifted, not repeated: the two-input cases below are `datediff`, and a second column
+      // bit-identical to the first would price the emitted bytes correctly but make every
+      // difference zero, which is not the shape a differential over this file would want.
+      val (nf2Data, _, _) = fill(arena, _ => false, shift = 137)
+      val (mx2Data, mx2Validity, mx2Nulls) = fill(arena, i => i % 11 == 0, shift = 137)
       val dst = arena.allocate(numRows * 4L, 8)
       val dstValidity = arena.allocate((numRows + 7) / 8L, 8)
       val dst2 = arena.allocate(numRows * 4L, 8)

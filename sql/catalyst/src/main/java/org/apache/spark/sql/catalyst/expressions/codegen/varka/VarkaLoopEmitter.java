@@ -1851,7 +1851,11 @@ public final class VarkaLoopEmitter {
           // FAIL only: this set exists to allocate the condemning accumulator and to keep the
           // word the collect reads alive, and a NULL node writes neither - it narrows its own
           // word instead, and liveWords demands that word through its own arm. Including NULL
-          // here parked a guardAcc and a guardTmp that nothing ever read.
+          // here parked a guardAcc and a guardTmp that nothing ever read. MUL is excluded for a
+          // different reason - a checked one never reaches here at all, because the compiler
+          // declines it and emitIntArith throws if it ever did - so this guard is defensive
+          // rather than load-bearing; the invariant is stated in three places (here, the throw,
+          // and the compiler's decline) and all three must move together if it is ever widened.
           if (n.mode() == Overflow.FAIL && n.op() != IntOp.MUL) {
             checkedArith.add(node);
           }
@@ -1933,6 +1937,17 @@ public final class VarkaLoopEmitter {
     // position} names the operand that failed, because one message shared across operands is
     // exactly what sent the IR fuzzer's first failure (#110) hunting for a next_day the shape
     // did not contain - the reason the check requireLiteralOffset replaced carried the name too.
+    //
+    // This one stays a local instanceof pair rather than moving to a shared predicate the way
+    // requireDayOffsetShape moved to isDayOffsetShape, and the difference is which of the two
+    // has a compiler-side counterpart to drift from. The day offset does: `compileOffset` runs
+    // an admission test over a compiled subtree, so the rule was stated twice, in two languages,
+    // and the copies did drift. These two operands are not admitted by a test at all - the
+    // NextDay and AddMonths arms *construct* a LiteralSlot or a derived column and can build
+    // nothing else - so there is no second copy here, only a defence against a future producer.
+    // Unifying them would also be wrong on the merits: this check must keep refusing the third
+    // kind, because a weekday and a month count carry runtime bounds a derived value cannot
+    // declare.
     private static void requireOffsetShape(VarkaVectorIR offset, String position) {
       if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)) {
         throw new IllegalArgumentException(
@@ -1952,8 +1967,7 @@ public final class VarkaLoopEmitter {
      * meant to be read together.
      */
     private static void requireDayOffsetShape(VarkaVectorIR offset, String position) {
-      if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)
-          && !(offset instanceof IntArith) && !(offset instanceof IntNeg)) {
+      if (!isDayOffsetShape(offset)) {
         throw new IllegalArgumentException(
             position + " must be a literal slot, a column or int arithmetic, got " + offset);
       }
@@ -2256,7 +2270,11 @@ public final class VarkaLoopEmitter {
           // Task 63's overflow check reads both operands and the result after the lanewise
           // op has consumed the operands off the stack, so all three are parked. Allocated in
           // both bodies, unlike pairTmp: a dense batch overflows exactly as a masked one does,
-          // and the check is what the mode asks for, not what the null state asks for.
+          // and the check is what the mode asks for, not what the null state asks for. That
+          // reads as true of both modes and is true of FAIL: a NULL node has no dense body at
+          // all, because `analyze` sets nullsFromValidInputs for it and `emit` then builds
+          // none, so its dense slots are planned and never used. Harmless, and worth knowing
+          // before counting dense locals against a method budget.
           if (analysis.options.checkIntOverflow() && node instanceof IntArith n
               && n.mode() != Overflow.WRAP) {
             s.intArithTmp.put(node, new int[] {slot++, slot++, slot++});
@@ -2449,10 +2467,25 @@ public final class VarkaLoopEmitter {
    * predicate exists to make impossible for the next kind added. Tasks 52 and 60 added the
    * first two kinds, task 63 the third.
    */
+  /**
+   * The node kinds a {@code date_add}/{@code date_sub} day offset may be. Public because
+   * `VarkaExpressionCompiler` gates its offset arm on exactly this: the compiler deciding what
+   * to build and the emitter deciding what to accept are one rule, and stating it twice is how
+   * `date_add(d, weekday(d2) + 1)` came to be fused in EXPLAIN and refused at emit time, which
+   * the evaluator turns into a silent per-batch fallback. Widen this and both move together.
+   */
+  public static boolean isDayOffsetShape(VarkaVectorIR offset) {
+    return offset instanceof LiteralSlot || offset instanceof ColumnRef
+        || offset instanceof IntArith || offset instanceof IntNeg;
+  }
+
   private static boolean guardedWord(Analysis analysis, VarkaVectorIR node,
       boolean producersGuarding, boolean selfGuarding, boolean checkedArith) {
-    return (producersGuarding && analysis.guardedProducers.contains(node))
-        || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node))
+    // Written as "everything that needs a scratch, plus the kinds that need only the word", so
+    // that guardScratch being a subset of this is structural rather than two copies of two
+    // clauses agreeing by inspection. A kind added to guardScratch alone would otherwise get a
+    // slot and a word the liveness pass had killed.
+    return guardScratch(analysis, node, producersGuarding, selfGuarding)
         || (checkedArith && analysis.checkedArith.contains(node));
   }
 
@@ -3633,8 +3666,14 @@ public final class VarkaLoopEmitter {
     };
     // Before the scratch-slot test, because the refusal is about the node and not about how
     // this body was configured: with `checkIntOverflow` off there is no scratch, and a checked
-    // multiply would otherwise slip through as a plain wrapping one - the A/B switch silently
-    // changing semantics rather than only cost.
+    // multiply would otherwise slip through as a plain wrapping one.
+    //
+    // Note what the argument is not. That switch *does* change meaning for the other checked
+    // nodes, deliberately: with it off a `FAIL` add wraps and a `NULL` add answers the wrapped
+    // number where Spark returns null, which is what its own javadoc promises and what makes
+    // it a reference arm rather than a setting. `MUL` is different in kind - there is no
+    // correct checked emission for it at all, so "off" cannot mean "the same node, cheaper".
+    // A reader who generalises this into the `NULL` and `IntNeg` arms breaks the benchmark.
     if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP) {
       throw new IllegalArgumentException("a checked multiply has no int-lane overflow test: " + n);
     }
@@ -3704,9 +3743,17 @@ public final class VarkaLoopEmitter {
   /**
    * Consumes a {@code VectorMask} of overflowing lanes and disposes of it as the mode says:
    * {@code FAIL} condemns the batch through the shared accumulator, {@code NULL} clears those
-   * lanes from the node's own validity word. The {@code NULL} arm is the only place in the
-   * emitter that narrows a word after it was stored, which is what makes such a node able to
-   * null a lane whose inputs were both valid.
+   * lanes from the node's own validity word. Narrowing a word after it was stored is what makes
+   * such a node able to null a lane whose inputs were both valid, and there is one sibling that
+   * does the same thing: {@code make_date}'s non-ANSI tail in {@link #emitMakeDate}, which ANDs
+   * the node's word with its validity mask so an invalid date is a null rather than an error.
+   * The two are deliberately not one helper. They narrow by opposite polarities - this arm by
+   * the complement of its mask, {@code emitMakeDate} by the mask itself - and take the mask from
+   * different places, this one off the operand stack and that one out of a local, so a shared
+   * helper would have to reorder the {@code land} operands at one of the two sites. That is a
+   * bytecode change to a shape whose committed benchmark numbers and pinned op counts describe
+   * the bytes as they are, which is a real cost for three lines. What the pair does need is to
+   * stay findable from each other, which is what this paragraph and its twin there are for.
    */
   private static void emitOverflowMask(CodeBuilder cb, Overflow mode, VarkaVectorIR node,
       boolean dense, Slots s) {
@@ -3717,8 +3764,22 @@ public final class VarkaLoopEmitter {
     // NULL: word &= ~overflow. A dense body has no word to narrow, and `emit` builds none at
     // all for a kernel whose analysis set nullsFromValidInputs - which every NULL node does -
     // so reaching here dense means that invariant broke. Refused rather than papered over with
-    // a pop, which would silently drop the check and answer where Spark returns null; the
-    // sibling impossibilities (a NULL IntNeg, a checked multiply) are refused the same way.
+    // a pop, which would silently drop the check and answer where Spark returns null.
+    //
+    // The two sibling impossibilities are refused earlier, not by a throw at this same site: a
+    // NULL IntNeg never reaches emission at all, because analyze() throws on it while walking
+    // every root (Spark has no try_negative, so this can only mean a bug upstream); a checked
+    // MUL is declined by the compiler and, failing that, throws inside emitIntArith itself
+    // before this method would ever see it. Three refusals, three places, one invariant - a
+    // future refactor that unifies the overflow dispatch across IntArith and IntNeg has to
+    // keep all three in view, not assume the shape of one implies the others.
+    //
+    // "Refused" is a claim about this class, not about a running query: `VarkaKernelEvaluator`
+    // catches an IllegalArgumentException out of `emit` as an emission failure and drops the
+    // whole task to the row path, so in production a broken invariant is a warned
+    // de-optimisation and not a crash. What makes these refusals load-bearing is that the
+    // emitter suite asserts each of them; the throw is how the assertion has something to
+    // catch, not a runtime guarantee.
     if (dense) {
       throw new IllegalArgumentException(
           "a NULL-mode overflow mask reached a dense body, which has no word to narrow: " + node);
@@ -3841,9 +3902,11 @@ public final class VarkaLoopEmitter {
     // the AND is what keeps a null lane from condemning the batch, so skipping it quietly
     // would turn a liveness error into spurious batch declines on nullable data. `loadWord`
     // refuses instead, and that refusal is what {@code misdescribeWordLiveness} arms in the
-    // "loaded" direction. What makes the case unreachable is {@link #guardedWord}: one
-    // predicate, read by both the slot planner and the liveness pass, so neither can decide
-    // this node is guarded while the other decides its word is dead.
+    // "loaded" direction. What makes the case unreachable is {@link #guardedWord}, which the
+    // liveness pass reads and which contains {@link #guardScratch}, the slot planner's
+    // predicate, by construction - so the planner cannot decide this node is guarded while the
+    // liveness pass decides its word is dead. It was one predicate until task 63 found that
+    // its two readers ask different questions; the containment is what preserves the property.
     if (!dense && word != null && word != WORD_ALL_TRUE) {
       cb.aload(s.species);
       loadWord(cb, s, word);
@@ -3975,7 +4038,9 @@ public final class VarkaLoopEmitter {
     // The value, over the clamped month; garbage where a mask said so.
     emitDaysFromCivil(cb, year, clamped, day, t[7], t[8], t[9], t[10], t[11], t[12], t[13],
         t[14], t[15], t[16], t[17]);
-    // Under the NULL form an invalid date is a null output: the validity joins the word.
+    // Under the NULL form an invalid date is a null output: the validity joins the word. This
+    // is the second of the emitter's two places that narrow a word after storing it; the other
+    // is the NULL arm of {@link #emitOverflowMask}, whose javadoc says why they are not shared.
     if (ownLive && !n.failOnError()) {
       loadWord(cb, s, own);
       cb.aload(valid);
