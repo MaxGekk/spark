@@ -55,10 +55,57 @@ comparison's operand goes through `compileNode`, whose value leaf is `DateType`
 predicate position has no arm and declines. `PLAN_TASK_63.md` 9.8 already noted
 this for the arithmetic instance; it is true of the whole family.
 
-**So the user cannot write the range test at all, and the sentence that
-motivates this task is wrong.** The cliff is real - see 2.3 - but it is not
-"your own guard is ignored". It is "a condition about something else does not
-protect the arm", which is a weaker claim and changes the design trade in 3.
+**So the user cannot write that range test today, and the sentence that
+motivates this task is wrong as it stands.** The cliff is real - see 2.3 - but
+what a user can currently express is "a condition about something else", not
+"my own bound on the count".
+
+*Extended on 8 September 2026, after the paragraph above was first written and
+the obvious follow-up question was asked: could those shapes fuse?* They could,
+and the distance is short, which matters for how this task is argued rather than
+for what it builds. Two independent blockers, both established by patching the
+compiler experimentally and reverting:
+
+* **A bare int column has no arm in comparison operand position.** `compare`'s
+  local `operand` admits an int *literal* directly - that is what makes
+  `month(d) = 6` fuse - and sends everything else to `compileNode`, whose value
+  leaf is `DateType` and the year-month interval. Adding one case for an
+  `IntegerType` `BoundReference` was enough to fuse
+  `CASE WHEN m > 0 THEN d ELSE d2 END` and, with it, 2.41's own shape in its
+  explicit form:
+
+      CASE WHEN m >= -1000 AND m <= 1000 THEN add_months(d, m)
+           ELSE DATE'1999-01-01' END
+      -> (if (and (cmp:GE col:0 lit:0) (cmp:LE col:0 lit:1))
+              (addMonths col:1 col:0) lit:2)
+
+* **`BETWEEN` is blocked separately, and by something else entirely.**
+  `Between` is a `RuntimeReplaceable` whose replacement is, unless
+  `ALWAYS_INLINE_COMMON_EXPR` is set, `With(input) { ref =>
+  And(GreaterThanOrEqual(ref, lower), LessThanOrEqual(ref, upper)) }` - a
+  common-expression binding so `input` is evaluated once. The compiler has no
+  arm for `With`/`CommonExpressionRef`, so `BETWEEN` declines even with the
+  first blocker fixed. For a bare column the binding buys nothing and inlining
+  would be sound, but that is a second arm and not this task's.
+
+**Neither is taken here, and the first is deliberately not taken here.**
+Widening `compare`'s `operand` alone is a widening of one of the four
+near-copies that milestone 5's task 86 exists to unify, and widening one copy in
+isolation is exactly the move that produced the ghost fallback task 86 was
+opened for - `date_add(d, weekday(d2) + 1)` accepted by the compiler, marked
+fused in EXPLAIN and refused at emit time. It looks safe here, because `Compare`
+already takes arbitrary IR operands and both lanes are int32, so the emitter
+side probably needs nothing; "probably" is the word that cost a PR. It is folded
+into task 86, whose enumeration test - the compiler's admitted set equals the
+emitter's accepted set, per position - is what turns that "probably" into an
+assertion.
+
+What this does to the present task is change its argument, not its design. If
+the bound becomes expressible, ignoring it is worse rather than better, so the
+honest fix in 3.1 is more motivated and the cheap candidate less. 3.1 is written
+against the shapes reachable today and holds either way; this note records that
+it also holds after task 86, which is the case where getting it wrong would be
+most visible to a user.
 
 ### 2.3 What is actually reachable
 
@@ -94,13 +141,16 @@ fused and needs 2.1's disjunction rule. *Exclude a node under an arm from the
 guarded set* is cheaper and makes the shape decline at compile time with a
 reason instead.
 
-2.2 cuts the second one's argument down. It was attractive while the story was
-"the user wrote a bound and we ignored it", because then a compile-time decline
-at least tells them so. But the user cannot write that bound, so the choice is
-between a shape that fuses and occasionally declines a batch, and a shape that
-never fuses at all. Declining every batch of a shape that would otherwise fuse
-whenever no extreme row is present is a regression for the common case, not a
-repair - the opposite of task 78, where declining recovered a real loss.
+2.2 cuts the second one's argument down, and cuts it twice. It was attractive
+while the story was "the user wrote a bound and we ignored it", because then a
+compile-time decline at least tells them so. But the user cannot write that
+bound today, so the choice is between a shape that fuses and occasionally
+declines a batch, and a shape that never fuses at all. Declining every batch of
+a shape that would otherwise fuse whenever no extreme row is present is a
+regression for the common case, not a repair - the opposite of task 78, where
+declining recovered a real loss. And once task 86 makes the bound expressible,
+the cheap candidate is worse again for the opposite reason: it would decline the
+very shape a user wrote a bound to keep.
 
 **So this task builds the honest fix**, and the cheap one is recorded here as
 the fallback if 3.3's measurement says the arm mask costs more than the
