@@ -864,19 +864,18 @@ private[sql] object VarkaExpressionCompiler {
   /** Whether a day count fits an int32 lane, so producing it cannot have wrapped. */
   private def withinInt(v: Long): Boolean = v >= Int.MinValue.toLong && v <= Int.MaxValue.toLong
 
-  /** Whether the operation on operands of these bounds cannot leave the int32 range. */
+  /**
+   * Whether the operation on operands of these bounds cannot leave the int32 range. Read
+   * through `intBound`'s own `IntArith` arm rather than re-dispatched here: the candidate node
+   * is never emitted, so building one to ask the question is free, and the two answers cannot
+   * drift apart the way two copies of "MUL multiplies, else adds" once could. The bound is
+   * always non-negative by construction (every base case and every combinator in `intBound`
+   * preserves that), so the only thing left to ask is whether it stays at or under
+   * `Int.MaxValue` - one past it, `2^31`, is the first magnitude that overflows.
+   */
   private def cannotOverflow(op: IntOp, l: VarkaVectorIR, r: VarkaVectorIR,
       literals: mutable.LinkedHashMap[Int, Int]): Boolean =
-    (for {
-      a <- intBound(l, literals)
-      b <- intBound(r, literals)
-      worst <- exactly(if (op == IntOp.MUL) Math.multiplyExact(a, b) else Math.addExact(a, b))
-    } yield {
-      // `a` and `b` are absolute bounds, so the result lies in `[-worst, worst]` and the
-      // binding end is the positive one: `Int.MaxValue`, not `MIN_VALUE`'s magnitude, which is
-      // one larger and would admit a result of exactly 2^31 - the first value that overflows.
-      worst >= 0 && worst <= Int.MaxValue.toLong
-    }).getOrElse(false)
+    intBound(new IntArith(op, Overflow.WRAP, l, r), literals).exists(_ <= Int.MaxValue.toLong)
 
   /**
    * The shared body of the three binary arithmetic arms. A checked multiply declines unless
