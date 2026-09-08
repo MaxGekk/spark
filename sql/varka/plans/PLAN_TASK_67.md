@@ -63,6 +63,62 @@ on some paths (`intToYearMonthInterval` again) - taken only where the source
 unit's range is inside the target's, which for `MONTH` to `YEAR TO MONTH` it
 is; otherwise declined.
 
+### 2.1 Reconciled against task 63, which landed after this plan was written
+
+*Added 8 September 2026. Sections above were written on 5 September, when int32
+arithmetic was still ahead of this task; three of their decisions defer to it.
+Checked against master at `a26ab686fe0`, and one of the three was wrong.*
+
+**`d - ym_col` does not become "one arm", and it should stay out of this task.**
+The analyzer produces `DatetimeSub(l, r, DateAddYMInterval(l, UnaryMinus(r,
+ansi)))` (`BinaryArithmeticWithDatetimeResolver.scala:117`), so the month count
+is a negation of an interval column. Task 63 does supply `IntNeg` - but its
+compile arm is `case n @ UnaryMinus(c, failOnError) if n.dataType ==
+IntegerType`, and this negation is `YearMonthIntervalType`, so that arm does not
+match and widening it would be wrong: int arithmetic is an int-typed concept.
+The arm would have to be local to `compileMonths`, which is fine.
+
+The blocker is one layer down, in the emitter. `analyze()` calls
+`requireOffsetShape(n.months(), "add_months' month count")`, which admits a
+`LiteralSlot` or a `ColumnRef` and nothing else, so an `IntNeg` in that position
+is refused - and section 3.2 of this plan promises no emitter byte moves. So
+`d - ym_col` stays declined here and belongs to task 68, which owns `-ym`
+anyway. Its decline reason changes, though: not "waits for int arithmetic",
+which has arrived, but that the month-count position takes a literal or a column
+and this is neither.
+
+*What the refusal is not.* It would be easy to read the emitter's strictness as
+"a month count carries a runtime bound a derived value cannot declare" - that
+sentence is in `requireOffsetShape`'s own comment as of task 78, and for the
+month count it is imprecise. A column-count `AddMonths` joins `selfGuarding`
+and is guarded at run time against `MONTH_ARITH_MIN/MAX_MONTHS` by a lanewise
+check on the count's *value*, which does not care what produced it; a derived
+count would be covered by exactly that guard. `next_day`'s weekday is the one
+that genuinely cannot, being folded or a task-59 derived leaf with no lanewise
+range guard behind it. The two positions share a check and do not share the
+reason, and whoever widens this for task 68 should split them rather than
+believe the shared comment. Recorded here, and left for that task.
+
+**The `YEAR`-unit casts stay declined, for a different reason than section 2
+gives.** `IntervalUtils.intToYearMonthInterval` is `Math.multiplyExact(v, 12)`
+for a `YEAR` end field - always checked, whatever the session's ANSI mode, and
+throwing `castingCauseOverflowError` rather than `ARITHMETIC_OVERFLOW`. Task 63
+lowers a checked multiply only where `intBound` proves it cannot overflow, and
+an interval or int column carries no bound, so the common case still declines.
+What has changed is that the compiler's comment - "admitting it needs the
+multiply in the lane, not a bound" - now names a thing that exists, so it reads
+as an invitation it is not. The reason string and that comment are corrected in
+this task even though the outcome does not move, because the next reader of that
+arm will otherwise try the multiply and find out the hard way.
+
+A bounded operand would now fuse: `CAST(year(d) AS INTERVAL YEAR)` has
+`intBound` 40000, and 40000 * 12 is inside int32. That is a real widening this
+task can take for free, since it is the existing arm plus a bound query.
+
+**`CAST(ym AS INT)` on a `YEAR`-ended interval is unchanged**, and correctly so:
+`yearMonthIntervalToInt` is `v / MONTHS_PER_YEAR`, and task 63 lowers no
+division. Task 68, as section 3.2 already says.
+
 **What the check would have rejected:** a unit that changed the stored
 value (it does not), an Arrow vector that is not fixed-width int32 (it is), a
 cast that is not a relabel for the `MONTH` unit (it is), and a leaf widening
@@ -98,8 +154,10 @@ the bounds check and the status route are type-blind.
 * `Cast(e, YearMonthIntervalType(MONTH, MONTH))` over an int-typed fused
   field or int column, and `Cast(ym, IntegerType)` over a `MONTH`-ended
   interval, as relabels (the `unix_date` arm's pattern, no node); the
-  `YEAR`-unit casts decline with "year-unit interval cast waits for int
-  arithmetic".
+  `YEAR`-unit casts decline, with a reason naming the unbounded checked
+  multiply rather than a wait that is over (2.1), except over an operand
+  `intBound` can bound - `CAST(year(d) AS INTERVAL YEAR)` - which fuses on
+  task 63's existing `IntArith` arm.
 
 **What a user observes.** A cached table with interval columns fuses in
 `SELECT d + ym`, `WHERE ym > INTERVAL '1' YEAR`, `greatest(ym1, ym2)`,
