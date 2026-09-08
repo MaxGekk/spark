@@ -2143,6 +2143,37 @@ frontier and say so in the comment: `i % 7` is residual because integer
 division has no arm, and the comment says that rather than "not a kernel op",
 so the next task to lower `%` finds a sentence that tells it to look.
 
+## A value that depends on repo state is queried, not chosen
+
+Adding a case to `VarkaEmitterParityBenchmark` needs a free case id, and the id
+names the emitted kernel's class. Picking one by reading the ids near where you
+are editing fails: not every id in that file is a literal - the trunc block
+computes `id` and `id + 1` from a tuple list - so a grep can hand you one that is
+already taken, and the emitter's `require` then reports it twenty minutes into a
+regeneration, after every earlier case has been timed. That happened twice in one
+evening, on two different guesses.
+
+`dev/varka_bench_ids.sh` is the answer to the question the guess was trying to
+answer. It runs the benchmark with `-Dvarka.bench.dryRun=true`, which emits and
+registers every case and times none, and prints the ids in use and the next free
+one - the file's own answer, in about as long as a JVM takes to start. The id
+space is per file, since each benchmark names its kernels with its own class
+prefix.
+
+The general form is worth more than the script. A value whose correctness depends
+on something already in the repository should be computed from that something,
+never chosen because it looks right: the next free id from the set of ids, a
+test's expected value from the same function that builds its data, a fixture's
+selectivity from a count query rather than from the arithmetic meant to produce
+it, the safety of widening a shared fixture from a grep for who reads it. The
+cost asymmetry is what makes it a rule rather than a habit - where the repository
+has a guard the mistake is loud and costs one round trip, and where it has none
+the run succeeds and publishes something other than what its name says.
+
+A dry run is a check on structure and says nothing about numbers. It is not a
+faster regeneration, and the script's header says so where someone tired might
+reach for it.
+
 ## An overflow check is nearly free in wide lanes and expensive in narrow ones
 
 Task 63's ANSI check is a sign test: four lanewise ops and a compare for `+`

@@ -88,6 +88,34 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
   /** Every case id handed to [[emit]], so a reused one is named here rather than deep in a run. */
   private val usedIds = scala.collection.mutable.Set.empty[Int]
 
+  /**
+   * Structural dry run: with {@code -Dvarka.bench.dryRun=true} every case is emitted and
+   * registered but none is timed, so the whole file's case ids are checked in about as long as
+   * it takes to start a JVM instead of the twenty minutes a full run takes to reach the case
+   * that collides.
+   *
+   * It exists because picking a free id by reading the file is unreliable and the emitter's own
+   * `require` is the only authority: not every id here is a literal - the trunc block computes
+   * `id` and `id + 1` from a tuple list - so a grep answers a question this method answers
+   * exactly. `dev/varka_bench_ids.sh` is the front end, and it prints the next free id.
+   *
+   * A dry run measures nothing and proves nothing about the numbers. It is a check on the
+   * file's structure, and it is never a substitute for a regeneration.
+   */
+  private val dryRun = sys.props.get("varka.bench.dryRun").exists(_.toBoolean)
+
+  /** Times `b`, unless this is a dry run - see [[dryRun]]. */
+  private def runCases(b: Benchmark): Unit = if (!dryRun) b.run()
+
+  /** What a dry run prints instead of timings: every id in use, and the first one that is not. */
+  private def reportIds(): Unit = if (dryRun) {
+    val ids = usedIds.toSeq.sorted
+    // scalastyle:off println
+    println(s"varka-bench-ids: ${ids.size} cases, ids ${ids.mkString(",")}")
+    println(s"varka-bench-next-free-id: ${if (ids.isEmpty) 0 else ids.max + 1}")
+    // scalastyle:on println
+  }
+
   private def emit(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
       loader: VarkaGeneratedClassLoader, n: Int,
       options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): VarkaFusedKernel = {
@@ -222,7 +250,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           depth1.run(Array(mxData.address()), Array(mxValidity.address()), Array(mxNulls),
             Array(dst.address()), Array(dstValidity.address()), Array(3), numRows)
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("datediff: emitted loop vs hand-written kernel") {
@@ -293,7 +321,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             Array(0L, mx2Validity.address()), Array(numRows, mx2Nulls),
             Array(dst.address()), Array(dstValidity.address()), Array.empty[Int], numRows)
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("fused chain vs sequential kernel passes") {
@@ -311,7 +339,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
               dst.address(), dstValidity.address())
           }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("shared subchain across two outputs (DAG-CSE)") {
@@ -341,7 +369,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             mx2Data.address(), mx2Validity.address(), mx2Nulls,
             dst2.address(), dst2Validity.address(), numRows)
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("predication: CASE WHEN blend vs plain arithmetic (task 11)") {
@@ -383,7 +411,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           run(blended, mxData.address(), mxValidity.address(), mxNulls,
             mx2Data.address(), mx2Validity.address(), mx2Nulls)
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("dayofweek: magic multiply vs digit sum vs DIV vs LocalDate (tasks 11, 14)") {
@@ -430,7 +458,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             i += 1
           }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("year: the calendar extractions against LocalDate (task 26)") {
@@ -1216,7 +1244,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             pass += 1
           }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("GROUP_BUDGET: two outputs over one shared chain, split vs kept together") {
@@ -1257,7 +1285,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase("budget 24: one loop method, cross-output CSE kept") { _ =>
           run(together)
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("task 32 B2: the fused-method ladder past four outputs (PLAN_TASK_32.md 10.4)") {
@@ -1321,7 +1349,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             chunkedWide(kernel, outputs)
           }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("widest shape: MAX_FUSED_NODES ops in one kernel") {
@@ -1345,7 +1373,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
               wideDst(k).address(), wideDstValidity(k).address())
           }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("next_day: the literal kernel, the column kernel, the derived leaf and " +
@@ -1512,7 +1540,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
               }
             }
           }
-          benchmark.run()
+          runCases(benchmark)
         } finally {
           // Each vector close is guarded and the allocator close sits in its own finally, so
           // one failure cannot skip the rest: the allocator is a child of the process-lifetime
@@ -1669,7 +1697,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
               }
             }
           }
-          benchmark.run()
+          runCases(benchmark)
         } finally {
           validFormats.foreach(_.close())
           tenthBad.foreach(_.close())
@@ -1822,7 +1850,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             chunkedCalendar(fourFieldsPerGroup, chunk, mixed = true)
           }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("task 44: the epilogue's HugeMethodLimit crossing (PLAN_TASK_32.md 7.1)") {
@@ -1882,7 +1910,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           benchmark.addCase(s"shared (4048B epilogue, under HugeMethodLimit), chunk $chunk " +
             s"($note)") { _ => chunked20(shared20, chunk) }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("task 43: one output, widening - where a single loop method stops scaling") {
@@ -1934,11 +1962,12 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             require(status == 0, s"the kernel declined a batch: status $status")
           }
         }
-        benchmark.run()
+        runCases(benchmark)
       }
     } finally {
       loader.release()
       arena.close()
     }
+    reportIds()
   }
 }
