@@ -1,0 +1,108 @@
+================================================================================================
+SELECT d WHERE d < d2 (narrowed), 10% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d WHERE d < d2 (narrowed), 10% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                         44             49           4         45.3          22.1       1.0X
+varka (SIMD)                                                                              20             22           3        101.7           9.8       2.2X
+
+
+================================================================================================
+SELECT d, d2 WHERE d < d2 (control), 10% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d, d2 WHERE d < d2 (control), 10% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                            41             44           5         49.1          20.3       1.0X
+varka (SIMD)                                                                                 17             20           3        114.3           8.7       2.3X
+
+
+================================================================================================
+COUNT(*) WHERE d < d2 (no read-back), 10% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) WHERE d < d2 (no read-back), 10% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                             40             42           2         50.6          19.8       1.0X
+varka (SIMD)                                                                                  18             20           2        111.1           9.0       2.2X
+
+
+================================================================================================
+SELECT d WHERE d < d2 (narrowed), 70% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d WHERE d < d2 (narrowed), 70% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                         46             49           4         43.2          23.2       1.0X
+varka (SIMD)                                                                              31             34           2         63.7          15.7       1.5X
+
+
+================================================================================================
+SELECT d, d2 WHERE d < d2 (control), 70% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d, d2 WHERE d < d2 (control), 70% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                            45             48           3         44.5          22.5       1.0X
+varka (SIMD)                                                                                 35             39           5         56.8          17.6       1.3X
+
+
+================================================================================================
+COUNT(*) WHERE d < d2 (no read-back), 70% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) WHERE d < d2 (no read-back), 70% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                             41             45           3         49.1          20.4       1.0X
+varka (SIMD)                                                                                  37             40           3         54.7          18.3       1.1X
+
+
+================================================================================================
+SELECT d WHERE d < d2 (narrowed), 100% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d WHERE d < d2 (narrowed), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                          48             52           2         41.3          24.2       1.0X
+varka (SIMD)                                                                               38             42           2         52.4          19.1       1.3X
+
+
+================================================================================================
+SELECT d, d2 WHERE d < d2 (control), 100% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d, d2 WHERE d < d2 (control), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                             48             50           2         41.9          23.9       1.0X
+varka (SIMD)                                                                                  44             47           2         45.8          21.8       1.1X
+
+
+================================================================================================
+COUNT(*) WHERE d < d2 (no read-back), 100% selected
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) WHERE d < d2 (no read-back), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                              39             43           3         50.8          19.7       1.0X
+varka (SIMD)                                                                                   44             47           4         45.3          22.1       0.9X
+
+

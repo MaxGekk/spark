@@ -276,8 +276,80 @@ compared are against stock on the same host.
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+### 9.1 The A/B, on the laptop
+
+`VarkaNarrowingBenchmark`, new, with its own committed results at both widths
+and provenance beside them. **These are laptop numbers and are not comparable
+to the 0.66x that motivated this task**, which is task 62's surface on the
+pinned 512-bit runner against three distributions. They establish the sign and
+the size; the ratio the milestone's public table quotes still needs the runner.
+
+| shape | 10% selected | 70% | 100% |
+|---|---|---|---|
+| `SELECT d ... WHERE d < d2`, narrowed | 2.2x / 2.2x | 1.5x / 1.5x | 1.3x / 1.3x |
+| `SELECT d, d2 ...`, the control | 2.3x / 2.3x | 1.3x / 1.2x | 1.1x / 1.1x |
+| `COUNT(*) ...`, nothing crosses the floor | 2.2x / 2.1x | 1.1x / 1.1x | 0.9x / 0.8x |
+
+AVX-512 / 128-bit, against the Janino session on the same data. The losing
+shape is a win at every rung. The ladder falls with selectivity in all three
+rows, which is the mechanism 6's table predicted: the floor's cost is per
+selected row, the kernel's advantage is per input row. The two widths agree
+inside a rung's noise, which is what a change to the row boundary rather than
+to the lanes should look like.
+
+### 9.2 The predictions, scored
+
+**1 missed.** The control was to be above 1.00x at 10% and below it at 100%.
+The direction is right - 2.3x down to 1.1x - but it never crosses below.
+
+**2 missed, and this is the finding.** It said candidate B alone would not turn
+`d < d2` into a win at 70% selected. It is 1.5x there. 6.1 pre-committed to
+what that would mean: "the floor is cheaper than task 19 measured and that is a
+finding about task 19, not about this shape." So the read-back floor at task
+19's ~25 ns per row is not what stands between this shape and stock - removing
+one operator and one column's worth of row conversion was enough. The practical
+consequence is for scope item 13: making the node `CodegenSupport` is not
+needed to make this family win, so the item keeps its own justification rather
+than inheriting this task's.
+
+**3 holds at two rungs of three.** The two-column row is 12% slower across the
+floor than the one-column row at 70% and 14% at 100% (63.7 against 56.8, 52.4
+against 45.8), over the threshold 6.1 set. At 10% it inverts - the narrowed
+shape reads 101.7 against the control's 114.3 - and that is recorded rather
+than explained away: almost nothing crosses the floor at that rung, so layer 3
+has almost nothing to act on and the gap is inside the run-to-run band. Either
+sign at 10% would need a second run to mean anything.
+
+### 9.3 What moved that the plan did not list
+
+**The benchmark's first fixture was mislabelled, and the bug is the same one
+task 63's third review had just found in `VarkaArithmeticBenchmark`.** `d2` was
+`d` cycle-shifted by `s` days, so `d < d2` holds for `(cycle - s) / cycle` of
+the rows - the inverse of the shift. The rungs labelled 10, 70 and 100% were
+really 90, 30 and 0% selected, and the top rung's `s = cycle` made `d2` equal
+`d` on every row, so it selected nothing while claiming everything. The first
+results looked like Varka getting faster as more rows were selected, which is
+what sent me back to the fixture.
+
+Nothing failed, because nothing was broken: it measured a real plan over real
+data and answered a question other than the one on its label. That is exactly
+the shape of task 63's copied column, and it is the second instance in a day,
+so the fix is not just the arithmetic. Selectivity is now the sign of
+`d2 - d`, one day either way, which is exact whatever the cycle does, and
+`requireSelectivity` asserts each rung's actual fraction against the engine
+before anything is timed. A mislabelled rung now fails the run.
+
+`SKILLS.md` carries the general form under task 63's checklist already - a
+fixture chosen for a property the test does not assert is a number nobody
+re-reads. What this adds is that asserting the property is cheap: one count
+query per rung, run once, outside the timed region.
+
+### 9.4 What this leaves for later
+
+The pinned-runner dispatch, which is what turns 9.1 into a number the public
+table can quote and flips the three `Surface` entries' measured ratios. And the
+`COUNT(*)` rung at 0.9x/0.8x at full selectivity - the kernel with nothing
+crossing the boundary, still behind stock on this data. It is not this task's
+shape and not this task's cause; it belongs to whoever prices the predicate
+kernel against Janino's on a fully-selecting range, and it is left in the
+milestone's debt register rather than chased here.

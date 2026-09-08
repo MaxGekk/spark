@@ -1,0 +1,113 @@
+Narrow-width companion of VarkaNarrowingBenchmark-jdk25-results.txt: the same benchmark under
+-XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
+  benchmark:   org.apache.spark.sql.execution.benchmark.VarkaNarrowingBenchmark
+  commit:      30d85a26bec
+  date:        2026-09-08T16:33:57Z
+  jdk:         OpenJDK Runtime Environment (build 25.0.4+7-1-26.04-Ubuntu)
+  kernel:      7.0.0-31-generic
+  cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+  power:       governor=performance epp=performance profile=performance
+  load at start: 0.53
+  canary:      ok (compute +0.2% cache +1.4% memory -0.3% )
+  wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt sql/Test/runMain org.apache.spark.sql.execution.benchmark.VarkaNarrowingBenchmark
+  narrow run:  build/sbt "project sql" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.execution.benchmark.VarkaNarrowingBenchmark"
+
+Running benchmark: SELECT d WHERE d < d2 (narrowed), 10% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 42 iterations, 2029 ms
+  Running case: varka (SIMD)
+  Stopped after 88 iterations, 2008 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d WHERE d < d2 (narrowed), 10% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                         45             48           3         44.8          22.3       1.0X
+varka (SIMD)                                                                              20             23           2         98.8          10.1       2.2X
+Running benchmark: SELECT d, d2 WHERE d < d2 (control), 10% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 48 iterations, 2013 ms
+  Running case: varka (SIMD)
+  Stopped after 100 iterations, 2006 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d, d2 WHERE d < d2 (control), 10% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                            39             42           3         50.7          19.7       1.0X
+varka (SIMD)                                                                                 17             20           3        115.2           8.7       2.3X
+Running benchmark: COUNT(*) WHERE d < d2 (no read-back), 10% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 45 iterations, 2025 ms
+  Running case: varka (SIMD)
+  Stopped after 94 iterations, 2017 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) WHERE d < d2 (no read-back), 10% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                             40             45           5         49.6          20.2       1.0X
+varka (SIMD)                                                                                  19             21           2        105.1           9.5       2.1X
+Running benchmark: SELECT d WHERE d < d2 (narrowed), 70% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 43 iterations, 2041 ms
+  Running case: varka (SIMD)
+  Stopped after 62 iterations, 2027 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d WHERE d < d2 (narrowed), 70% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                         44             47           3         45.1          22.2       1.0X
+varka (SIMD)                                                                              30             33           2         67.0          14.9       1.5X
+Running benchmark: SELECT d, d2 WHERE d < d2 (control), 70% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 43 iterations, 2021 ms
+  Running case: varka (SIMD)
+  Stopped after 54 iterations, 2015 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d, d2 WHERE d < d2 (control), 70% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                            44             47           6         45.2          22.1       1.0X
+varka (SIMD)                                                                                 36             37           4         56.2          17.8       1.2X
+Running benchmark: COUNT(*) WHERE d < d2 (no read-back), 70% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 47 iterations, 2002 ms
+  Running case: varka (SIMD)
+  Stopped after 51 iterations, 2007 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) WHERE d < d2 (no read-back), 70% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                             39             43           3         50.9          19.6       1.0X
+varka (SIMD)                                                                                  36             39           5         55.7          18.0       1.1X
+Running benchmark: SELECT d WHERE d < d2 (narrowed), 100% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 39 iterations, 2023 ms
+  Running case: varka (SIMD)
+  Stopped after 49 iterations, 2004 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d WHERE d < d2 (narrowed), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                          48             52           4         41.9          23.9       1.0X
+varka (SIMD)                                                                               38             41           4         52.9          18.9       1.3X
+Running benchmark: SELECT d, d2 WHERE d < d2 (control), 100% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 39 iterations, 2030 ms
+  Running case: varka (SIMD)
+  Stopped after 42 iterations, 2042 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+SELECT d, d2 WHERE d < d2 (control), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                             48             52           2         41.5          24.1       1.0X
+varka (SIMD)                                                                                  44             49           4         45.6          21.9       1.1X
+Running benchmark: COUNT(*) WHERE d < d2 (no read-back), 100% selected over 2000000 Arrow-cached rows
+  Running case: baseline (Janino)
+  Stopped after 49 iterations, 2036 ms
+  Running case: varka (SIMD)
+  Stopped after 42 iterations, 2023 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+COUNT(*) WHERE d < d2 (no read-back), 100% selected over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                              37             42           2         53.3          18.7       1.0X
+varka (SIMD)                                                                                   45             48           3         44.7          22.4       0.8X
