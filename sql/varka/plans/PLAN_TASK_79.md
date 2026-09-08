@@ -79,14 +79,26 @@ compiler experimentally and reverting:
       -> (if (and (cmp:GE col:0 lit:0) (cmp:LE col:0 lit:1))
               (addMonths col:1 col:0) lit:2)
 
-* **`BETWEEN` is blocked separately, and by something else entirely.**
-  `Between` is a `RuntimeReplaceable` whose replacement is, unless
-  `ALWAYS_INLINE_COMMON_EXPR` is set, `With(input) { ref =>
-  And(GreaterThanOrEqual(ref, lower), LessThanOrEqual(ref, upper)) }` - a
-  common-expression binding so `input` is evaluated once. The compiler has no
-  arm for `With`/`CommonExpressionRef`, so `BETWEEN` declines even with the
-  first blocker fixed. For a bare column the binding buys nothing and inlining
-  would be sound, but that is a second arm and not this task's.
+* **`BETWEEN` is not a second blocker, and the appearance that it was is an
+  artifact of the tool.** `Between` is a `RuntimeReplaceable` whose replacement
+  is `With(input) { ref => And(GreaterThanOrEqual(ref, lower),
+  LessThanOrEqual(ref, upper)) }` unless `ALWAYS_INLINE_COMMON_EXPR` is set, and
+  the compiler has no arm for `With`/`CommonExpressionRef` - which is why
+  `dev/varka_emit.sh` declines it. But that tool resolves names and functions
+  and *nothing else*: it never runs the optimizer, and
+  `RewriteWithExpression` inlines a binding whose child satisfies
+  `CollapseProject.isCheap`, which an `Attribute` or `BoundReference` does. So
+  in a real query a `BETWEEN` over a column arrives as the plain `And` above.
+
+  The repo already proves it: `d BETWEEN DATE'2020-06-01' AND DATE'2021-06-01'`
+  is a `Surface.filter` entry and task 62's 1B-row run has it fusing whole at
+  7.96x. If the `With` reached the compiler that entry would decline.
+
+  So after task 86's widening, `m BETWEEN -1000 AND 1000` fuses with no further
+  work. What remains unexamined is a `BETWEEN` over an input `isCheap` refuses,
+  where the rewrite hoists the common expression into a `Project` instead of
+  inlining it; that changes the plan shape rather than the expression, and
+  nothing here has looked at what Varka makes of it.
 
 **Neither is taken here, and the first is deliberately not taken here.**
 Widening `compare`'s `operand` alone is a widening of one of the four

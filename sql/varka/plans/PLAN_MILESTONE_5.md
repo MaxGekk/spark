@@ -1053,13 +1053,19 @@ test proves it. It is also the natural first exercise of the unified table: a
 position gains a kind, and nothing else in the file has to be touched for the
 emitter to agree.
 
-Two shapes stay out of it and are named so the next reader does not go looking.
-`BETWEEN` declines for an unrelated reason - `Between` is a
-`RuntimeReplaceable` whose replacement is `With(input) { ref => And(...) }`
-unless `ALWAYS_INLINE_COMMON_EXPR` is set, and no arm handles
-`With`/`CommonExpressionRef`; inlining it for a leaf input would be sound but is
-its own change. And int arithmetic in predicate position stays where task 63's
-comment put it, since a widened *leaf* is not a widened *tree*.
+`BETWEEN` comes along for free and needs no arm of its own, which is worth
+saying because the first reading of it said the opposite. `Between`'s
+replacement is `With(input) { ref => And(...) }`, and the compiler has no arm
+for `With`/`CommonExpressionRef` - so `dev/varka_emit.sh` declines it. That tool
+resolves names and functions and nothing else; it never optimizes, and
+`RewriteWithExpression` inlines a binding whose child is `CollapseProject.isCheap`,
+which an `Attribute` or `BoundReference` is. `d BETWEEN <lit> AND <lit>` fusing
+whole at 7.96x in task 62's run is the standing proof. A `BETWEEN` over an input
+`isCheap` refuses is a different question - the rewrite hoists it into a
+`Project` rather than inlining - and nobody has looked at it.
+
+Int arithmetic in predicate position stays out and where task 63's comment put
+it, since a widened *leaf* is not a widened *tree*.
 
 **The admission check.** A test that enumerates the operand positions and,
 for each, asserts that the set the compiler admits and the set the emitter
