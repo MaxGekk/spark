@@ -39,8 +39,20 @@ serves filters: an eligible predicate becomes a mask kernel whose single
 output is the selection bitmap, and the batch is compacted - or its rows
 skipped at the row boundary - by that mask.
 
-The supported expression surface, over `DateType` columns (stored as `INT`
-days since epoch) and day offsets that are a foldable integer literal, an
+Varka reads three Spark types, and they are the three that are int32 both in
+Spark and in the Arrow cache: `DateType` (stored as `INT` days since epoch),
+`IntegerType`, and `YearMonthIntervalType` in every unit (task 67), whose value
+is a count of months whether it is spelled `INTERVAL YEAR`, `INTERVAL MONTH` or
+`INTERVAL YEAR TO MONTH`. An interval column reaches the same lanes as a date
+one; where it may appear is decided by Spark's own typing, so it fuses in
+`d + ym`, in the ordered comparisons and `IN`, and in the same-typed
+`greatest`/`least`/`coalesce`/`IF`/`CASE`. `CAST` between an `INT` and a
+`MONTH`-unit interval is a relabel in both directions and emits nothing; the
+`YEAR`-unit casts, which multiply or divide by twelve, are residual, as is
+`d - ym_col`.
+
+The supported expression surface, then, over those columns and day offsets that
+are a foldable integer literal, an
 `IntegerType` column (task 38; a `ShortType`/`ByteType` offset column still
 declines) or int arithmetic over those (task 63), including that column
 spelled as a day interval,
@@ -180,9 +192,10 @@ A projection does not have to be fully eligible: eligible entries fuse,
 untouched input columns are forwarded zero-copy, and the remaining entries run
 the standard row path per row, merged with the kernel outputs (task 12).
 
-Explicitly out of scope are `CalendarInterval` (months/years), strings,
-decimals and nested/complex types. Day offsets are int32, whether a literal, a
-column or arithmetic over them.
+Explicitly out of scope are `CalendarInterval` (a struct of months, days and
+microseconds), `DayTimeIntervalType` (int64 microseconds), strings, decimals and
+nested/complex types. Day offsets are int32, whether a literal, a column or
+arithmetic over them.
 
 Varka is designed as a drop-in, zero-risk replacement: every Varka path falls
 back to the standard row engine on any failure, so results are always correct.
@@ -192,7 +205,10 @@ back to the standard row engine on any failure, so results are always correct.
 ### Columnar morsels
 
 Spark's `DateType` columns reach Varka as Arrow `DateDayVector` (int32 days)
-with a bit-packed validity buffer (1 bit per row, bit set = valid). A morsel
+with a bit-packed validity buffer (1 bit per row, bit set = valid); an
+`IntegerType` column arrives as an `IntVector` and a year-month interval as an
+`IntervalYearVector`, both `BaseFixedWidthVector`s of width four with the same
+buffer layout, which is why the lane code is unaware of the difference. A morsel
 maps the data and validity buffers onto zero-copy Panama `MemorySegment`s, so
 no heap objects are built per row:
 

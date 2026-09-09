@@ -26,7 +26,7 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.arrow.memory.{ArrowBuf, BufferAllocator}
-import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntVector, ValueVector, VarCharVector}
+import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYearVector, IntVector, ValueVector, VarCharVector}
 
 import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
@@ -39,7 +39,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{IntRangeOps, Sel
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
-import org.apache.spark.sql.types.{DateType, IntegerType, StructType}
+import org.apache.spark.sql.types.{DateType, IntegerType, StructType, YearMonthIntervalType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
 
@@ -474,6 +474,12 @@ private[sql] abstract class VarkaEvaluatorBase(
           (acv.getValueVector(), plan.derivedAt(i)) match {
             case (v: DateDayVector, None) => v.getValueCount() == rows
             case (v: IntVector, None) => v.getValueCount() == rows
+            // Task 67: a year-month interval is a count of months in an int32 buffer whatever
+            // its unit, and `IntervalYearVector` is a BaseFixedWidthVector of width four - the
+            // same buffer layout the kernels already read. The list is by vector class rather
+            // than by Spark type, so admitting the type is exactly this line: the serializer
+            // already stores such a column and `ArrowColumnVector` already reads it back.
+            case (v: IntervalYearVector, None) => v.getValueCount() == rows
             case (v: VarCharVector, Some(_)) => v.getValueCount() == rows
             case _ => false
           }
@@ -1080,6 +1086,10 @@ private[sql] class VarkaKernelEvaluator(
     val vector: ValueVector = dataType match {
       case DateType => new DateDayVector(s"varka$ordinal", allocator)
       case IntegerType => new IntVector(s"varka$ordinal", allocator)
+      // Task 67: the output side of the same admission. The unit rides on the Spark type and
+      // never on the buffer, so every year-month unit writes one vector class; the row path
+      // reads it back through the accessor `ArrowColumnVector` already has.
+      case _: YearMonthIntervalType => new IntervalYearVector(s"varka$ordinal", allocator)
     }
     val fixed = vector.asInstanceOf[BaseFixedWidthVector]
     try {

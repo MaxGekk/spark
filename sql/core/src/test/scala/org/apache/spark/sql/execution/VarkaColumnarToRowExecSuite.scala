@@ -18,7 +18,7 @@
 package org.apache.spark.sql.execution
 
 import org.apache.arrow.memory.BufferAllocator
-import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntVector}
+import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYearVector, IntVector}
 
 import org.apache.spark.{Partition, TaskContext}
 import org.apache.spark.rdd.RDD
@@ -552,6 +552,9 @@ object VarkaColumnarToRowExecSuite {
               case (_, null) => vector.setNull(i)
               case (ddv: DateDayVector, days) => ddv.setSafe(i, days)
               case (iv: IntVector, value) => iv.setSafe(i, value)
+              // Task 67: a year-month interval column, whose value is the month count. The
+              // field comes from `toArrowField` like the others, so the unit is already on it.
+              case (yv: IntervalYearVector, months) => yv.setSafe(i, months)
             }
           }
           vector.setValueCount(values.length)
