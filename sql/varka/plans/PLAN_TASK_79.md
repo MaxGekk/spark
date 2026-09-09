@@ -420,8 +420,94 @@ the declines it prevents, which the differential counts rather than times.
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+### 9.1 The A/B, and why it is quoted as a ratio and not as a rate
+
+The four cases are in `VarkaEmitterParityBenchmark` (ids 960 and 961, null-free
+and mixed nulls) and they run the same `CASE` over the same guarded producer
+with `guardUnderArm` on and off. Measured twice, on a machine in two very
+different states, the context costs:
+
+| | null-free | mixed nulls |
+|---|---|---|
+| AVX-512 | 0.5% | -0.7% (on faster) |
+| 128-bit | 1.4% | -0.9% (on faster) |
+
+Two of the four are negative, which is the honest way of saying the cost is
+under this benchmark's noise floor - as one mask AND per guarded node per lane
+group should be. The first run, on a hot machine hours earlier, read 0.6% and
+0.16% at AVX-512; the agreement across two machine states is the reason to
+believe the number, since an A/B is a ratio within one invocation and a
+uniformly slow machine cancels out of it.
+
+**The absolute rates are deliberately not committed, and this section quotes no
+rate.** Two regenerations of this file produced two different and mutually
+inconsistent pictures of rows this task does not touch:
+
+* On a hot machine, every vectorized row moved 3% to 16.5% in one direction -
+  hand-written `DateVectorOps` kernels among them, which no emitter change can
+  reach - while every scalar and per-row control held to 0.2%.
+* On a cool machine, with the controls inside 0.5% and the canary clean, the
+  moves became incoherent rather than uniform: `fused, depth 1` at -75.5%,
+  `budget 16 (shipped)` at -54.5%, two chunked chain rows at +50.7% and +45.0%,
+  the hand-written `datediff` at -11.7%, in both directions.
+
+A -75.5% on `fused, depth 1` - a plain chain with no `IfElse` and no guard -
+would be a catastrophic regression, and the emitter suite disproves it directly:
+a shape with no batch-condemning node under an arm is byte-identical with the
+option either way, which 5's last test asserts. So the file's absolute numbers
+are not reproducing, for a reason that is neither the machine's temperature nor
+this change, and committing them would rewrite fifty rows that other plans quote
+with values this section cannot stand behind.
+
+What that costs: the four new cases have no committed results row, so a later
+reader cannot trace the percentages above to a file. They are recorded here as
+measured, twice, with the runs' provenance in the session and the cases in the
+tree ready to re-run. It is a debt and 9.3 registers it.
+
+### 9.2 The predictions, scored
+
+**1 holds.** The arm context costs under 3% at both widths on the `CASE`
+shapes - 0.5% and 1.4% null-free, negative on both mixed-null rows - and nothing
+on the shapes without an `IfElse`, which the byte-identity test makes exact
+rather than
+statistical: those shapes emit the same bytes with the option on or off, so
+there
+is nothing to measure.
+
+**2 holds, in the half that is checkable.** The pinned line map and the shape
+hash are IR-derived and did not move, and no shape without a batch-condemning
+node under an arm changed a byte. The half about `everyNode`'s bytes moving is
+unverified: no `codeSize` is pinned on it, so the suite cannot say, and the
+file-level evidence that would have said is the one this section refuses to
+trust.
+
+**3 holds.** The differential's two shapes go from a positive declined count to
+zero when the condition routes the extreme rows to the arm without the guarded
+node, and still decline when it routes them into it. The answers do not move in
+either direction, because only the decline route changed.
+
+### 9.3 What moved that the plan did not list, and what is left
+
+**A fourth node kind.** 2.3 listed three and the milestone row counted three;
+`make_date` is a fourth. It is *always* in `selfGuarding` - its year-range
+check,
+and its invalid-date check under ANSI, both condemn through the same collect -
+so
+it meets this cliff like the others. Found by checking the pinned `everyNode`
+fixture rather than by reasoning from the row, which is why 2.4 exists.
+
+**The disjunction rule was not buildable.** 2.41 and this plan's first draft
+said a node used under several arms takes the OR of their masks. A shared node
+is emitted at its first textual use and its guard with it, so a second
+condition's word may not exist at that point. 3.3 builds the conservative same-arm-chain
+rule
+instead, and the milestone section carries a note saying so.
+
+**Left for later**, both in the milestone's debt register rather than here: the
+parity file's absolute numbers, which two runs could not reproduce and which
+want
+their own investigation - the chunked 20M-row runner's JIT state depending on
+case
+ordering is the first thing to look at, since adding four cases mid-file is what
+changed. And with it, the committed row for this task's own pair.
+
