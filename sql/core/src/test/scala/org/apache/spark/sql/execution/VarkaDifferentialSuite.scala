@@ -275,6 +275,73 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 79: a guard under a CASE arm condemns from the taken arm only") {
+    // The cliff, end to end and in both directions. Each shape is run twice over one fixture:
+    // once with the condition routing the extreme rows to the arm *without* the guarded node,
+    // where the batch must now survive, and once routing them into it, where it must still
+    // decline. Answers come from the row engine either way, so the only thing that moves is
+    // the route - which is what makes the pair a test of this task and not of the arithmetic.
+    cacheDatesFarOffset(spark)
+    cacheDatesFarOffset(varkaSpark)
+    cacheIntsOverflow(spark)
+    cacheIntsOverflow(varkaSpark)
+    try {
+      // Task 52's day producer. Only the 1969 row is below the cut, and it carries a small
+      // offset; the two rows whose offset is twenty million days are above it.
+      val producerSafe =
+        "SELECT CASE WHEN d < DATE'2000-01-01' THEN year(date_add(d, off)) " +
+          "ELSE year(d) END AS a FROM varka_dates_far_offset"
+      val producerTaken =
+        "SELECT CASE WHEN d >= DATE'2000-01-01' THEN year(date_add(d, off)) " +
+          "ELSE year(d) END AS a FROM varka_dates_far_offset"
+      // Task 63's checked add, under the session's ANSI mode. Only the leap-day row has a
+      // `big` that cannot overflow, so it is the one the first condition selects.
+      val arithSafe =
+        "SELECT CASE WHEN d = DATE'2024-02-29' THEN big + i " +
+          "ELSE year(d) END AS a FROM varka_ints_overflow"
+      val arithTaken =
+        "SELECT CASE WHEN d <> DATE'2024-02-29' THEN big + i " +
+          "ELSE year(d) END AS a FROM varka_ints_overflow"
+
+      def declined(query: String): Long = {
+        val actual = varkaSpark.sql(query)
+        val plan = actual.queryExecution.executedPlan
+        assertFused(plan)
+        checkAnswer(actual, spark.sql(query))
+        val node = plan.collectFirst { case v: VarkaColumnarToRowExec => v }
+        assert(node.isDefined, s"expected a fused Varka projection:\n${plan.treeString}")
+        assert(node.get.metrics("numFallbackBatchesKernel").value === 0L,
+          "no kernel failure: the route is the only thing under test")
+        node.get.metrics("numFallbackBatchesDeclined").value
+      }
+
+      // The direction this task changes: no decline, and the answers still the row engine's.
+      assert(declined(producerSafe) === 0L,
+        "task 52's producer: the far offsets are in the untaken arm, so nothing should decline")
+      assert(declined(arithSafe) === 0L,
+        "task 63's checked add: the overflowing rows are in the untaken arm")
+
+      // The direction it must not change. For the day producer the row engine recomputes the
+      // declined batch and answers - `LocalDate` handles any int day - so the metric is
+      // readable. For the checked add it cannot: with the overflowing rows in the *taken* arm
+      // the query legitimately raises, on both engines, which is the same error identity task
+      // 63's own differential pins. A decline that did not happen would show here as a wrong
+      // answer rather than an exception, so the assertion still has teeth.
+      assert(declined(producerTaken) > 0L,
+        "task 52's producer: the far offsets are in the taken arm, so the batch must decline")
+      for (session <- Seq(spark, varkaSpark)) {
+        intercept[SparkArithmeticException] {
+          session.sql(arithTaken).collect()
+        }
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach { s =>
+        s.catalog.uncacheTable("varka_dates_far_offset")
+        s.catalog.uncacheTable("varka_ints_overflow")
+      }
+    }
+  }
+
   test("task 52: a literal day shift past the calendar range is residual, with its reason, " +
       "and an in-range one fuses") {
     // The compile-time half of the range guard: `year(date_add(d, 20000000))` is the query

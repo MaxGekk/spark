@@ -81,6 +81,34 @@ object VarkaArithmeticBenchmark extends BenchmarkBase {
   /** Every case id handed to [[emit]], so a reused one is named here rather than deep in a run. */
   private val usedIds = scala.collection.mutable.Set.empty[Int]
 
+  /**
+   * Structural dry run: with {@code -Dvarka.bench.dryRun=true} every case is emitted and
+   * registered but none is timed, so the whole file's case ids are checked in about as long as
+   * it takes to start a JVM instead of the twenty minutes a full run takes to reach the case
+   * that collides.
+   *
+   * It exists because picking a free id by reading the file is unreliable and the emitter's own
+   * `require` is the only authority: not every id here is a literal - the trunc block computes
+   * `id` and `id + 1` from a tuple list - so a grep answers a question this method answers
+   * exactly. `dev/varka_bench_ids.sh` is the front end, and it prints the next free id.
+   *
+   * A dry run measures nothing and proves nothing about the numbers. It is a check on the
+   * file's structure, and it is never a substitute for a regeneration.
+   */
+  private val dryRun = sys.props.get("varka.bench.dryRun").exists(_.toBoolean)
+
+  /** Times `b`, unless this is a dry run - see [[dryRun]]. */
+  private def runCases(b: Benchmark): Unit = if (!dryRun) b.run()
+
+  /** What a dry run prints instead of timings: every id in use, and the first one that is not. */
+  private def reportIds(): Unit = if (dryRun) {
+    val ids = usedIds.toSeq.sorted
+    // scalastyle:off println
+    println(s"varka-bench-ids: ${ids.size} cases, ids ${ids.mkString(",")}")
+    println(s"varka-bench-next-free-id: ${if (ids.isEmpty) 0 else ids.max + 1}")
+    // scalastyle:on println
+  }
+
   /** The A/B's reference arm: the same IR with task 63's overflow check switched off. */
   private val uncheckedArm = VarkaEmitOptions.DEFAULTS.withCheckIntOverflow(false)
 
@@ -217,7 +245,7 @@ object VarkaArithmeticBenchmark extends BenchmarkBase {
         benchmark.addCase("i - 1, ANSI, check off") { _ => run1(subUnchecked, false, one) }
         benchmark.addCase("-i, ANSI, checked") { _ => run1(negChecked, false, noLiterals) }
         benchmark.addCase("-i, ANSI, check off") { _ => run1(negUnchecked, false, noLiterals) }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("where the overflow mask goes: condemn the batch, or null the lane") {
@@ -241,7 +269,7 @@ object VarkaArithmeticBenchmark extends BenchmarkBase {
           run1(tryAdd, true, one)
         }
         benchmark.addCase("i + 1, LEGACY wrapping (no mask)") { _ => run1(wrapAdd, true, one) }
-        benchmark.run()
+        runCases(benchmark)
       }
 
       runBenchmark("arithmetic over calendar fields, where the bound removes the check") {
@@ -287,11 +315,12 @@ object VarkaArithmeticBenchmark extends BenchmarkBase {
           run2(diffWrap, false, one)
         }
         benchmark.addCase("datediff(d, d2) + 1, checked") { _ => run2(diffChecked, false, one) }
-        benchmark.run()
+        runCases(benchmark)
       }
     } finally {
       loader.release()
       arena.close()
     }
+    reportIds()
   }
 }
