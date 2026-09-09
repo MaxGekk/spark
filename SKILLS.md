@@ -1746,6 +1746,10 @@ A value root's validity OR depends on its word, not on its vector store, and the
 input word for every calendar extraction, so the OR now goes first (`validityOrFirst`). C2 meets
 it at a few hundred nodes and inlines it, and every masked row in the parity file moved: `year`
 +20% at AVX-512 and +30% at 128-bit, the 64-op shape +75%, the budget-24 shape +83% and +180%.
+The 64-op figure is one half of a two-sided move and was read as a win because the other half was
+not looked at: the same commit took that row from 270.4 to 8.8 M rows/s at 128-bit, where it stayed
+for several regenerations (`PLAN_MILESTONE_4.md` 2.39). A number quoted at one width when the change
+moved both is half a measurement.
 The exact safety test is "the word is an input word or the constant", not "the root computes no
 word": `Year(IfElse(...))` aliases the blend's computed slot, and reading it early is a frame with
 no such local, which the verifier rejects.
