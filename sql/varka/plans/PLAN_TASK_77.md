@@ -226,7 +226,34 @@ Registered before the data:
 
 ## 10. Outcome
 
-<!-- Filled in when the measurement lands: the band as measured, 7's predictions
-     scored one by one, what moved that the plan did not list, and what the task
-     leaves for later - which goes to the milestone's debt register or a scope
-     document, never to a code comment. -->
+**Prediction 4 was scored early, before this plan was reviewed, because it is the
+falsifier for section 4.3 and it needs no machine - only committed files out of
+git history.** A probe gate was walked over every committed revision of both
+parity results files, 47 revisions in all, flagging any row that exists to lose
+to the first row of its table and reads above 1.0X.
+
+| file | revisions | flagged |
+|---|---|---|
+| `-jdk25-128bit-results.txt` | 15 | 3 |
+| `-jdk25-results.txt` | 32 | 0 |
+
+The three are `aef0b82260e`, the commit that caused the collapse, and the two
+regenerations committed while it was still broken. In each the row
+`sequential kernels, 64 passes` reads 2.0X, 2.1X and 2.0X - the sixty-four
+separate passes beating the fused kernel that exists to beat them. Nothing after
+task 70's fix is flagged, and the wide file is never flagged, which is right
+because the collapse was 128-bit only. So the gate fires on the known collapse
+and nowhere else, with no false positive in 47 revisions.
+
+Two caveats that belong with the result rather than after it. The probe selected
+references by name (`sequential kernel`, `hand-written kernel`, `LocalDate`, and
+two more), which is exactly what 3.2 says the shipped gate must *not* do; the
+enumeration is still owed. And the coverage that heuristic reaches is 18 rows in
+7 of the file's 12 tables, so five tables have no reference at all and are
+ungated - which is what test 6's completeness assertion is for, and a number the
+enumeration should try to improve.
+
+<!-- The rest, filled in when the measurement lands: the band as measured, 7's
+     other predictions scored one by one, what moved that the plan did not list,
+     and what the task leaves for later - which goes to the milestone's debt
+     register or a scope document, never to a code comment. -->
