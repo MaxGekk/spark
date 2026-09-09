@@ -21,6 +21,8 @@
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark
 #   dev/varka_bench_regen.sh core VarkaFilterBenchmark --no-narrow
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --narrow-only
+#   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --no-pin
+#   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --pin=0-3
 #
 # Writes three files beside each other under sql/<module>/benchmarks/:
 #   <Class>-jdk25-results.txt          the wide run, exactly as Spark's harness
@@ -49,15 +51,50 @@ set -euo pipefail
 usage() { sed -n '17,40p' "$0"; exit 2; }
 [ "$#" -ge 2 ] || usage
 module="$1"; klass="$2"; shift 2
-narrow=1; wide_run=1; force=0
+narrow=1; wide_run=1; force=0; pin=auto
 for a in "$@"; do
   case "$a" in
     --no-narrow) narrow=0 ;;
     --narrow-only) wide_run=0 ;;
     --force) force=1 ;;
+    --no-pin) pin=none ;;
+    --pin=*) pin="${a#--pin=}" ;;
     *) usage ;;
   esac
 done
+
+# The CPU set the runs are pinned to. This machine is heterogeneous - the Ryzen AI 9 HX 370 has
+# four Zen5 cores at 5.16 GHz and eight Zen5c at 3.29 GHz, on two separate 16 MB L3 slices - and
+# an unpinned benchmark thread is rescheduled between them during a run. Two effects follow, both
+# measured: the clock alone is worth 1.57x (a 1.5632 measured ratio against a 1.5680 clock ratio,
+# so the datapath is the same width on both core types and only the clock differs), and a case
+# whose working set fits one CCX's L3 loses it on migration - 154 GB/s becomes 37.7 GB/s, a 4x
+# drop concentrated on the memory-bound rows. Pinning to the fast CCX removes both. It does not
+# make the file reproducible on its own; see `dev/varka_bench_repeat.sh` for what is left.
+#
+# `auto` picks the cores sharing cpu0's L3 whose max frequency equals the package maximum, so it
+# is right on a uniform machine too (every core qualifies, and the pin is a no-op in effect).
+if [ "$pin" = auto ]; then
+  maxf=0
+  for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+    f=$(cat "$d/cpuinfo_max_freq" 2>/dev/null || echo 0)
+    [ "$f" -gt "$maxf" ] && maxf=$f
+  done
+  fast=""
+  for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+    c=$(basename "$(dirname "$d")"); c=${c#cpu}
+    f=$(cat "$d/cpuinfo_max_freq" 2>/dev/null || echo 0)
+    [ "$f" = "$maxf" ] && fast="${fast:+$fast,}$c"
+  done
+  pin="${fast:-none}"
+fi
+if [ "$pin" = none ] || ! command -v taskset > /dev/null; then
+  runner=()
+  pin_desc="none (numbers are not comparable with a pinned run)"
+else
+  runner=(taskset -c "$pin")
+  pin_desc="taskset -c $pin"
+fi
 # A bare class name is resolved from the module's test sources, since the benchmarks are not
 # all in one package (catalyst's sit in org.apache.spark.sql, sql/core's under
 # org.apache.spark.sql.execution.benchmark); a dotted name is taken as given.
@@ -119,11 +156,13 @@ cpu="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
   echo "power:       governor=$(cat $cpufreq/scaling_governor 2>/dev/null || echo n/a)" \
     "epp=$(cat $cpufreq/energy_performance_preference 2>/dev/null || echo n/a)" \
     "profile=$(powerprofilesctl get 2>/dev/null || echo n/a)"
+  echo "pinned to:   $pin_desc"
   echo "load at start: $load"
   echo "canary:      $canary"
-  echo "wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt $module/Test/runMain $fqcn"
+  echo "wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 ${runner[*]} build/sbt" \
+    "$module/Test/runMain $fqcn"
   if [ "$narrow" -eq 1 ]; then
-    echo "narrow run:  build/sbt \"project $module\"" \
+    echo "narrow run:  ${runner[*]} build/sbt \"project $module\"" \
       "'set Test/javaOptions += \"-XX:MaxVectorSize=16\"' \"Test/runMain $fqcn\""
   fi
 } > "$prov"
@@ -131,14 +170,16 @@ cat "$prov"
 
 if [ "$wide_run" -eq 1 ]; then
   echo "== wide run =="
-  SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt -batch "$module/Test/runMain $fqcn" > /dev/null
+  SPARK_GENERATE_BENCHMARK_FILES=1 "${runner[@]}" build/sbt -batch \
+    "$module/Test/runMain $fqcn" > /dev/null
   [ -f "$wide" ] || { echo "the wide run wrote no $wide" >&2; exit 1; }
 fi
 
 if [ "$narrow" -eq 1 ]; then
   echo "== narrow run (-XX:MaxVectorSize=16) =="
   raw="$(mktemp)"
-  build/sbt -batch "project $module" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' \
+  "${runner[@]}" build/sbt -batch "project $module" \
+    'set Test/javaOptions += "-XX:MaxVectorSize=16"' \
     "Test/runMain $fqcn" > "$raw"
   {
     echo "Narrow-width companion of $klass-jdk25-results.txt: the same benchmark under"

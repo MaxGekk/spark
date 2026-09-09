@@ -2143,6 +2143,44 @@ frontier and say so in the comment: `i % 7` is residual because integer
 division has no arm, and the comment says that rather than "not a kernel op",
 so the next task to lower `%` finds a sentence that tells it to look.
 
+## A benchmark number is reproducible within a run and not between runs
+
+Two regenerations of `VarkaEmitterParityBenchmark` with no code change between
+them disagree on rows nothing touched: pinned, the median case moves 1.6% but 73
+of 211 move more than 3% and 22 move more than 10%, the worst near 26%; unpinned
+the worst is 75%. This was found by refusing to commit a regeneration whose diff
+looked like a regression, and then asking what an unchanged file does.
+
+Each candidate was measured out rather than argued out. Within-run noise: the
+average iteration over the best iteration has a median of 1.007 across 207 cases
+and never exceeds 1.5, so every case is tight inside its own run. The clock:
+sampling `scaling_cur_freq` through six runs of one case gives 5.08 to 5.14 GHz
+while that case's throughput moves 31%. Address layout: `setarch -R` does not
+narrow the spread. Contention: the machine is idle.
+
+What remains is the per-fork C2 lottery `PLAN_TASK_32.md` 11 had already traced
+to JDK-8380195, "Vector API produces bimodal performance - nondeterministic C2
+intrinsification across JVM forks", closed Not an Issue. Read that section
+before re-deriving any of it: it also refuted buffer alignment, OSR, unroll
+limits and forced inlining as levers.
+
+**Two effects are this machine's own, and those are fixable.** The Ryzen AI 9 HX
+370 is heterogeneous: four Zen5 cores at 5.16 GHz and eight Zen5c at 3.29 GHz,
+on two separate 16 MB L3 slices, and an unpinned thread is rescheduled between
+them mid-run. The clock is worth 1.57x, and the datapath is not the difference -
+the measured ratio 1.5632 matches the clock ratio 1.5680 to 0.3%, so a Zen5c
+core is a slower clock and not a narrower machine. Migration also costs L3
+residency where the working set fits one slice: 154 GB/s becomes 37.7 GB/s.
+`dev/varka_bench_regen.sh` now pins to the fast complex and records the pin.
+
+**The rule.** An A/B whose arms sit in the same run is sound - one JVM, one
+layout, one clock - and that is how every A/B here is built, which is why task
+79's arm-context pair read 0.5% and 1.4% across two runs whose absolute rates
+disagreed by 75%. A number compared against a *previous* run is not sound below
+the band, and the regeneration diff's 3% threshold is below the band for every
+memory-bound row. Run `dev/varka_bench_repeat.sh` to measure the band before
+reading a diff as a regression.
+
 ## A value that depends on repo state is queried, not chosen
 
 Adding a case to `VarkaEmitterParityBenchmark` needs a free case id, and the id

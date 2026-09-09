@@ -708,7 +708,17 @@ reserved and no instruction had read - dead code, and reported as tidiness. But
 a slot change moves the emitted bytecode, so `sql/varka/AGENTS.md` requires the
 results files be regenerated rather than the figures patched, and that
 regeneration moved the AVX-512 masked row 26.1%, from 14706.5 to 18542.2 M
-rows/s. The 128-bit row did not move at all. So an unused local was costing
+rows/s. The 128-bit row did not move at all.
+
+*Caveated on 9 September 2026 by `PLAN_MILESTONE_5.md` 2.21.* That 26.1% is a
+diff between two regenerations rather than an A/B inside one run, and it was
+taken unpinned. The later investigation measured what an *unchanged* parity
+file does between two runs on this machine: pinned, 22 of 211 cases move more
+than 10% and the worst is 26%; unpinned the worst is 75%. So the magnitude
+here is inside the noise band and is not evidence, though the mechanism may
+still be real - the emitted bytes did change, and a dead local does change
+register pressure. Task 82 inherits the claim and should re-take it pinned and
+repeated before scoping itself on it. So an unused local was costing
 fifteen points of throughput at one width and nothing at the other - a register
 pressure signature, the wide body having more live vector values and no headroom
 - and 9.1's original attribution of that cost to the mask disposal was wrong at

@@ -821,7 +821,9 @@ operations, and in a dense body it costs what five operations cost: 1.4% on
 `i + 1` at AVX-512 and 26.6% at 128-bit (`VarkaArithmeticBenchmark`, requoted
 from `80d06a51560`). In a masked body at 128 bits the same node costs 65.8% -
 6522.9 M rows/s against 19073.8 with the check off - on arithmetic that did not
-change. At AVX-512 the masked cost is 3.9%: the first run read 19.0% there, and
+change. At AVX-512 the masked cost is 3.9% - though 2.21 finds the cross-run
+diff behind that reading is inside the file's noise band, and asks this task to
+re-take it pinned before scoping itself on it. The first run read 19.0%, and
 that turned out to be a dead local slot rather than the disposal, so this task
 is a 128-bit finding and the wide width is not evidence for it. The
 difference is not the sign test. It is what happens to the mask afterwards:
@@ -1239,6 +1241,93 @@ the full int32 month range against `IntervalUtils.getYears`, `getMonths` and
 `extract(MONTH)` is attempted; and a throughput pair per shape against the row
 engine, since these are new lowerings and not, as task 68's group A is, old
 kernels under a new type.
+### 2.21 The benchmark files are not reproducible run to run (task 90)
+
+*Added 9 September 2026, from the investigation task 79's section 9 asked for.*
+
+**The observation.** Two regenerations of `VarkaEmitterParityBenchmark` with no
+code change between them disagree, on rows nothing touched. Pinned to one core
+complex the median case moves 1.6%, but 73 of 211 cases move more than 3%, 22
+move more than 10%, and the worst reaches 26%. Unpinned the worst reaches 75%.
+Task 79's 9.1 refused to commit a regeneration on that evidence; this is what
+the evidence turned out to be.
+
+**What it is not**, each eliminated by measurement rather than argument:
+
+* *Within-run noise.* Across all 207 cases of a committed run, the ratio of the
+  average iteration to the best iteration has a median of 1.007 and never
+  exceeds 1.5. Every case is tight inside its own run - the harness reports the
+  best of tens of thousands of iterations, and the average is the same number.
+  So the compiled code is in place before measurement starts, which rules out
+  compiler-queue saturation, code-cache exhaustion and deopt storms.
+* *The clock.* Sampling `scaling_cur_freq` through six runs of one case gives
+  5.08 to 5.14 GHz, a 1.2% spread, while the throughput of those same runs
+  moves 31%. At a fixed clock, the work per cycle is what changed.
+* *Address layout.* Disabling ASLR with `setarch -R` does not narrow the
+  spread; interleaved, the randomised runs were tighter than the fixed ones.
+* *Contention.* The machine is idle; nothing but the JVM is on the pinned cores.
+
+**What it is, and task 32 got here first.** A per-fork JIT and code-layout
+lottery: the same bytecode produces slightly different machine code and
+placement in each JVM. `-Xbatch`, which removes the compilation timing races,
+narrows one case's spread from 49% to 14% and does not remove it.
+
+`PLAN_TASK_32.md` 11 investigated this and went further on the JIT side than
+this section does. It found the upstream report - JDK-8380195, "Vector API
+produces bimodal performance - nondeterministic C2 intrinsification across JVM
+forks", roughly 2x across identically configured forks, closed **Not an Issue**
+in April 2026 - and it tested and refuted the obvious levers: buffer alignment
+raised to 64 bytes, which pinned the *slow* mode rather than the fast one;
+`-XX:-UseOnStackReplacement`; `-XX:LoopUnrollLimit` at 250; and forced
+inlining. Its conclusion was that whatever picks the mode is inside C2's code
+generation and is not reachable from those levers, and it measured one kernel
+21 times at 128-bit, landing the fast mode 4 times. Nothing here contradicts
+it. What this section adds is the size of the effect across a whole file, the
+proof that it is not within-run, and the machine half below.
+
+**The machine half is new, and it is the fixable part.** The Ryzen AI 9 HX 370
+is heterogeneous: four Zen5 cores at 5.16 GHz and eight Zen5c at 3.29 GHz, on
+two separate 16 MB L3 slices. An unpinned thread is rescheduled between them
+during a 40-minute run, so each case is measured wherever it happened to be.
+The clock alone is worth 1.57x - and the datapath is not the difference, since
+the measured ratio of 1.5632 matches the clock ratio of 1.5680 to 0.3%, so both
+core types retire this code at the same rate per cycle. Migration also costs L3
+residency where the working set fits one slice: `fused, depth 1` reads 154 GB/s
+resident and 37.7 GB/s after, the 4x collapse that started this. Pinning to the
+fast complex takes the worst case from 75% to 26%. That is done, in
+`dev/varka_bench_regen.sh`, and recorded in each provenance file.
+
+**What follows, and it is mostly reassuring.** An A/B whose two arms sit in the
+same run is sound: they share a JVM, a layout and a clock. Every A/B in this
+project is built that way, which is why task 79's arm-context pair read 0.5%
+and 1.4% across two runs whose absolute rates disagreed by 75%, and why task
+67's interval pair was trustworthy. The project's *decisions* are not in
+question wholesale. What is in question is a number compared against a previous
+run, below the band - and the regeneration diff's "moved by at least 3%" report
+is below the band for every memory-bound row.
+
+**One decision does rest on such a diff**, and it is named here so it is
+re-tested rather than inherited: `PLAN_TASK_63.md` 9.7 attributes 26.1%
+(14706.5 to 18542.2 M rows/s at AVX-512) to removing a dead local slot, from a
+comparison of two *unpinned* regenerations, and 2.12 above narrows task 82 to
+"a 128-bit task" on the strength of it. 26.1% is at the very top of the band
+measured here, from runs where the worst case is 75%. The mechanism may be real
+- the emitted bytes did change, and a dead local does change register pressure
+- but the magnitude is not evidence until it is re-measured pinned.
+
+**The task.** Establish the band per file with `dev/varka_bench_repeat.sh`,
+commit it beside the results, and make the regeneration diff report against the
+band rather than a flat 3%. Then decide, with numbers, whether the absolute
+rates are worth buying back: N forks per case with a median, which is what JMH
+does and would cost N times a regeneration. The alternative is to stop treating
+absolute rates as comparable across runs and let the A/Bs carry every claim,
+which is close to what the plans already do in practice.
+
+**The admission check.** The band measured for the parity, arithmetic and
+throughput files, three runs each, committed; and one shape whose A/B is known
+tight - task 79's arm context - shown to stay tight across those same runs
+while its absolute rate wanders, which is the evidence that the two kinds of
+number deserve different treatment.
 
 ## 3. Task breakdown
 
@@ -1277,6 +1366,7 @@ independent of both and of each other.
 | 87 | The epilogue is the one method no budget bounds (section 2.18). **Scoped** (8 September 2026), from a 35-million-iteration fuzz run; independent of 83 to 86 | The epilogue emitted as one method holding every group, so a tree inside `MAX_FUSED_NODES` can pass 65535 bytes and the Class-File API refuses the class - `epilogueMasked` at 67244 bytes for nested `make_date`, replaying at `-Dvarka.fuzz.seed=2026092800 -Dvarka.fuzz.only=73411`; either partition it as the loop is partitioned or give the emitter a byte budget, and in both cases decline with a reason rather than throw | The pinned fuzz iteration declining with a reason instead of throwing; every shape that fits today emitting identical bytes against the pinned line map and the `codeSize` assertions; and `MAX_FUSED_NODES`' javadoc no longer claiming a per-method guarantee it only has for the loop |
 | 88 | An exact division through double lanes (section 2.19). **Scoped** (9 September 2026), from task 68's admission check; independent of 65 but competes with it | `trunc((double) v * (1.0 / d))` as a lowering for integer division by a constant, exact for every int32 dividend and any divisor below about 2^21 - no magic, no correction carries, no range restriction, and no int64 lane, so none of this milestone's lane-width work is a precondition. Verified numerically and round-tripped through `I2D`/`D2I` on the preferred species; the admission check makes that exhaustive over the calendar divisors and commits the script | The exhaustive check committed beside `verify_long_lane_magic.py`; op counts per lowering from `dev/varka_emit.sh --table` before any timing; then a three-arm A/B - today's range-narrowed magic, task 65's int64 widening, and this - on one benchmark over the same shapes, with the choice made from the numbers rather than from the simplification each offers |
 | 89 | The year-month interval divisions (section 2.20). **Scoped** (9 September 2026), split out of task 68; after whichever of 65 and 88 the A/B chooses | `extract(YEAR FROM ym)` and `ym / num` on the chosen exact division, with the truncation correction `extract` needs and the `HALF_UP` step `ym / num` needs; `extract(MONTH FROM ym)` behind the further question of a `ByteType` output the evaluator does not have; `ym / col` declining, the divisor not being a constant | The two rounding corrections verified over the full int32 month range against Spark's own `getYears`, `getMonths` and `IntMath.divide` by a committed script; the byte-output question settled before `extract(MONTH)` is built; a throughput pair per shape against the row engine, these being new lowerings |
+| 90 | The benchmark files are not reproducible run to run (section 2.21). **Scoped** (9 September 2026), from the investigation task 79's section 9 asked for; the pinning half is already done | Two regenerations with no change between them disagree on 73 of 211 cases by more than 3% and 22 by more than 10%, pinned; unpinned the worst is 75%. Measured out: within-run noise (avg/best median 1.007), the clock (constant to 1.2% while throughput moves 31%), ASLR, contention. What remains is the per-fork C2 lottery `PLAN_TASK_32.md` 11 already traced to JDK-8380195. `dev/varka_bench_repeat.sh` measures the band; `dev/varka_bench_regen.sh` now pins to the fast core complex and records it | The band committed per file for the parity, arithmetic and throughput benchmarks; the regeneration diff reported against that band rather than a flat 3%; task 63's 9.7 dead-local figure re-taken pinned before task 82 scopes itself on it; and the decision on N-fork medians taken from the cost, with the fallback stated - that absolute rates stop being compared across runs and the within-run A/Bs carry the claims |
 
 ## 4. Files
 
