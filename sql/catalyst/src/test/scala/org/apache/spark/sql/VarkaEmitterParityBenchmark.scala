@@ -104,8 +104,22 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
    */
   private val dryRun = sys.props.get("varka.bench.dryRun").exists(_.toBoolean)
 
-  /** Times `b`, unless this is a dry run - see [[dryRun]]. */
-  private def runCases(b: Benchmark): Unit = if (!dryRun) b.run()
+  /**
+   * A case-name substring from `-Dvarka.bench.only`, for investigating one block without
+   * paying for the whole file. Diagnostic only: a filtered run must never be written to a
+   * results file, since the committed file is the whole surface.
+   */
+  private val only = sys.props.get("varka.bench.only").filter(_.nonEmpty)
+
+  /** Times `b`, unless this is a dry run - see [[dryRun]] - and only the cases [[only]] keeps. */
+  private def runCases(b: Benchmark): Unit = if (!dryRun) {
+    only.foreach { pattern =>
+      val keep = b.benchmarks.filter(_.name.contains(pattern)).toSeq
+      b.benchmarks.clear()
+      b.benchmarks ++= keep
+    }
+    if (b.benchmarks.nonEmpty) b.run()
+  }
 
   /** What a dry run prints instead of timings: every id in use, and the first one that is not. */
   private def reportIds(): Unit = if (dryRun) {
