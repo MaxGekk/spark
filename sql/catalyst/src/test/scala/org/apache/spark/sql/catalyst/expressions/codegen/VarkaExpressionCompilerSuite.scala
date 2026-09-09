@@ -19,7 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, MakeDate, Month, Multiply, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
@@ -438,24 +438,13 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(compiled.outputTypes === Seq(DateType, DateType))
   }
 
-  test("task 60 declines: a YEAR-end interval cast, the negated MONTH cast and a " +
-      "further-folded count, each with its own reason") {
-    val monthInterval = YearMonthIntervalType(YearMonthIntervalType.MONTH,
-      YearMonthIntervalType.MONTH)
-    val yearInterval = YearMonthIntervalType(YearMonthIntervalType.YEAR,
-      YearMonthIntervalType.YEAR)
-    // CAST(i AS INTERVAL YEAR) is 12 * i (Cast.intToYearMonthInterval), so the column under it
-    // is not the month count and it is not admitted the way the MONTH cast is. Task 63 supplies
-    // the multiply this once waited for, and task 67 re-pinned the reason on what still refuses
-    // it: the emitter's month-count position takes a literal or a column, so an IntArith there
-    // would be fusion the emitter declines to emit. Task 68 widens both together.
-    assert(declineReason(DateAddYMInterval(d, Cast(i, yearInterval))) ===
-      "month count is a year-interval cast, whose 12x multiply the month-count position " +
-        "cannot hold: it takes a literal or a column")
-    // date - INTERVAL m MONTH arrives as UnaryMinus over the cast; not matched until task 63's
-    // negate composes with it.
-    assert(declineReason(DateAddYMInterval(d, UnaryMinus(Cast(i, monthInterval)))) ===
-      "month count is neither a foldable literal nor an integer column")
+  test("task 60 declines: a further-folded count and a widened one, each with its own reason") {
+    // The YEAR-end interval cast and the negated MONTH cast used to decline here. Task 68
+    // widened the emitter's month-count position to hold task 63's arithmetic, so the first now
+    // declines only when its multiply is unbounded and the second fuses outright; both moved to
+    // that task's tests rather than being deleted, and this comment is the pointer, since a
+    // reader chasing "why did add_months stop declining these" should land somewhere.
+    //
     // A column read through further arithmetic is not the bare-column or bare-cast shape
     // compileMonths matches; it is not foldable either, so it declines the same way.
     assert(declineReason(AddMonths(d, Add(i, Literal(1)))) ===
@@ -585,26 +574,139 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(toInt.outputs === Seq(new ColumnRef(0)))
     assert(toInt.outputTypes === Seq(IntegerType))
 
-    // The YEAR unit is neither direction's identity: 12x one way, /12 the other. The month
-    // count's reason names the position rather than the multiply, because task 63 supplies
-    // the multiply and the emitter's month-count check is what refuses it (PLAN_TASK_67.md
-    // 2.1); the reverse direction is a division, which nothing lowers.
-    assert(declineReason(DateAddYMInterval(d, Cast(i, ymy.dataType)), withIntervals) ===
-      "month count is a year-interval cast, whose 12x multiply the month-count position " +
-        "cannot hold: it takes a literal or a column")
+    // The YEAR unit is neither direction's identity: 12x one way, /12 the other. Task 68
+    // widened the emitter's month-count position and takes the 12x; the reverse direction is a
+    // division, which nothing lowers and which task 89 owns.
     assert(declineReason(Cast(ymy, IntegerType), withIntervals).nonEmpty)
   }
 
-  test("task 67: `d - ym` declines, and its reason is the month-count position") {
+  test("task 68: the YEAR-unit cast is a checked 12x, in both positions, bound permitting") {
+    // `intToYearMonthInterval` multiplies by twelve with `Math.multiplyExact` whatever the
+    // session's ANSI mode, so the multiply is checked and only a bound removes it. `year(d)`
+    // is bounded at 40000 and 40000 * 12 is inside int32; a bare int column is not bounded and
+    // declines like every other unbounded checked multiply.
+    val bounded = VarkaExpressionCompiler.compile(
+      Seq(out(Cast(Year(d), ymy.dataType))), withIntervals).get
+    assert(bounded.outputs === Seq(
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)), new LiteralSlot(0))))
+    assert(bounded.outputTypes === Seq(ymy.dataType))
+    assert(declineReason(Cast(i, ymy.dataType), withIntervals) ===
+      "checked int multiply whose operands do not rule out overflow")
+
+    // The same expression in `add_months`' month-count position, which task 68's emitter split
+    // opened. Task 67 pinned this as declining; that it now fuses is the evidence group C
+    // landed, and the emitter's `requireMonthCountShape` is what has to agree.
+    val inCount = VarkaExpressionCompiler.compile(
+      Seq(out(DateAddYMInterval(d, Cast(Year(d), ymy.dataType)))), withIntervals).get
+    assert(inCount.outputs === Seq(new IRAddMonths(new ColumnRef(0),
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+        new LiteralSlot(0)))))
+    assert(declineReason(DateAddYMInterval(d, Cast(i, ymy.dataType)), withIntervals) ===
+      "checked int multiply whose operands do not rule out overflow")
+  }
+
+  test("task 68: `d - ym` fuses, its count a checked negation the guard covers") {
     // Spark rewrites `d - ym` to DateAddYMInterval(d, UnaryMinus(ym)), so the count is a
-    // negated column. Task 63 lowers that negation - but into an IntNeg, and the emitter's
-    // month-count check takes a literal slot or a column and nothing else, so admitting it
-    // here would be a compiler claiming fusion the emitter refuses. It goes to task 68 with
-    // the cast above, blocked on the same check. This test is what fails if someone widens
-    // the compiler without widening `requireOffsetShape` with it.
-    val reason = declineReason(DateAddYMInterval(d, UnaryMinus(ymm, false)), withIntervals)
-    assert(reason === "month count is neither a foldable literal nor an integer column",
-      s"unexpected reason: $reason")
+    // negated interval column. Task 63 lowers the negation and task 68's emitter split lets
+    // the month-count position hold it - the position `next_day`'s weekday no longer shares,
+    // because task 60's lanewise guard on the count's value covers a derived count and
+    // `next_day` has no such guard. Task 67 pinned this as declining.
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(DateAddYMInterval(d, UnaryMinus(ymm, false)))), withIntervals).get
+    assert(compiled.outputs === Seq(new IRAddMonths(new ColumnRef(0),
+      new IntNeg(Overflow.FAIL, new ColumnRef(1)))))
+    assert(compiled.outputTypes === Seq(DateType))
+  }
+
+  test("task 68: the interval algebra rides task 63's nodes, always checked") {
+    // None of these has a LEGACY wrapping form - Spark computes every one with addExact,
+    // subtractExact, negateExact or multiplyExact in every mode - so the declared mode is FAIL
+    // and only `intBound` takes the check off. Over two unbounded interval columns it stays.
+    val add = VarkaExpressionCompiler.compile(
+      Seq(out(Add(ymm, ym))), withIntervals).get
+    assert(add.outputs === Seq(
+      new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1))))
+    assert(add.outputTypes === Seq(ymm.dataType))
+    val sub = VarkaExpressionCompiler.compile(
+      Seq(out(Subtract(ymm, ym))), withIntervals).get
+    assert(sub.outputs === Seq(
+      new IntArith(IntOp.SUB, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1))))
+    val neg = VarkaExpressionCompiler.compile(
+      Seq(out(UnaryMinus(ymm, false))), withIntervals).get
+    assert(neg.outputs === Seq(new IntNeg(Overflow.FAIL, new ColumnRef(0))))
+
+    // `abs` is not an op the IR has: it is the blend `if (x < 0) -x else x`, whose IntNeg arm
+    // takes exactly the one input that overflows a negation. Since task 79 the guard under a
+    // CASE arm is qualified by that arm, so only the lanes that negate can condemn.
+    // `d - CAST(i AS INTERVAL MONTH)`, which the analyzer spells as a negation over the
+    // relabel cast, fuses on the same arm - task 60 pinned it as declining.
+    val negCast = VarkaExpressionCompiler.compile(
+      Seq(out(DateAddYMInterval(d, UnaryMinus(Cast(i, ymm.dataType))))), withIntervals).get
+    assert(negCast.outputs === Seq(new IRAddMonths(new ColumnRef(0),
+      new IntNeg(Overflow.FAIL, new ColumnRef(1)))))
+
+    val abs = VarkaExpressionCompiler.compile(
+      Seq(out(Abs(ymm, false))), withIntervals).get
+    assert(abs.outputs === Seq(new IfElse(
+      new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0)),
+      new IntNeg(Overflow.FAIL, new ColumnRef(0)), new ColumnRef(0))))
+
+    // make_ym_interval is `m + 12 * y`, two checked nodes composed; bounded operands remove
+    // both checks, which is the shape that fuses with none at all.
+    val mk = VarkaExpressionCompiler.compile(
+      Seq(out(MakeYMInterval(Year(d), Month(d)))), withIntervals).get
+    assert(mk.outputs === Seq(new IntArith(IntOp.ADD, Overflow.WRAP,
+      new IRMonth(new ColumnRef(0)),
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+        new LiteralSlot(0)))))
+    assert(mk.outputTypes === Seq(YearMonthIntervalType()))
+    assert(declineReason(MakeYMInterval(i, i), withIntervals) ===
+      "checked int multiply whose operands do not rule out overflow")
+  }
+
+  test("task 68: the unit relabel type coercion inserts is admitted, the truncating one not") {
+    // Two year-month intervals of different units do not meet directly: `TypeCoercion` widens
+    // both to the hull, `YearMonthIntervalType(min(start), max(end))`, so `ymm + ymy` reaches
+    // the compiler as an add over two casts to YEAR TO MONTH. Without an arm for that cast the
+    // plainest spelling of group A's binary algebra declines, which is what this test would
+    // have caught earlier than the differential did.
+    val hull = YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.MONTH)
+    val coerced = Add(Cast(ymm, hull), Cast(ymy, hull))
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(coerced)), withIntervals).get
+    assert(compiled.outputs === Seq(
+      new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1))))
+    assert(compiled.outputTypes === Seq(hull))
+    // The relabel on its own, in a value position, emitting nothing at all.
+    val bare = VarkaExpressionCompiler.compile(Seq(out(Cast(ymm, hull))), withIntervals).get
+    assert(bare.outputs === Seq(new ColumnRef(0)))
+    assert(bare.outputTypes === Seq(hull))
+
+    // The other direction truncates - a YEAR end field keeps only the whole years, which is a
+    // division by twelve - and is named rather than left to the generic decline. Coercion never
+    // produces it, since it widens the end field; only a cast the user wrote reaches here.
+    val years = YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.YEAR)
+    for (narrowing <- Seq(Cast(ym, years), Cast(ymm, years))) {
+      assert(declineReason(narrowing, withIntervals) ===
+        "year-month interval narrowed to a YEAR-ended unit, which divides by twelve")
+    }
+  }
+
+  test("task 68: `ym * num` takes the int lane and names the types that are not one") {
+    // A literal multiplier is bounded and the check comes off; an int column is an unbounded
+    // checked multiply and declines as every other does. Long, Decimal and Double are not
+    // int32 lanes and decline by type, rather than reaching intOperand and being reported as
+    // "not an int column or literal", which would hide which of the two is wrong.
+    val byLiteral = VarkaExpressionCompiler.compile(
+      Seq(out(MultiplyYMInterval(Cast(Year(d), ymy.dataType), Literal(3)))), withIntervals).get
+    // The result widens to YEAR TO MONTH whatever the operand's unit, which is Spark's own
+    // typing and correct: scaling a year interval can produce months.
+    assert(byLiteral.outputTypes === Seq(YearMonthIntervalType()))
+    assert(declineReason(MultiplyYMInterval(ymm, i), withIntervals) ===
+      "checked int multiply whose operands do not rule out overflow")
+    for ((mult, name) <- Seq(Literal(3L) -> "bigint", Literal(2.5d) -> "double")) {
+      assert(declineReason(MultiplyYMInterval(ymm, mult), withIntervals) ===
+        s"interval multiplier of type $name is not an int32 lane")
+    }
   }
 
   test("task 52: a literal day shift fuses at the bound and declines one day past it") {

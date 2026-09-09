@@ -47,9 +47,28 @@ is a count of months whether it is spelled `INTERVAL YEAR`, `INTERVAL MONTH` or
 one; where it may appear is decided by Spark's own typing, so it fuses in
 `d + ym`, in the ordered comparisons and `IN`, and in the same-typed
 `greatest`/`least`/`coalesce`/`IF`/`CASE`. `CAST` between an `INT` and a
-`MONTH`-unit interval is a relabel in both directions and emits nothing; the
-`YEAR`-unit casts, which multiply or divide by twelve, are residual, as is
-`d - ym_col`.
+`MONTH`-unit interval is a relabel in both directions and emits nothing, as is
+the cast between two year-month units that ends at `MONTH` - the one type
+coercion inserts when two units meet, so `ymm + ymy` fuses like `ymm + ymm2`.
+Since task 68 the `INT`-to-`YEAR` cast, which multiplies by twelve, fuses
+wherever the compile-time bound rules that multiply's overflow out - over a
+calendar field it does, over a bare int column it does not. The direction that
+divides by twelve, which is `EXTRACT(YEAR FROM ym)`, `ym / k` and a cast that
+narrows a year-month interval to a `YEAR`-ended unit, stays residual and is task
+89's: the emitter's exact magic division covers about a
+forty-thousandth of a full int32 month count.
+
+Task 68 also admits the algebra whose operands and result are both intervals:
+`ym + ym`, `ym - ym`, `-ym`, `abs(ym)`, `ym * k` and `make_ym_interval(y, m)`,
+and, in `ADD_MONTHS`' month-count position, `d - ym_col`. None of these has a
+wrapping form - Spark computes every one with `addExact`, `subtractExact`,
+`negateExact` or `multiplyExact` whatever the session's ANSI mode - so the check
+is unconditional and only a compile-time bound takes it off. A checked `*` has
+no int-lane overflow test, so `ym * k` fuses only where the bound proves it safe
+and is residual otherwise, exactly as task 63's int multiply is; `abs` is not an
+op the IR has but the blend `if (ym < 0) -ym else ym`, whose negation arm alone
+can condemn a batch. `try_add(ym, ym)` and the other `try_*` spellings are
+residual, having no null-on-overflow lowering.
 
 The supported expression surface, then, over those columns and day offsets that
 are a foldable integer literal, an
@@ -116,11 +135,14 @@ becomes timestamp arithmetic) decline:
 * `DAYOFYEAR` (task 34), `LAST_DAY` (task 36) and `ADD_MONTHS` / `date +
   INTERVAL n MONTH` (task 40), all over the same civil-from-days prefix;
   `LAST_DAY` and `ADD_MONTHS` return dates. `ADD_MONTHS`' month count is a
-  literal or (task 60) an integer column - `CAST(m AS INTERVAL MONTH)` reads
-  the same way, but `CAST(m AS INTERVAL YEAR)` and a stored year-month
-  interval column decline, the first because its value is 12 times the
-  column, not the column itself, and the second because the Arrow cache
-  holds it as a type no kernel reads. A column count carries a per-batch
+  literal, (task 60) an integer column, (task 67) a stored year-month
+  interval column, or (task 68) arithmetic over any of those - the negation
+  behind `d - ym_col`, and the `CAST(m AS INTERVAL YEAR)` whose value is
+  twelve times the column rather than the column itself. What lets a derived
+  count in is that the range check below is lanewise on the count's *value*
+  and cares nothing about what produced it; `NEXT_DAY`'s weekday, which has
+  no such check, still takes a literal or a column only. A column count
+  carries a per-batch
   range check on the count itself, the same route as the day producer above:
   a lane outside `VarkaChrono.MONTH_ARITH_MIN/MAX_MONTHS` (about 2047 years
   either way, where the lowering's magic division by 12 stops being exact)
@@ -414,7 +436,9 @@ attributes alone did not answer:
   an integer column or int arithmetic" for anything else (e.g. `i % 7`, whose
   operator no arm lowers). Since task 63, "checked int multiply whose operands
   do not rule out overflow" names an ANSI or TRY `*` the compile-time bound
-  cannot prove safe, and "day offset arithmetic that lowers to a node the offset
+  cannot prove safe - which since task 68 is also how an unbounded `ym * k`
+  reports, the interval multiply being that same node - and "day offset
+  arithmetic that lowers to a node the offset
   position does not take" names arithmetic in a `date_add`/`date_sub` offset
   that lowers to something other than an arithmetic node - `weekday(d) + 1`,
   which is task 57's own node. (`intOperand` carries a third, "int arithmetic
@@ -422,7 +446,10 @@ attributes alone did not answer:
   operands of an `Add` to share a type, so an `IntegerType` one has two int
   operands by construction.) Since task 59, a `next_day` whose weekday is neither a literal
   nor a stored string column reports "next_day with a weekday that is neither
-  a literal nor a column"; a `trunc` whose format is neither foldable nor a
+  a literal nor a column"; since task 68, a multiplier that is not an int32
+  lane reports "interval multiplier of type ... is not an int32 lane", naming
+  the type rather than reporting it as a bad int operand, so `ym * 2.5` cannot
+  be read as a `ym * i`; a `trunc` whose format is neither foldable nor a
   stored string column keeps task 35's "trunc with a non-foldable format"
   (task 61). Since task 52, a calendar function over arithmetic
   that can leave the lowering's range reports "day range [lo, hi] leaves the

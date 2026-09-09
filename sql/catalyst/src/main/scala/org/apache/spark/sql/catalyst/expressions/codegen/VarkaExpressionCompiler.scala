@@ -24,7 +24,7 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, Month, Multiply, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -513,10 +513,49 @@ private[sql] object VarkaExpressionCompiler {
     // for a MONTH end field and `yearMonthIntervalToInt` returns `v` for a MONTH-ended
     // interval, so both directions of the MONTH unit are the identity on the lane; only the
     // Spark type on the outside differs, and that rides on `outputTypes`. The YEAR unit is
-    // neither direction's identity - it multiplies or divides by twelve - and is not here.
+    // neither direction's identity - it multiplies or divides by twelve. Its outbound half is
+    // the arm below, task 68's; its inbound half, `CAST(ym AS INT)` over a YEAR-ended interval,
+    // is a division by twelve and belongs to task 89 with the extracts.
     case Cast(child, YearMonthIntervalType(_, YearMonthIntervalType.MONTH), _, _)
         if child.dataType == IntegerType =>
       compileIntOperand(child, "the month count", inputs, literals, sink)
+    // Task 68: the unit relabel between two year-month intervals, which is not a cast a user
+    // writes but the one type coercion inserts whenever two units meet - `ymm + ymy` widens
+    // both operands to YEAR TO MONTH before the add. `Cast.castToYearMonthInterval` computes
+    // `periodToMonths(monthsToPeriod(v), endField)`, which splits the count into whole years
+    // and a remainder and puts it back together: exactly `v` again for a MONTH end field, at
+    // every int including `Int.MinValue`, since the reassembly's `multiplyExact` is over
+    // `v / 12`. So this direction emits nothing and only `outputTypes` moves. The YEAR-ended
+    // direction drops the remainder, which is a division by twelve, and declines below.
+    case Cast(child, YearMonthIntervalType(_, YearMonthIntervalType.MONTH), _, _)
+        if child.dataType.isInstanceOf[YearMonthIntervalType] =>
+      compileNode(child, inputs, literals, sink)
+    // Task 68: `CAST(i AS INTERVAL YEAR)` in a value position, which is `12 * i` with an
+    // interval output. `IntervalUtils.intToYearMonthInterval` computes it with
+    // `Math.multiplyExact` whatever the session's ANSI mode, so the multiply is checked and the
+    // bound is the only thing that removes it. This is the same expression `compileMonths`
+    // admits in `add_months`' month-count position; the difference is that there the emitter
+    // has a shape check to satisfy and here it has none, which is why task 67's 2.1 - written
+    // about `compileMonths` - reads as if the whole cast were blocked when only that position
+    // was.
+    case c @ Cast(child, YearMonthIntervalType(YearMonthIntervalType.YEAR,
+        YearMonthIntervalType.YEAR), _, _) if child.dataType == IntegerType =>
+      val mark = literals.size
+      val built = for {
+        x <- intOperand(child, inputs, literals, sink)
+        r <- arithOver(IntOp.MUL, Overflow.FAIL, x, twelve(literals), c, literals, mark, sink)
+      } yield r
+      if (built.isEmpty) truncate(literals, mark)
+      built
+    // The truncating half of the pair above, named rather than left to the generic decline:
+    // narrowing a year-month interval to a YEAR-ended unit keeps only the whole years, which
+    // is `v - v % 12` and so a division. Type coercion never produces this - it widens the end
+    // field - so it reaches here only from a cast the user wrote, and it belongs to task 89
+    // with `extract(YEAR FROM ym)` and `ym / k`.
+    case c @ Cast(child, YearMonthIntervalType(_, YearMonthIntervalType.YEAR), _, _)
+        if child.dataType.isInstanceOf[YearMonthIntervalType] =>
+      sink.note("year-month interval narrowed to a YEAR-ended unit, which divides by twelve", c)
+      None
     case Cast(child, IntegerType, _, _)
         if child.dataType == YearMonthIntervalType(YearMonthIntervalType.MONTH,
           YearMonthIntervalType.MONTH) =>
@@ -616,6 +655,74 @@ private[sql] object VarkaExpressionCompiler {
       intArith(IntOp.SUB, a.evalMode, a.left, a.right, a, inputs, literals, sink)
     case a: Multiply if a.dataType == IntegerType =>
       intArith(IntOp.MUL, a.evalMode, a.left, a.right, a, inputs, literals, sink)
+    // Task 68's group A: the year-month interval algebra, on task 63's nodes with an
+    // interval-typed output. The int arms above keep their `IntegerType` gate and these are
+    // siblings rather than a widening of it, because int arithmetic is an int-typed concept and
+    // a widened gate is how an interval reaches a position that reads it as a day count. Every
+    // one of them is checked in every evaluation mode - Spark computes them with `addExact`,
+    // `subtractExact`, `negateExact` and `multiplyExact`, and there is no `LEGACY` or `try_`
+    // spelling for an interval - so the mode is `FAIL` and `intBound` is the only thing that
+    // takes the check off.
+    case a: Add if a.dataType.isInstanceOf[YearMonthIntervalType] =>
+      intervalArith(IntOp.ADD, a.left, a.right, a, inputs, literals, sink)
+    case a: Subtract if a.dataType.isInstanceOf[YearMonthIntervalType] =>
+      intervalArith(IntOp.SUB, a.left, a.right, a, inputs, literals, sink)
+    case n @ UnaryMinus(c, _) if n.dataType.isInstanceOf[YearMonthIntervalType] =>
+      // `IntervalMathUtils.negateExact`, which throws on `Int.MinValue` alone, so any bound at
+      // all rules it out - `IntNeg`'s reasoning over an interval operand.
+      intervalOperand(c, "the negated interval", inputs, literals, sink).map { x =>
+        val checked = !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+        new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
+      }
+    case n @ Abs(c, _) if n.dataType.isInstanceOf[YearMonthIntervalType] =>
+      // There is no abs op in the IR, and none is needed: `abs(x)` is the blend
+      // `if (x < 0) -x else x`, which is task 63's negate under task 11's `IfElse`. The only
+      // input that overflows a negation is `Int.MinValue`, and it is negative, so it takes the
+      // `IntNeg` arm - the check fires exactly where `IntegerExactNumeric` throws. That puts a
+      // checked node under a `CASE` arm, which is task 79's shape and is deliberate: since
+      // task 79 the guard is qualified by the arm, so only the lanes that actually negate can
+      // condemn the batch.
+      intervalOperand(c, "the absolute interval", inputs, literals, sink).map { x =>
+        val zero = new LiteralSlot(literals.getOrElseUpdate(0, literals.size))
+        val checked = !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+        new IfElse(new Compare(CompareOp.LT, x, zero),
+          new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x), x)
+      }
+    case m @ MakeYMInterval(y, mo) =>
+      // `toIntExact(addExact(months, multiplyExact(years, 12)))` - two of task 63's nodes
+      // composed, both checked. Over bounded operands the bound removes both checks, which is
+      // what makes `make_ym_interval(year(d), month(d))` fuse with none; over an unbounded int
+      // column the multiply keeps its check and declines, as every checked multiply does.
+      val mark = literals.size
+      val built = for {
+        years <- intOperand(y, inputs, literals, sink)
+        months <- intOperand(mo, inputs, literals, sink)
+        scaled <- arithOver(IntOp.MUL, Overflow.FAIL, years, twelve(literals), m,
+          literals, mark, sink)
+        total <- arithOver(IntOp.ADD, Overflow.FAIL, months, scaled, m, literals, mark, sink)
+      } yield total
+      if (built.isEmpty) truncate(literals, mark)
+      built
+    case m @ MultiplyYMInterval(iv, num) =>
+      // `Math.multiplyExact(months, num)` for the int-family arms. A literal multiplier is
+      // bounded and the check comes off; an int column is an unbounded checked multiply and
+      // declines like any other. The `Long`, `Decimal` and `Double` arms are not int32 lanes
+      // and decline by type rather than reaching `intOperand`, which would report them as
+      // "not an int column or literal" and hide which of the two is wrong.
+      num.dataType match {
+        case IntegerType =>
+          val mark = literals.size
+          val built = for {
+            x <- intervalOperand(iv, "the multiplied interval", inputs, literals, sink)
+            k <- intOperand(num, inputs, literals, sink)
+            r <- arithOver(IntOp.MUL, Overflow.FAIL, x, k, m, literals, mark, sink)
+          } yield r
+          if (built.isEmpty) truncate(literals, mark)
+          built
+        case other =>
+          sink.note(s"interval multiplier of type ${other.simpleString} is not an int32 lane", m)
+          None
+      }
     case n @ UnaryMinus(c, failOnError) if n.dataType == IntegerType =>
       // Spark has no try_negative, so the mode is only ever WRAP or FAIL here. Negation
       // overflows on exactly one value, `Int.MinValue`, so any bound at all rules it out and
@@ -930,21 +1037,87 @@ private[sql] object VarkaExpressionCompiler {
     operands match {
       case None => None
       case Some((x, y)) =>
-        val declared = overflowOf(mode)
-        // A checked operation whose operands' bounds rule out overflow needs no check at all,
-        // so it emits as WRAP - fewer ops, and the only way a checked multiply fuses.
-        val overflow =
-          if (declared != Overflow.WRAP && cannotOverflow(op, x, y, literals)) Overflow.WRAP
-          else declared
-        if (op == IntOp.MUL && overflow != Overflow.WRAP) {
-          truncate(literals, mark)
-          sink.note("checked int multiply whose operands do not rule out overflow", whole)
-          None
-        } else {
-          Some(new IntArith(op, overflow, x, y))
-        }
+        arithOver(op, overflowOf(mode), x, y, whole, literals, mark, sink)
     }
   }
+
+  /**
+   * The overflow decision, shared by the int arithmetic arms and task 68's interval ones so
+   * that the bound rule and the checked-multiply refusal are stated once rather than in two
+   * places that can drift. A checked operation whose operands' bounds rule out overflow needs
+   * no check at all and emits as `WRAP` - fewer ops, and the only way a checked multiply
+   * fuses; an int lane has no cheap overflow test for `*`, so one that keeps its check
+   * declines and `literals` is rolled back to `mark` so a declining entry leaves no slot
+   * behind.
+   */
+  private def arithOver(
+      op: IntOp,
+      declared: Overflow,
+      x: VarkaVectorIR,
+      y: VarkaVectorIR,
+      whole: Expression,
+      literals: mutable.LinkedHashMap[Int, Int],
+      mark: Int,
+      sink: DeclineSink): Option[VarkaVectorIR] = {
+    val overflow =
+      if (declared != Overflow.WRAP && cannotOverflow(op, x, y, literals)) Overflow.WRAP
+      else declared
+    if (op == IntOp.MUL && overflow != Overflow.WRAP) {
+      truncate(literals, mark)
+      sink.note("checked int multiply whose operands do not rule out overflow", whole)
+      None
+    } else {
+      Some(new IntArith(op, overflow, x, y))
+    }
+  }
+
+  /**
+   * An operand of task 68's year-month interval algebra: a value whose lane is a count of
+   * months. The interval column and the interval literal are `compileNode`'s own leaves since
+   * task 67, and nested interval arithmetic is the arms below, so this is a type gate over the
+   * same walk - the interval counterpart of `intOperand`, and separate for the same reason the
+   * arms are separate rather than the int arms' type gate being widened.
+   */
+  private def intervalOperand(
+      e: Expression,
+      position: String,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = e match {
+    case _ if !e.dataType.isInstanceOf[YearMonthIntervalType] =>
+      sink.note(s"$position of type ${e.dataType.simpleString} is not a year-month interval", e)
+      None
+    case _ => compileNode(e, inputs, literals, sink)
+  }
+
+  /**
+   * The shared body of task 68's binary interval arms. Spark computes `ym + ym` and `ym - ym`
+   * with `IntervalMathUtils.addExact`/`subtractExact`, which throw in every evaluation mode -
+   * there is no `LEGACY` wrapping form for an interval and no `try_` spelling - so the declared
+   * mode is `FAIL` unconditionally rather than read off `evalMode`, and `arithOver`'s bound is
+   * the only thing that takes the check off.
+   */
+  private def intervalArith(
+      op: IntOp,
+      l: Expression,
+      r: Expression,
+      whole: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = {
+    val mark = literals.size
+    val operands = for {
+      x <- intervalOperand(l, "the left interval operand", inputs, literals, sink)
+      y <- intervalOperand(r, "the right interval operand", inputs, literals, sink)
+    } yield (x, y)
+    operands.flatMap { case (x, y) =>
+      arithOver(op, Overflow.FAIL, x, y, whole, literals, mark, sink)
+    }
+  }
+
+  /** The slot holding `12`, the months in a year - `make_ym_interval` and the YEAR casts. */
+  private def twelve(literals: mutable.LinkedHashMap[Int, Int]): LiteralSlot =
+    new LiteralSlot(literals.getOrElseUpdate(12, literals.size))
 
   /**
    * Interns `br`'s ordinal into `inputs` and wraps it as a `ColumnRef` - shared by
@@ -1136,20 +1309,36 @@ private[sql] object VarkaExpressionCompiler {
           // under this cast is a count of years and the node needs months - unlike the MONTH-end
           // cast MonthIntervalOffset matches, which returns `v` unchanged.
           //
-          // Task 63 supplies the multiply this arm once said it was waiting for, and it still
-          // declines - for a reason one layer down, which task 67's section 2.1 records. The
-          // month-count position is checked by the emitter's `requireOffsetShape`, which admits
-          // a literal slot or a column and nothing else, so an `IntArith` here would be a
-          // compiler that claims fusion and an emitter that refuses it: a ghost fallback, the
-          // failure `sql/varka/AGENTS.md` names. A foldable year count never reaches this arm
-          // anyway - `foldDaysOffset` above already folds `CAST(5 AS INTERVAL YEAR)` to 60 - so
-          // what is left here is only the derived operand the position cannot hold. Widening it
-          // is task 68's, together with `-ym`, which is blocked on exactly the same check.
-          case Cast(br: BoundReference, YearMonthIntervalType(YearMonthIntervalType.YEAR,
-              YearMonthIntervalType.YEAR), _, _) if br.dataType == IntegerType =>
-            sink.note("month count is a year-interval cast, whose 12x multiply the month-count " +
-              "position cannot hold: it takes a literal or a column", months)
-            None
+          // Task 63 supplied the multiply and task 68 supplied the position: the emitter's
+          // month-count check took task 63's arithmetic once `requireMonthCountShape` split it
+          // from `next_day`'s weekday, which shares no guard with it. So this is that multiply,
+          // always checked because `IntervalUtils.intToYearMonthInterval` uses
+          // `Math.multiplyExact` whatever the session's ANSI mode, and `arithOver`'s bound is
+          // what removes the check - `CAST(year(d) AS INTERVAL YEAR)` fuses on its 40000 bound
+          // while a bare column declines, as every unbounded checked multiply does. A foldable
+          // year count never reaches this arm at all: `foldDaysOffset` above folds
+          // `CAST(5 AS INTERVAL YEAR)` to 60 before the match.
+          case c @ Cast(operand, YearMonthIntervalType(YearMonthIntervalType.YEAR,
+              YearMonthIntervalType.YEAR), _, _) if operand.dataType == IntegerType =>
+            val mark = literals.size
+            val built = for {
+              x <- intOperand(operand, inputs, literals, sink)
+              r <- arithOver(IntOp.MUL, Overflow.FAIL, x, twelve(literals), c,
+                literals, mark, sink)
+            } yield r
+            if (built.isEmpty) truncate(literals, mark)
+            built
+          // Task 68: `d - ym_col`, which the analyzer spells `DateAddYMInterval(d,
+          // UnaryMinus(ym))`, so the count is a negation of an interval column. Its check comes
+          // off wherever a negation's does, which is any bound at all - and a bare interval
+          // column has none, so this keeps its check and is guarded on the count's value by
+          // task 60 exactly as a plain column count is.
+          case u @ UnaryMinus(operand, _)
+              if operand.dataType.isInstanceOf[YearMonthIntervalType] =>
+            intervalOperand(operand, "the negated month count", inputs, literals, sink).map { x =>
+              val checked = !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+              new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
+            }
           // Task 67: `d + ym_col`. The stored value is the month count in every unit, so this
           // is task 60's column-count AddMonths exactly, with the same runtime guard on the
           // count's lanes - the guard reads the value and not the column's Spark type. It

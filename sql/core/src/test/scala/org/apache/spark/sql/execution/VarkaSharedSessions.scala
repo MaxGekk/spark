@@ -221,6 +221,12 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
    * Built through SQL rather than `createDataFrame` because a year-month interval column has
    * no plain Scala literal: the units come from the casts and `make_ym_interval`, which is
    * also the shape a user writes.
+   *
+   * `ymm2` is task 68's second interval, for the binary algebra - genuinely a different count
+   * from `ymm` on every row, not a second call to the same generator, so `ymm - ymm2` is not a
+   * disguised zero. Its `Int.MaxValue` row is what makes `ymm + ymm2` overflow, which is how
+   * the checked arithmetic's error identity is tested; the other rows stay well inside the
+   * range so a filtered query over them fuses and answers.
    */
   protected def cacheDatesIntervals(session: SparkSession): Unit = {
     session.sql(
@@ -228,16 +234,17 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
         |       CAST(m AS INTERVAL MONTH) AS ymm,
         |       CAST(y AS INTERVAL YEAR) AS ymy,
         |       make_ym_interval(y, mm) AS ym,
-        |       m
+        |       CAST(m2 AS INTERVAL MONTH) AS ymm2,
+        |       m, m2
         |FROM VALUES
-        |  (DATE'2024-01-31',  3,     1,  2),
-        |  (DATE'2024-02-29', -14,   -2,  0),
-        |  (DATE'2020-05-05',  24565, 3,  1),
-        |  (DATE'1969-12-31', -300000, 0, 11),
-        |  (DATE'2024-01-01',  NULL,  1,  1),
-        |  (NULL,              7,     2,  3),
-        |  (DATE'9999-12-01',  1,     0,  1)
-        |AS t(d, m, y, mm)""".stripMargin)
+        |  (DATE'2024-01-31',  3,       1,  2, 10),
+        |  (DATE'2024-02-29', -14,     -2,  0, -20),
+        |  (DATE'2020-05-05',  24565,   3,  1, 2147483647),
+        |  (DATE'1969-12-31', -300000,  0, 11, 5),
+        |  (DATE'2024-01-01',  NULL,    1,  1, 100),
+        |  (NULL,              7,       2,  3, NULL),
+        |  (DATE'9999-12-01',  1,       0,  1, -3)
+        |AS t(d, m, y, mm, m2)""".stripMargin)
       .createOrReplaceTempView("varka_dates_intervals")
     session.catalog.cacheTable("varka_dates_intervals")
   }

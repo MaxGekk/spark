@@ -698,6 +698,56 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(badSubOffset.getMessage.contains("date_sub's day offset"), badSubOffset.getMessage)
   }
 
+  test("task 68: the month count takes int arithmetic, next_day's weekday still does not") {
+    // Task 68 split `requireOffsetShape` in two. The month count and the weekday shared it
+    // under one sentence - that each "carries a runtime bound a derived value cannot declare" -
+    // which is true of the weekday and false of the count: a column-count `AddMonths` is in
+    // `selfGuarding` and is checked at run time against MONTH_ARITH_MIN/MAX_MONTHS by a
+    // lanewise test on the count's own value, which cares nothing about what produced it. The
+    // weekday has no such guard, so a derived value there reaches `emitFloorMod7` unchecked.
+    //
+    // Both directions are asserted, because a split made on one side only is a ghost fallback
+    // on the other - the compiler admitting what the emitter refuses, or the emitter admitting
+    // what nothing guards.
+    for (count <- Seq(new IntNeg(Overflow.FAIL, new ColumnRef(1)),
+        new IntArith(IntOp.MUL, Overflow.WRAP, new ColumnRef(1), new LiteralSlot(0)))) {
+      val (_, bytes) = emitMulti(Seq(new AddMonths(new ColumnRef(0), count)), 2, 1)
+      assert(bytes.nonEmpty, s"the month count should hold $count")
+    }
+    val badWeekday = intercept[IllegalArgumentException](emitMulti(
+      Seq(new NextDay(new ColumnRef(0), new IntNeg(Overflow.FAIL, new ColumnRef(1)))), 2, 0))
+    assert(badWeekday.getMessage.contains("next_day's weekday"), badWeekday.getMessage)
+  }
+
+  test("task 68: task 60's guard covers a derived month count, which is why the split is safe") {
+    // The claim the split rests on, tested rather than asserted: the guard reads the count's
+    // lanes after the arithmetic, so a count that only leaves the range *because* of the
+    // negation still condemns the batch. Without this the split would be a way to smuggle an
+    // unguarded count past task 60.
+    val root = new AddMonths(new ColumnRef(0), new IntNeg(Overflow.WRAP, new ColumnRef(1)))
+    val (kernel, loader) = load(emitMulti(Seq(root), 2, 0))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        def status(count: Int => Int, length: Int): Int = {
+          val dates = makeInputData(arena, length, _ => false, _ => 0, poisonNulls = false)
+          val counts = makeInputData(arena, length, _ => false, count, poisonNulls = false)
+          runKernel2(kernel, dates, counts, makeOutput(arena, length), length)
+        }
+        // In range after negation: computed.
+        assert(status(i => -(i % 100), 64) === 0)
+        // Lane 3 negates to one month past MONTH_ARITH_MAX_MONTHS, so the guard must fire -
+        // and the input itself, -24565, is inside the range, so only the derived value is out.
+        assert(status(i => if (i == 3) -(VarkaChrono.MONTH_ARITH_MAX_MONTHS + 1) else 0, 64) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
   test("task 59: next_day with a column weekday matches the reference evaluator over every " +
       "null pattern of both columns, in and out of the leaf's range") {
     // The trap is task 38's again: the node's word used to alias the date's alone, which was
@@ -2245,6 +2295,57 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  test("task 68: abs is a blend whose negation arm alone condemns, at Int.MinValue") {
+    // `abs` is not an op the IR has. The compiler spells it `if (x < 0) -x else x`, so what
+    // the emitter sees is task 79's shape - a guarded node under a CASE arm - built from task
+    // 63's nodes. There is nothing new to lower here, and that is the claim: the blend
+    // answers what Spark's `abs` answers everywhere the negation is defined, and condemns the
+    // batch at the one input where Spark raises instead.
+    val x = new ColumnRef(0)
+    def absOf(mode: Overflow): VarkaVectorIR =
+      new IfElse(new Compare(CompareOp.LT, x, new LiteralSlot(0)), new IntNeg(mode, x), x)
+    val caseLengths = Seq(0, 1, 7, 8, 15, 16, 17, 33, 64, 65, 1000)
+    val patterns = Seq(Seq(nullPatterns(0)._2), Seq(nullPatterns(1)._2), Seq(nullPatterns(3)._2))
+    // Inside the range both modes are total and agree with the reference, negatives included -
+    // which is the half of `abs` that actually takes the negation arm.
+    for (mode <- Seq(Overflow.WRAP, Overflow.FAIL)) {
+      checkMatrix(Seq(absOf(mode)), 1, Array(0), caseLengths, patterns, data = small,
+        ctx = s"abs $mode inside the range")
+    }
+    // Over the extremes only the wrapping form is total: it answers Int.MinValue for
+    // Int.MinValue, which is what Spark's own LEGACY-mode `abs` does on an int.
+    checkMatrix(Seq(absOf(Overflow.WRAP)), 1, Array(0), caseLengths, patterns, data = extreme,
+      ctx = "abs WRAP over the extremes")
+
+    // And the checked form at the one value that overflows. Int.MinValue is negative, so it
+    // takes the arm that negates and task 79's qualification cannot spare it; the lane after
+    // it is the same value under a null, where no arithmetic was asked for.
+    val (kernel, loader) = load(emitMulti(Seq(absOf(Overflow.FAIL)), 1, 1))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        def status(length: Int, at: Int, isNull: Int => Boolean): Int = {
+          val col = makeInputData(arena, length,
+            isNull, i => if (i == at) Int.MinValue else -(i % 5) - 1, poisonNulls = false)
+          val out = makeOutput(arena, length)
+          kernel.run(Array(col.data.address()), Array(col.validityAddress(length)),
+            Array(col.nullCount), Array(out._1.address()), Array(out._2.address()),
+            Array(0), length)
+        }
+        val none = (_: Int) => false
+        assert(status(64, -1, none) === 0, "no lane holds Int.MinValue")
+        assert(status(64, 3, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE, "a loop lane")
+        assert(status(17, 16, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE, "an epilogue lane")
+        assert(status(64, 3, _ == 3) === 0, "the overflowing lane is null")
+        assert(status(17, 16, _ == 16) === 0, "the overflowing epilogue lane is null")
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
   test("task 63: the check costs bytes only where it is emitted, and none with it off") {
     val a = new ColumnRef(0)
     val b = new ColumnRef(1)
@@ -2359,6 +2460,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "negation's check is one compare: it reads the operand, not the result")
     assert(by("year * 100 + month") === by("year, month (control)") + 2,
       "the key is the two fields plus its own two ops, so the year prefix is computed once")
+    // Task 68's `make_ym_interval(year(d), month(d))` is this row and not a new one: the
+    // compiler lowers it to exactly these nodes with 12 in the literal slot, both in WRAP
+    // because the calendar fields' bounds prove the multiply and the add safe. Registering it
+    // again would pin the same bytes under a second name.
   }
 
   test("task 63: make_date over a shifted year - the documented compile-time shape - " +
