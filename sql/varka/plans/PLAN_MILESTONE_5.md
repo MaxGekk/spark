@@ -1132,6 +1132,114 @@ emitting the same bytes, against the pinned line map and the `codeSize`
 assertions; and `MAX_FUSED_NODES`' javadoc corrected to say which methods its
 guarantee covers.
 
+### 2.19 An exact division through double lanes (task 88)
+
+*Added 9 September 2026, from task 68's admission check.*
+
+**The observation.** Task 26's whole design, and task 65's replacement for it,
+rest on one absence: `VectorOperators` has no multiply-high on any lane type, so
+an exact Granlund-Montgomery magic is not expressible on int lanes. 2.7 takes
+that as given and routes around it by widening the dividend to int64, where a
+64-bit low product is enough.
+
+There is a second route, and nothing in this repository has considered it: widen
+to *double* lanes instead. `(double) v` is exact for every int32, IEEE
+multiplication is correctly rounded, and `D2I` narrows by truncating toward zero
+- which is Java's `/` exactly. So `trunc((double) v * (1.0 / d))` is a candidate
+lowering for `v / d` with no magic constant, no round-down correction and no
+range restriction.
+
+**Why it is exact, which decides whether this is worth a task at all.**
+If `d` divides `v` the quotient is an integer under 2^31, exactly representable,
+and the multiply is correctly rounded to it. If it does not, the true quotient
+`v / d` has denominator `d` in lowest terms, so it lies at least `1 / d` from
+every integer; the floating error is at most about `2^31 / d * 2^-52`, which is
+`2^-21 / d`. Truncation therefore lands on the same integer for every divisor
+below roughly 2^21. The margin does not thin out at the top of the range - it
+scales with the quotient - which is the difference from an int-lane magic, whose
+exact range is a fixed fraction of the type's.
+
+Checked as well as argued: over structured and random int32 dividends, for
+divisors 12, 3, 7 and 100, both `(double) v / (double) d` and the faster
+`(double) v * (1.0 / d)` matched Java's `/` on every case, and an `I2D` /
+multiply / `D2I` round trip runs on this machine's preferred species - sixteen
+int lanes to two eight-lane double halves.
+
+**What it would delete, if it wins.** The same list 2.7 offers - the round-down
+magics and their correction carries, the `NARROWED` variant, `VarkaChrono`'s
+range constants - but without task 65's precondition, since it needs no int64
+lane and therefore none of milestone 5's lane-width work. It also removes the
+range bound from `extract(YEAR FROM ym)`, which task 68 deferred for exactly
+that bound (`PLAN_TASK_68.md` 2.2: the int-lane magic for `/12` is exact over
+0..49,151, about one forty-thousandth of a year-month interval's range). It does
+not rescue `extract(MONTH FROM ym)`, whose output is a `ByteType` Varka cannot
+emit; that is task 89's other blocker and no division removes it.
+
+**Why it is an A/B and not a decision.** It costs what 2.7 costs and possibly
+more: half the lanes, two conversions in and two out per int vector, and a
+double multiply rather than an integer one. 2.7's own estimate for the int64
+route is "a small throughput loss bought with a large simplification"; this one
+has the same shape of cost and must be measured against both the shipped magic
+*and* task 65's widening, on the same shapes, before either is chosen. Three
+arms, one benchmark.
+
+**The admission check.** The exactness argument above, verified exhaustively
+rather than sampled - for `/12` over the whole int32 range, and for the calendar
+divisors 146097, 36524, 1461 and 365 over the dividend ranges
+`emitChronoPrefix` actually produces - by a committed script beside
+`verify_long_lane_magic.py`, which is the precedent. Then the op counts for one
+extraction under each of the three lowerings, from `dev/varka_emit.sh --table`,
+before any measurement is taken.
+
+**What would reject it.** A divisor at or above 2^21 (none of Varka's are); a
+lowering that needs the *remainder* at full width, where the double route gives
+the quotient and the remainder costs a multiply back; and the conversion cost
+exceeding the magic it replaces on the shapes that matter, which is what the A/B
+is for. `Float16` and single-precision floats are not candidates - 24 mantissa
+bits cannot hold an int32 dividend - so this is a double-lane question only.
+
+### 2.20 The year-month interval divisions (task 89)
+
+*Added 9 September 2026, split out of task 68 by its admission check.*
+
+**The observation.** Of the eight expressions `PLAN_MILESTONE_4.md` 2.33 gave
+task 68, two need division by a constant: `extract(YEAR | MONTH FROM ym)` and
+`ym / num`. `PLAN_TASK_68.md` 2.2 to 2.4 found three things about them the
+section had assumed away. The exact int-lane magic for `/12` is the one the
+emitter already has, `MONTH_ARITH_M`, and it is exact over `0..49,151` - about
+one forty-thousandth of a year-month interval's int32 range. That magic
+computes a floor, and `extract` is Java's `/`, which truncates; they differ on
+every negative with a remainder. And `ym / num` rounds `HALF_UP`, ties away
+from zero, which needs the remainder as well as the quotient, over an exact
+range that depends on the divisor.
+
+A fourth blocker is not about division at all: `extract(MONTH FROM ym)` returns
+a **`ByteType`** (`ExtractIntervalPart[Int](ByteType, getMonths, ...)`), and
+Varka has no byte lane and no `ByteType` arm in `allocateVector`. A perfect
+division still leaves that expression un-emittable.
+
+**Why it waits.** Two routes in this milestone remove the range bound outright:
+task 65's int64 widening and task 88's double lanes. Building a range-guarded
+int-lane version first means building the thing either exists to delete, and
+then owning both. So this task is sequenced after whichever of 65 and 88 the
+three-arm A/B chooses, and takes its division from that.
+
+**The task, once a route is chosen.** `extract(YEAR)` as the chosen division
+with a truncation correction on the negative side; `extract(MONTH)` as
+`months - 12 * q` over it, *once a byte output exists* - which is its own
+question and may leave `extract(MONTH)` residual for longer than its twin;
+`ym / num` for a literal `num` as the chosen division plus the `HALF_UP` step,
+with a power-of-two `num` taking the shift; `ym / col` declining, since the
+divisor is then not a constant.
+
+**The admission check.** The truncation and `HALF_UP` corrections verified over
+the full int32 month range against `IntervalUtils.getYears`, `getMonths` and
+`IntMath.divide`, by a committed script; the byte-output question answered - an
+`IntVector` narrowed at the store, or a decline with a reason - before
+`extract(MONTH)` is attempted; and a throughput pair per shape against the row
+engine, since these are new lowerings and not, as task 68's group A is, old
+kernels under a new type.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
@@ -1167,6 +1275,8 @@ independent of both and of each other.
 | 85 | Lane type as a parameter (section 2.16). **Scoped** (8 September 2026); after 84, and blocking milestone 5's own tasks 28 and 29 | The emitter parameterised on a lane descriptor - vector class, species, byte stride, load and store descriptors - against the 204 `INT_VECTOR` references, 16 four-byte stride assumptions and 18 species references it carries today; the lane on the node's physical representation rather than inferred from the Spark type, with year-month intervals (int32 months, the same lane as DATE and INT) as the forcing function that can land first; measured against a generated-per-lane emitter, since a descriptor risks a megamorphic call in the hot path | The int32 lane's emitted bytes unchanged against the pinned oracles; a second lane type reaching the same green differential and fuzz matrices at both vector widths; and the fuzz reachability test widened from every node type to node type times lane type |
 | 86 | One operand admission, stated once (section 2.17). **Scoped** (8 September 2026), from the ghost fallback task 63's review found; independent of 83 to 85 | `intOperand`, `compileIntOperand`, `compileOffset` and `compare`'s `operand` as one function taking what the position accepts, and the emitter's four `require*Shape` checks derived from that same table rather than restated beside it, so widening the compiler either widens the emitter or fails to compile; carrying one widening as the table's first exercise - a bare `IntegerType` column in comparison operand position, which declines today and which task 79's admission check verified fuses with one case added, and which is folded in here rather than taken alone because widening one copy in isolation is what produced the ghost fallback | A test enumerating the operand positions and asserting that the set the compiler admits and the set the emitter accepts are the same set - the assertion whose absence let `date_add(d, weekday(d2) + 1)` ship as fused in EXPLAIN and a silent per-batch fallback at run time; every compiler decline reason unchanged, since no shape may move |
 | 87 | The epilogue is the one method no budget bounds (section 2.18). **Scoped** (8 September 2026), from a 35-million-iteration fuzz run; independent of 83 to 86 | The epilogue emitted as one method holding every group, so a tree inside `MAX_FUSED_NODES` can pass 65535 bytes and the Class-File API refuses the class - `epilogueMasked` at 67244 bytes for nested `make_date`, replaying at `-Dvarka.fuzz.seed=2026092800 -Dvarka.fuzz.only=73411`; either partition it as the loop is partitioned or give the emitter a byte budget, and in both cases decline with a reason rather than throw | The pinned fuzz iteration declining with a reason instead of throwing; every shape that fits today emitting identical bytes against the pinned line map and the `codeSize` assertions; and `MAX_FUSED_NODES`' javadoc no longer claiming a per-method guarantee it only has for the loop |
+| 88 | An exact division through double lanes (section 2.19). **Scoped** (9 September 2026), from task 68's admission check; independent of 65 but competes with it | `trunc((double) v * (1.0 / d))` as a lowering for integer division by a constant, exact for every int32 dividend and any divisor below about 2^21 - no magic, no correction carries, no range restriction, and no int64 lane, so none of this milestone's lane-width work is a precondition. Verified numerically and round-tripped through `I2D`/`D2I` on the preferred species; the admission check makes that exhaustive over the calendar divisors and commits the script | The exhaustive check committed beside `verify_long_lane_magic.py`; op counts per lowering from `dev/varka_emit.sh --table` before any timing; then a three-arm A/B - today's range-narrowed magic, task 65's int64 widening, and this - on one benchmark over the same shapes, with the choice made from the numbers rather than from the simplification each offers |
+| 89 | The year-month interval divisions (section 2.20). **Scoped** (9 September 2026), split out of task 68; after whichever of 65 and 88 the A/B chooses | `extract(YEAR FROM ym)` and `ym / num` on the chosen exact division, with the truncation correction `extract` needs and the `HALF_UP` step `ym / num` needs; `extract(MONTH FROM ym)` behind the further question of a `ByteType` output the evaluator does not have; `ym / col` declining, the divisor not being a constant | The two rounding corrections verified over the full int32 month range against Spark's own `getYears`, `getMonths` and `IntMath.divide` by a committed script; the byte-output question settled before `extract(MONTH)` is built; a throughput pair per shape against the row engine, these being new lowerings |
 
 ## 4. Files
 
