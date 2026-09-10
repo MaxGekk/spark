@@ -3847,6 +3847,42 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "a 64-lane group must not word-write, since its lane mask would be zero")
   }
 
+  test("task 47: the write-count ladder really is one shape family, so its steps are runtime") {
+    // Read the ladder's own emissions before reading its numbers. PLAN_TASK_76.md 3.2 built
+    // these four rungs to "hold the shape family constant and vary only the count", and task 47
+    // measured a step at k=3 that neither task's model predicts: both arms that write per lane
+    // group fall away sharply there while the word writer does not. The first thing to rule out
+    // is a layout change - a rung crossing GROUP_BUDGET into two loop methods would pay every
+    // per-method cost twice, and no rule could be fitted across that.
+    //
+    // It does not happen. All four rungs emit one masked loop method and the body grows by a
+    // steady ~130 bytes per write. So the k=3 step is a property of how the JVM runs these
+    // bytes, not of which bytes are emitted - which is what points at task 46's mechanism, the
+    // caller's node count crossing C2's inlining cutoff so that one more OR call stops being
+    // inlined. The word writer has no call at that site to refuse, and its curve is smooth.
+    // Asserted here so the next reader of either ladder meets the fact before the number.
+    // Built exactly as the benchmark builds them - one literal slot per blend. Repeating one
+    // slot instead would make the k roots the same tree, which CSE collapses to a single
+    // output: the rungs would all be one write and the ladder would measure nothing.
+    def rung(k: Int): Seq[VarkaVectorIR] = (0 until k).map { j =>
+      new IfElse(
+        new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(j)),
+        new AddDays(new ColumnRef(0), new LiteralSlot(j)),
+        new SubDays(new ColumnRef(0), new LiteralSlot(j)))
+    }
+    def loopMethods(k: Int): Int =
+      methodNames(emitMulti(rung(k), 1, 4, VarkaEmitOptions.DEFAULTS))
+        .count(_.startsWith("loopMasked"))
+    assert((1 to 4).map(loopMethods) === Seq(1, 1, 1, 1),
+      "a rung emitting two loop methods would pay every per-method cost twice")
+    val bytes = (1 to 4).map(k =>
+      VarkaEmitterTestSupport.codeSize(
+        emitMulti(rung(k), 1, 4, VarkaEmitOptions.DEFAULTS)._2, "loopMasked0"))
+    val steps = bytes.sliding(2).map(p => p(1) - p(0)).toSeq
+    assert(steps.forall(step => step > 100 && step < 160),
+      s"the rungs should grow by one write's worth of bytes each: $bytes (steps $steps)")
+  }
+
   test("task 76: every arm of task 46's A/B still emits two different kernels") {
     // The failure this task is downstream of, made loud. Task 70's pass removed the per-group
     // validity call for a served root, which left both of task 46's arms emitting the same

@@ -423,3 +423,103 @@ method is `emitVectorLoop` followed by `emitStatusReturn`, with no early
 return inside the loop - the all-null shortcut is the driver's and the
 guard's reduction is once per method after the back edge. There is exactly
 one flush point, between the loop's end and the status return.
+
+### 10.2 Step 2: option A, and what the ladder says
+
+Option A shipped as `validityByWord`, default **off**, and the ladder is why.
+
+Ten runs on an idle machine under the performance governor, pinned to the
+fast CCX exactly as `dev/varka_bench_regen.sh` pins - four at 4 lanes
+(`-XX:MaxVectorSize=16`), three at 8 (`=32`) and three at 16 - on task 76's
+own four rungs, arms adjacent in one run. Each run is 223 result rows and
+took 16 minutes; the series ran 14:58 to 17:40 on 10 September 2026. The
+advantage of the word writer over each of task 76's two arms, as the range
+across runs:
+
+**Against the shipped arm (task 46's width-named helpers):**
+
+| writes | 4 lanes | 8 lanes | 16 lanes |
+|---|---|---|---|
+| 1 | +5.9 to +8.7% | -16.6 to -15.4% | -19.6 to -17.2% |
+| 2 | +6.9 to +9.0% | -13.6 to -11.4% | -19.7 to -15.7% |
+| 3 | +35.5 to +38.3% | +26.4 to +30.0% | +22.1 to +23.7% |
+| 4 | -5.8 to -5.3% | -6.5 to -5.2% | -8.0 to -5.1% |
+
+**Against the general pair:**
+
+| writes | 4 lanes | 8 lanes | 16 lanes |
+|---|---|---|---|
+| 1 | -1.6 to +1.6% | +11.5 to +12.2% | +3.9 to +5.9% |
+| 2 | +5.3 to +6.0% | +3.4 to +6.1% | -0.9 to +0.3% |
+| 3 | +50.7 to +54.2% | +52.3 to +58.4% | +38.7 to +42.8% |
+| 4 | +9.2 to +10.3% | +8.0 to +10.2% | +7.5 to +11.2% |
+
+The run-to-run spread is 1 to 3 percentage points against effects of 5 to 38,
+and every sign is stable across runs.
+
+**Prediction 1 held, and it is the one that mattered.** Section 6 registered
+that the 4-lane deficit at one and two writes should *disappear* rather than
+shrink. Task 76 measured the shipped width-named helpers 3.8 to 6.8% and 0.5
+to 1.5% behind the general pair there, and this series reproduces that on the
+same rungs - at 4 lanes and one write the general pair is 7.4% ahead of the
+shipped arm. With the word writer the inversion is gone: it beats the shipped
+arm by 5.9 to 9.0% at one and two writes and lands level with the general
+pair. The mechanism task 76 named is therefore the mechanism. At four lanes a
+validity group is half a byte, two consecutive groups read-modify-write the
+same byte and serialise on it, and removing the read removes the regime.
+
+**And the same table refuses the change as a default.** At 8 and 16 lanes,
+where a group owns whole bytes and the chain never existed, the word writer
+*loses* 11 to 20% at one and two writes. That is the honest reading of its
+own hypothesis: where there is no serialised chain to remove, an eight-byte
+store plus an accumulator, a mask, a shift and a branch is simply more work
+than a one- or two-byte read-modify-write whose helper already inlines.
+Production runs at the preferred width, which is 16 lanes on this machine, so
+the shipped default stays off and `PLAN_MILESTONE_4.md`'s "one validity write
+per word" is not, as written, an improvement.
+
+**The k=3 column is a step in something else, and it is not the emitter.**
+Every arm falls away sharply at three writes and both per-group arms fall
+furthest, which is why the word writer's advantage there is 22 to 38% at
+every width - an outlier against its own neighbours at k=2 and k=4. The first
+thing to rule out was a layout change, and `VarkaLoopEmitterSuite`'s "the
+write-count ladder really is one shape family" does: all four rungs emit one
+masked loop method and the body grows by a steady ~130 bytes per write. So
+the step is in how the JVM runs those bytes. The shape that fits is task 46's
+own mechanism - the caller's node count crossing C2's inlining cutoff, so
+that one more OR call stops being inlined - and the word writer, which has
+no call at that site to refuse, degrades smoothly instead. **Stated as the
+leading hypothesis rather than as proof**, on task 76's precedent: nothing
+here reads `-XX:+PrintInlining`, and until something does, no rule may be
+fitted across k=3 in *either* task's table.
+
+### 10.3 The decision, and what carries forward
+
+**Task 47 ships the option and keeps the default off.** The word writer is
+correct - the emitter suite compares it against the per-group writer bit for
+bit at three widths, four shapes, thirteen lengths through both sides of
+every word boundary and three null states, and the differential runs it
+through Arrow buffers on a 5000-row fixture whose second batch is fourteen
+words and eight rows - and it is a 6 to 9% win at the one width where the
+read-modify-write serialises. It is a 11 to 20% loss at the two widths where
+it does not.
+
+What follows is a narrower task than this row was written as, and a
+better-founded one. The rule the numbers support is not keyed on the write
+count, which is what task 76 declined, but on a property of the bit layout:
+**a validity group smaller than a byte**, which is 2 and 4 lanes and nothing
+else. That is one condition, derived from the mechanism rather than fitted to
+a threshold, and `widthSpecialised` already reads `analysis.lanes`. It is
+recorded as milestone 5's task 92 rather than shipped here, because on this
+machine it would turn on for no production query - the preferred width is 16
+lanes - and a default that only a `MaxVectorSize` flag can reach should be
+justified by a machine that runs at that width, not by this one.
+
+Option B of section 3.1 - store once per word rather than once per group - is
+where the two widths that lose might be recovered, since what they are paying
+for is the wider store rather than the removed read. It needs its own ladder
+run and belongs with task 92.
+
+Section 3.4's driver item, the masked driver's dead null-state prologue, is
+untouched by this measurement and independent of it; it also moves to task 92,
+where its short-batch A/B can share a run with the width rule's.
