@@ -361,5 +361,36 @@ with one or two per-group writes, in a regime task 47 exists to remove. Adding a
 rule now would tune a constant inside a loop shape that is scheduled for
 replacement.
 
-<!-- Remaining: the decline written up, 2.38 and the debt entry swept, row 76,
-     and what carries to row 47. -->
+### 10.8 The decline, and section 7's predictions scored
+
+**Task 76 closes with a recorded decline.** 2.38 licensed one if the single-field
+cost proved too small to matter; the measurement chose it for a better reason
+than size. The shipped default is right at 8 and 16 lanes at every write count
+and right at 4 lanes above two writes, and what it costs elsewhere is 4 to 7% in
+a loop shape row 47 replaces. A rule now would fit two thresholds on one machine
+inside a regime scheduled for removal.
+
+1. **Missed.** The crossover was predicted at two writes. There is a crossover at
+   4 lanes, between two and three - but none at all at 8 or 16 lanes, where the
+   width-named helpers win throughout. The prediction assumed the question had
+   one answer.
+2. **Held.** The wide width did not confirm the single-field half: its committed
+   8.8% sits inside a band of 10.30% and 6.02%, and the purpose-built ladder puts
+   the same shape at +29.6 to +32.0% the other way. Reporting AVX-512 as "not
+   distinguished" was right, and the task would have shipped a wrong rule had it
+   rested there.
+3. **Held.** `validityByBitmap` is inert for a `Cond` root, asserted in the
+   emitter suite, so the filter pair is a one-flag comparison.
+4. **Not reached.** No rule was built, so nothing was checked for over-reach.
+
+### 10.9 What carries to row 47
+
+That the per-group read-modify-write is a **4-lane** problem specifically, with
+the measurement to show it, and that removing it removes the regime in which the
+helper choice matters at all. Row 47 is also **ungated on task 46** now: task 76
+was that gate.
+
+Two artefacts stay behind for it. The write-count ladder is committed with its
+case ids, so row 47 can measure against the same rungs. And the emitter suite's
+"every arm of task 46's A/B still emits two different kernels" is the assertion
+that stops this pair collapsing silently a second time.
