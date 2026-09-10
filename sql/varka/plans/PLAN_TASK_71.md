@@ -293,7 +293,42 @@ about them, and 3.2 already showed the other candidate shapes are too noisy to
 rank small effects. **What the ladder can actually establish is where the
 split/merge boundary should sit, not which of several wide budgets is best.**
 
-<!-- The rest, filled in as the task lands: 3.3's enumeration, 4.2's guard, the
-     ladder, section 7's other predictions scored, and what the task leaves for
-     later - which goes to the milestone's debt register or a scope document,
-     never to a code comment. -->
+### 10.3 Step 3.3's enumeration: the re-pinning cost is one assertion, and
+prediction 4 is wrong
+
+The enumeration was done by changing the default and running the suites, not by
+grepping for what might move - a grep finds what addresses a method by name, and
+what matters is what that addressing actually *sees*.
+
+| default | catalyst Varka suites | sql/core Varka suites |
+|---|---|---|
+| 16 (shipped) | 267 pass | 180 pass |
+| 24 | 267 pass, 0 fail | - |
+| 64 | 266 pass, **1 fail** | 180 pass, 0 fail |
+
+**At 24, nothing moves at all.** The roughly two dozen pinned op-count oracles
+that read `loopDense0`/`loopMasked0` by name are unaffected, because the shapes
+they use are single-output or already grouped; the addressing is only fragile in
+principle.
+
+**At 64, exactly one assertion fails**, and it is the one whose reasoning is
+written out in the source: `VarkaLoopEmitterSuite.scala:1838-1841`, "year reuses
+nothing against [x + 1] and 1 + 38 > 16, so it opens a group of its own, which
+month then joins". At 64 that sum fits and the two become one method. The
+assertion did exactly what an assertion with its arithmetic spelled out is for.
+
+**Prediction 4 said a default change would re-pin more than ten assertions, and
+that the true count would exceed the grep's estimate.** It is one, and only past
+24. The prediction reasoned from how the tests *address* methods rather than from
+what those tests actually construct, which is the same error in miniature that
+2.39 made - inferring from a shape instead of measuring it.
+
+**Two gaps in this enumeration, stated rather than buried.** `VarkaAssemblySuite`
+cancels all 23 of its tests in this environment for want of a disassembler, so
+its `loopDense0` frame-name pins were never exercised at any budget; they are
+checked on a host that has one, or the task ships not knowing. And the
+benchmarks were not run here - the parity file's case names carry loop-method
+counts, so a default change moves the file's text as well as its numbers.
+
+**The differential does not move**, at any budget tried, which is the claim
+section 6 makes: grouping decides which method holds an op, never the answer.
