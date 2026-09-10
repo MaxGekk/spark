@@ -187,19 +187,39 @@ public final class VarkaLoopEmitter {
 
   /**
    * The most op nodes one emitted <i>loop method</i> carries; outputs are partitioned into
-   * sibling loop methods within this budget (task 11). Measured reason: each Vector API call
-   * site expands into a large intrinsic graph, so C2's compile time grows steeply with op
-   * count - the tier-4 compile of a single 64-op loop took ~10 seconds, during which the
-   * loop ran the C1 version with boxed vectors at ~1% speed ({@code -XX:+PrintCompilation}
-   * shows the OSR task pending; whether a run sees the cliff depends only on when that
-   * compile lands relative to it). A 16-op loop method compiles promptly under every load
-   * tried, so every hot loop stays at or under it by construction. Grouping is greedy over
-   * the output order and counts only nodes new to the group, so outputs sharing subtrees
-   * tend to land together and keep their cross-output CSE; a single output wider than the
-   * budget gets its own group untouched - splitting inside an output would forfeit the
-   * register residency that is the point, and single-output loops measured healthy at every
-   * width tried (59 ops: 80% of peak within 400 ms, throughput proportional to op count) -
-   * the slow compiles were specific to multi-output loops. Numbers in PLAN_TASK_11.md
+   * sibling loop methods within this budget (task 11).
+   *
+   * <p><b>The original reason for 16 has been retired, and the value has not.</b> Task 11
+   * observed a 64-op loop whose tier-4 compile did not land for ~10 seconds, during which the
+   * loop ran C1-boxed at ~1% speed, and read that as C2's compile time growing steeply with
+   * op count. Task 43 re-measured the same path on JDK 25 and it does not reproduce: a ladder
+   * of single-output loops from 20 to 248 ops compiles linearly at roughly 1.1 ms per op at
+   * AVX-512 and 2.0 at 128-bit, so 248 ops takes 271 ms on the standard path and 186 ms on
+   * the OSR path the original describes. Two orders of magnitude below the folklore, and it
+   * agrees with the independent ~1 ms per op this repository already carried elsewhere.
+   *
+   * <p>The observation is not being called a mismeasurement - a rate jumping from 9 to ~1000
+   * M rows/s at t=12s is not subtle - but the honest reading is a compile task <i>queueing</i>
+   * behind others under load rather than ten seconds of compiler work. That keeps the symptom
+   * and drops the inference: <b>a queued compile can bite at any width and any op count, which
+   * is a scheduling property no per-method budget can bound.</b> So this constant is not
+   * currently justified by compile time. What justifies it today is task 71's measurement:
+   * of nine shapes surveyed across budgets from 16 to 64, three regroup at all and only one
+   * above 24 - for a saving of one lane op out of 38 - so raising it buys almost nothing while
+   * growing every method toward C1's refusal threshold (past about 1900 bytes a loop method
+   * runs interpreted until C2 lands). See {@code PLAN_TASK_43.md} 8 and {@code PLAN_TASK_71.md}
+   * 10.5; `SKILLS.md` carries the three-width ladder.
+   *
+   * <p>What task 43's ladder does <i>not</i> license: "no cliff exists". It is one Zen 5 host,
+   * one JDK 25 build, one shape family, and it stops at 248 ops. A lowering with more live
+   * values per op could still spill, and the machine is not a full-width 512-bit one - the
+   * compile-time findings should carry over, being a function of the IR, but the throughput
+   * arm would want re-running there.
+   *
+   * <p>Grouping is greedy over the output order and counts only nodes new to the group, so
+   * outputs sharing subtrees tend to land together and keep their cross-output CSE; a single
+   * output wider than the budget gets its own group untouched - splitting inside an output
+   * would forfeit the register residency that is the point. Numbers in PLAN_TASK_11.md
    * section 6.
    *
    * <p>Task 17 priced the one candidate the debt register left open - raising the budget so
