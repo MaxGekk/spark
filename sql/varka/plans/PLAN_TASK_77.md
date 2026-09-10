@@ -253,7 +253,67 @@ enumeration is still owed. And the coverage that heuristic reaches is 18 rows in
 ungated - which is what test 6's completeness assertion is for, and a number the
 enumeration should try to improve.
 
-<!-- The rest, filled in when the measurement lands: the band as measured, 7's
-     other predictions scored one by one, what moved that the plan did not list,
-     and what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+### 10.1 The band, measured
+
+Twenty-eight runs on an idle machine overnight on 10 September 2026, serial and
+pinned to the fast CCX exactly as `dev/varka_bench_regen.sh` pins: ten of the
+parity benchmark per width, four of the throughput benchmark per width. Every run
+verified for row count as it finished.
+
+| file | runs | cases | median | p90 | max | over 3% | over 10% | over 20% |
+|---|---|---|---|---|---|---|---|---|
+| parity, AVX-512 | 10 | 211 | 5.34% | 22.30% | 227.15% | 151 | 66 | 27 |
+| parity, 128-bit | 10 | 211 | 1.72% | 11.88% | 39.06% | 71 | 25 | 12 |
+| throughput, AVX-512 | 4 | 84 | 5.31% | 20.83% | 24.26% | 57 | 26 | 9 |
+| throughput, 128-bit | 4 | 84 | 3.67% | 21.90% | 24.26% | 51 | 14 | 10 |
+
+The worst single case is `12 outputs over one date, one method (1 loop methods),
+null-free`, which ranges 43.1 to 141.0 M rows/s across ten runs of an unchanged
+file - a 3.3x swing that any task reading a diff would have to interpret.
+
+### 10.2 The predictions, scored - three of four missed, and the misses are the result
+
+**1 missed, and the artefact is better for it.** It predicted a per-case band
+would *not* reproduce, with worst-quartile overlap near chance and correlation
+under 0.3. The overlap is 37 of 52 at AVX-512 and 39 of 52 at 128-bit, against a
+chance of about 13 - roughly three times chance at both widths. The correlation
+of the exact spread is 0.325 and 0.728.
+
+So the two statistics disagree, and the disagreement is the finding: *which*
+cases are noisy reproduces strongly, while *how* noisy a given case is reproduces
+only at the narrow width. That is exactly the shape a band needs. A band is a
+threshold, not a point estimate, and a threshold only has to know which cases
+deserve a loose one. The plan pre-committed to shipping whichever the data
+supported, so the per-case band ships and the file-level threshold is dropped.
+
+**2 half missed.** It predicted a file-level median under 3% and a p90 over 10%,
+reasoning that ten runs would widen the tail and not the median. The p90 holds at
+every width. The median does not at AVX-512: 5.34%, against the 1.6% that
+`dev/varka_bench_repeat.sh`'s header reports from three runs. More runs widened
+the median too, so three runs understate the band and the header's number should
+not be quoted as the band.
+
+**3 missed, and backwards.** It predicted the narrow width would be the noisier,
+on the grounds that every collapse this milestone has recorded was found at
+128-bit. The narrow width is markedly *quieter* on every statistic: median 1.72%
+against 5.34%, p90 11.88% against 22.30%, worst case 39% against 227%. The
+inference was wrong in an instructive way - collapses were found at 128-bit
+because the narrow file is the quiet one, where a collapse stands out, not
+because it is the unstable one.
+
+**4 confirmed**, scored early in 10 above.
+
+### 10.3 What this changes in the design
+
+Section 4.1's open question is closed in favour of the per-case band, so the band
+file carries a threshold per key rather than one number per file. Section 4.2's
+classification is per case accordingly.
+
+One thing the plan did not anticipate: the two widths need different thresholds,
+and by a factor of three at the median. A single band applied to both would be
+far too loose for the narrow file, which is where collapses have historically
+shown up - the opposite of a safe default.
+
+<!-- The rest, filled in as the task lands: what moved that the plan did not
+     list, and what the task leaves for later - which goes to the milestone's
+     debt register or a scope document, never to a code comment. -->
