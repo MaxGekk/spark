@@ -125,6 +125,12 @@ THROUGHPUT_WINS = [
     "chain depth 8",
     "dayofweek, row consumer",
     "case when unpredictable, row consumer",
+    # New in task 68; one revision each, no loss, and six to eight times the row
+    # engine at both widths, so the direction is not in doubt even on thin history.
+    "interval add, int count (task 68 control)",
+    "interval add, interval columns (task 68)",
+    "month composite, int form (task 68 control)",
+    "make_ym_interval (task 68)",
     "add_months, int count (task 67 control)",
     "d + interval column (task 67)",
 ]
