@@ -199,11 +199,33 @@ fi
 
 echo
 echo "== what moved against the committed wide file =="
+# The band, where one has been measured for this file, turns "moved 14.2%" into
+# a verdict: a case's own tier says whether a move that size means anything. See
+# dev/varka_bench_band.py. Without one the flat threshold applies, as before.
+band="${wide%-results.txt}-band.txt"
+band_arg=()
+if [ -f "$band" ]; then
+  band_arg=(--band "$band")
+  echo "(classified against $band)"
+fi
 if [ "$wide_run" -eq 1 ] && git cat-file -e "HEAD:$wide" 2>/dev/null; then
-  "$(dirname "$0")/varka_bench_diff.py" --git HEAD "$wide"
+  "$(dirname "$0")/varka_bench_diff.py" --git HEAD "$wide" "${band_arg[@]}"
 else
   echo "(no committed version of $wide to compare against)"
 fi
+echo
+
+# The invariants, which are not about the numbers moving. A fused kernel that has
+# become slower than the passes it exists to beat is a broken measurement, not a
+# slow row, and it is the failure task 77 was opened for: the 128-bit collapse
+# went into three committed files before anyone remarked on it.
+echo "== invariants =="
+gate_rc=0
+for f in ${wide_run:+"$wide"} ${narrow:+"$narrow_file"}; do
+  [ -f "$f" ] || continue
+  "$(dirname "$0")/varka_bench_gate.py" "$f" || gate_rc=1
+done
+[ "$gate_rc" -eq 0 ] || echo "the gate failed: do not commit this file until it is understood"
 echo
 [ "$wide_run" -eq 1 ] && echo "wrote: $wide"
 [ "$narrow" -eq 1 ] && echo "wrote: $narrow_file"
