@@ -244,7 +244,11 @@ apparent small wins turned out to be noise.
   once took ~10 s. The old observation is not being called a mismeasurement - a rate jumping
   9 to ~1000 M rows/s at t=12s is not subtle - but the number describes a JDK that is no
   longer the one in use, and anything resting on it (`GROUP_BUDGET`'s javadoc, among others)
-  needs re-deriving rather than re-citing.
+  needs re-deriving rather than re-citing. *`GROUP_BUDGET`'s javadoc was re-derived on 10
+  September 2026: the compile-time argument is gone from it, replaced by task 71's survey -
+  raising the budget past 24 regroups one shape of nine for one lane op, while growing every
+  method toward C1's refusal threshold. The constant is unchanged at 16 and its justification
+  is now a measurement of what the budget does rather than of what compiling costs.*
 
   **And it disagreed with another number this repository already carried.** `PLAN_MILESTONE_4.md`
   section 2.3 and its debt register both price a wide loop's compile at "~1 ms per vector op",
