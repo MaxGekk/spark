@@ -175,6 +175,35 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
   }
 
   /**
+   * Task 68's fixture: two month counts, each spelled once as an int column and once as a
+   * `MONTH`-unit interval, so the binary algebra has a genuine second operand. Its own table
+   * rather than two columns added to `varka_date_interval_counts`, for the reason that table
+   * itself records - a cached table with one more column is not the same cached table, so
+   * task 67's committed rows keep the fixture they were measured on.
+   *
+   * The second count is the first generator shifted by 97 within a period of 241, which is
+   * prime, so `m2` differs from `m` on every row and no row is a disguised `x + x`. That is
+   * asserted here rather than argued, per this project's fixture rule; both counts stay inside
+   * `[-120, 120]`, so their sum cannot overflow and the pair measures the arithmetic rather
+   * than a fallback.
+   */
+  private def cacheIntervalPairs(session: SparkSession): Unit = {
+    session.sql(
+      """select date_add(date'2020-01-01', cast(id as int) % 1460) as d,
+        |       cast(pmod(id, 241) - 120 as int) as m,
+        |       cast(pmod(id + 97, 241) - 120 as int) as m2,
+        |       cast(cast(pmod(id, 241) - 120 as int) as interval month) as ym,
+        |       cast(cast(pmod(id + 97, 241) - 120 as int) as interval month) as ym2
+        |from range(0, 2000000)""".stripMargin)
+      .createOrReplaceTempView("varka_interval_pairs")
+    session.catalog.cacheTable("varka_interval_pairs")
+    val same = session.sql(
+      "select count(*) from varka_interval_pairs where m = m2").collect().head.getLong(0)
+    require(same == 0L,
+      s"varka_interval_pairs' two counts must differ on every row, got $same equal rows")
+  }
+
+  /**
    * `varka_dates_weekday` for task 59: dates `d` and `d2` beside a weekday name `s` cycling
    * through the 21 spellings in three case styles, every name valid, so the derived leaf's
    * parse is the whole of the pre-pass and nothing declines.
@@ -318,6 +347,8 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
       cacheDatesMonthCounts(varka)
       cacheDatesIntervalCounts(baseline)
       cacheDatesIntervalCounts(varka)
+      cacheIntervalPairs(baseline)
+      cacheIntervalPairs(varka)
       cacheDatesWeekday(baseline)
       cacheDatesWeekday(varka)
       cacheDatesTruncFormats(baseline)
@@ -353,6 +384,25 @@ object VarkaThroughputBenchmark extends SqlBasedBenchmark {
         "SELECT add_months(d, m) AS a FROM varka_date_interval_counts")
       runQueries(baseline, varka, "d + interval column (task 67)",
         "SELECT d + ym AS a FROM varka_date_interval_counts")
+      // Task 68's two pairs, and what they are for. The type exists only above the kernel, in
+      // `outputTypes` and `allocateVector`, and not in the IR, so an emitter-level parity row
+      // cannot see it at all: an interval arm and its int twin are the same nodes over the same
+      // lanes. Only an end-to-end row can, and what it prices is the Arrow write path - whether
+      // filling an `IntervalYearVector` costs what filling an `IntVector` costs. A gap between
+      // the halves of a pair is therefore a finding about that path, not about the lane.
+      //
+      // The addition pair is task 63's checked add, whose interval spelling is checked in every
+      // ANSI mode because Spark computes it with `addExact` unconditionally. The composite pair
+      // is the shape that fuses with no check at all, both operands being calendar fields the
+      // compile-time bound proves safe.
+      runQueries(baseline, varka, "interval add, int count (task 68 control)",
+        "SELECT m + m2 AS a FROM varka_interval_pairs")
+      runQueries(baseline, varka, "interval add, interval columns (task 68)",
+        "SELECT ym + ym2 AS a FROM varka_interval_pairs")
+      runQueries(baseline, varka, "month composite, int form (task 68 control)",
+        "SELECT year(d) * 12 + month(d) AS a FROM varka_interval_pairs")
+      runQueries(baseline, varka, "make_ym_interval (task 68)",
+        "SELECT make_ym_interval(year(d), month(d)) AS a FROM varka_interval_pairs")
       // Task 42: a date built from three int columns, under the session's default (ANSI) mode.
       runQueries(baseline, varka, "make_date",
         "SELECT make_date(y, m, dd) AS a FROM varka_date_parts")

@@ -2351,3 +2351,91 @@ existing rule elsewhere in the codebase, grep for that rule's real definition
 and call or copy it exactly; a hand-derived approximation of a sealed
 interface's membership is not the same question as "what does the emitter
 actually treat as a calendar consumer."
+
+## A refusal shared by two positions carries one reason, and it can be true of only one
+
+Task 68's whole compiler-visible change was possible because one emitter check
+turned out to be two. `VarkaLoopEmitter.requireOffsetShape` policed both
+`next_day`'s weekday operand and `add_months`' month count, admitting a literal
+slot or a bare column in either and refusing everything else. Its javadoc gave
+one reason for both: "a weekday and a month count carry runtime bounds a
+derived value cannot declare". That sentence is true of the weekday and false
+of the month count, and the difference is exactly task 60's guard, which checks
+the count's *value* lanewise against `MONTH_ARITH_MIN/MAX_MONTHS` and cares
+nothing about what produced it. A negated column and a column are the same
+thing to it. `next_day` has no such guard, so its position really does need the
+shape restriction.
+
+The cost of the conflation was two tasks. Task 60 could have admitted a derived
+count when it added the guard; task 67 wrote `d - ym_col` and the `YEAR`-unit
+cast off as "residual, blocked on the emitter" without asking why. Neither was
+wrong to trust the comment - the comment was the only statement of the rule.
+
+Three habits follow, and they are the refusal-side twin of the checklist's rule
+about a predicate with more than one reader:
+
+- **When one predicate serves two positions, its reason has to hold for each
+  position separately, and the javadoc has to say which position it is talking
+  about.** The fix here was not new logic: `isDayOffsetShape` stayed exactly as
+  it was and gained a second, laxer caller, `requireMonthCountShape`. What
+  changed was that each caller now states its own reason, so the next reader is
+  not told that a guarded position is unguarded.
+- **A runtime guard on a value is what buys a position its derived inputs.** A
+  guard that tests a *shape* at compile time constrains what may reach it
+  forever; a guard that tests a *value* per lane constrains nothing upstream.
+  So when a task adds a value guard, the next question is which compile-time
+  shape restrictions that guard has just made unnecessary - that is a gain the
+  guard's own task can bank, not a follow-up.
+- **A restriction inherited without its reason is a decline nobody rechecked.**
+  Task 67 pinned `d - ym_col` as declining with a test, which is the right way
+  to record a limitation; what was missing was the note saying whose limitation
+  it was. A pinned decline should name the check that produces it, so the task
+  that changes that check finds the test by grepping for it.
+
+The general shape: the ghost-fallback contract makes the compiler and the
+emitter agree by forcing the stricter of the two to win. That is safe and it is
+also lossy, because the stricter side's reason travels with the *predicate*
+rather than with each *call site*, and a reason that is only sometimes true
+gets applied everywhere the name appears.
+
+## Check that the place a prediction blames actually exists
+
+Task 68's prediction register asked its two interval rows to land within 3% of
+their int twins and added the clause that made it look rigorous: "a larger gap
+is a finding about the Arrow write path, not the lane". The gap came in at 5.1%
+at one width, and the argument that followed was about noise bands - how far
+this benchmark's cases move between runs, whether a within-run pair gap is
+bounded by a between-run diff, whether three more runs would settle it.
+
+None of that was needed. There is no Arrow write path to have a finding about.
+`VarkaKernelEvaluator.project` reads `getDataBuffer().memoryAddress()` off each
+output vector and hands the address to the kernel, which writes four-byte lanes
+into it; `IntVector`, `DateDayVector` and `IntervalYearVector` are all
+`BaseFixedWidthVector`s of `TYPE_WIDTH` 4, so the buffers are the same size and
+the same bytes land in them, and one shared `setValueCount` closes the batch
+with no branch on type. The accessors differ, but a columnar sink runs none of
+them. The only per-type step in the whole route is which class the constructor
+makes, once per output per batch.
+
+The lesson is about the shape of the prediction, not about Arrow. A prediction
+of the form "if X differs, the cause is Y" is two claims, and the second one is
+checkable at *write* time, for free, by reading Y. Doing that here would have
+cost one grep and would have replaced a 3% measurement question - which task 67
+had already failed to answer and handed forward - with a code fact and a test
+that pins it. Instead the clause was carried across two tasks as if it named a
+real mechanism, and each task spent its measurement budget failing to resolve a
+difference that could not exist.
+
+Two habits follow:
+
+- **When a plan names the place a difference would come from, open that place
+  before the run, not after.** If it turns out to be empty, the prediction is
+  not "unresolved pending a better instrument" - it is answered, and better than
+  a measurement could answer it, because a benchmark can only ever fail to find
+  a difference that is not there.
+- **Prefer the invariant test to the timing whenever the claim is really about
+  code.** "Admitting this type costs the kernel nothing" reads like a
+  performance claim and is a structural one. As a test it is a few lines - the
+  same arithmetic under two Spark types must produce byte-identical buffers from
+  demonstrably different vector classes - and it fails the day the premise
+  breaks, which is exactly when a benchmark's noise would hide it.

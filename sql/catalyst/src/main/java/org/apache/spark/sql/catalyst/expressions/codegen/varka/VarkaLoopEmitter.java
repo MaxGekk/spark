@@ -1919,7 +1919,7 @@ public final class VarkaLoopEmitter {
           analyzeOp(node, false, n.days());
         }
         case AddMonths n -> {
-          requireOffsetShape(n.months(), "add_months' month count");
+          requireMonthCountShape(n.months(), "add_months' month count");
           analyzeOp(node, false, n.days(), n.months());
         }
         case MakeDate n -> {
@@ -2020,9 +2020,10 @@ public final class VarkaLoopEmitter {
     // task 38 widened the offset from LiteralSlot-only to a literal or a column, but it is
     // still not an arbitrary subtree - VarkaExpressionCompiler only ever emits one of these
     // two shapes, and this check fails fast if a future IR producer emits anything else. It
-    // guards NextDay's weekday (task 59) and AddMonths' month count (task 60), the stricter
-    // requireLiteralOffset that used to cover them having no caller left; the day offset it
-    // also guarded took a third kind in task 63 and moved to requireDayOffsetShape. {@code
+    // guards NextDay's weekday (task 59), the stricter requireLiteralOffset that used to cover
+    // it having no caller left; the day offset it also guarded took a third kind in task 63 and
+    // moved to requireDayOffsetShape, and AddMonths' month count took the same kind in task 68
+    // and moved to requireMonthCountShape. {@code
     // position} names the operand that failed, because one message shared across operands is
     // exactly what sent the IR fuzzer's first failure (#110) hunting for a next_day the shape
     // did not contain - the reason the check requireLiteralOffset replaced carried the name too.
@@ -2031,12 +2032,12 @@ public final class VarkaLoopEmitter {
     // requireDayOffsetShape moved to isDayOffsetShape, and the difference is which of the two
     // has a compiler-side counterpart to drift from. The day offset does: `compileOffset` runs
     // an admission test over a compiled subtree, so the rule was stated twice, in two languages,
-    // and the copies did drift. These two operands are not admitted by a test at all - the
-    // NextDay and AddMonths arms *construct* a LiteralSlot or a derived column and can build
-    // nothing else - so there is no second copy here, only a defence against a future producer.
-    // Unifying them would also be wrong on the merits: this check must keep refusing the third
-    // kind, because a weekday and a month count carry runtime bounds a derived value cannot
-    // declare.
+    // and the copies did drift. This operand is not admitted by a test at all - the NextDay arm
+    // *constructs* a LiteralSlot or a derived column and can build nothing else - so there is no
+    // second copy here, only a defence against a future producer.
+    //
+    // It served AddMonths' month count too until task 68, on a reason that turned out to be
+    // true of only one of them: see requireMonthCountShape.
     private static void requireOffsetShape(VarkaVectorIR offset, String position) {
       if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)) {
         throw new IllegalArgumentException(
@@ -2045,13 +2046,43 @@ public final class VarkaLoopEmitter {
     }
 
     /**
+     * The month count of {@code AddMonths}, which task 68 widened by the kind task 63 built:
+     * a literal slot, a column, or int arithmetic over those - {@code d - ym_col}, whose count
+     * is an {@link IntNeg} over the interval column, and {@code CAST(i AS INTERVAL YEAR)},
+     * whose count is that column times twelve.
+     *
+     * <p>This position and {@code next_day}'s weekday shared {@link #requireOffsetShape} until
+     * task 68, under one sentence covering both - that each "carries a runtime bound a derived
+     * value cannot declare". That is true of the weekday and false here, which
+     * {@code PLAN_TASK_67.md} 2.1 recorded and this split acts on. A column-count
+     * {@code AddMonths} is in {@link Analysis#selfGuarding} and is checked at run time against
+     * {@link VarkaChrono#MONTH_ARITH_MIN_MONTHS}/{@code MAX_MONTHS} by a lanewise test on the
+     * count's own <i>value</i>, which cares nothing about what produced it - so a derived count
+     * is covered by exactly the guard a column count is. {@code next_day}'s weekday has no such
+     * guard: its range is established by a compile-time fold or by task 59's derived leaf, and a
+     * derived value there would reach {@code emitFloorMod7} unchecked.
+     *
+     * <p>The two therefore share no rule any more. {@code VarkaExpressionCompiler.compileMonths}
+     * admits exactly these three kinds; the two are meant to be read together, and the
+     * enumeration test milestone 5's task 86 asks for is what would keep them together
+     * mechanically.
+     */
+    private static void requireMonthCountShape(VarkaVectorIR months, String position) {
+      if (!isDayOffsetShape(months)) {
+        throw new IllegalArgumentException(
+            position + " must be a literal slot, a column or int arithmetic, got " + months);
+      }
+    }
+
+    /**
      * The day offset of {@code AddDays}/{@code SubDays}, which task 63 widened by one kind:
      * a literal slot, a column, or int arithmetic over those - {@code date_add(d, i * 7)}.
      * Not every node, which is the point of keeping a check here at all: a date-valued
      * subtree in this position would be read as a day count and produce a plausible wrong
-     * date, and the calendar operands next door still take the stricter
-     * {@link #requireOffsetShape}, because {@code next_day}'s weekday and
-     * {@code add_months}' month count carry runtime bounds a derived value cannot declare.
+     * date, and {@code next_day}'s weekday next door still takes the stricter
+     * {@link #requireOffsetShape}, because its range comes from a compile-time fold with no
+     * runtime guard behind it - unlike {@code add_months}' month count, which task 68 widened
+     * to this same shape for the reason {@link #requireMonthCountShape} gives.
      * `VarkaExpressionCompiler.compileOffset` admits exactly these three kinds; the two are
      * meant to be read together.
      */

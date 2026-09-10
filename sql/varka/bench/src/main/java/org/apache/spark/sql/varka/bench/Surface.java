@@ -98,6 +98,20 @@ public final class Surface {
       Entry.projection("d + ym"),
       Entry.projection("CAST(i AS INTERVAL MONTH)"),
       Entry.projection("CAST(ymm AS INT)"),
+      // Task 68: the algebra whose operands and result are both intervals, and the two shapes
+      // that reach `add_months`' month-count position through a derived count. Every one of
+      // these is checked in every ANSI mode - Spark computes them with `addExact`,
+      // `negateExact` or `multiplyExact` unconditionally - except where both operands are
+      // calendar fields, which is what the last two projection rows are: the multiply and
+      // `make_ym_interval` fuse with no check at all only because the bound proves them safe.
+      Entry.projection("ymm + ymy"),
+      Entry.projection("ymm - ymy"),
+      Entry.projection("-ymm"),
+      Entry.projection("abs(ymm)"),
+      Entry.projection("d - ymm"),
+      Entry.projection("d + CAST(month(d) AS INTERVAL YEAR)"),
+      Entry.projection("CAST(month(d) AS INTERVAL YEAR) * 3"),
+      Entry.projection("make_ym_interval(year(d), month(d))"),
       Entry.projection("trunc(d, 'YEAR')"),
       Entry.projection("trunc(d, 'MONTH')"),
       Entry.projection("trunc(d, 'QUARTER')"),

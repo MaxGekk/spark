@@ -350,8 +350,147 @@ ids.
 
 ## 9. Outcome
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+### 9.1 The two pairs, and the predictions scored
+
+`VarkaThroughputBenchmark`, on `varka_interval_pairs` - one fixture holding two
+month counts, each spelled once as an int column and once as a `MONTH`-unit
+interval - so each pair's two rows differ in the operands' Spark type and in
+nothing else. Both files are the first pinned regeneration of this benchmark,
+the pinning having landed in the commit this branch sits on.
+
+| row (varka side, M rows/s) | AVX-512 | 128-bit |
+|---|---|---|
+| `m + m2`, int counts, the control | 280.9 | 248.3 |
+| `ym + ym2`, interval columns | 288.8 | 261.0 |
+| `year(d) * 12 + month(d)`, the control | 262.0 | 223.0 |
+| `make_ym_interval(year(d), month(d))` | 263.6 | 222.1 |
+
+**Prediction 1's premise is false, which is a better answer than the measurement
+it asked for.** It asked each interval form to land within 3% of its int form at
+both widths, and said a larger gap would be a finding about the Arrow write
+path. The composite pair agrees to 0.6% and -0.4%; the addition pair to 2.8% at
+AVX-512 and 5.1% at 128 bits. The 5.1% cannot be a write-path finding, because
+there is no per-type write path for it to be a finding about.
+
+The kernel never touches an Arrow vector object. `VarkaKernelEvaluator.project`
+reads `getDataBuffer().memoryAddress()` and `getValidityBuffer().memoryAddress()`
+off each output and hands those addresses to the runner; the emitted loop writes
+four-byte lanes into them. `IntVector`, `DateDayVector` and `IntervalYearVector`
+are all `BaseFixedWidthVector`s of `TYPE_WIDTH` 4, so `allocateNew(len)` reserves
+identical data and validity buffers, and one shared `setValueCount(len)` closes
+the batch with no branch on type. The accessors do differ, but the benchmark's
+cases write to a columnar sink and no accessor runs on either side. What is left
+is a single constructor call per output per batch, choosing which class holds the
+buffer - per batch, not per row, and a few hundred allocations against two
+million lane writes.
+
+So the whole of "admitting the type costs the kernel nothing" is a statement
+about code, and `VarkaKernelEvaluatorSuite`'s "an interval output takes the int
+output's write path, byte for byte" pins it: the same arithmetic under the two
+Spark types, run through the evaluator, must produce byte-identical data buffers
+of identical capacity from demonstrably different vector classes. That test
+fails the day Arrow changes a width or someone adds a per-type write, which a
+benchmark never would - a benchmark can only fail to find a difference that is
+not there.
+
+The residual 2.8% and 5.1% are therefore the per-fork JIT and code-layout
+lottery, drawn once for each of a pair's two separately compiled kernels.
+`dev/varka_bench_repeat.sh` measures that at 73 of 211 parity cases past 3%
+between runs even pinned, which is the right order of magnitude for what is
+seen here. Note that the thirty-two rows this regeneration moved are *not* that
+evidence: that is a between-run diff carrying a systematic change, most of it
+the pinning, and it bounds nothing about two cases inside one run.
+
+**Prediction 2 is confirmed, and by identity rather than by a new register
+row.** `make_ym_interval(year(d), month(d))` compiles to
+`IntArith(ADD, WRAP, Month(d), IntArith(MUL, WRAP, Year(d), lit))` - both nodes
+wrapping, `intBound` having proved the multiply and the add safe from the
+calendar fields' own ranges. That is the node tree task 63 already registered as
+`year * 100 + month`, at 42 dense `IntVector` calls with the claim that the key
+costs the two fields plus its own two ops. Registering it again would pin the
+same bytes under a second name, so the register gained a comment pointing at it
+instead, and `VarkaExpressionCompilerSuite` asserts the tree.
+
+**Prediction 3 is confirmed on bytes and does not apply to numbers.** No pinned
+oracle moved, no `codeSize` assertion moved, and the whole gate is green at both
+widths. The committed numbers did move, on thirty-two rows, and none of that is
+this task's: it is the first regeneration since the runner was pinned to the
+fast CCX, which is exactly the movement that change was made to cause.
+
+### 9.2 What moved that the plan did not list
+
+**Section 6's fixture instruction contradicted the fixture it named, and the
+fixture won.** The plan said to add `m2`/`ym2` to `varka_date_interval_counts`.
+That table's own comment forbids it, in as many words: a cached table with one
+more column is not the same cached table, which is why task 67 copied task 60's
+generator into a new table rather than widening it. Task 68 did the same thing
+one step further along, into `varka_interval_pairs`, and the run says the
+precaution was real - task 67's two rows moved 1.1% and 0.6% in a run where
+thirty-two others moved more than 3%.
+
+**`checkMatrix` cannot drive a shape that is meant to decline.** It asserts the
+kernel returned status 0 on every case, which is the right assertion and the
+reason `abs`'s `Int.MinValue` could not go through it. That case is a bespoke
+status test in the shape of task 63's condemn test - the overflowing lane in a
+loop lane, in an epilogue lane, and under a null - beside a `checkMatrix` over
+values inside the range. Section 5's "a value matrix including `Int.MinValue`"
+was one test in the plan and is two in the code.
+
+**One shape stayed residual and changed its reason, which is not the same as
+staying put.** Task 67 pinned `d + CAST(m AS INTERVAL YEAR)` as declining and
+recorded the emitter's month-count position as the cause. It still declines, and
+the cause is now the checked multiply by twelve over an unbounded int column,
+which has no int-lane overflow test. The differential's comment was rewritten
+rather than its assertion left alone: a decline whose recorded reason has gone
+stale is worse than an unpinned one, because the next reader trusts it.
+
+**Group A's plainest spelling needed a cast arm the plan did not list, and the
+surface table is what found it.** Two year-month intervals of different units
+never meet directly: `TypeCoercion` widens both to
+`YearMonthIntervalType(min(start), max(end))`, so `ymm + ymy` arrives as an add
+over two casts and declined, while the same-unit `ymm + ymm2` fused. Every
+compiler test had built its trees by hand, where no cast exists, so the suite was
+green on a shape the analyzer never produces. What caught it was writing
+`ymm + ymy` as a `Surface` entry marked fused - `varka_dates` has one column per
+unit and no two of the same one, so the surface could not express the shape the
+tests had been checking. The arm is a relabel: `castToYearMonthInterval` splits
+the count into whole years and a remainder and reassembles it, which returns the
+same int for a `MONTH` end field at every value including `Int.MinValue`. The
+narrowing direction drops the remainder, so it is a division and declines with
+its own reason, pointing at task 89. Both directions and the coerced add are
+pinned in `VarkaExpressionCompilerSuite`, and the coerced add in the
+differential.
+
+**`try_add(ym, ym)` needed pinning and was not in the plan.** Spark spells it as
+a `TryEval` around the add, and the compiler has no arm for `TryEval` at all, so
+the whole entry is residual and the row engine returns the null. That is the
+answer this task must not change while it has no null-on-overflow lowering, so
+it is asserted rather than left to be discovered.
+
+**`docs/sql-varka.md` was stale from task 67, not merely incomplete.** Its
+`ADD_MONTHS` bullet still said a stored year-month interval column declines
+because the Arrow cache holds it as a type no kernel reads - false since task
+67, and in the paragraph this task rewrites. Corrected here, along with the
+`YEAR`-cast sentence in the type paragraph, both decline-reason entries, and a
+new `SKILLS.md` section on the lesson underneath the whole task: a refusal
+shared by two positions carries one reason, and here it was true of only one.
+
+### 9.3 What this leaves for later
+
+Group B, the two divisions, is milestone 5's task 89: `extract(YEAR|MONTH FROM
+ym)` and `ym / k` need a division exact over the full int32 month range, which
+the emitter's `MONTH_ARITH_M` magic is not - it covers 0..49,151, about a
+forty-thousandth of the type. Task 65 and task 88 are its two routes, and
+`extract(MONTH)`'s `ByteType` output is a blocker neither route removes.
+
+The 3% question is closed, and not by measuring it. Task 67 left it to "the
+pinned runner"; the pinned runner ran here and could not have answered it,
+because 9.1's write path does not exist. Nothing is owed on it and no follow-up
+row is opened - the claim it was standing in for is now a test.
+
+What is genuinely unmeasured is this benchmark's own band: how far its cases
+move between two runs with nothing changed. `dev/varka_bench_repeat.sh` has that
+number for `VarkaEmitterParityBenchmark` and not for this file, and every future
+task that reads a regeneration diff wants it. That is a property of the
+instrument rather than anything about intervals, so it belongs in its own row if
+it is wanted, not in this task's tail.

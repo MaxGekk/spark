@@ -260,15 +260,124 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
         checkAnswer(actual, spark.sql(q))
       }
 
-      // And the two shapes task 67 leaves declined, asserted as residual rather than left to
-      // be discovered: both are blocked on the emitter's month-count position, not on the
-      // arithmetic, and both belong to task 68 (PLAN_TASK_67.md 2.1).
-      for (q <- Seq(
-          "SELECT d - ymm AS a FROM varka_dates_intervals",
-          "SELECT d + CAST(m AS INTERVAL YEAR) AS a FROM varka_dates_intervals")) {
-        val actual = varkaSpark.sql(q)
-        assertNotFused(actual.queryExecution.executedPlan)
-        checkAnswer(actual, spark.sql(q))
+      // Task 68 opened the month-count position to derived counts, so `d - ymm` - which is
+      // `add_months` over a negated column count - now fuses where task 67 left it residual.
+      // The far rows still decline at runtime, which is the guard doing its work on a count
+      // it did not itself produce.
+      val minus = varkaSpark.sql("SELECT d - ymm AS a FROM varka_dates_intervals")
+      assertFused(minus.queryExecution.executedPlan)
+      checkAnswer(minus, spark.sql("SELECT d - ymm AS a FROM varka_dates_intervals"))
+
+      // The one shape that stays residual, and for a different reason than task 67 recorded:
+      // not the emitter's position rule any more, but the checked multiply by twelve over an
+      // unbounded int column, which has no int-lane overflow test. Task 68's group C admits
+      // the YEAR cast only where the operand's bound rules the multiply out.
+      val years = varkaSpark.sql(
+        "SELECT d + CAST(m AS INTERVAL YEAR) AS a FROM varka_dates_intervals")
+      assertNotFused(years.queryExecution.executedPlan)
+      checkAnswer(years,
+        spark.sql("SELECT d + CAST(m AS INTERVAL YEAR) AS a FROM varka_dates_intervals"))
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_intervals"))
+    }
+  }
+
+  test("task 68: the year-month interval algebra fuses and agrees in both ANSI modes") {
+    // Group A of the task: the arithmetic whose operands and result are both intervals. None
+    // of it has a wrapping form - Spark computes every one of these with `addExact`,
+    // `subtractExact`, `negateExact` or `multiplyExact` whatever the session's ANSI mode - so
+    // the two modes are asserted to produce the same plan and the same answers, which is the
+    // claim that the declared overflow mode is FAIL rather than read off `evalMode`.
+    //
+    // `ymm - ymm2` is the binary case over two genuinely different columns, and it is the
+    // subtraction rather than the addition because the fixture's `ymm2` carries `Int.MaxValue`
+    // to overflow the *addition*; that row is the next test's subject.
+    //
+    // The mixed-unit row beside it is the same algebra in the spelling a user is likelier to
+    // write, and it exercises a cast nobody types: two year-month intervals of different units
+    // do not meet directly, so `TypeCoercion` widens both to the hull and the compiler sees an
+    // add over two relabels. Without an arm for that relabel this row declines while the
+    // same-unit row above fuses, which is the difference the surface table would have shipped.
+    //
+    // The multiply and `make_ym_interval` are over bounded operands on purpose: both compose a
+    // checked multiply by twelve, and an unbounded operand leaves that check in place, which
+    // has no int-lane test and declines at compile time. The bounded shapes are the ones that
+    // fuse with no check at all.
+    cacheDatesIntervals(spark)
+    cacheDatesIntervals(varkaSpark)
+    try {
+      val queries = Seq(
+        "SELECT ymm - ymm2 AS a FROM varka_dates_intervals ORDER BY a",
+        "SELECT ymm + ymy AS a, ymm - ym AS b FROM varka_dates_intervals ORDER BY a, b",
+        "SELECT -ymm AS a, abs(ymm) AS b FROM varka_dates_intervals ORDER BY a, b",
+        "SELECT CAST(month(d) AS INTERVAL YEAR) * 3 AS a FROM varka_dates_intervals ORDER BY a",
+        "SELECT make_ym_interval(year(d), month(d)) AS a FROM varka_dates_intervals ORDER BY a")
+      for (ansi <- Seq(false, true)) {
+        withAnsi(ansi) {
+          for (query <- queries) {
+            val plan = checkDifferential(spark, varkaSpark, query, expectFused = true)
+            assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L, query)
+            assert(varkaMetric(plan, "numFallbackBatchesKernel") === 0L, query)
+          }
+        }
+      }
+
+      // Group C: the same expressions in `add_months`' month-count position, which task 68's
+      // emitter split opened to a derived count. Task 67 could compile these and the emitter
+      // refused them; here they run. They are asserted apart from the group above because the
+      // count is guarded lanewise on its value, so the fixture's far rows decline the batch
+      // and the row engine answers - a route, not a wrong answer.
+      for (query <- Seq(
+          "SELECT d - CAST(m AS INTERVAL MONTH) AS a FROM varka_dates_intervals",
+          "SELECT d + CAST(month(d) AS INTERVAL YEAR) AS a FROM varka_dates_intervals")) {
+        for (ansi <- Seq(false, true)) {
+          withAnsi(ansi) {
+            val actual = varkaSpark.sql(query)
+            assertFused(actual.queryExecution.executedPlan)
+            checkAnswer(actual, spark.sql(query))
+          }
+        }
+      }
+
+      // And the two shapes group A does not admit, asserted as residual rather than left to
+      // be discovered. An unbounded interval column scaled by a literal is still a checked
+      // multiply, and a checked multiply has no int-lane overflow test. `try_add` is spelled
+      // as a `TryEval` around the add, which the compiler has no arm for at all, so the whole
+      // entry is residual and the row engine returns its null - the answer this task must not
+      // change while it has no null-on-overflow lowering.
+      for (ansi <- Seq(false, true)) {
+        withAnsi(ansi) {
+          for (query <- Seq(
+              "SELECT ymm * 3 AS a FROM varka_dates_intervals ORDER BY a",
+              "SELECT try_add(ymm, ymm2) AS a FROM varka_dates_intervals ORDER BY a")) {
+            checkDifferential(spark, varkaSpark, query, expectFused = false)
+          }
+        }
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_intervals"))
+    }
+  }
+
+  test("task 68: an overflowing interval add raises the row engine's own error in both modes") {
+    // The error identity, and the reason the fixture carries an `Int.MaxValue` month count.
+    // The kernel's sign test condemns the batch, the evaluator throws the kernel's outputs
+    // away, and the row engine recomputes the whole batch and raises - so the exception the
+    // user sees comes from Spark's own `IntervalMathUtils`, message and condition included.
+    // Both ANSI modes, because interval arithmetic has no unchecked form to fall back to.
+    cacheDatesIntervals(spark)
+    cacheDatesIntervals(varkaSpark)
+    try {
+      val q = "SELECT ymm + ymm2 AS a FROM varka_dates_intervals ORDER BY a"
+      for (ansi <- Seq(false, true)) {
+        withAnsi(ansi) {
+          val plan = varkaSpark.sql(q).queryExecution.executedPlan
+          assertFused(plan)
+          val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
+          val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
+          assert(actual.getCondition === expected.getCondition, s"ansi=$ansi")
+          assert(actual.getMessage === expected.getMessage, s"ansi=$ansi")
+        }
       }
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_intervals"))

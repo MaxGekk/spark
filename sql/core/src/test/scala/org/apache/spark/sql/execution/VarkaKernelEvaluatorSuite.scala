@@ -22,11 +22,11 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
 import org.apache.arrow.memory.{BufferAllocator, OutOfMemoryException}
-import org.apache.arrow.vector.{DateDayVector, IntervalYearVector, VarCharVector}
+import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYearVector, IntVector, VarCharVector}
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, DateAddYMInterval, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, DateAddYMInterval, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
@@ -259,6 +259,72 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
       input.close()
       assert(ArrowUtils.rootAllocator.getAllocatedMemory === initial,
         "the interval output leaked Arrow memory")
+    } finally {
+      TaskContext.unset()
+      allocator.close()
+    }
+  }
+
+  test("task 68: an interval output takes the int output's write path, byte for byte") {
+    // What `PLAN_TASK_68.md` 6.1 called the Arrow write path, and what is actually there.
+    // The kernel never touches an Arrow vector object: `project` reads
+    // `getDataBuffer().memoryAddress()` off each output and the emitted loop writes four-byte
+    // lanes into that address, so the only thing `allocateVector`'s arm decides is which class
+    // holds the buffer. Both classes are `BaseFixedWidthVector`s of width four, so
+    // `allocateNew` reserves the same bytes and the same bytes land in them.
+    //
+    // This is pinned rather than measured, because a benchmark can only fail to find a
+    // difference that is not there, while this fails the day Arrow changes a width or someone
+    // adds a per-type write. The widths are asserted first: they are the premise, and they
+    // belong to a library this repository does not own.
+    assert(IntVector.TYPE_WIDTH === 4)
+    assert(DateDayVector.TYPE_WIDTH === IntVector.TYPE_WIDTH)
+    assert(IntervalYearVector.TYPE_WIDTH === IntVector.TYPE_WIDTH,
+      "an interval month count is an int32 lane; the whole type admission rests on it")
+
+    val ymAttr = AttributeReference("ym",
+      YearMonthIntervalType(YearMonthIntervalType.MONTH, YearMonthIntervalType.MONTH))()
+    val output = Seq(intAttr, ymAttr)
+    // One set of counts, held twice under the two Spark types, so the two projections below
+    // differ in nothing but the type - which is the whole experiment.
+    val counts: Seq[java.lang.Integer] = Seq(7, -3, null, 0, 2147483, -2147483)
+    val initial = ArrowUtils.rootAllocator.getAllocatedMemory
+    val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-test-write", 0, Long.MaxValue)
+    val context = TaskContext.empty()
+    TaskContext.setTaskContext(context)
+    try {
+      // The same arithmetic twice: `i + 3` over the int column, `ym + INTERVAL 3 MONTH` over
+      // the interval one. Both lower to one `IntArith` over a column and a literal slot.
+      val asInt: Seq[NamedExpression] = Seq(Alias(Add(intAttr, Literal(3)), "a")())
+      val asInterval: Seq[NamedExpression] =
+        Seq(Alias(Add(ymAttr, Literal(3, ymAttr.dataType)), "a")())
+      val buffers = Seq(asInt, asInterval).map { projectList =>
+        val input = VarkaColumnarToRowExecSuite.buildBatch(
+          BatchSpec("arrow", Seq(counts, counts)), output, allocator)
+        val kernels = new VarkaKernelEvaluator(projectList, output,
+          offHeapColumnVectorEnabled = false, operatorName = "Test", None)
+        assert(kernels.canRun(input), "both spellings should be servable")
+        val out = kernels.project(input)
+        val vector = out.column(0).asInstanceOf[ArrowColumnVector].getValueVector()
+          .asInstanceOf[BaseFixedWidthVector]
+        val data = vector.getDataBuffer()
+        val bytes = Array.tabulate(4 * counts.length)(i => data.getByte(i.toLong))
+        val cls = vector.getClass.getSimpleName
+        val capacity = data.capacity()
+        input.close()
+        (cls, capacity, bytes.toSeq)
+      }
+      val (intClass, intCapacity, intBytes) = buffers.head
+      val (ymClass, ymCapacity, ymBytes) = buffers(1)
+      // The classes really do differ, or the comparison below proves nothing.
+      assert(intClass === "IntVector" && ymClass === "IntervalYearVector",
+        s"expected the two arms to allocate different classes, got $intClass and $ymClass")
+      assert(ymCapacity === intCapacity, "same width, so allocateNew reserves the same buffer")
+      assert(ymBytes === intBytes,
+        "the interval output's data buffer must hold the int output's bytes exactly")
+      context.markTaskCompleted(None)
+      assert(ArrowUtils.rootAllocator.getAllocatedMemory === initial,
+        "one of the two arms leaked Arrow memory")
     } finally {
       TaskContext.unset()
       allocator.close()
