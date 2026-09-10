@@ -227,7 +227,16 @@ object VarkaEmitDump {
       val value: AnyRef =
         if (param == classOf[Int] || param == classOf[java.lang.Integer]) Integer.valueOf(v.trim)
         else if (param == classOf[Boolean] || param == classOf[java.lang.Boolean]) {
-          java.lang.Boolean.valueOf(v.trim)
+          // `Boolean.valueOf` answers false for every string that is not "true", so a typo or
+          // a plausible-looking `=on` silently selects the arm you did not ask for - and a
+          // benchmark then measures it without saying so. The enum branch below already
+          // refuses an unknown constant; this refuses an unknown boolean the same way.
+          v.trim.toLowerCase(java.util.Locale.ROOT) match {
+            case "true" => java.lang.Boolean.TRUE
+            case "false" => java.lang.Boolean.FALSE
+            case other =>
+              throw new IllegalArgumentException(s"$k: expected true or false, got '$other'")
+          }
         } else if (param.isEnum) {
           param.getEnumConstants.find(_.toString == v.trim).getOrElse(
             throw new IllegalArgumentException(s"$k: no constant $v")).asInstanceOf[AnyRef]

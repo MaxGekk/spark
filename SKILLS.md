@@ -244,7 +244,11 @@ apparent small wins turned out to be noise.
   once took ~10 s. The old observation is not being called a mismeasurement - a rate jumping
   9 to ~1000 M rows/s at t=12s is not subtle - but the number describes a JDK that is no
   longer the one in use, and anything resting on it (`GROUP_BUDGET`'s javadoc, among others)
-  needs re-deriving rather than re-citing.
+  needs re-deriving rather than re-citing. *`GROUP_BUDGET`'s javadoc was re-derived on 10
+  September 2026: the compile-time argument is gone from it, replaced by task 71's survey -
+  raising the budget past 24 regroups one shape of nine for one lane op, while growing every
+  method toward C1's refusal threshold. The constant is unchanged at 16 and its justification
+  is now a measurement of what the budget does rather than of what compiling costs.*
 
   **And it disagreed with another number this repository already carried.** `PLAN_MILESTONE_4.md`
   section 2.3 and its debt register both price a wide loop's compile at "~1 ms per vector op",
@@ -2608,3 +2612,53 @@ methods, what a javadoc says a call costs) instead of from measuring it, in a
 plan written to correct exactly that failure elsewhere. Registering a prediction
 is not the same as having evidence for it, and the value of writing it down is
 precisely that it can be scored against something.
+
+## A default that is wrong at one width may be wrong for a reason the width creates
+
+Task 46 gave the per-group validity write a width-specialised helper and made it
+the default, on the grounds that the general form is 212 bytes and C2 refuses to
+inline it inside a fused loop. Task 70's review then found the default losing
+8-9% on a single-field kernel, and milestone 4 opened a row to key the choice on
+the number of validity writes a loop body makes. Measured, that rule is right at
+one vector width and wrong at the other two, and the justification the option was
+added on does not apply to the shape at all.
+
+**Three things were excluded from the JVM's own output, and the third is the
+design's own premise.** The compiled masked loop inlines the writer in *both*
+arms - neither disassembly contains a call to it, and `PrintInlining` is
+symmetric. The arm that loses is the *smaller* one, 642 instructions against 654.
+And it is the arm doing the *cheaper* address arithmetic, shift-and-mask against
+signed divide and modulo. What differs is register-file placement: ten extra
+general-to-vector moves in one arm against ten more general-register ALU
+operations in the other.
+
+**The width is not a modifier on the effect; it creates it.** Run at three
+widths, the loss exists at 4 lanes and nowhere else - at 8 and 16 the specialised
+helper wins at every write count by 8 to 36%. Four lanes is the only width in
+that set where a validity group does not own whole bytes: four bits, so two
+consecutive groups read-modify-write the same byte and serialise on it. That
+serialised chain is the regime in which the register-placement difference decides
+the outcome; without it, the cheaper arithmetic wins as designed.
+
+Three habits:
+
+- **Before keying a rule on a quantity, check whether the answer has the same
+  sign everywhere the rule will run.** Two shapes at one width proposed "key on
+  the write count". A third width showed the question does not have one answer,
+  so the rule would have been correct on the shapes it was fitted to and wrong on
+  most of the engine.
+- **A width is a cheap third sample and often a qualitative one.** Two widths
+  disagreeing looks like noise or a modifier; a third turns it into a mechanism,
+  because widths differ in structure - here, whether a group's bits fit whole
+  bytes - and not only in throughput.
+- **When the cause is a regime rather than a constant, look for the task that
+  removes the regime.** The lever here was not the helper choice but "one
+  validity write per word", already scoped and already gated on this very
+  decision. Tuning a constant inside a loop shape that is scheduled for
+  replacement spends effort twice and leaves a fitted threshold behind.
+
+The postscript is a tooling one. `VarkaEmitDump`'s option parser read any string
+that was not `"true"` as `false`, so `--options validityByWidth=on` silently
+selected the arm it was meant to exclude, and two runs measured the same arm
+before identical byte counts gave it away. An option parser that coerces rather
+than refuses turns a typo into a measurement of the wrong thing.

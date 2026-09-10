@@ -204,7 +204,193 @@ with the band consulted per row rather than a flat threshold.
 
 ## 10. Outcome
 
-<!-- Filled in when the measurement lands: the ladder, section 7's predictions
-     scored one by one, what moved that the plan did not list, and what the task
-     leaves for later - which goes to the milestone's debt register or a scope
-     document, never to a code comment. -->
+### 10.1 Step 3.1: the arms do still differ, and the filter's second flag is inert
+
+`VarkaLoopEmitterSuite`, "task 76: every arm of task 46's A/B still emits two
+different kernels", over all five shapes the parity file pairs. It also asserts
+what 3.1 said to assert rather than assume: `validityByBitmap` is inert for a
+`Cond` root, so the filter pair varies one thing despite naming two.
+
+### 10.2 Step 3.2's ladder, and it refutes the rule the row proposed
+
+Four rungs, `k` unserved `IfElse` blends over one date, holding the shape family
+constant so only the write count moves - one rung adds one write, the same ops
+and the same 145 bytes. Four runs per width, pinned, adjacent arms.
+**Specialised advantage, negative where the general pair wins:**
+
+| writes | 128-bit (4 runs) | AVX-512 (4 runs) |
+|---|---|---|
+| 1 | -3.8 to -6.8% | +29.6 to +32.0% |
+| 2 | -0.5 to -1.5% | +16.8 to +21.4% |
+| 3 | +11.1 to +12.1% | +10.9 to +15.2% |
+| 4 | +11.9 to +19.9% | +7.7 to +12.6% |
+
+**The two widths disagree in sign at low write counts, and in direction
+throughout.** At 128 bits the specialised helper loses below three writes and
+wins above, which is the shape 2.38 expected. At AVX-512 it wins at every rung
+and wins *most* where the narrow width says it loses. Both are reproducible: the
+run-to-run spread is 1 to 5 percentage points against effects of 6 to 32.
+
+The narrow half corroborates the shapes that raised the question - `year` at one
+write loses 7.7% in the committed file against the ladder's 3.8 to 6.8%, and the
+four shared fields at four writes win 24.5% against the ladder's 11.9 to 19.9%.
+
+**So prediction 1 is refuted, and with it 2.38's design.** "Specialised above one
+write, general at one" is right at 128 bits and wrong at AVX-512, where the
+general pair never wins anything. A single rule keyed on the write count alone
+cannot be correct at both widths.
+
+That this is a width interaction rather than noise is what the cost structure
+suggests: at four lanes a body makes four times as many lane-group calls per row
+as at sixteen, and the specialised helper's saving is per call while its cost -
+one more method to compile and keep hot - is per body.
+
+### 10.3 The design fork this opens, which the plan did not state a default for
+
+Three options, and the choice is not the measurement's to make:
+
+1. **A width-aware rule.** `widthSpecialised` already reads `analysis.lanes`, so
+   "specialised always at 16 lanes, specialised above two writes at 4" costs no
+   new plumbing. It is also the most complex thing this task could ship, and it
+   is fitted to two widths on one machine.
+2. **Keep the global default and record the narrow-width loss.** The specialised
+   helper is right at AVX-512 everywhere and right at 128 bits above two writes;
+   what it costs is 4 to 7% on a narrow-width body with one or two writes.
+   2.38 already licenses this outcome, and 2.3 makes it a per-width verdict.
+3. **Key on writes without regard to width**, which the data says is wrong at
+   AVX-512 by 17 to 32 percentage points. Not defensible.
+
+### 10.4 Root cause: it is not the thing task 46's javadoc says it is
+
+The loss was chased through the JVM's own output at 128-bit, on the same blend
+shape written as SQL so `dev/varka_emit.sh` and `VarkaEmitDump` could reach it.
+**Three candidate causes are excluded by measurement, and the third is the one
+the design rests on.**
+
+* **Not a refused inline.** Task 46's javadoc explains the specialised helpers by
+  the general pair being 212 bytes and "C2 refuses to inline the writer inside a
+  fused loop". In the compiled masked loop **both arms inline it**: neither
+  disassembly contains a call to the helper, and the 24 call sites in each are
+  deoptimisation stubs at one address. `-XX:+PrintInlining` agrees and is
+  symmetric - each helper inlines at hot sites and is refused at cold ones,
+  `orValidityBitsAt4` included, because 48 bytes is over `MaxInlineSize`.
+* **Not instruction count.** The compiled loops are 642 instructions for the
+  width-named arm and 654 for the general one. The arm that loses is the
+  *smaller* one.
+* **Not the helper's own arithmetic.** The specialised form is cheaper by
+  construction and the assembly shows it: `row >>> 3` and `row & 7` against the
+  general form's `row / 8` and `row % 8`, which is 5 more `shrq`/`andl` in the
+  width-named arm against 5 more `sarq`/`subq` in the general one. The arm doing
+  less address arithmetic is the one that loses.
+
+**What does differ is register-file traffic.** All ten of the general arm's extra
+"vector" instructions are moves rather than compute - `vmovq` +6, `vmovd` +3,
+`vmovsd` +1 - and the width-named arm carries correspondingly more GPR ALU work
+(`movl` +5, `andl` +5). The two arms are not doing different work; they are
+holding it in different register files.
+
+That is a register-allocation difference, which is the class of effect
+`SKILLS.md`'s "A bimodal kernel is usually the register allocator" was written
+for, **and it explains the width dependence**: a 4-lane body runs four times as
+many lane groups per row as a 16-lane one, so whatever the allocator does around
+the per-group write is paid four times as often at the narrow width and is
+amortised at the wide one. Stated as the leading hypothesis rather than as proof:
+the instruction mix supports it, and nothing here measures spill traffic
+directly.
+
+**So the premise the option was added on does not hold for this shape.** The
+specialised helpers were justified by an inlining refusal that does not occur
+here, and they nonetheless win at 16 lanes and lose at 4 - for a reason unrelated
+to why they exist.
+
+### 10.5 A tooling defect found on the way, and fixed
+
+`VarkaEmitDump`'s `--options` parser used `java.lang.Boolean.valueOf`, which
+answers false for every string that is not `"true"`. `--options
+validityByWidth=on` therefore selected the arm it was meant to exclude, silently,
+and two of this investigation's runs measured the same arm twice before the
+identical byte counts gave it away. The enum branch beside it already refuses an
+unknown constant; the boolean branch now refuses an unknown boolean the same way.
+
+### 10.6 The loss exists at one width only, and that width is the one where a
+group is half a byte
+
+The ladder run at a third width settles it. Specialised advantage:
+
+| writes | 4 lanes | 8 lanes | 16 lanes |
+|---|---|---|---|
+| 1 | -3.8 to -6.8% | +33.3 to +35.7% | +29.6 to +32.0% |
+| 2 | -0.5 to -1.5% | +18.9 to +19.7% | +16.8 to +21.4% |
+| 3 | +11.1 to +12.1% | +19.7 to +25.8% | +10.9 to +15.2% |
+| 4 | +11.9 to +19.9% | +13.3 to +16.5% | +7.7 to +12.6% |
+
+**At 8 and 16 lanes the specialised helper wins at every write count.** The loss
+is unique to 4 lanes, and 4 lanes is the only width in this set where a validity
+group does not own whole bytes: 4 bits, so *two consecutive groups
+read-modify-write the same byte* and serialise on it. At 8 lanes a group is
+exactly one byte, at 16 exactly two.
+
+So 10.4's register-file finding is the mechanism and this is the regime that
+makes it visible: where the loop is already carrying a serialised byte
+read-modify-write chain, the arms' differing register placement decides the
+result and the width-named arm happens to lose; where the chain is absent, its
+cheaper address arithmetic wins as designed. Both arms do the same byte
+read-modify-write at 4 lanes, which is why the *chain* is not itself the
+difference between them - it is the condition under which the difference matters.
+
+### 10.7 What can be influenced, and by what
+
+**Not the helper choice.** A rule keyed on the write count is right at 4 lanes
+and wrong at 8 and 16, where the general pair never wins; a rule keyed on lanes
+and writes together is two fitted thresholds on one machine, for a 4-to-7% effect
+on one width at one and two writes.
+
+**The lever is the write itself, and it is already a task.** Milestone 4's row
+47, "one validity write per word", is exactly the change that removes the
+serialised chain: accumulate a 64-bit word's worth of groups and store once
+instead of a read-modify-write per group. At 4 lanes that is sixteen groups per
+store rather than sixteen partial stores over eight bytes - the regime this loss
+lives in disappears rather than being tuned around. Row 47 is currently gated on
+task 46, which is this decision; that gating is the right way round and this
+measurement is what it was waiting for.
+
+**So the honest close for task 76 is a recorded decline**, which 2.38 already
+licenses. The shipped default is right at 8 and 16 lanes at every write count,
+and right at 4 lanes above two writes; what it costs is 4 to 7% on a 4-lane body
+with one or two per-group writes, in a regime task 47 exists to remove. Adding a
+rule now would tune a constant inside a loop shape that is scheduled for
+replacement.
+
+### 10.8 The decline, and section 7's predictions scored
+
+**Task 76 closes with a recorded decline.** 2.38 licensed one if the single-field
+cost proved too small to matter; the measurement chose it for a better reason
+than size. The shipped default is right at 8 and 16 lanes at every write count
+and right at 4 lanes above two writes, and what it costs elsewhere is 4 to 7% in
+a loop shape row 47 replaces. A rule now would fit two thresholds on one machine
+inside a regime scheduled for removal.
+
+1. **Missed.** The crossover was predicted at two writes. There is a crossover at
+   4 lanes, between two and three - but none at all at 8 or 16 lanes, where the
+   width-named helpers win throughout. The prediction assumed the question had
+   one answer.
+2. **Held.** The wide width did not confirm the single-field half: its committed
+   8.8% sits inside a band of 10.30% and 6.02%, and the purpose-built ladder puts
+   the same shape at +29.6 to +32.0% the other way. Reporting AVX-512 as "not
+   distinguished" was right, and the task would have shipped a wrong rule had it
+   rested there.
+3. **Held.** `validityByBitmap` is inert for a `Cond` root, asserted in the
+   emitter suite, so the filter pair is a one-flag comparison.
+4. **Not reached.** No rule was built, so nothing was checked for over-reach.
+
+### 10.9 What carries to row 47
+
+That the per-group read-modify-write is a **4-lane** problem specifically, with
+the measurement to show it, and that removing it removes the regime in which the
+helper choice matters at all. Row 47 is also **ungated on task 46** now: task 76
+was that gate.
+
+Two artefacts stay behind for it. The write-count ladder is committed with its
+case ids, so row 47 can measure against the same rungs. And the emitter suite's
+"every arm of task 46's A/B still emits two different kernels" is the assertion
+that stops this pair collapsing silently a second time.
