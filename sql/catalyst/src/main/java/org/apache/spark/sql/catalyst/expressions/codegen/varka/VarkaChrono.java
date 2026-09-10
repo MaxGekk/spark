@@ -108,6 +108,32 @@ public final class VarkaChrono {
   public static final int NARROW_MAX_DAYS = (1 << NARROW_ERA_K) - 1 - NARROW_BIAS;
 
   /**
+   * The last day {@link #narrowed} is actually <i>exact</i> for, which is not
+   * {@link #NARROW_MAX_DAYS} (task 69). In calendar terms, 29 February 42400.
+   *
+   * <p>Three bounds are in play and the shipped one is the tightest. {@link #NARROW_MAX_DAYS}
+   * is the ceiling of the era step's <i>shift</i> domain, {@code w < 2^NARROW_ERA_K}. Looser
+   * than that is the multiply's own overflow, {@code w * NARROW_ERA_M < 2^31}, about 18.8
+   * million. Looser still - and the real limit - is what {@code eraOf}'s correction can
+   * absorb: it adds one era when the magic undershoots, so the split stays exact past the
+   * point the multiply wraps, and ends only where the undershoot reaches <i>two</i> eras. That
+   * is {@code w = 20161385}, giving about 9,266 years of headroom over the shipped ceiling
+   * rather than the ~5,600 the multiply bound alone would suggest.
+   *
+   * <p>Why two constants rather than a wider one: {@link #NARROW_MAX_DAYS} is what a
+   * <i>value</i> may be, and it is the emitter's guard bound and the column contract's
+   * neighbour. This is what an intermediate may reach and still decompose correctly, so it
+   * bounds an <i>upward</i> shift over a day the guard has already admitted - the direction
+   * task 60's review found declining conservatively. It is deliberately not used downward:
+   * below zero the whole narrowing is undefined and {@link #NARROW_MIN_DAYS} still binds.
+   *
+   * <p>Verified in {@code VarkaChronoSuite} two ways, per {@code PLAN_TASK_69.md} 2: the era
+   * identity asserted exact at this bound and failing one past it, and an exhaustive sweep of
+   * both lowerings against {@code java.time} from {@link #NARROW_MIN_DAYS} to here.
+   */
+  public static final int NARROW_DECOMPOSE_MAX_DAYS = 20161385 - NARROW_BIAS;
+
+  /**
    * The first epoch day a date column can hold under the project's column contract: 0001-01-01,
    * the smallest date Spark SQL can write. The contract is what task 52's compile-time range
    * analysis starts from: a bare column lies in {@code [CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]},

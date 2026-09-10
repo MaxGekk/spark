@@ -1394,11 +1394,13 @@ is the decision. Three things came out of building it.
   0001..9999 (`VarkaChrono.CONTRACT_MIN/MAX_DAYS`, derived from `LocalDate` in source), a literal
   day offset shifts it by exactly its value, `next_day` by 1..7, `add_months(n)` by 28n..31n,
   `last_day` by 0..30, and `greatest`/`least`/`if`/`coalesce` take the hull. The check is one
-  compare of that interval against `NARROW_MIN/MAX_DAYS` in the compiler's calendar arms
-  (`dayRange`/`calendarInput` in `VarkaExpressionCompiler`), and it costs nothing at run time.
-  The slack is large - 8449747 days forward and 4675410 back from the contract - so the
-  corpus never trips it, and a query that does is computed by the row engine with the interval
-  named in `EXPLAIN`.
+  compare of that interval against `NARROW_MIN_DAYS`/`NARROW_DECOMPOSE_MAX_DAYS` in the
+  compiler's calendar arms (`dayRange`/`calendarInput` in `VarkaExpressionCompiler`), and it
+  costs nothing at run time. The slack is large - 11833917 days forward and 4675410 back from
+  the contract - so the corpus never trips it, and a query that does is computed by the row
+  engine with the interval named in `EXPLAIN`. (Task 52 wrote `NARROW_MAX_DAYS` on both sides
+  and 8449747 forward; task 69 gave the upward side its own constant, which is the bullet on
+  asymmetric admission checks above.)
 - **A date-typed calendar output is not "back in range".** The tempting rule "a calendar node's
   output re-enters the contract" is false for `last_day` and `add_months`: their input passed
   the check at their own arm, but the output is up to 30 days (or 31 per month) later, so a
@@ -1450,6 +1452,32 @@ is the decision. Three things came out of building it.
   check establishes a fact the compiler wants to rely on, encode the *fact* in the same
   representation the analysis already manipulates, never as a special case meaning "trust me".
   The special case is invisible to every rule written before it.
+- **A constant's name can be a claim nobody checked, and the claim can be too tight.**
+  `NARROW_MAX_DAYS` is `(1 << NARROW_ERA_K) - 1 - NARROW_BIAS`, the ceiling of the *shift
+  domain* of the era step, and it had been read for four tasks as the range the narrowed
+  civil-from-days decomposition is exact over. It is not. Task 60's review noticed the first
+  layer - what binds above is the multiply's own overflow, `w * NARROW_ERA_M < 2^31`, looser
+  than the shift domain by about 5,600 years. Task 69 found a second: `eraOf` adds one era when
+  the magic undershoots, and that correction keeps the split exact past the point the multiply
+  wraps, ending only where the undershoot reaches *two* eras. The real limit is 9,266 years
+  above the constant that had been standing in for it, and the four shapes declining against it
+  were being told their day could leave a domain it could not reach. The habit worth keeping:
+  when a bound is named after the mechanism that produces it rather than after the property it
+  is supposed to guarantee, the two are not the same number, and which one a caller needs is a
+  question to ask rather than to inherit. The way to answer it is task 69's section 2 - prove
+  the identity over the extended domain and sweep it exhaustively against `java.time`, because
+  "the multiply does not overflow" says nothing on its own about whether the result is still
+  the era.
+- **An interval-based admission check should be asymmetric when the mechanism is.** The same
+  task's whole shipped change is that `admitCalendar` tests `lo` against `NARROW_MIN_DAYS` and
+  `hi` against `NARROW_DECOMPOSE_MAX_DAYS`. There is no headroom below - `NARROW_MIN_DAYS` is
+  exactly `w = 0`, and one day under it `w` is read as about 4.29e9 - while above, the
+  correction buys nine thousand years. Writing one constant on both sides had looked like
+  symmetry and was actually an accident of there being only one constant. It also left the
+  shape that motivated the debt still residual: `weekofyear` shifts `+-3` through `ThursdayOf`,
+  a shape declines on the union of its directions, and a bound loosened upward alone cannot
+  reach it. Recovering that one needs the other lever entirely - the guard's own compare
+  against a bound the compiler picks - which is milestone 5's task 91.
 - **A guard the compiler relies on cannot sit behind an option the compiler cannot see.** The
   same review caught the count guard filed with the option-gated day-producer guards while
   `dayRange` returned `Bounded` for a column count unconditionally. With

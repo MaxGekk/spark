@@ -1535,8 +1535,16 @@ private[sql] object VarkaExpressionCompiler {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = {
     dayRange(node, literals, guarded = true) match {
+      // Asymmetric on purpose (task 69). Downward, `NARROW_MIN_DAYS` binds: below it the
+      // narrowing is undefined and no correction rescues it. Upward, the binding limit is not
+      // `NARROW_MAX_DAYS` - that is the era step's *shift* domain and the range the runtime
+      // guards enforce on a producer's own result - but how far the decomposition stays exact
+      // on a value already in hand, which `eraOf`'s one-era correction carries about 9,266
+      // years further. So an upward shift over a guarded day producer, which task 60's review
+      // recorded as declining conservatively, is admitted where it is genuinely exact.
       case Bounded(lo, hi)
-          if lo >= VarkaChrono.NARROW_MIN_DAYS && hi <= VarkaChrono.NARROW_MAX_DAYS =>
+          if lo >= VarkaChrono.NARROW_MIN_DAYS
+            && hi <= VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS =>
         Some(node)
       case Bounded(lo, hi) =>
         sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", calendar)
