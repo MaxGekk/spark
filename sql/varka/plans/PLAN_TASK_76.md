@@ -204,7 +204,61 @@ with the band consulted per row rather than a flat threshold.
 
 ## 10. Outcome
 
-<!-- Filled in when the measurement lands: the ladder, section 7's predictions
-     scored one by one, what moved that the plan did not list, and what the task
-     leaves for later - which goes to the milestone's debt register or a scope
-     document, never to a code comment. -->
+### 10.1 Step 3.1: the arms do still differ, and the filter's second flag is inert
+
+`VarkaLoopEmitterSuite`, "task 76: every arm of task 46's A/B still emits two
+different kernels", over all five shapes the parity file pairs. It also asserts
+what 3.1 said to assert rather than assume: `validityByBitmap` is inert for a
+`Cond` root, so the filter pair varies one thing despite naming two.
+
+### 10.2 Step 3.2's ladder, and it refutes the rule the row proposed
+
+Four rungs, `k` unserved `IfElse` blends over one date, holding the shape family
+constant so only the write count moves - one rung adds one write, the same ops
+and the same 145 bytes. Four runs per width, pinned, adjacent arms.
+**Specialised advantage, negative where the general pair wins:**
+
+| writes | 128-bit (4 runs) | AVX-512 (4 runs) |
+|---|---|---|
+| 1 | -3.8 to -6.8% | +29.6 to +32.0% |
+| 2 | -0.5 to -1.5% | +16.8 to +21.4% |
+| 3 | +11.1 to +12.1% | +10.9 to +15.2% |
+| 4 | +11.9 to +19.9% | +7.7 to +12.6% |
+
+**The two widths disagree in sign at low write counts, and in direction
+throughout.** At 128 bits the specialised helper loses below three writes and
+wins above, which is the shape 2.38 expected. At AVX-512 it wins at every rung
+and wins *most* where the narrow width says it loses. Both are reproducible: the
+run-to-run spread is 1 to 5 percentage points against effects of 6 to 32.
+
+The narrow half corroborates the shapes that raised the question - `year` at one
+write loses 7.7% in the committed file against the ladder's 3.8 to 6.8%, and the
+four shared fields at four writes win 24.5% against the ladder's 11.9 to 19.9%.
+
+**So prediction 1 is refuted, and with it 2.38's design.** "Specialised above one
+write, general at one" is right at 128 bits and wrong at AVX-512, where the
+general pair never wins anything. A single rule keyed on the write count alone
+cannot be correct at both widths.
+
+That this is a width interaction rather than noise is what the cost structure
+suggests: at four lanes a body makes four times as many lane-group calls per row
+as at sixteen, and the specialised helper's saving is per call while its cost -
+one more method to compile and keep hot - is per body.
+
+### 10.3 The design fork this opens, which the plan did not state a default for
+
+Three options, and the choice is not the measurement's to make:
+
+1. **A width-aware rule.** `widthSpecialised` already reads `analysis.lanes`, so
+   "specialised always at 16 lanes, specialised above two writes at 4" costs no
+   new plumbing. It is also the most complex thing this task could ship, and it
+   is fitted to two widths on one machine.
+2. **Keep the global default and record the narrow-width loss.** The specialised
+   helper is right at AVX-512 everywhere and right at 128 bits above two writes;
+   what it costs is 4 to 7% on a narrow-width body with one or two writes.
+   2.38 already licenses this outcome, and 2.3 makes it a per-width verdict.
+3. **Key on writes without regard to width**, which the data says is wrong at
+   AVX-512 by 17 to 32 percentage points. Not defensible.
+
+<!-- The rest, filled in once the fork is decided: the rule or the decline, the
+     remaining predictions scored, and what the task leaves for later. -->

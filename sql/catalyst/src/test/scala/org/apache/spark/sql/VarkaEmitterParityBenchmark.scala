@@ -526,7 +526,8 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             pass += 1
           }
         }
-        def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1): Unit =
+        def chunked(kernel: VarkaFusedKernel, mixed: Boolean, outputs: Int = 1,
+            lits: Array[Int] = Array.empty[Int]): Unit =
           eachChunk { (dataOff, validityOff, n) =>
             val dstData = if (outputs == 1) Array(dst.address() + dataOff)
               else dstData4.take(outputs).map(_ + dataOff)
@@ -539,10 +540,10 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
             val status = if (mixed) {
               kernel.run(Array(mxData.address() + dataOff),
                 Array(mxValidity.address() + validityOff),
-                Array(nullsIn(n)), dstData, dstValid, Array.empty[Int], n)
+                Array(nullsIn(n)), dstData, dstValid, lits, n)
             } else {
               kernel.run(Array(nfData.address() + dataOff), Array(0L), Array(0),
-                dstData, dstValid, Array.empty[Int], n)
+                dstData, dstValid, lits, n)
             }
             require(status == 0, s"the kernel declined a batch: status $status")
           }
@@ -666,6 +667,29 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val orAfter = perGroupWrite.withValidityOrFirst(false)
         val yearOrAfter = emit(Seq(new Year(new ColumnRef(0))), 1, 0, loader, 887, orAfter)
         val fourSharedOrAfter = emit(fourFields, 1, 0, loader, 888, orAfter)
+        // Task 76's ladder in the number of per-group validity writes, which is the quantity
+        // 2.38 proposes keying the helper choice on. The two shapes that raised the question -
+        // single-field `year` at one write, the four shared fields at four - differ in method
+        // size and op count as well as in writes, so a threshold fitted to them alone could be
+        // fitted to the wrong quantity. These four rungs hold the shape family constant and
+        // vary only the count: an `IfElse` blend is unserved by construction (its word is
+        // computed per lane group, PLAN_TASK_70.md 2.1), so k blends over one date are k
+        // writes in one loop method, and each rung adds the same 145 bytes and the same ops.
+        // Both arms ride task 70's per-group reference variant, as every task 46 pair must.
+        val blends = (1 to 4).map { k =>
+          (0 until k).map { j =>
+            new IfElse(new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(j)),
+              new AddDays(new ColumnRef(0), new LiteralSlot(j)),
+              new SubDays(new ColumnRef(0), new LiteralSlot(j))): VarkaVectorIR
+          }
+        }
+        val blendLits = Array(1, 2, 3, 4)
+        val blendSpecialised = blends.zipWithIndex.map { case (roots, i) =>
+          emit(roots, 1, 4, loader, 962 + i, perGroupWrite)
+        }
+        val blendGeneral = blends.zipWithIndex.map { case (roots, i) =>
+          emit(roots, 1, 4, loader, 966 + i, generalHelpers)
+        }
         val selectionRoot = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
         val filterKernel = emit(Seq(selectionRoot), 1, 1, loader, 884)
         val filterGeneral = emit(Seq(selectionRoot), 1, 1, loader, 885, generalHelpers)
@@ -716,6 +740,17 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         benchmark.addCase(
           "dayofweek, per group + general validity helpers (task 46 A/B), mixed nulls") { _ =>
           chunked(dowGeneral, true)
+        }
+        // Task 76's rungs, adjacent so each pair shares a JIT and thermal state.
+        for (k <- 1 to 4) {
+          benchmark.addCase(
+            s"$k validity write(s) per body, width-named helpers (task 76), mixed nulls") { _ =>
+            chunked(blendSpecialised(k - 1), true, k, blendLits)
+          }
+          benchmark.addCase(
+            s"$k validity write(s) per body, general helpers (task 76), mixed nulls") { _ =>
+            chunked(blendGeneral(k - 1), true, k, blendLits)
+          }
         }
         benchmark.addCase("filter d < literal, null-free") { _ =>
           chunkedFilter(filterKernel, false)

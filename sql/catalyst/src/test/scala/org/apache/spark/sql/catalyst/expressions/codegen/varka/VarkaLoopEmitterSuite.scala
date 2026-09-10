@@ -3700,6 +3700,51 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "the baked emission still calls VectorSpecies.length()")
   }
 
+  test("task 76: every arm of task 46's A/B still emits two different kernels") {
+    // The failure this task is downstream of, made loud. Task 70's pass removed the per-group
+    // validity call for a served root, which left both of task 46's arms emitting the same
+    // bytes - each pair timed one kernel against itself, and the committed numbers said so for
+    // a regeneration before anyone noticed. The arms were rebuilt on task 70's per-group
+    // reference variant; this is the assertion that they stay rebuilt.
+    //
+    // Asserted on the loop methods rather than the whole class, since `emitMulti` gives each
+    // class a fresh name and the name is in the bytes.
+    val col = new ColumnRef(0)
+    val perGroup = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
+    val general = perGroup.withValidityByWidth(false)
+    def layout(bytes: (String, Array[Byte])): Seq[(String, Int)] =
+      methodNames(bytes).filter(n => n.startsWith("loopDense") || n.startsWith("loopMasked"))
+        .sorted.map(m => m -> VarkaEmitterTestSupport.codeSize(bytes._2, m))
+
+    // Every shape the parity file pairs for this A/B, with the options each arm is built from.
+    val pairs = Seq[(String, Seq[VarkaVectorIR], Int, Int, VarkaEmitOptions, VarkaEmitOptions)](
+      ("year", Seq[VarkaVectorIR](new Year(col)), 1, 0, perGroup, general),
+      ("year, dense arm", Seq[VarkaVectorIR](new Year(col)), 1, 0,
+        perGroup.withDenseValidityOnce(false), general.withDenseValidityOnce(false)),
+      ("dayofweek", Seq[VarkaVectorIR](new DayOfWeek(col)), 1, 0, perGroup, general),
+      ("year+month+day+quarter, shared",
+        Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col)),
+        1, 0, perGroup, general),
+      ("filter d < literal",
+        Seq[VarkaVectorIR](new Compare(CompareOp.LT, col, new LiteralSlot(0))), 1, 1,
+        VarkaEmitOptions.DEFAULTS, general))
+    for ((name, roots, inputs, lits, specialised, other) <- pairs) {
+      assert(layout(emitMulti(roots, inputs, lits, specialised))
+        !== layout(emitMulti(roots, inputs, lits, other)),
+        s"$name: the two arms emit the same loop methods, so their benchmark pair times one " +
+          "kernel against itself - which is exactly what task 70 did to this A/B once")
+    }
+
+    // The filter pair is the one whose two arms differ in two flags nominally, `DEFAULTS`
+    // against `perGroupWrite.withValidityByWidth(false)`. `validityByBitmap` should be inert
+    // for a `Cond` root, since the bitmap pass never serves one - asserted here rather than
+    // assumed, because if it is not inert that pair measures two changes at once.
+    val cond = Seq[VarkaVectorIR](new Compare(CompareOp.LT, col, new LiteralSlot(0)))
+    assert(layout(emitMulti(cond, 1, 1, VarkaEmitOptions.DEFAULTS))
+      === layout(emitMulti(cond, 1, 1, perGroup)),
+      "validityByBitmap is not inert for a Cond root, so the filter A/B varies two things")
+  }
+
   test("task 46: the specialised helpers answer what the general pair answered") {
     // The correctness statement, and the only one that matters: results identical under both
     // settings, at every null pattern and every length where the last byte is partial. The
