@@ -1293,12 +1293,16 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
       }
 
       runBenchmark("GROUP_BUDGET: two outputs over one shared chain, split vs kept together") {
-        // The register's open retuning candidate (task 17). A shared depth-8 chain with six
-        // more ops on each of two outputs is 20 distinct ops, straddling the shipped budget of
-        // 16: at 16 the outputs land in two loop methods and the second recomputes the eight
-        // shared ops per lane group, at 24 they share one method and keep their cross-output
-        // CSE. The question is whether the bigger method's C2 compile stays cheap enough for
-        // that to pay (PLAN_TASK_14.md 7.5 measured compile time at ~1 ms per vector op).
+        // Task 17's pair, and since task 71 the A/B is the rule rather than the budget. A
+        // shared depth-8 chain with six more ops on each of two outputs is 20 distinct nodes
+        // against a budget of 16, so clause 1 splits them and the second method recomputes the
+        // eight shared ops per lane group - 60 vector ops across two methods against 43 in
+        // one. Task 71 measured that the merge is strictly less work and that clause 1 rejects
+        // it anyway, because the budget bounds the method while the marginal cost already
+        // excludes what the group holds; the fix is clause 2 counting whole-node reuse
+        // (`shareWholeNodes`), not a wider budget, because the budget is what keeps compile
+        // time in hand. So the arms are the rule off and on, both at the shipped budget: off
+        // is what every regeneration through task 70 measured, on is what ships.
         val benchmark = new Benchmark(
           s"two outputs over a shared chain, $numRows rows, mixed nulls", numRows,
           minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
@@ -1315,19 +1319,18 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           chainOver(shared, 6, 8), chainOver(shared, 6, 14))
         val offsets = (0 until 20).map(level => level * 13 + 1).toArray
         val split = emit(roots, 2, 20, loader, 600,
-          VarkaEmitOptions.DEFAULTS.withGroupBudget(16))
-        val together = emit(roots, 2, 20, loader, 601,
-          VarkaEmitOptions.DEFAULTS.withGroupBudget(24))
+          VarkaEmitOptions.DEFAULTS.withShareWholeNodes(false))
+        val together = emit(roots, 2, 20, loader, 601, VarkaEmitOptions.DEFAULTS)
         def run(kernel: VarkaFusedKernel): Unit = {
           kernel.run(Array(mxData.address(), mx2Data.address()),
             Array(mxValidity.address(), mx2Validity.address()), Array(mxNulls, mx2Nulls),
             Array(dst.address(), dst2.address()),
             Array(dstValidity.address(), dst2Validity.address()), offsets, numRows)
         }
-        benchmark.addCase("budget 16 (shipped): two loop methods, shared chain recomputed") {
+        benchmark.addCase("whole-node reuse off: two loop methods, shared chain recomputed") {
           _ => run(split)
         }
-        benchmark.addCase("budget 24: one loop method, cross-output CSE kept") { _ =>
+        benchmark.addCase("whole-node reuse on (shipped): one loop method, CSE kept") { _ =>
           run(together)
         }
         runCases(benchmark)

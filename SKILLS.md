@@ -2530,3 +2530,53 @@ records shapes where Varka loses - and measuring found 32 of 42 tables where it
 wins in every revision and ten where it does not, which is a fact about the
 read-back floor rather than a judgement call. A hand-written list would have got
 that wrong in both directions.
+
+## A budget that bounds the method is not a budget that bounds the work
+
+`GROUP_BUDGET` had rested since task 11 on one measurement: two outputs over a
+shared depth-8 chain ran about 1.4x faster as two loop methods than as one, read
+as register pressure. Task 71 reopened it because the rows had reversed, expecting
+to pick a bigger number. The number did not move. What was wrong was where the
+bound was applied.
+
+The grouping condition compares `group.ops + marginal` against the budget, and
+`marginal` already excludes nodes the group holds. So task 17's pair is 14 nodes
+plus 6 against a budget of 16 - and the two methods it is split into cost 28
+nodes of work, where the one method it is refused costs 20. **The condition
+rejects the cheaper arrangement because it bounds the method, not the work.**
+
+Task 32 step B2 had already found this and fixed the calendar half of it: an
+output reusing a civil-from-days prefix may join past the budget, "because
+skipping the prefix makes the method less work rather than more". That argument
+is not about prefixes. Any node the group already holds is work the joining
+output skips. Generalising the exception - measured as what an output would cost
+alone, less what it actually adds - merges exactly the shapes a wider budget
+would merge and nothing else, at the shipped budget.
+
+And the budget was the wrong lever for a second reason. It is what keeps compile
+time in hand: past about 1900 bytes C1 refuses a loop method and it runs
+interpreted until C2 lands, a third of a second once per shape per JVM. Raising
+it to buy one shape's CSE pays for that everywhere. The rule buys it only where
+an output has reuse to act on.
+
+Two habits, and the second is the one that keeps being learned here:
+
+- **When a threshold produces a result that looks wrong, check what it is
+  measured against before changing its value.** A bound compared against the
+  wrong quantity gives wrong answers at every value, and retuning it hides that
+  under a number that happens to work on the shape you tested.
+- **Survey statically before benchmarking a ladder.** Emitting the corpus at
+  every rung and counting methods and ops took one command and answered the whole
+  question: of nine shapes, three regroup across 16 to 64, and only one above 24 -
+  for a saving of one lane op out of 38. A five-rung throughput ladder would have
+  spent hours and then had to beat the file's noise to say the same thing, on
+  rows the band shows cannot rank small effects anyway.
+
+The postscript is about predictions. This task registered four and three were
+wrong - the win was not the inlining it named, the flattening came a rung earlier
+than predicted, and a default change re-pinned one assertion rather than the ten
+predicted. Each was reasoned from the shape of the code (how tests address
+methods, what a javadoc says a call costs) instead of from measuring it, in a
+plan written to correct exactly that failure elsewhere. Registering a prediction
+is not the same as having evidence for it, and the value of writing it down is
+precisely that it can be scored against something.

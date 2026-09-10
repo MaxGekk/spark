@@ -244,7 +244,237 @@ to settle at any grouping.
 
 ## 10. Outcome
 
-<!-- Filled in when the measurement lands: the ladder, section 7's predictions
-     scored one by one, what moved that the plan did not list, and what the task
-     leaves for later - which goes to the milestone's debt register or a scope
-     document, never to a code comment. -->
+### 10.1 Step 3.1's mechanism probe: the win is the CSE, and prediction 1 is wrong
+
+Emitted both arms directly and counted what is in them, then ran each alone in
+its own JVM under `-XX:+PrintCompilation` and `-XX:+PrintInlining`.
+
+**What each arm contains**, per loop method, from the emitted bytes:
+
+| budget | loop methods | bytes each | `IntVector` calls | `VarkaVectorSupport` calls |
+|---|---|---|---|---|
+| 16 | 2 | 432 | 30 each | 5 each |
+| 24, 32, 48, 64 | 1 | 504 | 43 | 5 |
+
+Merging takes the kernel from 60 vector ops and 10 support calls per lane group
+to 43 and 5 - a 31% reduction in work. The committed throughput gain is 1.3X.
+The two numbers match closely enough that nothing else needs explaining: the
+merged arm wins because the shared depth-8 chain is computed once instead of
+twice, which is the cross-output CSE the budget was splitting.
+
+**Prediction 1 is refuted, and by the absence of the thing it named.** It said
+the win would be `orValidityBitsAt` inlining in the merged arm. That call is
+**not emitted at all** for this shape - zero occurrences across a full
+`-XX:+PrintInlining` log of both kernels. Task 70's bitmap pass serves these
+roots (two chains over one column, so the word is a bare leaf), which removed
+the per-group OR entirely. The javadoc's hypothesis is about a call that no
+longer exists here. It may still be the right account of *why the rows reversed
+at `aef0b82260e`*, which predates task 70 and is not something this probe can
+reach; what it is not is the reason the merged arm wins today.
+
+**Compilation behaviour is identical per method**, which took a second run to
+establish honestly. Run in the benchmark's own order the split arm showed ten
+compilation events against the merged arm's three, which looks like a
+recompilation difference and is not: the split arm runs first and pays the
+warmup. Run alone in a fresh JVM each, every loop method in both arms compiles
+four times at tier 3 and three at tier 4. The split simply has two methods, so
+it compiles twice as much. (Three tier-4 compiles of one method is itself more
+than a healthy method needs, but it is the same in both arms, so it is not what
+separates them - that is task 90's.)
+
+### 10.2 What this changes in the ladder
+
+**Rungs above 24 are byte-identical on this shape.** The table above is the
+whole of it: 24, 32, 48 and 64 emit the same single 504-byte method. So the
+five-rung ladder of 4.1 has exactly two distinct outcomes here, and any ranking
+among the upper rungs measured on this shape would be measuring the file's
+noise. The ladder needs shapes that straddle the higher budgets to say anything
+about them, and 3.2 already showed the other candidate shapes are too noisy to
+rank small effects. **What the ladder can actually establish is where the
+split/merge boundary should sit, not which of several wide budgets is best.**
+
+### 10.3 Step 3.3's enumeration: the re-pinning cost is one assertion, and
+prediction 4 is wrong
+
+The enumeration was done by changing the default and running the suites, not by
+grepping for what might move - a grep finds what addresses a method by name, and
+what matters is what that addressing actually *sees*.
+
+| default | catalyst Varka suites | sql/core Varka suites |
+|---|---|---|
+| 16 (shipped) | 267 pass | 180 pass |
+| 24 | 267 pass, 0 fail | - |
+| 64 | 266 pass, **1 fail** | 180 pass, 0 fail |
+
+**At 24, nothing moves at all.** The roughly two dozen pinned op-count oracles
+that read `loopDense0`/`loopMasked0` by name are unaffected, because the shapes
+they use are single-output or already grouped; the addressing is only fragile in
+principle.
+
+**At 64, exactly one assertion fails**, and it is the one whose reasoning is
+written out in the source: `VarkaLoopEmitterSuite.scala:1838-1841`, "year reuses
+nothing against [x + 1] and 1 + 38 > 16, so it opens a group of its own, which
+month then joins". At 64 that sum fits and the two become one method. The
+assertion did exactly what an assertion with its arithmetic spelled out is for.
+
+**Prediction 4 said a default change would re-pin more than ten assertions, and
+that the true count would exceed the grep's estimate.** It is one, and only past
+24. The prediction reasoned from how the tests *address* methods rather than from
+what those tests actually construct, which is the same error in miniature that
+2.39 made - inferring from a shape instead of measuring it.
+
+**Two gaps in this enumeration, stated rather than buried.** `VarkaAssemblySuite`
+cancels all 23 of its tests in this environment for want of a disassembler, so
+its `loopDense0` frame-name pins were never exercised at any budget; they are
+checked on a host that has one, or the task ships not knowing. And the
+benchmarks were not run here - the parity file's case names carry loop-method
+counts, so a default change moves the file's text as well as its numbers.
+
+**The differential does not move**, at any budget tried, which is the claim
+section 6 makes: grouping decides which method holds an op, never the answer.
+
+### 10.4 Step 4.2's guard, written before either ladder arm
+
+`VarkaLoopEmitterSuite`, "task 71: a budget change reaches only the shapes whose
+grouping it decides". Its corpus is shapes no rung can regroup - one output is
+one group whatever the budget, and outputs whose combined weight exceeds every
+rung stay apart at all of them - asserted across 16, 24, 32, 48 and 64 on method
+names and `codeSize`:
+
+* one depth-8 chain, a single output;
+* one `year`, 38 ops against the shipped 16, so a single output wider than the
+  budget which stays one method as the budget grows past it;
+* one `add_months`, 112 ops, wider than every rung;
+* two `year`s over *different* dates, 76 ops with no prefix to reuse, so clause
+  1 splits them and clause 2 never opens.
+
+A shape that legitimately regroups - two small disjoint outputs, which a wider
+budget should merge - is deliberately absent, because that is what the budget is
+for and asserting it unchanged would assert the feature away.
+
+10.3 learned the cost of a default change by making it and running the suites.
+That is the right cost and the wrong way to learn it; this is the assertion that
+makes it a check.
+
+### 10.5 Step 5, static half: the boundary is between 16 and 24, and nothing
+above 24 buys anything
+
+Before timing any rung, emit a corpus at each and count what the budget actually
+regroups. Methods are `loopDense*`; ops are `IntVector` calls summed over them.
+
+| shape | 16 | 24 | 32 | 48 | 64 |
+|---|---|---|---|---|---|
+| task 17: 2 outputs, shared depth-8 chain | 2 / 60 | 1 / 43 | 1 / 43 | 1 / 43 | 1 / 43 |
+| 3 outputs, shared depth-8 chain | 2 / 61 | 1 / 44 | 1 / 44 | 1 / 44 | 1 / 44 |
+| `date_add` + `year` over one date | 2 / 38 | 2 / 38 | 2 / 38 | 1 / 37 | 1 / 37 |
+| 2 outputs, shared depth-4 chain | 1 / 35 | 1 / 35 | 1 / 35 | 1 / 35 | 1 / 35 |
+| DAG-CSE: `date_add(d,1)` and `datediff` over it | 1 / 7 | 1 / 7 | 1 / 7 | 1 / 7 | 1 / 7 |
+| 2 plain chains, nothing shared | 1 / 28 | 1 / 28 | 1 / 28 | 1 / 28 | 1 / 28 |
+| `year` + `month` over one date | 1 / 40 | 1 / 40 | 1 / 40 | 1 / 40 | 1 / 40 |
+| `year` over two dates | 2 / 68 | 2 / 68 | 2 / 68 | 2 / 68 | 2 / 68 |
+| `dayofweek` + `weekday` | 1 / 34 | 1 / 34 | 1 / 34 | 1 / 34 | 1 / 34 |
+
+**Three of nine shapes regroup at all, and only one of them above 24.** The two
+that move at 24 each drop 17 ops, about 28%. The one that moves at 48 drops
+**one op of 38** - and it is the shape whose assertion 10.3 found failing at 64.
+So going past 24 buys a single lane op on one shape, costs the one pinned
+assertion, and grows every method's bound toward the C1 refusal 2.3 records.
+
+Six shapes never move, and two of them say why the budget is narrower than it
+looks: `year + month` is clause 2's, and `year` over two dates has nothing to
+share at any budget. **The budget decides grouping only where outputs share
+nodes but no calendar prefix and their merged weight straddles the rung.**
+
+This is the ladder's answer, and it needed no timing run. Prediction 2 said the
+budget's win would keep growing to at least 32 and then flatten; it flattens at
+24, one rung earlier, and the static count is what shows it rather than a
+throughput measurement that would have had to beat the file's noise.
+
+**And it points at 4.1's second dimension rather than at a number.** Read the
+condition again with the survey in hand. `marginal` already counts only nodes
+*new* to the group, so `group.ops + marginal` is the merged method's total, with
+the shared chain counted once: task 17's pair is 14 + 6 = 20 against a budget of
+16. Two methods cost 28 nodes of work to the merged method's 20, so the merge is
+strictly less work - and clause 1 rejects it anyway, because it bounds the
+method rather than the work.
+
+Clause 2 exists for exactly that case and does not fire, because `saved` counts
+civil-from-days prefix reuse only. Widen it to count *any* reuse and task 17's
+pair merges at a budget of 16, with no rung moved: `saved` becomes 8, clause 2
+opens to `FUSED_CEILING`, and the same 28% saving arrives without loosening the
+bound that keeps compile time in hand. The justification is identical to the one
+B2 wrote for prefixes - joining lets the output skip work the group already
+does, which is less work rather than a trade.
+
+So the shape of the answer is a rule, not a number, which is what prediction 3
+registered.
+
+### 10.6 The rule, built and measured - prediction 3 confirmed
+
+`VarkaEmitOptions.shareWholeNodes`, on by default, `GROUP_BUDGET` unchanged at
+16. Clause 2's reuse is now measured as what an output would cost alone less what
+it actually adds, which is the prefix accounting generalised - a reused prefix is
+reused nodes. The gate stays `> 0`: reuse opens the wider bound, its size does
+not.
+
+**It merges what a wider budget would and nothing else**, asserted method for
+method in `VarkaLoopEmitterSuite` over a ten-shape corpus, in both directions:
+identical to a budget of 24 for the two shapes that share nodes without sharing a
+prefix, identical to the shipped setting for the five that have no reuse to act
+on, and the sharing corpus is required to actually differ from the shipped
+setting so it cannot quietly stop exercising the rule.
+
+**The regeneration**, first to be read by task 77's band and gate rather than by
+eye:
+
+| width | reuse off, two methods | reuse on, one method | relative |
+|---|---|---|---|
+| AVX-512 | 5019.8 | 6507.6 | 1.3X |
+| 128-bit | 2317.9 | 3063.4 | 1.3X |
+
+Both within 0.4% of the same kernels' numbers in the previous file, which is what
+says the shapes did not drift. **No row moved past the band**; seventeen the band
+calls unreadable were set aside unclassified, several swinging more than 18%,
+each of which under a flat threshold would have wanted a second regeneration to
+interpret. Controls within 2.4%, the gate clean at both widths, the requote list
+empty.
+
+**The A/B had to be rewritten, not just regenerated.** With the rule shipped, the
+old "budget 16" arm merges too, and the pair that has measured this question
+since task 17 would have become two copies of one kernel. The arms are now the
+rule off and on at the shipped budget. Their band entries were renamed rather
+than remeasured, because the kernels are unchanged - the suite asserts the
+reuse-off arm emits what budget 16 emitted and the shipped arm what budget 24
+emitted.
+
+### 10.7 What moved that the plan did not list
+
+**Three of four predictions were wrong, and all three the same way.** 1 said the
+win was an inlining effect and named a call this shape no longer emits; 2 said
+the win would grow to at least 32 and it flattens at 24; 4 said a default change
+would re-pin more than ten assertions and it is one. Each reasoned from the shape
+of the code - how tests address methods, what a javadoc says a call costs -
+rather than measuring it. That is section 2.39's failure in miniature, three
+times, in a plan written to correct exactly that.
+
+**Task 79's four benchmark cases had never been regenerated into the committed
+file.** They appear as new rows here. Nothing was wrong with them; the task added
+the cases and the file was not regenerated, which is invisible until someone
+regenerates for another reason.
+
+### 10.8 What this leaves for later
+
+Task 79's four rows are now committed but **unbanded** - the band was measured
+before they existed, so `--band` will report them without a tier until the parity
+band is remeasured. That belongs with milestone 5's task 90, which already owes
+the arithmetic benchmark's band.
+
+`VarkaAssemblySuite` cancels its 23 tests here for want of a disassembler, so its
+`loopDense0` frame-name pins were never exercised against a grouping change at
+any setting. The rule does not move those shapes, but that is reasoning rather
+than a check.
+
+And `FUSED_CEILING` is now the bound that matters for shapes with reuse, since
+clause 2 admits more of them. Nothing here suggests 400 is wrong - B2 chose it on
+compile time and that argument is untouched - but the ceiling now governs a wider
+set than when it was set, which is worth a sentence in whatever revisits it.

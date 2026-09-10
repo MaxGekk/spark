@@ -213,16 +213,26 @@ public final class VarkaLoopEmitter {
    * the current file reads 4385.5 against 5482.1 at AVX-512 and 1645.6 against 2566.5 at
    * 128-bit, the merged method ahead.
    *
-   * <p>Task 32 step B2 added the one exception, and it is not task 17's case: an output that
-   * reuses a civil-from-days prefix the group already computes joins past this budget, up to
-   * {@link #FUSED_CEILING}, because skipping the prefix makes the method less work rather than
-   * more. Two plain chains over a shared subchain have no prefix to reuse and stay split - and
-   * whether they still should is open again: the two rows above reversed when task 46 moved
-   * the validity OR ahead of the vector work (budget 24 at 5492.1 against budget 16 at 4237.4
-   * in the file that change regenerated, where every earlier regeneration had 16 ahead by
-   * ~1.4x), which says the loss task 17 measured was the refused OR call in the wider method
-   * rather than register pressure. Retuning this budget on that evidence is task 43's
-   * question, not B2's. See {@link #groupOutputs} and {@code PLAN_TASK_32.md} 7.6.
+   * <p>Task 32 step B2 added the first exception: an output that reuses a civil-from-days
+   * prefix the group already computes joins past this budget, up to {@link #FUSED_CEILING},
+   * because skipping the prefix makes the method less work rather than more.
+   *
+   * <p><b>Task 71 settled task 17's case, and the answer was not this number.</b> The budget
+   * bounds the <i>method</i>, while the marginal cost it is compared against already excludes
+   * nodes the group holds - so task 17's pair is 14 + 6 against 16 and is split into two
+   * methods costing 28 nodes of work where one method costs 20. The merge is strictly less
+   * work and clause 1 rejects it anyway. What was missing is the same exception B2 wrote,
+   * generalised: {@link VarkaEmitOptions#shareWholeNodes} lets an output that reuses whole
+   * nodes join too, which merges exactly the shapes a budget of 24 would merge and nothing
+   * else (asserted method for method in {@code VarkaLoopEmitterSuite}), at the shipped budget.
+   * Raising the budget instead would have loosened the bound that keeps compile time in hand -
+   * past about 1900 bytes C1 refuses a loop method and it runs interpreted until C2 lands.
+   *
+   * <p>Two readings this javadoc carried are also retired. The rows did reverse at
+   * {@code aef0b82260e}, but the {@code orValidityBitsAt} call it blamed is not emitted for
+   * this shape at all since task 70's bitmap pass; and the retune was pointed at "task 43's
+   * question", which is task 71's. The static survey behind all of this is
+   * {@code PLAN_TASK_71.md} 10.5. See {@link #groupOutputs} and {@code PLAN_TASK_32.md} 7.6.
    */
   public static final int GROUP_BUDGET = 16;
 
@@ -889,8 +899,19 @@ public final class VarkaLoopEmitter {
     for (int o = 0; o < outputs.size(); o++) {
       GroupOps withNext = group.copy();
       int marginal = withNext.add(outputs.get(o));
+      // What clause 2 counts as reuse. By default only a civil-from-days prefix the group
+      // already computes (task 32 step B2). Under `shareWholeNodes` (task 71) any node the
+      // group already holds counts too, measured as what this output would cost on its own
+      // less what it actually adds - which is the prefix accounting generalised, since a
+      // reused prefix is reused nodes. The gate stays `> 0`: reuse opens the wider bound,
+      // its size does not.
+      int reuse = withNext.saved;
+      if (options.shareWholeNodes()) {
+        GroupOps alone = new GroupOps(options.shareChronoPrefix());
+        reuse = alone.add(outputs.get(o)) - marginal;
+      }
       boolean fits = group.ops + marginal <= options.groupBudget()
-          || (withNext.saved > 0 && group.ops + marginal <= options.fusedCeiling());
+          || (reuse > 0 && group.ops + marginal <= options.fusedCeiling());
       // marginal == 0 means this output adds no node the group does not already have - it
       // is structurally the same tree - so splitting it off cannot reduce the method's op
       // count and only costs it the CSE. That matters once a node can outweigh the budget on
