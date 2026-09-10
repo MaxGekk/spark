@@ -118,6 +118,28 @@ install the version dev/lint-python pins"
   fi
 fi
 
+# The benchmark diff carries its own check of the one thing a reader cannot see
+# it get wrong: a row key that collides silently drops a row from the requote,
+# which is the closing step of every regeneration.
+for tool in varka_bench_diff varka_bench_gate; do
+  if printf '%s\n' "${files[@]}" | grep -qx "dev/$tool.py"; then
+    if ! out="$(python3 "dev/$tool.py" --selftest 2>&1)"; then
+      echo "$out" | sed "s|^|$tool selftest: |"
+      findings=$((findings + 1))
+    fi
+  fi
+done
+
+# A committed results file must satisfy its invariants whatever its numbers are.
+if printf '%s\n' "${files[@]}" | grep -qE '^sql/.*/benchmarks/Varka.*-results\.txt$'; then
+  while IFS= read -r f; do
+    out="$(python3 dev/varka_bench_gate.py "$f" 2>&1)" || {
+      echo "$out" | sed 's/^/bench gate: /'
+      findings=$((findings + 1))
+    }
+  done < <(printf '%s\n' "${files[@]}" | grep -E '^sql/.*/benchmarks/Varka.*-results\.txt$')
+fi
+
 if [ "$docs_changed" -eq 1 ] && [ -x dev/varka_quote_check.py ]; then
   out="$(dev/varka_quote_check.py 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
