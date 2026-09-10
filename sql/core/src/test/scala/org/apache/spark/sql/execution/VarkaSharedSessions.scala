@@ -299,6 +299,33 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   }
 
   /**
+   * Builds and caches a `varka_dates_narrow_ceiling` temp view for task 69: a date `d` and an
+   * int `off` whose sum lands on each end of the range task 52's runtime guard enforces,
+   * `VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS`, and nowhere outside it.
+   *
+   * Every row therefore passes that guard, which is the point: what this fixture exercises is
+   * the shift *above* the guarded producer. A `+k` on top reaches `NARROW_MAX_DAYS + k`, and
+   * task 69's question is how large `k` may be before the decomposition stops being exact.
+   * Keeping every row inside the guard's range keeps the batch served by the kernel, so a
+   * value that disagrees with the row engine is the lowering's answer and not a fallback's.
+   *
+   * The ends are written as the constants rather than as dates, because they are the constants:
+   * a date literal here would have to be re-derived by hand the next time either bound moves.
+   */
+  protected def cacheDatesNarrowCeiling(session: SparkSession): Unit = {
+    val rows = Seq(
+      (date("1970-01-01"), Int.box(VarkaChrono.NARROW_MAX_DAYS)),
+      (date("1970-01-01"), Int.box(VarkaChrono.NARROW_MIN_DAYS)),
+      (date("2024-03-15"), Int.box(3)),
+      (date("2024-03-15"), null: java.lang.Integer),
+      (null: java.sql.Date, Int.box(3)),
+      (date("2024-02-29"), Int.box(0)))
+    session.createDataFrame(rows).toDF("d", "off").coalesce(1)
+      .createOrReplaceTempView("varka_dates_narrow_ceiling")
+    session.catalog.cacheTable("varka_dates_narrow_ceiling")
+  }
+
+  /**
    * Builds and caches a `varka_date_months` temp view for task 60: a date `d` and two int month
    * counts, each nullable independently. `m` covers both ends of
    * `VarkaChrono.MONTH_ARITH_MIN/MAX_MONTHS` and includes a row 30000 months past each end, far

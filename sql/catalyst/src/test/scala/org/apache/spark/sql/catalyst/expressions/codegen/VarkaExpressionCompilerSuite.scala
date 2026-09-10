@@ -352,7 +352,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(compiled.outputs === Seq(new IRYear(thursday), new IRWeekOfYear(thursday)))
     assert(compiled.outputTypes === Seq(IntegerType, IntegerType))
     // The same admission as weekofyear's: three days short of a bare date's last shift.
-    val shiftHiWeek = VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS - 3
+    val shiftHiWeek = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS - 3
     assert(VarkaExpressionCompiler.compile(
       Seq(out(YearOfWeek(DateAdd(d, Literal(shiftHiWeek))))), childOutput).isDefined)
     assert(VarkaExpressionCompiler.compile(
@@ -362,7 +362,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
   test("task 37: the range analysis bounds the Thursday shift at three days either way") {
     // weekofyear over a date shifted to the last three days the analysis admits fuses; one more
     // day and the Thursday of the shifted day can leave the calendar range, so it declines.
-    val shiftHiWeek = VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS - 3
+    val shiftHiWeek = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS - 3
     assert(VarkaExpressionCompiler.compile(
       Seq(out(WeekOfYear(DateAdd(d, Literal(shiftHiWeek))))), childOutput).isDefined)
     assert(VarkaExpressionCompiler.compile(
@@ -498,20 +498,28 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(fuses(Year(DateAdd(d, i))))
   }
 
-  test("task 60 review: an upward shift over a guarded day offset declines conservatively, " +
-      "which is a registered debt rather than a requirement") {
-    // These four fused before the composition fix and are correct when they do: every one of
-    // them shifts the guarded producer's result *upward*, and the civil-from-days lowering does
-    // not stop being exact at NARROW_MAX_DAYS - that constant is the ceiling of the era step's
-    // `w < 2 ^ NARROW_ERA_K` shift domain, while what binds above is the multiply's overflow.
-    // dayRange has only the one constant, so it declines them. Correct, and over-conservative.
+  test("task 69: an upward shift over a guarded day offset fuses again, and the downward " +
+      "siblings still do not") {
+    // Written by task 60's review as four pinned declines, with the note that flipping them
+    // was the follow-up's deliverable. This is that flip, and three of the four take it; the
+    // fourth is below, with its own reason. The declines were correct and over-conservative:
+    // each shifts the guarded producer's result *upward*, and the civil-from-days lowering
+    // does not stop being exact at NARROW_MAX_DAYS - that constant is the ceiling of the era
+    // step's `w < 2 ^ NARROW_ERA_K` shift domain, not of the decomposition. dayRange had only
+    // the one constant, so it declined them.
     //
-    // Pinned so the debt is visible and so the follow-up that gives the upward direction its
-    // own limit has an assertion to flip rather than a silent widening of behaviour. Flipping
-    // these to `fuses` is the deliverable there; see the milestone debt register.
-    assert(!fuses(Year(LastDay(DateAdd(d, i)))))
-    assert(!fuses(Year(NextDay(DateAdd(d, i), Literal("MON")))))
-    assert(!fuses(Year(DateAdd(DateAdd(d, i), Literal(5)))))
+    // Task 69 measured where the decomposition does stop being exact - past the multiply's own
+    // overflow too, because `eraOf`'s one-era correction carries it further - and gave the
+    // upward direction its own bound. `NARROW_MAX_DAYS` still governs what a runtime guard
+    // enforces on a producer's own result; `NARROW_DECOMPOSE_MAX_DAYS` governs what an
+    // intermediate may reach and still decompose.
+    assert(fuses(Year(LastDay(DateAdd(d, i)))))
+    assert(fuses(Year(NextDay(DateAdd(d, i), Literal("MON")))))
+    assert(fuses(Year(DateAdd(DateAdd(d, i), Literal(5)))))
+    // The fourth does not flip, and PLAN_TASK_69.md 1 says why while listing it: `ThursdayOf`
+    // shifts +-3, so only its +3 side is this task's to recover. Its -3 side reaches below
+    // NARROW_MIN_DAYS, where the lowering is undefined, and a shape declines on the union of
+    // its directions - so loosening the upward bound alone cannot admit it.
     assert(!fuses(WeekOfYear(DateAdd(d, i))))
     // The downward siblings must keep declining whatever that follow-up does: below
     // NARROW_MIN_DAYS the lowering really is undefined, and trunc over a column offset was
@@ -520,10 +528,37 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(!fuses(Year(DateSub(DateAdd(d, i), Literal(5)))))
   }
 
+  test("task 69: the new ceiling is where the upward shift stops, to the day") {
+    // The headroom the task bought, stated as the number of days a guarded producer's result
+    // may be shifted up and still decompose. Derived from the two constants, never retyped:
+    // the guard leaves the producer in [NARROW_MIN_DAYS, NARROW_MAX_DAYS], so a `+k` above it
+    // reaches NARROW_MAX_DAYS + k, and the admission check now compares that against
+    // NARROW_DECOMPOSE_MAX_DAYS rather than against NARROW_MAX_DAYS.
+    val headroom = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS - VarkaChrono.NARROW_MAX_DAYS
+    assert(headroom > 0, "task 69 rests on the decomposition outliving the guards' range")
+    assert(fuses(Year(DateAdd(DateAdd(d, i), Literal(headroom)))))
+    assert(declineReason(Year(DateAdd(DateAdd(d, i), Literal(headroom + 1)))) ===
+      s"day range [${VarkaChrono.NARROW_MIN_DAYS + headroom + 1}, " +
+        s"${VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + 1}] leaves the calendar lowering's range")
+    // Downward the guard's own constant still binds, and one day is enough to show it: the
+    // check is asymmetric on purpose, NARROW_MIN_DAYS on the low side unchanged.
+    assert(!fuses(Year(DateSub(DateAdd(d, i), Literal(1)))))
+    // The two constants are also the two directions of a single shape: `next_day` shifts
+    // +1..7, which fits, while the same producer under `trunc` reaches -365 and does not.
+    assert(fuses(Year(NextDay(DateAdd(d, i), Literal("MON")))))
+    assert(!fuses(Year(TruncDate(DateAdd(d, i), Literal("YEAR")))))
+  }
+
   // Task 52's compile-time range guard. `HI` and `LO` are the largest literal shifts that keep
   // a contract column inside the narrowed range, derived from the constants rather than
   // retyped, so the tests below sit at +-1 of the real bound whatever it is.
-  private val shiftHi = VarkaChrono.NARROW_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS
+  //
+  // The two directions take different constants since task 69. Downward the narrowing is
+  // undefined below `NARROW_MIN_DAYS` and nothing rescues it. Upward the binding limit is how
+  // far the decomposition stays exact on a value already in hand, which is further than the
+  // era step's shift domain - so `shiftHi` derives from `NARROW_DECOMPOSE_MAX_DAYS` and the
+  // guards keep enforcing `NARROW_MAX_DAYS` on a producer's own result.
+  private val shiftHi = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS
   private val shiftLo = VarkaChrono.NARROW_MIN_DAYS - VarkaChrono.CONTRACT_MIN_DAYS
 
   private def fuses(e: Expression, output: Seq[Attribute] = childOutput): Boolean =
@@ -713,7 +748,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(fuses(Year(DateAdd(d, Literal(shiftHi)))))
     assert(declineReason(Year(DateAdd(d, Literal(shiftHi + 1)))) ===
       s"day range [${VarkaChrono.CONTRACT_MIN_DAYS + shiftHi + 1}, " +
-        s"${VarkaChrono.NARROW_MAX_DAYS + 1}] leaves the calendar lowering's range")
+        s"${VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + 1}] leaves the calendar lowering's range")
     assert(fuses(Year(DateSub(d, Literal(-shiftLo)))))
     assert(declineReason(Month(DateSub(d, Literal(-shiftLo + 1)))) ===
       s"day range [${VarkaChrono.NARROW_MIN_DAYS - 1}, " +
@@ -734,9 +769,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // date_add alone produces whatever int addition produces, as Spark's DateAdd does.
     assert(fuses(DateAdd(d, Literal(shiftHi + 1))))
     assert(fuses(DateDiff(DateAdd(d, Literal(shiftHi + 1)), d2)))
-    // Two literals each under the bound whose sum is over it.
-    assert(!fuses(Year(DateAdd(DateAdd(d, Literal(5000000)), Literal(5000000)))))
-    assert(fuses(Year(DateAdd(DateSub(d, Literal(5000000)), Literal(5000000)))))
+    // Two literals each under the bound whose sum is over it. Both derive from the bound
+    // rather than being written out: task 69 widened the ceiling by nine thousand years, and
+    // a pair of hand-picked constants that used to straddle it now fits under it silently.
+    val halfShift = shiftHi / 2 + 1
+    assert(!fuses(Year(DateAdd(DateAdd(d, Literal(halfShift)), Literal(halfShift)))))
+    assert(fuses(Year(DateAdd(DateSub(d, Literal(halfShift)), Literal(halfShift)))))
     // Long arithmetic: two Int.MaxValue offsets must not wrap back into range.
     assert(!fuses(Year(DateAdd(DateAdd(d, Literal(Int.MaxValue)), Literal(Int.MaxValue)))))
     // The identity cast and unix_date/date_from_unix_date unwrap to the child, so the
@@ -758,8 +796,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // A date literal is itself: in range when the parser wrote it, out of range when a test
     // builds one by hand - read back, not assumed.
     assert(fuses(Year(If(LessThan(d, d2), Literal(0, DateType), d))))
-    assert(!fuses(Year(If(LessThan(d, d2), Literal(VarkaChrono.NARROW_MAX_DAYS + 1, DateType), d))))
-    assert(fuses(Year(If(LessThan(d, d2), Literal(VarkaChrono.NARROW_MAX_DAYS, DateType), d))))
+    assert(!fuses(Year(If(LessThan(d, d2),
+      Literal(VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + 1, DateType), d))))
+    assert(fuses(Year(If(LessThan(d, d2),
+      Literal(VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS, DateType), d))))
   }
 
   test("task 52: the date-typed calendar outputs carry their own bound") {

@@ -1332,6 +1332,58 @@ tight - task 79's arm context - shown to stay tight across those same runs
 while its absolute rate wanders, which is the evidence that the two kinds of
 number deserve different treatment.
 
+### 2.22 A guard bound the shift above it chooses (task 91)
+
+*Added 10 September 2026, from task 69's outcome.*
+
+**The observation.** Task 69 gave the upward direction its own limit and three
+of four conservatively-declining shapes fused again. The fourth did not:
+`weekofyear(date_add(d, off))` and its `yearofweek` twin, which
+`PLAN_MILESTONE_4.md` 9 named as the ordinary query shape the debt was really
+about. `ThursdayOf` shifts `+-3`, and the `-3` side reaches
+`NARROW_MIN_DAYS - 3`, where the narrowing is not conservative but genuinely
+undefined: `w = days + NARROW_BIAS` goes negative and `(w * NARROW_ERA_M) >>>
+NARROW_ERA_K` reads it as about 4.29e9. No headroom exists below the way it
+did above, because `NARROW_MIN_DAYS` is exactly `w = 0`.
+
+**The lever is the guard, not the constant.** Task 52's runtime guard on a
+column-offset `date_add`/`date_sub` compares its result against
+`[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` and falls the batch back when it leaves.
+Those two bounds are already *parameters*: `emitRangeGuard` takes `lo` and
+`hi`, because task 60 reuses the same block for the month count against
+`MONTH_ARITH_MIN/MAX_MONTHS`. Only `emitAndValidatedOp`'s call site hardcodes
+the day pair. Nothing requires them to be *those* constants: the compiler
+knows, from `dayRange`, exactly how far the subtree above the producer shifts
+the day, and
+could ask the guard to enforce `[NARROW_MIN_DAYS + 3, NARROW_MAX_DAYS]` for a
+`ThursdayOf` consumer, or `[NARROW_MIN_DAYS + 365, ...]` for a `trunc` one. The
+run-time cost is identical - the same compare against a different immediate -
+and the compile-time decline becomes a batch fallback only for the batches that
+actually contain a day in the last three (or 365) of a thirteen-thousand-year
+window, which is to say never, in practice.
+
+**Why it is worth a row.** It closes the debt register entry task 69 swept only
+half of, it turns two more ordinary shapes from residual into fused, and it
+generalises: every downward-shifting consumer over a guarded producer becomes
+admissible by the same rule, which is the whole `trunc` family. It also
+subsumes the asymmetry task 69 shipped, since the upward side is the same idea
+with the shift added to the ceiling instead of the floor.
+
+**Why it is not free.** The guard's bound stops being a constant of
+`VarkaChrono` and becomes a per-node property the emitter reads, which touches
+`VarkaEmitOptions`' canonical form and the shape key: two subtrees identical
+except for the shift above them must not share a kernel. That is the same
+question task 84's value-range lattice answers for `dayRange` and `intBound`,
+so this task belongs after 84 and should take its interval representation
+rather than inventing a second one.
+
+**The admission check.** Half of it is already answered: `NARROW_MIN_DAYS`
+appears three times in `VarkaLoopEmitter`, and only one is a call site - the
+guard block itself is parameterised. What remains is a `VarkaEmitDump`
+op-count diff between a guard at the floor and one three days above it,
+showing the kernel differs by an immediate and nothing else, and the shape key
+shown to separate two otherwise-identical subtrees whose shifts differ, both
+before any downward consumer is admitted.
 ### 2.23 The validity write, keyed on the bit layout (task 92)
 
 *Added 10 September 2026, from task 47's measurement.*
@@ -1423,6 +1475,7 @@ independent of both and of each other.
 | 88 | An exact division through double lanes (section 2.19). **Scoped** (9 September 2026), from task 68's admission check; independent of 65 but competes with it | `trunc((double) v * (1.0 / d))` as a lowering for integer division by a constant, exact for every int32 dividend and any divisor below about 2^21 - no magic, no correction carries, no range restriction, and no int64 lane, so none of this milestone's lane-width work is a precondition. Verified numerically and round-tripped through `I2D`/`D2I` on the preferred species; the admission check makes that exhaustive over the calendar divisors and commits the script | The exhaustive check committed beside `verify_long_lane_magic.py`; op counts per lowering from `dev/varka_emit.sh --table` before any timing; then a three-arm A/B - today's range-narrowed magic, task 65's int64 widening, and this - on one benchmark over the same shapes, with the choice made from the numbers rather than from the simplification each offers |
 | 89 | The year-month interval divisions (section 2.20). **Scoped** (9 September 2026), split out of task 68; after whichever of 65 and 88 the A/B chooses | `extract(YEAR FROM ym)` and `ym / num` on the chosen exact division, with the truncation correction `extract` needs and the `HALF_UP` step `ym / num` needs; `extract(MONTH FROM ym)` behind the further question of a `ByteType` output the evaluator does not have; `ym / col` declining, the divisor not being a constant | The two rounding corrections verified over the full int32 month range against Spark's own `getYears`, `getMonths` and `IntMath.divide` by a committed script; the byte-output question settled before `extract(MONTH)` is built; a throughput pair per shape against the row engine, these being new lowerings |
 | 90 | The benchmark files are not reproducible run to run (section 2.21). **Partly done** (10 September 2026): the band is measured and committed for the parity and throughput benchmarks at both widths, and the regeneration diff classifies against it. That half landed under task 77, which had re-scoped itself onto this row's work without noticing this row existed - recorded here rather than quietly absorbed. Scoped 9 September 2026 from the investigation task 79's section 9 asked for; the pinning half was already done | Two regenerations with no change between them disagree on 73 of 211 cases by more than 3% and 22 by more than 10%, pinned; unpinned the worst is 75%. Measured out: within-run noise (avg/best median 1.007), the clock (constant to 1.2% while throughput moves 31%), ASLR, contention. What remains is the per-fork C2 lottery `PLAN_TASK_32.md` 11 already traced to JDK-8380195. `dev/varka_bench_repeat.sh` measures the band; `dev/varka_bench_regen.sh` now pins to the fast core complex and records it. **Measured, 10 September 2026**, over ten runs per width on an idle pinned machine: the parity file's median spread is 5.34% at AVX-512 and 1.72% at 128-bit, p90 22.30% and 11.88%, worst 227.15% and 39.06%; the throughput file 5.31% and 3.67%. Two findings the section did not predict. The narrow width is the *quieter* of the two by a factor of three at the median, so collapses have been found at 128-bit because that file is quiet enough for one to stand out, not because it is unstable - and the two widths need separate bands for that reason. And three runs understate the band: this row's own 1.6% median comes from three runs, where ten give 5.34% at the same width | The band committed per file for the parity and throughput benchmarks: **done**. The regeneration diff reported against the band rather than a flat 3%: **done**, cutting held-out false alarms on an unchanged file from 32.9% of rows to 5.6% at AVX-512 and 11.4% to 2.1% at 128-bit. Still open: the arithmetic benchmark's band; task 63's 9.7 dead-local figure re-taken pinned before task 82 scopes itself on it; the decision on N-fork medians taken from the cost, with the fallback stated - that absolute rates stop being compared across runs and the within-run A/Bs carry the claims; and the cause itself, which task 77's census leaves open with one method taking 100 runtime deoptimisations across 194 compiles and the `task_queued` records unread |
+| 91 | A guard bound the shift above it chooses (section 2.22). **Scoped** (10 September 2026), from task 69's outcome: it closed the upward half of `PLAN_MILESTONE_4.md` 9's conservative-decline entry and left the half that motivated it, `weekofyear`/`yearofweek` over a column offset, still residual because `ThursdayOf` shifts downward and there is no headroom below `NARROW_MIN_DAYS`; after 84, whose interval representation it should take | Task 52's runtime guard comparing against a bound the compiler chooses from the shift `dayRange` already computes for the subtree above the producer - `[NARROW_MIN_DAYS + 3, NARROW_MAX_DAYS]` under a `ThursdayOf` consumer, `+ 365` under a `trunc` one - so every downward-shifting consumer over a guarded producer becomes admissible at the same run-time cost, one compare against a different immediate | The guard's compare shown to be the only place `NARROW_MIN_DAYS` enters these kernels, by grep and a `VarkaEmitDump` op-count diff; the shape key shown to separate two subtrees identical but for the shift above them; `weekofyear(date_add(d, off))` fused with a differential over a batch that straddles the moved bound |
 | 92 | The validity write, keyed on the bit layout (section 2.23). **Scoped** (10 September 2026), from task 47's measurement: its word writer wins 6 to 9% at 4 lanes and loses 11 to 20% at 8 and 16, so it shipped as an option defaulting off; needs a machine whose preferred width is not this laptop's, which it shares with `PLAN_MILESTONE_4.md` row 62's pinned runner | `validityByWord` defaulting on where a validity group is smaller than a byte (`lanes < 8`) - one condition read off the bit layout rather than two thresholds fitted to a machine, which is what task 76 declined; plus option B of `PLAN_TASK_47.md` 3.1, storing once per word rather than once per group, and 3.4's masked-driver liveness item, both of which share this task's ladder run | The k=3 step in task 47's ladder explained from `-XX:+PrintInlining` before any rule is fitted across it - the emitted code is already ruled out - and the width rule's win reproduced on a machine that runs at that width rather than under a `MaxVectorSize` flag |
 
 ## 4. Files
