@@ -213,16 +213,26 @@ public final class VarkaLoopEmitter {
    * the current file reads 4385.5 against 5482.1 at AVX-512 and 1645.6 against 2566.5 at
    * 128-bit, the merged method ahead.
    *
-   * <p>Task 32 step B2 added the one exception, and it is not task 17's case: an output that
-   * reuses a civil-from-days prefix the group already computes joins past this budget, up to
-   * {@link #FUSED_CEILING}, because skipping the prefix makes the method less work rather than
-   * more. Two plain chains over a shared subchain have no prefix to reuse and stay split - and
-   * whether they still should is open again: the two rows above reversed when task 46 moved
-   * the validity OR ahead of the vector work (budget 24 at 5492.1 against budget 16 at 4237.4
-   * in the file that change regenerated, where every earlier regeneration had 16 ahead by
-   * ~1.4x), which says the loss task 17 measured was the refused OR call in the wider method
-   * rather than register pressure. Retuning this budget on that evidence is task 43's
-   * question, not B2's. See {@link #groupOutputs} and {@code PLAN_TASK_32.md} 7.6.
+   * <p>Task 32 step B2 added the first exception: an output that reuses a civil-from-days
+   * prefix the group already computes joins past this budget, up to {@link #FUSED_CEILING},
+   * because skipping the prefix makes the method less work rather than more.
+   *
+   * <p><b>Task 71 settled task 17's case, and the answer was not this number.</b> The budget
+   * bounds the <i>method</i>, while the marginal cost it is compared against already excludes
+   * nodes the group holds - so task 17's pair is 14 + 6 against 16 and is split into two
+   * methods costing 28 nodes of work where one method costs 20. The merge is strictly less
+   * work and clause 1 rejects it anyway. What was missing is the same exception B2 wrote,
+   * generalised: {@link VarkaEmitOptions#shareWholeNodes} lets an output that reuses whole
+   * nodes join too, which merges exactly the shapes a budget of 24 would merge and nothing
+   * else (asserted method for method in {@code VarkaLoopEmitterSuite}), at the shipped budget.
+   * Raising the budget instead would have loosened the bound that keeps compile time in hand -
+   * past about 1900 bytes C1 refuses a loop method and it runs interpreted until C2 lands.
+   *
+   * <p>Two readings this javadoc carried are also retired. The rows did reverse at
+   * {@code aef0b82260e}, but the {@code orValidityBitsAt} call it blamed is not emitted for
+   * this shape at all since task 70's bitmap pass; and the retune was pointed at "task 43's
+   * question", which is task 71's. The static survey behind all of this is
+   * {@code PLAN_TASK_71.md} 10.5. See {@link #groupOutputs} and {@code PLAN_TASK_32.md} 7.6.
    */
   public static final int GROUP_BUDGET = 16;
 

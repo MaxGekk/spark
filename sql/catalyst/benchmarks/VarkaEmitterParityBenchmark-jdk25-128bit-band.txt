@@ -220,5 +220,5 @@ tier   spread occ  table | case
 2    11.83   1  two outputs over 1000000 rows, mixed nulls | fused, CSE
 1     6.86   1  two outputs over 1000000 rows, mixed nulls | fused, memo disabled
 2    22.13   1  two outputs over 1000000 rows, mixed nulls | sequential kernels (9 passes)
-0     0.85   1  two outputs over a shared chain, 1000000 rows, mixed nulls | budget 16 (shipped): two loop methods, shared chain recomputed
-0     1.03   1  two outputs over a shared chain, 1000000 rows, mixed nulls | budget 24: one loop method, cross-output CSE kept
+0     0.85   1  two outputs over a shared chain, 1000000 rows, mixed nulls | whole-node reuse off: two loop methods, shared chain recomputed
+0     1.03   1  two outputs over a shared chain, 1000000 rows, mixed nulls | whole-node reuse on (shipped): one loop method, CSE kept

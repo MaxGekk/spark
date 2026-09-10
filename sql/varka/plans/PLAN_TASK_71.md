@@ -407,4 +407,74 @@ B2 wrote for prefixes - joining lets the output skip work the group already
 does, which is less work rather than a trade.
 
 So the shape of the answer is a rule, not a number, which is what prediction 3
-registered. That is the next thing to build and measure.
+registered.
+
+### 10.6 The rule, built and measured - prediction 3 confirmed
+
+`VarkaEmitOptions.shareWholeNodes`, on by default, `GROUP_BUDGET` unchanged at
+16. Clause 2's reuse is now measured as what an output would cost alone less what
+it actually adds, which is the prefix accounting generalised - a reused prefix is
+reused nodes. The gate stays `> 0`: reuse opens the wider bound, its size does
+not.
+
+**It merges what a wider budget would and nothing else**, asserted method for
+method in `VarkaLoopEmitterSuite` over a ten-shape corpus, in both directions:
+identical to a budget of 24 for the two shapes that share nodes without sharing a
+prefix, identical to the shipped setting for the five that have no reuse to act
+on, and the sharing corpus is required to actually differ from the shipped
+setting so it cannot quietly stop exercising the rule.
+
+**The regeneration**, first to be read by task 77's band and gate rather than by
+eye:
+
+| width | reuse off, two methods | reuse on, one method | relative |
+|---|---|---|---|
+| AVX-512 | 5019.8 | 6507.6 | 1.3X |
+| 128-bit | 2317.9 | 3063.4 | 1.3X |
+
+Both within 0.4% of the same kernels' numbers in the previous file, which is what
+says the shapes did not drift. **No row moved past the band**; seventeen the band
+calls unreadable were set aside unclassified, several swinging more than 18%,
+each of which under a flat threshold would have wanted a second regeneration to
+interpret. Controls within 2.4%, the gate clean at both widths, the requote list
+empty.
+
+**The A/B had to be rewritten, not just regenerated.** With the rule shipped, the
+old "budget 16" arm merges too, and the pair that has measured this question
+since task 17 would have become two copies of one kernel. The arms are now the
+rule off and on at the shipped budget. Their band entries were renamed rather
+than remeasured, because the kernels are unchanged - the suite asserts the
+reuse-off arm emits what budget 16 emitted and the shipped arm what budget 24
+emitted.
+
+### 10.7 What moved that the plan did not list
+
+**Three of four predictions were wrong, and all three the same way.** 1 said the
+win was an inlining effect and named a call this shape no longer emits; 2 said
+the win would grow to at least 32 and it flattens at 24; 4 said a default change
+would re-pin more than ten assertions and it is one. Each reasoned from the shape
+of the code - how tests address methods, what a javadoc says a call costs -
+rather than measuring it. That is section 2.39's failure in miniature, three
+times, in a plan written to correct exactly that.
+
+**Task 79's four benchmark cases had never been regenerated into the committed
+file.** They appear as new rows here. Nothing was wrong with them; the task added
+the cases and the file was not regenerated, which is invisible until someone
+regenerates for another reason.
+
+### 10.8 What this leaves for later
+
+Task 79's four rows are now committed but **unbanded** - the band was measured
+before they existed, so `--band` will report them without a tier until the parity
+band is remeasured. That belongs with milestone 5's task 90, which already owes
+the arithmetic benchmark's band.
+
+`VarkaAssemblySuite` cancels its 23 tests here for want of a disassembler, so its
+`loopDense0` frame-name pins were never exercised against a grouping change at
+any setting. The rule does not move those shapes, but that is reasoning rather
+than a check.
+
+And `FUSED_CEILING` is now the bound that matters for shapes with reuse, since
+clause 2 admits more of them. Nothing here suggests 400 is wrong - B2 chose it on
+compile time and that argument is untouched - but the ceiling now governs a wider
+set than when it was set, which is worth a sentence in whatever revisits it.
