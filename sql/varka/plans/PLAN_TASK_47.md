@@ -376,3 +376,50 @@ task 46's helper choice, which task 76 declined and which this task's writer
 is expected to make moot rather than revisit; and any change to what
 `servedByPass` or `fillsValidityOnce` decide - this task changes how the
 remaining writes are performed, never which roots perform them.
+
+## 10. Outcome
+
+### 10.1 Step 1: the admission check passes, on both halves
+
+**2.1, the word.** `VarkaKernelEvaluatorSuite`, "task 47: a destination
+validity buffer carries whole 64-bit words, at every length". Over 1, 7, 8,
+9, 63, 64, 65, 127, 128, 1000, 4095 and 4096 rows, and over all three
+destination vector classes (`DateDayVector`, `IntVector`,
+`IntervalYearVector`), Arrow's `allocateNew(len)` returns a validity buffer
+whose `capacity()` is at least `((len + 63) / 64) * 8`. The fallback of 2.1 -
+allocating the buffer explicitly at the rounded size - is not needed. What
+remains is the emitter's own bound: `s.validityBytes` is `(length + 7) / 8`
+and the destination segments are materialised at exactly that, so the segment
+must be rounded up to a multiple of 8 for the destinations. That is the
+one-line change 2.1 anticipated, and the buffer behind it is now known to
+carry it.
+
+**2.2, the single writer.** All three claims hold, and the third holds more
+strongly than the plan asked:
+
+1. The driver's step (3) writes each destination bitmap under exactly the two
+   predicates that decide whether a per-group write is emitted: `setValid`
+   when `fillsValidityOnce`, the bitmap pass when `servedByPass`, and `zero`
+   otherwise. An output keeping the per-group write is by construction the
+   `zero` case, so its bitmap is zero before any lane group runs.
+2. `groupOutputs` walks the outputs once and appends each index to exactly
+   one group, so the groups are a strict partition and no two loop methods
+   address the same `dstValidity[o]`.
+3. `servedByPass` is `!dense && analysis.served[o] != null` - a pure function
+   of the analysis and the body's own `dense` flag - and the dense and masked
+   kernels are emitted as two separate families, each with one driver and its
+   own loop and epilogue bodies. The driver and its bodies therefore cannot
+   disagree about which outputs the pass serves; it is not merely that they
+   are called with the same arguments.
+
+**And the same reading settles the population question of section 1 in the
+code.** `servedByPass` returns false for every output of a *dense* body, and
+`fillsValidityOnce` excludes a `Cond` root by design, so a dense filter
+kernel ORs per lane group on every batch. The dense filter is in this task's
+population, which is why section 4's tests cover it.
+
+**2.3, the boundary.** Confirmed, and smaller than the plan feared: a LOOP
+method is `emitVectorLoop` followed by `emitStatusReturn`, with no early
+return inside the loop - the all-null shortcut is the driver's and the
+guard's reduction is once per method after the back edge. There is exactly
+one flush point, between the loop's end and the status return.
