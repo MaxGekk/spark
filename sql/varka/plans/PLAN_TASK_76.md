@@ -312,5 +312,54 @@ and two of this investigation's runs measured the same arm twice before the
 identical byte counts gave it away. The enum branch beside it already refuses an
 unknown constant; the boolean branch now refuses an unknown boolean the same way.
 
-<!-- The rest, filled in once the fork is decided: the rule or the decline, the
-     remaining predictions scored, and what the task leaves for later. -->
+### 10.6 The loss exists at one width only, and that width is the one where a
+group is half a byte
+
+The ladder run at a third width settles it. Specialised advantage:
+
+| writes | 4 lanes | 8 lanes | 16 lanes |
+|---|---|---|---|
+| 1 | -3.8 to -6.8% | +33.3 to +35.7% | +29.6 to +32.0% |
+| 2 | -0.5 to -1.5% | +18.9 to +19.7% | +16.8 to +21.4% |
+| 3 | +11.1 to +12.1% | +19.7 to +25.8% | +10.9 to +15.2% |
+| 4 | +11.9 to +19.9% | +13.3 to +16.5% | +7.7 to +12.6% |
+
+**At 8 and 16 lanes the specialised helper wins at every write count.** The loss
+is unique to 4 lanes, and 4 lanes is the only width in this set where a validity
+group does not own whole bytes: 4 bits, so *two consecutive groups
+read-modify-write the same byte* and serialise on it. At 8 lanes a group is
+exactly one byte, at 16 exactly two.
+
+So 10.4's register-file finding is the mechanism and this is the regime that
+makes it visible: where the loop is already carrying a serialised byte
+read-modify-write chain, the arms' differing register placement decides the
+result and the width-named arm happens to lose; where the chain is absent, its
+cheaper address arithmetic wins as designed. Both arms do the same byte
+read-modify-write at 4 lanes, which is why the *chain* is not itself the
+difference between them - it is the condition under which the difference matters.
+
+### 10.7 What can be influenced, and by what
+
+**Not the helper choice.** A rule keyed on the write count is right at 4 lanes
+and wrong at 8 and 16, where the general pair never wins; a rule keyed on lanes
+and writes together is two fitted thresholds on one machine, for a 4-to-7% effect
+on one width at one and two writes.
+
+**The lever is the write itself, and it is already a task.** Milestone 4's row
+47, "one validity write per word", is exactly the change that removes the
+serialised chain: accumulate a 64-bit word's worth of groups and store once
+instead of a read-modify-write per group. At 4 lanes that is sixteen groups per
+store rather than sixteen partial stores over eight bytes - the regime this loss
+lives in disappears rather than being tuned around. Row 47 is currently gated on
+task 46, which is this decision; that gating is the right way round and this
+measurement is what it was waiting for.
+
+**So the honest close for task 76 is a recorded decline**, which 2.38 already
+licenses. The shipped default is right at 8 and 16 lanes at every write count,
+and right at 4 lanes above two writes; what it costs is 4 to 7% on a 4-lane body
+with one or two per-group writes, in a regime task 47 exists to remove. Adding a
+rule now would tune a constant inside a loop shape that is scheduled for
+replacement.
+
+<!-- Remaining: the decline written up, 2.38 and the debt entry swept, row 76,
+     and what carries to row 47. -->
