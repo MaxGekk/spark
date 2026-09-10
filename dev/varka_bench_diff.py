@@ -63,8 +63,18 @@ HEADER = re.compile(r"^(.*?):\s+Best Time\(ms\)")
 
 
 def parse(text):
-    """{(table, case): rate} plus the ordered list of keys, in file order."""
-    rates, order, table = {}, [], ""
+    """{(table, case, occurrence): rate} plus the ordered list of keys, in file order.
+
+    The occurrence index is not decoration. Four sections of the parity file share
+    the table header `20000000 rows in 4096-row chunks`, and two rows inside one
+    of them share the case name `weekofyear (task 37), null-free`, so a
+    (table, case) pair is not unique. Keyed without the index, the second row
+    overwrites the first: the file's own diff then silently reports one row where
+    there are two, and `--requote` treats the survivor's shifted key as absent
+    rather than moved, which is a false all-clear on the closing step
+    `sql/varka/AGENTS.md` makes mandatory.
+    """
+    rates, order, seen, table = {}, [], {}, ""
     for line in text.splitlines():
         line = re.sub(r"^\[info\] ?", "", line)
         h = HEADER.match(line)
@@ -73,10 +83,19 @@ def parse(text):
             continue
         m = ROW.match(line)
         if m:
-            key = (table, m.group(1).strip())
+            base = (table, m.group(1).strip())
+            seen[base] = seen.get(base, 0) + 1
+            key = base + (seen[base],)
             rates[key] = float(m.group(5))
             order.append(key)
     return rates, order
+
+
+def label_of(table, case, occ, ambiguous):
+    """The case as printed: qualified by table only where the name alone is not
+    enough, and by `#n` only where the same name repeats inside one table."""
+    label = f"[{table}] {case}" if ambiguous else case
+    return f"{label} #{occ}" if occ > 1 else label
 
 
 def read(path, rev=None):
@@ -119,11 +138,11 @@ def quotes_of(number):
 
 def print_requotes(rows):
     total = 0
-    for table, case, before, _ in rows:
+    for table, case, occ, before, _ in rows:
         hits = quotes_of(f"{before:.1f}")
         if hits:
             total += len(hits)
-            print(f"  {case} [{table}]: {before:.1f} is quoted in")
+            print(f"  {label_of(table, case, occ, False)} [{table}]: {before:.1f} is quoted in")
             for h in hits:
                 print(f"    {h}")
     print(f"  {total} document line(s) quote a moved row's old number")
@@ -133,10 +152,10 @@ def print_rows(rows, threshold):
     # A case name repeats across tables ("hand-written kernel, null-free" is in date_add's
     # table and in datediff's), so name the table wherever the case alone is ambiguous.
     counts = {}
-    for _, case, _, _ in rows:
+    for _, case, _, _, _ in rows:
         counts[case] = counts.get(case, 0) + 1
     labels = [
-        (f"[{table}] {case}" if counts[case] > 1 else case, b, a) for table, case, b, a in rows
+        (label_of(table, case, occ, counts[case] > 1), b, a) for table, case, occ, b, a in rows
     ]
     width = max((len(label) for label, _, _ in labels), default=10)
     print(f"{'case':{width}}  {'before':>9}  {'after':>9}  {'change':>8}")
@@ -152,11 +171,11 @@ def before_after(old_text, new_text, args):
     control = re.compile(args.control)
     controls, moved, same, missing = [], [], [], []
     for key in order:
-        section, case = key
+        section, case, occ = key
         if key not in old:
             missing.append(key)
             continue
-        row = (section, case, old[key], new[key])
+        row = (section, case, occ, old[key], new[key])
         if control.search(case):
             controls.append(row)
         elif abs(pct(old[key], new[key])) >= args.threshold:
@@ -181,19 +200,19 @@ def before_after(old_text, new_text, args):
     if missing or gone:
         print()
         for k in missing:
-            print(f"new only: [{k[0]}] {k[1]}")
+            print(f"new only: [{k[0]}] {label_of(k[0], k[1], k[2], False)}")
         for k in gone:
-            print(f"old only: [{k[0]}] {k[1]}")
+            print(f"old only: [{k[0]}] {label_of(k[0], k[1], k[2], False)}")
 
 
 def within(text, label_a, label_b, threshold):
     rates, order = parse(text)
     rows = []
-    for section, case in order:
+    for section, case, occ in order:
         if label_a in case:
-            twin = (section, case.replace(label_a, label_b))
+            twin = (section, case.replace(label_a, label_b), occ)
             if twin in rates:
-                rows.append((section, case, rates[twin], rates[(section, case)]))
+                rows.append((section, case, occ, rates[twin], rates[(section, case, occ)]))
     print(f"-- {label_a} (after) against {label_b} (before), same run --")
     print_rows(rows, threshold) if rows else print("(no pairs found)")
 
@@ -241,18 +260,62 @@ def surface_table(specs):
         print()
         print("| " + " | ".join(head) + " |")
         print("|" + "---|" * len(head))
-        for table, case in order:
+        for table, case, occ in order:
             m = SURFACE_NAME.match(table)
             if not m or bool(m.group(3)) != executor:
                 continue
             entry = m.group(1)
-            rates = [f.get((table, case)) for f, _ in files]
+            rates = [f.get((table, case, occ)) for f, _ in files]
             cells = [f"`{entry}`", case, selected.get(entry, "-") if "filter" in case else "-"]
             cells += [f"{r:.1f}" if r is not None else "-" for r in rates]
             for r in rates[:-1]:
                 cells.append(f"**{rates[-1] / r:.2f}x**" if r and rates[-1] else "-")
             print("| " + " | ".join(cells) + " |")
         print()
+
+
+# A results file holding the collision the parity file really has: two rows in one
+# table sharing a case name. Columns are squeezed only to fit the source line
+# limit; the parser reads them by whitespace, exactly as it reads a real file.
+SELFTEST_OLD = """\
+OpenJDK 64-Bit Server VM
+AMD Ryzen
+20000000 rows in 4096-row chunks:  Best Time(ms)   Avg Time(ms)
+------------------------------------------------------------------
+weekofyear (task 37), null-free  14 14 0 1430.0 0.7 1.0X
+some other case                  20 20 0  700.0 1.4 0.5X
+weekofyear (task 37), null-free  14 14 0 1430.3 0.7 1.0X
+"""
+
+SELFTEST_NEW = SELFTEST_OLD.replace("1430.3", "1000.0")
+
+
+def selftest():
+    """The keying, on a file holding the collision the parity file really has.
+
+    Two rows share a table and a case name and differ only in their rate. Keyed as
+    (table, case) the second overwrites the first, the parse reports one row where
+    there are two, and a change to the second is invisible - which is what
+    `--requote` was silently missing. Keyed with the occurrence index both survive.
+    """
+    rates, order = parse(SELFTEST_OLD)
+    assert len(order) == 3, f"expected 3 rows, parsed {len(order)}"
+    assert len(rates) == 3, f"expected 3 distinct keys, got {len(rates)}"
+    dup = [k for k in order if k[1].startswith("weekofyear")]
+    assert len(dup) == 2 and dup[0][2] == 1 and dup[1][2] == 2, dup
+    assert rates[dup[0]] == 1430.0 and rates[dup[1]] == 1430.3, [rates[k] for k in dup]
+
+    # And a change to the second one is reported, at the right magnitude.
+    new_rates, _ = parse(SELFTEST_NEW)
+    moved = [k for k in order if abs(pct(rates[k], new_rates[k])) >= 3.0]
+    assert moved == [dup[1]], f"expected only the second duplicate to move, got {moved}"
+    assert abs(pct(rates[dup[1]], new_rates[dup[1]]) + 30.08) < 0.1
+
+    # Labels stay readable: the repeat is marked, the singleton is not.
+    assert label_of("t", "c", 1, False) == "c"
+    assert label_of("t", "c", 2, False) == "c #2"
+    assert label_of("t", "c", 1, True) == "[t] c"
+    print("varka_bench_diff selftest: ok")
 
 
 def main():
@@ -262,6 +325,7 @@ def main():
     p.add_argument("old", nargs="?", help="the older results file")
     p.add_argument("new", nargs="?", help="the newer results file")
     p.add_argument("--git", metavar="REV", help="read the old side of FILE from this revision")
+    p.add_argument("--selftest", action="store_true", help="check the row keying and exit")
     p.add_argument("--within", metavar="FILE", help="A/B pairs inside one file")
     p.add_argument(
         "--ab",
@@ -294,6 +358,9 @@ def main():
     )
     args = p.parse_args()
 
+    if args.selftest:
+        selftest()
+        return
     if args.table:
         surface_table(args.table)
         return

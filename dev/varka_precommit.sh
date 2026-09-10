@@ -118,6 +118,16 @@ install the version dev/lint-python pins"
   fi
 fi
 
+# The benchmark diff carries its own check of the one thing a reader cannot see
+# it get wrong: a row key that collides silently drops a row from the requote,
+# which is the closing step of every regeneration.
+if printf '%s\n' "${files[@]}" | grep -qx 'dev/varka_bench_diff.py'; then
+  if ! out="$(python3 dev/varka_bench_diff.py --selftest 2>&1)"; then
+    echo "$out" | sed 's/^/bench diff selftest: /'
+    findings=$((findings + 1))
+  fi
+fi
+
 if [ "$docs_changed" -eq 1 ] && [ -x dev/varka_quote_check.py ]; then
   out="$(dev/varka_quote_check.py 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
