@@ -329,6 +329,69 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(mismatches === 0)
   }
 
+  test("task 69: where the era split stops being exact, and it is not where the ceiling is") {
+    // NARROW_MAX_DAYS is the ceiling of the era step's *shift* domain, w < 2^NARROW_ERA_K.
+    // Task 60's review observed that what binds above is the multiply's own overflow,
+    // w * NARROW_ERA_M < 2^31, which is looser. Neither is the real limit: `eraOf` corrects a
+    // one-era undershoot afterwards, and that correction keeps the split exact past the point
+    // the multiply wraps. What ends it is an undershoot of *two* eras, which one correction
+    // cannot absorb.
+    //
+    // Asserted as the number rather than as "it works further": the identity below holds at
+    // the bound and fails one past it, the way task 37's week magic is pinned.
+    val bias = VarkaChrono.NARROW_BIAS
+    def split(w: Int): (Int, Int) = {
+      val era = (w * VarkaChrono.NARROW_ERA_M) >>> VarkaChrono.NARROW_ERA_K
+      val rem = w - era * VarkaChrono.ERA_DAYS
+      if (rem >= VarkaChrono.ERA_DAYS) (era + 1, rem - VarkaChrono.ERA_DAYS) else (era, rem)
+    }
+    def exact(w: Int): Boolean = {
+      val (era, rem) = split(w)
+      era.toLong * VarkaChrono.ERA_DAYS + rem == w.toLong && rem >= 0 && rem < VarkaChrono.ERA_DAYS
+    }
+    val bound = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + bias
+    assert(exact(bound), s"the era split should be exact at w = $bound")
+    assert(!exact(bound + 1), s"the era split should fail at w = ${bound + 1}")
+    // And the extension really is past both of the bounds it is not: the shift domain the
+    // constant's name suggests, and the multiply's own overflow that task 60's review found.
+    assert(bound > (1 << VarkaChrono.NARROW_ERA_K) - 1,
+      "the extension should exceed the shift domain")
+    assert(bound.toLong * VarkaChrono.NARROW_ERA_M > Int.MaxValue.toLong,
+      "the extension should also exceed the multiply's own bound, which the correction absorbs")
+    // The ordering the compiler now depends on: the decomposition reaches further up than the
+    // range the shipped guards enforce, so widening the admission check cannot reach a day the
+    // decomposition gets wrong. Downward nothing moved - NARROW_MIN_DAYS still binds both.
+    assert(VarkaChrono.NARROW_MAX_DAYS < VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS)
+    assert(VarkaChrono.NARROW_MIN_DAYS < VarkaChrono.CONTRACT_MIN_DAYS)
+    assert(VarkaChrono.CONTRACT_MAX_DAYS < VarkaChrono.NARROW_MAX_DAYS)
+  }
+
+  test("task 69: the decomposition matches java.time over the extended range, both forms " +
+      "(opt-in: -Dvarka.sweep=true)") {
+    // The claim NARROW_DECOMPOSE_MAX_DAYS rests on, checked against the oracle rather than
+    // against the era identity alone: the era split being exact is necessary and the five
+    // fields are what callers read. Both lowerings, because both are live - the Julian map is
+    // the default and the century-then-year split is the reference variant.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to run the exhaustive sweep")
+    var day = VarkaChrono.NARROW_MIN_DAYS
+    val end = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS
+    var mismatches = 0
+    var firstBad = 0
+    while (day <= end) {
+      val date = LocalDate.ofEpochDay(day.toLong)
+      for (fields <- Seq(VarkaChrono.narrowedJulian(day), VarkaChrono.narrowedCenturyYear(day))) {
+        if (fields.year != date.getYear || fields.month != date.getMonthValue ||
+            fields.dayOfMonth != date.getDayOfMonth) {
+          if (mismatches == 0) firstBad = day
+          mismatches += 1
+        }
+      }
+      day += 1
+    }
+    assert(mismatches === 0, s"$mismatches mismatches, first at day $firstBad")
+  }
+
   test("task 37: the week magic is exact over the day-of-year domain and one past it") {
     // (dayOfYear - 1) / 7 for dayOfYear in 1..366 is x / 7 for x in 0..365; the magic holds
     // to 684 and fails at 685, which is the number to write down rather than "it works".

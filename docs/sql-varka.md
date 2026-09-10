@@ -103,7 +103,11 @@ becomes timestamp arithmetic) decline:
   quarter(d)` run one decomposition and four short tails in one loop method
   (task 32). The lowering is defined over years -12800 to 33134 -
   every date SQL can write, and then some - and the range is enforced where a
-  day can leave it, not at every extraction (tasks 51 and 52). A date column
+  day can leave it, not at every extraction (tasks 51 and 52). It stays exact
+  for a further nine thousand years, to 42400, which is what an *intermediate*
+  may reach: a value the compiler has already bounded below and is only
+  shifting upward is admitted against that wider ceiling rather than the
+  enforced one (task 69). A date column
   is taken to hold `0001-01-01..9999-12-31`, the project's column contract,
   and is not checked at ingestion. The compiler bounds how far the arithmetic
   under a calendar function can shift such a day - literal `DATE_ADD` offsets,
@@ -114,8 +118,10 @@ becomes timestamp arithmetic) decline:
   producers it cannot bound that way carry a per-batch range check instead,
   and either one declines the whole batch to the row path, counted as
   `numFallbackBatchesDeclined`: a `DATE_ADD`/`DATE_SUB` with a *column*
-  offset whose result a calendar function reads, checked against the range
-  the calendar lowering is exact over; and an `ADD_MONTHS` with a *column*
+  offset whose result a calendar function reads, checked against the enforced
+  range above rather than the wider one an intermediate may reach, since what
+  a producer hands on should stay inside the range every consumer expects; and
+  an `ADD_MONTHS` with a *column*
   count, checked on the count itself (see below) - that one wherever it
   sits, because the check protects its own month arithmetic rather than a
   consumer's, so a bare `add_months(d, m)` carries it too. A `DATE_ADD` with

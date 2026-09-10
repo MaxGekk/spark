@@ -706,6 +706,54 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 69: a shift above a guarded day offset fuses up to the decomposition's own " +
+      "ceiling, and is residual one day past it") {
+    // The end-to-end half of task 69. The compiler suite asserts which shapes are admitted;
+    // this asserts that the admitted ones are *right*, at the exact day the new constant
+    // names, against a row engine whose getYear is a LocalDate call and exact for any int day.
+    //
+    // The fixture keeps every row inside the range task 52's runtime guard enforces, so no
+    // batch declines at run time and the kernel really answers. The literal on top is what
+    // moves: `headroom` days above NARROW_MAX_DAYS is exactly NARROW_DECOMPOSE_MAX_DAYS, the
+    // last day the narrowed lowering decomposes correctly, and one more is the first day it
+    // does not. Both constants are read, never retyped, so this test moves when they do.
+    val headroom = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS - VarkaChrono.NARROW_MAX_DAYS
+    cacheDatesNarrowCeiling(spark)
+    cacheDatesNarrowCeiling(varkaSpark)
+    try {
+      val atCeiling = checkDifferential(spark, varkaSpark,
+        s"SELECT year(date_add(date_add(d, off), $headroom)) AS y, " +
+          s"month(date_add(date_add(d, off), $headroom)) AS m FROM varka_dates_narrow_ceiling " +
+          "ORDER BY y, m",
+        expectFused = true)
+      assert(varkaMetric(atCeiling, "numFallbackBatchesDeclined") === 0L,
+        s"nothing here trips a runtime guard:\n${atCeiling.treeString}")
+      assert(varkaMetric(atCeiling, "numFallbackBatchesKernel") === 0L)
+      // One day past, the compiler declines - the same reason string task 52 writes, reporting
+      // an interval whose upper end is NARROW_DECOMPOSE_MAX_DAYS + 1.
+      val pastCeiling = checkDifferential(spark, varkaSpark,
+        s"SELECT year(date_add(date_add(d, off), ${headroom + 1})) AS y, " +
+          "date_add(d, 1) AS keep FROM varka_dates_narrow_ceiling ORDER BY y, keep",
+        expectFused = true)
+      val explained = pastCeiling.collect { case p if isVarkaNode(p) =>
+        p.verboseStringWithOperatorId() }.mkString("\n")
+      assert(explained.contains(
+        s"residual (day range [${VarkaChrono.NARROW_MIN_DAYS + headroom + 1}, " +
+          s"${VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + 1}]"), explained)
+      assert(explained.contains("keep: fused"), explained)
+      // Downward the guard's constant still binds and the old answer stands: NARROW_MIN_DAYS
+      // is not what this task moved, so a subtraction over the same producer stays residual.
+      val below = checkDifferential(spark, varkaSpark,
+        "SELECT year(date_sub(date_add(d, off), 1)) AS y, date_add(d, 1) AS keep " +
+          "FROM varka_dates_narrow_ceiling ORDER BY y, keep",
+        expectFused = true)
+      assert(below.collect { case p if isVarkaNode(p) => p.verboseStringWithOperatorId() }
+        .mkString("\n").contains("y: residual (day range ["))
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_narrow_ceiling"))
+    }
+  }
+
   test("task 60: the producer's own guard reaches a filter predicate through the same route " +
       "as task 52's day producer") {
     // Unlike task 52's date_add offset, add_months' month count is never itself a filter

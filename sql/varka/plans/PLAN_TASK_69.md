@@ -134,3 +134,63 @@ cheapest way for the reviewer to see the blast radius.
 Task-specific gate: `git diff --stat` shows no `benchmarks/` file and no
 pinned fixture moving. If either moves, something reached the emitter and
 the change is not what this plan describes.
+
+## 6. Outcome
+
+**The admission check passed, and by more than the estimate.** Section 2's
+claim was that the multiply's own overflow, `w * NARROW_ERA_M < 2^31`, binds
+above rather than the shift domain `w < 2^NARROW_ERA_K` - about 18.8 million
+against 16.8 million, which the plan put at roughly 5,600 years of headroom.
+Neither is the limit. `eraOf` adds one era when the magic undershoots, and
+that correction keeps the era split exact past the point the multiply wraps.
+What ends it is an undershoot of *two* eras, which one correction cannot
+absorb, and that happens at `w = 20161385`:
+
+| bound | `w` | as an epoch day | in calendar terms |
+|---|---|---|---|
+| shift domain, `NARROW_MAX_DAYS` | 16777215 | 11382643 | 15 August 33134 |
+| multiply overflow | 18837575 | 13443003 | 11 September 38775 |
+| the real limit, `NARROW_DECOMPOSE_MAX_DAYS` | 20161385 | 14766813 | 29 February 42400 |
+
+That is 3,384,170 days of headroom over the shipped ceiling, about 9,266
+years rather than 5,600. Both checks section 2 asked for are in
+`VarkaChronoSuite`: the era identity asserted exact at the bound and failing
+one day past it, and an exhaustive sweep of both lowerings - the Julian map
+and the century-then-year split - against `java.time` from `NARROW_MIN_DAYS`
+to the new ceiling, run under `-Dvarka.sweep=true` beside the suite's other
+whole-range sweeps.
+
+**Three of the four pinned declines flipped, not four.** `last_day`,
+`next_day` and a positive literal `date_add` over a column offset fuse again.
+`weekofyear`/`yearofweek` does not, and section 1 says why while listing it:
+`ThursdayOf` shifts `+-3`, so only its `+3` side was ever this task's to
+recover, and a shape declines on the union of its directions. The test
+carries that as its own assertion with the reason beside it, so the next
+reader does not have to re-derive why the fourth stayed put.
+
+**The shipped change is one condition.** `admitCalendar`'s `Bounded` arm
+became asymmetric - `NARROW_MIN_DAYS` below, the new constant above - and
+nothing else moved. Two main-source files carry it, the constant and that
+arm; the other four changed files are tests and fixtures. No emitted byte, no
+pinned oracle, no committed number, and no `benchmarks/` file in
+`git diff --stat`, which is the blast radius section 3.3 predicted.
+
+**What the differential adds over the compiler suite.** The compiler suite
+asserts which shapes are admitted; `varka_dates_narrow_ceiling` asserts the
+admitted ones are right. Every row sits inside the range task 52's runtime
+guard enforces, so no batch declines at run time and the kernel really
+answers, and the literal on top puts the intermediate on
+`NARROW_DECOMPOSE_MAX_DAYS` exactly. `year` and `month` at that day agree
+with the row engine; one day further the entry is residual with the interval
+in its reason ending at `NARROW_DECOMPOSE_MAX_DAYS + 1`.
+
+**What it did not close, and where that went.** The debt-register entry this
+task swept named `weekofyear(date_add(d, off))` as the ordinary query shape
+the conservatism cost, and that shape is still residual. It cannot be
+recovered this way: `NARROW_MIN_DAYS` is exactly `w = 0`, so there is no
+headroom below to find. The lever is the other one - task 52's runtime guard
+compares against `lo`/`hi` that `emitRangeGuard` already takes as parameters,
+and the compiler could pass a floor raised by whatever `dayRange` says the
+subtree above the producer subtracts. That is `PLAN_MILESTONE_5.md` 2.22,
+task 91, scoped from this outcome rather than noted here, and it generalises
+past `ThursdayOf` to the whole `trunc` family.
