@@ -1,0 +1,210 @@
+# Task 76: one validity writer is right for one shape and wrong for another
+
+## 1. Where this came from
+
+`PLAN_MILESTONE_4.md` row 76 and section 2.38, out of task 70's review. Task 46
+gave the per-group validity write a width-specialised helper -
+`orValidityBitsAt16` and its siblings, each with the general form's four-arm
+switch already resolved and the `VectorSpecies` constant baked in - and made it
+the default, argued from a measurement on the four-field shared method. It is a
+global boolean, and the measurement splits by shape.
+
+## 2. What is established, before this plan proposes anything
+
+### 2.1 The pairing, which is easy to get wrong
+
+The specialised arm is the row named **`words per group (task 70 A/B)`**, not
+the one named for task 45. Task 70 turned the per-group write off for a served
+root, which left task 46's arms timing one kernel against itself, so both were
+rebuilt on task 70's per-group reference variant: `generalHelpers =
+perGroupWrite.withValidityByWidth(false)` against `perGroupWrite` itself
+(`VarkaEmitterParityBenchmark.scala:157, 652`). The two differ in exactly one
+flag and the per-group call survives in both.
+
+*Recorded because the first attempt at this plan paired the task 45 row as the
+specialised arm and briefly concluded 2.38's premise had reversed.* It has not.
+
+### 2.2 The effect, from the committed files
+
+| pair | width | specialised | general | effect |
+|---|---|---|---|---|
+| single-field `year`, mixed nulls | AVX-512 | 3092.5 | 3366.0 | general +8.8% |
+| single-field `year`, mixed nulls | 128-bit | 1190.5 | 1281.6 | general +7.7% |
+| four fields shared, mixed nulls | AVX-512 | 1069.8 | 922.5 | specialised +16.0% |
+| four fields shared, mixed nulls | 128-bit | 417.3 | 335.2 | specialised +24.5% |
+
+So the shipped default wins the shape it was argued from and loses the other.
+
+### 2.3 One of those four numbers is inside its own noise, and it is the one the
+task exists for
+
+Against task 77's band for these rows:
+
+| pair | width | effect | band of the two rows | verdict |
+|---|---|---|---|---|
+| single-field `year` | AVX-512 | 8.8% | 10.30% / 6.02% | **inside the noise** |
+| single-field `year` | 128-bit | 7.7% | 1.34% / 1.47% | resolvable |
+| four fields | AVX-512 | 16.0% | 10.08% / 10.33% | resolvable |
+| four fields | 128-bit | 24.5% | 1.72% / 2.96% | resolvable |
+
+**The 128-bit rows carry this task's claim.** The wide rows corroborate and
+cannot fail it on their own: at AVX-512 the single-field loss is smaller than
+what one of its two rows moves on an unchanged file. That is the third time this
+milestone has found the narrow width the trustworthy one, after task 90's band
+and task 77's collapse.
+
+### 2.4 Where the choice is made, and what is not there
+
+`options.validityByWidth()` is read in exactly one place, `emitLanes`
+(`VarkaLoopEmitter.java:656-662`), which sees only the options - never the IR.
+It bakes a class-wide `Analysis.lanes` (`:1564`). The only per-site refinement is
+`widthSpecialised(analysis, s)` (`:3206-3214`), which adds one fact: the epilogue
+always uses the general form, because its group is a remainder rather than a
+width and it runs once per batch.
+
+**The quantity the rule wants is not available where the choice is made.** The
+count of validity writes a loop body makes is derivable one frame up, in
+`emitLaneGroup` (`:3245`), which has the group's `outputIdx` and already computes
+the per-root verdict `validityWritten = fillsValidityOnce(...) ||
+servedByPass(...)` (`:3327-3328`). Nothing computes the count, and `Slots` carries
+no group. Two seams exist and 3.3 chooses between them.
+
+## 3. The admission check, to do first
+
+### 3.1 Confirm the arms still measure two kernels
+
+This measurement has broken once already, silently: task 70's pass removed the
+per-group call for served roots and left both arms emitting the same bytes.
+Before any number is read, assert that the two arms differ - method names and
+`codeSize` - for every pair the task quotes. A number from two identical kernels
+is the failure mode this task is downstream of.
+
+The filter pair needs its own look: 884 is `DEFAULTS` and 885 is
+`perGroupWrite.withValidityByWidth(false)`, which differ in **two** flags
+nominally. `validityByBitmap` should be inert for a `Cond` root, since the pass
+never serves one - assert that rather than assume it.
+
+### 3.2 Is the write count the key, or is something else?
+
+2.38 proposes "specialised above one write, general at one", reasoning that the
+number of validity writes is what differs between the two shapes. It is also
+what differs between one output and four, and those shapes differ in method
+size, op count and live ranges too. A rule keyed on the wrong quantity is right
+on the two shapes it was fitted to and wrong elsewhere.
+
+So the check is a ladder in the write count - one, two, three, four unserved
+value roots in one group - holding the shape otherwise as constant as the IR
+allows, at 128-bit where 2.3 says the effect is readable. If the crossover sits
+at a write count, the rule is the write count. If the ladder is flat and the two
+known shapes still differ, it is not, and the task says so instead of shipping a
+rule fitted to two points.
+
+### 3.3 Where the rule lives
+
+Not `emitLanes`, which cannot see a shape. Two candidates:
+
+* **On `Slots`, written by `planSlots`**, which already receives `outputIdx`, so
+  `widthSpecialised(analysis, s)` reads it with no new parameter. This keeps the
+  decision where the one existing per-site refinement already lives.
+* **Threaded from `emitLaneGroup`** through `emitValidityRead`/`emitValidityOr`/
+  `emitRootValidityOr`, which is more parameters on three signatures.
+
+The plan takes the first unless the check finds `planSlots` cannot compute the
+count for the same group the emission uses.
+
+### 3.4 The reads are on a different footing from the writes
+
+`emitValidityRead` (`:3284`) is called per *referenced input*, not per output, so
+a rule counting writes leaves the reads unkeyed. Three outcomes are possible and
+the task must pick one explicitly: reads follow the writes' verdict, reads keep
+the global default, or reads get their own count. Silence here would ship a rule
+that half-applies.
+
+### 3.5 What the check would have rejected
+
+That the task 45 row is the specialised arm (2.1). That the wide width can
+settle the single-field loss (2.3). That the arms are known to differ (they were
+identical once, silently). That the write count is the key merely because it
+differs between the two shapes (3.2). And that the choice can be keyed from
+`emitLanes`, where the shape is not visible (2.4).
+
+## 4. The design, if the check passes
+
+A rule at `widthSpecialised`: the width-named helpers above the threshold the
+ladder finds, the general pair at or below it, the epilogue unchanged.
+`VarkaEmitOptions.validityByWidth` stays exactly as it is - the reference arm the
+A/B measures against, on `FloorMod7`'s precedent - and gains no second boolean;
+a rule that needs a switch to express is not a rule.
+
+**And a decline is a real outcome**, which 2.38 already allows. If 3.2's ladder
+is flat, or if the single-field cost proves to be inside the band at both widths
+once remeasured, the honest close is the finding recorded and the debt entry
+swept in the past tense. 2.3 makes that verdict per width rather than global,
+which is new: the wide width cannot resolve it and the narrow one can.
+
+## 5. Files
+
+| file | what |
+|---|---|
+| `VarkaLoopEmitter.java` | the count on `Slots`, and `widthSpecialised` reading it |
+| `VarkaLoopEmitterSuite.scala` | 3.1's arms-differ assertion, and the rule's own guard |
+| `VarkaEmitterParityBenchmark.scala` | 3.2's write-count ladder, on fresh case ids |
+| benchmarks + bands | regenerated, gated; the rows 2.2 names move |
+| `PLAN_MILESTONE_4.md`, this file | row 76, 2.38 corrected where 2.1 and 2.3 change it, section 10 |
+
+## 6. Tests
+
+* **The arms differ**, asserted rather than assumed, for every pair this task
+  quotes - the failure that made task 70's review necessary.
+* **The rule's guard**: shapes on either side of the threshold emit the helper
+  the rule names, and shapes the rule does not reach are byte-identical with it
+  on and off. The second half is what stops a rule keyed on one quantity from
+  moving shapes that differ in another.
+* **The differential is untouched.** Which helper writes a validity bit cannot
+  change a bit's value; if any differential moves, the change is wrong.
+
+## 7. The measurement, and predictions registered before it
+
+The ladder of 3.2 at both widths, read at 128-bit and corroborated at AVX-512,
+with the band consulted per row rather than a flat threshold.
+
+1. **The crossover is at two writes** - the general helper wins at one and loses
+   at two and above - which is 2.38's guess and what the two known shapes imply.
+2. **The wide width will not confirm the single-field half.** Its effect is
+   8.8% against rows that move 10.30% and 6.02%, so the honest report there is
+   "not distinguished", and the task must not be allowed to rest on it.
+3. **The filter pair's second flag is inert**, since the bitmap pass never
+   serves a `Cond` root, so 884 against 885 is a one-flag comparison in effect.
+4. **The rule moves no shape with one write per body other than the ones the
+   ladder names** - the `dayofweek` and filter rows are the check on that, since
+   both keep a per-group write for a different reason.
+
+## 8. Risks
+
+1. **The motivating number is the least resolvable one.** Everything here rests
+   on a 7.7% effect at one width. If a remeasurement moves it inside the band,
+   the task closes with a decline, and that is a result rather than a failure.
+2. **A rule fitted to two points.** 3.2's ladder exists so the threshold comes
+   from a curve rather than from the two shapes that raised the question.
+3. **Reads and writes drifting apart** (3.4), which would leave a shape reading
+   through one helper family and writing through the other.
+4. **The arms silently collapsing again.** Any future change that removes the
+   per-group write for a shape makes its pair meaningless; 6's first test is what
+   makes that loud.
+
+## 9. Sequencing
+
+1. This plan and row 76.
+2. 3.1's arms-differ assertion, first, because everything downstream reads those
+   rows.
+3. 3.2's ladder, at 128-bit, and the crossover.
+4. 3.3's seam and 3.4's decision about reads.
+5. The rule and its guard; the regeneration, gated and banded.
+6. 2.38 corrected, row 76, `SKILLS.md`, section 10.
+
+## 10. Outcome
+
+<!-- Filled in when the measurement lands: the ladder, section 7's predictions
+     scored one by one, what moved that the plan did not list, and what the task
+     leaves for later - which goes to the milestone's debt register or a scope
+     document, never to a code comment. -->
