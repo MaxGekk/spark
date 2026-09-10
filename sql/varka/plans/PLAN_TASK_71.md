@@ -244,7 +244,56 @@ to settle at any grouping.
 
 ## 10. Outcome
 
-<!-- Filled in when the measurement lands: the ladder, section 7's predictions
-     scored one by one, what moved that the plan did not list, and what the task
-     leaves for later - which goes to the milestone's debt register or a scope
-     document, never to a code comment. -->
+### 10.1 Step 3.1's mechanism probe: the win is the CSE, and prediction 1 is wrong
+
+Emitted both arms directly and counted what is in them, then ran each alone in
+its own JVM under `-XX:+PrintCompilation` and `-XX:+PrintInlining`.
+
+**What each arm contains**, per loop method, from the emitted bytes:
+
+| budget | loop methods | bytes each | `IntVector` calls | `VarkaVectorSupport` calls |
+|---|---|---|---|---|
+| 16 | 2 | 432 | 30 each | 5 each |
+| 24, 32, 48, 64 | 1 | 504 | 43 | 5 |
+
+Merging takes the kernel from 60 vector ops and 10 support calls per lane group
+to 43 and 5 - a 31% reduction in work. The committed throughput gain is 1.3X.
+The two numbers match closely enough that nothing else needs explaining: the
+merged arm wins because the shared depth-8 chain is computed once instead of
+twice, which is the cross-output CSE the budget was splitting.
+
+**Prediction 1 is refuted, and by the absence of the thing it named.** It said
+the win would be `orValidityBitsAt` inlining in the merged arm. That call is
+**not emitted at all** for this shape - zero occurrences across a full
+`-XX:+PrintInlining` log of both kernels. Task 70's bitmap pass serves these
+roots (two chains over one column, so the word is a bare leaf), which removed
+the per-group OR entirely. The javadoc's hypothesis is about a call that no
+longer exists here. It may still be the right account of *why the rows reversed
+at `aef0b82260e`*, which predates task 70 and is not something this probe can
+reach; what it is not is the reason the merged arm wins today.
+
+**Compilation behaviour is identical per method**, which took a second run to
+establish honestly. Run in the benchmark's own order the split arm showed ten
+compilation events against the merged arm's three, which looks like a
+recompilation difference and is not: the split arm runs first and pays the
+warmup. Run alone in a fresh JVM each, every loop method in both arms compiles
+four times at tier 3 and three at tier 4. The split simply has two methods, so
+it compiles twice as much. (Three tier-4 compiles of one method is itself more
+than a healthy method needs, but it is the same in both arms, so it is not what
+separates them - that is task 90's.)
+
+### 10.2 What this changes in the ladder
+
+**Rungs above 24 are byte-identical on this shape.** The table above is the
+whole of it: 24, 32, 48 and 64 emit the same single 504-byte method. So the
+five-rung ladder of 4.1 has exactly two distinct outcomes here, and any ranking
+among the upper rungs measured on this shape would be measuring the file's
+noise. The ladder needs shapes that straddle the higher budgets to say anything
+about them, and 3.2 already showed the other candidate shapes are too noisy to
+rank small effects. **What the ladder can actually establish is where the
+split/merge boundary should sit, not which of several wide budgets is best.**
+
+<!-- The rest, filled in as the task lands: 3.3's enumeration, 4.2's guard, the
+     ladder, section 7's other predictions scored, and what the task leaves for
+     later - which goes to the milestone's debt register or a scope document,
+     never to a code comment. -->
