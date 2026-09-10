@@ -2817,6 +2817,55 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ctx = "two dates", options = sharing)
   }
 
+  test("task 71: a budget change reaches only the shapes whose grouping it decides") {
+    // The guard section 2.35 believed already existed and did not. B2's byte-identity test
+    // above compares `shareChronoPrefix` off against on at ONE budget; nothing asserted that
+    // moving the budget itself touches only what it should. Task 71 measured the cost of a
+    // default change by moving it and running the suites - one assertion failed, at 64, and it
+    // was the one that spells out "1 + 38 > 16" - which is the right cost and the wrong way to
+    // learn it. This is the assertion.
+    //
+    // The corpus is shapes whose grouping no budget in the ladder can change: one output is
+    // always one group whatever the budget, and outputs whose combined weight exceeds every
+    // rung stay apart at all of them. A shape that legitimately regroups - two small disjoint
+    // outputs, which a wider budget should merge - is deliberately not here, because it is
+    // what the budget is for.
+    val col = new ColumnRef(0)
+    val corpus = Seq[(String, Seq[VarkaVectorIR], Int, Int)](
+      ("one depth-8 chain, one output", Seq(chain(8)), 1, 8),
+      // 38 ops against the shipped 16: a single output wider than the budget gets its own
+      // group untouched, and stays one method when the budget grows past it.
+      ("one calendar output, wider than the shipped budget", Seq[VarkaVectorIR](new Year(col)),
+        1, 0),
+      // add_months weighs 112 - wider than every rung, so it is its own group at all of them.
+      ("one add_months, wider than every rung",
+        Seq[VarkaVectorIR](new AddMonths(col, new LiteralSlot(0))), 1, 1),
+      // Two calendar outputs over different dates: 38 + 38 against a top rung of 64, and no
+      // prefix to reuse, so clause 1 splits them and clause 2 never opens.
+      ("two calendar outputs over different dates",
+        Seq[VarkaVectorIR](new Year(col), new Year(new ColumnRef(1))), 2, 0))
+    val rungs = Seq(16, 24, 32, 48, 64)
+    for ((name, roots, inputs, lits) <- corpus) {
+      val emitted = rungs.map { budget =>
+        budget -> emitMulti(roots, inputs, lits, VarkaEmitOptions.DEFAULTS.withGroupBudget(budget))
+      }
+      val (baseBudget, base) = emitted.head
+      val loops = methodNames(base)
+        .filter(n => n.startsWith("loopDense") || n.startsWith("loopMasked")).sorted
+      for ((budget, bytes) <- emitted.tail) {
+        assert(methodNames(bytes)
+          .filter(n => n.startsWith("loopDense") || n.startsWith("loopMasked")).sorted === loops,
+          s"$name: budget $budget grouped differently from $baseBudget, and this shape's " +
+            "grouping is not the budget's to decide")
+        for (method <- loops) {
+          assert(VarkaEmitterTestSupport.codeSize(bytes._2, method)
+            === VarkaEmitterTestSupport.codeSize(base._2, method),
+            s"$name: $method changed size between budgets $baseBudget and $budget")
+        }
+      }
+    }
+  }
+
   test("task 32 B2: with no prefix to reuse, sharing changes no loop method - the guard that " +
       "clause 2 admits fragment reuse and nothing else") {
     // Before B2 this test asserted every calendar loop method byte for byte unchanged under

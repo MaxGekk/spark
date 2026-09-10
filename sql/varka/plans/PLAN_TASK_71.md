@@ -332,3 +332,26 @@ counts, so a default change moves the file's text as well as its numbers.
 
 **The differential does not move**, at any budget tried, which is the claim
 section 6 makes: grouping decides which method holds an op, never the answer.
+
+### 10.4 Step 4.2's guard, written before either ladder arm
+
+`VarkaLoopEmitterSuite`, "task 71: a budget change reaches only the shapes whose
+grouping it decides". Its corpus is shapes no rung can regroup - one output is
+one group whatever the budget, and outputs whose combined weight exceeds every
+rung stay apart at all of them - asserted across 16, 24, 32, 48 and 64 on method
+names and `codeSize`:
+
+* one depth-8 chain, a single output;
+* one `year`, 38 ops against the shipped 16, so a single output wider than the
+  budget which stays one method as the budget grows past it;
+* one `add_months`, 112 ops, wider than every rung;
+* two `year`s over *different* dates, 76 ops with no prefix to reuse, so clause
+  1 splits them and clause 2 never opens.
+
+A shape that legitimately regroups - two small disjoint outputs, which a wider
+budget should merge - is deliberately absent, because that is what the budget is
+for and asserting it unchanged would assert the feature away.
+
+10.3 learned the cost of a default change by making it and running the suites.
+That is the right cost and the wrong way to learn it; this is the assertion that
+makes it a check.
