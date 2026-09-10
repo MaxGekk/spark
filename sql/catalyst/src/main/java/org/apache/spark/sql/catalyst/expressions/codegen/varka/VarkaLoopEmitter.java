@@ -889,8 +889,19 @@ public final class VarkaLoopEmitter {
     for (int o = 0; o < outputs.size(); o++) {
       GroupOps withNext = group.copy();
       int marginal = withNext.add(outputs.get(o));
+      // What clause 2 counts as reuse. By default only a civil-from-days prefix the group
+      // already computes (task 32 step B2). Under `shareWholeNodes` (task 71) any node the
+      // group already holds counts too, measured as what this output would cost on its own
+      // less what it actually adds - which is the prefix accounting generalised, since a
+      // reused prefix is reused nodes. The gate stays `> 0`: reuse opens the wider bound,
+      // its size does not.
+      int reuse = withNext.saved;
+      if (options.shareWholeNodes()) {
+        GroupOps alone = new GroupOps(options.shareChronoPrefix());
+        reuse = alone.add(outputs.get(o)) - marginal;
+      }
       boolean fits = group.ops + marginal <= options.groupBudget()
-          || (withNext.saved > 0 && group.ops + marginal <= options.fusedCeiling());
+          || (reuse > 0 && group.ops + marginal <= options.fusedCeiling());
       // marginal == 0 means this output adds no node the group does not already have - it
       // is structurally the same tree - so splitting it off cannot reduce the method's op
       // count and only costs it the CSE. That matters once a node can outweigh the budget on

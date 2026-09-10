@@ -2817,6 +2817,76 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ctx = "two dates", options = sharing)
   }
 
+  test("task 71: whole-node reuse groups what a wider budget would, and nothing else") {
+    // Clause 2 lets an output join a group past the budget when joining lets it skip work the
+    // group already does. B2 wrote that for a civil-from-days prefix; `shareWholeNodes`
+    // generalises it to any node the group holds, which is the same argument - a reused prefix
+    // is reused nodes. The point is that it needs no wider budget: `groupBudget` bounds the
+    // method, and it is what keeps compile time in hand (C1 refuses a loop method past about
+    // 1900 bytes), so buying the CSE by raising it would loosen the wrong bound.
+    //
+    // The claim asserted here is method-for-method identity, in both directions: at the
+    // shipped budget the rule emits exactly what a budget of 24 emits for the shapes that
+    // share nodes, and exactly what the shipped budget emits for every shape that does not.
+    // Method-level rather than whole-class, because `emitMulti` gives each class a fresh name
+    // and the name is in the bytes.
+    val c0 = new ColumnRef(0)
+    val c1 = new ColumnRef(1)
+    def over(base: VarkaVectorIR, depth: Int, slotBase: Int): VarkaVectorIR = {
+      var node = base
+      for (level <- 0 until depth) {
+        node = if (level % 2 == 0) new AddDays(node, new LiteralSlot(slotBase + level))
+        else new SubDays(node, new LiteralSlot(slotBase + level))
+      }
+      node
+    }
+    val shared8 = chain(8)
+    val da1 = new AddDays(c0, new LiteralSlot(0))
+    val rule = VarkaEmitOptions.DEFAULTS.withShareWholeNodes(true)
+    val wider = VarkaEmitOptions.DEFAULTS.withGroupBudget(24)
+    val shipped = VarkaEmitOptions.DEFAULTS.withShareWholeNodes(false)
+
+    // Shapes that share nodes but no prefix, and whose merged weight straddles the budget:
+    // the rule must emit what the wider budget emits.
+    val sharing = Seq[(String, Seq[VarkaVectorIR], Int, Int)](
+      ("task 17's two outputs over a shared chain",
+        Seq(over(shared8, 6, 8), over(shared8, 6, 14)), 1, 20),
+      ("three outputs over a shared chain",
+        Seq(over(shared8, 4, 8), over(shared8, 4, 12), over(shared8, 4, 16)), 1, 20))
+    // The loop methods of one emitted class, as (name -> code size) - what a grouping change
+    // moves and a class name does not.
+    def layout(bytes: (String, Array[Byte])): Seq[(String, Int)] =
+      methodNames(bytes).filter(n => n.startsWith("loopDense") || n.startsWith("loopMasked"))
+        .sorted.map(m => m -> VarkaEmitterTestSupport.codeSize(bytes._2, m))
+
+    for ((name, roots, inputs, lits) <- sharing) {
+      assert(layout(emitMulti(roots, inputs, lits, rule))
+        === layout(emitMulti(roots, inputs, lits, wider)),
+        s"$name: the rule at the shipped budget should emit what a budget of 24 emits")
+      assert(layout(emitMulti(roots, inputs, lits, rule))
+        !== layout(emitMulti(roots, inputs, lits, shipped)),
+        s"$name: the rule should change this shape, or the corpus has stopped exercising it")
+    }
+
+    // And everything else is untouched: nothing shared, sharing already served by clause 2,
+    // sharing that fits the budget anyway, and outputs too heavy to join at any bound.
+    val untouched = Seq[(String, Seq[VarkaVectorIR], Int, Int)](
+      ("two plain chains over different columns", Seq(chain(6), over(c1, 6, 6)), 2, 12),
+      ("year and month over one date, clause 2's own case",
+        Seq[VarkaVectorIR](new Year(c0), new Month(c0)), 1, 0),
+      ("year over two dates, nothing to share",
+        Seq[VarkaVectorIR](new Year(c0), new Year(c1)), 2, 0),
+      ("add_months over two dates, heavier than any bound",
+        Seq[VarkaVectorIR](new AddMonths(c0, new LiteralSlot(0)),
+          new AddMonths(c1, new LiteralSlot(0))), 2, 1),
+      ("date_add and datediff over it, already one group", Seq(da1, new DateDiff(da1, c1)), 2, 1))
+    for ((name, roots, inputs, lits) <- untouched) {
+      assert(layout(emitMulti(roots, inputs, lits, rule))
+        === layout(emitMulti(roots, inputs, lits, shipped)),
+        s"$name: the rule reached a shape it has no reuse to act on")
+    }
+  }
+
   test("task 71: a budget change reaches only the shapes whose grouping it decides") {
     // The guard section 2.35 believed already existed and did not. B2's byte-identity test
     // above compares `shareChronoPrefix` off against on at ONE budget; nothing asserted that
