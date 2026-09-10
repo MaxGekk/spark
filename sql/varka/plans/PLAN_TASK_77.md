@@ -52,10 +52,20 @@ Three things lift it, and none of them is an engine change:
    number - which is what row 77's "a committed row that would have caught the
    collapse the day it landed" is really asking for.
 
+**Correction, 10 September 2026: items 1 and 2 above are milestone 5's task 90,
+not this task's.** That row was scoped on 9 September for exactly them - the band
+committed per file, the regeneration diff reported against it rather than a flat
+3% - and this plan re-scoped onto it without checking milestone 5's table. The
+work is done and is credited to row 90, which now records what landed and what it
+still owes; this task keeps item 3, the gate, which row 90 does not scope, and the
+two repairs section 1 turned up: 2.39's correction and the row key. The mistake is
+left visible here rather than tidied away, because it is the same one 2.39 made -
+a claim adopted without enumerating the state it depends on.
+
 **Explicitly not in this task.** Forking a JVM per section, which the superseded
 plan proposed: forking was there to keep a profile clean, and the profile story
 is what came out. The emitter. `GROUP_BUDGET` (task 71), the validity helper
-choice (task 76), task 47's remainder. The cause hunt.
+choice (task 76), task 47's remainder. The cause hunt, which is row 90's.
 
 ## 3. The admission check, to do first
 
@@ -314,6 +324,39 @@ and by a factor of three at the median. A single band applied to both would be
 far too loose for the narrow file, which is where collapses have historically
 shown up - the opposite of a safe default.
 
-<!-- The rest, filled in as the task lands: what moved that the plan did not
-     list, and what the task leaves for later - which goes to the milestone's
-     debt register or a scope document, never to a code comment. -->
+### 10.4 What moved that the plan did not list
+
+**The scope belonged to a row that already existed.** Section 2's re-scope -
+measure the band, commit it, classify against it - is milestone 5's task 90,
+scoped a day earlier for those exact deliverables. This plan did not look at
+milestone 5's table before claiming the work. Both rows now say so, and the band
+half is credited to 90 with its remaining items listed. The lesson is the one
+2.39 already taught and this plan then repeated: a claim that depends on existing
+state is checked against that state, not adopted because it reads well.
+
+**The row key was not unique, and the requote had been paying for it.** Four
+sections of the parity file share a table header and two rows share a case name,
+so `(table, case)` merged two rows into one: 207 rows parsed to 206, and
+`--requote` reported the survivor's shifted key as absent rather than moved, which
+is a false all-clear on the closing step `sql/varka/AGENTS.md` makes mandatory.
+Fixed with a self-test built on the collision the file actually holds.
+
+**A control row is itself unreadable.** `probe: trivial body, int[] (control)`
+spreads 64.6% across ten runs of an unchanged file. The diff prints controls under
+the heading "if these moved, the machine moved", and that heading is not true of
+that row. It is left as found, in the band's unreadable tier, rather than quietly
+dropped from the control set - deciding what the control set should be is row
+90's, alongside the cause.
+
+**The gate's completeness check earned its place on first use.** Walked back
+through the record it found a table present in August and absent now, which is
+recorded as retired. A section appearing or vanishing should be a decision.
+
+### 10.5 What this leaves for later
+
+The cause, entirely: milestone 5's task 90. The census leaves it sharper than it
+found it - `ChronoVectorOps.vectorFourFieldsNoValidity` takes 100 runtime
+deoptimisations across 194 compiles and is hand-written, the 10609 `task_queued`
+records are unread, and `SKILLS.md`'s task-43 correction offers compile queueing
+as an alternative nobody has tested. Row 90 also still owes the arithmetic
+benchmark's band, task 63's 9.7 figure re-taken pinned, and the N-fork decision.

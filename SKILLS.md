@@ -2443,3 +2443,90 @@ Two habits follow:
   same arithmetic under two Spark types must produce byte-identical buffers from
   demonstrably different vector classes - and it fails the day the premise
   breaks, which is exactly when a benchmark's noise would hide it.
+## Two things share the name `uncommon_trap`, and only one of them happened
+
+`PLAN_MILESTONE_4.md` 2.39 read `-XX:+LogCompilation` and reported that a kernel
+was taking nine `profile_predicate` traps per method with action
+`maybe_recompile`, thirty-six for the kernel, 494 across the file, and concluded
+that a polluted profile was making C2 speculate, fail and rebuild. A whole task
+was planned on that. None of it was there.
+
+A self-closing `<uncommon_trap .../>` inside a `<parse>` tree is a guard the
+compiler **inserted while building the method**. C2 emits a fixed block of them
+per counted-loop compile - `predicate`, `profile_predicate`, `loop_limit_check`,
+`auto_vectorization_check` - which is why their counts move together and tie. A
+loop that never deoptimises emits four. A runtime deoptimisation is a different
+element: an open `<uncommon_trap thread=... compile_id=... level=...>` carrying a
+nested `<jvms method='...'/>` frame with a literal method name, usually followed
+by `<make_not_entrant>`. Counting the first and reporting it as the second counts
+compiles.
+
+**The tell was inside the section's own numbers.** It reported six tier-4
+compiles plus two on-stack replacements two paragraphs above, and nine traps per
+method two paragraphs below. Eight compiles plus the tier-3 compile is nine. A
+per-method count that equals the compile count is a per-compile event, and the
+document had both numbers on one page.
+
+Counted properly the same run gives 1764 insertions against 394 runtime
+`profile_predicate` deoptimisations, and the storm is real but elsewhere: the
+worst method takes 100 deoptimisations across 194 compiles and is *hand-written*,
+while the shape the section was about no longer appears at all.
+
+Three habits, and the first two are cheap:
+
+- **Reproduce a diagnostic's element on something with a known answer before
+  counting it in anger.** A twenty-line program with a summing loop settles what
+  `profile_predicate` means in about a minute, and it settles it against a
+  program that provably has no deoptimisation to find.
+- **Two counts that must differ and do not are a keying bug, not a coincidence.**
+  `predicate` and `profile_predicate` are independent runtime failures and tied
+  exactly. Independent things do not tie; a fixed block emitted once per compile
+  does.
+- **Attribute through the field that names the thing.** A runtime deoptimisation
+  carries its own `<jvms method='...'/>` with a literal name. The numeric
+  `<klass>`/`<method>` ids that need a per-compilation-unit lookup live only in
+  the `<parse>` tree - the half that should not be attributed at all - so a
+  procedure that resolves ids is a procedure counting the wrong half.
+
+`dev/varka_trap_census.py` does the split and exists so this cannot be repeated
+by hand.
+
+## A band says which moves to read; an invariant says which to stop the line for
+
+Task 77 was opened because a kernel fell from 273 to 8.8 M rows/s at 128-bit and
+the number went into three committed files with nobody remarking on it. The
+instinct is to make the diff louder. That does not work, and measuring the file
+says why: over ten runs with nothing changed, the parity file's median case moves
+5.34% at AVX-512, its p90 22.3%, and its worst 227%. A threshold low enough to
+catch a collapse flags a third of the file every time, and a reader who has
+learned to discount large moves discounts the real one too.
+
+Two different instruments, and conflating them is what left the collapse
+uncaught for three regenerations:
+
+- **The band is for reading.** It records, per case, what an unchanged file does,
+  so a move can be compared against that case's own noise instead of a flat
+  number. Held out, that cuts false alarms from 32.9% of rows to 5.6%.
+- **The gate is for invariants.** What made the collapse different was not its
+  size but that it broke something that must be true: the fused kernel became
+  slower than the sixty-four separate passes it exists to beat. That is an
+  assertion, it is independent of every number in the file, and walked back over
+  76 committed revisions it fires three times - the collapse and the two
+  regenerations after it - and never otherwise.
+
+Two rules fell out of building them.
+
+**A band is a threshold, so it only has to know which cases are noisy.** The
+split-half check found that *which* cases are noisy reproduces strongly (worst
+quartile 37 of 52 the same, against a chance of 13) while *how* noisy a given
+case is reproduces weakly at the wide width (correlation 0.325). So the band
+records a tier, not a spread, and does not publish precision the measurement
+cannot support.
+
+**Derive an invariant, do not assert one.** Every pair in the gate was checked
+against every committed revision of its file before being written down. For the
+end-to-end benchmark the direction was genuinely unknown - the debt register
+records shapes where Varka loses - and measuring found 32 of 42 tables where it
+wins in every revision and ten where it does not, which is a fact about the
+read-back floor rather than a judgement call. A hand-written list would have got
+that wrong in both directions.
