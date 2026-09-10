@@ -355,3 +355,56 @@ for and asserting it unchanged would assert the feature away.
 10.3 learned the cost of a default change by making it and running the suites.
 That is the right cost and the wrong way to learn it; this is the assertion that
 makes it a check.
+
+### 10.5 Step 5, static half: the boundary is between 16 and 24, and nothing
+above 24 buys anything
+
+Before timing any rung, emit a corpus at each and count what the budget actually
+regroups. Methods are `loopDense*`; ops are `IntVector` calls summed over them.
+
+| shape | 16 | 24 | 32 | 48 | 64 |
+|---|---|---|---|---|---|
+| task 17: 2 outputs, shared depth-8 chain | 2 / 60 | 1 / 43 | 1 / 43 | 1 / 43 | 1 / 43 |
+| 3 outputs, shared depth-8 chain | 2 / 61 | 1 / 44 | 1 / 44 | 1 / 44 | 1 / 44 |
+| `date_add` + `year` over one date | 2 / 38 | 2 / 38 | 2 / 38 | 1 / 37 | 1 / 37 |
+| 2 outputs, shared depth-4 chain | 1 / 35 | 1 / 35 | 1 / 35 | 1 / 35 | 1 / 35 |
+| DAG-CSE: `date_add(d,1)` and `datediff` over it | 1 / 7 | 1 / 7 | 1 / 7 | 1 / 7 | 1 / 7 |
+| 2 plain chains, nothing shared | 1 / 28 | 1 / 28 | 1 / 28 | 1 / 28 | 1 / 28 |
+| `year` + `month` over one date | 1 / 40 | 1 / 40 | 1 / 40 | 1 / 40 | 1 / 40 |
+| `year` over two dates | 2 / 68 | 2 / 68 | 2 / 68 | 2 / 68 | 2 / 68 |
+| `dayofweek` + `weekday` | 1 / 34 | 1 / 34 | 1 / 34 | 1 / 34 | 1 / 34 |
+
+**Three of nine shapes regroup at all, and only one of them above 24.** The two
+that move at 24 each drop 17 ops, about 28%. The one that moves at 48 drops
+**one op of 38** - and it is the shape whose assertion 10.3 found failing at 64.
+So going past 24 buys a single lane op on one shape, costs the one pinned
+assertion, and grows every method's bound toward the C1 refusal 2.3 records.
+
+Six shapes never move, and two of them say why the budget is narrower than it
+looks: `year + month` is clause 2's, and `year` over two dates has nothing to
+share at any budget. **The budget decides grouping only where outputs share
+nodes but no calendar prefix and their merged weight straddles the rung.**
+
+This is the ladder's answer, and it needed no timing run. Prediction 2 said the
+budget's win would keep growing to at least 32 and then flatten; it flattens at
+24, one rung earlier, and the static count is what shows it rather than a
+throughput measurement that would have had to beat the file's noise.
+
+**And it points at 4.1's second dimension rather than at a number.** Read the
+condition again with the survey in hand. `marginal` already counts only nodes
+*new* to the group, so `group.ops + marginal` is the merged method's total, with
+the shared chain counted once: task 17's pair is 14 + 6 = 20 against a budget of
+16. Two methods cost 28 nodes of work to the merged method's 20, so the merge is
+strictly less work - and clause 1 rejects it anyway, because it bounds the
+method rather than the work.
+
+Clause 2 exists for exactly that case and does not fire, because `saved` counts
+civil-from-days prefix reuse only. Widen it to count *any* reuse and task 17's
+pair merges at a budget of 16, with no rung moved: `saved` becomes 8, clause 2
+opens to `FUSED_CEILING`, and the same 28% saving arrives without loosening the
+bound that keeps compile time in hand. The justification is identical to the one
+B2 wrote for prefixes - joining lets the output skip work the group already
+does, which is less work rather than a trade.
+
+So the shape of the answer is a rule, not a number, which is what prediction 3
+registered. That is the next thing to build and measure.
