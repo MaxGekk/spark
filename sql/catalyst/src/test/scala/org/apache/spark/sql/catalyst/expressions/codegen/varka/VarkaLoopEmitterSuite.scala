@@ -198,14 +198,26 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     Col(data, validity, nulls)
   }
 
-  private def makeOutput(arena: Arena, length: Int): (MemorySegment, MemorySegment) = {
+  private def makeOutput(
+      arena: Arena,
+      length: Int,
+      validityBytes: Long = -1L): (MemorySegment, MemorySegment) = {
     val data = alloc(arena, length * 4L)
     // A sentinel no chain produces from the inputs above, so an unwritten valid row shows.
     for (i <- 0 until length) data.set(ValueLayout.JAVA_INT, i * 4L, 0xDEADBEEF)
-    val validity = alloc(arena, (length + 7) / 8L)
+    // The nominal size by default, and a bounded segment is a real assertion: a per-group
+    // write addressing more than the bytes its group occupies faults here rather than
+    // corrupting a neighbour. Task 47's word writer needs whole words instead, which is what
+    // an Arrow destination buffer actually carries (VarkaKernelEvaluatorSuite), so its arm
+    // asks for that size explicitly rather than widening every other test's guard.
+    val validity = alloc(arena, if (validityBytes >= 0) validityBytes else (length + 7) / 8L)
     validity.fill(0xFF.toByte) // the loop must zero it; stale bits must not leak through
     (data, validity)
   }
+
+  /** The destination validity bytes an emission under `options` needs; see [[makeOutput]]. */
+  private def outputValidityBytes(options: VarkaEmitOptions, length: Int): Long =
+    if (options.validityByWord()) ((length + 63L) / 64L) * 8L else (length + 7L) / 8L
 
   /** Asserts two (data, validity) outputs agree bit for bit and, where valid, value for value. */
   private def assertSameOutput(
@@ -268,7 +280,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
           val cols = (0 until numInputs).map { c =>
             makeInputData(arena, length, combo(c), i => data(c, i))
           }
-          val outs = roots.map(_ => makeOutput(arena, length))
+          val outs = roots.map(_ =>
+            makeOutput(arena, length, outputValidityBytes(options, length)))
           val nullCounts = cols.map { col =>
             if (forceMasked && col.nullCount == 0) 1 else col.nullCount
           }
@@ -3698,6 +3711,140 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val baked = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0)._2
     assert(!VarkaEmitterTestSupport.invokedNames(baked, species).asScala.contains("length"),
       "the baked emission still calls VectorSpecies.length()")
+  }
+
+  test("task 47: the word writer's bitmap is the per-group writer's, at every length, width " +
+      "and null state") {
+    // The failure mode this task has and its predecessors did not: a store eight bytes wide
+    // where the group is one or two, into a bitmap whose nominal size is (length + 7) / 8. Both
+    // halves of that are length-dependent and silent - a word that runs off the end faults only
+    // when the segment happens to be tight, and a partial word left behind is a wrong bit, not
+    // a crash - so the ladder is the test, and it runs the awkward lengths on purpose: below a
+    // word, either side of a word boundary, either side of the default batch size.
+    //
+    // The oracle is the per-group writer itself. Both arms run on the same input and the
+    // bitmaps are compared byte for byte over the rows that exist, which is the only comparison
+    // that can catch a bit set in the wrong word.
+    val blend: VarkaVectorIR = new IfElse(
+      new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0)),
+      new AddDays(new ColumnRef(0), new LiteralSlot(0)),
+      new SubDays(new ColumnRef(0), new LiteralSlot(0)))
+    // A Cond root is the filter kernel, and it is in this task's population on *every* batch:
+    // its slot holds a selection bitmap rather than validity, so task 45's driver fill cannot
+    // serve it and task 70's pass does not run in a dense body at all. Leaving it out would
+    // leave the project's most common shape untested at both arms.
+    val filter: VarkaVectorIR = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
+    val lits = Array(3)
+    for (lanes <- Seq(4, 8, 16)) {
+      val perGroup = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+      val byWord = perGroup.withValidityByWord(true)
+      for ((roots, shape) <- Seq(
+          Seq(blend) -> "one blend",
+          Seq(filter) -> "a filter",
+          Seq(blend, filter) -> "a blend beside a filter",
+          Seq(blend, blend, filter) -> "two blends beside a filter")) {
+        val (refKernel, refLoader) = load(emitMulti(roots, 1, lits.length, perGroup))
+        val (wordKernel, wordLoader) = load(emitMulti(roots, 1, lits.length, byWord))
+        try {
+          for (length <- Seq(1, 7, 8, 15, 16, 63, 64, 65, 127, 128, 129, 1000, 4096);
+               (isNull, nullState) <- Seq[(Int => Boolean, String)](
+                 (_ => false, "null-free"),
+                 (i => i % 3 == 0, "mixed nulls"),
+                 (_ => true, "all null"))) {
+            val arena = Arena.ofConfined()
+            try {
+              val col = makeInputData(arena, length, isNull, i => i - 500)
+              // The reference arm keeps the tight segment, so it stays the guard it has always
+              // been; only the word arm is given the whole words a real destination carries.
+              val refOut = roots.map(_ => makeOutput(arena, length))
+              val wordOut = roots.map(_ =>
+                makeOutput(arena, length, ((length + 63L) / 64L) * 8L))
+              val ctx = s"$shape at $lanes lanes, length $length, $nullState"
+              for ((kernel, outs) <- Seq(refKernel -> refOut, wordKernel -> wordOut)) {
+                val dstData = roots.zip(outs).map { case (root, out) =>
+                  if (root.isInstanceOf[Cond]) 0L else out._1.address()
+                }
+                val status = kernel.run(Array(col.data.address()),
+                  Array(col.validityAddress(length)), Array(col.nullCount),
+                  dstData.toArray, outs.map(_._2.address()).toArray, lits, length)
+                assert(status === 0, s"$ctx: the kernel declined a batch it should compute")
+              }
+              for ((root, i) <- roots.zipWithIndex) {
+                for (b <- 0L until (length + 7) / 8L) {
+                  assert(
+                    wordOut(i)._2.get(ValueLayout.JAVA_BYTE, b) ===
+                      refOut(i)._2.get(ValueLayout.JAVA_BYTE, b),
+                    s"$ctx: output $i validity byte $b differs")
+                }
+                if (!root.isInstanceOf[Cond]) {
+                  for (r <- 0 until length) {
+                    val valid =
+                      (refOut(i)._2.get(ValueLayout.JAVA_BYTE, r / 8L) & (1 << (r % 8))) != 0
+                    if (valid) {
+                      assert(
+                        wordOut(i)._1.get(ValueLayout.JAVA_INT, r * 4L) ===
+                          refOut(i)._1.get(ValueLayout.JAVA_INT, r * 4L),
+                        s"$ctx: output $i row $r differs")
+                    }
+                  }
+                }
+              }
+            } finally {
+              arena.close()
+            }
+          }
+        } finally {
+          refLoader.release()
+          wordLoader.release()
+        }
+      }
+    }
+  }
+
+  /** The four body methods' sizes, which is how a change's blast radius is asserted here. */
+  private def bodySizes(named: (String, Array[Byte])): Seq[Int] =
+    Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")
+      .map(VarkaEmitterTestSupport.codeSize(named._2, _))
+
+  test("task 47: the word writer reaches the outputs that keep a per-group write, and only " +
+      "those") {
+    // The blast radius, asserted rather than described. An output task 45 fills once, and one
+    // task 70's pass writes whole, must emit the same bytes under both arms - the word writer
+    // has nothing to do for them - while an output that still writes per lane group must not.
+    // This is also what stops the two arms collapsing into one kernel, which is exactly how
+    // task 46's A/B silently began timing itself (see the task 76 test below).
+    val lanes = 16
+    val perGroup = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+    val byWord = perGroup.withValidityByWord(true)
+    // `year(d)` on a dense batch is task 45's fill; on a masked batch with the bitmap pass on
+    // it is task 70's whole-bitmap write. Neither keeps a per-group write, so both arms agree.
+    val year: VarkaVectorIR = new Year(new ColumnRef(0))
+    assert(bodySizes(emitMulti(Seq(year), 1, 0, perGroup)) ===
+      bodySizes(emitMulti(Seq(year), 1, 0, byWord)),
+      "an output the driver writes must not change under the word writer")
+    // A blend's word is computed per lane group, so it is unserved by construction and keeps
+    // the write - both bodies must differ.
+    val blend: VarkaVectorIR = new IfElse(
+      new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0)),
+      new AddDays(new ColumnRef(0), new LiteralSlot(0)),
+      new SubDays(new ColumnRef(0), new LiteralSlot(0)))
+    assert(bodySizes(emitMulti(Seq(blend), 1, 1, perGroup)) !==
+      bodySizes(emitMulti(Seq(blend), 1, 1, byWord)),
+      "a per-group write must change under the word writer, or the A/B times one kernel twice")
+    // And a filter, whose per-group OR survives task 45 in the dense body too.
+    val filter: VarkaVectorIR = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
+    assert(bodySizes(emitMulti(Seq(filter), 1, 1, perGroup)) !==
+      bodySizes(emitMulti(Seq(filter), 1, 1, byWord)),
+      "a selection root must change under the word writer")
+    // A width the accumulator's arithmetic cannot serve falls back to the per-group form
+    // rather than emitting something subtly wrong. At 64 lanes a group is a whole word and the
+    // mask `(1L << lanes) - 1` is zero, because Java shifts modulo 64 - the arm would write
+    // nothing but zeros. No int lane count this JVM offers reaches it, which is exactly why it
+    // is worth an assertion: the guard is unreachable today and has to survive a wider one.
+    val wide = VarkaEmitOptions.DEFAULTS.withLanesOverride(64)
+    assert(bodySizes(emitMulti(Seq(blend), 1, 1, wide)) ===
+      bodySizes(emitMulti(Seq(blend), 1, 1, wide.withValidityByWord(true))),
+      "a 64-lane group must not word-write, since its lane mask would be zero")
   }
 
   test("task 76: every arm of task 46's A/B still emits two different kernels") {

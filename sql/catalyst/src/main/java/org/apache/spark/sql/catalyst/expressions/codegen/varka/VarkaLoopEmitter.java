@@ -570,6 +570,9 @@ public final class VarkaLoopEmitter {
   /** {@code void VarkaVectorSupport.orValidityBitsAt<N>(MemorySegment, long, long)} (task 46). */
   private static final MethodTypeDesc OR_VALIDITY_BITS_AT_WIDTH = MethodTypeDesc.of(
       ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, ConstantDescs.CD_long);
+  /** {@code void VarkaVectorSupport.putValidityWord(MemorySegment, long, long)} (task 47). */
+  private static final MethodTypeDesc PUT_VALIDITY_WORD = MethodTypeDesc.of(
+      ConstantDescs.CD_void, MEMORY_SEGMENT, ConstantDescs.CD_long, ConstantDescs.CD_long);
 
   /** {@code int VectorSpecies.length()} / {@code int VectorSpecies.loopBound(int)}. */
   private static final MethodTypeDesc SPECIES_LENGTH = MethodTypeDesc.of(ConstantDescs.CD_int);
@@ -2264,6 +2267,14 @@ public final class VarkaLoopEmitter {
      * is the month count operand, checked against the range the magic multiply is exact over,
      * and so parked before the node's own value exists at all.
      */
+    /**
+     * Task 47: one {@code long} accumulator per output whose validity this body writes a word
+     * at a time, or {@code -1} for an output that keeps the per-lane-group read-modify-write.
+     * Null in every body that does not word-write at all, which is what keeps such a body's
+     * slot numbering - and so its bytes - exactly what it was before this task.
+     */
+    int[] validityAcc;
+
     final Map<VarkaVectorIR, Integer> guardTmp = new HashMap<>();
 
     /** {@code MakeDate}'s {@link #MAKE_DATE_TMP_COUNT} locals (task 42). */
@@ -2374,6 +2385,22 @@ public final class VarkaLoopEmitter {
     boolean guarding = producersGuarding || selfGuarding || checkedArith;
     if (guarding) {
       s.guardAcc = slot++;
+    }
+    // Task 47: one accumulator per output this body writes a word at a time. Allocated after
+    // guardAcc and before epilogueMask, and only in a loop body that word-writes at all, so
+    // every other emission keeps the slot numbering it had - the byte-identity the option's
+    // off arm is asserted on.
+    if (mode == BodyMode.LOOP && wordWrites(analysis)) {
+      for (int o : outputIdx) {
+        if (keepsPerGroupWrite(analysis, dense, outputs, o)) {
+          if (s.validityAcc == null) {
+            s.validityAcc = new int[outputs.size()];
+            Arrays.fill(s.validityAcc, -1);
+          }
+          s.validityAcc[o] = slot;
+          slot += 2;
+        }
+      }
     }
     // Task 70: which words this body still reads, or null for "all of them" - the pass off, or
     // a dense body, which has no words. Decided before the allocation loop because it decides
@@ -2914,7 +2941,29 @@ public final class VarkaLoopEmitter {
       if (!(outputs.get(o) instanceof Cond)) {
         loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
       }
-      loadSegment(cb, P_DST_VALIDITY, o, s.validityBytes, s.dstValSeg[o]);
+      // Task 47: an output this emission writes a word at a time needs the segment to own the
+      // whole last word, ((length + 63) / 64) * 8 bytes, where the nominal (length + 7) / 8 is
+      // short of it for every length not a multiple of 64. The Arrow buffer behind it carries
+      // that at every length (VarkaKernelEvaluatorSuite), and the driver's zero below then
+      // covers exactly the bytes the loop stores. Every other output keeps the nominal size,
+      // so an emission that word-writes nothing keeps its bytes.
+      if (wordWrites(analysis) && keepsPerGroupWrite(analysis, dense, outputs, o)) {
+        cb.aload(P_DST_VALIDITY);
+        cb.loadConstant(o);
+        cb.laload();
+        cb.iload(P_LENGTH);
+        cb.loadConstant(63);
+        cb.iadd();
+        cb.i2l();
+        cb.loadConstant(64L);
+        cb.ldiv();
+        cb.loadConstant(3);
+        cb.lshl();
+        cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
+        cb.astore(s.dstValSeg[o]);
+      } else {
+        loadSegment(cb, P_DST_VALIDITY, o, s.validityBytes, s.dstValSeg[o]);
+      }
       // Task 70: an output the bitmap pass serves is written whole between steps (4) and (5)
       // below - after the null state it reads exists and before the shortcut can return - and
       // that write is what keeps this step's invariant for it, not a zero it overwrites.
@@ -3153,6 +3202,21 @@ public final class VarkaLoopEmitter {
 
   private static void emitVectorLoop(CodeBuilder cb, boolean dense,
       List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, Slots s) {
+    // Task 47: each validity accumulator is zeroed before the loop, not because the first
+    // group needs it - it starts a word and clears the accumulator itself - but because the
+    // verifier does. The clear sits behind `if ((i & 63) == 0)`, so at that branch's merge one
+    // incoming edge has assigned the local and the other has not, and a merge of `long` with
+    // `top` is `top`: `VerifyError: Bad local variable type` on the first `lload`. Two
+    // bytecodes once per method make the local definitely assigned on every path into the loop.
+    if (s.validityAcc != null) {
+      for (int o : outputIdx) {
+        if (s.validityAcc[o] >= 0) {
+          cb.loadConstant(0L);
+          cb.lstore(s.validityAcc[o]);
+        }
+      }
+    }
+
     // (6) The lane-group loop: for (i = 0; i < loopBound; i += lanes).
     cb.loadConstant(0);
     cb.istore(s.iVar);
@@ -3345,16 +3409,14 @@ public final class VarkaLoopEmitter {
       VarkaVectorIR root = outputs.get(o);
       if (root instanceof Cond cond) {
         emitCond(cb, cond, dense, analysis, s, computed);
-        cb.aload(s.dstValSeg[o]);
-        cb.iload(s.iVar);
-        cb.i2l();
-        if (dense) {
-          cb.aload(s.condMask.get(cond));
-          cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
-        } else {
-          cb.lload(s.kt.get(cond));
-        }
-        emitValidityOr(cb, analysis, s);
+        emitValidityWrite(cb, analysis, s, o, () -> {
+          if (dense) {
+            cb.aload(s.condMask.get(cond));
+            cb.invokevirtual(VECTOR_MASK, "toLong", TO_LONG);
+          } else {
+            cb.lload(s.kt.get(cond));
+          }
+        });
         continue;
       }
       // The validity OR goes *before* the vector computation wherever its word is already
@@ -3412,15 +3474,78 @@ public final class VarkaLoopEmitter {
   /** ORs a value root's validity word for this lane group into its destination bitmap. */
   private static void emitRootValidityOr(CodeBuilder cb, boolean dense, Analysis analysis,
       Slots s, int output, VarkaVectorIR root) {
+    emitValidityWrite(cb, analysis, s, output, () -> {
+      if (dense) {
+        cb.loadConstant(-1L);
+      } else {
+        loadWord(cb, s, s.wordRef.get(root));
+      }
+    });
+  }
+
+  /**
+   * This lane group's validity bits for one output, however this emission writes them.
+   * {@code pushBits} leaves the group's bits as a long, lane 0 in bit 0, with anything above
+   * the group's own {@code lanes} bits unspecified - the read helpers deliberately leave the
+   * neighbouring rows in place, and {@link VectorMask#fromLong} ignores them.
+   *
+   * <p>The per-group form (task 46) hands segment, row and bits to {@code orValidityBitsAt*},
+   * which masks and shifts them itself. The word form (task 47) does that arithmetic here,
+   * because the bits go into a register rather than into memory:
+   *
+   * <pre>
+   *   if ((i &amp; 63) == 0) acc = 0;              // a new word starts at every 64th row
+   *   acc |= (bits &amp; laneMask) &lt;&lt; (i &amp; 63);
+   *   putValidityWord(dstValidity, i, acc);      // the whole word, no read
+   * </pre>
+   *
+   * <p>The mask is not optional: {@code orValidityBitsAt16} gets it for free from a narrowing
+   * cast to {@code short}, and dropping it here would OR a neighbouring group's bits into this
+   * one. It is a constant, since the lane count is baked wherever this form is used.
+   *
+   * <p>The store runs on every group rather than only on the group that completes a word, which
+   * is deliberate for this arm: it keeps the store count exactly what the per-group form has,
+   * so what the A/B prices is the removal of the <i>read</i> and its dependency chain, not two
+   * changes at once. It also means the loop needs no flush - the last group of the last word
+   * has already stored it - and that the bits above {@code loopBound} in the final word are
+   * zero, which is what lets the epilogue OR its partial group in afterwards.
+   */
+  private static void emitValidityWrite(CodeBuilder cb, Analysis analysis, Slots s, int output,
+      Runnable pushBits) {
+    int acc = s.validityAcc == null ? -1 : s.validityAcc[output];
+    if (acc < 0) {
+      cb.aload(s.dstValSeg[output]);
+      cb.iload(s.iVar);
+      cb.i2l();
+      pushBits.run();
+      emitValidityOr(cb, analysis, s);
+      return;
+    }
+    Label started = cb.newLabel();
+    cb.iload(s.iVar);
+    cb.loadConstant(63);
+    cb.iand();
+    cb.ifne(started);
+    cb.loadConstant(0L);
+    cb.lstore(acc);
+    cb.labelBinding(started);
+    cb.lload(acc);
+    pushBits.run();
+    // VarkaVectorSupport.laneMask, folded here: the engine module is not on this module's
+    // compile path, and every width that reaches this arm is well under 64 lanes.
+    cb.loadConstant((1L << analysis.lanes) - 1L);
+    cb.land();
+    cb.iload(s.iVar);
+    cb.loadConstant(63);
+    cb.iand();
+    cb.lshl();
+    cb.lor();
+    cb.lstore(acc);
     cb.aload(s.dstValSeg[output]);
     cb.iload(s.iVar);
     cb.i2l();
-    if (dense) {
-      cb.loadConstant(-1L);
-    } else {
-      loadWord(cb, s, s.wordRef.get(root));
-    }
-    emitValidityOr(cb, analysis, s);
+    cb.lload(acc);
+    cb.invokestatic(SUPPORT, "putValidityWord", PUT_VALIDITY_WORD);
   }
 
   /**
@@ -3450,6 +3575,35 @@ public final class VarkaLoopEmitter {
    */
   private static boolean servedByPass(Analysis analysis, boolean dense, int o) {
     return !dense && analysis.served[o] != null;
+  }
+
+  /**
+   * Whether output {@code o} still writes its validity once per lane group - neither filled by
+   * the driver (task 45) nor written whole by the bitmap pass (task 70). This is task 47's
+   * population, and it is <i>not</i> "the masked path": {@link #servedByPass} is false for
+   * every output of a dense body and {@link #fillsValidityOnce} excludes a {@link Cond} root by
+   * design, so a fused filter is in it on every batch, dense included.
+   */
+  private static boolean keepsPerGroupWrite(Analysis analysis, boolean dense,
+      List<VarkaVectorIR> outputs, int o) {
+    return !fillsValidityOnce(analysis, dense, outputs.get(o)) && !servedByPass(analysis, dense, o);
+  }
+
+  /**
+   * Whether this emission writes destination validity a 64-bit word at a time (task 47).
+   *
+   * <p>Three conditions. The option, because the per-group form stays a reference variant the
+   * differential checks against. A baked lane count, because the accumulator's shift is
+   * {@code i & 63} against a group of exactly {@code lanes} bits and a body that reads its
+   * width at run time knows neither. And a lane count that is a proper divisor of 64: a group
+   * runs from {@code i} to {@code i + lanes} and must not straddle two words, and at 64 lanes
+   * exactly the mask {@code (1L << lanes) - 1} is zero, since Java shifts modulo 64. Both are
+   * true of every width this JVM offers for int lanes; false is the safe answer for a width
+   * that arrives later.
+   */
+  private static boolean wordWrites(Analysis analysis) {
+    return analysis.options.validityByWord()
+        && analysis.lanes != 0 && analysis.lanes < 64 && 64 % analysis.lanes == 0;
   }
 
   /**

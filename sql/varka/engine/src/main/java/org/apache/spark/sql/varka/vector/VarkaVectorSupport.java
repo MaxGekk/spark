@@ -197,6 +197,31 @@ public final class VarkaVectorSupport {
   }
 
   /**
+   * Stores a whole 64-bit word of destination validity: bit {@code b} of {@code word} is row
+   * {@code (row & ~63L) + b}. Task 47's write, and deliberately the one access in this class
+   * that addresses a fixed word rather than the bytes a lane group occupies.
+   *
+   * <p>Two things make that sound here and nowhere else. It is a <i>destination</i> bitmap,
+   * which the evaluator allocates: {@code VarkaKernelEvaluatorSuite}'s "a destination validity
+   * buffer carries whole 64-bit words, at every length" pins that Arrow gives back at least
+   * {@code ((len + 63) / 64) * 8} bytes for every length and every vector class Varka writes,
+   * and the emitter sizes the segment to match. And it is a plain store, not an OR, which is
+   * sound because the driver has zeroed exactly the outputs that reach it and
+   * {@code groupOutputs} gives each output one writing method. A <i>source</i> bitmap has
+   * neither property - its sizing belongs to the input batch - which is why
+   * {@link #validityBitsAt} still reads a group's own bytes and says so at length.
+   *
+   * <p>What this buys is the removal of the read. {@code orValidityBitsAt*} loads the group's
+   * bytes, ORs and stores them back; at four lanes a group is half a byte, so two consecutive
+   * groups read-modify-write the same byte and serialise on it. The caller accumulates a word's
+   * groups in a register and calls this once, so the chain is gone rather than tuned around -
+   * see {@code PLAN_TASK_76.md} 10.6, which measured the regime.
+   */
+  public static void putValidityWord(MemorySegment validity, long row, long word) {
+    validity.set(UNALIGNED_LONG, (row >>> 6) << 3, word);
+  }
+
+  /**
    * {@link #validityBitsAt} for the last, <i>partial</i> lane group: {@code rows} rows starting
    * at {@code row}, where {@code rows} is anything from 1 to {@code lanes - 1} and therefore
    * not a width the byte-span switch above can serve. That switch exists because a whole group
