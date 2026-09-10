@@ -18,10 +18,21 @@
 # How far apart do two runs of the same benchmark land, with nothing changed?
 #
 #   dev/varka_bench_repeat.sh catalyst VarkaEmitterParityBenchmark 3
+#   dev/varka_bench_repeat.sh catalyst VarkaEmitterParityBenchmark 10 --narrow
+#   dev/varka_bench_repeat.sh core VarkaThroughputBenchmark 4 --band <file>
 #
 # Runs the benchmark N times, pinned exactly as dev/varka_bench_regen.sh pins it,
-# writes nothing to the committed results files, and reports the per-case spread:
-# the median, how many cases exceed 3, 10 and 20 percent, and the worst few.
+# writes nothing to the committed results files, and hands the runs to
+# dev/varka_bench_band.py, which reports the per-case spread: the median, the
+# p90, how many cases exceed 3, 10 and 20 percent, and the worst few. With
+# --band it also writes the committed band file the diff reads.
+#
+# --narrow runs under -XX:MaxVectorSize=16, the width the committed 128-bit
+# companion files are measured at. The two widths need separate bands and are
+# not interchangeable: over ten runs each, the narrow file's median spread is
+# 1.72% against the wide file's 5.34%, so one band across both would be far too
+# loose for the narrow file - which is where every collapse this milestone has
+# recorded actually showed up.
 #
 # It exists because a diff between two regenerations is not evidence of a change
 # until you know what an unchanged file does. On this machine it does more than
@@ -41,7 +52,15 @@
 set -uo pipefail
 root="$(git rev-parse --show-toplevel)"; cd "$root"
 [ "$#" -ge 2 ] || { sed -n '17,45p' "$0"; exit 2; }
-module="$1"; klass="$2"; runs="${3:-3}"
+module="$1"; klass="$2"; runs="${3:-3}"; shift 3 2>/dev/null || shift $#
+narrow=0; band=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --narrow) narrow=1; shift ;;
+    --band) band="$2"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
 
 case "$klass" in
   *.*) fqcn="$klass"; klass="${klass##*.}" ;;
@@ -73,39 +92,23 @@ fi
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 for i in $(seq 1 "$runs"); do
-  echo "== run $i of $runs"
-  "${runner[@]}" build/sbt -batch "$module/Test/runMain $fqcn" > "$out/run$i" 2>&1 \
-    || { echo "run $i failed:"; tail -5 "$out/run$i"; exit 1; }
+  echo "== run $i of $runs${narrow:+ }$([ "$narrow" -eq 1 ] && echo '(128-bit)')"
+  if [ "$narrow" -eq 1 ]; then
+    "${runner[@]}" build/sbt -batch "project $module" \
+      'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain $fqcn" \
+      > "$out/run$i" 2>&1 || { echo "run $i failed:"; tail -5 "$out/run$i"; exit 1; }
+  else
+    "${runner[@]}" build/sbt -batch "$module/Test/runMain $fqcn" > "$out/run$i" 2>&1 \
+      || { echo "run $i failed:"; tail -5 "$out/run$i"; exit 1; }
+  fi
+  # A run with no result rows is a broken invocation, not a quiet one; catching it
+  # here keeps a long series from being analysed as if it had data.
+  rows=$(grep -cE '^(\[info\] )?\S.*[0-9]+\s+[0-9.]+\s+[0-9.]+\s+[0-9.]+X\s*$' "$out/run$i")
+  [ "$rows" -gt 0 ] || { echo "run $i produced no result rows:"; tail -5 "$out/run$i"; exit 1; }
+  echo "   $rows rows"
 done
 
-python3 - "$out" "$runs" <<'PY'
-import re, sys, io, os, statistics
-out, runs = sys.argv[1], int(sys.argv[2])
-row = re.compile(r'^(?:\[info\] )?(\S.*?)\s{2,}\d+\s+\d+\s+\d+\s+([\d.]+)\s+[\d.]+\s+[\d.]+X\s*$')
-def parse(p):
-    d, seen = {}, {}
-    for ln in io.open(p, errors="replace"):
-        m = row.match(ln.rstrip())
-        if m:
-            n = m.group(1).strip()
-            seen[n] = seen.get(n, 0) + 1
-            d[f"{n}#{seen[n]}"] = float(m.group(2))
-    return d
-rs = [parse(os.path.join(out, f"run{i}")) for i in range(1, runs + 1)]
-common = set(rs[0])
-for r in rs[1:]:
-    common &= set(r)
-spread = []
-for k in common:
-    vs = [r[k] for r in rs]
-    spread.append(((max(vs) - min(vs)) / min(vs) * 100, k, min(vs), max(vs)))
-spread.sort(reverse=True)
-ps = [s[0] for s in spread]
-print(f"\n{len(common)} cases over {runs} runs")
-print(f"  median spread : {statistics.median(ps):.2f}%")
-for t in (3, 10, 20):
-    print(f"  over {t:2d}%       : {sum(1 for p in ps if p > t):4d}")
-print(f"\n{'worst cases':60s} {'min':>9s} {'max':>9s} {'spread':>7s}")
-for p, k, lo, hi in spread[:10]:
-    print(f"{k[:60]:60s} {lo:9.1f} {hi:9.1f} {p:6.1f}%")
-PY
+files=""
+for i in $(seq 1 "$runs"); do files="$files $out/run$i"; done
+# shellcheck disable=SC2086
+dev/varka_bench_band.py ${band:+--write "$band"} $files

@@ -148,50 +148,106 @@ def print_requotes(rows):
     print(f"  {total} document line(s) quote a moved row's old number")
 
 
-def print_rows(rows, threshold):
+BAND_ROW = re.compile(r"^(\d) +([\d.]+) +(\d+)  (.*)$")
+BAND_DELIM = " | "
+BAND_LABEL = {0: "quiet", 1: "moderate", 2: "noisy", 3: "unreadable"}
+BAND_THRESHOLD = {0: 3.0, 1: 10.0, 2: 25.0}
+
+
+def read_band(path):
+    """{(table, case, occurrence): tier} from a band file written by
+    dev/varka_bench_band.py. A tier is what an unchanged file does to that case:
+    0 within 3%, 1 within 10%, 2 within 25%, 3 not readable from a diff at all."""
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            m = BAND_ROW.match(line.rstrip())
+            if m:
+                table, _, case = m.group(4).partition(BAND_DELIM)
+                out[(table, case, int(m.group(3)))] = int(m.group(1))
+    if not out:
+        raise SystemExit(f"{path}: no band rows parsed")
+    return out
+
+
+def band_verdict(band, key, change):
+    """(marker, meaningful). Without a band this is the flat threshold as before."""
+    if band is None:
+        return (" <--" if abs(change) >= 3.0 else ""), abs(change) >= 3.0
+    tier = band.get(key)
+    if tier is None:
+        return " <-- (no band)", True
+    if tier >= 3:
+        return "  (unreadable)", False
+    over = abs(change) >= BAND_THRESHOLD[tier]
+    return (f" <-- ({BAND_LABEL[tier]})" if over else ""), over
+
+
+def print_rows(rows, threshold, band=None):
     # A case name repeats across tables ("hand-written kernel, null-free" is in date_add's
     # table and in datediff's), so name the table wherever the case alone is ambiguous.
     counts = {}
     for _, case, _, _, _ in rows:
         counts[case] = counts.get(case, 0) + 1
     labels = [
-        (label_of(table, case, occ, counts[case] > 1), b, a) for table, case, occ, b, a in rows
+        (label_of(table, case, occ, counts[case] > 1), (table, case, occ), b, a)
+        for table, case, occ, b, a in rows
     ]
-    width = max((len(label) for label, _, _ in labels), default=10)
+    width = max((len(label) for label, _, _, _ in labels), default=10)
     print(f"{'case':{width}}  {'before':>9}  {'after':>9}  {'change':>8}")
-    for label, b, a in labels:
+    for label, key, b, a in labels:
         change = pct(b, a)
-        mark = " <--" if abs(change) >= threshold else ""
+        if band is None:
+            mark = " <--" if abs(change) >= threshold else ""
+        else:
+            mark, _ = band_verdict(band, key, change)
         print(f"{label:{width}}  {b:9.1f}  {a:9.1f}  {change:+7.1f}%{mark}")
 
 
 def before_after(old_text, new_text, args):
     old, _ = parse(old_text)
     new, order = parse(new_text)
+    band = read_band(args.band) if args.band else None
     control = re.compile(args.control)
-    controls, moved, same, missing = [], [], [], []
+    controls, moved, same, missing, unreadable = [], [], [], [], []
     for key in order:
         section, case, occ = key
         if key not in old:
             missing.append(key)
             continue
         row = (section, case, occ, old[key], new[key])
+        change = pct(old[key], new[key])
         if control.search(case):
             controls.append(row)
-        elif abs(pct(old[key], new[key])) >= args.threshold:
-            moved.append(row)
-        else:
-            same.append(row)
+            continue
+        if band is None:
+            (moved if abs(change) >= args.threshold else same).append(row)
+            continue
+        # A case the band calls unreadable is set aside rather than reported as
+        # moved: its swing between two runs of an unchanged file is larger than
+        # anything a regeneration could tell you, so listing it wastes the reader.
+        if band.get(key, 0) >= 3:
+            unreadable.append(row)
+            continue
+        _, over = band_verdict(band, key, change)
+        (moved if over else same).append(row)
     if controls:
         print(f"-- controls ({args.control}); if these moved, the machine moved --")
-        print_rows(controls, args.threshold)
+        print_rows(controls, args.threshold, band)
         print()
-    print(f"-- moved by at least {args.threshold:g}% --")
-    print_rows(moved, args.threshold) if moved else print("(none)")
+    if band is None:
+        print(f"-- moved by at least {args.threshold:g}% --")
+    else:
+        print(f"-- moved past the band in {args.band} --")
+    print_rows(moved, args.threshold, band) if moved else print("(none)")
+    if unreadable:
+        print()
+        print(f"-- {len(unreadable)} case(s) the band calls unreadable, not classified --")
+        print_rows(unreadable, args.threshold, band)
     if args.all and same:
         print()
-        print("-- within the threshold --")
-        print_rows(same, args.threshold)
+        print("-- within the band --" if band else "-- within the threshold --")
+        print_rows(same, args.threshold, band)
     if args.requote:
         print()
         print("-- requote: document lines quoting the old numbers of the moved rows --")
@@ -326,6 +382,12 @@ def main():
     p.add_argument("new", nargs="?", help="the newer results file")
     p.add_argument("--git", metavar="REV", help="read the old side of FILE from this revision")
     p.add_argument("--selftest", action="store_true", help="check the row keying and exit")
+    p.add_argument(
+        "--band",
+        metavar="FILE",
+        help="classify each move against the band file for this benchmark, instead of "
+        "one flat threshold; written by dev/varka_bench_band.py",
+    )
     p.add_argument("--within", metavar="FILE", help="A/B pairs inside one file")
     p.add_argument(
         "--ab",

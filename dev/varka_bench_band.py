@@ -19,6 +19,23 @@
 #
 #   dev/varka_bench_band.py run1.txt run2.txt ...            # the band, per case
 #   dev/varka_bench_band.py --split-half run1.txt ...        # does the band reproduce?
+#   dev/varka_bench_band.py --write FILE run1.txt ...        # the committed band file
+#
+# The band is a TIER per case, not a spread per case, and that is what the
+# split-half check decided. Over ten runs per width, *which* cases are noisy
+# reproduces strongly - the worst quartile of one half is 37 of 52 the same cases
+# in the other, against a chance of 13 - while *how* noisy a given case is
+# reproduces only weakly at the wide width (correlation 0.325 against 0.728 at the
+# narrow one). A threshold only has to know which cases deserve a loose one, so
+# tiers respect what reproduces and do not invent the rest. Tier agreement between
+# independent halves is 0.52 and 0.59 by Cohen's kappa, and 96% of cases agree
+# within one tier.
+#
+# The boundaries are 3, 10 and 25 percent, which are the thresholds this project
+# already reads by. A case above the top tier is not marked with a bigger number
+# but called unreadable: a row that swings 227% between runs of an unchanged file
+# cannot be read from a diff at all, and saying so is more use than a threshold
+# nobody could act on.
 #
 # A regeneration's diff prints "moved 14.2%" against nothing, so every task since
 # task 52 has had to run the whole file twice to tell its own change from the
@@ -39,8 +56,10 @@
 # share a case name as well, so a (table, case) pair is not unique and a keying
 # that assumes it is silently merges rows.
 
+import datetime
 import re
 import statistics
+import subprocess
 import sys
 
 ROW = re.compile(r"^(.*?)\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)X\s*$")
@@ -86,9 +105,95 @@ def summarise(label, sp):
         print(f"   over {t:2d}%: {sum(1 for p in ps if p > t):4d}")
 
 
+TIER_BOUNDS = (3.0, 10.0, 25.0)
+DELIM = " | "
+
+
+def tier_of(spread):
+    """0 quiet, 1 moderate, 2 noisy, 3 not readable from a diff at all."""
+    for i, b in enumerate(TIER_BOUNDS):
+        if spread <= b:
+            return i
+    return len(TIER_BOUNDS)
+
+
+def provenance(nruns):
+    def sh(*cmd, stderr=False):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return (r.stderr if stderr else r.stdout).strip()
+        except Exception:
+            return "?"
+
+    cpu = "?"
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    cpu = line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    return [
+        f"runs:    {nruns}",
+        f"commit:  {sh('git', 'rev-parse', '--short', 'HEAD')}",
+        f"date:    {datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}",
+        f"jdk:     {(sh('java', '-version', stderr=True).splitlines() or ['?'])[0]}",
+        f"cpu:     {cpu}",
+    ]
+
+
+def write_band(path, runs, sp):
+    """One line per case: its tier, the spread measured, and the key.
+
+    Keys are written `table | case | occurrence`, and the delimiter is asserted
+    absent from both names rather than hoped absent - a name that contained it
+    would silently split into a different key and the band would apply to the
+    wrong row.
+    """
+    lines = []
+    for k, (spread, lo, hi) in sorted(sp.items()):
+        table, case, occ = k
+        assert DELIM not in table and DELIM not in case, f"delimiter inside a name: {k}"
+        lines.append(f"{tier_of(spread)} {spread:8.2f} {occ:3d}  {table}{DELIM}{case}")
+    body = [
+        f"Band for {len(sp)} cases: how far apart repeated runs of an unchanged file land.",
+        "Written by dev/varka_bench_band.py. Read by dev/varka_bench_diff.py --band, which",
+        "uses a case's tier to decide whether its move in a regeneration means anything.",
+        "",
+        "tier 0 <= 3%   1 <= 10%   2 <= 25%   3 not readable from a diff at all",
+        "",
+    ]
+    body += provenance(len(runs)) + ["", "tier   spread occ  table | case"] + lines
+    with open(path, "w") as f:
+        f.write("\n".join(body) + "\n")
+    counts = [0] * (len(TIER_BOUNDS) + 1)
+    for spread, _, _ in sp.values():
+        counts[tier_of(spread)] += 1
+    print(f"wrote {path}: {len(sp)} cases, tiers {counts}")
+
+
+def read_band(path):
+    """{(table, case, occurrence): (tier, spread)} from a band file."""
+    out = {}
+    with open(path) as f:
+        for line in f:
+            m = re.match(r"^(\d) +([\d.]+) +(\d+)  (.*)$", line.rstrip())
+            if not m:
+                continue
+            table, _, case = m.group(4).partition(DELIM)
+            out[(table, case, int(m.group(3)))] = (int(m.group(1)), float(m.group(2)))
+    return out
+
+
 def main():
     args = sys.argv[1:]
     split = "--split-half" in args
+    write_to = None
+    if "--write" in args:
+        i = args.index("--write")
+        write_to = args[i + 1]
+        args = args[:i] + args[i + 2 :]
     paths = [a for a in args if not a.startswith("--")]
     runs = [parse(p) for p in paths]
     for p, r in zip(paths, runs):
@@ -99,6 +204,8 @@ def main():
     if not split:
         sp = spreads(runs)
         summarise(f"band over {len(runs)} runs", sp)
+        if write_to:
+            write_band(write_to, runs, sp)
         print(f"\n{'worst cases':70s} {'lo':>9s} {'hi':>9s} {'spread':>8s}")
         for k, (p, lo, hi) in sorted(sp.items(), key=lambda kv: -kv[1][0])[:15]:
             print(f"{(k[1] + ' | ' + k[0])[:70]:70s} {lo:9.1f} {hi:9.1f} {p:7.1f}%")
