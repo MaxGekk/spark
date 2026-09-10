@@ -27,7 +27,15 @@ the driver for every root whose validity is a pure AND/OR of input bitmaps,
 so those roots have no per-group write at all. What it left per lane group is
 named there: a `Cond` root's selection OR, an `IfElse`'s blend, `make_date`'s
 validity test, a pick's two reads, and the read-and-AND a range guard keeps.
-Those are this task's population.
+Those are this task's population - and it is **not** "the masked path",
+which is how 2.17 described what 47 would be left with before task 45 was
+built. A `Cond` root's slot holds a selection *bitmap* rather than validity,
+so `fillsValidityOnce` excludes it by design and a fused filter ORs once per
+lane group **on every batch, dense or masked** (2.17's own update says so, and
+the parity benchmark's comment beside case 884 repeats it). The columnar
+filter is the most common shape in the whole project and it is in this task's
+population at both null states; anything below that says "masked" means the
+masked *value* roots, and the tests must cover the dense filter as well.
 
 **Also task 70 (9.5, and `VarkaLoopEmitter` at the input-prologue comment).**
 A second, unrelated item was assigned here in as many words: the masked
@@ -83,9 +91,12 @@ Two things to establish, in this order:
    `VarkaKernelEvaluator.scala:1387` already reads, so it is available and
    not a new dependency. Check it directly, over a ladder of lengths that
    includes the awkward ones - 1, 7, 8, 9, 63, 64, 65, 4095, 4096 - and
-   assert `capacity() >= ((len + 63) / 64) * 8` for every one. Do this as a
-   committed test in the evaluator's suite, not as a scratch program, because
-   the answer is a property of an Arrow version this repository upgrades.
+   assert `capacity() >= ((len + 63) / 64) * 8` for every one - that bound is
+   the highest word a group can address, since the last group's rows are
+   below `len` and its word index is therefore at most `(len - 1) >>> 6`. Do
+   this as a committed test in the evaluator's suite, not as a scratch
+   program, because the answer is a property of an Arrow version this
+   repository upgrades.
 
 **If capacity falls short at some length**, the fallback is not to abandon
 the task: allocate the destination validity buffer explicitly at the rounded
@@ -147,11 +158,19 @@ measures them against each other on the same ladder.
 **Option A: store every group, read none.** Keep one store per lane group
 where there is one today, and drop the read: the accumulator holds the word
 so far, each group ORs its bits into it in register, and the whole 64-bit
-word is stored every time. Store count unchanged, read count zero, and the
-memory dependency chain that task 76 found becomes a register dependency
-chain. Cheapest to build, and it is the variant that most directly tests
+word is stored every time. The memory dependency chain task 76 found becomes
+a register one. Cheapest to build, and the variant that most directly tests
 10.4's hypothesis, because it changes the traffic without changing the loop's
 shape at all.
+
+It is not free, and the plan should not pretend the store count staying equal
+means the store cost does. The store gets *wider* - eight bytes where today
+it is two at 16 lanes and one at 8 and 4 - so A trades a load and its
+dependency for four to eight times the bytes written into the same cache
+line. That is the claim to measure, not an argument to win: the stores are to
+the same address within a word and the line is already dirty, so the extra
+bytes should be nearly free, but "should be" is what task 76 said about the
+helper choice.
 
 **Option B: store once per word.** The accumulator is stored only when a word
 completes, which the emitter can test as `(i & 63) == 64 - lanes` - a compare
@@ -165,10 +184,16 @@ the lane-group loop.
 outer word loop with the lane-group body emitted `64 / lanes` times inside
 it. No branch and no accumulator test, and it hands C2 an unrolled body,
 which is the ILP this project prefers to state rather than hope for. It also
-multiplies the loop method's size by four at 16 lanes and by sixteen at 4,
-against a `GROUP_BUDGET` of 16 that task 71 just re-justified on method size,
-so it is very likely to be refused on those grounds - it is in the option
-space to be measured and ruled out on a number, not on the prediction.
+multiplies the loop method's size by four at 16 lanes and by sixteen at 4.
+The limit that bites there is *not* `GROUP_BUDGET`, which is a plan-time op
+budget per group and would be unchanged by an unroll: it is the emitted
+method's size against C2's parse and inlining thresholds - task 46's whole
+finding was the caller reaching `NodeCountInliningCutoff` from the `year`
+body's intrinsics alone - and, further out, C1's virtual-register refusal
+(task 43 found it width-independent and landing on the epilogue) and the
+JVM's 64KB method limit this project already tracks. Name the right limit
+when measuring it, and rule the option out on a number rather than on this
+prediction.
 
 **Prediction register, before the runs.** A is expected to recover most of
 the four-lane loss because the chain is the mechanism 10.4 named; B is
@@ -199,6 +224,20 @@ rather than assumed:
   numbers rather than from the first shape measured. It follows
   `validityByWidth`'s pattern exactly, including staying out of `canonical()`
   when it holds its default so production shape hashes do not move.
+
+**And two existing flags go inert under it, which is this task's likeliest
+silent failure.** With the word writer on there is no helper call, so
+`validityByWidth` has nothing to choose; and there is no call to place, so
+`validityOrFirst` has nothing to order. That is exactly what happened once
+already: task 70's pass removed the per-group call for a served root, both of
+task 46's arms began emitting identical bytes, and the committed numbers
+timed one kernel against itself for a whole regeneration before anyone
+noticed (`VarkaLoopEmitterSuite`, "task 76: every arm of task 46's A/B still
+emits two different kernels"). This task adds a third flag over the same
+population and must carry the same assertion: for every arm pair it
+benchmarks, the two emissions differ, asserted in the emitter suite before a
+number is quoted. Where a flag is genuinely inert under `validityByWord`, say
+so in its javadoc rather than leaving a benchmark to discover it.
 
 ### 3.3 Where the accumulator resets
 
@@ -265,11 +304,18 @@ makes the option's default the only thing the reviewer has to judge.
 
 ## 6. The measurement
 
-**On task 76's ladder, because it was left for this.** `PLAN_TASK_76.md` 10.9
-committed the write-count ladder with its case ids (962-969) precisely so
-this task could measure against the same rungs. Run it at 4, 8 and 16 lanes,
-four runs per width, arms adjacent in one run, as 76 did - the same protocol,
-so the two tables can be read against each other.
+**On task 76's ladder's shapes, with arms of its own.** `PLAN_TASK_76.md`
+10.9 committed the write-count ladder precisely so this task could measure
+against the same rungs: `k` unserved `IfElse` blends over one date, `k` from
+1 to 4, holding the shape family constant so only the write count moves.
+Reuse the *shapes*, not the arms - 962-969 are the width-named/general helper
+pair and price a different question. This task's arms are `validityByWord`
+on and off over those same four rungs, which is a new pair of case ids;
+enumerate the file's existing ids and take the next free block rather than
+reading the ones nearby (the benchmark's own `require` has caught that
+mistake twice). Run at 4, 8 and 16 lanes, four runs per width, arms adjacent
+in one run, as 76 did - the same protocol, so the two tables can be read
+against each other.
 
 The number that decides the task is the **4-lane, one-write and two-write
 rungs**, where task 76 measured the width-named helpers 3.8 to 6.8% and 0.5
@@ -289,11 +335,16 @@ Compare with `dev/varka_bench_diff.py --band`.
 
 1. **The store is wider than the buffer.** Section 2.1 is exactly this, and
    it is checked before anything is designed around it.
-2. **A partial word is left unflushed on some path.** The loop's early
-   returns - the all-null shortcut, the guard's status return - are paths out
-   of the loop method, and each one has to flush or provably have nothing to
-   flush. Enumerate them from `emitStatusReturn` and the shortcut rather than
-   from memory; the length ladder in section 4 is what catches a missed one.
+2. **A partial word is left unflushed.** Smaller than it looks, and the plan
+   answers it rather than deferring it: a LOOP method is `emitVectorLoop`
+   followed by `emitStatusReturn` and has exactly one exit, with no early
+   return inside the loop - the all-null shortcut lives in the driver, which
+   runs no lane groups, and the guard's status reduction is once per method
+   after the back edge. So there is one flush point, between the loop's end
+   and the status return, and the risk is that it is omitted rather than that
+   it is hard to place. The length ladder in section 4 is what catches an
+   omission, since a partial word only exists when `loopBound` is not a
+   multiple of 64.
 3. **The accumulator collides with the register pressure the task is trying
    to relieve.** One extra live `long` per written output, in a body that
    task 50 already made visible as register-allocation-sensitive. This is a
