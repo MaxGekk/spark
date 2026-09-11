@@ -798,12 +798,29 @@ decides how much this PR was worth.
 
 ### 11.8 Sequencing
 
-1. The `probe-only` workflow and a handful of dispatches: 11.2.2's hit rate
-   and 11.2.1's memory, recorded here.
-2. The full workflow, run without `create-commit` until a run passes the
+**Corrected 11 September 2026, while building it.** This list read as though
+the dispatches could precede the PR. They cannot: `workflow_dispatch` fires
+only for a workflow file that is on the repository's **default branch**, so a
+new workflow is not dispatchable from the branch that adds it. The fork's own
+default branch is a copy of `apache/spark` rather than this project's master,
+and `vecbricks/varka` is where Actions run for this repository, so the
+workflow has to land on `vecbricks/varka` `master` before it can be run once.
+
+That splits step 1 in two and is the reason the workflow ships with
+`probe-only` defaulting to **true**: the first dispatches after it merges are
+gate-only, they cost minutes, and nothing expensive can run by accident while
+the numbers 11.2 needs are still unknown.
+
+1. The workflow, with `probe-only`, merged - it is inert until dispatched.
+2. A handful of `probe-only` dispatches: 11.2.2's hit rate, and 11.2.1's
+   memory and core count, recorded here.
+3. One dispatch with `probe-only` off and `create-commit` off, to measure the
+   build and the run against the six-hour job limit (11.6's risk 3, which
+   `probe-only` cannot reach because it stops before the build).
+4. The full workflow, run without `create-commit` until a run passes the
    fixed-share rule.
-3. The committed files, and this section's outcome.
-4. (C) reads them.
+5. The committed files, and this section's outcome.
+6. (C) reads them.
 
 ### 11.9 Explicitly out of scope
 
