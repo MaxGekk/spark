@@ -822,6 +822,74 @@ the numbers 11.2 needs are still unknown.
 5. The committed files, and this section's outcome.
 6. (C) reads them.
 
+### 11.9 The datapath probe was reading the frequency control
+
+*Found on 11 September 2026, by building 11.3's gate and dispatching it.*
+
+**The probe this section was designed around did not measure the datapath.**
+`dev/varka_bench_surface.sh` built its `datapath` provenance line from
+`Canary.compute` at `-XX:MaxVectorSize=32` and `=64`. That loop is a scalar
+xorshift over one `long` with a self-dependency, and `Canary`'s own javadoc
+says what it is: "a scalar multiply-add recurrence. Frequency-bound and
+touches no memory, so it moves only if the clock does. **This is the
+control.**" `MaxVectorSize` cannot touch it. The ratio is 1.00 on every
+machine, and that is what nine dispatches showed - an AMD EPYC 7763 with no
+AVX-512 at all, an EPYC 9V74, an **Intel Xeon 6973P-C with `UseAVX=3`,
+`MaxVectorSize=64` and the full flag set**, and the development laptop, all
+exactly 1.00.
+
+Three things follow. The gate of 11.3 would have rejected every machine
+forever, the full-width Xeon included. Every `datapath` line in the four
+committed surface files is a scalar rate wearing a vector label. And
+`SKILLS.md`'s "This machine's AVX-512 is 256 bits wide" is *not* affected -
+it rests on task 43's op-count ladder at three widths, where 256 to 512 buys
+0.95x, which is independent evidence and stands.
+
+**The replacement, `dev/varka_canary/Datapath.java`.** Eight independent
+`IntVector` accumulators, register-resident, no loads or stores, reporting
+**lanes per nanosecond** rather than operations per second - which is the
+whole trick. A full-width unit retires a 512-bit operation in the time a
+256-bit one takes, so doubling the species doubles the lanes per nanosecond; a
+double-pumped unit takes twice as long for twice the lanes and the rate is
+flat.
+
+`Canary.compute` is left alone rather than fixed, because it is the frequency
+control `dev/varka_bench_canary.sh` compares a machine against and every
+committed `baseline-<host>.txt` is calibrated to it.
+
+**It validates in both directions on one machine**, which the old probe never
+could. On the development laptop:
+
+| transition | lane-ops/ns | ratio |
+|---|---|---|
+| 128 -> 256 bits | 67.6 -> 136.3 | **2.02x** |
+| 256 -> 512 bits | 136.3 -> 155.6 | **1.14x** |
+
+The first is the positive control - the probe *can* see a doubling when the
+datapath really doubles - and the second is the negative one, agreeing with
+task 43's independent 0.95x. The gate now takes the 128-to-256 reading on
+every dispatch and fails when it is under 1.50, because a probe that cannot
+see a doubling on the machine in front of it has no standing to pronounce on
+512 bits either.
+
+**What this does not yet answer.** No machine has been observed reading about
+2 for 256 to 512. The laptop cannot, by 11.9's own negative control, and the
+one full-width Xeon in the pool was measured with the broken probe. Whether
+GitHub's Xeons read 2 with the fixed probe is the next dispatch, and the
+answer decides whether this task proceeds on the pool or needs the CPU-model
+allowlist after all.
+
+**And while the gate was being fixed: are the runner's cores the same?** The
+development machine's are not: four Zen 5 at 5158 MHz and eight Zen 5c at
+3289 MHz in two L3 clusters, which is exactly why `dev/varka_bench_regen.sh`
+and `dev/varka_bench_surface.sh` pin to `0,12,13,14,15,1,2,3` - the eight SMT
+threads of the four fast cores. A measurement spread over two core types is
+two measurements averaged, so a runner that is heterogeneous has to be pinned
+too, and the gate now reports `lscpu --extended`, the distinct core maximum
+frequencies and the number of distinct core types on every dispatch. The first
+eight dispatches reported 4 cores and 15 GiB but not the core layout, which is
+what this adds.
+
 ### 11.9 Explicitly out of scope
 
 A self-hosted runner; a CI-calibrated canary; changing the driver, the
