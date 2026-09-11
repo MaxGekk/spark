@@ -784,14 +784,18 @@ decides how much this PR was worth.
 1. **The runner cannot hold the rows.** 11.2.1, checked first; the driver
    fails rather than publishing an overhead-dominated rate.
 2. **The pool never gives a full-width machine.** 11.2.2; the probe makes a
-   miss cost minutes, and the escalation is a cost decision.
+   miss cost minutes, and the escalation is a cost decision. *Settled by 11.9:
+   it does, one runner in eighteen, an AMD EPYC 9V45 reading 1.99.*
 3. **The build and the four runs blow the job's 6-hour limit.** The fork's
    assembly dominates and `probe-only` stops before it, so this risk is
    deliberately *not* covered by 11.2's dispatches: it needs one build-only
    dispatch of its own, whose number goes in 11.2.1 beside the memory. Four
    distributions at the laptop's per-run cost is the other half of the sum,
    and the surface's 39 tables give the shape of it. Caching is why the
-   download and the build are separate steps.
+   download and the build are separate steps. *Settled by 11.10, which gives
+   the build and the run a six-hour budget each instead of one between them -
+   and, because 11.9's hit rate made the build-only dispatch this risk asks
+   for unaffordable on the gated path, lets it run on any machine.*
 4. **A committed file looks like the laptop's but is not comparable.** The
    `canary: OFF (CI runner)` line and the runner identity are what stop a
    reader taking it for one; (C) must quote the machine beside the number.
@@ -812,15 +816,31 @@ gate-only, they cost minutes, and nothing expensive can run by accident while
 the numbers 11.2 needs are still unknown.
 
 1. The workflow, with `probe-only`, merged - it is inert until dispatched.
+   **Done, PR #180.** The probe it gated on was wrong; **fixed in PR #181**,
+   and 11.9 is that finding.
 2. A handful of `probe-only` dispatches: 11.2.2's hit rate, and 11.2.1's
-   memory and core count, recorded here.
-3. One dispatch with `probe-only` off and `create-commit` off, to measure the
-   build and the run against the six-hour job limit (11.6's risk 3, which
-   `probe-only` cannot reach because it stops before the build).
-4. The full workflow, run without `create-commit` until a run passes the
-   fixed-share rule.
-5. The committed files, and this section's outcome.
-6. (C) reads them.
+   memory and core count, recorded here. **Done:** 4 cores, 15 GiB, one
+   qualifying runner in eighteen, the census in 11.9.
+
+**Steps 3 to 6 restated, because 11.10 changed their order.** The old step 3 -
+one dispatch to price the build against the six-hour limit - is gone: it needed
+the same one-in-eighteen machine as the real run, so it cost what it was meant
+to de-risk. The job split replaces it, and the two questions that do *not*
+depend on the machine are answered first, on any runner:
+
+3. The job split, merged, so a dispatch can build and measure separately.
+4. One `build-only` dispatch at `require-datapath: any`. Warms the
+   commit-keyed jar cache from wherever it lands, and times the cold build.
+5. 11.2.1's row ladder at `require-datapath: any` with the cache warm: 1e7,
+   5e7, 1e8 rows at one partition and 6g. Row capacity and cost per row are
+   properties of the 4 cores and 15 GiB every runner shares, so this needs no
+   luck - only the published numbers do.
+6. The gated run: batches at `require-datapath: 512` and the row count step 5
+   chose, `create-commit` off, until one lands on the EPYC 9V45. Each miss
+   stops at the `gate` job in about a minute and never reaches the build.
+7. The committed files once a run passes the fixed-share rule, this section's
+   outcome, and 11.5's predictions scored.
+8. (C) reads them.
 
 ### 11.9 The datapath probe was reading the frequency control
 
@@ -872,12 +892,55 @@ every dispatch and fails when it is under 1.50, because a probe that cannot
 see a doubling on the machine in front of it has no standing to pronounce on
 512 bits either.
 
-**What this does not yet answer.** No machine has been observed reading about
-2 for 256 to 512. The laptop cannot, by 11.9's own negative control, and the
-one full-width Xeon in the pool was measured with the broken probe. Whether
-GitHub's Xeons read 2 with the fixed probe is the next dispatch, and the
-answer decides whether this task proceeds on the pool or needs the CPU-model
-allowlist after all.
+**What the fixed probe found on the pool.** Twenty-four dispatches on 11
+September 2026, immediately after the fix merged; eighteen reached the probe,
+the other six having been rejected first by an `expected-cpu` filter. The
+control reads 2.00 to 2.04 on every one of the eighteen - which is the positive
+control this section said had never been observed away from the laptop, and it
+is now observed on five CPU models from four families. The 512-bit reading then
+splits the pool three ways, and the third way was not anticipated:
+
+| CPU | runs | flags | `MaxVectorSize` | 256:128 control | 512:256 |
+|---|---|---|---|---|---|
+| AMD EPYC 7763 (Zen 3) | 8 | no `avx512` | 32 | 2.00 - 2.01 | **1.00** |
+| AMD EPYC 9V74 (Zen 4) | 3 | no `avx512` | 32 | 2.00 | **0.91 - 1.00** |
+| Intel Xeon Platinum 8573C | 4 | full `avx512` set | 64 | 2.00 - 2.03 | **1.34 - 1.36** |
+| Intel Xeon 6973P-C | 2 | full `avx512` set | 64 | 2.00 - 2.01 | **1.33 - 1.35** |
+| AMD EPYC 9V45 (Zen 5) | 1 | full `avx512` set | 64 | 2.04 | **1.99** |
+
+The Xeon 6973P-C row is the same machine 11.9's opening paragraph lists among
+the nine the broken probe read 1.00 on. It is 1.33 with the fixed one, which is
+the cleanest demonstration available that the old reading carried no
+information about the hardware at all.
+
+**So the answer is yes, and it is an AMD.** The EPYC 9V45 reads 1.99: a
+512-bit integer add costs exactly what a 256-bit one costs, so twice the lanes
+arrive in the same time. That is the machine this task needs, and it is in the
+pool.
+
+**"Full width" is not a yes-or-no property, which is the finding.** The two
+Xeons have the entire AVX-512 flag set, `UseAVX=3` and `MaxVectorSize=64`, and
+still read 1.33 to 1.36 rather than 2. The reason is issue ports rather than
+datapath: Intel's server cores retire 256-bit integer vector ops on three
+ports, and a 512-bit op consumes a fused pair plus the third, so the issue
+rate falls from three per cycle to two while the lanes double - 2 x 2/3 =
+1.33 predicted, against 1.33 and 1.35 measured on two different Intel
+generations. Zen 5 has four 512-bit-native vector pipes and loses nothing,
+which is the 1.99. A model-name allowlist would have called all three of these
+"full width" and been wrong about two of them by a third; the probe
+distinguishes them because it measures the quantity the benchmark actually
+spends, which is lanes retired per unit time and not vector register width.
+
+That also vindicates 11.3's threshold. 1.50 sits between 1.35 and 1.99 with
+room on both sides, so the gate admits the Zen 5 and rejects the Xeon without
+either being a near miss.
+
+**What this costs in dispatches, and what had to change because of it.** One
+machine in eighteen. Each miss costs about a minute, so the re-dispatch loop
+11.3 was designed around still works - but the hit rate is low enough that the
+lucky runner cannot also be asked to do a cold build inside one six-hour job,
+because a single overrun forfeits both the run and the cache. That is what
+11.10 splits apart.
 
 **And while the gate was being fixed: are the runner's cores the same?** The
 development machine's are not: four Zen 5 at 5158 MHz and eight Zen 5c at
@@ -890,7 +953,54 @@ frequencies and the number of distinct core types on every dispatch. The first
 eight dispatches reported 4 cores and 15 GiB but not the core layout, which is
 what this adds.
 
-### 11.9 Explicitly out of scope
+### 11.10 The build and the measurement no longer share a job
+
+*Written 11 September 2026, from 11.9's hit rate.*
+
+11.3 shipped one job - gate, then build, then run - on the reasoning that a
+miss is cheap because the gate is seconds. That reasoning is sound and 11.9
+confirms it: a miss costs about a minute. What it did not anticipate is that a
+**hit** would be scarce. At one runner in eighteen, the single job asks the
+machine we waited eighteen dispatches for to complete a cold
+`build/sbt package` of the whole fork plus two Maven modules *and* the
+four-distribution surface run inside one six-hour limit. An overrun is
+cancelled, the `actions/cache` post-step never saves, and the next lucky runner
+starts from nothing - so the risk is not "one wasted run", it is "no run ever
+completes".
+
+11.8's step 3 was meant to price this with one cheap dispatch. It cannot: the
+pricing run needs the same lucky machine as the real one, so pricing it costs
+what doing it costs.
+
+**The observation that dissolves it: the build is machine-independent.** Only
+the measurement needs the Zen 5. So the job splits three ways, which is the
+shape `.github/workflows/benchmark.yml` already uses:
+
+* `gate` - the probe block, unchanged, about a minute. Its CPU model and three
+  probe readings become job outputs, so the later jobs record them in the
+  provenance without re-running anything.
+* `build`, `needs: gate` - an `actions/cache` entry keyed on the commit SHA
+  over `assembly/target/scala-2.13/jars` (what `bin/spark-class` resolves
+  `SPARK_JARS_DIR` to), the bench driver jar, the engine jar and
+  `conf/log4j2.properties`. A hit does nothing; a miss builds and saves. The
+  SBT/Maven/Coursier cache stays underneath it as the second level.
+* `measure`, `needs: build` - the surface run, the tar, the upload and the
+  optional commit, unchanged.
+
+Two consequences, one per open question. Each job carries its own six-hour
+budget, so the surface run no longer shares a clock with the build - 11.7's
+risk 3 is answered structurally rather than by a measurement that could not be
+afforded. And a `build-only` dispatch with `require-datapath: any` warms the
+SHA-keyed cache from *any* runner, so by the time a gated dispatch lands on the
+Zen 5 it pays a cache restore and the run, not the build. The lottery ticket
+buys the cheap half.
+
+**What is deliberately not done here.** The row count and the wall time per row
+are properties of the 4 cores and 15 GiB that every runner in the pool shares,
+so 11.2.1's ladder runs at `require-datapath: any` and needs no luck at all.
+Only the published numbers wait for the Zen 5.
+
+### 11.11 Explicitly out of scope
 
 A self-hosted runner; a CI-calibrated canary; changing the driver, the
 surface or the shell driver, except where 11.2.1 forces the row count or the
