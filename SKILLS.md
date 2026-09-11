@@ -1670,6 +1670,26 @@ the fuzzer's node generator and the two pinned fixtures.
   orphan is a number the text quotes because it was wrong, the allowlist is the right home
   for it - that is what a ratchet with reasons is for - and the reason should say the
   provenance was squashed away, so nobody later hunts for a file that cannot exist.
+- **And the mirror failure, which is quieter: a quote that traces perfectly and is stale.**
+  The same history search that rescues a superseded number also means a document can keep
+  quoting figures no current file carries, indefinitely, while the gate stays green. Task 64's
+  plan was found this way on 11 September 2026: every one of the twelve numbers its admission
+  check rested on - the guard's price from the parity files, the pre-pass's from the
+  throughput files - had been regenerated away by tasks 70, 71, 76 and 77, and the quote check
+  had passed over all of them because the git history still had them. The plan read as
+  current and its summary sentence, "10-15% of the one shape that pays it", had become 4.4%
+  to 15.9%.
+- The tool is not wrong - proving provenance and proving currency are different questions,
+  and it answers the first by design. What follows is a habit rather than a fix: **before
+  acting on a plan that quotes benchmark numbers, grep the files it cites for the figures it
+  attributes to them.** It costs one command, it is the only way to tell a requoted plan from
+  a stale one, and a plan whose *decision* rests on a number - an admission check, a
+  registered prediction, a default chosen from a committed rate - is exactly where a stale
+  quote does damage. A `--current-only` mode that reported quotes matching history alone
+  would turn the habit into a gate, and is worth a tooling row if this recurs.
+- The related trap when checking by hand: a number can appear in *some* results file by
+  coincidence, so grep the file the sentence names rather than the whole benchmark directory.
+  A corpus-wide search said four of task 64's twelve numbers were fine; per-file, none was.
 
 ## Repo Workflow (vecbricks/varka)
 
