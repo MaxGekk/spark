@@ -19,8 +19,15 @@
 # after another on an idle machine, and print the table that compares them.
 #
 #   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--driver-memory 16g] \
-#       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--skip-build] \
+#       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--shard I/N] [--skip-build] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
+#
+# --shard I/N runs entries I, I+N, I+2N ... of the surface, so N runs between them
+# cover it exactly once and dev/varka_bench_merge.py joins their files back into one
+# per distribution. It is for GitHub's six-hour job limit, which the whole surface at
+# the row count the fixed-share rule wants does not fit; on a machine of your own,
+# leave it alone. The shard's output file is named for it, so shards of one run can
+# share a directory.
 #
 #   dev/varka_bench_surface.sh \
 #       spark-4.2.0-jdk17=/opt/spark-4.2.0-bin-hadoop3:/usr/lib/jvm/java-17-openjdk-amd64 \
@@ -69,6 +76,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 usage() { sed -n '17,50p' "$0"; exit 2; }
 rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
+shard=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --rows) rows="$2"; shift 2 ;;
@@ -77,6 +85,7 @@ while [ "$#" -gt 0 ]; do
     --driver-memory) memory="$2"; shift 2 ;;
     --force) force=1; shift ;;
     --only) only="$2"; shift 2 ;;
+    --shard) shard="$2"; shift 2 ;;
     --skip-build) build=0; shift ;;
     --help|-h) usage ;;
     *=*) dists+=("$1"); shift ;;
@@ -178,12 +187,16 @@ for spec in "${dists[@]}"; do
       *) echo "$label: conf '$c' is not key=value" >&2; exit 1 ;;
     esac
   done
-  out="$out_dir/DateSurface-$label-results.txt"
+  # The shard in the file name, not only in the provenance: shards of one run are
+  # collected into one directory before merging, and two of them must not be the same path.
+  suffix=""
+  [ -n "$shard" ] && suffix="-shard${shard//\//of}"
+  out="$out_dir/DateSurface-$label$suffix-results.txt"
   echo "== $label: $spark_home under $java_home -> $out"
   JAVA_HOME="$java_home" "$spark_home/bin/spark-submit" "${submit[@]}" \
     --class org.apache.spark.sql.varka.bench.DateSurfaceBenchmark "$jar" \
     --label "$label" --rows "$rows" --partitions "$partitions" --out "$out" \
-    ${only:+--only "$only"} "${driver[@]}" \
+    ${only:+--only "$only"} ${shard:+--shard "$shard"} "${driver[@]}" \
     --provenance "commit=$commit" --provenance "datapath=$datapath" \
     --provenance "canary=$canary" --provenance "host=$(hostname -s)" \
     --provenance "spark home=$spark_home"
@@ -191,5 +204,10 @@ for spec in "${dists[@]}"; do
 done
 
 echo
+if [ -n "$shard" ]; then
+  echo "== shard $shard: no table, because a shard is a fraction of the surface. Collect every"
+  echo "   shard's files and run dev/varka_bench_merge.py, which checks they agree and joins them."
+  exit 0
+fi
 echo "== the table (${files[*]##*/}) =="
 dev/varka_bench_diff.py --table "${files[@]}"

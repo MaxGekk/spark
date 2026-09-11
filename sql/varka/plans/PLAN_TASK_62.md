@@ -809,7 +809,9 @@ decides how much this PR was worth.
    deliberately *not* covered by 11.2's dispatches: it needs one build-only
    dispatch of its own, whose number goes in 11.2.1 beside the memory. Four
    distributions at the laptop's per-run cost is the other half of the sum,
-   and the surface's 39 tables give the shape of it. Caching is why the
+   and the surface's tables give the shape of it - 52 entries as of 12 September
+   2026, not the 39 the committed laptop files carry, which is itself a reason
+   to read the count off `Surface.ENTRIES` rather than from a document. Caching is why the
    download and the build are separate steps. *Settled by 11.10, which gives
    the build and the run a six-hour budget each instead of one between them -
    and, because 11.9's hit rate made the build-only dispatch this risk asks
@@ -1057,7 +1059,78 @@ by design makes every later step and every post step conditional, so anything
 that must survive that failure has to say so explicitly.** A comment asserting
 it is not enough, and this one asserted the opposite of what the file did.
 
-### 11.11 Explicitly out of scope
+### 11.11 Sharding the surface across runners
+
+*Written 12 September 2026, from the ladder of 11.2.1 and a suggestion that the
+pool's parallelism was being left on the table.*
+
+**The bind.** The fixed-share rule wants about 5e8 rows; the measured ladder
+puts the whole surface at roughly eight hours there, against a six-hour job
+limit. One dispatch cannot do it, and lowering the rows to fit fails the rule
+the numbers are published under.
+
+**What the runner was actually doing.** `--master local[1]`, by design, so the
+benchmark uses one core and three of the runner's four sit idle. The
+parallelism to reach for is therefore not a wider executor - that would change
+what the committed laptop files measured - but more runners. GitHub allows
+twenty jobs at once.
+
+**The axis, which is the whole decision.** Sharding by *distribution* is the
+obvious four-way split and it destroys the deliverable: the headline is Varka
+against stock, and those two arms would then have been measured on different
+machines. Sharding by *entry* - each shard runs all four distributions over a
+subset of the entries - keeps every ratio inside one machine, and spends the
+heterogeneity only on comparisons between entries, which is the same
+heterogeneity Spark's own committed files already accept by recording the CPU
+in each header.
+
+**Measured shape at 1e8 rows**, from the run of 11 September:
+
+| arm | wall |
+|---|---|
+| `spark-4.2.0-jdk17` | 18m55s |
+| `spark-4.2.0-jdk25` | 17m09s |
+| `varka-off-jdk25` | 16m44s |
+| `varka-jdk25` | 5m34s |
+
+About 45 s of each stock arm and 25 s of the Varka arm is JVM start plus the
+cached table, and **that part does not shard**: a shard runs fewer queries but
+still builds the whole table, four times. So the useful number of shards is
+bounded by when the per-shard table build starts to dominate, not by how many
+runners are free.
+
+**The stride, not a slice.** Shard *i* takes entries *i*, *i+N*, *i+2N*. The
+surface is ordered by expression family, so contiguous blocks would hand one
+shard every calendar extraction and another every comparison, and their run
+times would differ several-fold - and the wall clock is the slowest shard, not
+the mean. A stride mixes the families so the shards finish together.
+
+**The index, not a regex.** `--only` already existed and could have expressed
+shards as names. It would have been wrong: the names would be written by hand,
+and a surface that gains an entry - as it did, from 39 to 52 - would leave the
+hand-written shards quietly covering the wrong set with nothing to notice. An
+index modulo the list length cannot drift from the list it indexes. The price
+is that every shard of one run must come from one commit, which
+`dev/varka_bench_merge.py` checks rather than assumes.
+
+**What the merge refuses.** Shards of one label must agree on commit, rows,
+partitions, shard count, surface entry count, CPU model, `MaxVectorSize` and
+datapath ratio; their indices must be exactly 0..N-1, once each; and the
+entries must union to the whole surface. Host and date are exactly what
+sharding trades away, so they are recorded per shard in the merged header
+rather than collapsed into one line that would be false. A mis-joined file is a
+published number nobody can reproduce, and it has no other symptom - which is
+why this is a program with exit codes and not a `cat`.
+
+**The dispatch economics.** Each shard is its own dispatch on its own random
+runner, so no single round fills N shards at a hit rate of one in eighteen.
+Re-dispatching only the outstanding ones does: twenty parallel dispatches
+return roughly one qualifying runner per round at about a minute per miss, so
+eight shards take on the order of eight rounds.
+`dev/varka_surface_shards.py` is that loop, with its state in
+`.git/` so it is interruptible.
+
+### 11.12 Explicitly out of scope
 
 A self-hosted runner; a CI-calibrated canary; changing the driver, the
 surface or the shell driver, except where 11.2.1 forces the row count or the
