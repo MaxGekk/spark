@@ -1633,6 +1633,86 @@ copy bytes. Measured on the task 59 differential's own fixture, with the
 metric as the gate: the stacked shape must stop counting
 `numFallbackBatchesNonArrow` at all.
 
+### 2.28 Statistics-directed guard selection (task 64)
+
+Added on 4 September 2026 from a question the owner asked about task 52's
+runtime guard: the input batch, or the node before, may already know the
+range of a column, and then the per-lane check is work the batch has proved
+unnecessary. Task 52 (#115) puts a per-lane range check on a `date_add` whose
+offset is a column and whose result a calendar node reads, at a measured 5-15%
+of that kernel null-free and 13-14% with mixed nulls (`PLAN_TASK_52.md` 11).
+The check exists because the compiler cannot bound a column at compile time;
+a batch can.
+
+**Three sources of the bound, in order of plumbing.** First, compute it: a
+vector minimum and maximum over the offset column before the kernel runs,
+which task 56 already does for the interval bound through
+`IntRangeOps.allWithin` and which the throughput benchmark could not measure.
+A date column holds the contract range (`CONTRACT_MIN_DAYS..CONTRACT_MAX_DAYS`),
+so if every offset of the batch lies in `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS,
+NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` no lane of `date_add(d, off)` can leave
+the calendar range and the batch runs the **unguarded** kernel - the class
+task 52's option already emits, since the shape cache keys on options. Second,
+read it: the cached-batch serializers, the Arrow one included, compute count,
+null count, lower and upper bound per column for every cached batch, and use
+them today only to prune batches under a filter at the scan; the fork owns the
+serializer and the scan-to-batch iterator, so the bounds can ride with the
+`ColumnarBatch` to the exec node, where the check costs nothing - the null
+count already travels that way for the null-free fast path. Third, the file:
+Parquet row-group and page statistics, which the Arrow-native datasource
+(`SCOPE_MILESTONE_6.md`, item 8's neighbourhood) is the place to attach.
+
+**The design, in two steps.** Step one, the pre-pass: the evaluator, for each
+compiled projection whose plan carries a guarded producer, runs
+`IntRangeOps.allWithin` over the offset input with the bound above and picks
+the unguarded kernel when it holds, the guarded one when it does not - both
+from the shape cache, both already tested by task 52's suite, so the change is
+in `VarkaKernelEvaluator` alone and the emitter does not move. The in-kernel
+guard stays as the answer for the batch whose offsets say "maybe", which in
+the corpus is never. Step two, the statistics: `ArrowCachedBatchSerializer`'s
+per-batch bounds attached to the batch it deserializes, read by the evaluator
+before it computes anything, so the pre-pass is skipped when the bound is
+already known; the same channel answers task 56's interval bound for free and
+opens batch pruning inside the fused pipeline later. Both steps behind their
+own switch, with the pass and the lookup priced against the guard on the
+parity benchmark's `year(date_add(d, off))` pair and on the throughput
+benchmark's `date_add(d, i)` control.
+
+**What it does not change.** Task 52's compile-time analysis is what says
+which producers need a check at all; this task decides per batch whether a
+given one does. A batch with a far offset still declines, through the same
+route, and the differential's far-offset fixtures hold that. Depends on #115
+and on task 56's kernel, both on master before it starts.
+
+**Why this moved out of milestone 4** (11 September 2026). The milestone's
+remaining subject is task 62's closing measurement and the README written from
+it, and this task cannot reach either. `DateSurfaceBenchmark`'s surface has 39
+entries and exactly two carry a column offset: `date_add(d, i)`, which has no
+calendar consumer and so is never given task 52's guard - the parity file's own
+`task 52 control` pair is the proof, being the same number with the option on
+and off - and `add_months(d, i)`, whose guard is task 60's count guard, which
+3.2 of `PLAN_TASK_64.md` excludes by name. There is no `year(date_add(d, i))`
+in the surface at all.
+
+So this task changes no number the public table will show. Its own section 6
+proposes *adding* a surface entry for the shape, and that entry should be
+justified as coverage if it is wanted - "the surface should cover a calendar
+node over a column offset" is a good reason; "so that this task has somewhere
+to appear" is not, and conflating them would put a shape in the public table
+because it flatters us.
+
+Two smaller reasons point the same way. Landing it would move the parity and
+throughput files, so after task 62 (B) runs the committed companions go stale,
+and before it the closing measurement waits on a task that adds nothing to its
+output. And the prize is shrinking on the width that matters: the requote of
+`PLAN_TASK_64.md` 1 found the masked 16-lane row had already lost a third of
+the guard's share to task 70's bitmap pass, and a genuine 512-bit datapath
+makes the surrounding compute faster again while the guard stays two vector
+compares.
+
+It sits here beside row 82, which its own text says "shares its ground with
+task 64".
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
@@ -1658,6 +1738,7 @@ independent of both and of each other.
 | 30 | ANSI integer arithmetic - **narrowed on 4 September 2026**: the int32 add, subtract, multiply and negate over fused fields, int columns and literals, with the ANSI overflow decline and the `try_*` validity form, moved into milestone 4 as task 63, **which shipped** (`PLAN_TASK_63.md` 9); what stays here is the rest | `/` (a double), `div` (task 29's long lane), `%` and `pmod` with the divide-by-zero rule, the int64 forms, and `Multiply` overflow through 28's widening where task 63's saturating check is not enough | The error-identity differential: same `SparkException`, same row, as the row engine under ANSI; `try_*` differential over overflow-dense and overflow-free data; committed number on the no-overflow path against Janino |
 | 39 | `date - date`. **Planned** (`PLAN_TASK_39.md`), blocked on tasks 28 and 29 | The node, the int32-to-int64 conversion, the eight-byte output, and both overflow tests routed through task 26's decline channel rather than task 30's throw path; the legacy `CalendarInterval` variant declining. The int-to-long step is the two-part `convertShape` from the preferred int species, never a load through a half-width int species: two species of one lane type in one JVM turn the shared `IntVector` templates bimorphic and C2 keeps a heap box per loop iteration (`SKILLS.md`, "Every operator the plans rely on"), and the lane-width "tie" in `VarkaMilestone4MeasurementsBenchmark-jdk25-results.txt` was measured in exactly such a JVM | The overflow boundary exact in both directions (106751991 succeeds, 106751992 declines); Varka's exception identical to the row engine's, compared by running both; `datediff` unaffected; green at both widths, where an int64 lane holds a different number of rows |
 | 49 | Exact civil-from-days in long lanes. **Planned in section 2.19** (PR #69; there is no `PLAN_TASK_49.md`), blocked on task 29 | The admission check first, over all 2^32 days against a long-arithmetic reference: exact magic division with a 64-bit low product and no correction carries, run for **both** decompositions - the three-division era/century/year form (146097, 36524, 365) and task 54's two-division Julian map (146097 on `4 * d + 3`, then 1461), which Ben Joffe's `fast64` shows reaching four multiplies for the whole date where Neri-Schneider needs seven; then the lowering, and the guard, the decline path, the `NARROWED` variant and `VarkaChrono`'s range constants removed with it. Verified before starting (`SKILLS.md`, "Every operator the plans rely on"): `LongVector.mul` by a constant compiles to one `vpmullq` on this CPU (AVX-512DQ with VL), not the three-multiply emulation plain AVX2 gets, and unsigned long compares are one `vpcmpuq` into a k-mask. Plan B if the 0.75x gate fails: Joffe's bucket technique for a guard-free int-lane total - `bucket = (d + 2^31) >>> 20`, reduce by `bucket * 1022679`, add `bucket * 2800` to the year - about 14 ops against task 26's `TOTAL` at 16 and without the deliberate wrap; his `article_2_l1` variant replaces two of those multiplies with an eight-entry offset table, one lane permute on a 256-bit int species | The exhaustive sweep as a committed opt-in test, at both widths; the parity `year` case measured against the shipped narrowed lowering in one run; declined on the record if the sweep disagrees anywhere or AVX-512 costs more than 0.75x |
+| 64 | Statistics-directed guard selection (section 2.28). **Planned** (`PLAN_TASK_64.md`, requoted 11 September 2026) and **moved from milestone 4** the same day: the surface task 62 measures carries no shape that pays task 52's producer guard, so this task cannot change a number the public table shows | Step one: the evaluator runs `IntRangeOps.allWithin` over a guarded producer's offset column against `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS, NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` and picks the unguarded or the guarded kernel from the shape cache per batch; step two: the Arrow cache's per-batch column bounds attached to the `ColumnarBatch` and read before the pass, answering task 56's bound too; each behind a switch | The guarded kernel never runs on the differential's in-range fixtures and the far-offset fixtures still decline; the pass and the lookup priced against the guard on the parity `year(date_add(d, off))` pair, both widths, with a registered prediction that the null-free and mixed-null cost of task 52's guard is recovered; byte identity of the emitter |
 | 65 | Joffe's `fast32` civil-from-days in int lanes. **Scoped in section 2.7** (5 September 2026); independent of 29 | The admission check first: the two source files transcribed into `sql/varka/papers` with reading notes; a committed script deriving a low-32-bit magic and its exact range per stage and sweeping the chain against `LocalDate`; the dependent-stage count against the prefix's. If admitted, an emit-option variant, the A/B beside the task 53 and 54 pairs at both widths, the register and the `HugeMethodLimit` ladder re-pinned, and the default chosen from the numbers | Exact over at least the narrowed range, or declined; a shorter dependent chain than the prefix's, or declined; the A/B at or above 1.0x at both widths, or the numbers go to the debt register |
 | 66 | Second-level chrono fragments. **Scoped in section 2.8** (5 September 2026); after task 32's B2 grouping decision | `FragmentKind`s for the year parts, the January month, the month start and `floorMod(d, 7)`, keyed and planned as the prefix is; emitted once per lane group, elided when no consumer in the group reads them; the register and the `HugeMethodLimit` ladder re-pinned; the A/B beside task 32's shared rows at both widths | The matrix and the whole-range sweep under a widened group budget over every pair and triple of calendar outputs; the byte identity of every single-field kernel; the gate in 2.8 (at or above 1.05x at AVX-512 on both shapes), or the register goes to the debt register |
 | 72 | Output order for prefix affinity (section 2.25): `year(d), year(d2), month(d)` takes three loop methods where the adjacent order takes two | The admission check first - no consumer of a group depends on contiguous output indices - then a two-pass grouping that gathers a calendar output into the group whose prefix it reuses wherever that group is; the evaluator and the line map untouched | The pinned limitation in `VarkaLoopEmitterSuite` flipped to two methods; the pinned oracles unmoved; the permuted and adjacent orders within noise in the parity harness at both widths; the differential suite green with the two orders |

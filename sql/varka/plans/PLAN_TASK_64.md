@@ -10,12 +10,38 @@ batch has proved unnecessary. Task 52 (#115) put a per-lane range guard on a
 node reads, because the compiler cannot bound a column at compile time. The
 guard's price is committed in the parity file
 (`sql/catalyst/benchmarks/VarkaEmitterParityBenchmark-jdk25-results.txt`,
-"year" section, task 52's A/B on `year(date_add(d, off))`): 2786.8 M rows/s
-with the guard against 3100.8 without on null-free data (-10.1%) and 2030.9
-against 2302.5 with mixed nulls (-11.8%) at 256 bits; 1189.9 against 1237.2
-(-3.8%) and 727.5 against 855.3 (-14.9%) at 128 bits in the `-128bit-` file.
-That is 10-15% of the one shape that pays it, on every batch, when in the
-corpus no batch ever carries an offset that could leave the range.
+"year" section, task 52's A/B on `year(date_add(d, off))`): 2793.3 M rows/s
+with the guard against 3166.2 without on null-free data (-11.8%) and 2821.2
+against 3056.1 with mixed nulls (-7.7%) at 256 bits; 1193.1 against 1247.4
+(-4.4%) and 1033.9 against 1229.2 (-15.9%) at 128 bits in the `-128bit-`
+file. That is **4 to 16%** of the one shape that pays it, on every batch,
+when in the corpus no batch ever carries an offset that could leave the
+range.
+
+*Requoted on 11 September 2026, and this time the range itself moved.* The
+figures this paragraph carried until then - 2786.8 against 3100.8, 2030.9
+against 2302.5, 1189.9 against 1237.2 and 727.5 against 855.3, read as "10-15%
+of the one shape that pays it" - were taken on 8 September from task 63's
+regeneration, and tasks 70, 71, 76 and 77 have regenerated both files since.
+None of those eight numbers survives in a current file; they are in the files'
+git history, which is why `dev/varka_quote_check.py` kept passing over them. A
+plan whose admission check rests on numbers no file carries reads as clean and
+is not.
+
+**One of the four moved for a reason worth recording rather than requoting.**
+The masked AVX-512 row went from 2030.9 to 2821.2 M rows/s, a 39% rise, and
+the guard's share of it fell from 11.8% to 7.7%. The guard did not get
+cheaper: task 70's bitmap pass took the per-group validity write out of
+exactly this kernel, so everything around the guard got faster and the guard
+became a smaller fraction of a smaller total. `PLAN_TASK_70.md` 9.5 saw the
+same interaction from its side, noting that "task 64 removes the guard from
+the in-range case and so widens what this task's rule drops". The reading for
+this task is that **the prize erodes as the masked path improves**, and that
+the 128-bit null-free case is now a 4.4% prize rather than the 10% the old
+summary implied. The task is still worth building - section 2's check is
+about the *pass* being cheaper than the guard, and that holds by a wider
+margin than before - but it is worth building for the 128-bit mixed-null case
+at 15.9% rather than uniformly.
 
 The kernel that does not pay it already exists: task 52's
 `guardDayProducers` option emits the unguarded bytes, the shape cache keys on
@@ -39,13 +65,15 @@ reading four bytes per row and touching no output - and task 56 already runs
 exactly that pass, on exactly a `date_add(d, i)` kernel, for the interval
 bound. Its price is the committed throughput pair
 (`sql/core/benchmarks/VarkaThroughputBenchmark-jdk25-results.txt`): the
-control `date_add, column offset (task 56 control)` at 204.9 M rows/s (4.9
-ns/row) and `date + CAST(i AS INTERVAL DAY), bound checked (task 56)` at
-230.6 M rows/s (4.3 ns/row) over 2M Arrow-cached rows; at 128 bits 199.8
-against 210.6. *Requoted on 8 September 2026 from task 63's regeneration of
-that file, which moved the pair by 2.9% and 9.0%; the figures this paragraph
-first carried - 199.2 against 211.6, and 197.7 against 204.4 - are in the
-file's history.* The reading is unchanged and is in fact firmer: the checked
+control `date_add, column offset (task 56 control)` at 201.3 M rows/s and
+`date + CAST(i AS INTERVAL DAY), bound checked (task 56)` at 220.8 M rows/s
+over 2M Arrow-cached rows; at 128 bits 192.4 against 212.4. *Requoted on 11
+September 2026 alongside section 1, from the current file. The pair has now
+been quoted three times - 199.2 against 211.6 at planning, 204.9 against
+230.6 after task 63's regeneration, and these - and every version has said
+the same thing, which is the point: the checked row is faster than its
+control at both widths in all three.* The reading is unchanged and is in fact
+firmer: the checked
 row is *faster* in both files, by less than the rows' 2-3 ms standard
 deviation, so the pass is below the noise floor of an end-to-end row whose
 kernel is the cheapest shape there is. The guard, by
@@ -377,18 +405,20 @@ input changes. `everyNode` and `pinnedLineMap` are untouched.
 ## 6. The measurement
 
 Two benchmarks, both regenerated with `dev/varka_bench_regen.sh` on an idle
-machine, both widths, and both **after PR #145 merges**: the unguarded kernel
-is a one-body kernel only with task 70, so the ceiling this task can reach is
-#145's committed number, and a regeneration before the merge would price the
-selection against a kernel that no longer exists on master a week later.
+machine, both widths. This section was written to wait for PR #145, because
+the unguarded kernel is a one-body kernel only with task 70 and a
+regeneration before that merge would have priced the selection against a
+kernel that no longer existed a week later. **#145 merged, and section 1's
+requote of 11 September 2026 is that post-task-70 number** - which is where
+the masked AVX-512 row's 39% rise came from.
 
 **The ceiling: the parity pair, already committed.** `year(date_add(d, off)),
 producer guard on / off (task 52 A/B)` at both null patterns and both widths
 is the kernel-level difference between the two classes the evaluator chooses
 between. No row is added to the parity benchmark: this task changes no
 kernel, and the parity harness bypasses the evaluator, so it cannot see the
-choice. The pair's values after #145 merges are the numbers the predictions
-below are read against; the ones in section 1 are master's today.
+choice. Section 1's values are the post-task-70 pair and are what
+the predictions below are read against.
 
 **What is realised: the throughput pair, added beside task 56's.** In
 `VarkaThroughputBenchmark`, after the task 56 pair and on the same
@@ -418,7 +448,9 @@ counting inventories).
    rate is within 2% of what the unguarded parity kernel's advantage predicts
    for an end-to-end row - concretely, the gap between the two throughput
    rows is between 3% and 10% of the "guard always" row. Reason: the parity
-   pair puts the guard at 10-12% of kernel time null-free, and the throughput
+   pair puts the guard at 11.8% of kernel time null-free at 256 bits and
+   4.4% at 128 bits - so this prediction is registered against the wide
+   width, and the narrow one is expected to land under it - and the throughput
    row spends roughly half its 5 ns/row outside the kernel (batch assembly,
    the cache read, the noop sink), which halves the visible fraction. If the
    gap is under 2%, the kernel is not where this row's time goes and the
