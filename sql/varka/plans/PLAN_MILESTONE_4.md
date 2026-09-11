@@ -22,8 +22,11 @@ measuring what it was built for), 72 and 73 (emitter infrastructure, where 73's
 predicate is the fact milestone 5's task 84 lattice will carry anyway), and 80
 (string columns, sized for milestone 6's needs). Row 44 moved differently: task
 87 absorbed it, because both are the epilogue's size at two thresholds and two
-rows would have designed one partitioning twice. What remains here is 62, 64
-and 78.
+rows would have designed one partitioning twice. **Task 64 followed on 11
+September 2026**, once its requote showed it cannot reach the milestone's
+remaining subject: the surface task 62 measures carries no shape that pays
+task 52's producer guard, so the task changes no number the closing table will
+show. What remains here is 62 and 78.
 
 Milestone 3 closed with task 23, so this file is no longer the scope document it
 opened as: it is the task plan that document promised, written against the
@@ -1447,54 +1450,11 @@ so it takes a row of its own rather than a date function's.
 
 ### 2.31 Statistics-directed guard selection (task 64)
 
-Added on 4 September 2026 from a question the owner asked about task 52's
-runtime guard: the input batch, or the node before, may already know the
-range of a column, and then the per-lane check is work the batch has proved
-unnecessary. Task 52 (#115) puts a per-lane range check on a `date_add` whose
-offset is a column and whose result a calendar node reads, at a measured 5-15%
-of that kernel null-free and 13-14% with mixed nulls (`PLAN_TASK_52.md` 11).
-The check exists because the compiler cannot bound a column at compile time;
-a batch can.
-
-**Three sources of the bound, in order of plumbing.** First, compute it: a
-vector minimum and maximum over the offset column before the kernel runs,
-which task 56 already does for the interval bound through
-`IntRangeOps.allWithin` and which the throughput benchmark could not measure.
-A date column holds the contract range (`CONTRACT_MIN_DAYS..CONTRACT_MAX_DAYS`),
-so if every offset of the batch lies in `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS,
-NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` no lane of `date_add(d, off)` can leave
-the calendar range and the batch runs the **unguarded** kernel - the class
-task 52's option already emits, since the shape cache keys on options. Second,
-read it: the cached-batch serializers, the Arrow one included, compute count,
-null count, lower and upper bound per column for every cached batch, and use
-them today only to prune batches under a filter at the scan; the fork owns the
-serializer and the scan-to-batch iterator, so the bounds can ride with the
-`ColumnarBatch` to the exec node, where the check costs nothing - the null
-count already travels that way for the null-free fast path. Third, the file:
-Parquet row-group and page statistics, which the Arrow-native datasource
-(`SCOPE_MILESTONE_6.md`, item 8's neighbourhood) is the place to attach.
-
-**The design, in two steps.** Step one, the pre-pass: the evaluator, for each
-compiled projection whose plan carries a guarded producer, runs
-`IntRangeOps.allWithin` over the offset input with the bound above and picks
-the unguarded kernel when it holds, the guarded one when it does not - both
-from the shape cache, both already tested by task 52's suite, so the change is
-in `VarkaKernelEvaluator` alone and the emitter does not move. The in-kernel
-guard stays as the answer for the batch whose offsets say "maybe", which in
-the corpus is never. Step two, the statistics: `ArrowCachedBatchSerializer`'s
-per-batch bounds attached to the batch it deserializes, read by the evaluator
-before it computes anything, so the pre-pass is skipped when the bound is
-already known; the same channel answers task 56's interval bound for free and
-opens batch pruning inside the fused pipeline later. Both steps behind their
-own switch, with the pass and the lookup priced against the guard on the
-parity benchmark's `year(date_add(d, off))` pair and on the throughput
-benchmark's `date_add(d, i)` control.
-
-**What it does not change.** Task 52's compile-time analysis is what says
-which producers need a check at all; this task decides per batch whether a
-given one does. A batch with a far offset still declines, through the same
-route, and the differential's far-offset fixtures hold that. Depends on #115
-and on task 56's kernel, both on master before it starts.
+Moved to `PLAN_MILESTONE_5.md` section 2.28 on 11 September 2026: the
+milestone's remaining subject is task 62's closing measurement, and this task
+cannot reach it - the surface that measurement runs carries no shape that pays
+task 52's producer guard. The text is there unchanged. The heading stays so
+citations of this section number still resolve.
 
 ### 2.32 Year-month interval columns in the date lane (task 67)
 
@@ -2159,7 +2119,6 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 60 | `add_months` with a month-count column. **DONE** (`PLAN_TASK_60.md`) | `AddMonths(days, ColumnRef)` with `requireOffsetShape` and the words ANDed; the compile-time month bound moved to a runtime guard on the count lanes through task 52's `emitRangeGuard` (generalized from `emitProducerGuard`), `STATUS_CHRONO_RANGE` on an out-of-range lane; `dayRange` answering `Bounded` at the guard's own extremes, not `ColumnShifted` | The guard declining in a loop lane and an epilogue lane, not under a null count; in-range batches computed at both widths; the differential with in-range and out-of-range counts and nulls, the declined metric firing only for the latter; the count guard's cost measured beside task 52's row |
 | 61 | `trunc` with a format column. **DONE** (`PLAN_TASK_61.md` 9) | Task 59's derived leaf mapping the format through `parseTruncLevel` to a level column whose validity is the output's; `TruncDateDynamic(days, levelRef)`, a chrono node computing all four levels off one prefix and selecting per lane by three blends; the doc saying the literal form is the shape to write | The reference arm `truncDate` per row over the parsed level; the matrix cycling all levels and the invalid codes at both widths; a differential over a format column mixing every level, invalid formats and null; the literal `trunc` byte for byte unchanged |
 | 63 | Int32 arithmetic in the date lane: `Add`, `Subtract`, `Multiply`, `UnaryMinus` over fused fields, int columns and literals (section 2.30). **DONE** (`PLAN_TASK_63.md` 9: the ANSI check costs 1.9% at AVX-512 and 28.3% at 128-bit null-free, and 63.7% in a 128-bit masked body, where the mask-to-long disposal rather than the sign test dominates - while at AVX-512 the masked cost is 3.5%, the first run's 19.0% there having been a dead local slot the review removed; a compile-time bound removes the check where the operands rule overflow out, which is what makes `year(d) * 100 + month(d)` fuse under ANSI at all; a checked multiply over an unbounded operand declines; end to end the composite key runs 9.3x Janino and `datediff + 1` 9.1x, and the mixed projection whose arithmetic entry now fuses goes from 2.3x to 10.8x) | The compiler arms with an `IntegerType` column leaf; the lanewise op in non-ANSI; the per-lane overflow mask ORed into task 52's accumulator in ANSI, behind a `VarkaEmitOptions` switch; `try_add`/`try_subtract`/`try_multiply` as the mask cleared from validity; `/`, `div`, `%` and int64 left to milestone 5 | Boundary tests at `Int.MaxValue`/`Int.MinValue` in both modes; the error-identity differential under ANSI (same error, same row, as the row engine); the `try_*` differential over overflow-dense and overflow-free data; `year(d) * 100 + month(d)` and `datediff(a, b) + 1` fusing end to end; a parity pair for the check's cost with a registered prediction; both pinned fixtures re-pinned once. Shipped beyond this: the bound analysis that removes the check, arithmetic admitted as a `date_add` day offset and as a `make_date` operand, `VarkaArithmeticBenchmark` as its own file with its own results, and `i % 7` replacing `i + 1` as the canonical residual entry in nine places that had depended on `i + 1` not fusing |
-| 64 | Statistics-directed guard selection (section 2.31). **Planned** (`PLAN_TASK_64.md`) | Step one: the evaluator runs `IntRangeOps.allWithin` over a guarded producer's offset column against `[NARROW_MIN_DAYS - CONTRACT_MIN_DAYS, NARROW_MAX_DAYS - CONTRACT_MAX_DAYS]` and picks the unguarded or the guarded kernel from the shape cache per batch; step two: the Arrow cache's per-batch column bounds attached to the `ColumnarBatch` and read before the pass, answering task 56's bound too; each behind a switch | The guarded kernel never runs on the differential's in-range fixtures and the far-offset fixtures still decline; the pass and the lookup priced against the guard on the parity `year(date_add(d, off))` pair, both widths, with a registered prediction that the null-free and mixed-null cost of task 52's guard is recovered; byte identity of the emitter |
 | 67 | Year-month interval columns in the date lane (section 2.32). **DONE** (`PLAN_TASK_67.md` 9: the type is admitted end to end with no IR node and no emitted byte, so `d + ym` is task 60's column-count kernel and its runtime guard covers an interval count exactly as it covers an int one; `d + ym` and `add_months(d, m)` on one fixture agree to 0.8% at 128-bit, while the AVX-512 pair sits inside a run-to-run spread that reaches 19% on rows this task does not touch, so the 3% question belongs to the pinned runner. `d - ym_col` and the `YEAR`-unit casts stay residual and move to task 68, blocked on the emitter's month-count position rather than on arithmetic - 2.1 records that the position's stated reason is true of `next_day`'s weekday and not of the month count) | `IntervalYearVector` admitted in `isArrowBacked` and `YearMonthIntervalType` in `allocateVector`; the interval column as a value leaf and the interval literal as a slot in the compiler; `d + ym` and `d - ym` with a column interval through task 60's guarded `AddMonths`; comparisons, `IN`, `BETWEEN`, `greatest`/`least`, `coalesce`, `IF`/`CASE` over intervals; the `MONTH`-unit casts as relabels; the interval entries in task 62's surface; the docs' type list. No IR node, no emitter byte | The differential over a cached table with columns of all three units, nulls and values past task 60's month bound, in both ANSI modes, through the projection and the filter, with zero fallbacks where the plan fuses and the declined metric where the bound trips; the evaluator suite with an `IntervalYearVector` input and output; both pinned fixtures unmoved; the compiler suite's shapes and declines (the `YEAR`-unit casts declined with their reason until task 63) |
 | 68 | Year-month interval algebra (section 2.33). **DONE** (`PLAN_TASK_68.md` 9: the algebra that rides task 63's nodes and the two shapes task 67 left both ship; the two divisions do not, and are milestone 5's task 89). The task's own finding is that one emitter check was two: `requireOffsetShape` policed `next_day`'s weekday and `add_months`' month count with one reason, and that reason - a runtime bound a derived value cannot declare - is true of the weekday and false of the count, which task 60 guards lanewise on its *value* and not on its shape. Splitting the positions is the whole of group C: `d - ym_col` and the month-count `YEAR` cast fuse now, and task 67's tests pinning them as declining invert. Group A is arms, not machinery - `ym +- ym`, `-ym`, `abs(ym)` as the blend `if (ym < 0) -ym else ym`, `ym * k`, `make_ym_interval` - all in `FAIL` unconditionally, none of them having a wrapping form in Spark, so only `intBound` takes a check off; an unbounded `ym * k` declines as task 63's int multiply does, and `try_add(ym, ym)` stays residual, having no null-on-overflow lowering. The one arm the plan did not list is the relabel type coercion inserts when two interval units meet, without which `ymm + ymy` declined while `ymm + ymm2` fused - found by writing the shape as a `Surface` entry, since every compiler test had hand-built a tree the analyzer never produces. Measured end to end on `varka_interval_pairs`, the type costing the kernel nothing being the claim: `ym + ym2` against `m + m2` at 288.8 vs 280.9 M rows/s at AVX-512 and 261.0 vs 248.3 at 128 bits, `make_ym_interval(year(d), month(d))` against `year(d) * 12 + month(d)` at 263.6 vs 262.0 and 222.1 vs 223.0 - the interval side never slower. The one gap over 3% cannot be what the plan predicted it would be, because there is no per-type write path: the kernel writes four-byte lanes to a raw data-buffer address, all three vector classes are fixed-width four, and the only per-type step is one constructor per output per batch. So the type's cost is a statement about code, pinned by an evaluator test asserting the two spellings produce byte-identical buffers from different vector classes, and the residual percent is the per-fork JIT lottery. Task 67's open 3% question is closed with it. Section 6 said to widen task 67's fixture and that fixture's own comment forbids it, so the pairs got their own table; task 67's rows then moved 1.1% and 0.6% in that run, which is the precaution paying for itself) | `make_ym_interval`, `extract(YEAR \| MONTH FROM ym)` by literal-divisor magic, `ym * k` and `ym / k` with a literal, `ym +- ym`, `-ym`, `abs(ym)` on task 63's nodes with an interval output, the `YEAR`-unit casts; the literal-divisor node that section 2.30's note and scope item 11 both want | The admission check on the rounding of the literal division and the exactness range of the magic divisions over the whole int32 month range; the differential in both ANSI modes with the overflow rows raising the row engine's own error; a parity row per new node beside task 63's; both pinned fixtures re-pinned once |
 | 69 | An upward limit for the civil-from-days decomposition, so a shift over a guarded day producer stops declining conservatively (task 60's review; see the debt register). **DONE** (`PLAN_TASK_69.md` 6). The admission check passed, and by more than its own estimate: neither the shift domain nor the multiply's overflow is the limit, because `eraOf` corrects a one-era undershoot and the split stays exact until the undershoot reaches *two* eras, at `w = 20161385`. That is epoch day 14766813, 29 February 42400, against the shipped ceiling's 11382643 - 3,384,170 days of headroom, about 9,266 years rather than the 5,600 the multiply bound alone suggested. Three of the four pinned declines flipped, not four: `weekofyear`/`yearofweek` stays residual because `ThursdayOf` shifts `+-3` and a shape declines on the union of its directions, which section 1 said while listing it | A `NARROW_DECOMPOSE_MAX_DAYS` beside `NARROW_MAX_DAYS`: the latter is the era step's shift-domain ceiling, `(1 << NARROW_ERA_K) - 1 - NARROW_BIAS`, and the plan expected the multiply, `w * NARROW_ERA_M < 2^31`, to bind above it - the correction in `eraOf` carries it further still, so the shipped constant is `20161385 - NARROW_BIAS`. `dayRange` then tests the two directions against different constants, so `last_day`, `next_day` and a positive literal `date_add` over a column offset fuse again while the downward siblings (`trunc`, `ThursdayOf`, a negative literal) keep declining | The identity proved over the whole extended domain rather than the multiply merely not overflowing, and swept exhaustively against `java.time` the way `VarkaChrono`'s other limits are; three of the four pinned declines in `VarkaExpressionCompilerSuite` ("task 60 review: an upward shift ...") flipped to `fuses`, the downward ones and the two-directional `weekofyear` unmoved; a differential over a column offset at the new ceiling and one past it; no emitted byte moves, since this is a compiler-side bound only. The half this leaves open is `PLAN_MILESTONE_5.md` 2.22, task 91 |
