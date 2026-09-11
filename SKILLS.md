@@ -2133,6 +2133,34 @@ doubling, the second says this machine does not have one, and only the pair is e
 that has never been observed reading anything but "no" has not been shown to be able to say
 "yes", which is exactly the state the old one was in for the whole of its life.
 
+**The pool then said "yes", and said it on an AMD.** Eighteen dispatches of
+`varka-surface-benchmark.yml` reached the probe on 11 September 2026. The control read 2.00 to
+2.04 on every one of them - five CPU models from four families, so the probe is validated well
+away from the laptop - and the 512-bit reading split three ways:
+
+| CPU | runs | `avx512` flags | 256:128 control | 512:256 |
+|---|---|---|---|---|
+| AMD EPYC 7763 (Zen 3) | 8 | none | 2.00 - 2.01 | **1.00** |
+| AMD EPYC 9V74 (Zen 4) | 3 | none | 2.00 | **0.91 - 1.00** |
+| Intel Xeon Platinum 8573C | 4 | full set | 2.00 - 2.03 | **1.34 - 1.36** |
+| Intel Xeon 6973P-C | 2 | full set | 2.00 - 2.01 | **1.33 - 1.35** |
+| AMD EPYC 9V45 (Zen 5) | 1 | full set | 2.04 | **1.99** |
+
+**"Full width" is not a yes-or-no property, and that is the part worth carrying forward.** Both
+Xeons have the entire AVX-512 flag set, `UseAVX=3` and `MaxVectorSize=64`, and still read about
+1.34. The limit is issue ports, not datapath: Intel's server cores retire 256-bit integer vector
+ops on three ports, and a 512-bit op takes a fused pair plus the third, so the issue rate falls
+from three per cycle to two while the lanes double - 2 x 2/3 = 1.33 predicted, against 1.33 and
+1.35 measured on two different Intel generations. Zen 5 has four 512-bit-native vector pipes and
+loses nothing, hence 1.99. So the useful question about a machine is never "does it have
+AVX-512" and not even "is the datapath 512 bits", but **how many 512-bit operations it issues
+per cycle compared with 256-bit ones** - which is what a lanes-per-nanosecond ratio measures
+directly and what no flag reports.
+
+The 6973P-C row is worth one more sentence, because it is the same machine the broken probe had
+read 1.00 on. Two probes, one machine, 1.00 and 1.33: whatever the first was measuring, it was
+not this.
+
 Measured, not read off a spec sheet. Task 43's committed op-count ladder - a single-output loop
 from 20 to 248 `IntVector` ops - was run at three widths on the development machine (AMD Ryzen
 AI 9 HX PRO 370, Zen 5 mobile, JDK 25.0.4), by setting `Test / javaOptions +=
@@ -2161,10 +2189,13 @@ elision, task 43's own flatness - and both arms of every comparison ran on the s
 What is overstated is the label: "at both widths" has meant "at 4 lanes and at 16 lanes issued
 through a 256-bit datapath", not "at two datapath widths".
 
-**And it means there is unmeasured headroom on other hardware.** A host with a full-width 512-bit
-datapath - Intel Sapphire Rapids and Emerald Rapids, or AMD EPYC Turin - should turn that 0.95x
-into something near 2x on unmodified code. That is the cheapest performance work available to
-this project and it requires no port: the same jar, a different instance type.
+**And it means there is headroom on other hardware - measured now, on the runner pool.** The
+same jar on an AMD EPYC 9V45 (Zen 5 server) turns that 0.95x into 1.99x on the probe, because
+its four vector pipes are 512 bits wide natively. An Intel Sapphire or Emerald Rapids part gives
+1.35x rather than 2x for the port reason above, so it is real headroom but a third less than the
+lane count suggests. That is still the cheapest performance work available to this project and
+it requires no port: the same jar, a different instance type - and the instance type to ask for
+is Zen 5 or newer AMD, not Intel.
 
 **The method generalises: to find out whether a machine's widest vector is real, measure three
 widths, not two.** Two points cannot distinguish "the wide path is not helping" from "the wide

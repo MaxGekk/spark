@@ -41,6 +41,11 @@ on:
         description: 'Run the gate and stop. This is what makes re-dispatching cheap; it also reports the memory and core count section 11.2.1 needs.'
         required: true
         default: true
+      build-only:
+        type: boolean
+        description: 'Gate, then build, then stop - warming the commit-keyed jar cache from any runner, so a later gated dispatch pays only the run. See PLAN_TASK_62.md 11.10.'
+        required: true
+        default: false
       require-datapath:
         type: choice
         description: 'Abort unless the datapath probe says the vector unit is this wide'
@@ -78,24 +83,30 @@ on:
         default: false
 
 jobs:
-  surface:
-    name: "Date surface (probe-only: ${{ inputs.probe-only }})"
+  # Three jobs, not one, and PLAN_TASK_62.md 11.10 is why. The qualifying runner turned
+  # out to be one in eighteen, so asking it to do a cold build *and* the four runs inside
+  # one six-hour limit risks forfeiting both - and the cache with them, since a cancelled
+  # job never reaches its post step. The build does not care what machine it lands on;
+  # only the measurement does. Split apart, each half gets its own six-hour budget, and a
+  # `build-only` dispatch warms the commit-keyed jar cache from any runner so that the
+  # lucky one pays for the run alone.
+  gate:
+    name: "Gate"
     runs-on: ubuntu-latest
-    # Only the commit step needs more than read, and only when asked for.
-    permissions:
-      contents: write
-    env:
-      SPARK_LOCAL_IP: localhost
-      STOCK_VERSION: 4.2.0
+    outputs:
+      cpu: ${{ steps.probe.outputs.cpu }}
+      lanes: ${{ steps.probe.outputs.lanes }}
+      control: ${{ steps.probe.outputs.control }}
+      ratio: ${{ steps.probe.outputs.ratio }}
     steps:
     - name: Checkout Varka
       uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
-    # Before the gate, not after: Canary.java imports jdk.incubator.vector and runs with
+    # Before the gate, not after: Datapath.java imports jdk.incubator.vector and runs with
     # --add-modules jdk.incubator.vector, so the runner's preinstalled JDK cannot be
-    # assumed to serve it. Cached, this is seconds, and the gate still costs minutes
+    # assumed to serve it. Cached, this is seconds, and the gate still costs a minute
     # rather than hours.
     - name: Install JDK 25
       uses: actions/setup-java@v5
@@ -104,6 +115,7 @@ jobs:
         java-version: '25'
 
     - name: Gate - the machine, and whether it is the one this measurement needs
+      id: probe
       env:
         EXPECTED_CPU: ${{ inputs.expected-cpu }}
         REQUIRE_DATAPATH: ${{ inputs.require-datapath }}
@@ -159,21 +171,129 @@ jobs:
           echo "::error::datapath ratio $RATIO is not a full-width 512-bit unit; re-dispatch"
           exit 1
         fi
+        # Published as job outputs rather than re-measured downstream: the build and the
+        # run happen on other machines, so this is the only place the numbers exist.
+        {
+          echo "cpu=$CPU_MODEL"
+          echo "lanes=$C16 / $C32 / $C64"
+          echo "control=$CONTROL"
+          echo "ratio=$RATIO"
+        } >> "$GITHUB_OUTPUT"
 
-    - name: Stop here
-      if: ${{ inputs.probe-only }}
+  build:
+    name: "Build"
+    needs: gate
+    if: ${{ !inputs.probe-only }}
+    runs-on: ubuntu-latest
+    env:
+      SPARK_LOCAL_IP: localhost
+    steps:
+    - name: Checkout Varka
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    # JDK 25 and nothing else. The fork compiles with `--release 25` (pom.xml's
+    # java.version) and sql/varka/engine with `maven.compiler.release` 25, so a JAVA_HOME
+    # of 17 cannot build this tree at all. JDK 17 belongs in the measure job, where the
+    # stock-Spark arms run under it.
+    - name: Install JDK 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '25'
+
+    - name: Restore the jars built for this commit
+      id: jars
+      uses: actions/cache@v5
+      with:
+        path: |
+          assembly/target/scala-2.13/jars
+          sql/varka/bench/target/*.jar
+          sql/varka/engine/target/varka-engine-*.jar
+          conf/log4j2.properties
+        key: varka-surface-jars-${{ github.sha }}
+
+    - name: Cache SBT, Maven and Coursier
+      if: ${{ steps.jars.outputs.cache-hit != 'true' }}
+      uses: actions/cache@v5
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+          ~/.cache/coursier
+        key: varka-surface-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt') }}
+        restore-keys: |
+          varka-surface-
+
+    - name: Build the fork, the driver jar and the engine jar
+      if: ${{ steps.jars.outputs.cache-hit != 'true' }}
       run: |
-        echo "::notice::probe-only: the gate passed and nothing expensive ran"
+        set -euo pipefail
+        cp conf/log4j2.properties.template conf/log4j2.properties
+        sed -i 's/rootLogger.level = info/rootLogger.level = warn/g' conf/log4j2.properties
+        # The assembly, so this checkout's own bin/spark-submit runs it as a distribution.
+        ./build/sbt -Pscala-2.13 -Phive -Phive-thriftserver package
+        # The driver, compiled against the *released* Spark at provided scope, and the
+        # engine jar. The latter is not optional and its absence is silent: a distribution
+        # with Varka on and no engine jar falls back on every batch with a
+        # ClassNotFoundException in the log and measures the row engine under the kernel's
+        # name (ISSUES.md, "The engine jar is not in the distribution").
+        ./build/mvn -f sql/varka/bench/pom.xml -q -DskipTests package
+        ./build/mvn -f sql/varka/engine/pom.xml -q -DskipTests package
 
+  measure:
+    name: "Date surface on ${{ needs.gate.outputs.cpu }}"
+    needs: [gate, build]
+    if: ${{ !inputs.probe-only && !inputs.build-only }}
+    runs-on: ubuntu-latest
+    # Only the commit step needs more than read, and only when asked for.
+    permissions:
+      contents: write
+    env:
+      SPARK_LOCAL_IP: localhost
+      STOCK_VERSION: 4.2.0
+      GATE_CPU: ${{ needs.gate.outputs.cpu }}
+      GATE_LANES: ${{ needs.gate.outputs.lanes }}
+      GATE_CONTROL: ${{ needs.gate.outputs.control }}
+      GATE_RATIO: ${{ needs.gate.outputs.ratio }}
+    steps:
+    - name: Checkout Varka
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    # Both, and 17 first so that JAVA_HOME ends at 25. The surface script addresses each
+    # by JAVA_HOME_<n>_X64 anyway; the ordering only decides what a bare `java` is.
     - name: Install JDK 17
-      if: ${{ !inputs.probe-only }}
       uses: actions/setup-java@v5
       with:
         distribution: zulu
         java-version: '17'
 
+    - name: Install JDK 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '25'
+
+    - name: Restore the jars built for this commit
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          assembly/target/scala-2.13/jars
+          sql/varka/bench/target/*.jar
+          sql/varka/engine/target/varka-engine-*.jar
+          conf/log4j2.properties
+        key: varka-surface-jars-${{ github.sha }}
+        fail-on-cache-miss: true
+
+    - name: Record the machine the gate measured
+      run: |
+        echo "::notice::measuring on $GATE_CPU - $GATE_LANES lane-ops/ns at 128/256/512 bits; control $GATE_CONTROL, 512:256 $GATE_RATIO"
+
     - name: Cache the stock Spark distribution
-      if: ${{ !inputs.probe-only }}
       id: cache-stock
       uses: actions/cache@v5
       with:
@@ -181,7 +301,7 @@ jobs:
         key: stock-spark-${{ env.STOCK_VERSION }}-hadoop3
 
     - name: Download the stock Spark distribution
-      if: ${{ !inputs.probe-only && steps.cache-stock.outputs.cache-hit != 'true' }}
+      if: ${{ steps.cache-stock.outputs.cache-hit != 'true' }}
       run: |
         set -euo pipefail
         mkdir -p ~/stock-spark && cd ~/stock-spark
@@ -202,37 +322,7 @@ jobs:
         fi
         tar -xzf "$TGZ" && rm -f "$TGZ" "$TGZ.sha512"
 
-    - name: Cache SBT, Maven and Coursier
-      if: ${{ !inputs.probe-only }}
-      uses: actions/cache@v5
-      with:
-        path: |
-          build/apache-maven-*
-          build/*.jar
-          ~/.sbt
-          ~/.cache/coursier
-        key: varka-surface-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt') }}
-        restore-keys: |
-          varka-surface-
-
-    - name: Build the fork, the driver jar and the engine jar
-      if: ${{ !inputs.probe-only }}
-      run: |
-        set -euo pipefail
-        cp conf/log4j2.properties.template conf/log4j2.properties
-        sed -i 's/rootLogger.level = info/rootLogger.level = warn/g' conf/log4j2.properties
-        # The assembly, so this checkout's own bin/spark-submit runs it as a distribution.
-        ./build/sbt -Pscala-2.13 -Phive -Phive-thriftserver package
-        # The driver, compiled against the *released* Spark at provided scope, and the
-        # engine jar. The latter is not optional and its absence is silent: a distribution
-        # with Varka on and no engine jar falls back on every batch with a
-        # ClassNotFoundException in the log and measures the row engine under the kernel's
-        # name (ISSUES.md, "The engine jar is not in the distribution").
-        ./build/mvn -f sql/varka/bench/pom.xml -q -DskipTests package
-        ./build/mvn -f sql/varka/engine/pom.xml -q -DskipTests package
-
     - name: Run the surface
-      if: ${{ !inputs.probe-only }}
       env:
         ROWS: ${{ inputs.rows }}
         PARTITIONS: ${{ inputs.partitions }}
@@ -258,14 +348,12 @@ jobs:
           "varka-jdk25=$PWD:$J25:varka"
 
     - name: Tar the results
-      if: ${{ !inputs.probe-only }}
       run: |
         set -euo pipefail
         mkdir -p target
         tar -cvf target/varka-surface-results.tar sql/varka/bench/benchmarks
 
     - name: Upload the results
-      if: ${{ !inputs.probe-only }}
       uses: actions/upload-artifact@v7
       with:
         name: varka-surface-results
@@ -274,7 +362,7 @@ jobs:
     # Always uploaded above, committed only on request: a run that fails the fixed-share
     # rule still leaves its evidence.
     - name: Commit the results
-      if: ${{ !inputs.probe-only && inputs.create-commit && success() }}
+      if: ${{ inputs.create-commit && success() }}
       run: |
         set -euo pipefail
         git config --local user.name "${{ github.actor }}"
