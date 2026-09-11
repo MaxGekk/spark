@@ -1,0 +1,277 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+# Task 62's PR (B): the date surface, run against three Spark distributions on a
+# GitHub runner, per PLAN_TASK_62.md section 11.
+#
+# Why this is a sibling of benchmark.yml and not a mode of it (2.2): that one builds
+# this checkout's test jars and submits them through its own bin/spark-submit under a
+# single setup-java, while this driver is a plain application that must run on a
+# *downloaded* Spark under two JDKs.
+#
+# The steps are ordered so that a miss is cheap. There is no pinned runner to have -
+# GitHub's pool spans four CPU families within one regeneration and does reach genuine
+# full-width AVX-512 Intel Xeons - so the gate below records the CPU as Spark's own
+# benchmarks do and then decides on the *datapath probe*, because "512-bit datapath"
+# is a property and not a model name. Everything after the gate is expensive;
+# everything in it is seconds, which is what makes re-dispatching until the pool gives
+# the right machine a workable strategy rather than a gamble.
+name: Varka date surface benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      probe-only:
+        type: boolean
+        description: 'Run the gate and stop. This is what makes re-dispatching cheap; it also reports the memory and core count section 11.2.1 needs.'
+        required: true
+        default: true
+      require-datapath:
+        type: choice
+        description: 'Abort unless the datapath probe says the vector unit is this wide'
+        required: true
+        default: '512'
+        options:
+          - '512'
+          - 'any'
+      expected-cpu:
+        type: string
+        description: 'Expected CPU model, as benchmark.yml means it (e.g. "Intel(R) Xeon(R) Platinum 8370C"). Documentation and deliberate repeats; the probe is the gate.'
+        required: false
+        default: ''
+      rows:
+        description: 'Rows in the cached table. The laptop files are 1000000000; a runner will take less, and section 11.2.1 is how much.'
+        required: true
+        default: '200000000'
+      partitions:
+        description: 'Partitions. One, per PLAN_TASK_62.md 2.6, unless memory forces more.'
+        required: true
+        default: '1'
+      driver-memory:
+        description: 'Driver memory. The shell driver defaults to the laptop 16g; benchmark.yml uses 6g because the runner is the binding constraint.'
+        required: true
+        default: '6g'
+      only:
+        type: string
+        description: 'Surface entry regex, for a partial re-run'
+        required: false
+        default: ''
+      create-commit:
+        type: boolean
+        description: 'Commit the results files to this branch'
+        required: true
+        default: false
+
+jobs:
+  surface:
+    name: "Date surface (probe-only: ${{ inputs.probe-only }})"
+    runs-on: ubuntu-latest
+    # Only the commit step needs more than read, and only when asked for.
+    permissions:
+      contents: write
+    env:
+      SPARK_LOCAL_IP: localhost
+      STOCK_VERSION: 4.2.0
+    steps:
+    - name: Checkout Varka
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    # Before the gate, not after: Canary.java imports jdk.incubator.vector and runs with
+    # --add-modules jdk.incubator.vector, so the runner's preinstalled JDK cannot be
+    # assumed to serve it. Cached, this is seconds, and the gate still costs minutes
+    # rather than hours.
+    - name: Install JDK 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '25'
+
+    - name: Gate - the machine, and whether it is the one this measurement needs
+      env:
+        EXPECTED_CPU: ${{ inputs.expected-cpu }}
+        REQUIRE_DATAPATH: ${{ inputs.require-datapath }}
+      run: |
+        set -uo pipefail
+        CPU_MODEL=$(grep "model name" /proc/cpuinfo | head -1 | sed 's/model name\s*:\s*//')
+        echo "::notice::Runner CPU: $CPU_MODEL"
+        echo "runner label: ${{ runner.name }} | cores: $(nproc) | memory: $(free -g | awk '/^Mem:/{print $2}') GiB"
+        echo "AVX/SVE flags: $(lscpu | tr ' ' '\n' | grep -E '^avx|^sve' | sort -u | tr '\n' ' ')"
+        java -XX:+PrintFlagsFinal -version 2>/dev/null | grep -E ' (MaxVectorSize|UseAVX|UseSVE) ' || true
+        if [ -n "$EXPECTED_CPU" ] && ! echo "$CPU_MODEL" | grep -qF "$EXPECTED_CPU"; then
+          echo "::error::CPU mismatch! Expected '$EXPECTED_CPU' but got '$CPU_MODEL'"
+          exit 1
+        fi
+        # The datapath probe: the same one dev/varka_bench_surface.sh runs and records in
+        # every results file's provenance. Compute rates at MaxVectorSize=32 against =64,
+        # whose ratio is near 2x on a full-width 512-bit unit and near 1x on a
+        # double-pumped one (SKILLS.md, "This machine's AVX-512 is 256 bits wide").
+        probe() {
+          java --add-modules jdk.incubator.vector -XX:+IgnoreUnrecognizedVMOptions \
+            "-XX:MaxVectorSize=$1" dev/varka_canary/Canary.java 2>/dev/null \
+            | sed -n 's/^compute=//p' | cut -d' ' -f1
+        }
+        C32="$(probe 32)"; C64="$(probe 64)"
+        if [ -z "$C32" ] || [ -z "$C64" ] || ! awk -v a="$C32" 'BEGIN { exit !(a > 0) }'; then
+          echo "::error::the datapath probe produced no rate (C32='$C32' C64='$C64')"
+          exit 1
+        fi
+        RATIO="$(awk -v a="$C32" -v b="$C64" 'BEGIN { printf "%.2f", b / a }')"
+        echo "::notice::datapath probe: compute $C32 at 256 bits, $C64 at 512 bits, ratio $RATIO"
+        # 1.50 sits clear of both outcomes the probe distinguishes: a double-pumped unit
+        # reads 1.00 on the laptop this project measures on, a full-width one is nominally
+        # 2x. A value between them is a machine this gate should not guess about, so it
+        # fails rather than proceeding under either reading.
+        if [ "$REQUIRE_DATAPATH" = "512" ] \
+            && ! awk -v r="$RATIO" 'BEGIN { exit !(r >= 1.50) }'; then
+          echo "::error::datapath ratio $RATIO is not a full-width 512-bit unit; re-dispatch"
+          exit 1
+        fi
+
+    - name: Stop here
+      if: ${{ inputs.probe-only }}
+      run: |
+        echo "::notice::probe-only: the gate passed and nothing expensive ran"
+
+    - name: Install JDK 17
+      if: ${{ !inputs.probe-only }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '17'
+
+    - name: Cache the stock Spark distribution
+      if: ${{ !inputs.probe-only }}
+      id: cache-stock
+      uses: actions/cache@v5
+      with:
+        path: ~/stock-spark
+        key: stock-spark-${{ env.STOCK_VERSION }}-hadoop3
+
+    - name: Download the stock Spark distribution
+      if: ${{ !inputs.probe-only && steps.cache-stock.outputs.cache-hit != 'true' }}
+      run: |
+        set -euo pipefail
+        mkdir -p ~/stock-spark && cd ~/stock-spark
+        TGZ="spark-${STOCK_VERSION}-bin-hadoop3.tgz"
+        BASE="https://dlcdn.apache.org/spark/spark-${STOCK_VERSION}"
+        curl -fsSLO "$BASE/$TGZ"
+        # The checksum is the release's own, served beside it; a truncated download must
+        # fail here rather than three hours later as a baseline nobody can reproduce.
+        # Apache has served these in two formats over the years - `sha512sum` output, and
+        # `gpg --print-md SHA512`, which is spaced hex over several lines and which
+        # `sha512sum -c` cannot read - so the hash is extracted rather than piped.
+        curl -fsSLO "$BASE/$TGZ.sha512"
+        WANT="$(tr -d ' \n' < "$TGZ.sha512" | tr 'A-F' 'a-f' | grep -oE '[0-9a-f]{128}' | head -1)"
+        GOT="$(sha512sum "$TGZ" | cut -d' ' -f1)"
+        if [ -z "$WANT" ] || [ "$WANT" != "$GOT" ]; then
+          echo "::error::checksum mismatch for $TGZ (want '$WANT' got '$GOT')"
+          exit 1
+        fi
+        tar -xzf "$TGZ" && rm -f "$TGZ" "$TGZ.sha512"
+
+    - name: Cache SBT, Maven and Coursier
+      if: ${{ !inputs.probe-only }}
+      uses: actions/cache@v5
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+          ~/.cache/coursier
+        key: varka-surface-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt') }}
+        restore-keys: |
+          varka-surface-
+
+    - name: Build the fork, the driver jar and the engine jar
+      if: ${{ !inputs.probe-only }}
+      run: |
+        set -euo pipefail
+        cp conf/log4j2.properties.template conf/log4j2.properties
+        sed -i 's/rootLogger.level = info/rootLogger.level = warn/g' conf/log4j2.properties
+        # The assembly, so this checkout's own bin/spark-submit runs it as a distribution.
+        ./build/sbt -Pscala-2.13 -Phive -Phive-thriftserver package
+        # The driver, compiled against the *released* Spark at provided scope, and the
+        # engine jar. The latter is not optional and its absence is silent: a distribution
+        # with Varka on and no engine jar falls back on every batch with a
+        # ClassNotFoundException in the log and measures the row engine under the kernel's
+        # name (ISSUES.md, "The engine jar is not in the distribution").
+        ./build/mvn -f sql/varka/bench/pom.xml -q -DskipTests package
+        ./build/mvn -f sql/varka/engine/pom.xml -q -DskipTests package
+
+    - name: Run the surface
+      if: ${{ !inputs.probe-only }}
+      env:
+        ROWS: ${{ inputs.rows }}
+        PARTITIONS: ${{ inputs.partitions }}
+        DRIVER_MEMORY: ${{ inputs.driver-memory }}
+        ONLY: ${{ inputs.only }}
+      run: |
+        set -euo pipefail
+        STOCK="$HOME/stock-spark/spark-${STOCK_VERSION}-bin-hadoop3"
+        J17="${JAVA_HOME_17_X64}"; J25="${JAVA_HOME_25_X64}"
+        ARGS=(--rows "$ROWS" --partitions "$PARTITIONS" --driver-memory "$DRIVER_MEMORY")
+        # --force, and the reason is recorded rather than the gate weakened: the canary
+        # compares this machine against dev/varka_canary/baseline-<host>.txt and exits 2
+        # when there is none, which is every runner, since the hostname is per-dispatch.
+        # The file's canary line then reads OFF, which tells a reader what the absolute
+        # numbers are worth. See PLAN_TASK_62.md 11.4.
+        ARGS+=(--force --skip-build)
+        [ -n "$ONLY" ] && ARGS+=(--only "$ONLY")
+        # Varka last: the comparison table's ratios are the last file against the others.
+        dev/varka_bench_surface.sh "${ARGS[@]}" \
+          "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17" \
+          "spark-${STOCK_VERSION}-jdk25=$STOCK:$J25" \
+          "varka-off-jdk25=$PWD:$J25" \
+          "varka-jdk25=$PWD:$J25:varka"
+
+    - name: Tar the results
+      if: ${{ !inputs.probe-only }}
+      run: |
+        set -euo pipefail
+        mkdir -p target
+        tar -cvf target/varka-surface-results.tar sql/varka/bench/benchmarks
+
+    - name: Upload the results
+      if: ${{ !inputs.probe-only }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: varka-surface-results
+        path: target/varka-surface-results.tar
+
+    # Always uploaded above, committed only on request: a run that fails the fixed-share
+    # rule still leaves its evidence.
+    - name: Commit the results
+      if: ${{ !inputs.probe-only && inputs.create-commit && success() }}
+      run: |
+        set -euo pipefail
+        git config --local user.name "${{ github.actor }}"
+        git config --local user.email "${{ github.actor }}@users.noreply.github.com"
+        git add sql/varka/bench/benchmarks
+        git commit -m "Varka date surface results (${{ inputs.rows }} rows)"
+        for i in {1..5}; do
+          git fetch origin ${{ github.ref_name }}
+          git rebase origin/${{ github.ref_name }}
+          if git push origin ${{ github.ref_name }}:${{ github.ref_name }}; then
+            exit 0
+          fi
+          sleep 3
+        done
+        echo "::error::failed to push after 5 attempts"
+        exit 1
