@@ -717,8 +717,9 @@ this host - which is what will happen on every runner, since the hostname is
 per-dispatch - and the shell driver refuses to run when it fails;
 `dev/varka_bench_surface.sh` also refuses a load average over 1.0. Neither
 gate means on a shared CI VM what it means on the laptop, and the honest
-handling is not to weaken them but to pass `--force` and record why: the file's `canary` line then reads
-`OFF (CI runner)` rather than `ok (...)`, which tells a reader exactly how
+handling is not to weaken them but to pass `--force` and record why: the
+file's `canary` line then reads `OFF (CI runner)` rather than `ok (...)`,
+which tells a reader exactly how
 much the absolute numbers are worth. The *ratios* are what (C) quotes, and
 they are sound for the reason 2.21's band work established - both arms of a
 comparison sit in one run, sharing a JVM, a layout and a clock - except that
