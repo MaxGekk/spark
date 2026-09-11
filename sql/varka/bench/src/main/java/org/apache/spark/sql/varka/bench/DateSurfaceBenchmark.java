@@ -53,8 +53,8 @@ import scala.jdk.javaapi.CollectionConverters;
  * <pre>
  *   spark-submit --master local[1] --driver-memory 8g --class ...DateSurfaceBenchmark \
  *     varka-bench.jar --label spark-4.2.0 --rows 500000000 --out FILE [--partitions 1] [--iters 5]
- *     [--warmup-seconds 2] [--min-seconds 2] [--only REGEX] [--provenance key=value]...
- *     [--expect-fused] [--max-fixed-share PERCENT]
+ *     [--warmup-seconds 2] [--min-seconds 2] [--only REGEX] [--shard I/N]
+ *     [--provenance key=value]... [--expect-fused] [--max-fixed-share PERCENT]
  * </pre>
  *
  * {@code --expect-fused} (the fork with Varka on) fails the run, after writing the file, when an
@@ -68,6 +68,28 @@ import scala.jdk.javaapi.CollectionConverters;
  * partition is the default because on {@code local[1]} every task costs about two
  * milliseconds of scheduling and commit round trip, which fifty tasks turn into a tenth of
  * a second - invisible behind stock Spark's seconds, a third of a Varka row's.
+ *
+ * <p><b>{@code --shard I/N}</b> runs entries {@code I}, {@code I+N}, {@code I+2N} ... of
+ * {@link Surface#ENTRIES}, so N dispatches between them cover the surface exactly once. It
+ * exists because that job-size rule and the six-hour limit of a GitHub Actions job pull in
+ * opposite directions: the rule wants enough rows that fixed cost is under 5%, and at that row
+ * count one dispatch of the whole surface across four distributions does not fit
+ * (PLAN_TASK_62.md 11.11). Sharding divides the queries, not the table, so each shard still
+ * builds the full cached table in each distribution - which is why the split is worth taking
+ * only as far as the per-shard table build, and no further.
+ *
+ * <p>The index is taken over the entry list rather than matched against entry names, which
+ * {@code --only} would do. Names would have to be written out by hand, a shard would silently
+ * cover the wrong entries when the surface gains a line, and nothing would notice; an index
+ * modulo the list length cannot drift from the list it is an index into. Every shard of one
+ * run must therefore be built from the same commit, which {@code dev/varka_bench_merge.py}
+ * checks rather than assumes.
+ *
+ * <p>Striding rather than slicing into contiguous blocks is deliberate: the surface is ordered
+ * by expression family, so a contiguous block would give one shard every calendar extraction
+ * and another every comparison, and the shards' run times would differ several-fold. A stride
+ * mixes the families, so the shards finish together and the slowest one - which is what the
+ * wall-clock actually costs - is close to the mean.
  */
 public final class DateSurfaceBenchmark {
 
@@ -140,6 +162,8 @@ public final class DateSurfaceBenchmark {
     double warmupSeconds = 2.0;
     double minSeconds = 2.0;
     Pattern only = null;
+    int shardIndex = 0;
+    int shardCount = 1;
     boolean expectFused = false;
     double maxFixedShare = Double.NaN;
     final Map<String, String> provenance = new LinkedHashMap<>();
@@ -158,6 +182,15 @@ public final class DateSurfaceBenchmark {
           case "--warmup-seconds" -> a.warmupSeconds = Double.parseDouble(need(k, v));
           case "--min-seconds" -> a.minSeconds = Double.parseDouble(need(k, v));
           case "--only" -> a.only = Pattern.compile(need(k, v));
+          case "--shard" -> {
+            String spec = need(k, v);
+            int slash = spec.indexOf('/');
+            if (slash <= 0) {
+              throw new IllegalArgumentException("--shard wants I/N, got " + spec);
+            }
+            a.shardIndex = Integer.parseInt(spec.substring(0, slash));
+            a.shardCount = Integer.parseInt(spec.substring(slash + 1));
+          }
           case "--expect-fused" -> {
             a.expectFused = true;
             i--;
@@ -177,6 +210,16 @@ public final class DateSurfaceBenchmark {
       }
       if (a.out == null) {
         throw new IllegalArgumentException("--out FILE is required");
+      }
+      if (a.shardCount < 1 || a.shardIndex < 0 || a.shardIndex >= a.shardCount) {
+        throw new IllegalArgumentException(
+            "--shard wants 0 <= I < N with N >= 1, got " + a.shardIndex + "/" + a.shardCount);
+      }
+      if (a.shardCount > Surface.ENTRIES.size()) {
+        // Not an error worth failing a dispatch over, but a shard with no entries writes a
+        // file with no rows, and a merge would then quietly be missing nothing at all.
+        throw new IllegalArgumentException("--shard N is over the surface's "
+            + Surface.ENTRIES.size() + " entries, so some shard would be empty: " + a.shardCount);
       }
       return a;
     }
@@ -214,6 +257,10 @@ public final class DateSurfaceBenchmark {
           Provenance.collect(args.label, spark.version(), load, args.provenance);
       prov.put("rows", Long.toString(args.rows));
       prov.put("partitions", Integer.toString(args.partitions));
+      // Always written, so a whole-surface file says "0/1" rather than being silent about it
+      // and leaving a reader to wonder whether it is complete. The merge reads this.
+      prov.put("shard", args.shardIndex + "/" + args.shardCount);
+      prov.put("surface entries", Integer.toString(Surface.ENTRIES.size()));
       prov.put("methodology", String.format(Locale.ROOT,
           "%d+ iterations over %.0fs windows after %.0fs warm-up; wall time by nanoTime, "
               + "executor time as the sum of TaskMetrics.executorRunTime over the iteration",
@@ -221,7 +268,11 @@ public final class DateSurfaceBenchmark {
       file.append(Provenance.format(prov)).append(System.lineSeparator());
       log.print(file);
       List<String> violations = new ArrayList<>();
-      for (Surface.Entry entry : Surface.ENTRIES) {
+      for (int idx = 0; idx < Surface.ENTRIES.size(); idx++) {
+        Surface.Entry entry = Surface.ENTRIES.get(idx);
+        if (idx % args.shardCount != args.shardIndex) {
+          continue;
+        }
         if (args.only != null && !args.only.matcher(entry.label()).find()) {
           continue;
         }

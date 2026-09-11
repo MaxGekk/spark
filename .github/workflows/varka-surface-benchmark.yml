@@ -76,6 +76,11 @@ on:
         description: 'Surface entry regex, for a partial re-run'
         required: false
         default: ''
+      shard:
+        type: string
+        description: 'I/N - run entries I, I+N, I+2N of the surface, so N dispatches cover it once. For the row count the fixed-share rule wants, the whole surface does not fit one job. Merge with dev/varka_bench_merge.py. See PLAN_TASK_62.md 11.11.'
+        required: false
+        default: ''
       create-commit:
         type: boolean
         description: 'Commit the results files to this branch'
@@ -290,8 +295,13 @@ jobs:
         fail-on-cache-miss: true
 
     - name: Record the machine the gate measured
+      id: tag
+      env:
+        SHARD: ${{ inputs.shard }}
       run: |
         echo "::notice::measuring on $GATE_CPU - $GATE_LANES lane-ops/ns at 128/256/512 bits; control $GATE_CONTROL, 512:256 $GATE_RATIO"
+        # An artifact name may not contain a slash, and a shard is spelled I/N.
+        echo "slug=${SHARD:+-shard${SHARD//\//of}}" >> "$GITHUB_OUTPUT"
 
     # restore/save rather than the combined action, and the save placed directly after
     # the download rather than left to a post step. `actions/cache` does not save when
@@ -340,6 +350,7 @@ jobs:
         PARTITIONS: ${{ inputs.partitions }}
         DRIVER_MEMORY: ${{ inputs.driver-memory }}
         ONLY: ${{ inputs.only }}
+        SHARD: ${{ inputs.shard }}
       run: |
         set -euo pipefail
         STOCK="$HOME/stock-spark/spark-${STOCK_VERSION}-bin-hadoop3"
@@ -352,6 +363,7 @@ jobs:
         # numbers are worth. See PLAN_TASK_62.md 11.4.
         ARGS+=(--force --skip-build)
         [ -n "$ONLY" ] && ARGS+=(--only "$ONLY")
+        [ -n "$SHARD" ] && ARGS+=(--shard "$SHARD")
         # Varka last: the comparison table's ratios are the last file against the others.
         dev/varka_bench_surface.sh "${ARGS[@]}" \
           "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17" \
@@ -375,13 +387,17 @@ jobs:
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7
       with:
-        name: varka-surface-results
+        # Named for the shard, because collecting a sharded run downloads every artifact of it
+        # into one directory and a single name would leave one shard standing.
+        name: varka-surface-results${{ steps.tag.outputs.slug }}
         path: target/varka-surface-results.tar
 
     # Always uploaded above - `!cancelled()` is what makes that true - and committed only
     # on request, so a run that fails the fixed-share rule still leaves its evidence.
+    # Never from a shard: that file is a fraction of the surface, and the merge is what makes
+    # a committable one. dev/varka_bench_merge.py does the joining, off the runner.
     - name: Commit the results
-      if: ${{ inputs.create-commit && success() }}
+      if: ${{ inputs.create-commit && success() && !inputs.shard }}
       run: |
         set -euo pipefail
         git config --local user.name "${{ github.actor }}"

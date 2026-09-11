@@ -109,3 +109,4 @@ sql/varka/plans/PLAN_MILESTONE_4.md	3494.3	the debt entry quotes the regeneratio
 sql/varka/plans/PLAN_TASK_62.md	11.10	a section number, not a rate - the tool cannot tell the two apart
 sql/varka/plans/PLAN_TASK_62.md	11.11	a section number, not a rate - the tool cannot tell the two apart
 sql/varka/plans/PLAN_TASK_62.md	11.10.1	a section number, not a rate - the tool cannot tell the two apart
+sql/varka/plans/PLAN_TASK_62.md	11.12	a section number, not a rate - the tool cannot tell the two apart
