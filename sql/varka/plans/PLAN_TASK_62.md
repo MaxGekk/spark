@@ -630,11 +630,18 @@ number in the file, or a larger runner. What is **not** acceptable is a file
 whose headline rate is mostly job overhead, which is exactly what the rule
 exists to prevent and what the first 200M-row attempt produced.
 
-**11.2.2 How often does the pool give a full-width machine?** From the file
-census above, about 4% of CI-generated files. That is low, and it is fine
-*provided the probe runs first*: a wrong-width dispatch must cost two minutes,
-not two hours. If the measured hit rate is far below the census - say nothing
-full-width in twenty dispatches - the fallback is a larger runner or a
+**11.2.2 How often does the pool give a full-width machine?** The census
+counts *files*, not dispatches, and one dispatch writes as many files as the
+benchmarks it ran - so 118 full-width files out of ~2815 is **not** a 4% hit
+rate and must not be quoted as one. What the census establishes is weaker and
+sufficient: full-width machines are in the pool and are reached in ordinary
+use. The per-dispatch rate is unknown and is what the `probe-only` dispatches
+measure, ten of them being enough to tell "roughly one in three" from "one in
+twenty" and to price the retry loop.
+
+It is fine for the rate to be low *provided the probe runs first*: a
+wrong-width dispatch must cost two minutes, not two hours. If nothing
+full-width appears in twenty dispatches the fallback is a larger runner or a
 self-hosted one, and that is a cost decision rather than a design one.
 
 ### 11.3 The design
@@ -651,6 +658,7 @@ Inputs, following `benchmark.yml`'s naming so the two read alike:
 |---|---|---|
 | `rows` | from 11.2.1 | the job-size rule's number for this machine |
 | `partitions` | `1` | 2.6's finding; raised only if 11.2.1 forces it |
+| `driver-memory` | from 11.2.1 | the script defaults to `16g` for the laptop; `benchmark.yml` uses `6g` and the runner is the binding constraint |
 | `require-datapath` | `512` | `512` aborts unless the probe says full width; `any` records and continues |
 | `expected-cpu` | `''` | `benchmark.yml`'s input verbatim, as documentation and for a deliberate repeat on one model |
 | `only` | `''` | the driver's `--only` regex, for a partial re-run |
@@ -660,26 +668,37 @@ Inputs, following `benchmark.yml`'s naming so the two read alike:
 **The steps, in the order that makes a miss cheap.**
 
 1. Checkout.
-2. **The gate, before any build.** Record the CPU model and the `avx`/`sve`
+2. **Install JDK 25 only** - `setup-java`, cached, seconds - because the
+   gate below needs it and nothing else yet does. `Canary.java` imports
+   `jdk.incubator.vector` and is run with `--add-modules
+   jdk.incubator.vector`, so the runner's preinstalled JDK cannot be assumed
+   to serve it. Putting this before the gate rather than after is the
+   difference between a gate that runs and one that fails for the wrong
+   reason.
+3. **The gate, before any build.** Record the CPU model and the `avx`/`sve`
    flags as `benchmark.yml` does; fail on an `expected-cpu` mismatch; then
-   compile and run `dev/varka_canary/Canary.java` under a JDK the runner
-   already has and abort when `require-datapath` is `512` and the ratio is
-   below a threshold this PR fixes from the census (the laptop reads 1.00
-   double-pumped against a nominal 2x). Everything after this step is
-   expensive; everything in it is seconds. `probe-only` returns here.
-3. Install JDK 17 and JDK 25 - two `setup-java` steps keeping both
-   `JAVA_HOME`s, since the surface runs stock on both.
-4. Cache and download `spark-4.2.0-bin-hadoop3`, verified against its
+   run `dev/varka_canary/Canary.java` at `-XX:MaxVectorSize=32` and `=64` and
+   abort when `require-datapath` is `512` and the ratio is below a threshold
+   this PR fixes (the laptop reads 1.00 double-pumped against a nominal 2x;
+   the threshold wants to sit well clear of both, and the first dispatches
+   say where). Everything after this step is expensive; everything in it and
+   step 2 is seconds. `probe-only` returns here, after also printing
+   `free -g`, `nproc` and the runner label for 11.2.1.
+4. Install JDK 17 beside it, since the surface runs stock on both and
+   `setup-java` keeps each version's `JAVA_HOME` under its own variable.
+5. Cache and download `spark-4.2.0-bin-hadoop3`, verified against its
    published checksum.
-5. Build the fork's assembly, the bench jar and the engine jar. The engine
+6. Build the fork's assembly, the bench jar and the engine jar. The engine
    jar is not optional and its absence is silent: `ISSUES.md` records that a
    distribution with Varka on and no engine jar falls back on every batch
    with a `ClassNotFoundException` in the log and measures the row engine
    under the kernel's name. The shell driver already builds and passes it
    with `--driver-class-path`; the workflow must not route around that.
-6. Run `dev/varka_bench_surface.sh` over the four distributions in the order
-   3.1 fixes, Varka last, with `--force` and the reason recorded (11.4).
-7. Tar the changed files and, under `create-commit`, push them with
+7. Run `dev/varka_bench_surface.sh` over the four distributions in the order
+   3.1 fixes, Varka last, with `--force` and the reason recorded (11.4), and
+   with `--driver-memory` and `--rows` from the inputs rather than the
+   script's laptop defaults of `16g` and 500M.
+8. Tar the changed files and, under `create-commit`, push them with
    `benchmark.yml`'s rebase-retry loop. Always upload the artifact, so a run
    that fails the fixed-share rule still leaves its evidence.
 
@@ -693,9 +712,11 @@ files.
 ### 11.4 The canary, which is calibrated to the laptop
 
 `dev/varka_bench_canary.sh` compares the machine against a *recorded state*
-and the shell driver refuses to run when it fails; `dev/varka_bench_surface.sh`
-also refuses a load average over 1.0. Neither gate means on a shared CI VM
-what it means on the laptop, and the honest handling is not to weaken them
+in `dev/varka_canary/baseline-<host>.txt` and exits 2 when there is none for
+this host - which is what will happen on every runner, since the hostname is
+per-dispatch - and the shell driver refuses to run when it fails;
+`dev/varka_bench_surface.sh` also refuses a load average over 1.0. Neither
+gate means on a shared CI VM what it means on the laptop, and the honest handling is not to weaken them
 but to pass `--force` and record why: the file's `canary` line then reads
 `OFF (CI runner)` rather than `ok (...)`, which tells a reader exactly how
 much the absolute numbers are worth. The *ratios* are what (C) quotes, and
@@ -709,7 +730,42 @@ A second canary calibrated to the runner is possible and is deliberately out
 of scope: it would have to be recalibrated per CPU family, and the census
 says there are at least four.
 
-### 11.5 Tests and verification
+### 11.5 Predictions, registered before the run
+
+Section 6.1 registered predictions for (A) and 9.2 scored them, two of four
+missed. (B) gets the same treatment, and its first prediction is the one that
+decides how much this PR was worth.
+
+1. **The ratios grow against the laptop's, but less than the absolute rates
+   do.** `SPECIES_PREFERRED` is 16 int lanes on a double-pumped Zen and on a
+   full-width Xeon alike - both report 512-bit registers - so the *lane count
+   does not change* and the emitted kernel is the same. What changes is
+   whether the two halves are pumped or one operation issues. Stock Spark's
+   row engine is unaffected either way, so Varka's rise should carry straight
+   into the ratio.
+2. **Unless the surface is memory-bound, in which case almost nothing moves -
+   and that is the finding.** At a row count large enough to satisfy the
+   fixed-share rule the table does not fit in cache, and a kernel that is
+   waiting on memory does not care how wide its ALU is. If the full-width run
+   reproduces the laptop's ratios inside the band, then "on a 512-bit
+   datapath" was never the interesting property of this measurement, row 62's
+   title oversold it, and (C) should say so rather than quietly present the
+   numbers as a wider machine's. The executor-time tables and the per-row
+   nanoseconds are what separate the two cases; the prediction is that at
+   least the cheapest shapes - `date_add`, the comparisons - are bound by
+   memory and move least.
+3. **The same entries fuse.** Fusion is a compile-time decision over the IR
+   and has nothing to do with the vector width, so all the entries that fused
+   on the laptop must fuse on the runner. Any difference is a bug rather than
+   a measurement, and the driver already fails the run on an expected-fused
+   entry that is residual.
+4. **The fixed share is worse than the laptop's.** Fewer rows fit, and the
+   job's fixed cost does not shrink with them. The prediction is that the
+   worst row lands between the laptop's 4.5% and the 5% rule, and the run
+   fails if it does not - which is the outcome 11.2.1 exists to anticipate
+   rather than discover at the end of a six-hour job.
+
+### 11.6 Tests and verification
 
 * A `probe-only` dispatch that lands on a known double-pumped machine must
   fail with the ratio in the log, and one on a full-width machine must pass.
@@ -722,20 +778,24 @@ says there are at least four.
   a finding rather than a number.
 * The workflow's own yaml linted the way the repo lints the others.
 
-### 11.6 Risks
+### 11.7 Risks
 
 1. **The runner cannot hold the rows.** 11.2.1, checked first; the driver
    fails rather than publishing an overhead-dominated rate.
 2. **The pool never gives a full-width machine.** 11.2.2; the probe makes a
    miss cost minutes, and the escalation is a cost decision.
-3. **The two JDKs and the downloaded release blow the job's time limit.**
-   The build dominates; caching is why steps 4 and 5 are separate, and the
-   6-hour job limit is the bound to measure against on the first full run.
+3. **The build and the four runs blow the job's 6-hour limit.** The fork's
+   assembly dominates and `probe-only` stops before it, so this risk is
+   deliberately *not* covered by 11.2's dispatches: it needs one build-only
+   dispatch of its own, whose number goes in 11.2.1 beside the memory. Four
+   distributions at the laptop's per-run cost is the other half of the sum,
+   and the surface's 39 tables give the shape of it. Caching is why the
+   download and the build are separate steps.
 4. **A committed file looks like the laptop's but is not comparable.** The
    `canary: OFF (CI runner)` line and the runner identity are what stop a
    reader taking it for one; (C) must quote the machine beside the number.
 
-### 11.7 Sequencing
+### 11.8 Sequencing
 
 1. The `probe-only` workflow and a handful of dispatches: 11.2.2's hit rate
    and 11.2.1's memory, recorded here.
@@ -744,7 +804,7 @@ says there are at least four.
 3. The committed files, and this section's outcome.
 4. (C) reads them.
 
-### 11.8 Explicitly out of scope
+### 11.9 Explicitly out of scope
 
 A self-hosted runner; a CI-calibrated canary; changing the driver, the
 surface or the shell driver, except where 11.2.1 forces the row count or the
