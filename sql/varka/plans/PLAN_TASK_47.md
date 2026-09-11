@@ -510,10 +510,23 @@ count, which is what task 76 declined, but on a property of the bit layout:
 **a validity group smaller than a byte**, which is 2 and 4 lanes and nothing
 else. That is one condition, derived from the mechanism rather than fitted to
 a threshold, and `widthSpecialised` already reads `analysis.lanes`. It is
-recorded as milestone 5's task 92 rather than shipped here, because on this
-machine it would turn on for no production query - the preferred width is 16
-lanes - and a default that only a `MaxVectorSize` flag can reach should be
-justified by a machine that runs at that width, not by this one.
+recorded as milestone 5's task 92 rather than shipped here, and the owner
+merged it that way.
+
+**A correction to the sentence this section first gave for that**, which was
+that the rule "would turn on for no production query - the preferred width is
+16 lanes - and a default that only a `MaxVectorSize` flag can reach should be
+justified by a machine that runs at that width". The second half stands; the
+first half is true of this laptop and false in general. `SPECIES_PREFERRED`
+for an int lane is 128 bits on every NEON-only aarch64 - Apple Silicon among
+them - and on x86 without AVX2, which is four lanes and exactly the regime
+this task measured a 6 to 9% win in. That is not a flag-only path, and it is
+the reason this project commits 128-bit companion results files at all. So
+task 92's value is a real target's, not a simulated width's, and the case for
+turning the rule on is stronger than this section originally put it. What the
+second half still asks for is confirmation on hardware that runs at that
+width rather than on `-XX:MaxVectorSize=16`, which simulates the lane count
+and not the store behaviour.
 
 Option B of section 3.1 - store once per word rather than once per group - is
 where the two widths that lose might be recovered, since what they are paying
