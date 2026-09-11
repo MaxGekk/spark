@@ -1491,6 +1491,37 @@ is the decision. Three things came out of building it.
   is never optional, `guardedProducers` is "insurance for a consumer" and may be. A count guard
   protecting its own magic multiply is the former, and moving it there made the option's name
   honest again as well.
+- **Removing a dependency chain is only a win where the chain exists, and a validity group
+  smaller than a byte is where it exists.** Task 76 found task 46's helper choice inverting at
+  four lanes and named the mechanism: a group is `lanes` bits, so at 4 lanes it is half a byte,
+  two consecutive groups read-modify-write the same byte, and they serialise on it. Task 47
+  built the writer that removes the read entirely - accumulate the word in a register, store
+  all eight bytes, no load - and measured it on task 76's own rungs at three widths. It wins 6
+  to 9% at 4 lanes at one and two writes, and the inversion disappears with it, which is the
+  mechanism confirmed. It *loses* 11 to 20% at 8 and 16 lanes, where a group owns whole bytes
+  and there was never a chain: an eight-byte store plus an accumulator, a mask, a shift and a
+  branch is more work than a one-byte read-modify-write whose helper already inlines. The
+  general lesson is the one the numbers force rather than the one the row's title assumed -
+  "one write per word" is not an improvement, it is an improvement *at sub-byte group widths* -
+  and the rule that follows is keyed on the bit layout (`lanes < 8`), which is one condition
+  read off the mechanism, not the two thresholds fitted to a machine that task 76 declined.
+- **Before reading a ladder's numbers, check the ladder emits what it claims to.** Task 47's
+  ladder has a step at three writes that neither its model nor task 76's predicts, and the
+  first candidate - a rung crossing `GROUP_BUDGET` into two loop methods, which would pay every
+  per-method cost twice - is checkable in one test and false: all four rungs emit one loop
+  method and grow ~130 bytes per write. That turned "the numbers are strange at k=3" into "the
+  JVM does something at k=3", which is a different investigation with a named suspect (task
+  46's inlining cutoff on the caller). The assertion is committed, so the next reader of either
+  ladder meets the fact before the number. The failed first version of it is worth recording
+  too: it built the k rungs from one repeated literal slot, so the k roots were the same tree,
+  CSE collapsed them, and every rung emitted one write - a ladder that measures nothing while
+  looking exactly like one that does.
+- **A local written only inside a branch is `top` at the merge, and the verifier says so.**
+  Task 47's accumulator is cleared under `if ((i & 63) == 0)` and read straight after; the
+  first `lload` failed with `VerifyError: Bad local variable type ... Type top ... is not
+  assignable to long`, because one incoming edge had assigned the local and the other had not.
+  Initialising it once before the loop is two bytecodes and the fix. Emitting a store inside a
+  branch is fine; reading it at a point some path reaches without that store is not.
 - **A word this block reads must already be stored, not merely available on the stack.** The
   guard's mask-body AND reads `Slots#wordRef` for the node under guard - a *stored local*, not
   whatever the emitter last pushed. For `AddDays`/`SubDays` that word is computed immediately

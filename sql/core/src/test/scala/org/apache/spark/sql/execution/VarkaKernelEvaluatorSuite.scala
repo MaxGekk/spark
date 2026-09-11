@@ -651,4 +651,47 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
       allocator.close()
     }
   }
+
+  test("task 47: a destination validity buffer carries whole 64-bit words, at every length") {
+    // Task 47's admission check, and the reason it is a committed test rather than a comment:
+    // the answer is a property of the Arrow version this repository depends on, and the whole
+    // task rests on it. `VarkaLoopEmitter` writes a destination bitmap one lane group at a
+    // time today - a byte, a short or an int, never a word - because `validityBitsAt`'s
+    // javadoc records that addressing a whole word "would read past the end of the bitmap near
+    // it". Task 47 wants exactly that word-wide store on the destination side, which needs the
+    // buffer behind it to own the whole last word.
+    //
+    // The bound is `((len + 63) / 64) * 8`: the last lane group's rows are all below `len`, so
+    // its word index is at most `(len - 1) >>> 6`, and the store touches the eight bytes of
+    // that word. `(len + 7) / 8` - what the kernel's segment is sized to today, and what Arrow
+    // is asked for - is smaller than that for every length not a multiple of 64.
+    //
+    // The lengths are the awkward ones on purpose: below one word, either side of a word
+    // boundary, and either side of the default COLUMN_BATCH_SIZE.
+    val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-task-47", 0, Long.MaxValue)
+    try {
+      for (len <- Seq(1, 7, 8, 9, 63, 64, 65, 127, 128, 1000, 4095, 4096)) {
+        val wordBytes = ((len.toLong + 63L) / 64L) * 8L
+        for (vector <- Seq[BaseFixedWidthVector](
+            new DateDayVector("d", allocator),
+            new IntVector("i", allocator),
+            new IntervalYearVector("ym", allocator))) {
+          try {
+            vector.allocateNew(len)
+            val capacity = vector.getValidityBuffer().capacity()
+            assert(capacity >= wordBytes,
+              s"${vector.getClass.getSimpleName} at $len rows: validity capacity $capacity " +
+                s"is short of the $wordBytes bytes a word-wide store needs")
+            // The nominal size the emitter uses today, for contrast: this is what the store
+            // would run off, and it is what section 2.1 of the plan proposes to round up.
+            assert((len + 7) / 8 <= capacity)
+          } finally {
+            vector.close()
+          }
+        }
+      }
+    } finally {
+      allocator.close()
+    }
+  }
 }

@@ -558,6 +558,57 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
+  test("task 47: the word writer answers what the per-group write answered, over batches " +
+      "whose length is not a whole number of words") {
+    // The emitter suite compares the two arms bit for bit on hand-built batches; this runs them
+    // through the evaluator, real Arrow validity buffers and the fallback route, which is where
+    // the sizing this task changed actually lives. A destination bitmap the word writer touches
+    // is materialised at ((length + 63) / 64) * 8 bytes rather than the nominal (length + 7) / 8,
+    // and the buffer behind it is Arrow's, not the emitter suite's arena - so a mistake here is
+    // an IndexOutOfBoundsException or a wrong bit in the last word, and neither shows on a
+    // batch whose length happens to divide 64.
+    //
+    // 5000 rows at the default 4096-row batch gives one batch of 4096, which is 64 whole words,
+    // and one of 904, which is fourteen words and eight rows - the case the loop must leave a
+    // partial word for the epilogue to OR into. The 17th row of every 17 is null, so the masked
+    // body runs and the words are not constant.
+    cacheDatesBig(spark, 5000)
+    cacheDatesBig(varkaSpark, 5000)
+    try {
+      // One query per shape that keeps a per-group write. A blend, whose word task 70's pass
+      // cannot serve because it is computed per lane group; a filter, whose selection bitmap is
+      // not validity at all and is written per group in the dense body too; and both together,
+      // which is the multi-accumulator case.
+      val queries = Seq(
+        // Or(In0, And(In0, In1)): the mixed tree task 70's pass declines, so its word is
+        // computed per lane group and its validity is written there - this task's population.
+        "SELECT greatest(d, date_add(d, i)) AS g FROM varka_dates_big ORDER BY g",
+        "SELECT d, i FROM varka_dates_big WHERE d > DATE'2020-06-01' ORDER BY d, i",
+        // A fused filter under a fused projection, which is the multi-accumulator case and
+        // also the one where the projection's batch length is whatever compaction left - an
+        // arbitrary row count rather than a multiple of anything.
+        "SELECT greatest(d, date_add(d, i)) AS g, i FROM varka_dates_big " +
+          "WHERE d > DATE'2020-06-01' ORDER BY g, i",
+        // And a shape the word writer must not touch: task 45 fills its validity once on a
+        // dense batch and task 70's pass writes it whole on a masked one. It is here so the
+        // option is shown not to disturb what it does not write.
+        "SELECT year(d) AS y, month(d) AS m FROM varka_dates_big ORDER BY y, m")
+      for (byWord <- Seq(false, true)) {
+        VarkaColumnarToRowExec.setEmitOptionsForTesting(
+          VarkaEmitOptions.DEFAULTS.withValidityByWord(byWord))
+        try {
+          for (query <- queries) {
+            checkDifferential(spark, varkaSpark, query, expectFused = true)
+          }
+        } finally {
+          VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+        }
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_big"))
+    }
+  }
+
   test("task 70: the bitmap pass answers what the per-group write answered, end to end, over " +
       "nulls on either side") {
     // The emitter suite holds the two settings byte-identical on hand-built batches; this holds

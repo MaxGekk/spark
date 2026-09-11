@@ -1384,6 +1384,58 @@ op-count diff between a guard at the floor and one three days above it,
 showing the kernel differs by an immediate and nothing else, and the shape key
 shown to separate two otherwise-identical subtrees whose shifts differ, both
 before any downward consumer is admitted.
+### 2.23 The validity write, keyed on the bit layout (task 92)
+
+*Added 10 September 2026, from task 47's measurement.*
+
+**What task 47 established.** The per-group validity write is a
+read-modify-write, and at four lanes a validity group is half a byte, so two
+consecutive groups rewrite the same byte and serialise on it - the regime
+task 76 found its helper choice inverting inside. Task 47 built the writer
+that removes it: the bits accumulate in a register and the whole 64-bit word
+is stored, with no read. Over ten pinned runs it is a **6 to 9% win at 4
+lanes** at one and two writes, and the inversion disappears with it. It is an
+**11 to 20% loss at 8 and 16 lanes**, where a group owns whole bytes and
+there was no chain: an eight-byte store plus an accumulator, a mask, a shift
+and a branch is more work than a one-byte read-modify-write whose helper
+already inlines.
+
+**The rule that follows, and why it is not task 76's rejected one.** Task 76
+declined a rule keyed on the write count because it would be two thresholds
+fitted to one machine. This is one condition and it is not fitted: **a
+validity group smaller than a byte**, which is `lanes < 8` - 2 and 4 lanes,
+and nothing else, forever, because a group is `lanes` bits. It is the
+mechanism written down rather than a number tuned. `widthSpecialised` already
+reads `analysis.lanes`, so the plumbing exists.
+
+**Why it is a task and not a line of task 47.** On this machine the preferred
+width is 16 lanes, so the rule would turn on for no production query here: it
+is reachable only under `-XX:MaxVectorSize=16`, which is how the committed
+128-bit companion files are measured and not how anything runs. A default
+that only a flag can reach should be justified on a machine that runs at that
+width. That makes this task's admission check a hardware question, and it
+shares one with `PLAN_MILESTONE_4.md` row 62's pinned runner: both want a
+machine whose preferred width is not this laptop's.
+
+**Two more items ride with it, because they share a ladder run.** Option B of
+`PLAN_TASK_47.md` 3.1 - store once per word rather than once per group - is
+where the two widths that lose might be recovered, since what they pay for is
+the wider store and not the removed read; it is a branch per group against
+three stores in four saved at 16 lanes. And `PLAN_TASK_47.md` 3.4's driver
+item, the masked driver's dead null-state prologue (`PLAN_TASK_70.md` 9.5),
+which pays per batch rather than per group and is the whole of the remaining
+gap on a 64-row batch at AVX-512 - 1080.1 against the dense 1549.6.
+
+**One thing to settle first, and it is cheap.** Task 47's ladder has a step
+at three writes that neither task's model predicts: both per-group arms fall
+away sharply there and the word writer does not, so its advantage reads 22 to
+38% at every width against 5 to 9% at its neighbours. The emitted code is
+ruled out - all four rungs are one loop method growing ~130 bytes per write,
+asserted in `VarkaLoopEmitterSuite`. The leading hypothesis is task 46's own
+mechanism, the caller's node count crossing C2's inlining cutoff so one more
+OR call stops being inlined. `-XX:+PrintInlining` on the k=2 and k=3 rungs
+answers it in one run, and until it does, no rule may be fitted across k=3 in
+either task's table.
 
 ## 3. Task breakdown
 
@@ -1424,6 +1476,7 @@ independent of both and of each other.
 | 89 | The year-month interval divisions (section 2.20). **Scoped** (9 September 2026), split out of task 68; after whichever of 65 and 88 the A/B chooses | `extract(YEAR FROM ym)` and `ym / num` on the chosen exact division, with the truncation correction `extract` needs and the `HALF_UP` step `ym / num` needs; `extract(MONTH FROM ym)` behind the further question of a `ByteType` output the evaluator does not have; `ym / col` declining, the divisor not being a constant | The two rounding corrections verified over the full int32 month range against Spark's own `getYears`, `getMonths` and `IntMath.divide` by a committed script; the byte-output question settled before `extract(MONTH)` is built; a throughput pair per shape against the row engine, these being new lowerings |
 | 90 | The benchmark files are not reproducible run to run (section 2.21). **Partly done** (10 September 2026): the band is measured and committed for the parity and throughput benchmarks at both widths, and the regeneration diff classifies against it. That half landed under task 77, which had re-scoped itself onto this row's work without noticing this row existed - recorded here rather than quietly absorbed. Scoped 9 September 2026 from the investigation task 79's section 9 asked for; the pinning half was already done | Two regenerations with no change between them disagree on 73 of 211 cases by more than 3% and 22 by more than 10%, pinned; unpinned the worst is 75%. Measured out: within-run noise (avg/best median 1.007), the clock (constant to 1.2% while throughput moves 31%), ASLR, contention. What remains is the per-fork C2 lottery `PLAN_TASK_32.md` 11 already traced to JDK-8380195. `dev/varka_bench_repeat.sh` measures the band; `dev/varka_bench_regen.sh` now pins to the fast core complex and records it. **Measured, 10 September 2026**, over ten runs per width on an idle pinned machine: the parity file's median spread is 5.34% at AVX-512 and 1.72% at 128-bit, p90 22.30% and 11.88%, worst 227.15% and 39.06%; the throughput file 5.31% and 3.67%. Two findings the section did not predict. The narrow width is the *quieter* of the two by a factor of three at the median, so collapses have been found at 128-bit because that file is quiet enough for one to stand out, not because it is unstable - and the two widths need separate bands for that reason. And three runs understate the band: this row's own 1.6% median comes from three runs, where ten give 5.34% at the same width | The band committed per file for the parity and throughput benchmarks: **done**. The regeneration diff reported against the band rather than a flat 3%: **done**, cutting held-out false alarms on an unchanged file from 32.9% of rows to 5.6% at AVX-512 and 11.4% to 2.1% at 128-bit. Still open: the arithmetic benchmark's band; task 63's 9.7 dead-local figure re-taken pinned before task 82 scopes itself on it; the decision on N-fork medians taken from the cost, with the fallback stated - that absolute rates stop being compared across runs and the within-run A/Bs carry the claims; and the cause itself, which task 77's census leaves open with one method taking 100 runtime deoptimisations across 194 compiles and the `task_queued` records unread |
 | 91 | A guard bound the shift above it chooses (section 2.22). **Scoped** (10 September 2026), from task 69's outcome: it closed the upward half of `PLAN_MILESTONE_4.md` 9's conservative-decline entry and left the half that motivated it, `weekofyear`/`yearofweek` over a column offset, still residual because `ThursdayOf` shifts downward and there is no headroom below `NARROW_MIN_DAYS`; after 84, whose interval representation it should take | Task 52's runtime guard comparing against a bound the compiler chooses from the shift `dayRange` already computes for the subtree above the producer - `[NARROW_MIN_DAYS + 3, NARROW_MAX_DAYS]` under a `ThursdayOf` consumer, `+ 365` under a `trunc` one - so every downward-shifting consumer over a guarded producer becomes admissible at the same run-time cost, one compare against a different immediate | The guard's compare shown to be the only place `NARROW_MIN_DAYS` enters these kernels, by grep and a `VarkaEmitDump` op-count diff; the shape key shown to separate two subtrees identical but for the shift above them; `weekofyear(date_add(d, off))` fused with a differential over a batch that straddles the moved bound |
+| 92 | The validity write, keyed on the bit layout (section 2.23). **Scoped** (10 September 2026), from task 47's measurement: its word writer wins 6 to 9% at 4 lanes and loses 11 to 20% at 8 and 16, so it shipped as an option defaulting off; needs a machine whose preferred width is not this laptop's, which it shares with `PLAN_MILESTONE_4.md` row 62's pinned runner | `validityByWord` defaulting on where a validity group is smaller than a byte (`lanes < 8`) - one condition read off the bit layout rather than two thresholds fitted to a machine, which is what task 76 declined; plus option B of `PLAN_TASK_47.md` 3.1, storing once per word rather than once per group, and 3.4's masked-driver liveness item, both of which share this task's ladder run | The k=3 step in task 47's ladder explained from `-XX:+PrintInlining` before any rule is fitted across it - the emitted code is already ruled out - and the width rule's win reproduced on a machine that runs at that width rather than under a `MaxVectorSize` flag |
 
 ## 4. Files
 

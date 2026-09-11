@@ -690,6 +690,14 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         val blendGeneral = blends.zipWithIndex.map { case (roots, i) =>
           emit(roots, 1, 4, loader, 966 + i, generalHelpers)
         }
+        // Task 47's arm over the same four rungs: the shapes are 76's, the question is not.
+        // 76 asked which *helper* a per-group read-modify-write should call; this asks whether
+        // the read-modify-write should happen at all. So the arms are `validityByWord` on and
+        // off, with the width-named helpers on both sides, and the ids are a new block - 962
+        // to 969 are 76's pair and reusing them would put two questions in one row.
+        val blendByWord = blends.zipWithIndex.map { case (roots, i) =>
+          emit(roots, 1, 4, loader, 970 + i, perGroupWrite.withValidityByWord(true))
+        }
         val selectionRoot = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
         val filterKernel = emit(Seq(selectionRoot), 1, 1, loader, 884)
         val filterGeneral = emit(Seq(selectionRoot), 1, 1, loader, 885, generalHelpers)
@@ -750,6 +758,10 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
           benchmark.addCase(
             s"$k validity write(s) per body, general helpers (task 76), mixed nulls") { _ =>
             chunked(blendGeneral(k - 1), true, k, blendLits)
+          }
+          benchmark.addCase(
+            s"$k validity write(s) per body, one write per word (task 47), mixed nulls") { _ =>
+            chunked(blendByWord(k - 1), true, k, blendLits)
           }
         }
         benchmark.addCase("filter d < literal, null-free") { _ =>
