@@ -566,3 +566,187 @@ narrow table per shape family, as `VarkaThroughputBenchmark` has, which is a
 driver change rather than a surface one and belongs with PR (B). PR (B), the
 pinned full-width runner, and PR (C), the README, are unchanged by this run
 except that they now have a laptop data point that meets the size rule.
+
+## 11. PR (B): the runner
+
+*Planned 11 September 2026, after PR (A) and its 1B-row run landed.*
+
+### 11.1 What (B) is, and what it is not
+
+3.1 said PR (B) is "the workflow that runs the three distributions on a
+pinned runner and commits their files". The word *pinned* was doing work it
+cannot do, and this section replaces it.
+
+**There is no pinned runner and there does not need to be.** Every committed
+benchmark results file in this repository - the upstream ones, produced by
+`.github/workflows/benchmark.yml` - carries the CPU it ran on, and across the
+tree those CPUs are: AMD EPYC 7763 (Zen 3, no AVX-512) on about 1800 files,
+AMD EPYC 9V74 (Zen 4, AVX-512 double-pumped to 256 bits) on about 875, Intel
+Xeon Platinum 8370C (Ice Lake-SP, full 512-bit) on 64, and Intel Xeon
+6973P-C and 6975P-C (Granite Rapids, full 512-bit) on 54. All four families
+appear in files committed on one day from a single regeneration, all on
+`Linux ...-azure`. So GitHub's pool is heterogeneous *within one workflow
+run*, it does reach genuine full-width AVX-512 hardware, and the upstream
+project's whole approach is to record the CPU in the file and accept what it
+gets.
+
+**So (B) follows that convention and adds the check the convention lacks.**
+`benchmark.yml` in this fork already carries an early CPU check - the
+`expected-cpu` input, whose step reads `/proc/cpuinfo` and fails the job
+before any build when the model does not match. (B) reuses that shape and
+goes one better, because "512-bit datapath" is a property and not a model:
+the **datapath probe decides**, and the model list is documentation.
+
+### 11.2 The admission check, to do first
+
+Two questions, and the second can close this PR's *design* even though it
+cannot close the task.
+
+**11.2.1 Can a GitHub runner hold enough rows?** This is 7's risk 2 and it is
+the real one. `benchmark.yml` passes `--driver-memory 6g` with the comment
+"GitHub Actions has 7 GB memory limit"; the shell driver defaults to `16g`,
+and section 10's committed files are 1B rows in one partition, which is where
+the 5% fixed-share rule is finally met - the worst row at 4.5%, the median at
+1.7%. At 500M the rule was *not* met for the fastest shapes, which is why the
+run was redone. A runner that cannot cache 1B rows therefore cannot reproduce
+the committed files' size discipline, and the driver will say so rather than
+lie: it fails any Varka row whose fixed share exceeds `--max-fixed-share`.
+
+What to establish, in one short workflow dispatch before the full one is
+written:
+
+* the runner's actual memory (`free -g`) and core count, since the "7 GB"
+  comment predates GitHub's current standard runner;
+* how many rows the Arrow cache holds inside it - the cache is off-heap
+  `MemorySegment`s, so the binding constraint is machine memory rather than
+  the driver heap, and the two must be measured rather than reasoned about;
+* whether the fixed-share rule holds at that row count, which the driver
+  already answers by failing.
+
+If the largest row count that fits leaves the rule unmet, the honest outcomes
+are, in order of preference: more partitions (which costs ~2 ms of scheduling
+per task on `local[1]` and may still win), a documented higher share with the
+number in the file, or a larger runner. What is **not** acceptable is a file
+whose headline rate is mostly job overhead, which is exactly what the rule
+exists to prevent and what the first 200M-row attempt produced.
+
+**11.2.2 How often does the pool give a full-width machine?** From the file
+census above, about 4% of CI-generated files. That is low, and it is fine
+*provided the probe runs first*: a wrong-width dispatch must cost two minutes,
+not two hours. If the measured hit rate is far below the census - say nothing
+full-width in twenty dispatches - the fallback is a larger runner or a
+self-hosted one, and that is a cost decision rather than a design one.
+
+### 11.3 The design
+
+**A sibling workflow, `.github/workflows/varka-surface-benchmark.yml`.** Not a
+mode of `benchmark.yml`: 2.2 established that one builds this checkout's test
+jars and submits through its own `bin/spark-submit` under a single
+`setup-java`, while this driver is a plain application that must run on a
+*downloaded* Spark under two JDKs.
+
+Inputs, following `benchmark.yml`'s naming so the two read alike:
+
+| input | default | why |
+|---|---|---|
+| `rows` | from 11.2.1 | the job-size rule's number for this machine |
+| `partitions` | `1` | 2.6's finding; raised only if 11.2.1 forces it |
+| `require-datapath` | `512` | `512` aborts unless the probe says full width; `any` records and continues |
+| `expected-cpu` | `''` | `benchmark.yml`'s input verbatim, as documentation and for a deliberate repeat on one model |
+| `only` | `''` | the driver's `--only` regex, for a partial re-run |
+| `create-commit` | `false` | `benchmark.yml`'s semantics and its rebase-retry push |
+| `probe-only` | `false` | run the gate steps and stop - this is what makes re-dispatching cheap |
+
+**The steps, in the order that makes a miss cheap.**
+
+1. Checkout.
+2. **The gate, before any build.** Record the CPU model and the `avx`/`sve`
+   flags as `benchmark.yml` does; fail on an `expected-cpu` mismatch; then
+   compile and run `dev/varka_canary/Canary.java` under a JDK the runner
+   already has and abort when `require-datapath` is `512` and the ratio is
+   below a threshold this PR fixes from the census (the laptop reads 1.00
+   double-pumped against a nominal 2x). Everything after this step is
+   expensive; everything in it is seconds. `probe-only` returns here.
+3. Install JDK 17 and JDK 25 - two `setup-java` steps keeping both
+   `JAVA_HOME`s, since the surface runs stock on both.
+4. Cache and download `spark-4.2.0-bin-hadoop3`, verified against its
+   published checksum.
+5. Build the fork's assembly, the bench jar and the engine jar. The engine
+   jar is not optional and its absence is silent: `ISSUES.md` records that a
+   distribution with Varka on and no engine jar falls back on every batch
+   with a `ClassNotFoundException` in the log and measures the row engine
+   under the kernel's name. The shell driver already builds and passes it
+   with `--driver-class-path`; the workflow must not route around that.
+6. Run `dev/varka_bench_surface.sh` over the four distributions in the order
+   3.1 fixes, Varka last, with `--force` and the reason recorded (11.4).
+7. Tar the changed files and, under `create-commit`, push them with
+   `benchmark.yml`'s rebase-retry loop. Always upload the artifact, so a run
+   that fails the fixed-share rule still leaves its evidence.
+
+**What the file must say that the laptop's does not.** The provenance block
+already carries `datapath`, `MaxVectorSize`, the CPU flags and the CPU model.
+(B) adds the runner's identity - the workflow run id and the runner label -
+so a committed file names the dispatch that produced it and a reader can go
+back to the log. That is the CI counterpart of `host: aqua` in the laptop's
+files.
+
+### 11.4 The canary, which is calibrated to the laptop
+
+`dev/varka_bench_canary.sh` compares the machine against a *recorded state*
+and the shell driver refuses to run when it fails; `dev/varka_bench_surface.sh`
+also refuses a load average over 1.0. Neither gate means on a shared CI VM
+what it means on the laptop, and the honest handling is not to weaken them
+but to pass `--force` and record why: the file's `canary` line then reads
+`OFF (CI runner)` rather than `ok (...)`, which tells a reader exactly how
+much the absolute numbers are worth. The *ratios* are what (C) quotes, and
+they are sound for the reason 2.21's band work established - both arms of a
+comparison sit in one run, sharing a JVM, a layout and a clock - except that
+here the four distributions are four *processes* on one machine, which is
+weaker than one process's A/B and is the reason the fixed-share rule and the
+executor-time table exist.
+
+A second canary calibrated to the runner is possible and is deliberately out
+of scope: it would have to be recalibrated per CPU family, and the census
+says there are at least four.
+
+### 11.5 Tests and verification
+
+* A `probe-only` dispatch that lands on a known double-pumped machine must
+  fail with the ratio in the log, and one on a full-width machine must pass.
+  Both are observations of real dispatches, recorded in this section.
+* `dev/varka_quote_check.py` over the committed files, which already reads
+  this directory's glob.
+* `dev/varka_bench_diff.py --table` against the laptop's files: the *shape*
+  of the comparison must survive the machine change even where the rates do
+  not, and an entry that fuses on the laptop and is residual on the runner is
+  a finding rather than a number.
+* The workflow's own yaml linted the way the repo lints the others.
+
+### 11.6 Risks
+
+1. **The runner cannot hold the rows.** 11.2.1, checked first; the driver
+   fails rather than publishing an overhead-dominated rate.
+2. **The pool never gives a full-width machine.** 11.2.2; the probe makes a
+   miss cost minutes, and the escalation is a cost decision.
+3. **The two JDKs and the downloaded release blow the job's time limit.**
+   The build dominates; caching is why steps 4 and 5 are separate, and the
+   6-hour job limit is the bound to measure against on the first full run.
+4. **A committed file looks like the laptop's but is not comparable.** The
+   `canary: OFF (CI runner)` line and the runner identity are what stop a
+   reader taking it for one; (C) must quote the machine beside the number.
+
+### 11.7 Sequencing
+
+1. The `probe-only` workflow and a handful of dispatches: 11.2.2's hit rate
+   and 11.2.1's memory, recorded here.
+2. The full workflow, run without `create-commit` until a run passes the
+   fixed-share rule.
+3. The committed files, and this section's outcome.
+4. (C) reads them.
+
+### 11.8 Explicitly out of scope
+
+A self-hosted runner; a CI-calibrated canary; changing the driver, the
+surface or the shell driver, except where 11.2.1 forces the row count or the
+partition count; and the 128-bit companion run, which is milestone 5's task
+92 and wants a *narrower* machine than this one.
