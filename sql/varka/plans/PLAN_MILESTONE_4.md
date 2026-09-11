@@ -13,6 +13,18 @@ that point there, so citations still resolve. The coverage milestone that was
 called milestone 5 is now milestone 6 (`SCOPE_MILESTONE_6.md`). Everything
 below that says "milestone 5" in the old sense has been repointed.
 
+**Re-scoped again on 11 September 2026**, to what closes the milestone. Task 62
+is its exit - the row closes with (C), the README, which is written from (B)'s
+files - and task 78's public ratio waits on the same runner. Five open rows had
+nothing waiting on them and were moved to `PLAN_MILESTONE_5.md`, text and task
+numbers unchanged, on the 4 September precedent: 25 (ILP, whose harness stopped
+measuring what it was built for), 72 and 73 (emitter infrastructure, where 73's
+predicate is the fact milestone 5's task 84 lattice will carry anyway), and 80
+(string columns, sized for milestone 6's needs). Row 44 moved differently: task
+87 absorbed it, because both are the epilogue's size at two thresholds and two
+rows would have designed one partitioning twice. What remains here is 62, 64
+and 78.
+
 Milestone 3 closed with task 23, so this file is no longer the scope document it
 opened as: it is the task plan that document promised, written against the
 measurements it said should order it. The scope catalogue it grew from is kept
@@ -195,67 +207,10 @@ things that run established change the mechanism described above:
 
 ### 2.3 Instruction-level parallelism (task 25, item 13)
 
-The debt register's rule applies: a prediction goes in writing before the
-first measurement, and the honest null hypothesis is that C2 plus the
-out-of-order engine already collect most of the available overlap on a 16-op
-body, so K pays only on the long chains. The three confounders move together,
-never one at a time: K, the broadcast strategy (pinned locals collapsed
-throughput 7x at ~32 broadcasts, so unrolling and pre-broadcasting *compete*),
-and `GROUP_BUDGET`, which unrolling multiplies against a ~1 ms-per-vector-op
-C2 compile (**confirmed by task 43**: 1.1 ms per op at AVX-512 and 2.0 at
-128-bit, measured across a 20-to-248-op ladder - see `PLAN_TASK_43.md` 8.2, and
-the reconciliation note in 2.16). The candidates are the shapes that are compute-bound and already
-carry a committed number to beat: `dayofweek` (a 20-op fold), `CASE WHEN` on
-an unpredictable condition, and the depth-8 chain. Row-consumer shapes are
-bounded by the ~25 ns/row read-back floor and the filter path by compaction;
-no kernel-side ILP moves either, so neither is a candidate. One negative
-result worth carrying in: a 2-way unrolled add kernel over a misaligned
-buffer still lost 50-60% to the aligned case (section 8's buffer-alignment
-entry) - unrolling does not incidentally hide the alignment penalty, so this
-task's outcome and that entry's are independent questions, not one deferring
-to the other.
-
-Open question 4 is answered, ahead of the task and with the broadcast
-confounder held fixed at "emitted per use" so it does not contaminate the
-result (`VarkaUnrollFactorBenchmark`, committed results file in
-`sql/varka/engine/benchmarks/`, four runs total including two taken after
-merging task 24's PR and enabling the machine's performance mode, neither of
-which changed a conclusion): on an 8-op chain, K = 1, 2 and 4 are flat at
-both vector widths, on every run - within 4% either way, no consistent
-winner. The honest null hypothesis holds exactly on a body this short. On a
-20-op chain (the `dayofweek`-length candidate), K = 2 wins reproducibly at
-both widths and on every run - +2.6% to +9.2% at AVX-512, +1.2% to +6.2% at
-128-bit - and K = 4 adds no further, consistent benefit over K = 2 on either
-width (the sign varies run to run, always within a few percent). So "K pays
-only on the long chains" is confirmed rather than merely predicted, and the
-planner version below should cap K at 2 rather than search further: 4 was
-measured to buy nothing on the one shape where unrolling helped at all, while
-still paying `GROUP_BUDGET`'s doubled cost over K = 2. This measurement is
-also where a real methodology trap surfaced and was caught: comparing K = 1
-(straight-line unrolled source, the shape a real emission carries) against an
-earlier K = 2/4 written as a small constant-bound runtime loop over the op
-index produced a spurious 30-60% *loss* at K = 4 - an artifact of the loop
-shape, not of unrolling. Rewriting K > 1 as straight-line interleaved code,
-matching K = 1's shape exactly, is what produced the numbers above (`SKILLS.md`
-carries the general lesson).
-
-Re-measured in forked JVMs after the harness debt closed (the results file's
-header says how): the same picture. Depth 8 flat at both widths; depth 20
-gains +4.4% from K = 2 at AVX-512 and +4.3% at 128-bit by min, and K = 4 over
-K = 2 is +3.4% at one width and -1.9% at the other. The conclusion did not
-depend on the harness, which is what a plain add/sub chain should show.
-
-If a factor above 1 pays, the deliverable is the planner version: the emitter
-already knows the DAG's live-temporary count per lane group, so K is chosen
-per shape, and a shape whose live set fills the register file declines to
-unroll. That version exists only because the loop is generated - it is the
-whole reason this item belongs to Varka rather than to hand-written kernels.
-
-Task 24 goes first because an unrolled body's remainder is `K * lanes - 1`
-rows, so the tail question and the unroll question share a harness (open
-questions 4 and 5) - and the batch-size knee sweep (question 6) rides the same
-harness for the wide-shape case. Whatever the outcome, the `SKILLS.md`
-unrolling bullet is rewritten with the numbers, as it promises itself.
+Moved to `PLAN_MILESTONE_5.md` section 2.24 on 11 September 2026, when the
+milestone was re-scoped a second time to what closes it - task 62's
+measurement and what it needs; the text is there unchanged. The heading stays
+so citations of this section number still resolve.
 
 ### 2.4 Calendar extraction, `year` first (task 26, item 6)
 
@@ -639,6 +594,15 @@ trick task 39 uses, and the reason this task needs no error machinery of its
 own.
 
 ### 2.16 What `GROUP_BUDGET` does not bound (tasks 43, 44)
+
+**Task 44's half moved to `PLAN_MILESTONE_5.md` 2.18 on 11 September 2026**,
+where task 87 absorbed it: that task has the epilogue exceeding the JVM's
+65535-byte method cap, diagnoses the cause as the epilogue not being
+partitioned the way `GROUP_BUDGET` partitions the loop, and therefore has to
+choose the mechanism row 44 would have chosen. Row 44's size ladder and its
+`HugeMethodLimit` measurement are requirements there. Task 43's half is done
+and its text below is unchanged.
+
 
 Both come out of the review of task 26, and both are the same discovery from
 two sides: `GROUP_BUDGET` bounds one of the three method shapes the emitter
@@ -1748,90 +1712,17 @@ the decision to the emitter); it does not revisit `MAX_FUSED_NODES`.
 
 ### 2.36 Output order for prefix affinity (task 72)
 
-Added 7 September 2026, from B2's one pinned limitation (`PLAN_TASK_32.md`
-10.2 and 7.6). `groupOutputs` is greedy in output order, so in
-`year(d), year(d2), month(d)` the month is offered to the group holding
-`year(d2)`, whose prefix it cannot reuse, and forms a third loop method that
-recomputes the decomposition of `d` the first method already ran; adjacent,
-the same three outputs take two methods. B2 pinned that as a limitation
-rather than fixing it, because the driver's output order is the projection's
-and other things key on it.
-
-**The admission check, which is most of the task.** Nothing in the emitter
-requires a group's output indices to be contiguous: `groupOutputs` already
-returns lists of indices, each loop method takes its list, and the driver
-calls the methods in group order while the destinations stay indexed by
-output. So the change may be a two-pass grouping - gather each calendar
-output into the group whose prefix it reuses, wherever that group is, then
-fill the rest greedily as today - with no change to the evaluator's per-output
-vectors or to `VarkaDebugInfo`'s line map, both of which key on the output
-index and not on which method computes it. The check is to establish that:
-every consumer of a group walked, the line map and the pinned oracles asserted
-unmoved, and the differential suite run with a deliberately permuted grouping
-before the rule is written. If a consumer does depend on contiguity, the task
-says which and stops, and the debt entry stays.
-
-**What it is worth.** The shapes B2 measured, with one output between the
-siblings: `year(d), year(d2), month(d)` against `year(d), month(d), year(d2)`
-in the parity harness, at both widths, with the prediction registered that
-the permuted grouping matches the adjacent one within noise. Date columns in
-a projection are usually adjacent, so this is a small task with a bounded
-win; it is a row because the limitation is pinned in a test that should be
-flipped by a change, not silently.
+Moved to `PLAN_MILESTONE_5.md` section 2.25 on 11 September 2026, when the
+milestone was re-scoped a second time to what closes it - task 62's
+measurement and what it needs; the text is there unchanged. The heading stays
+so citations of this section number still resolve.
 
 ### 2.37 A stopping rule for the guard walk (task 73)
 
-Added 7 September 2026, out of task 70's fuzz run (see the debt register).
-
-**The observation.** `Analysis.collectGuardedProducers` calls
-`collectColumnOffsetProducers(chronoChild(node), ...)` for every `isChrono`
-node, and that walk descends the entire subtree, adding every
-`AddDays`/`SubDays` with a column offset it meets. It has no stopping rule.
-So in `month(dayOfWeek(date_add(date_add(d, off), off)))` the producer is
-guarded against `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` on its own value, when
-the value `month` actually decomposes is the `dayOfWeek` result and is always
-1 to 7. `weekday`, `dayofweek_iso`, `weekofyear` and `datediff` behave the
-same way: each bounds its output, and none of them stops the walk.
-
-The guard is not wrong, it is unnecessary. A batch whose producer leaves the
-range is declined and recomputed on the row engine, so the answers are right;
-what is lost is the fusion.
-
-**Why the task starts with an admission check, like task 69.** Through the
-compiler this shape never reaches the emitter. `dayRange` has no rule for a
-mod-7 node, so it returns `Unknown`, and `checkedForCalendar` declines the
-entry at compile time with "day producer the calendar range analysis does not
-bound". The entry is residual either way, and only a caller that builds IR
-directly - `VarkaIrFuzzSuite`, and any future planner-side rewrite - reaches
-the over-guard. So the first question is whether any SQL shape observes the
-difference at all. If none does, the honest outcome is to record that and
-close the task, exactly as task 69's section 2 is allowed to.
-
-If the check finds the shape does matter, the two halves have to move
-together, and the compiler half is the one that changes what a user sees:
-`dayRange` would gain a rule that a mod-7 node re-bases its child to a known
-small interval regardless of what the child's interval was, which is the same
-observation stated on the other side of the compiler. Then
-`year(dayofweek(date_add(d, off)))` fuses instead of going residual.
-
-**What closing the emitter half takes.** A stopping rule on the walk: descend
-only through nodes that pass a day through to the decomposition - `AddDays`,
-`SubDays`, `Greatest`, `Least`, `IfElse`, `NextDay`, `ThursdayOf`, `LastDay`,
-`AddMonths`, `TruncDate`, `MakeDate` - and stop at any node whose output is a
-bounded quantity of its own: the mod-7 family, `DateDiff`, `WeekOfYear` and
-every calendar field extraction. The set is the same one `dayRange` would
-need, which is the argument for taking both halves in one task rather than
-letting the two analyses drift apart again - drift between them is what this
-finding is.
-
-**How it was found, which is part of what it is.** Not by reading the
-emitter: by running `VarkaIrFuzzSuite` at 1.84 million iterations across
-twenty jobs on 7 September 2026, where every one of the twenty stopped on a
-shape of this form. At the shipped budget of 300 iterations it is
-unreachable. The suite's own half of the mismatch - a `Gen.bound` of 7 on a
-mod-7 node hid the producers beneath it from the `chronoBound` check - was
-fixed with task 70, because the fuzzer is unusable past about ten thousand
-iterations without it.
+Moved to `PLAN_MILESTONE_5.md` section 2.26 on 11 September 2026, when the
+milestone was re-scoped a second time to what closes it - task 62's
+measurement and what it needs; the text is there unchanged. The heading stays
+so citations of this section number still resolve.
 
 ### 2.38 The validity helper choice, keyed on the loop body (task 76)
 
@@ -2166,29 +2057,10 @@ rule is written: they are validity-driven, with no untaken arm.
 
 ### 2.42 String-column compaction that keeps the Arrow layout (task 80)
 
-Added 7 September 2026, out of task 59's review (see the debt register).
-
-**The observation.** A derived int32 leaf (task 59's weekday, task 61's trunc
-level) reads its source through a `VarCharVector`. A fused Varka filter ahead
-of the projection hands it a compacted batch whose string columns went through
-the generic on-heap compaction, so the leaf's source is no longer Arrow-backed
-and the projection refuses the batch: a stacked `next_day(d, s)` over a Varka
-filter is counted in `numFallbackBatchesNonArrow` and computed on the row
-path, with correct answers.
-
-**Why it is a task now.** Every future derived leaf over a string column
-inherits it, and milestone 6's item 3 puts string columns under filters and
-group keys, so the shape stops being a corner exactly when that milestone
-starts. Fixing it late means fixing it under a benchmark rather than under a
-differential.
-
-**The design.** A string-column compaction that keeps the Arrow layout,
-writing offsets and data buffers rather than materialising rows - task 21's
-`filterCompact` for fixed-width columns is the pattern, and the shape of the
-work is one pass to sum the selected lengths, one to write offsets, one to
-copy bytes. Measured on the task 59 differential's own fixture, with the
-metric as the gate: the stacked shape must stop counting
-`numFallbackBatchesNonArrow` at all.
+Moved to `PLAN_MILESTONE_5.md` section 2.27 on 11 September 2026, when the
+milestone was re-scoped a second time to what closes it - task 62's
+measurement and what it needs; the text is there unchanged. The heading stays
+so citations of this section number still resolve.
 
 ## 3. Task breakdown
 
@@ -2258,7 +2130,6 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 |---|---|---|---|
 | 24 | The scalar tail, interrogation, compaction. **DONE** (`PLAN_TASK_24.md`) | The tail-cost measurement (open question 3) recorded first; the unmasked-body-plus-masked-epilogue loop via `indexInRange`, deleting the emitter's second scalar IR walk; `compress(mask)` compaction in `VarkaFilterExec` against the committed ~1-3 ns/row ceiling, with the non-AVX-512 verdict; per-lane-group `anyTrue`/`allTrue` fast paths | Differential green at both vector widths, all null patterns, all-selected and none-selected; the pinned hashes and line map unchanged, which is the proof the refactor preserved behaviour (they were expected to move; see `PLAN_TASK_24.md` section 5); filter ladder re-run and committed; emitter per-node surface reduction stated as a number |
 | 31 | Assert the instructions, not the ratio. **DONE** (`PLAN_TASK_31.md`) - eleven cases at both widths; every hand-written kernel and every emitted loop measured genuinely packed, which the project had been assuming from throughput ratios; the inline-directive question answered and declined (2.2's update note) | A forked-JVM disassembly harness on `-XX:CompileCommand=print` rather than `-XX:+PrintAssembly` (see 2.2's update note); host-derived instruction-family assertions over the `DateVectorOps` kernels and one emitted loop per gating shape; a scalar/vector self-test first, so a detector that matches nothing cannot pass the rest vacuously; no count or code-size assertions, since task 32's bimodality found identical vector-op counts with a 2x instruction count; a clean skip where `hsdis` is absent, distinguishing "not found" from "found and refused to load" | The suite fails on a scalar body where a vector one is expected, and says which method and which family; green at both vector widths; skipped-not-failed on a runner without a disassembler |
-| 25 | ILP: the unroll factor as a plan decision. **Not started**; the harness it needs stopped measuring a degraded JIT state with PR #105 | The registered prediction, then the three-confounder matrix (K x broadcast strategy x `GROUP_BUDGET`) on `dayofweek`, unpredictable `CASE WHEN`, and the depth-8 chain; if K > 1 pays, per-shape K chosen from the live-temporary count the emitter already computes; the `SKILLS.md` bullet rewritten with the numbers; the batch-size knee sweep (question 6) on a wide fused shape | A committed number per candidate shape against its existing baseline; prediction scored honestly; no committed number regresses on shapes where K stays 1 |
 | 26 | Calendar extraction, `year` first. **DONE** (`PLAN_TASK_26.md`) | The four-constant range-narrowing admission check, recorded before emitter work; `year`, `month` and `dayofmonth` committed - one civil-from-days decomposition yields all three - with `quarter` riding `month` and `dayofyear`/date-level `date_trunc` as the algebra yields them; fields whose constants will not narrow declined with a task-16 reason | Differential across the Gregorian range including pre-1970, leap years, month-length boundaries and the 400-year cycle edges, at both widths; parity numbers committed; `year` demonstrably compiling on the TPC-H q7/q8/q9 shape |
 | 33 | `next_day`, as a handover experiment. **DONE** (`PLAN_TASK_33.md`, PR #61) | The node, the compiler arm declining every non-literal weekday, and the emitter arm over the existing mod-7 lowering; `PLAN_TASK_33.md` written as an executable recipe and scored in its own outcome section on which steps misled the agent that ran it | Every Varka suite green at both widths; the two pinned fixtures re-pinned under their update rule; no committed benchmark number moves, since the task adds a node type and changes no existing shape |
 | 34 | `dayofyear`. **DONE** (`PLAN_TASK_34.md`, PR #64) | The node, the January-based conversion off `emitChrono`'s March-based day of year, and the shared leap-flag helper tasks 35-37 reuse | Every Varka suite green at both widths; the pinned fixtures re-pinned; a day outside the covered range still declines (**this decline was removed by task 51**; see 2.19's update note and `PLAN_TASK_51.md`) |
@@ -2270,7 +2141,6 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 41 | `unix_date` / `date_from_unix_date`. **DONE** (`PLAN_TASK_41.md`, PR #63) | Two compiler arms that unwrap to the child, no IR node and no emitted code; the bare-`ColumnRef` output shape tested | A projection mixing a relabelled entry with an ordinary one fuses both; no pinned value moves, no committed number moves, no emitted bytes change for any existing shape |
 | 42 | `make_date`. **DONE** (`PLAN_TASK_42.md`, re-planned on 4 September 2026 against master and #115: the decline mask through task 52's accumulator, the year limit as the calendar range's whole years so `year(make_date(...))` fuses, and the first node that nulls a valid input, which takes a body off the dense fast path; starts after #115) | The three-child node, the validity predicate as a computed word in non-ANSI and a decline in ANSI, and the engine's year limit declining in both modes | The three-way distinction tested apart - null input, invalid date, unsupported year; both ANSI settings; the ANSI exception identical to the row engine's, compared by running both |
 | 43 | What bounds a loop method inside one output. **Measured; the decision waits on the emitter** (`PLAN_TASK_43.md` 8) - a 20-to-248-op ladder in one loop method shows no cliff at either width: nanoseconds per row per op flat to +-4% at AVX-512 and improving then flat at 128-bit, and tier-4 compile linear at ~1.1 ms/op, 271 ms standard and **186 ms OSR** at 248 ops against the ~10 seconds at 64 ops the `GROUP_BUDGET` javadoc still cites. Two of four predictions missed: 128-bit does not degrade, and C1's virtual-register refusal is width-independent and lands on the epilogue, never on a loop. **DONE 10 September 2026**: the second half was the javadoc correction 8.5 deliberately deferred, and it waited on the decision half, which task 71 settled. `GROUP_BUDGET`'s javadoc no longer cites the ~10 second compile as its measured reason - the observation is kept and the inference dropped, since the honest reading is a compile *queueing* under load rather than ten seconds of compiler work, and a queued compile can bite at any width and any op count, which no per-method budget can bound. What justifies 16 now is task 71's survey instead, and the javadoc carries 8.5's limits rather than swapping one confident number for another | The cliff located first - single-output loops at 60 to 250 ops, throughput and time-to-peak - then split, decline or accept, chosen on that number | A committed number per width; whichever mechanism wins, `CASE WHEN year ELSE month` either fuses within a stated bound or declines with a recorded reason |
-| 44 | The epilogue's size. **Not started**; its baseline has moved four times since it was written (the unshared crossing 17, 19, 20, then 21 outputs, the shared 40 then 44) and the crossing's cost is already priced in `PLAN_TASK_32.md` 7.3, so it opens by measuring fresh | A size ladder that can see the problem (4095 and 63, not only 4096), the epilogue measured against `HugeMethodLimit`, and the mechanism chosen on it | The wide-projection epilogue compiles, or declines; the committed ladder shows the epilogue's cost at a non-aligned length, which no committed case does today |
 | 32 | One decomposition, several fields. **DONE** (`PLAN_TASK_32.md` 7.6; steps A and B1 in PR #72, the plan for B2 in PR #74, B2 itself in the task-32-b2 branch: calendar siblings over one date share a loop method, 2.15x on four fields at AVX-512 and 2.51x at 128-bit, `FUSED_CEILING` set at 400 by the ladder) | The first ceiling kernel measured a non-inlining `computeFields` helper rather than the sharing, and was rebuilt hand-inlined, guarded and writing four validity buffers: 692.4/678.8 against 450.4/448.8 M rows/s at AVX-512 (1.5x), and a wash at 128-bit (1.06x, one run of five at 1.50x). Step B builds emitter-side fragment sharing behind a `VarkaEmitOptions` switch, with the default decided at both widths rather than closed. Step B1 built the fragment and made it the default: the epilogue's `HugeMethodLimit` crossing moves from 17 calendar outputs to 40 (**task 51 moves this again, to 19/44, task 48 to 20/44 and task 54 to 21/44 - see the debt register and `PLAN_TASK_54.md` 9**), and B2's grouping relaxation stays gated on the two-field measurement. **The gate cleared** (`PLAN_TASK_32.md` 7.2): 1.29x at two fields, 1.57x at three, 1.80x at four, growing rather than shrinking against prediction 3's expectation - and the emitted dense-body shared kernel turns out to beat `ChronoVectorOps`'s own "ceiling" by 1.15-1.20x, since that kernel has no dense path and was measuring the masked body throughout - and the same 1.29x/1.57x/1.80x pattern reproduces at 128-bit (1.31x/1.47x/1.67x), so the width-dependent bimodality that made the hand-written ceiling a wash at 128-bit (`PLAN_TASK_32.md` 7.4) turns out to belong to that specific kernel and not to the sharing mechanism. The compile-cliff risk `GROUP_BUDGET` itself exists to avoid was also measured directly rather than assumed (`PLAN_TASK_32.md` 7.5): `-XX:+PrintCompilation` on every kernel in the parity suite shows the widest single loop method (200 ops, four fields) reaching tier 4 in 272 ms and the widest kernel overall (twenty separate methods) in 2.4 s, nowhere near the historic 10-second cliff and with no `blocked` compile task anywhere in the log | `ChronoVectorOpsTest` differentials the kernel against `java.time` over its exact sweep range and a boundary set, at both widths (the engine module's own narrow-vector Maven profile); the emitted lowering swept against `LocalDate` over all 16,777,216 covered days under both settings; no pinned oracle moved, and every loop method asserted byte for byte unchanged, so no committed number for any existing shape can have |
 | 45 | The null-free validity fast path. **DONE** (`PLAN_TASK_45.md` 11) - the driver sets a dense batch's value outputs valid once and the loop's per-lane-group `orValidityBitsAt` is not emitted; the shared four-field kernel gains 86% at AVX-512 and 149% at 128-bit, `year` 26% and 41%, `dayofweek` 12% and 46%, with both mixed-null controls within 2% at both widths. Prediction 3 - that the narrow width gains more, the same argument 2.17 makes for task 46 - is the cleanest hit; prediction 4 held at AVX-512 and missed at 128-bit | The bound first: a validity-free variant of `ChronoVectorOps` sizing the prize (2.17), then the dense driver filling the output validity once per batch instead of the dense loop ORing it per lane group | The whole Varka suite at both widths with the dense/masked pair still agreeing bit for bit; the committed parity cases regenerated in one run, with the null-free and mixed-null rows of each moving in opposite directions or not at all |
 | 46 | Validity helpers that inline. **DONE** (`PLAN_TASK_46.md` 9) - and not by the route it planned. The width-named helpers were measured at +12%/+17% (AVX-512/128-bit) on the masked calendar shapes and the compiled loop said the gain was the *read* side; the write was still a call in every arm, refused by C2's `NodeCountInliningCutoff` on the caller (18250-18520 nodes against 18000, from an instrumented fastdebug JVM) because it was the last call parsed. Emitting the OR before the compute inlines it: every masked row moved, `year` +20%/+30%, the 64-op shape +75%, budget-24 +83%/+180%. (The 64-op figure is the AVX-512 half of a two-sided move: at 128-bit the same commit took that row from 270.4 to 8.8 M rows/s, which nobody remarked on until task 70's review - section 2.39.) With the order fixed the names are a per-shape trade (`year` -4%/-8%, four fields +11%/+27%, the selection kernel +43%/+6%); `validityByWidth` stays on, `validityOrFirst` is the fix | the eight width-named helpers under their size gate; `validityOrFirst` and the `wordKnownBeforeCompute` test; `lanesOverride`; `canonical()` fixed; the probe takes an emit variant and a masked run; a selection-root parity case and five A/B pairs | three regenerations at both widths, the last committed; `-XX:+PrintInlining` read against the JDK source (C1 against C2), the loop bodies disassembled in both arms, the refusal instrumented in `bytecodeInfo.cpp`; the full gate at both widths |
@@ -2296,13 +2166,10 @@ real 512-bit datapath, and the README rewritten from that run (2.29).
 | 70 | Validity as bitmap algebra in the driver (section 2.34). **DONE** (`PLAN_TASK_70.md` 9: the four-field shape 1.59x at AVX-512 and 1.89x at 128-bit against the arm that shipped, and on its dense twin; every served row faster at both widths; on by default; a masked method whose every word is dead is its dense twin's bytes, and the epilogue's crossing moves to 49 shared and 22 unshared) | The analysis that says whether a root's validity word is a pure AND/OR over input bitmaps (no `Cond`, no `IfElse`, no node that can be null on valid inputs); the driver's per-batch bitmap pass, emitted between the null-state prologue and the all-null shortcut - a copy for one column, a bytewise AND or OR for several, `setValid` or `zero` where an operand's null count decides the whole expression, the final partial byte masked to `length % 8` bits - behind its own switch; the per-group write not emitted per served root, and the per-group read and the word locals not emitted per loop method in which no consumer is left - a guard, a blend, a `Cond` root's OR or an unserved root, "every root qualifies" being neither necessary nor sufficient (`PLAN_TASK_70.md` 2.2); the one-body-not-two consequence for such shapes verified rather than assumed | The differential at both widths and both switch settings with byte-identical validity, the existing suite as the oracle; `assertSameOutput` holding on the tail byte; the qualifying predicate tested against a `CASE WHEN`, a filter root and a null-on-valid-input node, each of which must not qualify; `year(date_add(d, off))` over poisoned null slots keeping its word and declining nothing, which is the guard case the first draft of section 2.34 would have broken; a null-free operand under an OR root and an all-null one under both operators, the three states resolved rather than assumed; the driver's own code size pinned on the output ladder beside the epilogue's, since it is the method every batch runs; the masked parity rows measured on a tree that already carries task 46, with a registered bound that no masked row passes its dense counterpart |
 | 62 | The closing measurement: every date expression, on a 512-bit datapath, against stock Spark on JDK 17 and JDK 25. **(A) done** (`PLAN_TASK_62.md` 9 and 10: the driver, its module and shell driver, and the laptop's four files - re-measured at 1B rows, where the 5% job-size rule is met with the worst row at 4.5% and the median at 1.7%, every one of 50 shapes fused, and three of the four filter losses turned into wins by task 37); (B) the pinned runner and (C) the README open | A Java driver under `sql/varka/bench` submitted to three distributions - stock Spark on JDK 17, stock Spark on JDK 25, this fork on JDK 25 - in one dispatch of the benchmark workflow with `expected-cpu` pinned to a full-width Xeon, running one committed SQL query per covered date expression in the projection and filter shapes over a table sized so the per-job fixed cost is under 5% of every Varka row's wall time (at least 200 ms per Varka query), recording executor time beside wall time for every row, with provenance including the 256-to-512 op-count ladder that proves the datapath; `dev/varka_bench_surface.sh` and the diff script producing the table; README's benchmark section rewritten from the three files with a reproduction guide a reader can follow from the downloads alone; the laptop's run committed as the second data point | Three results files with provenance, generated by one workflow dispatch on a 512-bit runner; every README figure tracing to them (the quote check); every Varka row's fixed share (wall minus executor time, over wall) under 5% in the files; the fork-with-Varka-off row agreeing with stock Spark on JDK 25 within noise on every shape; the ladder in the provenance showing the 256-to-512 step near 2x, or the file labelled 256-bit |
 | 71 | `GROUP_BUDGET` retuned on the emitter as it is (section 2.35). **DONE** (`PLAN_TASK_71.md` 10), and the number did not move: it is still 16. The budget bounds the *method*, while the marginal cost it is compared against already excludes nodes the group holds - task 17's pair is 14 + 6 against 16, split into two methods costing 28 nodes of work where one costs 20. The merge is strictly less work and clause 1 rejects it anyway. What was missing is the exception step B2 already wrote, generalised: `shareWholeNodes` lets an output reusing whole nodes join too, which merges exactly the shapes a budget of 24 would and nothing else, at the shipped budget. Raising the budget instead would have loosened the bound that keeps compile time in hand | A static survey first: of nine shapes only three regroup across 16 to 64, and only one above 24 - for a saving of one lane op out of 38, at the cost of the one pinned assertion that spells its arithmetic out. So the boundary is 16 to 24 and the variable is the rule. `VarkaEmitOptions.shareWholeNodes` on by default; the parity A/B rewritten from budget-versus-budget to rule-off-versus-on, since with the rule shipped the old split arm merges too and the pair would have become two copies of one kernel; both files regenerated. Three javadoc readings retired with it: that the reversal was `orValidityBitsAt` inlining, a call task 70 stopped emitting for this shape; that the retune was task 43's; and section 2.35's belief that B2's byte-identity test already guards a budget change, which it does not - it compares prefix-sharing off against on at one budget | The mechanism established before any number was chosen, and it refuted the plan's own first prediction; the re-pinning cost enumerated by making the change and running the suites rather than by grepping, which found one assertion rather than the predicted ten; the guard 2.35 believed existed, written; the rule asserted method for method in both directions over a ten-shape corpus, with the sharing half required to differ from the shipped setting so it cannot stop exercising the rule; 269 catalyst and 180 sql/core tests green, the differential unmoved; and a regeneration read by task 77's band and gate - no row past the band, seventeen unreadable rows set aside, controls within 2.4%, gate clean, requote empty |
-| 72 | Output order for prefix affinity (section 2.36): `year(d), year(d2), month(d)` takes three loop methods where the adjacent order takes two | The admission check first - no consumer of a group depends on contiguous output indices - then a two-pass grouping that gathers a calendar output into the group whose prefix it reuses wherever that group is; the evaluator and the line map untouched | The pinned limitation in `VarkaLoopEmitterSuite` flipped to two methods; the pinned oracles unmoved; the permuted and adjacent orders within noise in the parity harness at both widths; the differential suite green with the two orders |
-| 73 | A stopping rule for the guard walk (section 2.37). **Planned** (`PLAN_TASK_73.md`), and its admission check is **done and overturns 2.37's premise**: the section expected no SQL shape to reach the over-guard, but `dayRange` bounds `make_date` from task 42's published years without looking at its children, so `year(make_date(2020, 1, dayofweek(date_add(d, off))))` fuses and the emitted kernel carries a guard the shape cannot need - 1274 to 1317 bytes in the masked loop. The task is therefore a fix rather than the decline 2.37 expected: a column-offset day producer is guarded on its own value even when a mod-7 node between it and the calendar node has already re-based the day (task 70's fuzz run; see the debt register) | The admission check first - whether any SQL shape observes the difference, given that `dayRange` returns `Unknown` for a mod-7 child and declines the entry at compile time before the emitter is reached, which can legitimately close the task with the finding recorded. If it does: a stopping rule on `collectColumnOffsetProducers` that descends only through nodes passing a day to the decomposition and stops at any node whose output is bounded in itself, and the matching rule in `dayRange`, taken together so the two analyses cannot drift apart again | The reproducer from the fuzz run served rather than declined at both widths (seed 20260907005 iteration 61379's shape, and the nine siblings substituting `weekday`, `dayofweek_iso` and `datediff`); the compiler suite's decline for `year(dayofweek(date_add(d, off)))` flipped to `fuses` if the compiler half moves, or the reason requoted if it does not; every guarded shape task 52 and task 60 pin still declining, since the rule may only remove guards a bounded node stands under; `VarkaIrFuzzSuite` at a million iterations per width with the `chronoBound` check relaxed to match, which is the oracle that found it |
 | 76 | The validity helper choice, keyed on the loop body (section 2.38). **DONE - declined** (`PLAN_TASK_76.md` 10), which 2.38 licensed and the measurement chose. The loss is a 4-lane regime and nothing else: at 8 and 16 lanes the width-named helpers win at every write count by 8 to 36%, and 4 lanes is the one width where a validity group is half a byte, so two consecutive groups read-modify-write the same byte. A rule on the write count is right there and wrong at the other two widths. What the shipped default costs is 4 to 7% on a 4-lane body with one or two per-group writes - inside a loop shape task 47 replaces | Three explanations excluded from the JVM's own output, including the one task 46's javadoc rests on: the compiled masked loop inlines the writer in *both* arms, so there is no refused call; the arm that loses is the smaller one, 642 instructions against 654; and it is the arm doing the cheaper address arithmetic, shift-and-mask against signed divide and modulo. What differs is register-file placement - ten extra general-to-vector moves in one arm against ten more general-register ALU ops in the other. Also fixed on the way: `VarkaEmitDump`'s `--options` parser silently read any non-`true` string as `false`, so `validityByWidth=on` selected the arm it was meant to exclude | The arms asserted to emit different kernels before any number was read, which is the failure this task was downstream of; a write-count ladder holding the shape family constant rather than a threshold fitted to the two shapes that raised it; ten runs across three widths; and the finding carried to row 47 rather than spent on a rule inside a shape that is scheduled for replacement |
 | 77 | The 128-bit compile cliff behind the per-group validity OR (section 2.39). **DONE** (`PLAN_TASK_77.md` 10), and nothing it shipped is what the row was named after. 2.39's reading was counting the wrong element - the traps it reported are guards C2 *inserts* per compile, not deoptimisations that happened, and its own arithmetic gave it away, nine per method being exactly the eight compiles plus the tier-3 compile it counted two paragraphs earlier. Corrected from a run made for the purpose: a storm is real, at 957 runtime deoptimisations with one method taking 100 across 194 compiles, and that method is *hand-written*; the row's own shape has recovered; and benches 930 and 945, one expression with the validity OR and without, storm identically, which retires the lowering as a suspect. The cause is milestone 5's task 90 | 2.39 corrected along with three records that depended on it (the debt entry's `PLAN_TASK_11.md` citation, withdrawn twice over; row 46's +75%, which is one width of a two-sided move whose other half was the collapse; the unserved-root list, missing the `try_*` forms and the subtree closure). `dev/varka_trap_census.py`, which separates the two elements that share the name `uncommon_trap` so the mistake cannot be repeated. The row key in `dev/varka_bench_diff.py`, which was `(table, case)` and not unique, so 207 rows parsed to 206 and `--requote` silently skipped one. And `dev/varka_bench_gate.py`: the invariants a results file must satisfy whatever its numbers are, each pair derived by holding in every committed revision rather than asserted. The band half of this work belongs to task 90 and is credited there | The census reproduced from the JVM's own output, with a probe showing a loop that never deoptimises emitting four of the traps 2.39 counted; the keying fixed with a self-test over the collision the parity file actually holds; and the gate walked back over 76 committed revisions of four files, flagging three and only three - `aef0b82260e` and the two regenerations committed while it was still broken, all at 128-bit - which is what turns 'a committed row that would have caught the collapse the day it landed' into a checked claim |
 | 78 | A forwarded-only projection over a Varka filter runs through rows (section 2.40). **Code landed, measurement pending** (`PLAN_TASK_78.md`): the rule absorbs the narrowing projection into `VarkaFilterColumnarToRowExec`, which removes the operator boundary and stops the node converting columns the consumer discards; the surface's three two-column predicates are ordinary `filter` entries again. On the laptop (`VarkaNarrowingBenchmark`, both widths) the losing shape runs 2.2x of the Janino session at 10% selected, 1.5x at 70% and 1.3x at 100%, and the two predictions that missed both said the read-back floor would still hold it under stock - it does not, which is a finding about task 19's floor rather than about this shape and is why scope item 13 keeps its own justification. The ratio for the public table waits on the pinned 512-bit runner, since these are laptop numbers on this task's own fixture and not task 62's surface | `SELECT d FROM t WHERE d < d2` runs at 0.66x of stock Spark with a columnar consumer and 0.57x counted in the 1B-row run (`PLAN_TASK_62.md` 10; the 43.2-against-67.7 laptop pair this row used to quote is 9.1's and is superseded), because the rule takes a projection only when an entry fuses and a forwarded-only projection has none (task 62's run; see the debt register) | The two layers separated first, by one run of that row with the projection removed by hand: the rule leaves a Janino `Project` because a forwarded-only projection fuses no entry, and under that the node is not `CodegenSupport`, so it produces rows at task 19's floor against stock's fused loop. Then one of three, cheapest first: decline the shape in the rule, which recovers to 1.00x with no new machinery; absorb the narrowing into `VarkaFilterExec` or the rule; or fuse the boundary by making the node `CodegenSupport`, which is scope item 13's lever and the only one that can win rather than draw | The throughput row back above stock at 10%, 70% and 100% selected; the differential over that query through both a row and a columnar consumer; no other plan shape changing operator |
 | 79 | The guard and the untaken arm (section 2.41): a guarded producer under a `CASE`/`IF` arm condemns the batch from the arm the row never takes (task 60's review; see the debt register). **DONE** (`PLAN_TASK_79.md` 9: the arm context costs under 3% at both widths and is negative on both mixed-null rows, so it is under the benchmark's noise floor, and the differential's declined count goes from positive to zero where the extreme rows sit in the untaken arm; `make_date` turned out to be a fourth node kind reaching this cliff, and 2.41's disjunction rule was replaced by the conservative same-arm-chain one, which is buildable where the guard is emitted. The pair's absolute rates are not committed - two regenerations of the parity file disagreed with each other on rows this task does not touch, which 9.1 records and the debt register carries). Its 2.2 corrects this row's original claim that a user's own `BETWEEN` on the count cannot keep the shape fused - that projection does not fuse at all, since a bare int column has no arm in predicate position, so the reachable shapes are date- or field-driven conditions and the claim the fix has to be worth is the weaker one. **Widened by task 63** (`PLAN_TASK_63.md` 9.7): the ANSI overflow check disposes of its mask through the same `emitGuardCollect`, so a checked `IntArith`/`IntNeg` under a `CASE` arm is a third node kind with this cliff - `CASE WHEN d < DATE'2020-01-01' THEN i + 1 ELSE year(d) END` condemns a batch from a lane the condition sends to the ELSE arm. Answers stay right; the fusion is lost on exactly the data the check is there for | Either the arm's condition mask ANDed into the guard, which keeps the shape fused, or the node excluded from the guarded set so the compiler declines it with a reason at compile time; an A/B, since either changes emitted bytes on a shape the parity file measures. The honest fix's cost is not ordering - the condition is emitted before the arms, so its mask is already in a slot - but sharing: a guarded node used both inside an arm and outside it is emitted once, so its mask must be the disjunction over its use contexts or an unconditional consumer silently stops declining (2.41) | The differential over the two shapes `PLAN_TASK_79.md` 2.3 pins - a date-driven condition over a column-count `add_months`, and the same over task 63's checked `i + 1` - fusing and answering correctly over a fixture whose extremes sit in the untaken arm, with the declined count going from positive to zero; the shared-node case of 2.1, where the guarded node is used both inside an arm and bare, still declining, which is the silent-wrong-answer test; the emitted bytes of every shape without an `IfElse` unchanged; `Greatest`/`Least` explicitly out, with the reason in the code |
-| 80 | String-column compaction that keeps the Arrow layout (section 2.42): a derived int32 leaf over a string column is refused per batch when a fused Varka filter sits under it, because the filter's compaction leaves the column on-heap (task 59's review; see the debt register) | The compaction writing offsets and data buffers rather than materialising rows, on task 21's `filterCompact` pattern; sized before milestone 6's item 3 puts string columns under filters and group keys | The stacked `next_day(d, s)` over a Varka filter counting no `numFallbackBatchesNonArrow` at all on task 59's own fixture, answers unchanged, and the fixed-width compaction's numbers not moving |
 
 ## 4. Files
 
