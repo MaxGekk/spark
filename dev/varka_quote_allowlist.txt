@@ -108,3 +108,4 @@ sql/varka/plans/PLAN_MILESTONE_4.md	4003.7	the debt entry quotes the regeneratio
 sql/varka/plans/PLAN_MILESTONE_4.md	3494.3	the debt entry quotes the regeneration that opened it, which task 70's third regeneration superseded inside the same PR
 sql/varka/plans/PLAN_TASK_62.md	11.10	a section number, not a rate - the tool cannot tell the two apart
 sql/varka/plans/PLAN_TASK_62.md	11.11	a section number, not a rate - the tool cannot tell the two apart
+sql/varka/plans/PLAN_TASK_62.md	11.10.1	a section number, not a rate - the tool cannot tell the two apart
