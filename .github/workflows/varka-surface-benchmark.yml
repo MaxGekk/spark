@@ -293,9 +293,14 @@ jobs:
       run: |
         echo "::notice::measuring on $GATE_CPU - $GATE_LANES lane-ops/ns at 128/256/512 bits; control $GATE_CONTROL, 512:256 $GATE_RATIO"
 
-    - name: Cache the stock Spark distribution
+    # restore/save rather than the combined action, and the save placed directly after
+    # the download rather than left to a post step. `actions/cache` does not save when
+    # the job has failed, and this job fails by design whenever a run misses the
+    # fixed-share rule - so the combined action re-downloaded 400 MB on every calibration
+    # dispatch, which is exactly the run you make several of.
+    - name: Restore the stock Spark distribution
       id: cache-stock
-      uses: actions/cache@v5
+      uses: actions/cache/restore@v5
       with:
         path: ~/stock-spark
         key: stock-spark-${{ env.STOCK_VERSION }}-hadoop3
@@ -322,6 +327,13 @@ jobs:
         fi
         tar -xzf "$TGZ" && rm -f "$TGZ" "$TGZ.sha512"
 
+    - name: Save the stock Spark distribution
+      if: ${{ steps.cache-stock.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      with:
+        path: ~/stock-spark
+        key: stock-spark-${{ env.STOCK_VERSION }}-hadoop3
+
     - name: Run the surface
       env:
         ROWS: ${{ inputs.rows }}
@@ -347,20 +359,27 @@ jobs:
           "varka-off-jdk25=$PWD:$J25" \
           "varka-jdk25=$PWD:$J25:varka"
 
+    # `!cancelled()` and not the default, because the step this follows fails on purpose:
+    # a run whose fixed share is over the ceiling has still done every measurement, and
+    # those numbers are how the next row count gets chosen. Without this the surface runs
+    # for twenty minutes and uploads nothing, which is what happened on the first
+    # calibration dispatch.
     - name: Tar the results
+      if: ${{ !cancelled() }}
       run: |
         set -euo pipefail
         mkdir -p target
         tar -cvf target/varka-surface-results.tar sql/varka/bench/benchmarks
 
     - name: Upload the results
+      if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7
       with:
         name: varka-surface-results
         path: target/varka-surface-results.tar
 
-    # Always uploaded above, committed only on request: a run that fails the fixed-share
-    # rule still leaves its evidence.
+    # Always uploaded above - `!cancelled()` is what makes that true - and committed only
+    # on request, so a run that fails the fixed-share rule still leaves its evidence.
     - name: Commit the results
       if: ${{ inputs.create-commit && success() }}
       run: |

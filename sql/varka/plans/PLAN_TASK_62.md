@@ -630,6 +630,24 @@ number in the file, or a larger runner. What is **not** acceptable is a file
 whose headline rate is mostly job overhead, which is exactly what the rule
 exists to prevent and what the first 200M-row attempt produced.
 
+**Measured, 11 September 2026.** The runner is 4 cores and **15 GiB**, which
+retires `benchmark.yml`'s "7 GB memory limit" comment as the basis for the `6g`
+driver setting. The build is **9m48s cold** - `sbt package` 363 s, then the two
+Maven modules, then 525 MB of jars uploaded - and **52 s warm**, which is the
+commit-keyed cache of 11.10 working. Both numbers are far below what this
+section feared; see 11.10 for what that retires.
+
+The row count is the live question and the rule is answering it. At **1e7 rows**
+the surface completed in 21m19s and then failed 14 Varka rows, the worst at
+**37%** on `least(d, d2)` against the 5% ceiling. That is the rule doing its
+job: at ten million rows with one partition there is not enough executor time
+to hide planning and scheduling. Holding the fixed cost constant while executor
+time scales with rows puts the worst row at about 5.5% at 1e8 - still over -
+and about 2.9% at 2e8, which is the `rows` default the workflow already shipped
+with. Note that the laptop needed 1B rows to reach 4.5%: the runner meets the
+rule at fewer rows precisely *because* it is slower per core, so each row buys
+more executor time to amortise the same fixed cost.
+
 **11.2.2 How often does the pool give a full-width machine?** The census
 counts *files*, not dispatches, and one dispatch writes as many files as the
 benchmarks it ran - so 118 full-width files out of ~2815 is **not** a 4% hit
@@ -999,6 +1017,45 @@ buys the cheap half.
 are properties of the 4 cores and 15 GiB that every runner in the pool shares,
 so 11.2.1's ladder runs at `require-datapath: any` and needs no luck at all.
 Only the published numbers wait for the Zen 5.
+
+#### 11.10.1 What the split was worth, measured - and where its argument was wrong
+
+*The dispatches this section authorised, run the same day.*
+
+**The six-hour argument above is weaker than it was stated.** The cold build is
+**9m48s**, not the hour or more the risk assumed, so a single job would have
+left more than five and a half hours for the surface run and the limit was
+never close. That reasoning should not be relied on again without the number
+beside it.
+
+Two things the split *is* worth stand unaffected, and one of them is why it had
+to happen at all:
+
+1. **It fixed a build that could never have run.** The single job installed JDK
+   17 after JDK 25, and `actions/setup-java` leaves `JAVA_HOME` at whatever it
+   installed last, while this tree compiles with `--release 25`. No dispatch had
+   ever cleared the gate to find out. That bug, not the six-hour limit, is what
+   the restructure actually bought.
+2. **The warm build is 52 s against 9m48s.** Every gated dispatch after the
+   first pays a cache restore rather than a build, which at one qualifying
+   runner in eighteen is the difference between a cheap lottery ticket and an
+   expensive one.
+
+**And it exposed two more bugs, both of the same kind: work thrown away because
+a step failed on purpose.** The surface job *is designed to fail* when a run
+misses the fixed-share rule, and both `actions/cache`'s post-step save and the
+steps after a failed one are skipped on a failing job. So the first calibration
+dispatch ran the whole surface for twenty-one minutes and uploaded nothing -
+though the workflow's own comment promised that "a run that fails the
+fixed-share rule still leaves its evidence" - and re-downloaded the 400 MB stock
+distribution it had just fetched. The fix is `!cancelled()` on the tar and
+upload steps, and splitting the stock-Spark cache into restore plus an explicit
+save placed directly after the download rather than left to a post step.
+
+The general lesson, which is worth more than the two fixes: **a step that fails
+by design makes every later step and every post step conditional, so anything
+that must survive that failure has to say so explicitly.** A comment asserting
+it is not enough, and this one asserted the opposite of what the file did.
 
 ### 11.11 Explicitly out of scope
 
