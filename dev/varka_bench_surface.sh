@@ -112,18 +112,26 @@ fi
 jar="$(ls "$jar_dir"/varka-bench-*.jar 2>/dev/null | grep -v -- '-sources\|-tests' | head -1)"
 [ -n "$jar" ] || { echo "no driver jar under $jar_dir; build it or drop --skip-build" >&2; exit 1; }
 
-# The datapath probe, under the last distribution's JDK.
+# The datapath probe, under the last distribution's JDK: dev/varka_canary/Datapath.java at
+# two widths, reporting lanes per nanosecond, whose ratio is about 2 on a full-width unit and
+# about 1 on a double-pumped one.
+#
+# This read `Canary.compute` until 11 September 2026, which was wrong and silently so: that
+# loop is a scalar xorshift over one `long` - Canary's own javadoc calls it "the control" -
+# so MaxVectorSize cannot touch it and the ratio was 1.00 on every machine ever measured,
+# a full-width Intel Xeon 6973P-C included. Every `datapath` line committed before that date
+# is a scalar rate wearing a vector label. See PLAN_TASK_62.md 11.9.
 last="${dists[${#dists[@]}-1]}"
 probe_java="$(echo "$last" | cut -d= -f2- | cut -d: -f2)/bin/java"
 probe() {
   "$probe_java" --add-modules jdk.incubator.vector -XX:+IgnoreUnrecognizedVMOptions \
-    "-XX:MaxVectorSize=$1" dev/varka_canary/Canary.java 2>/dev/null \
-    | sed -n 's/^compute=//p' | cut -d' ' -f1
+    "-XX:MaxVectorSize=$1" dev/varka_canary/Datapath.java 2>/dev/null \
+    | sed -n 's/^lane_ops_per_ns=//p' | cut -d' ' -f1
 }
 c32="$(probe 32 || echo 0)"; c64="$(probe 64 || echo 0)"
 if [ -n "$c32" ] && [ -n "$c64" ] && awk -v a="$c32" 'BEGIN { exit !(a > 0) }'; then
   datapath="$(awk -v a="$c32" -v b="$c64" \
-    'BEGIN { printf "compute %s at 256 bits, %s at 512 bits, ratio %.2f", a, b, b / a }')"
+    'BEGIN { printf "%s lane-ops/ns at 256 bits, %s at 512 bits, ratio %.2f", a, b, b / a }')"
 else
   datapath="n/a"
 fi

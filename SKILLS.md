@@ -2109,6 +2109,30 @@ was an assumption until task 31.
 
 ## This machine's AVX-512 is 256 bits wide, and every "512-bit" number in this repo is really a 256-bit one
 
+**A probe that claimed to measure this was reading the frequency control, from task 62 until
+11 September 2026.** `dev/varka_bench_surface.sh` built the `datapath` line in every committed
+surface file from `Canary.compute` at `-XX:MaxVectorSize=32` and `=64`. That loop is a scalar
+xorshift over one `long`, and `Canary`'s own javadoc says so - "Frequency-bound and touches no
+memory, so it moves only if the clock does. This is the control." A flag about vector width
+cannot move it, so the ratio read 1.00 on every machine ever measured: an AMD EPYC 7763 with no
+AVX-512 at all, an EPYC 9V74, an Intel Xeon 6973P-C with `UseAVX=3` and `MaxVectorSize=64`, and
+this laptop, all identical. The conclusion in this section's heading is **not** affected,
+because it rests on the ladder below rather than on that probe - but a gate built on the probe
+would have rejected every machine forever, which is how it was found.
+
+The replacement is `dev/varka_canary/Datapath.java`, and the lesson in its shape is worth more
+than the bug: **measure lanes per nanosecond, not operations per second.** A full-width unit
+retires a 512-bit operation in the time a 256-bit one takes, so doubling the species doubles the
+lanes; a double-pumped unit takes twice as long for twice the lanes and the rate is flat. Rates
+in operations per second cannot tell those apart, and neither can anything scalar.
+
+**And carry a positive control in the probe itself.** The new one takes a third reading at 128
+bits, because 128 to 256 must show a real doubling on any machine with a 256-bit datapath. On
+this laptop it reads 2.02x against 1.14x for 256 to 512 - the first says the probe can see a
+doubling, the second says this machine does not have one, and only the pair is evidence. A probe
+that has never been observed reading anything but "no" has not been shown to be able to say
+"yes", which is exactly the state the old one was in for the whole of its life.
+
 Measured, not read off a spec sheet. Task 43's committed op-count ladder - a single-output loop
 from 20 to 248 `IntVector` ops - was run at three widths on the development machine (AMD Ryzen
 AI 9 HX PRO 370, Zen 5 mobile, JDK 25.0.4), by setting `Test / javaOptions +=
