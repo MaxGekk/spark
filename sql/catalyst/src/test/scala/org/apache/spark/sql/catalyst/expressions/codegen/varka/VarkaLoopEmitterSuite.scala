@@ -732,6 +732,57 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(badWeekday.getMessage.contains("next_day's weekday"), badWeekday.getMessage)
   }
 
+  test("task 93: the re-armed check fires on the composed day, in every body") {
+    // The runtime half of task 93. The compiler admits year(add_months(date_add(d, i), i))
+    // because it inserts a check between the month add and the decomposition; this is that
+    // check doing its job, built here as IR rather than through the compiler so the emitter is
+    // tested on its own.
+    //
+    // The value the check sees is d + offset + 31-ish * count, and only lanes outside the
+    // narrowed range condemn the batch. A lane the validity word says is null must not,
+    // because a null lane holds whatever the column held and the batch is still answerable.
+    val guarded = new GuardedDay(
+      new AddMonths(new AddDays(new ColumnRef(0), new ColumnRef(1)), new ColumnRef(2)))
+    val root = new Year(guarded)
+    val (kernel, loader) = load(emitMulti(Seq(root), 3, 0))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        def status(length: Int, day: Int => Int, off: Int => Int, count: Int => Int,
+            nullAt: Int => Boolean): Int = {
+          val d = makeInputData(arena, length, nullAt, day, poisonNulls = false)
+          val o = makeInputData(arena, length, _ => false, off, poisonNulls = false)
+          val c = makeInputData(arena, length, _ => false, count, poisonNulls = false)
+          runKernel3(kernel, d, o, c, makeOutput(arena, length), length)
+        }
+        val none = (_: Int) => false
+        // Everything small: in range, computed.
+        assert(status(64, _ => 0, _ => 1, _ => 1, none) === 0)
+        // Lane 5 asks for the largest month count the count guard allows over a day already at
+        // the top of the guarded range: the composed day leaves the range and the batch is
+        // condemned. In a loop lane...
+        val far = (i: Int) => if (i == 5) VarkaChrono.MONTH_ARITH_MAX_MONTHS else 0
+        assert(status(64, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0, far, none) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE, "a loop lane")
+        // ... and in an epilogue lane, where the bounds mask has to let it through.
+        assert(status(17, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0,
+          i => if (i == 16) VarkaChrono.MONTH_ARITH_MAX_MONTHS else 0, none) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE, "an epilogue lane")
+        // The same lane under a null date does not condemn: the word masks it out.
+        assert(status(64, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0, far, _ == 5) === 0,
+          "a null lane must not condemn the batch")
+        // Downward too, which is the direction the lowering is not exact in at all.
+        assert(status(64, _ => VarkaChrono.NARROW_MIN_DAYS, _ => 0,
+          i => if (i == 7) VarkaChrono.MONTH_ARITH_MIN_MONTHS else 0, none) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE, "below the floor")
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
   test("task 68: task 60's guard covers a derived month count, which is why the split is safe") {
     // The claim the split rests on, tested rather than asserted: the guard reads the count's
     // lanes after the arithmetic, so a count that only leaves the range *because* of the

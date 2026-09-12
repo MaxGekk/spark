@@ -52,6 +52,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
@@ -1231,6 +1232,7 @@ public final class VarkaLoopEmitter {
       case LiteralSlot l -> new VarkaVectorIR[0];
       case AddDays n -> new VarkaVectorIR[] {n.days(), n.offset()};
       case SubDays n -> new VarkaVectorIR[] {n.days(), n.offset()};
+      case GuardedDay n -> new VarkaVectorIR[] {n.days()};
       case DateDiff n -> new VarkaVectorIR[] {n.end(), n.start()};
       case DayOfWeek n -> new VarkaVectorIR[] {n.days()};
       case WeekDay n -> new VarkaVectorIR[] {n.days()};
@@ -1801,6 +1803,7 @@ public final class VarkaLoopEmitter {
         case WeekDay n -> wordOwner.get(n.days());
         case DayOfWeekIso n -> wordOwner.get(n.days());
         case ThursdayOf n -> wordOwner.get(n.days());
+        case GuardedDay n -> wordOwner.get(n.days());
         case Year n -> wordOwner.get(n.days());
         case Month n -> wordOwner.get(n.days());
         case DayOfMonth n -> wordOwner.get(n.days());
@@ -1851,6 +1854,7 @@ public final class VarkaLoopEmitter {
         case WeekDay n -> pureWord.get(n.days());
         case DayOfWeekIso n -> pureWord.get(n.days());
         case ThursdayOf n -> pureWord.get(n.days());
+        case GuardedDay n -> pureWord.get(n.days());
         case Year n -> pureWord.get(n.days());
         case Month n -> pureWord.get(n.days());
         case DayOfMonth n -> pureWord.get(n.days());
@@ -1942,6 +1946,9 @@ public final class VarkaLoopEmitter {
           analyzeOp(node, false, n.days(), n.offset());
         }
         case ThursdayOf n -> analyzeOp(node, false, n.days());
+        // A pass-through of its child's value with a range check beside it, so it analyses
+        // exactly as any other one-date operation: same validity, own word, one child.
+        case GuardedDay n -> analyzeOp(node, false, n.days());
         case Year n -> analyzeOp(node, false, n.days());
         case Month n -> analyzeOp(node, false, n.days());
         case DayOfMonth n -> analyzeOp(node, false, n.days());
@@ -2382,7 +2389,11 @@ public final class VarkaLoopEmitter {
     // which is how it was found.
     boolean checkedArith = mode != BodyMode.DRIVER && analysis.options.checkIntOverflow()
         && outputs.stream().anyMatch(o -> reaches(o, analysis.checkedArith));
-    boolean guarding = producersGuarding || selfGuarding || checkedArith;
+    // Task 93's range check folds into the same accumulator and is behind no option, so a body
+    // holding one needs it allocated on that ground alone.
+    boolean rearmed = mode != BodyMode.DRIVER
+        && outputs.stream().anyMatch(o -> reachesGuardedDay(o, new HashSet<>()));
+    boolean guarding = producersGuarding || selfGuarding || checkedArith || rearmed;
     if (guarding) {
       s.guardAcc = slot++;
     }
@@ -2560,6 +2571,7 @@ public final class VarkaLoopEmitter {
       case DayOfWeekIso n -> s.wordRef.get(n.days());
       case NextDay n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
       case ThursdayOf n -> s.wordRef.get(n.days());
+      case GuardedDay n -> s.wordRef.get(n.days());
       case Year n -> s.wordRef.get(n.days());
       case Month n -> s.wordRef.get(n.days());
       case DayOfMonth n -> s.wordRef.get(n.days());
@@ -2687,9 +2699,30 @@ public final class VarkaLoopEmitter {
    * so neither ever loads this slot. Allocating one for them reserved a local nothing read and
    * shifted every later local in the body.
    */
+  /** Whether any node under {@code root} is a {@link GuardedDay}, memoised against sharing. */
+  private static boolean reachesGuardedDay(VarkaVectorIR root, Set<VarkaVectorIR> seen) {
+    if (!seen.add(root)) {
+      return false;
+    }
+    if (root instanceof GuardedDay) {
+      return true;
+    }
+    for (VarkaVectorIR child : childrenOf(root)) {
+      if (reachesGuardedDay(child, seen)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private static boolean guardScratch(Analysis analysis, VarkaVectorIR node,
       boolean producersGuarding, boolean selfGuarding) {
-    return (producersGuarding && analysis.guardedProducers.contains(node))
+    // GuardedDay is unconditional - not behind either flag - because the compiler admits the
+    // expression on the strength of this check (task 93, PLAN_TASK_93.md 3.4). A flag that
+    // removed it would leave the compile-time bound standing over a value nothing bounds,
+    // which is the wrong-answer case the column-count AddMonths javadoc names.
+    return node instanceof GuardedDay
+        || (producersGuarding && analysis.guardedProducers.contains(node))
         || (selfGuarding && node instanceof AddMonths && analysis.selfGuarding.contains(node));
   }
 
@@ -2771,6 +2804,10 @@ public final class VarkaLoopEmitter {
           demand.accept(analysis.wordOwner.get(l.right()));
         }
         case MakeDate m -> demand.accept(new WordOwner.Own(m));
+        // The range check masks the lanes the word says are null before reporting one out of
+        // range, so that word has to survive the liveness pass. It is the child's: this node
+        // checks a value without changing its validity, so it forwards rather than owning one.
+        case GuardedDay g -> demand.accept(analysis.wordOwner.get(g.days()));
         // The rest read no word here. A value node's own word, where it needs one, is
         // demanded by its root write, by a guard below, or by a consumer above it; a leaf
         // owns no word at all; and `IfElse`'s blend reads its branches' words through the
@@ -2824,6 +2861,7 @@ public final class VarkaLoopEmitter {
       switch (n) {
         case AddDays x -> { demand.accept(analysis.wordOwner.get(x.days()));
           demand.accept(analysis.wordOwner.get(x.offset())); }
+        case GuardedDay x -> demand.accept(analysis.wordOwner.get(x.days()));
         case SubDays x -> { demand.accept(analysis.wordOwner.get(x.days()));
           demand.accept(analysis.wordOwner.get(x.offset())); }
         case NextDay x -> { demand.accept(analysis.wordOwner.get(x.days()));
@@ -3828,6 +3866,18 @@ public final class VarkaLoopEmitter {
         line(cb, analysis, node);
         emitFloorMod7(cb, node, analysis, s);
         emitModOffset(cb, s, 3);
+      }
+      case GuardedDay n -> {
+        // The value passes through untouched; what this node adds is two compares beside it
+        // (task 93). The word is the child's, because a range check does not change validity -
+        // it decides whether the batch is answered at all, not which lanes are null.
+        emitValue(cb, n.days(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        Integer guardTmp = s.guardTmp.get(node);
+        if (guardTmp != null) {
+          emitRangeGuard(cb, node, dense ? null : s.wordRef.get(n.days()), guardTmp, dense,
+              analysis, s, VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS);
+        }
       }
       case ThursdayOf n -> {
         // t = d + 3 - weekday0(d), the Thursday of d's Monday-based week (task 37), on
