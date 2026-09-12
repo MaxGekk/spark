@@ -22,6 +22,7 @@ import java.util.List;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.storage.StorageLevel;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -43,7 +44,7 @@ public class SurfaceTest {
         .config("spark.ui.enabled", "false")
         .config("spark.sql.shuffle.partitions", "1")
         .getOrCreate();
-    DateSurfaceBenchmark.buildTable(spark, 1_000L, 2);
+    DateSurfaceBenchmark.buildTable(spark, 1_000L, 2, StorageLevel.MEMORY_ONLY());
   }
 
   @AfterAll
@@ -95,5 +96,20 @@ public class SurfaceTest {
   public void labelsAreUniqueSoTablesAreTooAcrossFiles() {
     long distinct = Surface.ENTRIES.stream().map(Surface.Entry::label).distinct().count();
     assertEquals(Surface.ENTRIES.size(), distinct);
+  }
+
+  /**
+   * The residency guard's positive side: a table this small is trivially resident, so the
+   * check must say so and must say it in the shape the provenance line publishes. The
+   * negative side cannot be tested here without a table larger than the test JVM's heap; it
+   * is evidenced instead by the three GitHub runs of 11 and 12 September 2026 that this
+   * guard was written from, whose logs carry "Persisting block rdd_4_0 to disk instead".
+   */
+  @Test
+  public void theCachedTableIsResidentAndTheProvenanceSaysSo() {
+    assertTrue(DateSurfaceBenchmark.cacheResident(spark, 2));
+    String state = DateSurfaceBenchmark.cacheState(spark, 2);
+    assertTrue(state.startsWith("2 of 2 partitions cached"), state);
+    assertTrue(state.endsWith("0.0 GiB on disk"), state);
   }
 }
