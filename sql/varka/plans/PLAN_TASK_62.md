@@ -1149,8 +1149,11 @@ have published a number 25 times too small as Varka's date_add rate.
 
 **What happened.** The log carries
 `WARN MemoryStore: Not enough space to cache rdd_4_0 in memory!` 392 times, and
-the 1e8 log carries it zero times. The cached table did not fit, so every
-iteration recomputed it, and the measurement became a recompute rate.
+the 1e8 log carries it zero times. The next line says where it went:
+`Persisting block rdd_4_0 to disk instead`. So the measurement was not a
+recompute rate, as this section first said - it was the runner's **SSD read
+rate**, served out of a cache that was still, as far as everything downstream
+could tell, a cache.
 
 **Why the rule not only missed it but was fooled by it.** The rule is
 `(wall - executor) / wall`, and it exists to fail a job too *small* to amortise
@@ -1177,7 +1180,22 @@ interval columns, so it is six four-byte columns, 24 bytes a row, and 4.8 GB at
 2e8. More partitions is the lever, and 11.2.1 listed it first among the
 fallbacks before any of this was measured.
 
-**The fix, which is a second rule and not a bigger number.**
+**The first fix: stop offering the disk.** `spark.catalog().cacheTable(name)`
+takes Spark's default storage level, `MEMORY_AND_DISK`. That default is right
+for a workload, which should finish rather than fail, and exactly wrong for a
+benchmark, which should fail rather than measure something else - it is what
+converted "this table does not fit" into "this works, at storage bandwidth".
+The driver now asks for `MEMORY_ONLY`, with `--storage-level` to override, and
+records the level in the provenance beside the residency. It costs nothing in
+comparability: a run that fits behaves identically under either level, so the
+committed laptop files stay directly comparable.
+
+It also makes *cached* mean one thing. Under `MEMORY_AND_DISK` a table wholly
+on disk still reports every partition cached, which is why the guard below
+needs a separate `diskSize > 0` clause; under `MEMORY_ONLY` the partition count
+alone is a complete residency statement.
+
+**The second fix, which is a rule and not a bigger number.**
 `DateSurfaceBenchmark` now refuses to write a file whose cached table is not
 entirely resident, checked once immediately after the table is materialised so
 a misconfigured run costs a minute rather than three hours, and records the
@@ -1185,6 +1203,12 @@ residency in the provenance so a reader can see it rather than trust it.
 `--allow-nonresident-cache` exists for a deliberate exception. The two rules now
 bracket the row count from opposite sides: too small fails the fixed share, too
 large fails residency, and a file can only be written between them.
+
+The guard is kept even though the storage level removes the disk path, because
+the two rule out different things: the level rules out that one substitution,
+and the guard rules out the rest - a partially cached table, or one evicted
+later under execution pressure. A level is a property that cannot be forgotten;
+a guard catches what the property does not cover.
 
 **The general lesson, which is why this is a section and not a commit message.**
 A benchmark guard that can only fail in one direction will eventually be

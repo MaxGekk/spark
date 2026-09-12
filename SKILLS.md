@@ -2220,8 +2220,9 @@ that measured nothing at all, and passed it with the best number it had ever pro
 
 An eleven-fold throughput collapse, reported as an improvement, against 1811.6 M/s in the
 committed laptop file. The cause was in the log 392 times and nowhere else:
-`WARN MemoryStore: Not enough space to cache rdd_4_0 in memory!`. The table did not fit, so
-every iteration recomputed it.
+`WARN MemoryStore: Not enough space to cache rdd_4_0 in memory!`, followed by
+`Persisting block rdd_4_0 to disk instead`. The table did not fit, so the benchmark timed the
+runner's SSD - served out of something that was still, to everything downstream, a cache.
 
 **The rule was not merely blind to this - it was fooled by it, and the worse the failure the
 better it looked.** A job whose cache does not fit has an enormous executor time, so the
@@ -2234,6 +2235,13 @@ like to a rule that catches runs that are too small?", and the answer - "healthy
 healthier" - is the bug. A one-sided rule needs a partner before it can be trusted, and the
 partner here is a residency check that refuses to write a file whose cached table is not
 entirely in memory. The two now bracket the row count from opposite sides.
+
+**And the storage level is worth setting explicitly in any benchmark that caches.** Spark's
+default is `MEMORY_AND_DISK`, which is right for a workload - finish rather than fail - and
+wrong for a measurement, which should fail rather than quietly measure something else. It is
+what turned "does not fit" into "works, at storage bandwidth". `MEMORY_ONLY` removes that
+path and makes *cached* mean one thing: under the default, a table wholly on disk still
+reports every partition cached, so a residency check has to test bytes-on-disk separately.
 
 Three things that were **not** the cause, each checked rather than assumed, because each was
 the obvious guess:

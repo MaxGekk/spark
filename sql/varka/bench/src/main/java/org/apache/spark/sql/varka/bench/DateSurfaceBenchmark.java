@@ -40,6 +40,7 @@ import org.apache.spark.sql.execution.SparkPlan;
 import org.apache.spark.sql.execution.metric.SQLMetric;
 import org.apache.spark.sql.util.QueryExecutionListener;
 import org.apache.spark.storage.RDDInfo;
+import org.apache.spark.storage.StorageLevel;
 import scala.jdk.javaapi.CollectionConverters;
 
 /**
@@ -56,7 +57,7 @@ import scala.jdk.javaapi.CollectionConverters;
  *     varka-bench.jar --label spark-4.2.0 --rows 500000000 --out FILE [--partitions 1] [--iters 5]
  *     [--warmup-seconds 2] [--min-seconds 2] [--only REGEX] [--shard I/N]
  *     [--provenance key=value]... [--expect-fused] [--max-fixed-share PERCENT]
- *     [--allow-nonresident-cache]
+ *     [--allow-nonresident-cache] [--storage-level MEMORY_ONLY]
  * </pre>
  *
  * {@code --expect-fused} (the fork with Varka on) fails the run, after writing the file, when an
@@ -168,6 +169,7 @@ public final class DateSurfaceBenchmark {
     int shardCount = 1;
     boolean expectFused = false;
     boolean allowNonresidentCache = false;
+    StorageLevel storageLevel = StorageLevel.MEMORY_ONLY();
     double maxFixedShare = Double.NaN;
     final Map<String, String> provenance = new LinkedHashMap<>();
 
@@ -198,6 +200,7 @@ public final class DateSurfaceBenchmark {
             a.expectFused = true;
             i--;
           }
+          case "--storage-level" -> a.storageLevel = StorageLevel.fromString(need(k, v));
           case "--allow-nonresident-cache" -> {
             a.allowNonresidentCache = true;
             i--;
@@ -258,7 +261,7 @@ public final class DateSurfaceBenchmark {
     };
     PrintStream log = System.out;
     try {
-      buildTable(spark, args.rows, args.partitions);
+      buildTable(spark, args.rows, args.partitions, args.storageLevel);
       String cache = cacheState(spark, args.partitions);
       if (!cacheResident(spark, args.partitions) && !args.allowNonresidentCache) {
         throw new IllegalStateException("the cached table is not resident: " + cache
@@ -273,7 +276,7 @@ public final class DateSurfaceBenchmark {
       prov.put("partitions", Integer.toString(args.partitions));
       // Always written, so a whole-surface file says "0/1" rather than being silent about it
       // and leaving a reader to wonder whether it is complete. The merge reads this.
-      prov.put("cache", cache);
+      prov.put("cache", cache + ", " + args.storageLevel.description());
       prov.put("shard", args.shardIndex + "/" + args.shardCount);
       prov.put("surface entries", Integer.toString(Surface.ENTRIES.size()));
       prov.put("methodology", String.format(Locale.ROOT,
@@ -311,7 +314,7 @@ public final class DateSurfaceBenchmark {
    * The table: the generator {@code VarkaThroughputBenchmark} uses, in the given number of
    * partitions (one by default; see the class comment on what a task costs).
    */
-  static void buildTable(SparkSession spark, long rows, int partitions) {
+  static void buildTable(SparkSession spark, long rows, int partitions, StorageLevel level) {
     spark.sql(String.format(Locale.ROOT,
         "SELECT CASE WHEN id %% 31 = 0 THEN NULL"
             + " ELSE date_add(DATE'2020-01-01', CAST(id %% 1460 AS INT)) END AS d,"
@@ -325,7 +328,15 @@ public final class DateSurfaceBenchmark {
             + " make_ym_interval(CAST(id %% 20 AS INT), CAST(id %% 12 AS INT)) AS ym"
             + " FROM range(0, %d, 1, %d)", rows, partitions))
         .createOrReplaceTempView("varka_dates");
-    spark.catalog().cacheTable("varka_dates");
+    // MEMORY_ONLY, not Spark's MEMORY_AND_DISK default, and the difference is not academic:
+    // the default is right for a workload, which should finish rather than fail, and exactly
+    // wrong for a benchmark, which should fail rather than measure something else. Three runs
+    // in September 2026 logged "Persisting block rdd_4_0 to disk instead" and then timed the
+    // runner's SSD - 72.6 M rows/s against 854 M/s for the same entry at half the rows - and
+    // reported success, because a disk-backed cache is still a cache as far as everything
+    // downstream is concerned. Removing the disk path makes "cached" mean one thing, so the
+    // partition count alone is a complete residency statement.
+    spark.catalog().cacheTable("varka_dates", level);
     spark.sql("SELECT count(*) FROM varka_dates").collect();
   }
 
@@ -339,7 +350,9 @@ public final class DateSurfaceBenchmark {
    * unnoticed - it *passes* the fixed-share rule, and passes it easily. Every iteration
    * recomputes the table, executor time balloons, and the constant driver cost becomes a
    * negligible fraction of it. Three runs on GitHub runners in September 2026 reported
-   * success this way while measuring recomputation: at 2e8 rows {@code date_add(d, 3)} read
+   * success this way while timing the runner's SSD - Spark's default {@code MEMORY_AND_DISK}
+   * had persisted the block to disk, so the read still came from a "cache" - and at 2e8 rows
+   * {@code date_add(d, 3)} read
    * 72.6 M rows/s against 854 M/s at 1e8, with a *better* fixed share (1.9% against 15.4%),
    * and the only symptom was 389 {@code MemoryStore} warnings buried in the log.
    *
@@ -351,6 +364,11 @@ public final class DateSurfaceBenchmark {
    * is one block and Spark will not cache a single block larger than the unrolling memory it
    * has, however large the heap. Raising {@code --driver-memory} therefore does not help -
    * measured, 6g, 8g and 11g all failed identically - and more partitions is the fix.
+   *
+   * <p>This check is kept even though {@link #buildTable} now asks for {@code MEMORY_ONLY},
+   * which removes the disk path that caused the original silence. The two are complementary:
+   * the storage level rules out one substitution, and this rules out the rest - a partially
+   * cached table, or one evicted later under execution pressure.
    */
   static String cacheState(SparkSession spark, int partitions) {
     int cached = 0;
