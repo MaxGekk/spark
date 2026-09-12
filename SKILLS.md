@@ -2206,6 +2206,49 @@ off the class file, so the same shapes are being compared at each width.
 **`-XX:MaxVectorSize=32` is arguably the honest "wide" setting on this laptop**: identical
 throughput, smaller emitted bodies, shorter compiles.
 
+## A benchmark guard that fails in one direction gets satisfied by the failure in the other
+
+Task 62's surface driver fails a run whose *fixed share* - `(wall - executor) / wall`, the
+part of wall time that is not executor time - is over 5% on a Varka row. It exists to catch a
+job too small to amortise its planning and scheduling. On 12 September 2026 it passed a run
+that measured nothing at all, and passed it with the best number it had ever produced.
+
+| rows | `date_add(d, 3)`, Varka arm | worst fixed share | verdict |
+|---|---|---|---|
+| 1e8 | **854 M rows/s** | 15.4% | failed the rule |
+| 2e8 | **72.6 M rows/s** | **1.9%** | **passed** |
+
+An eleven-fold throughput collapse, reported as an improvement, against 1811.6 M/s in the
+committed laptop file. The cause was in the log 392 times and nowhere else:
+`WARN MemoryStore: Not enough space to cache rdd_4_0 in memory!`. The table did not fit, so
+every iteration recomputed it.
+
+**The rule was not merely blind to this - it was fooled by it, and the worse the failure the
+better it looked.** A job whose cache does not fit has an enormous executor time, so the
+constant driver cost becomes a vanishing fraction of it. The metric that catches "too small"
+is *maximised* by "catastrophically too big".
+
+So the lesson generalises past this benchmark: **ask of every guard what its own violation
+looks like from the far side.** Here the question is "what does a run that is far too big look
+like to a rule that catches runs that are too small?", and the answer - "healthy, and getting
+healthier" - is the bug. A one-sided rule needs a partner before it can be trusted, and the
+partner here is a residency check that refuses to write a file whose cached table is not
+entirely in memory. The two now bracket the row count from opposite sides.
+
+Three things that were **not** the cause, each checked rather than assumed, because each was
+the obvious guess:
+
+* **Not the heap.** 6g, 8g and 11g gave 392, 389 and 389 warnings - identical. The limit is
+  per *block*: with one partition the whole table is one block, and Spark will not cache a
+  single block bigger than its unrolling memory however large the heap. More partitions is the
+  lever, not more memory.
+* **Not the stock arms.** Every warning in all three runs was in the Arrow-cached `varka-jdk25`
+  arm; the arms using Spark's own compressed cached-batch serializer were fine.
+* **Not a scaling law.** A "2.51x wall time per doubling of rows" measured across the runs
+  looked like superlinear cache-residency behaviour and was used to project an eight-hour
+  surface. It was the onset of this cliff. A smooth-looking exponent fitted across a
+  discontinuity will mislead confidently.
+
 ## Building a fastdebug JDK for HotSpot diagnostics
 
 Three questions in milestone 4 could not be answered from a product JVM - why SuperWord

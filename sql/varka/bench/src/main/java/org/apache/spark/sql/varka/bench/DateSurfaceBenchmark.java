@@ -39,6 +39,7 @@ import org.apache.spark.sql.execution.QueryExecution;
 import org.apache.spark.sql.execution.SparkPlan;
 import org.apache.spark.sql.execution.metric.SQLMetric;
 import org.apache.spark.sql.util.QueryExecutionListener;
+import org.apache.spark.storage.RDDInfo;
 import scala.jdk.javaapi.CollectionConverters;
 
 /**
@@ -55,6 +56,7 @@ import scala.jdk.javaapi.CollectionConverters;
  *     varka-bench.jar --label spark-4.2.0 --rows 500000000 --out FILE [--partitions 1] [--iters 5]
  *     [--warmup-seconds 2] [--min-seconds 2] [--only REGEX] [--shard I/N]
  *     [--provenance key=value]... [--expect-fused] [--max-fixed-share PERCENT]
+ *     [--allow-nonresident-cache]
  * </pre>
  *
  * {@code --expect-fused} (the fork with Varka on) fails the run, after writing the file, when an
@@ -165,6 +167,7 @@ public final class DateSurfaceBenchmark {
     int shardIndex = 0;
     int shardCount = 1;
     boolean expectFused = false;
+    boolean allowNonresidentCache = false;
     double maxFixedShare = Double.NaN;
     final Map<String, String> provenance = new LinkedHashMap<>();
 
@@ -193,6 +196,10 @@ public final class DateSurfaceBenchmark {
           }
           case "--expect-fused" -> {
             a.expectFused = true;
+            i--;
+          }
+          case "--allow-nonresident-cache" -> {
+            a.allowNonresidentCache = true;
             i--;
           }
           case "--max-fixed-share" -> a.maxFixedShare = Double.parseDouble(need(k, v));
@@ -252,6 +259,13 @@ public final class DateSurfaceBenchmark {
     PrintStream log = System.out;
     try {
       buildTable(spark, args.rows, args.partitions);
+      String cache = cacheState(spark, args.partitions);
+      if (!cacheResident(spark, args.partitions) && !args.allowNonresidentCache) {
+        throw new IllegalStateException("the cached table is not resident: " + cache
+            + ". Every timing below it would be a recompute rate, not a kernel rate. Raise"
+            + " --partitions so no single block has to fit, or lower --rows; raising"
+            + " --driver-memory does not help, because the limit is per block.");
+      }
       StringBuilder file = new StringBuilder();
       Map<String, String> prov =
           Provenance.collect(args.label, spark.version(), load, args.provenance);
@@ -259,6 +273,7 @@ public final class DateSurfaceBenchmark {
       prov.put("partitions", Integer.toString(args.partitions));
       // Always written, so a whole-surface file says "0/1" rather than being silent about it
       // and leaving a reader to wonder whether it is complete. The merge reads this.
+      prov.put("cache", cache);
       prov.put("shard", args.shardIndex + "/" + args.shardCount);
       prov.put("surface entries", Integer.toString(Surface.ENTRIES.size()));
       prov.put("methodology", String.format(Locale.ROOT,
@@ -312,6 +327,54 @@ public final class DateSurfaceBenchmark {
         .createOrReplaceTempView("varka_dates");
     spark.catalog().cacheTable("varka_dates");
     spark.sql("SELECT count(*) FROM varka_dates").collect();
+  }
+
+  /**
+   * What the cache actually holds, as a one-line summary, or {@code null} when the table is
+   * entirely resident in memory.
+   *
+   * <p><b>Why this exists.</b> {@code --max-fixed-share} fails a job too *small* to amortise
+   * its driver overhead. Nothing failed a job so *large* that the cached table did not fit,
+   * and that omission is worse than it sounds, because such a run does not merely go
+   * unnoticed - it *passes* the fixed-share rule, and passes it easily. Every iteration
+   * recomputes the table, executor time balloons, and the constant driver cost becomes a
+   * negligible fraction of it. Three runs on GitHub runners in September 2026 reported
+   * success this way while measuring recomputation: at 2e8 rows {@code date_add(d, 3)} read
+   * 72.6 M rows/s against 854 M/s at 1e8, with a *better* fixed share (1.9% against 15.4%),
+   * and the only symptom was 389 {@code MemoryStore} warnings buried in the log.
+   *
+   * <p>So the two rules bracket the row count from opposite sides, and a file can only be
+   * written when it is between them. This one is checked once, immediately after the table
+   * is materialised, so a misconfigured run costs a minute rather than three hours.
+   *
+   * <p>The failure is per *block*, not per byte: with {@code --partitions 1} the whole table
+   * is one block and Spark will not cache a single block larger than the unrolling memory it
+   * has, however large the heap. Raising {@code --driver-memory} therefore does not help -
+   * measured, 6g, 8g and 11g all failed identically - and more partitions is the fix.
+   */
+  static String cacheState(SparkSession spark, int partitions) {
+    int cached = 0;
+    long mem = 0;
+    long disk = 0;
+    for (RDDInfo info : spark.sparkContext().getRDDStorageInfo()) {
+      cached += info.numCachedPartitions();
+      mem += info.memSize();
+      disk += info.diskSize();
+    }
+    return String.format(Locale.ROOT,
+        "%d of %d partitions cached, %.1f GiB in memory, %.1f GiB on disk", cached, partitions,
+        mem / (double) (1L << 30), disk / (double) (1L << 30));
+  }
+
+  /** True when every partition is in memory and none spilled. */
+  static boolean cacheResident(SparkSession spark, int partitions) {
+    int cached = 0;
+    long disk = 0;
+    for (RDDInfo info : spark.sparkContext().getRDDStorageInfo()) {
+      cached += info.numCachedPartitions();
+      disk += info.diskSize();
+    }
+    return cached >= partitions && disk == 0;
   }
 
   static String projectionQuery(Surface.Entry e) {
