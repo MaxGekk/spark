@@ -20,14 +20,25 @@
 #
 #   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--driver-memory 16g] \
 #       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--shard I/N] [--skip-build] \
+#       [--benchmark surface|chains] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
 #
-# --shard I/N runs entries I, I+N, I+2N ... of the surface, so N runs between them
-# cover it exactly once and dev/varka_bench_merge.py joins their files back into one
-# per distribution. It is for GitHub's six-hour job limit, which the whole surface at
-# the row count the fixed-share rule wants does not fit; on a machine of your own,
-# leave it alone. The shard's output file is named for it, so shards of one run can
-# share a directory.
+# --benchmark chains runs Chains through the same driver instead of Surface, writing
+# DateChain-<label>-results.txt. The two answer different questions: the surface is
+# one entry per expression and its lightest rows are bound by memory bandwidth rather
+# than arithmetic, so a wider vector datapath cannot show on them; the chains compose
+# the same operations three and four deep until the kernel is bound by what it
+# computes. See the Chains javadoc. The chains also clear the fixed-share rule at 1e8
+# rows, where the surface needs 5e8, because more work per row buys the same executor
+# time as more rows without needing the memory to hold them.
+#
+# --shard I/N runs entries I, I+N, I+2N ... of whichever list --benchmark selected -
+# 52 surface entries or 12 chains, so N is bounded by that list and not by the
+# surface's length - and N runs between them cover it exactly once, with
+# dev/varka_bench_merge.py joining their files back into one per distribution. It is
+# for GitHub's six-hour job limit, which the whole surface at the row count the
+# fixed-share rule wants does not fit; on a machine of your own, leave it alone. The
+# shard's output file is named for it, so shards of one run can share a directory.
 #
 #   dev/varka_bench_surface.sh \
 #       spark-4.2.0-jdk17=/opt/spark-4.2.0-bin-hadoop3:/usr/lib/jvm/java-17-openjdk-amd64 \
@@ -43,7 +54,8 @@
 # for a 12 ms job to be under 5% of them.
 #
 # Each LABEL names one run and its results file,
-# sql/varka/bench/benchmarks/DateSurface-<LABEL>-results.txt. SPARK_HOME is a
+# sql/varka/bench/benchmarks/<STEM>-<LABEL>-results.txt, where STEM is DateSurface
+# or DateChain by --benchmark. SPARK_HOME is a
 # distribution's root - a downloaded release, or this checkout after
 # `build/sbt package` (its bin/spark-submit runs the assembled jars). The third
 # field is a comma-separated list of extra `--conf` settings; the word `varka`
@@ -74,9 +86,13 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-usage() { sed -n '17,50p' "$0"; exit 2; }
+# The header block, found rather than hard-coded: the range used to be '17,50p' and the
+# comment above grew past it, so --help and every usage error stopped mid-sentence and dropped
+# the only paragraph documenting the mandatory LABEL=SPARK_HOME:JAVA_HOME argument - which is
+# precisely what a usage error is about. Ends at the first line that is not a comment.
+usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit 2; }
 rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
-shard=""
+shard=""; benchmark=surface
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --rows) rows="$2"; shift 2 ;;
@@ -86,6 +102,7 @@ while [ "$#" -gt 0 ]; do
     --force) force=1; shift ;;
     --only) only="$2"; shift 2 ;;
     --shard) shard="$2"; shift 2 ;;
+    --benchmark) benchmark="$2"; shift 2 ;;
     --skip-build) build=0; shift ;;
     --help|-h) usage ;;
     *=*) dists+=("$1"); shift ;;
@@ -93,6 +110,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "${#dists[@]}" -ge 1 ] || usage
+case "$benchmark" in
+  surface) main_class=org.apache.spark.sql.varka.bench.DateSurfaceBenchmark; stem=DateSurface ;;
+  chains)  main_class=org.apache.spark.sql.varka.bench.DateChainBenchmark;   stem=DateChain ;;
+  *) echo "--benchmark wants surface or chains, got '$benchmark'" >&2; exit 2 ;;
+esac
 
 load="$(cut -d' ' -f1 /proc/loadavg)"
 if [ "$force" -eq 0 ] && awk -v l="$load" 'BEGIN { exit !(l > 1.0) }'; then
@@ -191,10 +213,10 @@ for spec in "${dists[@]}"; do
   # collected into one directory before merging, and two of them must not be the same path.
   suffix=""
   [ -n "$shard" ] && suffix="-shard${shard//\//of}"
-  out="$out_dir/DateSurface-$label$suffix-results.txt"
+  out="$out_dir/$stem-$label$suffix-results.txt"
   echo "== $label: $spark_home under $java_home -> $out"
   JAVA_HOME="$java_home" "$spark_home/bin/spark-submit" "${submit[@]}" \
-    --class org.apache.spark.sql.varka.bench.DateSurfaceBenchmark "$jar" \
+    --class "$main_class" "$jar" \
     --label "$label" --rows "$rows" --partitions "$partitions" --out "$out" \
     ${only:+--only "$only"} ${shard:+--shard "$shard"} "${driver[@]}" \
     --provenance "commit=$commit" --provenance "datapath=$datapath" \
@@ -205,7 +227,7 @@ done
 
 echo
 if [ -n "$shard" ]; then
-  echo "== shard $shard: no table, because a shard is a fraction of the surface. Collect every"
+  echo "== shard $shard: no table, because a shard is a fraction of the run. Collect every"
   echo "   shard's files and run dev/varka_bench_merge.py, which checks they agree and joins them."
   exit 0
 fi

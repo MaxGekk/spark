@@ -1750,6 +1750,17 @@ the fuzzer's node generator and the two pinned fixtures.
   gives the IR, the shape hash and per-method `IntVector` invocation counts on the
   suite's own scale; `--asm` adds C2's assembly for the dense loop; `--table
   --variant k=v` prints the plan's op-count table with deltas against the defaults.
+  **A count taken from that tool before 12 September 2026 for an expression written
+  with an operator rather than a function is wrong, and wrong in the direction that
+  hides work**: the tool resolved attributes and functions but never ran type
+  coercion, so `d + ym` stayed an `Add` over a date and an interval instead of
+  becoming `DateAddYMInterval`, and it reported `declined` for shapes the surface had
+  been timing with `expectFused` for weeks. Every date/interval arithmetic spelling
+  task 67 added was affected. It resolves through the analyzer now, so re-take any
+  such number rather than trusting it - and note the general shape, since this is the
+  second tool in the same family to have carried it: a hand-rolled resolver that
+  binds names and looks up functions is enough for `year(d)` and silently not enough
+  for `d + ym`, because the operator needs a rule the analyzer owns.
 - `dev/varka_hsdis_build.sh` builds `hsdis-<arch>.so` from the JDK's single source
   file against the distribution's libcapstone, no JDK build needed;
   `dev/varka_worktree.sh gc` removes the worktrees whose PRs merged.

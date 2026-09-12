@@ -1,0 +1,137 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.spark.sql.varka.bench;
+
+import java.util.List;
+
+import org.apache.spark.sql.SparkSession;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * {@link Chains}, checked the way {@link SurfaceTest} checks the surface: every entry has to
+ * run, produce one column, and plan without a Varka node on stock Spark, which is the negative
+ * side of the {@code EXPLAIN} check the driver relies on.
+ *
+ * <p>What this file cannot check is the property the list exists for - that each chain is
+ * heavy enough to leave the memory-bandwidth regime. That is an op count, and op counts come
+ * from the emitter in catalyst test scope rather than from here, so {@link Chains}'s javadoc
+ * records the number for each entry and {@code dev/varka_emit.sh --table} reproduces them. The
+ * cheap half of the property is checkable, though, and is: a chain must be a composition, not
+ * a single call, or it belongs in {@link Surface} instead.
+ */
+public class ChainsTest {
+  private static SparkSession spark;
+
+  @BeforeAll
+  public static void start() {
+    spark = BenchSession.start("ChainsTest");
+  }
+
+  @AfterAll
+  public static void stop() {
+    BenchSession.stop(spark);
+  }
+
+  @Test
+  public void everyChainRuns() {
+    for (Surface.Entry e : Chains.ENTRIES) {
+      String q = DateSurfaceBenchmark.projectionQuery(e);
+      var df = spark.sql(q);
+      assertEquals(1, df.schema().fields().length, q);
+      assertEquals(1_000L, df.count(), q);
+      assertEquals(DateSurfaceBenchmark.Fusion.PLAIN, DateSurfaceBenchmark.plansVarka(spark, q), q);
+    }
+  }
+
+  /**
+   * The reason each entry is here, asserted rather than asserted-in-a-comment. An entry below
+   * {@link Chains#MIN_OPS} would not clear the 5% fixed-share rule at 1e8 rows and so would
+   * not do the job the list exists for.
+   *
+   * <p>This replaced a nesting-depth check, which was the obvious proxy and the wrong one:
+   * {@code weekofyear(add_months(d, i))} is two calls and 176 ops while
+   * {@code month(next_day(date_add(d, i), 'MONDAY'))} is three calls and 55, because what
+   * costs is the arithmetic inside each operation and not how many are stacked.
+   */
+  @Test
+  public void everyChainIsHeavyEnoughToEarnItsPlace() {
+    for (Surface.Entry e : Chains.ENTRIES) {
+      int ops = Chains.emitterOps(e.label());
+      assertTrue(ops >= Chains.MIN_OPS,
+          e.label() + " is " + ops + " ops, under the " + Chains.MIN_OPS + " this list needs");
+    }
+  }
+
+  @Test
+  public void chainsAreExpectedToFuseAndAreNotInTheSurface() {
+    List<String> surface = Surface.ENTRIES.stream().map(Surface.Entry::label).toList();
+    for (Surface.Entry e : Chains.ENTRIES) {
+      assertTrue(e.expectFused(), e.label() + " must be expected to fuse or it times a fallback");
+      assertTrue(!surface.contains(e.label()), e.label() + " is already in the surface");
+    }
+  }
+
+  /**
+   * Varka covers three types in one int32 lane - DATE, INT and the year-month interval - and
+   * the point of this list over a chain of dates is to exercise and demonstrate all three, in
+   * single expressions rather than in separate rows. A list that drifted back to dates alone
+   * would still be heavy, still fuse, and still miss what it is for, with nothing to say so.
+   *
+   * <p>Counted over column *references*, tokenised, not over substrings: an earlier version of
+   * this test looked for digits to find int arithmetic and so counted the literal in
+   * {@code * 12} as int coverage, which flattered a list where only four entries used the int
+   * column at all. A literal is folded into the kernel; a column is loaded and vectorised, and
+   * only the second demonstrates anything.
+   */
+  @Test
+  public void theChainsMixAllThreeTypes() {
+    int allThree = 0;
+    for (Surface.Entry e : Chains.ENTRIES) {
+      List<String> tokens = List.of(e.projection().split("[^A-Za-z0-9_]+"));
+      boolean date = tokens.contains("d") || tokens.contains("d2");
+      boolean integer = tokens.contains("i");
+      // Column names only. "INTERVAL" was in this list and should never have been: it is a type
+      // keyword in a cast or literal, never a column, so an entry reading no interval column at
+      // all counted toward the total - the same literal-for-column mistake the javadoc above
+      // says this method was rewritten to remove, left in the other half of the predicate.
+      boolean interval =
+          tokens.contains("ym") || tokens.contains("ymm") || tokens.contains("ymy");
+      assertTrue(date, e.label() + " has no date column");
+      if (date && integer && interval) {
+        allThree++;
+      }
+    }
+    // Every entry, derived from the list rather than written down: the bound used to be 8 with
+    // twelve qualifying, so a third of the list could have lost its int or interval column and
+    // this would still have passed - which is the drift its javadoc says it exists to catch.
+    assertEquals(Chains.ENTRIES.size(), allThree,
+        "every entry must reference a date, an int and an interval column; the list has drifted "
+            + "back to being about dates");
+  }
+
+  @Test
+  public void labelsAreUniqueSoTablesAreTooAcrossFiles() {
+    long distinct = Chains.ENTRIES.stream().map(Surface.Entry::label).distinct().count();
+    assertEquals(Chains.ENTRIES.size(), distinct);
+  }
+}

@@ -19,6 +19,10 @@
 
     dev/varka_bench_merge.py SHARD_DIR... --out sql/varka/bench/benchmarks
 
+Files are grouped by the `benchmark` and `label` their own provenance records, not by
+their names, so shards of two benchmarks staged in one directory merge separately - and a
+results file that is not a shard of this tool's making is skipped rather than merged.
+
 `DateSurfaceBenchmark --shard I/N` runs entries I, I+N, I+2N ... of the surface, so N
 dispatches between them cover it exactly once. That exists because the fixed-share rule
 and GitHub's six-hour job limit pull in opposite directions (PLAN_TASK_62.md 11.11).
@@ -55,13 +59,14 @@ BLOCK = re.compile(r"^(?P<entry>.+?) over (?P<rows>\d+) rows(?P<rest>[:,].*)$")
 # Fields every shard of one label must agree on. Not host/date/load: those differ by
 # construction, and pretending otherwise is the error this tool exists to prevent.
 MUST_MATCH = (
+    "benchmark",
     "label",
     "spark",
     "commit",
     "rows",
     "partitions",
     "shard count",
-    "surface entries",
+    "entries",
     "cpu",
     "MaxVectorSize",
     "datapath",
@@ -193,26 +198,53 @@ def main():
     ap.add_argument("--out", required=True, help="where the merged files are written")
     a = ap.parse_args()
 
-    # Grouped by label, which is read from the file rather than parsed out of its name.
+    # Grouped by (benchmark, label), both read from the provenance rather than parsed out of
+    # the file name, and a file carrying neither is not ours.
+    #
+    # This is not a stylistic preference. The workflow tars sql/varka/bench/benchmarks whole,
+    # so every artifact also carries the committed whole-surface results files from the
+    # checkout. A name-based rule gave those a self-consistent group of their own - one file,
+    # agreeing with itself on everything this tool checks - whose output path was the committed
+    # file, so a chains merge overwrote published surface results and exited 0. Reading the
+    # benchmark from inside the file makes a stray whole-surface file join the surface group,
+    # where the shard-index check rejects it loudly, or be skipped outright when it predates
+    # the key. The same rule keeps DateTimeBenchmark and DateVectorOpsBenchmark files, which
+    # also match Date*-results.txt and have no provenance block at all, from being parsed.
     groups = OrderedDict()
+    skipped = []
     for d in a.dirs:
         for root, _sub, names in os.walk(d):
             for n in sorted(names):
-                if not (n.startswith("DateSurface-") and n.endswith("-results.txt")):
+                if not n.endswith("-results.txt"):
                     continue
                 path = os.path.join(root, n)
-                prov, _ = read(path)
-                groups.setdefault(prov.get("label", "?"), []).append(path)
+                try:
+                    prov, _ = read(path)
+                except SystemExit:
+                    skipped.append(path)
+                    continue
+                if "benchmark" not in prov or "shard" not in prov:
+                    skipped.append(path)
+                    continue
+                groups.setdefault((prov["benchmark"], prov.get("label", "?")), []).append(path)
+    for path in skipped:
+        print(f"skipped (not a shard of this tool's making): {path}")
     if not groups:
-        raise SystemExit(f"no DateSurface-*-results.txt under {', '.join(a.dirs)}")
+        raise SystemExit(
+            f"no results file with a 'benchmark' and 'shard' provenance line under "
+            f"{', '.join(a.dirs)}"
+        )
 
+    stems = {"surface": "DateSurface", "chains": "DateChain"}
     os.makedirs(a.out, exist_ok=True)
-    for label, files in groups.items():
+    for (benchmark, label), files in groups.items():
+        if benchmark not in stems:
+            raise SystemExit(f"unknown benchmark {benchmark!r} in {files[0]}")
         text = merge_label(label, sorted(files))
-        dest = os.path.join(a.out, f"DateSurface-{label}-results.txt")
+        dest = os.path.join(a.out, f"{stems[benchmark]}-{label}-results.txt")
         with open(dest, "w", encoding="utf-8") as fh:
             fh.write(text)
-        print(f"{label}: {len(files)} shard(s) -> {dest}")
+        print(f"{benchmark} {label}: {len(files)} shard(s) -> {dest}")
     return 0
 
 

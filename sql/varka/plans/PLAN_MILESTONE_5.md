@@ -553,7 +553,17 @@ on `compileCoalesce` proves this (`(kT AND v(x)) OR (NOT kT AND v(y))` with
 `kT = v(x)` reduces to `v(x) OR v(y)`), and `pureOf` still returns nothing
 for it because `IfElse` has no arm.
 
-**The census.** `VarkaWordCensus` (catalyst test scope,
+**The census, and a caveat found on 12 September 2026.** Its `surface` corpus is
+not the whole surface: `resolve` had no analyzer pass, so every date/interval
+shape task 67 added parsed to an `Add` the compiler declined, and the corpus was
+truncated by hand to "the `Surface` projections that resolve without the
+analyzer's type coercion". The figures below are therefore over about two thirds
+of the surface while reading as though they were over all of it. The resolver is
+fixed and the interval columns are declared, so widening the corpus is now a
+matter of adding the entries and requoting this paragraph - work for whichever of
+tasks 74 and 75 next touches the census, since it moves every number here.
+
+`VarkaWordCensus` (catalyst test scope,
 `dev/varka_word_census.sh`) classifies every value root of three corpora by
 its word today and under the two extensions, and checks its verdict against
 the emitter's by emitting each single-root shape with the pass on and off:
@@ -1713,6 +1723,73 @@ compares.
 It sits here beside row 82, which its own text says "shares its ground with
 task 64".
 
+### 2.29 The bench module's tests are enforced by hand or not at all (task 94)
+
+*Opened 12 September 2026, by the review of task 62's chains PR.*
+
+`sql/varka/bench` holds the benchmark drivers and their suites - `SurfaceTest`,
+`ChainsTest`, `PlanCheckTest`, `ProvenanceTest`, the two harness tests - and
+nothing runs them. `git grep 'bench/pom.xml' -- dev/ .github/` finds three call
+sites and all three are `-DskipTests package`: the surface workflow's build step,
+`dev/varka_bench_surface.sh`, and the jar-cache warm. `build_and_test.yml` has a
+`varka-engine` job and no bench one, and `dev/varka_precommit.sh` does not reach
+the module either.
+
+What that leaves unenforced is not decoration. `ChainsTest` is where the chain
+list's invariants live - every entry fuses, every entry carries a date, an int
+and an interval column, every entry clears `MIN_OPS`, no entry duplicates the
+surface - and `SurfaceTest` is where the surface's do. An edit that breaks any of
+them merges green. The review that opened this found two such invariants already
+weakened (a bound of 8 where all twelve qualified, and a predicate counting the
+`INTERVAL` type keyword as a column), which is the shape of the problem: the
+tests were right when written and nothing would have said when they stopped
+being.
+
+A `bench` step in `dev/varka_gate.sh` landed with that review as a stopgap - it
+runs in about fourteen seconds - but a gate step is a thing a person remembers to
+run. The task is the CI job: a `varka-bench` module in
+`dev/sparktestsupport/modules.py` so `dev/is-changed.py -m varka-bench` answers,
+the `precondition` wiring that consumes it, and a job modelled on `varka-engine`
+(which is the worked example, including its own comment about having had no
+condition and so building on every prose-only PR).
+
+### 2.30 Two int32 shapes decline that a reader would expect to fuse (task 95)
+
+*Opened 12 September 2026, while choosing task 62's chain entries.*
+
+`datediff(d2, d) * i` declines, and so does `i % 20`. Multiplying by a *literal*
+is fine - `CAST(month(d) AS INTERVAL YEAR) * 3` is in the surface - so the gap is
+an int multiply whose right operand is a column, and an int remainder at all.
+
+Both are ordinary arithmetic over the int32 lane the engine already owns, and
+both are spellings a reader reaches for immediately: "how many months between
+these dates, times a factor from the row", "bucket this by seven". The task is to
+find out which of the two is worth the lowering and what the guard costs -
+`IntArith` already carries task 63's checked/wrapping overflow discipline, so the
+question is that discipline's shape for `MUL` with a runtime operand and for
+`REM`, not whether the lane exists.
+
+It is scoped here rather than in milestone 4 because nothing in the date surface
+or the chains needs it: they are why it was found, not why it matters.
+
+### 2.31 `make_ym_interval` takes only arguments derived from a date (task 96)
+
+*Opened 12 September 2026, the same way.*
+
+`make_ym_interval(year(d), month(d))` fuses and is in the surface;
+`make_ym_interval(i, i)` declines. So the constructor for the third type cannot
+be fed from the int columns the engine already reads - only from ints it derived
+from a date itself.
+
+That is a narrow hole with a wide-looking edge, because year-month intervals are
+part of the public claim that Varka covers three types: a reader who writes
+`make_ym_interval(years, months)` over two int columns, which is the obvious
+spelling, falls back. The task is to establish whether the restriction is the
+compiler's admission rule or something the emitted lowering genuinely needs -
+task 67 built the type's arithmetic and this is the one shape of it that is
+column-hostile - and to lift it if it is only the former.
+
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
@@ -1758,6 +1835,9 @@ independent of both and of each other.
 | 90 | The benchmark files are not reproducible run to run (section 2.21). **Partly done** (10 September 2026): the band is measured and committed for the parity and throughput benchmarks at both widths, and the regeneration diff classifies against it. That half landed under task 77, which had re-scoped itself onto this row's work without noticing this row existed - recorded here rather than quietly absorbed. Scoped 9 September 2026 from the investigation task 79's section 9 asked for; the pinning half was already done | Two regenerations with no change between them disagree on 73 of 211 cases by more than 3% and 22 by more than 10%, pinned; unpinned the worst is 75%. Measured out: within-run noise (avg/best median 1.007), the clock (constant to 1.2% while throughput moves 31%), ASLR, contention. What remains is the per-fork C2 lottery `PLAN_TASK_32.md` 11 already traced to JDK-8380195. `dev/varka_bench_repeat.sh` measures the band; `dev/varka_bench_regen.sh` now pins to the fast core complex and records it. **Measured, 10 September 2026**, over ten runs per width on an idle pinned machine: the parity file's median spread is 5.34% at AVX-512 and 1.72% at 128-bit, p90 22.30% and 11.88%, worst 227.15% and 39.06%; the throughput file 5.31% and 3.67%. Two findings the section did not predict. The narrow width is the *quieter* of the two by a factor of three at the median, so collapses have been found at 128-bit because that file is quiet enough for one to stand out, not because it is unstable - and the two widths need separate bands for that reason. And three runs understate the band: this row's own 1.6% median comes from three runs, where ten give 5.34% at the same width | The band committed per file for the parity and throughput benchmarks: **done**. The regeneration diff reported against the band rather than a flat 3%: **done**, cutting held-out false alarms on an unchanged file from 32.9% of rows to 5.6% at AVX-512 and 11.4% to 2.1% at 128-bit. Still open: the arithmetic benchmark's band; task 63's 9.7 dead-local figure re-taken pinned before task 82 scopes itself on it; the decision on N-fork medians taken from the cost, with the fallback stated - that absolute rates stop being compared across runs and the within-run A/Bs carry the claims; and the cause itself, which task 77's census leaves open with one method taking 100 runtime deoptimisations across 194 compiles and the `task_queued` records unread |
 | 91 | A guard bound the shift above it chooses (section 2.22). **Scoped** (10 September 2026), from task 69's outcome: it closed the upward half of `PLAN_MILESTONE_4.md` 9's conservative-decline entry and left the half that motivated it, `weekofyear`/`yearofweek` over a column offset, still residual because `ThursdayOf` shifts downward and there is no headroom below `NARROW_MIN_DAYS`; after 84, whose interval representation it should take | Task 52's runtime guard comparing against a bound the compiler chooses from the shift `dayRange` already computes for the subtree above the producer - `[NARROW_MIN_DAYS + 3, NARROW_MAX_DAYS]` under a `ThursdayOf` consumer, `+ 365` under a `trunc` one - so every downward-shifting consumer over a guarded producer becomes admissible at the same run-time cost, one compare against a different immediate | The guard's compare shown to be the only place `NARROW_MIN_DAYS` enters these kernels, by grep and a `VarkaEmitDump` op-count diff; the shape key shown to separate two subtrees identical but for the shift above them; `weekofyear(date_add(d, off))` fused with a differential over a batch that straddles the moved bound |
 | 92 | The validity write, keyed on the bit layout (section 2.23). **Scoped** (10 September 2026), from task 47's measurement: its word writer wins 6 to 9% at 4 lanes and loses 11 to 20% at 8 and 16, so it shipped as an option defaulting off. **Worth more than it was first written as** (corrected 11 September 2026): four int lanes is `SPECIES_PREFERRED` on every NEON-only aarch64 and on x86 without AVX2, so this is a real target's default rather than a `MaxVectorSize` flag's; what it needs is one confirming run on such a machine, since task 47's four-lane numbers simulate the lane count on a 16-lane x86 | `validityByWord` defaulting on where a validity group is smaller than a byte (`lanes < 8`) - one condition read off the bit layout rather than two thresholds fitted to a machine, which is what task 76 declined; plus option B of `PLAN_TASK_47.md` 3.1, storing once per word rather than once per group, and 3.4's masked-driver liveness item, both of which share this task's ladder run | The k=3 step in task 47's ladder explained from `-XX:+PrintInlining` before any rule is fitted across it - the emitted code is already ruled out - and the width rule's win reproduced on a machine that runs at that width rather than under a `MaxVectorSize` flag |
+| 94 | The bench module's tests are enforced by hand or not at all (section 2.29). **Scoped** (12 September 2026), from the review of task 62's chains PR: `sql/varka/bench` is only ever `-DskipTests package`d - three call sites, all of them - so `ChainsTest` and `SurfaceTest` run when someone types the Maven line and never in CI. The review found two of their invariants already weakened, which is the shape of it: right when written, and nothing to say when they stopped being | A `varka-bench` module in `dev/sparktestsupport/modules.py`, the `precondition` wiring that consumes `dev/is-changed.py -m varka-bench`, and a job modelled on `varka-engine` | The suites run on a pull request that touches `sql/varka/bench` and not on one that does not; a deliberately broken `ChainsTest` invariant fails that job |
+| 95 | Two int32 shapes decline that a reader would expect to fuse (section 2.30). **Scoped** (12 September 2026), while choosing task 62's chain entries: `datediff(d2, d) * i` and `i % 20` both decline, though multiplying by a *literal* is fine - so it is an int multiply whose right operand is a column, and an int remainder at all | Whichever of `MUL` with a runtime operand and `REM` is worth the lowering, under task 63's existing checked/wrapping overflow discipline rather than beside it | Both spellings fuse or one is declined with a reason a reader can act on; the differential covers the overflow edge of whichever lands |
+| 96 | `make_ym_interval` takes only arguments derived from a date (section 2.31). **Scoped** (12 September 2026), the same way: `make_ym_interval(year(d), month(d))` fuses and is in the surface, `make_ym_interval(i, i)` declines - so the constructor for the third type cannot be fed from the int columns the engine already reads, which is the obvious spelling and part of the three-types claim | Establish whether the restriction is the admission rule or something the lowering needs, and lift it if it is the former | `make_ym_interval` over two int columns fuses and matches the row engine over the ANSI overflow edge, or declines with a reason that says why it must |
 
 ## 4. Files
 

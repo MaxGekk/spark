@@ -1218,7 +1218,131 @@ like from the far side - here, "what does a run that is far too big look like to
 a rule that catches runs that are too small?" - and if the answer is "healthy",
 the rule needs a partner before it is trusted.
 
-### 11.13 Explicitly out of scope
+### 11.13 The surface cannot show the datapath, and the chains are the answer
+
+*Opened 12 September 2026, from a question about what is actually being timed.*
+
+**Most of the surface is bound by memory bandwidth, not by arithmetic, and a
+wider vector datapath cannot help it.** The committed laptop file has
+`date_add(d, 3)` at 0.5 ns/row, moving four bytes in and four out - about
+15 GB/s, which is single-core DRAM speed on that machine. One add per eight
+bytes. Roughly a third of the 52 entries are single calls in that regime.
+
+That is a problem for this task's whole premise. The point of gating on a
+full-width 512-bit runner is to show what the width buys; on a bandwidth-bound
+kernel it buys nothing, however genuine the 1.99 the probe reads. Task 43
+measured the width with an op-count ladder precisely because that is
+compute-bound. The surface is a different instrument and answers a different
+question - Varka against stock Spark, where it reads 18x to 25x, which is the
+milestone's headline and is not in doubt.
+
+**So the chains are a second benchmark, not a change to the surface.**
+`Chains.ENTRIES` composes the same operations until the arithmetic dominates:
+twelve entries at **293 to 483** emitter ops, against 34 for `year(d)` and 64
+for `weekofyear(d)`, every one checked to fuse before it was added.
+
+**Most of them were impossible until task 93 landed.** A chain that shifts a
+date by a column of days and then by a column month count declined, because
+task 52's guard promised the whole narrowed range and the shift above it had
+none left - `dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)` is the
+shape that opened task 93, and it is entry 7 here at 332 ops. Re-arming the
+guard is what makes this list what it is; the first version, written against
+what fused before, was 163 to 304 ops.
+
+**And the deeper list is the better demonstration of the primary claim, not
+only of the datapath.** Stock Spark's generated code pays its per-row costs at
+every link of a chain, while the kernel fuses the whole chain into one
+vectorised loop and shares the civil-from-days prefix across the calendar nodes
+reading one date (task 32). So the ratio against stock should *grow* with
+depth, and the surface's 18x to 25x is the floor of what the engine is worth
+rather than the headline.
+
+**One family still cannot sit above a re-arm.** `weekofyear` and `YEAROFWEEK`
+shift by the Thursday rule's literal three days, and task 93 re-arms only a
+runtime-valued shift - so `extract(YEAROFWEEK FROM add_months(last_day(
+date_add(d, i)), i) + ymy)` declines at `[-6156431, 12144130]`, three days past
+the floor. Whether a small literal shift should re-arm - guarding it would
+decline almost no batch, unlike a shift of twenty million days - is a follow-up
+to task 93 rather than fixed here. (It is not in that plan's 9.5, which records only the double guard; this paragraph is its record.)
+
+**The week entry sidesteps it by spelling the day shift as an interval**, and
+the difference is the saturation rather than the guard: a column day offset
+makes `dayRange` answer the whole of `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` on
+task 52's guarantee, leaving the shifts above it nothing, while a month shift
+over a plain column keeps the interval additive from the contract range. So it
+lowers with no `GuardedDay` in it at all and is admitted on `admitCalendar`'s
+first case.
+
+**An IR census of the twelve, since the claim above invites it.** Eleven carry a
+`GuardedDay`; the `quarter`/`next_day` entry carries two. Only the week entry
+carries none. So "most of these were impossible before task 93" understates it -
+it is all but one - and the eleven are the regression set for guard placement,
+not the week entry.
+`DateChainBenchmark` runs the chains through the surface's driver - same table, same
+harness, same residency and fixed-share guards - and writes
+`DateChain-<label>-results.txt`. The surface keeps its coverage job and its
+spelling; the chains answer the width question.
+
+**And they mix the three types, which is the second reason to have them.**
+Varka covers DATE, INT and the year-month interval, all int32 in one lane, and
+a benchmark of dates alone both understates that to a reader and exercises less
+of the compiler. Eight of the twelve carry a date column, an int column and an
+interval column in one expression; one produces an interval rather than
+consuming one. Counted over column references rather than substrings - the
+first version of the test that guards this counted the literal in `* 12` as int
+coverage and so passed a list where only four entries touched the int column at
+all. A literal folds into the kernel; a column is loaded and vectorised, and
+only the second demonstrates anything.
+
+**A tooling bug found while choosing them, which invalidates earlier op
+counts.** `dev/varka_emit.sh` resolved attributes and functions but never ran
+type coercion, so `d + ym` stayed an `Add` over a date and an interval instead
+of becoming `DateAddYMInterval`, and the tool reported **declined** for it -
+for an expression `Surface` has been timing with `expectFused` for weeks. Every
+operator-spelled expression was affected, which is every date/interval
+arithmetic shape task 67 added. The fix resolves through a `LocalRelation` and
+`SimpleAnalyzer`; any op count taken from this tool for an operator expression
+before 12 September 2026 should be re-taken.
+
+**Coverage gaps found the same way, and not fixed here.** `datediff(d2, d) * i`
+and `i % 20` decline - an int multiply by a column and an int remainder -
+although multiplying by a literal is fine, as `CAST(month(d) AS INTERVAL YEAR)
+* 3` shows. `make_ym_interval(i, i)` declines where
+`make_ym_interval(year(d), month(d))` fuses. These two belong in the
+milestone's task table rather than in this task, and they are why several
+natural mixed-type spellings are absent from the list.
+
+A third was listed here and is **closed**:
+`dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)` declined when this
+paragraph was written and fuses at 332 ops since task 93, which is why it is
+entry 7 of `Chains` - see 11.13's opening. The line stayed after the task
+landed, so a reader turning this paragraph into follow-ups would have filed a
+coverage gap for an expression already being benchmarked.
+
+**Registered prediction, to be scored against the first committed chain file.**
+From the 1e8 dispatch of 11 September, whose results were never committed:
+the per-iteration fixed cost is near 18 ms, and fitting `year(d)` at 1.5 ns/row
+and `weekofyear(d)` at 2.1 ns/row against their op counts gives roughly
+0.02 ns per op over a memory floor near 0.8 ns. That predicts:
+
+1. every chain entry above **3.6 ns/row** at 1e8 rows on a runner. The model
+   above puts the shipped list, 293 to 483 ops, at **6.7 to 10.5 ns/row** - so
+   the margin is wide, and the prediction to score is that range and not the
+   3.9-to-5.2 one this section carried while the list was 152 to 218 ops. A
+   scorer reading the old range against the shipped file would see a large
+   systematic under-prediction and call the model wrong;
+2. therefore a worst fixed share **under 5%** at 1e8 rows, where the surface
+   needed 5e8 - so one dispatch, resident table, no sharding;
+3. and a **measurable 256-to-512 difference** on these entries where the
+   surface's lightest rows show none.
+
+The third is the one that matters and the one most likely to be wrong: it
+assumes the kernels are issue-bound rather than latency-bound on their
+dependency chains, and a deep chain of dependent operations may be neither.
+If it fails, the finding is that Varka's date kernels do not benefit from
+width at all, which would be worth knowing and worth publishing.
+
+### 11.14 Explicitly out of scope
 
 A self-hosted runner; a CI-calibrated canary; changing the driver, the
 surface or the shell driver, except where 11.2.1 forces the row count or the

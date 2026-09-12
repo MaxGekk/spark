@@ -36,16 +36,15 @@ name: Varka date surface benchmark
 on:
   workflow_dispatch:
     inputs:
-      probe-only:
-        type: boolean
-        description: 'Run the gate and stop. This is what makes re-dispatching cheap; it also reports the memory and core count section 11.2.1 needs.'
+      stop-after:
+        type: choice
+        description: 'How far to go. "gate" runs the probe and stops, which is what makes re-dispatching cheap and reports the memory and core count 11.2.1 needs. "build" also warms the commit-keyed jar cache from any runner, so a later gated dispatch pays only the run (11.10). "run" measures.'
         required: true
-        default: true
-      build-only:
-        type: boolean
-        description: 'Gate, then build, then stop - warming the commit-keyed jar cache from any runner, so a later gated dispatch pays only the run. See PLAN_TASK_62.md 11.10.'
-        required: true
-        default: false
+        default: 'gate'
+        options:
+          - 'gate'
+          - 'build'
+          - 'run'
       require-datapath:
         type: choice
         description: 'Abort unless the datapath probe says the vector unit is this wide'
@@ -60,9 +59,9 @@ on:
         required: false
         default: ''
       rows:
-        description: 'Rows in the cached table. The laptop files are 1000000000; a runner will take less, and section 11.2.1 is how much.'
+        description: 'Rows in the cached table. 1e8 is the only count measured resident on a runner - 2e8 is not, at any partition count or driver memory tried, and a non-resident run times the disk (PLAN_TASK_62.md 11.12). The laptop files are 1e9.'
         required: true
-        default: '200000000'
+        default: '100000000'
       partitions:
         description: 'Partitions. One, per PLAN_TASK_62.md 2.6, unless memory forces more.'
         required: true
@@ -76,6 +75,14 @@ on:
         description: 'Surface entry regex, for a partial re-run'
         required: false
         default: ''
+      benchmark:
+        type: choice
+        description: 'Which expressions. "surface" is one entry per expression, the coverage document, whose lightest rows are memory-bandwidth-bound and so cannot show a datapath difference. "chains" composes them three and four deep until the kernel is compute-bound, which is what a 512-bit run has to measure. See PLAN_TASK_62.md 11.13.'
+        required: true
+        default: 'surface'
+        options:
+          - 'surface'
+          - 'chains'
       shard:
         type: string
         description: 'I/N - run entries I, I+N, I+2N of the surface, so N dispatches cover it once. For the row count the fixed-share rule wants, the whole surface does not fit one job. Merge with dev/varka_bench_merge.py. See PLAN_TASK_62.md 11.11.'
@@ -188,7 +195,7 @@ jobs:
   build:
     name: "Build"
     needs: gate
-    if: ${{ !inputs.probe-only }}
+    if: ${{ inputs.stop-after != 'gate' }}
     runs-on: ubuntu-latest
     env:
       SPARK_LOCAL_IP: localhost
@@ -251,7 +258,7 @@ jobs:
   measure:
     name: "Date surface on ${{ needs.gate.outputs.cpu }}"
     needs: [gate, build]
-    if: ${{ !inputs.probe-only && !inputs.build-only }}
+    if: ${{ inputs.stop-after == 'run' }}
     runs-on: ubuntu-latest
     # Only the commit step needs more than read, and only when asked for.
     permissions:
@@ -298,10 +305,16 @@ jobs:
       id: tag
       env:
         SHARD: ${{ inputs.shard }}
+        BENCHMARK: ${{ inputs.benchmark }}
       run: |
         echo "::notice::measuring on $GATE_CPU - $GATE_LANES lane-ops/ns at 128/256/512 bits; control $GATE_CONTROL, 512:256 $GATE_RATIO"
         # An artifact name may not contain a slash, and a shard is spelled I/N.
-        echo "slug=${SHARD:+-shard${SHARD//\//of}}" >> "$GITHUB_OUTPUT"
+        # The surface keeps the artifact name it has had, so a hand-typed
+        # `gh run download -n varka-surface-results` keeps working; only the new
+        # benchmark takes a suffix.
+        suffix=""
+        [ "$BENCHMARK" != "surface" ] && suffix="-$BENCHMARK"
+        echo "slug=${suffix}${SHARD:+-shard${SHARD//\//of}}" >> "$GITHUB_OUTPUT"
 
     # restore/save rather than the combined action, and the save placed directly after
     # the download rather than left to a post step. `actions/cache` does not save when
@@ -351,6 +364,7 @@ jobs:
         DRIVER_MEMORY: ${{ inputs.driver-memory }}
         ONLY: ${{ inputs.only }}
         SHARD: ${{ inputs.shard }}
+        BENCHMARK: ${{ inputs.benchmark }}
       run: |
         set -euo pipefail
         STOCK="$HOME/stock-spark/spark-${STOCK_VERSION}-bin-hadoop3"
@@ -364,6 +378,9 @@ jobs:
         ARGS+=(--force --skip-build)
         [ -n "$ONLY" ] && ARGS+=(--only "$ONLY")
         [ -n "$SHARD" ] && ARGS+=(--shard "$SHARD")
+        # Guarded like ONLY and SHARD above it: an empty value would pass
+        # `--benchmark ""` and the shell driver would reject it.
+        [ -n "$BENCHMARK" ] && ARGS+=(--benchmark "$BENCHMARK")
         # Varka last: the comparison table's ratios are the last file against the others.
         dev/varka_bench_surface.sh "${ARGS[@]}" \
           "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17" \
@@ -403,7 +420,7 @@ jobs:
         git config --local user.name "${{ github.actor }}"
         git config --local user.email "${{ github.actor }}@users.noreply.github.com"
         git add sql/varka/bench/benchmarks
-        git commit -m "Varka date surface results (${{ inputs.rows }} rows)"
+        git commit -m "Varka date ${{ inputs.benchmark }} results (${{ inputs.rows }} rows)"
         for i in {1..5}; do
           git fetch origin ${{ github.ref_name }}
           git rebase origin/${{ github.ref_name }}
