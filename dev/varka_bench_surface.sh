@@ -20,7 +20,17 @@
 #
 #   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--driver-memory 16g] \
 #       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--shard I/N] [--skip-build] \
+#       [--benchmark surface|chains] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
+#
+# --benchmark chains runs Chains through the same driver instead of Surface, writing
+# DateChain-<label>-results.txt. The two answer different questions: the surface is
+# one entry per expression and its lightest rows are bound by memory bandwidth rather
+# than arithmetic, so a wider vector datapath cannot show on them; the chains compose
+# the same operations three and four deep until the kernel is bound by what it
+# computes. See the Chains javadoc. The chains also clear the fixed-share rule at 1e8
+# rows, where the surface needs 5e8, because more work per row buys the same executor
+# time as more rows without needing the memory to hold them.
 #
 # --shard I/N runs entries I, I+N, I+2N ... of the surface, so N runs between them
 # cover it exactly once and dev/varka_bench_merge.py joins their files back into one
@@ -76,7 +86,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 usage() { sed -n '17,50p' "$0"; exit 2; }
 rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
-shard=""
+shard=""; benchmark=surface
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --rows) rows="$2"; shift 2 ;;
@@ -86,6 +96,7 @@ while [ "$#" -gt 0 ]; do
     --force) force=1; shift ;;
     --only) only="$2"; shift 2 ;;
     --shard) shard="$2"; shift 2 ;;
+    --benchmark) benchmark="$2"; shift 2 ;;
     --skip-build) build=0; shift ;;
     --help|-h) usage ;;
     *=*) dists+=("$1"); shift ;;
@@ -93,6 +104,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "${#dists[@]}" -ge 1 ] || usage
+case "$benchmark" in
+  surface) main_class=org.apache.spark.sql.varka.bench.DateSurfaceBenchmark; stem=DateSurface ;;
+  chains)  main_class=org.apache.spark.sql.varka.bench.DateChainBenchmark;   stem=DateChain ;;
+  *) echo "--benchmark wants surface or chains, got '$benchmark'" >&2; exit 2 ;;
+esac
 
 load="$(cut -d' ' -f1 /proc/loadavg)"
 if [ "$force" -eq 0 ] && awk -v l="$load" 'BEGIN { exit !(l > 1.0) }'; then
@@ -191,10 +207,10 @@ for spec in "${dists[@]}"; do
   # collected into one directory before merging, and two of them must not be the same path.
   suffix=""
   [ -n "$shard" ] && suffix="-shard${shard//\//of}"
-  out="$out_dir/DateSurface-$label$suffix-results.txt"
+  out="$out_dir/$stem-$label$suffix-results.txt"
   echo "== $label: $spark_home under $java_home -> $out"
   JAVA_HOME="$java_home" "$spark_home/bin/spark-submit" "${submit[@]}" \
-    --class org.apache.spark.sql.varka.bench.DateSurfaceBenchmark "$jar" \
+    --class "$main_class" "$jar" \
     --label "$label" --rows "$rows" --partitions "$partitions" --out "$out" \
     ${only:+--only "$only"} ${shard:+--shard "$shard"} "${driver[@]}" \
     --provenance "commit=$commit" --provenance "datapath=$datapath" \

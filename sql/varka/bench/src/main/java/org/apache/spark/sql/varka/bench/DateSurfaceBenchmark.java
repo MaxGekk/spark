@@ -173,7 +173,7 @@ public final class DateSurfaceBenchmark {
     double maxFixedShare = Double.NaN;
     final Map<String, String> provenance = new LinkedHashMap<>();
 
-    static Args parse(String[] argv) {
+    static Args parse(String[] argv, int entryCount) {
       Args a = new Args();
       for (int i = 0; i < argv.length; i++) {
         String k = argv[i];
@@ -225,11 +225,11 @@ public final class DateSurfaceBenchmark {
         throw new IllegalArgumentException(
             "--shard wants 0 <= I < N with N >= 1, got " + a.shardIndex + "/" + a.shardCount);
       }
-      if (a.shardCount > Surface.ENTRIES.size()) {
+      if (a.shardCount > entryCount) {
         // Not an error worth failing a dispatch over, but a shard with no entries writes a
         // file with no rows, and a merge would then quietly be missing nothing at all.
-        throw new IllegalArgumentException("--shard N is over the surface's "
-            + Surface.ENTRIES.size() + " entries, so some shard would be empty: " + a.shardCount);
+        throw new IllegalArgumentException("--shard N is over the benchmark's " + entryCount
+            + " entries, so some shard would be empty: " + a.shardCount);
       }
       return a;
     }
@@ -245,9 +245,22 @@ public final class DateSurfaceBenchmark {
   private DateSurfaceBenchmark() {}
 
   public static void main(String[] argv) throws IOException {
-    Args args = Args.parse(argv);
+    run(argv, Surface.ENTRIES, "VarkaDateSurface");
+  }
+
+  /**
+   * The whole driver, over whatever list of entries it is given.
+   *
+   * <p>Parameterised rather than copied because {@link DateChainBenchmark} measures a
+   * different question over the same machinery, and everything here that is easy to get
+   * wrong - the residency guard, the fixed-share rule, the {@code EXPLAIN} check, the
+   * provenance block, the shard arithmetic - should be got right once. The entry list and
+   * the application name are the whole of the difference.
+   */
+  static void run(String[] argv, List<Surface.Entry> entries, String appName) throws IOException {
+    Args args = Args.parse(argv, entries.size());
     double load = Provenance.loadAverage();
-    SparkSession spark = SparkSession.builder().appName("VarkaDateSurface").getOrCreate();
+    SparkSession spark = SparkSession.builder().appName(appName).getOrCreate();
     ExecutorTime executor = new ExecutorTime();
     spark.sparkContext().addSparkListener(executor);
     KernelBatches batches = new KernelBatches();
@@ -278,7 +291,7 @@ public final class DateSurfaceBenchmark {
       // and leaving a reader to wonder whether it is complete. The merge reads this.
       prov.put("cache", cache + ", " + args.storageLevel.description());
       prov.put("shard", args.shardIndex + "/" + args.shardCount);
-      prov.put("surface entries", Integer.toString(Surface.ENTRIES.size()));
+      prov.put("surface entries", Integer.toString(entries.size()));
       prov.put("methodology", String.format(Locale.ROOT,
           "%d+ iterations over %.0fs windows after %.0fs warm-up; wall time by nanoTime, "
               + "executor time as the sum of TaskMetrics.executorRunTime over the iteration",
@@ -286,8 +299,8 @@ public final class DateSurfaceBenchmark {
       file.append(Provenance.format(prov)).append(System.lineSeparator());
       log.print(file);
       List<String> violations = new ArrayList<>();
-      for (int idx = 0; idx < Surface.ENTRIES.size(); idx++) {
-        Surface.Entry entry = Surface.ENTRIES.get(idx);
+      for (int idx = 0; idx < entries.size(); idx++) {
+        Surface.Entry entry = entries.get(idx);
         if (idx % args.shardCount != args.shardIndex) {
           continue;
         }

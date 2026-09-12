@@ -19,6 +19,10 @@
 
     dev/varka_bench_merge.py SHARD_DIR... --out sql/varka/bench/benchmarks
 
+Files are grouped by their name stem (DateSurface, DateChain) and their label, so shards
+of two different benchmarks staged in one directory are merged separately rather than
+into each other.
+
 `DateSurfaceBenchmark --shard I/N` runs entries I, I+N, I+2N ... of the surface, so N
 dispatches between them cover it exactly once. That exists because the fixed-share rule
 and GitHub's six-hour job limit pull in opposite directions (PLAN_TASK_62.md 11.11).
@@ -193,26 +197,32 @@ def main():
     ap.add_argument("--out", required=True, help="where the merged files are written")
     a = ap.parse_args()
 
-    # Grouped by label, which is read from the file rather than parsed out of its name.
+    # Grouped by (stem, label). The label is read from the file rather than parsed out of its
+    # name; the stem has to come from the name, because it is what distinguishes a surface
+    # file from a chain file and the provenance does not record it. Grouping on it keeps two
+    # benchmarks staged in one directory from being merged into each other - which would pass
+    # every consistency check this tool makes, since they agree on commit, CPU and rows and
+    # differ only in which expressions they ran.
     groups = OrderedDict()
     for d in a.dirs:
         for root, _sub, names in os.walk(d):
             for n in sorted(names):
-                if not (n.startswith("DateSurface-") and n.endswith("-results.txt")):
+                if not (n.startswith("Date") and n.endswith("-results.txt")):
                     continue
+                stem = n.split("-", 1)[0]
                 path = os.path.join(root, n)
                 prov, _ = read(path)
-                groups.setdefault(prov.get("label", "?"), []).append(path)
+                groups.setdefault((stem, prov.get("label", "?")), []).append(path)
     if not groups:
-        raise SystemExit(f"no DateSurface-*-results.txt under {', '.join(a.dirs)}")
+        raise SystemExit(f"no Date*-*-results.txt under {', '.join(a.dirs)}")
 
     os.makedirs(a.out, exist_ok=True)
-    for label, files in groups.items():
+    for (stem, label), files in groups.items():
         text = merge_label(label, sorted(files))
-        dest = os.path.join(a.out, f"DateSurface-{label}-results.txt")
+        dest = os.path.join(a.out, f"{stem}-{label}-results.txt")
         with open(dest, "w", encoding="utf-8") as fh:
             fh.write(text)
-        print(f"{label}: {len(files)} shard(s) -> {dest}")
+        print(f"{stem} {label}: {len(files)} shard(s) -> {dest}")
     return 0
 
 

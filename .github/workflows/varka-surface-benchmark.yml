@@ -76,6 +76,14 @@ on:
         description: 'Surface entry regex, for a partial re-run'
         required: false
         default: ''
+      benchmark:
+        type: choice
+        description: 'Which expressions. "surface" is one entry per expression, the coverage document, whose lightest rows are memory-bandwidth-bound and so cannot show a datapath difference. "chains" composes them three and four deep until the kernel is compute-bound, which is what a 512-bit run has to measure. See PLAN_TASK_62.md 11.13.'
+        required: true
+        default: 'surface'
+        options:
+          - 'surface'
+          - 'chains'
       shard:
         type: string
         description: 'I/N - run entries I, I+N, I+2N of the surface, so N dispatches cover it once. For the row count the fixed-share rule wants, the whole surface does not fit one job. Merge with dev/varka_bench_merge.py. See PLAN_TASK_62.md 11.11.'
@@ -298,10 +306,11 @@ jobs:
       id: tag
       env:
         SHARD: ${{ inputs.shard }}
+        BENCHMARK: ${{ inputs.benchmark }}
       run: |
         echo "::notice::measuring on $GATE_CPU - $GATE_LANES lane-ops/ns at 128/256/512 bits; control $GATE_CONTROL, 512:256 $GATE_RATIO"
         # An artifact name may not contain a slash, and a shard is spelled I/N.
-        echo "slug=${SHARD:+-shard${SHARD//\//of}}" >> "$GITHUB_OUTPUT"
+        echo "slug=-${BENCHMARK}${SHARD:+-shard${SHARD//\//of}}" >> "$GITHUB_OUTPUT"
 
     # restore/save rather than the combined action, and the save placed directly after
     # the download rather than left to a post step. `actions/cache` does not save when
@@ -351,6 +360,7 @@ jobs:
         DRIVER_MEMORY: ${{ inputs.driver-memory }}
         ONLY: ${{ inputs.only }}
         SHARD: ${{ inputs.shard }}
+        BENCHMARK: ${{ inputs.benchmark }}
       run: |
         set -euo pipefail
         STOCK="$HOME/stock-spark/spark-${STOCK_VERSION}-bin-hadoop3"
@@ -364,6 +374,7 @@ jobs:
         ARGS+=(--force --skip-build)
         [ -n "$ONLY" ] && ARGS+=(--only "$ONLY")
         [ -n "$SHARD" ] && ARGS+=(--shard "$SHARD")
+        ARGS+=(--benchmark "$BENCHMARK")
         # Varka last: the comparison table's ratios are the last file against the others.
         dev/varka_bench_surface.sh "${ARGS[@]}" \
           "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17" \

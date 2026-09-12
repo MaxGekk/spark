@@ -1218,7 +1218,52 @@ like from the far side - here, "what does a run that is far too big look like to
 a rule that catches runs that are too small?" - and if the answer is "healthy",
 the rule needs a partner before it is trusted.
 
-### 11.13 Explicitly out of scope
+### 11.13 The surface cannot show the datapath, and the chains are the answer
+
+*Opened 12 September 2026, from a question about what is actually being timed.*
+
+**Most of the surface is bound by memory bandwidth, not by arithmetic, and a
+wider vector datapath cannot help it.** The committed laptop file has
+`date_add(d, 3)` at 0.5 ns/row, moving four bytes in and four out - about
+15 GB/s, which is single-core DRAM speed on that machine. One add per eight
+bytes. Roughly a third of the 52 entries are single calls in that regime.
+
+That is a problem for this task's whole premise. The point of gating on a
+full-width 512-bit runner is to show what the width buys; on a bandwidth-bound
+kernel it buys nothing, however genuine the 1.99 the probe reads. Task 43
+measured the width with an op-count ladder precisely because that is
+compute-bound. The surface is a different instrument and answers a different
+question - Varka against stock Spark, where it reads 18x to 25x, which is the
+milestone's headline and is not in doubt.
+
+**So the chains are a second benchmark, not a change to the surface.**
+`Chains.ENTRIES` composes the same operations three and four deep until the
+arithmetic dominates: ten entries at 152 to 218 emitter ops, against 34 for
+`year(d)` and 64 for `weekofyear(d)`, every one checked to fuse before it was
+added. `DateChainBenchmark` runs them through the surface's driver - same
+table, same harness, same residency and fixed-share guards - and writes
+`DateChain-<label>-results.txt`. The surface keeps its coverage job and its
+spelling; the chains answer the width question.
+
+**Registered prediction, to be scored against the first committed chain file.**
+From the 1e8 dispatch of 11 September, whose results were never committed:
+the per-iteration fixed cost is near 18 ms, and fitting `year(d)` at 1.5 ns/row
+and `weekofyear(d)` at 2.1 ns/row against their op counts gives roughly
+0.02 ns per op over a memory floor near 0.8 ns. That predicts:
+
+1. every chain entry between **3.9 and 5.2 ns/row** at 1e8 rows on a runner;
+2. therefore a worst fixed share **under 5%** at 1e8 rows, where the surface
+   needed 5e8 - so one dispatch, resident table, no sharding;
+3. and a **measurable 256-to-512 difference** on these entries where the
+   surface's lightest rows show none.
+
+The third is the one that matters and the one most likely to be wrong: it
+assumes the kernels are issue-bound rather than latency-bound on their
+dependency chains, and a deep chain of dependent operations may be neither.
+If it fails, the finding is that Varka's date kernels do not benefit from
+width at all, which would be worth knowing and worth publishing.
+
+### 11.14 Explicitly out of scope
 
 A self-hosted runner; a CI-calibrated canary; changing the driver, the
 surface or the shell driver, except where 11.2.1 forces the row count or the
