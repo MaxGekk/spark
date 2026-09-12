@@ -312,4 +312,95 @@ whole-query speed-up for anyone not writing it.
 
 ## 9. Outcome
 
-To be written.
+**Built, and the shapes the task opened on fuse.** Op counts from
+`dev/varka_emit.sh --table`:
+
+| shape | before | after |
+|---|---|---|
+| `year(add_months(date_add(d, i), i))` | declined | **151** |
+| `dayofyear(add_months(last_day(date_add(d, i)), i))` | declined | **221** |
+| `dayofyear(add_months(last_day(date_sub(d, i)), i))` | declined | **221** |
+| `dayofyear(add_months(last_day(add_months(date_add(d, i), i)), i))` | declined | **334**, two checks |
+| `year(date_add(d, i))` | 38 | **38**, no check added |
+| `year(date_add(d, 20000000))` | declined | **declined** |
+| `year(date_add(date_add(d, i), 20000000))` | declined | **declined** |
+
+The IR reads as the design says it should:
+`(year (guardedDay (addMonths (addDays col:0 col:1) col:1)))` - the check
+between the shift that overflowed and the node that decomposes.
+
+### 9.1 Two things the plan had wrong, both found by building it
+
+**The placement cannot be a set handed to the emitter** - recorded as 3.3.1
+while implementing, because it is a correctness argument rather than a
+preference. The emitter cannot compute the placement (it never sees literal
+values) and cannot be told it out of band (`VarkaShapeKey` omits them, so two
+plans with one IR and different literals share a kernel). `GuardedDay` puts it
+in the IR, where the shape key separates the variants for free.
+
+**The re-arm rule was too permissive as first written.** "Re-arm when a runtime
+value contributed to the overflow" admitted
+`year(date_add(date_add(d, i), 20000000))` at 42 ops on the strength of the
+inner column offset - a kernel that would decline every batch, which is a slower
+way to decline than declining once at compile time. The rule is now "re-arm when
+*this node's own* shift is runtime-valued": a literal shift leaves the range for
+every row, and no check rescues that.
+
+That narrowing is also what kept task 69's four assertions passing unchanged,
+which is the best evidence available that it is the right line: those tests pin
+literal shifts over a guarded producer, and they neither gained a check nor
+started fusing.
+
+### 9.2 What the codebase caught that review did not
+
+Three mistakes, each caught by a guard already in the tree rather than by
+reading:
+
+* `GuardedDay` was first given its own validity word, copying `MakeDate`. It
+  compiled, and `assertWordAlgebraAgrees` failed on the first fuzz iteration: a
+  single-child date node *forwards* its child's word.
+* `VarkaIrFuzzSuite`'s "the generator reaches every IR node type" failed until
+  the generator drew one - the rule that a new node is fuzzed the day it lands.
+* The generator then drew a `GuardedDay` over an out-of-range subtree, the check
+  fired, the kernel declined, and the harness read a correct decline as a
+  mismatch. It now draws under `fitsUnderChrono`, and the firing is asserted
+  where a declined batch is the expected answer.
+
+The sealed hierarchy named the seven other places that had to change. Only two
+of them - the two canonical renderers - were in the IR file itself; the rest
+were in the emitter, and none was found by looking.
+
+### 9.3 Tests that changed, and why that is the finding
+
+Three existing tests asserted the declines this task removes, and all three
+predate it as deliberate records of the gap:
+
+* task 60's *"a column count over a column day offset does not escape the narrow
+  range"*, whose comment says `dayRange` must decline "rather than treat the
+  subtree as unbounded-but-guarded and admit on the producer's promise". That
+  reasoning is still right, and is quoted in the rewritten test: this task
+  admits on a *check*, not on a promise.
+* task 60's bound-composition test, where the two one-day-past-the-edge cases
+  now assert the check's presence instead of a decline. The bound arithmetic
+  they pin still decides where the check goes.
+* the differential's *"...because neither runtime guard can see the
+  composition"*, which recorded the wrong answer task 60's review found: year
+  87585 where the truth is -14848. It now asserts the entry fuses, the answers
+  match the row engine, and every batch of that fixture is **declined at run
+  time** - `numFallbackBatchesKernel` is 0, because every row of it composes out
+  of range. The value assertion is unchanged and is the one that matters.
+
+### 9.4 Verification
+
+279 catalyst Varka tests and 183 sql Varka tests pass, the catalyst suite passes
+again at `-XX:MaxVectorSize=16`, and `VarkaIrFuzzSuite` passes at 20,000
+iterations against the reference evaluator.
+
+### 9.5 Left undone
+
+The double guard. A shape re-armed above a task 52 producer emits both checks,
+and the outer one subsumes the inner: the inner guard's promise is what the
+interval arithmetic reads, so removing it needs the analysis to know the outer
+check is there. It is a cost, not a correctness gap, and it is the "cost
+direction" of risk 2 - measured before it is optimised, and a candidate for task
+84's lattice rather than for this task.
