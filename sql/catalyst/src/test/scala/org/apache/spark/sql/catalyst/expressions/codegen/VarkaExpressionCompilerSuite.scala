@@ -474,28 +474,43 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // low arm would under-approximate the backward shift, which is the corrupting direction.
     val atHi = DateAdd(d, Literal((shiftHi - 31L * VarkaChrono.MONTH_ARITH_MAX_MONTHS).toInt))
     assert(fuses(Year(AddMonths(atHi, i))))
-    assert(declineReason(Year(AddMonths(DateAdd(atHi, Literal(1)), i)))
-      .startsWith("day range ["))
+    assert(!ir(Year(AddMonths(atHi, i))).contains("guardedDay"),
+      "a shape already inside the range must not gain a check")
     val atLo = DateSub(d, Literal((31L * VarkaChrono.MONTH_ARITH_MIN_MONTHS - shiftLo).toInt))
     assert(fuses(Year(AddMonths(atLo, i))))
-    assert(declineReason(Year(AddMonths(DateSub(atLo, Literal(1)), i)))
-      .startsWith("day range ["))
+    assert(!ir(Year(AddMonths(atLo, i))).contains("guardedDay"))
+    // One day past either edge the interval leaves the range - and since task 93 the shape is
+    // re-armed rather than declined, because what carries it out is `add_months`' own column
+    // count, whose worst case most batches do not reach. The bound arithmetic above is what
+    // decides *where* the check goes, so it is still what these two lines pin; they assert the
+    // check's presence now instead of a decline.
+    assert(ir(Year(AddMonths(DateAdd(atHi, Literal(1)), i))).contains("guardedDay"))
+    assert(ir(Year(AddMonths(DateSub(atLo, Literal(1)), i))).contains("guardedDay"))
   }
 
-  test("task 60: a column count over a column day offset does not escape the narrow range") {
+  test("task 60: a column count over a column day offset is re-armed, not declined (task 93)") {
     // The day-offset guard bounds date_add's result to [NARROW_MIN_DAYS, NARROW_MAX_DAYS], and
     // add_months can then move it 2047 years further, where `narrowed` is undefined - so the
-    // day the calendar tail decomposes is out of range with nothing left to catch it. dayRange
-    // must widen the guarded producer's own interval by the shift above it and decline, rather
-    // than treat the subtree as unbounded-but-guarded and admit on the producer's promise.
-    assert(!fuses(Year(AddMonths(DateAdd(d, i), i))))
-    assert(declineReason(Year(AddMonths(DateAdd(d, i), i))).startsWith("day range ["))
-    // The sibling arms take the same path; trunc is the cheapest reproducer and shifts
-    // backward, the direction the lowering is not exact in.
+    // day the calendar tail decomposes is out of range. Task 60 recorded that dayRange must
+    // widen the guarded producer's interval by the shift above it and decline, "rather than
+    // treat the subtree as unbounded-but-guarded and admit on the producer's promise", and it
+    // was right: admitting on the promise is a wrong answer.
+    //
+    // Task 93 admits it on something else - a second check, inserted where the interval ran
+    // out, which makes the day the calendar tail decomposes in range as a fact rather than as
+    // a promise. The distinction the comment above draws is exactly the one that makes this
+    // safe, so it is quoted rather than deleted.
+    assert(fuses(Year(AddMonths(DateAdd(d, i), i))))
+    assert(ir(Year(AddMonths(DateAdd(d, i), i))) ===
+      "(year (guardedDay (addMonths (addDays col:0 col:1) col:1)))",
+      "the check belongs between the shift that overflowed and the node that decomposes")
+    // The sibling arms take the same path. `trunc` shifts backward by a literal 365, so its
+    // own shift is not runtime-valued and it still declines - the asymmetry task 93 turns on.
     assert(!fuses(Year(TruncDate(DateAdd(d, i), Literal("YEAR")))))
-    // A guarded producer directly under the calendar node is still admitted: its guarded
-    // result is exactly the range the lowering covers.
+    // A guarded producer directly under the calendar node is admitted with no second check:
+    // its guarded result is already exactly the range the lowering covers.
     assert(fuses(Year(DateAdd(d, i))))
+    assert(!ir(Year(DateAdd(d, i))).contains("guardedDay"))
   }
 
   test("task 69: an upward shift over a guarded day offset fuses again, and the downward " +
@@ -526,6 +541,54 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // answering wrongly before this fix, on master too.
     assert(!fuses(Year(TruncDate(DateAdd(d, i), Literal("MONTH")))))
     assert(!fuses(Year(DateSub(DateAdd(d, i), Literal(5)))))
+  }
+
+  test("task 93: a runtime shift that runs out of range is re-armed, a literal one declines") {
+    // The distinction the whole task turns on. Both shapes leave the range; only one of them
+    // leaves it for a reason a runtime check can rescue.
+    //
+    // add_months' column count can move a guarded day 2047 years, but that is a worst case
+    // most batches do not reach, so a check above it fuses the shape and reports the batches
+    // that do. A literal shift moves every row by the same amount, so a check above *it* would
+    // report every batch - a slower way to decline than declining here, for free.
+    assert(fuses(Year(AddMonths(DateAdd(d, i), i))))
+    assert(!fuses(Year(DateAdd(DateAdd(d, i), Literal(20000000)))))
+    assert(!fuses(Year(DateAdd(d, Literal(20000000)))))
+    // The trap the first version of the rule fell into: it asked "did any runtime value
+    // contribute below", saw the inner column offset, and admitted the literal shape above.
+    assert(declineReason(Year(DateAdd(DateAdd(d, i), Literal(20000000))))
+      .startsWith("day range ["))
+  }
+
+  test("task 93: the check is re-armed as often as the range runs out") {
+    // A rule phrased around one node cannot express this, which is why the plan's first draft
+    // said "guard the outermost producer" and this test exists: after the first check resets
+    // the interval to the narrowed range, `last_day` and a second column count carry it out
+    // again, and a shape with one check would decompose a day nothing bounded.
+    val twice = DayOfYear(AddMonths(LastDay(AddMonths(DateAdd(d, i), i)), i))
+    assert(fuses(twice))
+    val rendered = ir(twice)
+    assert(rendered.split("guardedDay", -1).length - 1 === 2,
+      s"expected two checks, got: $rendered")
+    // And where one is enough, exactly one is emitted.
+    val once = Year(AddMonths(DateAdd(d, i), i))
+    assert(ir(once).split("guardedDay", -1).length - 1 === 1, ir(once))
+  }
+
+  test("task 93: nothing that fuses today gains a check") {
+    // The cost side. Every shape here was admitted before the task and must be emitted exactly
+    // as it was - the interval never runs out, so there is nothing to re-arm.
+    Seq[Expression](
+      Year(d),
+      Year(DateAdd(d, i)),
+      Year(DateSub(d, i)),
+      Year(AddMonths(d, i)),
+      Year(LastDay(DateAdd(d, i))),
+      Year(NextDay(DateAdd(d, i), Literal("MON"))),
+      Year(DateAdd(d, Literal(shiftHi)))).foreach { e =>
+      assert(fuses(e), s"$e should fuse")
+      assert(!ir(e).contains("guardedDay"), s"$e gained a check it does not need: ${ir(e)}")
+    }
   }
 
   test("task 69: the new ceiling is where the upward shift stops, to the day") {
@@ -563,6 +626,13 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
 
   private def fuses(e: Expression, output: Seq[Attribute] = childOutput): Boolean =
     VarkaExpressionCompiler.compile(Seq(out(e)), output).isDefined
+
+  /** The compiled IR of a single output, rendered canonically - for asserting what is in it. */
+  private def ir(e: Expression, output: Seq[Attribute] = childOutput): String = {
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(e)), output)
+    assert(compiled.isDefined, s"$e declined; expected it to fuse")
+    VarkaVectorIR.canonical(compiled.get.outputs.head)
+  }
 
   private def declineReason(e: Expression, output: Seq[Attribute] = childOutput): String = {
     val partial = VarkaExpressionCompiler.compilePartial(

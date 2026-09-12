@@ -26,7 +26,7 @@ import scala.util.control.NonFatal
 import org.apache.spark.SparkIllegalArgumentException
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, StringType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -1498,6 +1498,11 @@ private[sql] object VarkaExpressionCompiler {
         LocalDate.of(VarkaChrono.MAKE_DATE_MIN_YEAR, 1, 1).toEpochDay,
         LocalDate.of(VarkaChrono.MAKE_DATE_MAX_YEAR, 12, 31).toEpochDay)
       // The Thursday of a day's week is within three days of it either way (task 37).
+      // The whole point of the node (task 93): whatever its child's interval was, what leaves
+      // it is inside the range the check enforces, because a lane outside it is reported and
+      // the batch recomputed on the row engine. That reset is what lets a second guarded shift
+      // compose above a first, which is the composition `PLAN_TASK_93.md` 2 is about.
+      case n: GuardedDay => Bounded(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS)
       case n: ThursdayOf => shifted(n.days(), -3, 3)
       case n: IRGreatest => hull(n.left(), n.right())
       case n: IRLeast => hull(n.left(), n.right())
@@ -1525,6 +1530,97 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
+   * The result of re-arming a subtree: the rewritten node, the interval it now produces, and
+   * whether a runtime-valued shift has contributed to that interval since the last
+   * [[GuardedDay]] - which is what decides whether a further overflow can be guarded or has to
+   * decline.
+   */
+  private case class Rearmed(node: VarkaVectorIR, range: DayRange, runtime: Boolean)
+
+  /**
+   * Insert [[GuardedDay]] wherever the running interval would leave the range the calendar
+   * lowering decomposes exactly, resetting the interval there (task 93).
+   *
+   * <p>Task 52 guards one producer, and its guard promises the whole narrowed range - so a
+   * second guarded shift above it has no budget left and [[admitCalendar]] must decline the
+   * expression, although both shifts are individually fine. Re-arming spends the range again:
+   * at a node whose interval overflows, the emitted check makes everything above it start from
+   * `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` once more.
+   *
+   * <p>It is a rewrite rather than a set of positions because the emitter cannot be told where
+   * to check: it never sees literal values, so it cannot run this arithmetic, and
+   * `VarkaShapeKey` keys a cached kernel on the IR without them - so a placement carried beside
+   * the IR would let one shape be served another's guards. In the IR, the shape key separates
+   * them (`PLAN_TASK_93.md` 3.3.1).
+   *
+   * <p><b>What must still decline, and the rule is narrower than it first looks.</b> A node is
+   * re-armed only when *its own* shift is runtime-valued - a column offset, a column month
+   * count - and not merely when something below it was. A literal shift that leaves the range
+   * leaves it for every row, so a check above it would emit a kernel that reports every batch:
+   * a slower way to decline than declining once, here, for free. The first version of this
+   * rule tested "did any runtime value contribute", and admitted
+   * `year(date_add(date_add(d, i), 20000000))` on the strength of the inner column offset,
+   * which is exactly that mistake.
+   *
+   * <p>Descends only the day-typed children the analysis bounds, which is exactly [[dayRange]]'s
+   * own set; anything else is returned untouched and its interval speaks for itself.
+   */
+  private def rearm(
+      node: VarkaVectorIR,
+      literals: mutable.LinkedHashMap[Int, Int]): Rearmed = {
+    def shiftIsRuntime(offset: VarkaVectorIR): Boolean = !offset.isInstanceOf[LiteralSlot]
+    // The node rebuilt over re-armed children, and whether its own shift is runtime-valued.
+    val (rebuilt, ownRuntime, childRuntime) = node match {
+      case n: AddDays =>
+        val d = rearm(n.days(), literals)
+        (new AddDays(d.node, n.offset()), shiftIsRuntime(n.offset()), d.runtime)
+      case n: SubDays =>
+        val d = rearm(n.days(), literals)
+        (new SubDays(d.node, n.offset()), shiftIsRuntime(n.offset()), d.runtime)
+      case n: IRAddMonths =>
+        val d = rearm(n.days(), literals)
+        (new IRAddMonths(d.node, n.months()), shiftIsRuntime(n.months()), d.runtime)
+      case n: IRLastDay =>
+        val d = rearm(n.days(), literals)
+        (new IRLastDay(d.node), false, d.runtime)
+      case n: IRTruncDate =>
+        val d = rearm(n.days(), literals)
+        (new IRTruncDate(d.node, n.level()), false, d.runtime)
+      case n: IRNextDay =>
+        val d = rearm(n.days(), literals)
+        (new IRNextDay(d.node, n.offset()), false, d.runtime)
+      case n: ThursdayOf =>
+        val d = rearm(n.days(), literals)
+        (new ThursdayOf(d.node), false, d.runtime)
+      // The hull nodes: both operands are day-typed, so both are re-armed and either's runtime
+      // contribution counts for the pair.
+      case n: IRGreatest =>
+        val a = rearm(n.left(), literals)
+        val b = rearm(n.right(), literals)
+        (new IRGreatest(a.node, b.node), false, a.runtime || b.runtime)
+      case n: IRLeast =>
+        val a = rearm(n.left(), literals)
+        val b = rearm(n.right(), literals)
+        (new IRLeast(a.node, b.node), false, a.runtime || b.runtime)
+      case n: IfElse =>
+        val a = rearm(n.thenNode(), literals)
+        val b = rearm(n.elseNode(), literals)
+        (new IfElse(n.cond(), a.node, b.node), false, a.runtime || b.runtime)
+      // A leaf of the analysis, or a node it does not bound: nothing to descend into, and its
+      // own interval is whatever `dayRange` already says.
+      case other => (other, false, false)
+    }
+    dayRange(rebuilt, literals, guarded = true) match {
+      case Bounded(lo, hi)
+          if ownRuntime
+            && (lo < VarkaChrono.NARROW_MIN_DAYS || hi > VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS) =>
+        Rearmed(new GuardedDay(rebuilt),
+          Bounded(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS), runtime = false)
+      case other => Rearmed(rebuilt, other, ownRuntime || childRuntime)
+    }
+  }
+
+  /**
    * The admission half of [[calendarInput]] over an already-built IR node, for a calendar node
    * whose child is not the compiled expression itself - task 37's week tail runs over the
    * Thursday shift the compiler wraps around the date, so the shift is what the analysis bounds.
@@ -1547,8 +1643,20 @@ private[sql] object VarkaExpressionCompiler {
             && hi <= VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS =>
         Some(node)
       case Bounded(lo, hi) =>
-        sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", calendar)
-        None
+        // Task 93: the interval ran out, but if a runtime-valued shift is what carried it out
+        // then a check can spend it again. `rearm` rewrites the subtree with the checks in it
+        // and answers the interval that results; only a literal overflow, which no check can
+        // rescue, still declines.
+        val fixed = rearm(node, literals)
+        fixed.range match {
+          case Bounded(flo, fhi)
+              if flo >= VarkaChrono.NARROW_MIN_DAYS
+                && fhi <= VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS =>
+            Some(fixed.node)
+          case _ =>
+            sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", calendar)
+            None
+        }
       case Unknown =>
         sink.note("day producer the calendar range analysis does not bound", calendar)
         None

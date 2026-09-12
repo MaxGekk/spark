@@ -130,23 +130,65 @@ The change builds on the vocabulary that is there rather than adding a parallel
 one:
 
 * `dayRange` already threads `guarded`, and `shifted(..., guardsBelow = true)`
-  already means "a guard is armed below this node". The walk gains an
-  accumulator beside its interval: the set of nodes where it re-armed, and
-  whether the overflow that forced each was literal or runtime.
-* `admitCalendar`'s failing `Bounded(lo, hi)` arm consults that set: non-empty
-  and all-runtime means admit and hand the set to the emitter; anything else
-  declines exactly as today.
-* `VarkaLoopEmitter`'s `Analysis.guardedProducers` becomes the set the compiler
-  computed rather than one the emitter re-derives, which also removes the
-  standing risk that the two disagree - the defect `PLAN_TASK_73.md` 3 describes
-  in the same family.
+  already means "a guard is armed below this node". The walk gains one fact
+  beside its interval: whether the overflow that forced a re-arm was literal or
+  runtime.
+* `admitCalendar`'s failing `Bounded(lo, hi)` arm consults it: runtime means
+  rewrite and admit; literal declines exactly as today.
 
-### 3.4 No new emit option
+### 3.3.1 The re-arm is an IR node, not a set handed to the emitter
 
-`VarkaEmitOptions.guardDayProducers` already gates the whole mechanism, and a
-second flag would multiply the shape-cache key for a placement the analysis
-decides rather than the caller. Re-arming rides on the existing flag; with it
-off, the shapes that need a re-arm decline as they do today.
+*Corrected 12 September 2026, from trying to build the version above.*
+
+The first two drafts had the compiler compute a set of nodes and pass it to
+`VarkaLoopEmitter.emit`. That cannot work, for a reason worth recording because
+it is the same class of bug the guard itself defends against.
+
+**The emitter cannot compute the set, and cannot be told it out of band.** It
+cannot compute it: `LiteralSlot` is `record LiteralSlot(int index)` and the
+emitter is handed `numLiterals`, never the values, so it cannot evaluate a
+literal shift and therefore cannot run the interval walk at all. And it cannot
+be told: `VarkaShapeKey` is `(outputs, numInputs, numLiterals, options)`, so two
+plans with the same IR shape and *different literal values* share one cached
+kernel. A re-arm set is a function of the literal values, so a side-channel set
+would let a shape needing a guard at one node be served the kernel emitted for a
+shape needing it at another. `VarkaShapeKey`'s own javadoc states the stakes: "A
+wrong hit returns wrong results and the ghost fallback cannot catch it."
+
+**So the decision goes in the IR.** A new node - `GuardedDay(child)`, one field -
+wraps the value at each point the walk re-arms. Everything follows from that:
+
+* it is part of `outputs`, so the shape key distinguishes the variants already,
+  with no change to the key, the cache or the `emit` signature;
+* `VarkaVectorIR` is `sealed ... permits`, so every exhaustive switch that must
+  handle it is a compile error until it does - which is what risk 1 asks for,
+  obtained from the language rather than from a review;
+* the emitter's job becomes "emit the guard block at this node", with no
+  analysis of its own, which is the direction `PLAN_TASK_73.md` 3 and task 84
+  both want: one analysis, in one place, and the emitter reading its answer.
+
+`Analysis.guardedProducers` keeps its present job for task 52's single-producer
+case. This adds a second, explicit route rather than rewriting the first, and
+whether the two should merge is left to task 84.
+
+### 3.4 No new emit option, and the re-arm is unconditional
+
+No new flag: a placement the analysis decides is not a caller's choice, and a
+second option would multiply the shape-cache key for nothing.
+
+But it must not ride on `guardDayProducers` either, and the reason is in the
+emitter's own javadoc on the column-count `AddMonths`, which faced exactly this:
+
+> It also has to be unconditional because the compiler reads the guard as
+> established fact: `dayRange` answers `Bounded` for a column count, and
+> composes that interval with whatever shifts it, without being able to see
+> `VarkaEmitOptions#guardDayProducers`. Behind the option the guard would vanish
+> while the compile-time bound stayed, which is a wrong answer rather than a
+> slower one.
+
+A re-arm is admitted on exactly that basis, so `GuardedDay` emits its check
+unconditionally, joining `selfGuarding` rather than `guardedProducers`. The
+first draft of this section said the opposite.
 
 ### 3.5 Its relation to task 84
 
@@ -164,9 +206,11 @@ for the third analysis in the family; this is the fourth.
   `admitCalendar`'s failing arm. The decline reason splits in two - the existing
   wording where a literal shift leaves the range, and no decline at all where a
   runtime one does.
-* `VarkaLoopEmitter.java`: `Analysis.guardedProducers` reads the compiler's set
-  instead of re-deriving one; `emitAndValidatedOp`'s guard block is reused
-  unchanged at the nodes that set names.
+* `VarkaVectorIR.java`: the `GuardedDay` record and its `permits` entry.
+* `VarkaLoopEmitter.java`: an arm in each exhaustive switch - the compiler names
+  them - and the guard block, reused unchanged, at `GuardedDay`.
+* Everything else the sealed hierarchy reaches: `VarkaReferenceEvaluator`,
+  `VarkaIrFuzzSuite`'s generator, and any pretty-printer or hash over the IR.
 * `VarkaEmitOptions.java`: **unchanged**, per 3.4.
 * `VarkaExpressionCompilerSuite.scala`, `VarkaLoopEmitterSuite.scala`,
   `VarkaDifferentialSuite.scala`, `VarkaIrFuzzSuite` fixtures.
@@ -268,4 +312,95 @@ whole-query speed-up for anyone not writing it.
 
 ## 9. Outcome
 
-To be written.
+**Built, and the shapes the task opened on fuse.** Op counts from
+`dev/varka_emit.sh --table`:
+
+| shape | before | after |
+|---|---|---|
+| `year(add_months(date_add(d, i), i))` | declined | **151** |
+| `dayofyear(add_months(last_day(date_add(d, i)), i))` | declined | **221** |
+| `dayofyear(add_months(last_day(date_sub(d, i)), i))` | declined | **221** |
+| `dayofyear(add_months(last_day(add_months(date_add(d, i), i)), i))` | declined | **334**, two checks |
+| `year(date_add(d, i))` | 38 | **38**, no check added |
+| `year(date_add(d, 20000000))` | declined | **declined** |
+| `year(date_add(date_add(d, i), 20000000))` | declined | **declined** |
+
+The IR reads as the design says it should:
+`(year (guardedDay (addMonths (addDays col:0 col:1) col:1)))` - the check
+between the shift that overflowed and the node that decomposes.
+
+### 9.1 Two things the plan had wrong, both found by building it
+
+**The placement cannot be a set handed to the emitter** - recorded as 3.3.1
+while implementing, because it is a correctness argument rather than a
+preference. The emitter cannot compute the placement (it never sees literal
+values) and cannot be told it out of band (`VarkaShapeKey` omits them, so two
+plans with one IR and different literals share a kernel). `GuardedDay` puts it
+in the IR, where the shape key separates the variants for free.
+
+**The re-arm rule was too permissive as first written.** "Re-arm when a runtime
+value contributed to the overflow" admitted
+`year(date_add(date_add(d, i), 20000000))` at 42 ops on the strength of the
+inner column offset - a kernel that would decline every batch, which is a slower
+way to decline than declining once at compile time. The rule is now "re-arm when
+*this node's own* shift is runtime-valued": a literal shift leaves the range for
+every row, and no check rescues that.
+
+That narrowing is also what kept task 69's four assertions passing unchanged,
+which is the best evidence available that it is the right line: those tests pin
+literal shifts over a guarded producer, and they neither gained a check nor
+started fusing.
+
+### 9.2 What the codebase caught that review did not
+
+Three mistakes, each caught by a guard already in the tree rather than by
+reading:
+
+* `GuardedDay` was first given its own validity word, copying `MakeDate`. It
+  compiled, and `assertWordAlgebraAgrees` failed on the first fuzz iteration: a
+  single-child date node *forwards* its child's word.
+* `VarkaIrFuzzSuite`'s "the generator reaches every IR node type" failed until
+  the generator drew one - the rule that a new node is fuzzed the day it lands.
+* The generator then drew a `GuardedDay` over an out-of-range subtree, the check
+  fired, the kernel declined, and the harness read a correct decline as a
+  mismatch. It now draws under `fitsUnderChrono`, and the firing is asserted
+  where a declined batch is the expected answer.
+
+The sealed hierarchy named the seven other places that had to change. Only two
+of them - the two canonical renderers - were in the IR file itself; the rest
+were in the emitter, and none was found by looking.
+
+### 9.3 Tests that changed, and why that is the finding
+
+Three existing tests asserted the declines this task removes, and all three
+predate it as deliberate records of the gap:
+
+* task 60's *"a column count over a column day offset does not escape the narrow
+  range"*, whose comment says `dayRange` must decline "rather than treat the
+  subtree as unbounded-but-guarded and admit on the producer's promise". That
+  reasoning is still right, and is quoted in the rewritten test: this task
+  admits on a *check*, not on a promise.
+* task 60's bound-composition test, where the two one-day-past-the-edge cases
+  now assert the check's presence instead of a decline. The bound arithmetic
+  they pin still decides where the check goes.
+* the differential's *"...because neither runtime guard can see the
+  composition"*, which recorded the wrong answer task 60's review found: year
+  87585 where the truth is -14848. It now asserts the entry fuses, the answers
+  match the row engine, and every batch of that fixture is **declined at run
+  time** - `numFallbackBatchesKernel` is 0, because every row of it composes out
+  of range. The value assertion is unchanged and is the one that matters.
+
+### 9.4 Verification
+
+279 catalyst Varka tests and 183 sql Varka tests pass, the catalyst suite passes
+again at `-XX:MaxVectorSize=16`, and `VarkaIrFuzzSuite` passes at 20,000
+iterations against the reference evaluator.
+
+### 9.5 Left undone
+
+The double guard. A shape re-armed above a task 52 producer emits both checks,
+and the outer one subsumes the inner: the inner guard's promise is what the
+interval arithmetic reads, so removing it needs the analysis to know the outer
+check is there. It is a cost, not a correctness gap, and it is the "cost
+direction" of risk 2 - measured before it is optimised, and a candidate for task
+84's lattice rather than for this task.

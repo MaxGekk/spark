@@ -722,38 +722,48 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 60: a calendar function over a column count above a column day offset is residual, " +
-      "because neither runtime guard can see the composition") {
-    // The gap the two guards leave between them. Task 52's guard bounds date_add's result and
-    // task 60's bounds add_months' count; each passes on the reproducer row, and the day
-    // add_months then produces is two thousand years below the range the lowering is exact
-    // over, with nothing left at run time to catch it. So the compiler has to: dayRange widens
-    // the guarded producer's own interval by the shift above it and declines the entry, and the
-    // row engine - whose getYear is a LocalDate call, exact for any int day - answers it.
+  test("task 93: a calendar function over a column count above a column day offset is fused, "
+      + "and the composition it cannot bound declines the batch instead") {
+    // Task 60's review found this shape answering year 87585 where the truth is -14848 -
+    // silently, with no metric moving - because task 52's guard bounds date_add's result and
+    // task 60's bounds add_months' count, and neither sees the day the composition produces.
+    // Task 60 closed it by declining the entry at compile time, and this test pinned that.
     //
-    // The value assertion is the one that matters. Were the entry admitted again, the kernel
-    // would answer year 87585 where the truth is -14848, silently and with no metric moving,
-    // which is exactly how this shipped before the review caught it.
+    // Task 93 keeps the correctness and drops the decline: a third check goes in between the
+    // month add and the decomposition, so the day the calendar tail reads is bounded as a fact
+    // rather than left to a promise. The entry fuses, and a batch whose composition leaves the
+    // range is reported and recomputed on the row engine rather than answered.
+    //
+    // Every row of this fixture composes out of range, and it is one partition, so the single
+    // batch declines and no kernel batch survives - which is why this asserts the values and
+    // the metrics rather than going through checkDifferential, whose expectFused path requires
+    // a kernel batch to have run. The value assertion is still the one that matters.
     cacheDatesGuardCompose(spark)
     cacheDatesGuardCompose(varkaSpark)
     try {
-      // `keep` is a second, fusible output so the projection is eligible at all: a Varka node
-      // needs something to fuse before it can report anything else as residual.
-      val plan = checkDifferential(spark, varkaSpark,
-        "SELECT year(add_months(date_add(d, off), m)) AS y, date_add(d, 1) AS keep " +
-          "FROM varka_dates_guard_compose ORDER BY y, keep",
-        expectFused = true)
+      val query = "SELECT year(add_months(date_add(d, off), m)) AS y, date_add(d, 1) AS keep " +
+        "FROM varka_dates_guard_compose ORDER BY y, keep"
+      val actual = varkaSpark.sql(query)
+      val plan = actual.queryExecution.executedPlan
+      assertFused(plan)
+      // The answers, against the row engine, whose getYear is a LocalDate call exact for any
+      // int day. This is the assertion the wrong answer would have broken.
+      checkAnswer(actual, spark.sql(query))
       val explained = plan.collect { case p if isVarkaNode(p) => p.verboseStringWithOperatorId() }
         .mkString("\n")
-      assert(explained.contains("y: residual (day range ["), explained)
+      assert(explained.contains("y: fused"), explained)
       assert(explained.contains("keep: fused"), explained)
-      // The two halves on their own still fuse: this declines the composition, not the guards.
-      checkDifferential(spark, varkaSpark,
-        "SELECT date_add(d, off) AS a, add_months(d, m) AS b " +
-          "FROM varka_dates_guard_compose ORDER BY a, b",
-        expectFused = true)
+      // And the route the right answer came by: declined at run time, not computed.
+      actual.queryExecution.toRdd.count()
+      val node = plan.collectFirst { case v: VarkaColumnarToRowExec => v }
+      assert(node.isDefined, "expected a fused Varka projection")
+      assert(node.get.metrics("numFallbackBatchesDeclined").value > 0L,
+        "the out-of-range composition should decline its batch")
+      assert(node.get.metrics("numFallbackBatchesKernel").value === 0L,
+        "no batch of this fixture is answerable by the kernel")
     } finally {
-      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_dates_guard_compose"))
+      spark.catalog.uncacheTable("varka_dates_guard_compose")
+      varkaSpark.catalog.uncacheTable("varka_dates_guard_compose")
     }
   }
 

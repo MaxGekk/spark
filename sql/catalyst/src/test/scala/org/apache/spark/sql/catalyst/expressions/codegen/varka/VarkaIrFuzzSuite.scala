@@ -150,6 +150,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       case n: DayOfWeekIso => (7L, g(n.days()))
       case n: NextDay => (satAdd(v(n.days()), 8), g(n.days(), n.offset()))
       case n: ThursdayOf => (satAdd(v(n.days()), 3), g(n.days()))
+      // Task 93: a range check beside the value, which the value itself does not feel. The
+      // bound is the child's, so a subtree that would leave the range still shows as one -
+      // the guard reports such a batch rather than making it representable.
+      case n: GuardedDay => (v(n.days()), g(n.days()))
       case n: WeekOfYear => (53L, g(n.days()))
       case n: Year => (40000L, g(n.days()))
       case n: Month => (12L, g(n.days()))
@@ -224,7 +228,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     def value(depth: Int): Gen = {
       if (depth == 0 || budget <= 1) return leaf()
       budget -= 1
-      rnd.nextInt(20) match {
+      rnd.nextInt(21) match {
         case 0 =>
           val a = value(depth - 1); val b = literal()
           Gen(new AddDays(a.node, b.node), satAdd(a.bound, b.bound))
@@ -323,6 +327,16 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
           // refuses it, so it is not drawn here.
           val checked = a.bound <= Int.MaxValue.toLong && rnd.nextBoolean()
           Gen(new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, a.node), a.bound)
+        case 20 =>
+          // Task 93's range check, over a subtree that stays inside the narrowed range - the
+          // same condition the calendar family below draws under, and for the same reason. A
+          // guard over a subtree that leaves the range does exactly what it is for: it reports
+          // the batch, the kernel declines, and the reference evaluator has no spelling for
+          // that, so this test would read a correct decline as a mismatch. The guard's firing
+          // is asserted where a declined batch is the expected answer, in the emitter suite.
+          val a = value(depth - 1)
+          if (!fitsUnderChrono(a)) return a
+          Gen(new GuardedDay(a.node), a.bound)
         case n =>
           // The calendar family, over a subtree that stays inside the narrowed range.
           val a = value(depth - 1)

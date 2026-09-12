@@ -53,7 +53,8 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.DayOfWeekIso,
             VarkaVectorIR.NextDay, VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono,
             VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate,
-            VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.Cond {
+            VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.Cond,
+            VarkaVectorIR.GuardedDay {
 
   /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
   enum LaneType { INT }
@@ -115,6 +116,35 @@ public sealed interface VarkaVectorIR
    * outside the loop.
    */
   record LiteralSlot(int index) implements VarkaVectorIR {}
+
+  /**
+   * {@code days}, checked at runtime to lie in the range the calendar lowering decomposes
+   * exactly, and reported through {@code STATUS_CHRONO_RANGE} where it does not (task 93).
+   *
+   * <p><b>Why the compiler inserts a node instead of the emitter finding the place.</b> The
+   * range analysis lives in {@code VarkaExpressionCompiler.dayRange}, and it needs literal
+   * values to run: a literal day shift moves the interval by its own amount. The emitter never
+   * sees those - {@link LiteralSlot} carries an index and {@code emit} is handed
+   * {@code numLiterals}, not the values - so it cannot decide where a check belongs. Nor can it
+   * be told out of band, because {@code VarkaShapeKey} keys the emitted class on
+   * {@code (outputs, numInputs, numLiterals, options)}: two plans with this same IR and
+   * different literals share one kernel, so a placement carried beside the IR rather than
+   * inside it would let one shape be served the other's guards. Inside the IR, the shape key
+   * separates them for free.
+   *
+   * <p><b>What it means for the interval above it.</b> Everything above a {@code GuardedDay}
+   * may assume {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]}, which is what lets a second shift
+   * compose where the analysis would otherwise have run out of range and declined the whole
+   * expression. That is the node's entire purpose: task 52 guards one producer, and a second
+   * guarded shift above it has no budget left, because the first already promised the whole
+   * range (see {@code PLAN_TASK_93.md} 2).
+   *
+   * <p>Its check is unconditional, not behind {@link VarkaEmitOptions#guardDayProducers}, for
+   * the reason the column-count {@code AddMonths} is: the compiler admits the expression on the
+   * strength of this check, so a flag that removed it would leave the compile-time bound
+   * standing over a value nothing bounds - a wrong answer rather than a slower one.
+   */
+  record GuardedDay(VarkaVectorIR days) implements VarkaVectorIR {}
 
   /**
    * {@code days + offset}, lane-wise, wrapping on overflow exactly as Spark's {@code DateAdd}
@@ -399,6 +429,7 @@ public sealed interface VarkaVectorIR
       case LiteralSlot n -> "lit:" + n.index();
       case AddDays n -> "(addDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
       case SubDays n -> "(subDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
+      case GuardedDay n -> "(guardedDay " + canonical(n.days()) + ")";
       case DateDiff n -> "(dateDiff " + canonical(n.end()) + " " + canonical(n.start()) + ")";
       case Compare n ->
           "(cmp:" + n.op().name() + " " + canonical(n.left()) + " " + canonical(n.right()) + ")";
@@ -465,6 +496,7 @@ public sealed interface VarkaVectorIR
           + lineOf.applyAsInt(n.offset()) + ")";
       case SubDays n -> "(subDays " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.offset()) + ")";
+      case GuardedDay n -> "(guardedDay " + lineOf.applyAsInt(n.days()) + ")";
       case DateDiff n -> "(dateDiff " + lineOf.applyAsInt(n.end()) + " "
           + lineOf.applyAsInt(n.start()) + ")";
       case Compare n -> "(cmp:" + n.op().name() + " " + lineOf.applyAsInt(n.left()) + " "

@@ -46,6 +46,10 @@ object VarkaReferenceEvaluator {
     case n: SubDays =>
       for (d <- evalValue(n.days(), row, lits); o <- evalValue(n.offset(), row, lits))
         yield d - o
+    // Task 93's range check is a status report, not a value change: the reference has no
+    // notion of a declined batch, and a lane the guard would report is one the kernel does not
+    // answer at all, so the differential never compares against it. The value passes through.
+    case n: GuardedDay => evalValue(n.days(), row, lits)
     case n: DateDiff =>
       for (e <- evalValue(n.end(), row, lits); s <- evalValue(n.start(), row, lits)) yield e - s
     case n: DayOfWeek =>
