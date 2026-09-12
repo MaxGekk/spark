@@ -637,16 +637,17 @@ Maven modules, then 525 MB of jars uploaded - and **52 s warm**, which is the
 commit-keyed cache of 11.10 working. Both numbers are far below what this
 section feared; see 11.10 for what that retires.
 
-The row count is the live question and the rule is answering it. At **1e7 rows**
-the surface completed in 21m19s and then failed 14 Varka rows, the worst at
-**37%** on `least(d, d2)` against the 5% ceiling. That is the rule doing its
-job: at ten million rows with one partition there is not enough executor time
-to hide planning and scheduling. Holding the fixed cost constant while executor
-time scales with rows puts the worst row at about 5.5% at 1e8 - still over -
-and about 2.9% at 2e8, which is the `rows` default the workflow already shipped
-with. Note that the laptop needed 1B rows to reach 4.5%: the runner meets the
-rule at fewer rows precisely *because* it is slower per core, so each row buys
-more executor time to amortise the same fixed cost.
+The row count is the live question. At **1e7 rows** the surface completed in
+21m19s and then failed 61 Varka rows, the worst at **68.2%** and the median at
+**35.9%** against the 5% ceiling; at **1e8** it failed 45, worst **18.3%**,
+median **7.2%**. That is the rule doing its job at the small end: with one
+partition there is not enough executor time to hide planning and scheduling.
+
+**Then 2e8 passed, and the pass was false.** See 11.12, which is the most
+important thing this task has found. Two extrapolations of the trend above -
+"about 5.5% at 1e8" and "about 2.9% at 2e8" - were both written here and both
+were wrong, and the reason they were wrong is that the trend they extrapolated
+had a cliff in it that the fixed-share rule cannot see.
 
 **11.2.2 How often does the pool give a full-width machine?** The census
 counts *files*, not dispatches, and one dispatch writes as many files as the
@@ -1130,7 +1131,70 @@ eight shards take on the order of eight rounds.
 `dev/varka_surface_shards.py` is that loop, with its state in
 `.git/` so it is interruptible.
 
-### 11.12 Explicitly out of scope
+### 11.12 The fixed-share rule passed a run that measured nothing
+
+*Found on 12 September 2026, by disbelieving a success.*
+
+**The 2e8-row dispatch succeeded, with a better fixed share than any run before
+it, and its numbers were meaningless.**
+
+| rows | `date_add(d, 3)`, Varka arm | worst fixed share | the rule says |
+|---|---|---|---|
+| 1e8 | **854 M rows/s** | 15.4% | fail |
+| 2e8 | **72.6 M rows/s** | **1.9%** | **pass** |
+
+An eleven-fold collapse in throughput, reported as an improvement. The
+committed laptop file reads 1811.6 M/s for the same entry, so a 2e8 file would
+have published a number 25 times too small as Varka's date_add rate.
+
+**What happened.** The log carries
+`WARN MemoryStore: Not enough space to cache rdd_4_0 in memory!` 392 times, and
+the 1e8 log carries it zero times. The cached table did not fit, so every
+iteration recomputed it, and the measurement became a recompute rate.
+
+**Why the rule not only missed it but was fooled by it.** The rule is
+`(wall - executor) / wall`, and it exists to fail a job too *small* to amortise
+its driver overhead. A job whose table does not fit has an enormous executor
+time, so its constant driver cost becomes a negligible fraction of it - the
+failure does not merely evade the rule, it *satisfies* the rule, and the worse
+it gets the better it looks. A rule with only one side is a rule that can be
+walked around from the other.
+
+**Three things that were not the cause, each checked.** It is not the driver
+heap: 6g, 8g and 11g produce 392, 389 and 389 warnings, identically. It is not
+the stock arms: every warning in all three runs is in `varka-jdk25`, the
+Arrow-cached arm. And it is not a scaling law - the "2.51x wall time per
+doubling of rows" recorded during the run, and used here to project an
+eight-hour surface at 5e8, was the onset of this cliff and nothing more. That
+projection is withdrawn.
+
+**What it actually is: a per-block limit, not a per-byte one.** With
+`--partitions 1` the whole table is a single block, and Spark declines to cache
+one block larger than the unrolling memory available, however large the heap -
+which is exactly why raising `--driver-memory` did nothing. The table is also
+twice the size this section had assumed: task 67 added three year-month
+interval columns, so it is six four-byte columns, 24 bytes a row, and 4.8 GB at
+2e8. More partitions is the lever, and 11.2.1 listed it first among the
+fallbacks before any of this was measured.
+
+**The fix, which is a second rule and not a bigger number.**
+`DateSurfaceBenchmark` now refuses to write a file whose cached table is not
+entirely resident, checked once immediately after the table is materialised so
+a misconfigured run costs a minute rather than three hours, and records the
+residency in the provenance so a reader can see it rather than trust it.
+`--allow-nonresident-cache` exists for a deliberate exception. The two rules now
+bracket the row count from opposite sides: too small fails the fixed share, too
+large fails residency, and a file can only be written between them.
+
+**The general lesson, which is why this is a section and not a commit message.**
+A benchmark guard that can only fail in one direction will eventually be
+satisfied by the failure in the other, and the more complete that failure the
+more comfortably it passes. Ask of every such rule what its own violation looks
+like from the far side - here, "what does a run that is far too big look like to
+a rule that catches runs that are too small?" - and if the answer is "healthy",
+the rule needs a partner before it is trusted.
+
+### 11.13 Explicitly out of scope
 
 A self-hosted runner; a CI-calibrated canary; changing the driver, the
 surface or the shell driver, except where 11.2.1 forces the row count or the
