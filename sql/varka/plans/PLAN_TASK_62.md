@@ -1286,13 +1286,18 @@ spelling; the chains answer the width question.
 **And they mix the three types, which is the second reason to have them.**
 Varka covers DATE, INT and the year-month interval, all int32 in one lane, and
 a benchmark of dates alone both understates that to a reader and exercises less
-of the compiler. Eight of the twelve carry a date column, an int column and an
+of the compiler. All twelve carry a date column, an int column and an
 interval column in one expression; one produces an interval rather than
-consuming one. Counted over column references rather than substrings - the
-first version of the test that guards this counted the literal in `* 12` as int
-coverage and so passed a list where only four entries touched the int column at
-all. A literal folds into the kernel; a column is loaded and vectorised, and
-only the second demonstrates anything.
+consuming one. (This read "eight of the twelve" until 12 September: eight
+was the count for the *first* list, and neither this paragraph nor
+`Chains`'s own javadoc was recounted when task 93 replaced it. `ChainsTest`
+now asserts the count against `ENTRIES.size()` rather than against a
+written-down number, so the two cannot drift apart again.) Counted over
+column references rather than substrings - the first version of the test
+that guards this counted the literal in `* 12` as int coverage and so passed
+a list where only four entries touched the int column at all. A literal
+folds into the kernel; a column is loaded and vectorised, and only the
+second demonstrates anything.
 
 **A tooling bug found while choosing them, which invalidates earlier op
 counts.** `dev/varka_emit.sh` resolved attributes and functions but never ran
