@@ -2250,6 +2250,18 @@ One bullet per debt: what it is, why it is a debt, and what closing it would
 take. Opened during task 24, per `sql/varka/AGENTS.md` - a swept entry is
 rewritten in the past tense with what the sweep found, never deleted.
 
+* **`dev/varka_emit.sh` reports a crash as an empty success.** The script runs the
+  dump into a log and prints the lines it greps out, so a run that throws produces
+  no output and exits 0 - indistinguishable from a run where nothing matched. Found
+  on 12 September 2026 while planning task 93: an unsupported `--columns` type threw
+  `IllegalArgumentException` and the tool printed nothing, three times, before the
+  underlying `catalyst/Test/runMain` was run by hand to see it. It is a debt rather
+  than a task because it is a few lines - check the runner's exit code, or fail when
+  the grep matches nothing - but it is worth a bullet because the failure mode is
+  silence, which is the kind a hurried reader takes for a negative result. The same
+  script's `--asm` path already swallows the exit code deliberately (`|| true`), so
+  the fix has to distinguish the two.
+
 * **A shift above a guarded day producer declined conservatively, including upward,
   where the lowering is still exact (task 60's review). Adopted as task 69, and SWEPT by it.**
   `dayRange` gives a column-offset
