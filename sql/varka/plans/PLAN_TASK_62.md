@@ -1286,13 +1286,18 @@ spelling; the chains answer the width question.
 **And they mix the three types, which is the second reason to have them.**
 Varka covers DATE, INT and the year-month interval, all int32 in one lane, and
 a benchmark of dates alone both understates that to a reader and exercises less
-of the compiler. Eight of the twelve carry a date column, an int column and an
+of the compiler. All twelve carry a date column, an int column and an
 interval column in one expression; one produces an interval rather than
-consuming one. Counted over column references rather than substrings - the
-first version of the test that guards this counted the literal in `* 12` as int
-coverage and so passed a list where only four entries touched the int column at
-all. A literal folds into the kernel; a column is loaded and vectorised, and
-only the second demonstrates anything.
+consuming one. (This read "eight of the twelve" until 12 September: eight
+was the count for the *first* list, and neither this paragraph nor
+`Chains`'s own javadoc was recounted when task 93 replaced it. `ChainsTest`
+now asserts the count against `ENTRIES.size()` rather than against a
+written-down number, so the two cannot drift apart again.) Counted over
+column references rather than substrings - the first version of the test
+that guards this counted the literal in `* 12` as int coverage and so passed
+a list where only four entries touched the int column at all. A literal
+folds into the kernel; a column is loaded and vectorised, and only the
+second demonstrates anything.
 
 **A tooling bug found while choosing them, which invalidates earlier op
 counts.** `dev/varka_emit.sh` resolved attributes and functions but never ran
@@ -1348,3 +1353,136 @@ A self-hosted runner; a CI-calibrated canary; changing the driver, the
 surface or the shell driver, except where 11.2.1 forces the row count or the
 partition count; and the 128-bit companion run, which is milestone 5's task
 92 and wants a *narrower* machine than this one.
+
+### 11.15 The gate gated a machine that did nothing
+
+*Found 12 September 2026, by the provenance of the run it invalidated. Numbered
+after 11.14 because 11.14 is cited by number elsewhere and renumbering it to keep
+the out-of-scope section last would cost more than the odd ordering does.*
+
+11.10 split this workflow into `gate`, `build` and `measure` so that the
+one-in-eighteen runner would not have to spend its six hours on a cold build. It
+did that, and in the same change it **silently destroyed the gate**.
+
+Every GitHub-hosted job runs on its own fresh ephemeral VM. So a probe that runs
+in `gate` measures the `gate` VM and says nothing whatever about the machine
+`measure` is handed. The chains calibration of 12 September (run 34707977257)
+is the demonstration: `gate` passed on an **AMD EPYC 9V45**, full AVX-512 flag
+set, 512:256 ratio **2.00**; `measure` ran on an **AMD EPYC 9V74**, flags `avx
+avx2` only, `MaxVectorSize: 32`, ratio **1.00**. A 256-bit measurement produced
+under a gate that had certified a 512-bit machine.
+
+Worse, it was *labelled* with the machine it did not run on. The job's `name:`
+interpolated `needs.gate.outputs.cpu`, so GitHub's UI read "Date surface on AMD
+EPYC 9V45 96-Core Processor" across the whole run. The one place the truth
+survived was the results file's own provenance, because
+`dev/varka_bench_surface.sh` re-probes on the measuring machine and records
+`datapath:`, `cpu:` and `MaxVectorSize:` in every file it writes. That habit -
+a results file that carries the evidence for its own claims rather than
+inheriting it - is what turned a wrong published number into a caught bug, and
+it is the argument for keeping it everywhere.
+
+**What makes this worth a section rather than a line.** The failure was not that
+the gate was wrong about its machine; it was right. It was that the gate was
+*asked the wrong question* and answered it correctly, which no amount of care in
+the probe could have caught. It is the sixth mechanism in this task to produce a
+plausible wrong answer - after a probe reading a scalar loop (11.9), a workflow
+discarding its evidence (11.12), a rule satisfied by the failure it could not
+see (11.12), a cache substituting a disk (11.12), and partitioning that appeared
+to help while making things worse (11.11).
+
+**And the naive repair would have been much worse than the bug.** Leaving `gate`
+upstream of `measure` and adding a second probe inside `measure` would require
+*both* VMs to be full-width for a `512` dispatch to produce anything - squaring a
+one-in-eighteen chance into roughly one in three hundred, at a minute a miss.
+The gate has to move, not multiply.
+
+**The fix.** The probe is now one script, `dev/varka_datapath.sh`, rather than a
+copy in the workflow and another in the shell driver, and it takes `--require`
+so the same code is both the survey and the gate. It runs *inside* `measure`,
+directly after the JDKs and before the 400 MB jar restore, so a miss costs
+seconds. `gate` keeps its name only as the pool census that `stop-after: gate`
+dispatches - it enforces nothing, is upstream of nothing, and never sees
+`require-datapath`, because a census that aborts on the machines it is counting
+cannot count them. `measure` is named for its inputs, never for a CPU: a job
+name is fixed before any job runs, so the only CPU it could ever interpolate is
+another machine's.
+
+**What the invalidated run is still good for.** Everything except the datapath
+question. Residency, fusion, the fixed-share rule and the ratio against stock
+are properties of the row count and the expressions, so 11.13's predictions 1
+and 2 are scored from it in 11.16; only prediction 3, the 256-to-512
+difference, needs the re-run.
+
+### 11.16 The chains measured, and the prediction that mattered was backwards
+
+*Run 34707977257, 12 September 2026: 1e8 rows, one partition, 8g driver, on an
+AMD EPYC 9V74 at 256 bits (see 11.15 - the gate certified a different machine).
+64 minutes for four distributions over twelve chains. `create-commit: false`, so
+the numbers below are from the run's artifact and are **not** committed; the
+committed file waits for the re-run under a working gate.*
+
+**The job-size rule is met, which is the whole reason the chains exist.**
+`2.3 GiB in memory, 0.0 GiB on disk`, zero `Not enough space` warnings, all
+twelve entries `kernel 60000 batches, fallback 0`, and a worst fixed share of
+**3.2%** on the Varka arm against a 5% rule. At 1e8 rows, where the surface
+needed 5e8 and no runner in the pool could hold it. Buying executor time with
+arithmetic instead of rows worked exactly as 11.13 argued it would.
+
+**11.13's registered predictions, scored.**
+
+| | predicted | measured | |
+|---|---|---|---|
+| 1a | every entry above 3.6 ns/row | 13.6 to 20.5 | held |
+| 1b | the shipped list at 6.7 to 10.5 ns/row | 13.6 to 20.5 | **failed, ~2x low** |
+| 2 | worst fixed share under 5% at 1e8 rows | 3.2% | held |
+| 3 | a measurable 256-to-512 difference | - | not scored, 11.15 |
+
+1b failed in the safe direction: the model's 0.02 ns per emitter op over a
+0.8 ns floor is about half the true per-op cost on this machine, so every entry
+sits further above the fixed-share threshold than predicted, which is why 2
+passed as comfortably as it did. `Chains.MIN_OPS` was set to 280 against a
+computed break-even near 140 precisely so that a wrong model could not put an
+entry under the rule, and that margin is what absorbed the error.
+
+**The prediction that was not registered as one, and is wrong.** 11.13 argued
+that stock Spark pays its per-row costs at every link of a chain while the
+kernel fuses the whole chain, so *"the ratio against stock should grow with
+depth, and the surface's 18x to 25x is the floor of what this engine is worth
+rather than the headline."*
+
+It is the ceiling. Measured:
+
+| | Varka ns/row | stock 4.2 ns/row | ratio |
+|---|---|---|---|
+| chains, 12 entries, 293-483 ops | 13.6 - 20.5 | 122.6 - 229.7 | **8.6x - 11.1x** |
+| surface, committed laptop file, 32 entries | 0.6 - 2.2 | 21.5 - 25.4 | 11.5x - 38.8x, median 21.6x |
+
+and the trend *within* the surface points the same way: its cheapest entries
+carry the largest ratios (`dayofweek(d)`, 38.8x) and its heaviest the smallest
+(`add_months(d, i)`, 11.5x), heading straight for the chains' 9x to 11x.
+
+The mechanism is not subtle once the numbers are in front of you. Stock's cost
+per row is overhead plus work; Varka's is work over lanes. When the expression
+is trivial the ratio is measuring Spark's per-row overhead and reads 38x. When
+the expression is heavy the overhead washes out and the ratio converges on the
+genuine compute speedup, which is **about 9x to 11x**. The argument in 11.13
+was not wrong about the mechanism - the kernel really does fuse the chain and
+really does share the civil-from-days prefix - it just ignored that the same
+depth grows the numerator too, and grows it from a much larger base.
+
+**This changes what the milestone should claim.** 9x to 11x on genuinely
+compute-bound expressions is the defensible number and the more interesting
+one: it is what the engine is worth when Spark's per-row overhead has been
+amortised away and only the arithmetic is left. The 20x to 38x on single calls
+is real, but it is largely a measurement of the row engine's overhead rather
+than of vectorised arithmetic, and a reader who is told 38x and later measures
+10x on their own workload will conclude the project oversold itself. Say both,
+and say which is which.
+
+*Caveat, and the reason this is not yet a finding.* The two rows of that table
+come from different machines and different row counts - chains on a runner at
+1e8, surface on the development laptop at 1e9. The within-surface trend is
+same-machine and does support the conclusion, but a surface run on the
+re-run's machine would settle it properly, and 11.17 should take one while the
+gate is fixed anyway.

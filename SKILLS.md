@@ -2172,6 +2172,31 @@ The 6973P-C row is worth one more sentence, because it is the same machine the b
 read 1.00 on. Two probes, one machine, 1.00 and 1.33: whatever the first was measuring, it was
 not this.
 
+**A gate in one GitHub job does not gate another job, and the workflow shipped for three days
+believing it did.** Every GitHub-hosted job runs on its own fresh ephemeral VM, so a probe in a
+`gate` job describes the `gate` VM and nothing else. `varka-surface-benchmark.yml` was split into
+`gate` / `build` / `measure` to keep a cold build off the scarce full-width runner, which worked -
+and in the same change the datapath gate stopped constraining the measurement. The chains run of
+12 September 2026 passed the gate on an EPYC 9V45 at ratio 2.00 and then measured on an EPYC 9V74
+at ratio 1.00, `MaxVectorSize: 32`. Because the measure job's `name:` interpolated
+`needs.gate.outputs.cpu`, GitHub's own UI attributed the run to the 9V45 throughout.
+
+Three lessons, in descending order of how far they travel:
+
+- **A results file that re-measures its own claims is worth the duplication.**
+  `dev/varka_bench_surface.sh` probes on the machine it runs on and writes `datapath:`, `cpu:`
+  and `MaxVectorSize:` into every file. That is the only reason this was caught rather than
+  published; every other surface, including the job name, said 9V45.
+- **Anything a job inherits from another job is a claim about a different machine.** `needs.<job>.outputs`
+  carries facts about hardware across a boundary that does not preserve them. Environment,
+  caches and artifacts cross; the machine does not.
+- **Duplicating a gate is worse than moving it.** Keeping `gate` upstream and adding a second
+  probe inside `measure` would demand that *both* VMs be full-width, turning a one-in-eighteen
+  chance into about one in three hundred. The probe is now one script, `dev/varka_datapath.sh`,
+  taking `--require 512|any`, run by the job that measures; the survey job keeps the same script
+  with `--require any`, because a census that aborts on the machines it is counting cannot count
+  them.
+
 Measured, not read off a spec sheet. Task 43's committed op-count ladder - a single-output loop
 from 20 to 248 `IntVector` ops - was run at three widths on the development machine (AMD Ryzen
 AI 9 HX PRO 370, Zen 5 mobile, JDK 25.0.4), by setting `Test / javaOptions +=
