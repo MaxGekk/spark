@@ -34,6 +34,11 @@
 #             the scalar model's and the emitted kernel's, at the wide width
 #   doc       build/sbt catalyst/doc, the javadoc gate CI runs
 #   engine    ./build/mvn -f sql/varka/engine/pom.xml test (off by default)
+#   bench     ./build/mvn -f sql/varka/bench/pom.xml test - the benchmark drivers'
+#             own suites, which nothing else runs: CI builds that module only with
+#             -DskipTests, so the invariants ChainsTest and SurfaceTest hold (every
+#             entry fuses, carries all three types and clears MIN_OPS) are enforced
+#             here or nowhere. About ten seconds.
 #   lint      dev/lint-java and dev/scalastyle
 #   quotes    dev/varka_quote_check.py: every number the documents quote traces to a
 #             committed results file (or the allowlist)
@@ -45,7 +50,7 @@
 # its instruction assertions is a gate that lies.
 set -uo pipefail
 
-steps_all=(compile wide narrow sweep doc lint quotes)
+steps_all=(compile wide narrow sweep doc bench lint quotes)
 only=""; skip=""; engine=0; list=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -114,6 +119,7 @@ for s in "${selected[@]}"; do
              'testOnly *VarkaChronoSuite *VarkaLoopEmitterSuite -- -z opt-in' ;;
     doc) run_step doc build/sbt -batch catalyst/doc ;;
     engine) run_step engine ./build/mvn -q -f sql/varka/engine/pom.xml test ;;
+    bench) run_step bench ./build/mvn -q -f sql/varka/bench/pom.xml test ;;
     lint) run_step lint bash -c 'dev/lint-java && dev/scalastyle' ;;
     quotes) run_step quotes dev/varka_quote_check.py ;;
   esac

@@ -49,8 +49,10 @@ import java.util.List;
  *
  * <p><b>And they mix the types on purpose.</b> Varka covers three - DATE, INT and the
  * year-month interval, all int32 in one lane - and a benchmark of dates alone understates that
- * to a reader and exercises less of the compiler. Seven of the twelve entries carry a date, an
- * int and an interval in one expression; one produces an interval rather than consuming one.
+ * to a reader and exercises less of the compiler. <b>Every</b> entry carries a date column, an
+ * int column and an interval column in one expression; one produces an interval rather than
+ * consuming one. (This read "seven of the twelve" and the plan said eight; both were written
+ * against the first list and neither was recounted when it was replaced.)
  * That is closer to real SQL than a chain of one type, and it is the claim the milestone
  * actually wants to make.
  *
@@ -65,7 +67,7 @@ import java.util.List;
  * <p><b>The sizing is a prediction, and is registered as one.</b> {@code PLAN_TASK_62.md}
  * 11.13 records it with its arithmetic and will score it against the first committed chain
  * file. The numbers behind it - a per-iteration fixed cost near 18 ms, roughly 0.02 ns per
- * emitter op over a memory floor near 0.8 ns, and so 3.9 to 5.2 ns/row for the entries here -
+ * emitter op over a memory floor near 0.8 ns, and so 6.7 to 10.5 ns/row for the entries here -
  * come from a GitHub dispatch on 11 September 2026 whose results were never committed,
  * because that run failed the fixed-share rule and predates the change that made a failing
  * run upload its evidence. They are therefore scratch figures in the sense
@@ -135,10 +137,14 @@ public final class Chains {
   record Chain(String expr, int emitterOps) {}
 
   /**
-   * Below this an entry does not earn its place: it would not clear the 5% fixed-share rule at
-   * 1e8 rows, which is what the whole list is arranged around. See the class comment for the
-   * arithmetic - roughly 0.02 ns per op over a 0.8 ns memory floor, against a 3.6 ns/row
-   * threshold, so about 140 ops is the break-even and 150 is the margin.
+   * Below this an entry does not earn its place. The break-even is lower than the constant:
+   * the class comment's model - roughly 0.02 ns per op over a 0.8 ns memory floor against a
+   * 3.6 ns/row threshold - puts it near 140 ops. This sits well above that on purpose, because
+   * the list is not trying to perch at the edge of the fixed-share rule but to be firmly
+   * compute-bound, and every entry task 93 admits clears it comfortably. A later editor who
+   * recomputes the model, reads 280 as a typo and lowers it to 150 would admit entries that
+   * pass this test and then fail --max-fixed-share after a gated runner dispatch, which is a
+   * much more expensive place to find out.
    */
   static final int MIN_OPS = 280;
 
@@ -163,9 +169,12 @@ public final class Chains {
       new Chain("datediff(add_months(last_day(date_add(d, i)), i) + ymy, d)", 293));
 
   /**
-   * The chains, ordered by family rather than by cost, the way {@link Surface#ENTRIES} is: a
-   * shard is a stride over this list, so families must be interleaved by the stride rather
-   * than pre-sorted, or the shards' run times diverge.
+   * The chains. Ordered by cost, descending - which the first version of this comment denied,
+   * claiming they were interleaved by family so a shard's stride would not sort them; the list
+   * was already sorted. It is tolerable here and would not be for {@link Surface#ENTRIES}: a
+   * stride over a sorted list hands shard 0 the heaviest of every N, so the shards diverge by
+   * the list's spread, and across 293 to 483 ops that is under 1.7x where across the surface's
+   * 9 to 218 it would be an order of magnitude.
    */
   public static final List<Surface.Entry> ENTRIES =
       CHAINS.stream().map(c -> Surface.Entry.projection(c.expr())).toList();

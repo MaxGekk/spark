@@ -23,13 +23,11 @@ import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 import scala.util.Random
 
-import org.apache.spark.sql.catalyst.FunctionIdentifier
-import org.apache.spark.sql.catalyst.analysis.{FunctionRegistry, UnresolvedAttribute, UnresolvedFunction}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{DataType, DateType, IntegerType}
+import org.apache.spark.sql.types.{DataType, DateType, IntegerType, YearMonthIntervalType}
 
 /**
  * A census of validity words (task 70's algebra): for every value root of a corpus, what its
@@ -159,24 +157,24 @@ object VarkaWordCensus {
 
   // --- SQL to IR, as VarkaEmitDump does ------------------------------------------------
 
+  // The interval columns are here so the corpus below can carry the date/interval shapes task
+  // 67 added. They were absent while `resolve` had no analyzer pass, because without coercion
+  // `d + ymm` declined and there was nothing to census.
   private val columns: Seq[Attribute] =
-    Seq("d:date", "d2:date", "d3:date", "d4:date", "i:int", "j:int").map { c =>
+    Seq("d:date", "d2:date", "d3:date", "d4:date", "i:int", "j:int",
+      "ymm:ymm", "ymy:ymy", "ym:ym").map { c =>
       val Array(name, tpe) = c.split(":")
       val dt: DataType = tpe.toLowerCase(Locale.ROOT) match {
         case "date" => DateType
+        case "ymm" => YearMonthIntervalType(YearMonthIntervalType.MONTH)
+        case "ymy" => YearMonthIntervalType(YearMonthIntervalType.YEAR)
+        case "ym" => YearMonthIntervalType()
         case _ => IntegerType
       }
       AttributeReference(name, dt)()
     }
 
-  private def resolve(e: Expression): Expression = {
-    val byName = columns.map(a => a.name -> a).toMap
-    e.transformUp {
-      case UnresolvedAttribute(Seq(name)) => byName(name)
-      case f: UnresolvedFunction =>
-        FunctionRegistry.builtin.lookupFunction(FunctionIdentifier(f.nameParts.last), f.arguments)
-    }
-  }
+  private def resolve(e: Expression): Expression = VarkaSqlResolve.resolve(e, columns)
 
   private case class Fused(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int)
 
@@ -188,7 +186,13 @@ object VarkaWordCensus {
     }
   }
 
-  /** The `Surface` projections that resolve without the analyzer's type coercion. */
+  /**
+   * The `Surface` projections. This used to read "...that resolve without the analyzer's type
+   * coercion" and to omit every date/interval shape, which was a workaround for the missing
+   * coercion pass rather than a choice: the census described itself as covering the surface
+   * while measuring about two thirds of it. With `resolve` sharing the fixed resolver the
+   * omitted entries can be carried, and they are.
+   */
   private val surface = Seq(
     "date_add(d, 3)", "date_add(d, i)", "date_sub(d, 5)", "datediff(d2, d)", "unix_date(d)",
     "date_from_unix_date(unix_date(d))", "year(d)", "month(d)", "day(d)", "quarter(d)",

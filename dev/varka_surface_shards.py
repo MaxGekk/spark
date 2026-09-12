@@ -17,7 +17,7 @@
 #
 """Run one sharded date surface across GitHub runners, re-dispatching the shards that miss.
 
-    dev/varka_surface_shards.py run     --shards 8 --rows 500000000
+    dev/varka_surface_shards.py run     --shards 8 --benchmark chains --rows 100000000
     dev/varka_surface_shards.py collect --shards 8 --out sql/varka/bench/benchmarks
 
 The measurement wants a runner whose 512-bit datapath is real, and about one runner in
@@ -138,9 +138,9 @@ def dispatch(shard, shards, a):
         "--ref",
         a.ref,
         "-f",
-        "probe-only=false",
+        "stop-after=run",
         "-f",
-        "build-only=false",
+        f"benchmark={a.benchmark}",
         "-f",
         f"require-datapath={a.require_datapath}",
         "-f",
@@ -229,6 +229,9 @@ def main():
             p.add_argument("--partitions", default="1")
             p.add_argument("--driver-memory", default="6g")
             p.add_argument("--require-datapath", default="512", choices=["512", "any"])
+            # Without this the dispatcher silently ran whatever the workflow defaults to, so a
+            # sharded chains run had no orchestrator and `collect` merged surface shards.
+            p.add_argument("--benchmark", default="surface", choices=["surface", "chains"])
             p.add_argument("--ref", default="master")
             p.add_argument("--max-parallel", type=int, default=20)
             p.add_argument("--poll", type=int, default=30)

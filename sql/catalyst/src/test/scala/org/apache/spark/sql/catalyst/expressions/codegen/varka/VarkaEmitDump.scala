@@ -22,14 +22,10 @@ import java.util.Locale
 
 import scala.jdk.CollectionConverters._
 
-import org.apache.spark.sql.catalyst.FunctionIdentifier
-import org.apache.spark.sql.catalyst.analysis.{FunctionRegistry, SimpleAnalyzer, UnresolvedAttribute}
-import org.apache.spark.sql.catalyst.analysis.UnresolvedFunction
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
 import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, ShortType, YearMonthIntervalType}
 
 /**
@@ -64,7 +60,11 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, Sh
  */
 object VarkaEmitDump {
 
-  private val defaultColumns = "d:date,d2:date,i:int,sh:short,by:byte"
+  // The interval columns are in the default set because the benchmark lists that cite this
+  // tool as "the source of truth [that] regenerates every number here" are full of them: with
+  // them absent, the documented command threw "unknown column ymy" for every chain entry and
+  // printed no table, so the recipe for re-taking a stale op count did not work.
+  private val defaultColumns = "d:date,d2:date,i:int,sh:short,by:byte,ymm:ymm,ymy:ymy,ym:ym"
   private val className = "org.apache.spark.sql.varka.execution.VarkaFusedDump"
 
   def main(args: Array[String]): Unit = {
@@ -222,19 +222,8 @@ object VarkaEmitDump {
    * for weeks. Resolving through a `LocalRelation` and `SimpleAnalyzer` costs nothing and
    * makes the tool agree with the engine.
    */
-  private def resolve(e: Expression, childOutput: Seq[Attribute]): Expression = {
-    val byName = childOutput.map(a => a.name -> a).toMap
-    val bound = e.transformUp {
-      case UnresolvedAttribute(Seq(name)) =>
-        byName.getOrElse(name, throw new IllegalArgumentException(
-          s"unknown column $name; declare it with --columns"))
-      case f: UnresolvedFunction =>
-        FunctionRegistry.builtin.lookupFunction(FunctionIdentifier(f.nameParts.last), f.arguments)
-    }
-    val analyzed = SimpleAnalyzer.execute(
-      Project(Seq(Alias(bound, "a")()), LocalRelation(childOutput)))
-    analyzed.asInstanceOf[Project].projectList.head.asInstanceOf[Alias].child
-  }
+  private def resolve(e: Expression, childOutput: Seq[Attribute]): Expression =
+    VarkaSqlResolve.resolve(e, childOutput)
 
   /** `k=v,k=v` onto the record's `with<K>` methods, by reflection. */
   private def parseOptions(spec: String): VarkaEmitOptions =

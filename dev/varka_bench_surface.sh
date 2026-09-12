@@ -54,7 +54,8 @@
 # for a 12 ms job to be under 5% of them.
 #
 # Each LABEL names one run and its results file,
-# sql/varka/bench/benchmarks/DateSurface-<LABEL>-results.txt. SPARK_HOME is a
+# sql/varka/bench/benchmarks/<STEM>-<LABEL>-results.txt, where STEM is DateSurface
+# or DateChain by --benchmark. SPARK_HOME is a
 # distribution's root - a downloaded release, or this checkout after
 # `build/sbt package` (its bin/spark-submit runs the assembled jars). The third
 # field is a comma-separated list of extra `--conf` settings; the word `varka`
@@ -85,7 +86,11 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-usage() { sed -n '17,50p' "$0"; exit 2; }
+# The header block, found rather than hard-coded: the range used to be '17,50p' and the
+# comment above grew past it, so --help and every usage error stopped mid-sentence and dropped
+# the only paragraph documenting the mandatory LABEL=SPARK_HOME:JAVA_HOME argument - which is
+# precisely what a usage error is about. Ends at the first line that is not a comment.
+usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit 2; }
 rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
 shard=""; benchmark=surface
 while [ "$#" -gt 0 ]; do

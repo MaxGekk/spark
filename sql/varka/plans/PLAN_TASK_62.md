@@ -1308,11 +1308,16 @@ before 12 September 2026 should be re-taken.
 and `i % 20` decline - an int multiply by a column and an int remainder -
 although multiplying by a literal is fine, as `CAST(month(d) AS INTERVAL YEAR)
 * 3` shows. `make_ym_interval(i, i)` declines where
-`make_ym_interval(year(d), month(d))` fuses. And
-`dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)` declines where the
-same chain without the trailing interval fuses. These belong in the milestone's
-task table rather than in this task, and they are why several natural
-mixed-type spellings are absent from the list.
+`make_ym_interval(year(d), month(d))` fuses. These two belong in the
+milestone's task table rather than in this task, and they are why several
+natural mixed-type spellings are absent from the list.
+
+A third was listed here and is **closed**:
+`dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)` declined when this
+paragraph was written and fuses at 332 ops since task 93, which is why it is
+entry 7 of `Chains` - see 11.13's opening. The line stayed after the task
+landed, so a reader turning this paragraph into follow-ups would have filed a
+coverage gap for an expression already being benchmarked.
 
 **Registered prediction, to be scored against the first committed chain file.**
 From the 1e8 dispatch of 11 September, whose results were never committed:
@@ -1320,9 +1325,12 @@ the per-iteration fixed cost is near 18 ms, and fitting `year(d)` at 1.5 ns/row
 and `weekofyear(d)` at 2.1 ns/row against their op counts gives roughly
 0.02 ns per op over a memory floor near 0.8 ns. That predicts:
 
-1. every chain entry above **3.6 ns/row** at 1e8 rows on a runner - the entries
-   are 163 to 304 ops where the prediction was framed at 152 to 218, so the
-   margin is wider than when it was written;
+1. every chain entry above **3.6 ns/row** at 1e8 rows on a runner. The model
+   above puts the shipped list, 293 to 483 ops, at **6.7 to 10.5 ns/row** - so
+   the margin is wide, and the prediction to score is that range and not the
+   3.9-to-5.2 one this section carried while the list was 152 to 218 ops. A
+   scorer reading the old range against the shipped file would see a large
+   systematic under-prediction and call the model wrong;
 2. therefore a worst fixed share **under 5%** at 1e8 rows, where the surface
    needed 5e8 - so one dispatch, resident table, no sharding;
 3. and a **measurable 256-to-512 difference** on these entries where the

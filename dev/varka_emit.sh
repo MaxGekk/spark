@@ -52,8 +52,27 @@ quoted=""
 for a in "${pass[@]}"; do quoted+=" \"$a\""; done
 
 if [ "$asm" -eq 0 ]; then
-  build/sbt -batch "catalyst/Test/runMain $main$quoted" 2>&1 | sed -E 's/^\[(info|error)\] ?//' \
-    | sed -n '/^entry \|^| expression/,$p' | grep -v -E '^\[(success|warn)\]|^WARNING: '
+  # The run's output is kept, not piped straight into the filter, so that a run which threw
+  # can be told from a run that simply matched nothing. It could not be before: the filter
+  # printed nothing either way and the script exited 0, so an unsupported --columns type or an
+  # expression the analyzer rewrites read exactly like a negative result. That cost three
+  # round trips on 12 September 2026 before the runner was invoked by hand, and it is the
+  # debt register entry this closes.
+  log="$(mktemp -t varka-emit.XXXXXX)"
+  trap 'rm -f "$log"' EXIT
+  # `|| true` so `set -e` does not abort before the diagnosis below: a non-zero run is
+  # exactly the case this block exists to explain.
+  build/sbt -batch "catalyst/Test/runMain $main$quoted" > "$log" 2>&1 || true
+  # `|| true` again: grep exits 1 when it filters everything out, which under `set -e` would
+  # abort here - the same silence, one line further down.
+  report="$(sed -E 's/^\[(info|error)\] ?//' "$log" \
+    | sed -n '/^entry \|^| expression/,$p' | grep -v -E '^\[(success|warn)\]|^WARNING: ' || true)"
+  if [ -z "$report" ]; then
+    echo "the dump produced no report; the run's own output follows" >&2
+    sed -E 's/^\[(info|error)\] ?//' "$log" | grep -E 'Exception|Error|error:' | head -5 >&2
+    exit 1
+  fi
+  printf '%s\n' "$report"
   exit 0
 fi
 

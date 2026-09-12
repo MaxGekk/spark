@@ -117,16 +117,23 @@ public class ChainsTest {
       List<String> tokens = List.of(e.projection().split("[^A-Za-z0-9_]+"));
       boolean date = tokens.contains("d") || tokens.contains("d2");
       boolean integer = tokens.contains("i");
-      boolean interval = tokens.contains("ym") || tokens.contains("ymm") || tokens.contains("ymy")
-          || tokens.contains("INTERVAL");
+      // Column names only. "INTERVAL" was in this list and should never have been: it is a type
+      // keyword in a cast or literal, never a column, so an entry reading no interval column at
+      // all counted toward the total - the same literal-for-column mistake the javadoc above
+      // says this method was rewritten to remove, left in the other half of the predicate.
+      boolean interval =
+          tokens.contains("ym") || tokens.contains("ymm") || tokens.contains("ymy");
       assertTrue(date, e.label() + " has no date column");
       if (date && integer && interval) {
         allThree++;
       }
     }
-    assertTrue(allThree >= 8,
-        "only " + allThree + " of " + Chains.ENTRIES.size() + " entries reference a date, an int "
-            + "and an interval column together; the list has drifted back to being about dates");
+    // Every entry, derived from the list rather than written down: the bound used to be 8 with
+    // twelve qualifying, so a third of the list could have lost its int or interval column and
+    // this would still have passed - which is the drift its javadoc says it exists to catch.
+    assertEquals(Chains.ENTRIES.size(), allThree,
+        "every entry must reference a date, an int and an interval column; the list has drifted "
+            + "back to being about dates");
   }
 
   @Test
