@@ -1261,11 +1261,24 @@ rather than the headline.
 shift by the Thursday rule's literal three days, and task 93 re-arms only a
 runtime-valued shift - so `extract(YEAROFWEEK FROM add_months(last_day(
 date_add(d, i)), i) + ymy)` declines at `[-6156431, 12144130]`, three days past
-the floor. The week entry here keeps its column offset below the re-arm.
-Whether a small literal shift should re-arm - guarding it would decline almost
-no batch, unlike a shift of twenty million days - is a follow-up to task 93,
-recorded in its 9.5 rather than fixed here.
-`DateChainBenchmark` runs them through the surface's driver - same table, same
+the floor. Whether a small literal shift should re-arm - guarding it would
+decline almost no batch, unlike a shift of twenty million days - is a follow-up
+to task 93, recorded in its 9.5 rather than fixed here.
+
+**The week entry sidesteps it by spelling the day shift as an interval**, and
+the difference is the saturation rather than the guard: a column day offset
+makes `dayRange` answer the whole of `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` on
+task 52's guarantee, leaving the shifts above it nothing, while a month shift
+over a plain column keeps the interval additive from the contract range. So it
+lowers with no `GuardedDay` in it at all and is admitted on `admitCalendar`'s
+first case.
+
+**An IR census of the twelve, since the claim above invites it.** Eleven carry a
+`GuardedDay`; the `quarter`/`next_day` entry carries two. Only the week entry
+carries none. So "most of these were impossible before task 93" understates it -
+it is all but one - and the eleven are the regression set for guard placement,
+not the week entry.
+`DateChainBenchmark` runs the chains through the surface's driver - same table, same
 harness, same residency and fixed-share guards - and writes
 `DateChain-<label>-results.txt`. The surface keeps its coverage job and its
 spelling; the chains answer the width question.

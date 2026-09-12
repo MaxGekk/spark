@@ -32,12 +32,13 @@
 # rows, where the surface needs 5e8, because more work per row buys the same executor
 # time as more rows without needing the memory to hold them.
 #
-# --shard I/N runs entries I, I+N, I+2N ... of the surface, so N runs between them
-# cover it exactly once and dev/varka_bench_merge.py joins their files back into one
-# per distribution. It is for GitHub's six-hour job limit, which the whole surface at
-# the row count the fixed-share rule wants does not fit; on a machine of your own,
-# leave it alone. The shard's output file is named for it, so shards of one run can
-# share a directory.
+# --shard I/N runs entries I, I+N, I+2N ... of whichever list --benchmark selected -
+# 52 surface entries or 12 chains, so N is bounded by that list and not by the
+# surface's length - and N runs between them cover it exactly once, with
+# dev/varka_bench_merge.py joining their files back into one per distribution. It is
+# for GitHub's six-hour job limit, which the whole surface at the row count the
+# fixed-share rule wants does not fit; on a machine of your own, leave it alone. The
+# shard's output file is named for it, so shards of one run can share a directory.
 #
 #   dev/varka_bench_surface.sh \
 #       spark-4.2.0-jdk17=/opt/spark-4.2.0-bin-hadoop3:/usr/lib/jvm/java-17-openjdk-amd64 \
@@ -221,7 +222,7 @@ done
 
 echo
 if [ -n "$shard" ]; then
-  echo "== shard $shard: no table, because a shard is a fraction of the surface. Collect every"
+  echo "== shard $shard: no table, because a shard is a fraction of the run. Collect every"
   echo "   shard's files and run dev/varka_bench_merge.py, which checks they agree and joins them."
   exit 0
 fi

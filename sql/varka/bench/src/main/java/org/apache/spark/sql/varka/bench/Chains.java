@@ -81,10 +81,25 @@ import java.util.List;
  * <p>One family still cannot sit above a re-armed guard: {@code weekofyear} and
  * {@code YEAROFWEEK} shift by the Thursday rule's literal three days, and a literal shift is
  * not re-armed - so {@code extract(YEAROFWEEK FROM add_months(last_day(date_add(d, i)), i) +
- * ymy)} declines at {@code [-6156431, 12144130]}, three days past the floor. The week entry
- * here keeps its column offset below the re-arm instead. Whether a small literal shift should
- * re-arm - guarding it would decline almost no batch, unlike a shift of twenty million days -
- * is a follow-up to task 93 rather than a defect in it.
+ * ymy)} declines at {@code [-6156431, 12144130]}, three days past the floor. Whether a small
+ * literal shift should re-arm - guarding it would decline almost no batch, unlike a shift of
+ * twenty million days - is a follow-up to task 93 rather than a defect in it.
+ *
+ * <p>The week entry here avoids that by spelling its day shift as an interval rather than as
+ * {@code date_add(d, i)}, and the difference is the saturation and not the guard: a column day
+ * offset makes {@code dayRange} answer the whole of
+ * {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]} on the strength of task 52's runtime guard, which
+ * leaves the shifts above it nothing, while a month shift over a plain column keeps the
+ * interval additive from the contract range and it stays inside. So that entry lowers to
+ * {@code (weekOfYear (thursdayOf (addMonths (addMonths (lastDay (addMonths col:0 col:1)) col:2)
+ * col:3)))} - no {@code GuardedDay} anywhere in it - and is admitted on {@code admitCalendar}'s
+ * first case. It is the one entry of the twelve that does not exercise task 93.
+ *
+ * <p>The other eleven do, and one of them twice:
+ * {@code quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY'))} lowers to
+ * {@code (quarter (nextDay (guardedDay (addMonths (guardedDay (addMonths (lastDay (addDays
+ * col:0 col:2)) col:2)) col:3)) lit:0))}. A reader reworking the literal-shift follow-up above
+ * should take the eleven as the regression set for guard placement, and not this one.
  *
  * <p>Every entry is checked to fuse before it is added - the driver's {@code --expect-fused}
  * fails the run otherwise - and the op count is the reason each was chosen over a lighter
