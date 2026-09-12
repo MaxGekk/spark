@@ -1238,8 +1238,33 @@ milestone's headline and is not in doubt.
 
 **So the chains are a second benchmark, not a change to the surface.**
 `Chains.ENTRIES` composes the same operations until the arithmetic dominates:
-twelve entries at 163 to 304 emitter ops, against 34 for `year(d)` and 64 for
-`weekofyear(d)`, every one checked to fuse before it was added.
+twelve entries at **293 to 483** emitter ops, against 34 for `year(d)` and 64
+for `weekofyear(d)`, every one checked to fuse before it was added.
+
+**Most of them were impossible until task 93 landed.** A chain that shifts a
+date by a column of days and then by a column month count declined, because
+task 52's guard promised the whole narrowed range and the shift above it had
+none left - `dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)` is the
+shape that opened task 93, and it is entry 7 here at 332 ops. Re-arming the
+guard is what makes this list what it is; the first version, written against
+what fused before, was 163 to 304 ops.
+
+**And the deeper list is the better demonstration of the primary claim, not
+only of the datapath.** Stock Spark's generated code pays its per-row costs at
+every link of a chain, while the kernel fuses the whole chain into one
+vectorised loop and shares the civil-from-days prefix across the calendar nodes
+reading one date (task 32). So the ratio against stock should *grow* with
+depth, and the surface's 18x to 25x is the floor of what the engine is worth
+rather than the headline.
+
+**One family still cannot sit above a re-arm.** `weekofyear` and `YEAROFWEEK`
+shift by the Thursday rule's literal three days, and task 93 re-arms only a
+runtime-valued shift - so `extract(YEAROFWEEK FROM add_months(last_day(
+date_add(d, i)), i) + ymy)` declines at `[-6156431, 12144130]`, three days past
+the floor. The week entry here keeps its column offset below the re-arm.
+Whether a small literal shift should re-arm - guarding it would decline almost
+no batch, unlike a shift of twenty million days - is a follow-up to task 93,
+recorded in its 9.5 rather than fixed here.
 `DateChainBenchmark` runs them through the surface's driver - same table, same
 harness, same residency and fixed-share guards - and writes
 `DateChain-<label>-results.txt`. The surface keeps its coverage job and its

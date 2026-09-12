@@ -20,17 +20,27 @@ package org.apache.spark.sql.varka.bench;
 import java.util.List;
 
 /**
- * Chained date expressions, for the question {@link Surface} cannot answer: how much does the
- * width of the vector datapath buy?
+ * Chained date expressions: what Varka is worth against stock Spark when a query does real
+ * work per row, which is the question {@link Surface} understates and the datapath question
+ * it cannot answer at all.
  *
- * <p><b>Why a second list.</b> The surface is one entry per expression, in the spelling a
- * reader would write, and that is what makes it a coverage document. It is also what makes it
- * the wrong instrument for a datapath measurement. Measured on the development laptop at 1e9
- * rows, {@code date_add(d, 3)} runs at 0.5 ns/row - that one *is* committed, in
- * {@code benchmarks/DateSurface-varka-jdk25-results.txt} - while reading four bytes and
- * writing four, which is about 15 GB/s and so single-core DRAM bandwidth on that machine.
- * The kernel is waiting for memory, not for the vector unit, and no width of datapath moves
- * bytes faster. Roughly a third of the surface is in that regime.
+ * <p><b>Why a second list, and why it is the one that makes the case.</b> The surface is one
+ * entry per expression, in the spelling a reader would write, and that is what makes it a
+ * coverage document. It also understates the engine twice over.
+ *
+ * <p>Its lightest rows are bound by memory bandwidth rather than by arithmetic: measured on the
+ * development laptop at 1e9 rows, {@code date_add(d, 3)} runs at 0.5 ns/row - that one *is*
+ * committed, in {@code benchmarks/DateSurface-varka-jdk25-results.txt} - while reading four
+ * bytes and writing four, about 15 GB/s and so single-core DRAM bandwidth on that machine. The
+ * kernel is waiting for memory, not for the vector unit, so no width of datapath moves it and
+ * roughly a third of the surface is in that regime.
+ *
+ * <p>And a single operation is where stock Spark is least disadvantaged. Its generated code
+ * pays its per-row costs once there; over a chain it pays them at every link, while the kernel
+ * here fuses the whole chain into one vectorised loop and shares the civil-from-days prefix
+ * across the calendar nodes that read one date (task 32). So the ratio against stock should
+ * *grow* with depth, and the surface's 18x to 25x is the floor of what this engine is worth
+ * rather than the headline. These entries are where that is visible.
  *
  * <p><b>What these are instead.</b> The same operations composed until the arithmetic per byte
  * read rises by an order of magnitude and the kernel is bound by what it computes rather than
@@ -61,6 +71,20 @@ import java.util.List;
  * run upload its evidence. They are therefore scratch figures in the sense
  * {@code dev/varka_quote_allowlist.txt} means it, and they are written here as the reasoning
  * that chose the list rather than as measurements anyone should quote.
+ *
+ * <p><b>Most of these were impossible before task 93.</b> A chain that shifts a date by a
+ * column of days and then by a column month count declined at compile time, because task 52's
+ * guard promised the whole narrowed range and the shift above it had none left; the entry at
+ * 332 ops below is the shape that opened that task. Re-arming the guard admits them, which is
+ * why this list is 293 to 483 emitter ops where its first version was 163 to 304.
+ *
+ * <p>One family still cannot sit above a re-armed guard: {@code weekofyear} and
+ * {@code YEAROFWEEK} shift by the Thursday rule's literal three days, and a literal shift is
+ * not re-armed - so {@code extract(YEAROFWEEK FROM add_months(last_day(date_add(d, i)), i) +
+ * ymy)} declines at {@code [-6156431, 12144130]}, three days past the floor. The week entry
+ * here keeps its column offset below the re-arm instead. Whether a small literal shift should
+ * re-arm - guarding it would decline almost no batch, unlike a shift of twenty million days -
+ * is a follow-up to task 93 rather than a defect in it.
  *
  * <p>Every entry is checked to fuse before it is added - the driver's {@code --expect-fused}
  * fails the run otherwise - and the op count is the reason each was chosen over a lighter
@@ -101,29 +125,27 @@ public final class Chains {
    * arithmetic - roughly 0.02 ns per op over a 0.8 ns memory floor, against a 3.6 ns/row
    * threshold, so about 140 ops is the break-even and 150 is the margin.
    */
-  static final int MIN_OPS = 150;
+  static final int MIN_OPS = 280;
 
   private static final List<Chain> CHAINS = List.of(
-      // Eight of the twelve carry a date, an int and an interval column at once. That is the
-      // claim the milestone wants to make and the reason this list is not about dates.
-      new Chain("(year(d + ym) - year(d2)) * 12 + month(d + ymm) + i", 304),
-      new Chain("dayofweek(last_day(d + ym) + CAST(i AS INTERVAL MONTH))", 303),
-      new Chain("weekofyear(add_months(d, i) + ymm)", 288),
-      new Chain("year(d - ymm) * 100 + dayofyear(d + ymy) + i", 280),
       // An interval *output*, built from two decomposed dates and an int: the third type as a
-      // result and not only as an input.
-      new Chain("make_ym_interval(year(d + ym), month(d + ymm) + i)", 274),
-      new Chain("quarter(d + ymm + CAST(i AS INTERVAL MONTH))", 262),
-      new Chain("year(add_months(d + ym, i))", 258),
-      new Chain("datediff(last_day(d + ym), date_add(d, i))", 178),
-      // Four without an interval, for contrast with the surface's own date/int rows and
-      // because the last of them is the control described below.
-      new Chain("dayofyear(add_months(last_day(date_add(d, i)), 1))", 218),
-      new Chain("quarter(last_day(add_months(d, i)))", 211),
-      // Two independent chains feeding one subtract: the only entry with instruction-level
+      // result and not only as an input, and the heaviest entry here.
+      new Chain("make_ym_interval(year(add_months(last_day(date_add(d, i)), i) + ymy), "
+          + "month(d + ymm) + i)", 483),
+      // Two independent chains feeding one subtract - the only shape with instruction-level
       // parallelism of its own, and so the control for whether the others are latency-bound.
-      new Chain("datediff(last_day(d), last_day(add_months(d, i)))", 207),
-      new Chain("extract(YEAROFWEEK FROM add_months(d, i))", 163));
+      new Chain("datediff(add_months(last_day(date_add(d, i)), i) + ymy, last_day(d + ym))", 466),
+      new Chain("weekofyear(add_months(last_day(d + ymm), i) + ymy)", 461),
+      new Chain("quarter(add_months(last_day(date_add(d, i) + ym), i) + ymm)", 444),
+      new Chain("quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY'))", 346),
+      new Chain("dayofyear(add_months(last_day(date_add(d, i)), i) + ymy)", 335),
+      // The shape task 93 was opened by: it declined until the guard learned to re-arm.
+      new Chain("dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)", 332),
+      new Chain("month(add_months(last_day(date_add(d, i)), i) + ymy)", 327),
+      new Chain("year(add_months(last_day(date_add(d, i)), i) + ymy)", 326),
+      new Chain("year(add_months(last_day(date_add(d, i) + ym), i))", 326),
+      new Chain("dayofweek(add_months(last_day(date_add(d, i)), i) + ymy)", 308),
+      new Chain("datediff(add_months(last_day(date_add(d, i)), i) + ymy, d)", 293));
 
   /**
    * The chains, ordered by family rather than by cost, the way {@link Surface#ENTRIES} is: a
