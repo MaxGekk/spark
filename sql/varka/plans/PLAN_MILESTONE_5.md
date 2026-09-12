@@ -553,7 +553,17 @@ on `compileCoalesce` proves this (`(kT AND v(x)) OR (NOT kT AND v(y))` with
 `kT = v(x)` reduces to `v(x) OR v(y)`), and `pureOf` still returns nothing
 for it because `IfElse` has no arm.
 
-**The census.** `VarkaWordCensus` (catalyst test scope,
+**The census, and a caveat found on 12 September 2026.** Its `surface` corpus is
+not the whole surface: `resolve` had no analyzer pass, so every date/interval
+shape task 67 added parsed to an `Add` the compiler declined, and the corpus was
+truncated by hand to "the `Surface` projections that resolve without the
+analyzer's type coercion". The figures below are therefore over about two thirds
+of the surface while reading as though they were over all of it. The resolver is
+fixed and the interval columns are declared, so widening the corpus is now a
+matter of adding the entries and requoting this paragraph - work for whichever of
+tasks 74 and 75 next touches the census, since it moves every number here.
+
+`VarkaWordCensus` (catalyst test scope,
 `dev/varka_word_census.sh`) classifies every value root of three corpora by
 its word today and under the two extensions, and checks its verdict against
 the emitter's by emitting each single-root shape with the pass on and off:

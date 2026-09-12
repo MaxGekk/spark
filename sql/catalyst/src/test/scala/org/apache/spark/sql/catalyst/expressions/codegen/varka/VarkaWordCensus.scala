@@ -187,11 +187,21 @@ object VarkaWordCensus {
   }
 
   /**
-   * The `Surface` projections. This used to read "...that resolve without the analyzer's type
-   * coercion" and to omit every date/interval shape, which was a workaround for the missing
-   * coercion pass rather than a choice: the census described itself as covering the surface
-   * while measuring about two thirds of it. With `resolve` sharing the fixed resolver the
-   * omitted entries can be carried, and they are.
+   * The `Surface` projections, minus its date/interval shapes - **not yet** the whole surface,
+   * and the gap is why this comment is longer than it looks like it should be.
+   *
+   * This read "the `Surface` projections that resolve without the analyzer's type coercion",
+   * which was a workaround for a bug rather than a choice: `resolve` had no analyzer pass, so
+   * `d + ymm` parsed to an `Add` the compiler declined, and the entries were dropped to keep
+   * the census running. That bug is fixed - `resolve` now shares `VarkaSqlResolve` with
+   * `VarkaEmitDump` - and the interval columns are declared above, so the omitted entries
+   * *can* be carried now.
+   *
+   * They are not carried yet, deliberately. Adding them moves every number the census
+   * publishes, and `PLAN_MILESTONE_5.md` 2.x quotes a 7 September run of it while describing
+   * that run as covering "the `Surface` projections". Re-running and requoting belongs to the
+   * task that owns the census (74/75), not to the benchmark change that happened to find the
+   * resolver bug. Until then this list is about two thirds of the surface and says so here.
    */
   private val surface = Seq(
     "date_add(d, 3)", "date_add(d, i)", "date_sub(d, 5)", "datediff(d2, d)", "unix_date(d)",
