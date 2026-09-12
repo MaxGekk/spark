@@ -1,0 +1,143 @@
+label:          varka-off-jdk25
+spark:          5.0.0-SNAPSHOT
+commit:         d0f97be0391
+datapath:       115.2 lane-ops/ns at 256 bits, 231.3 at 512 bits, ratio 2.01
+canary:         OFF
+host:           runnervmlun5p
+spark home:     /home/runner/work/varka/varka
+date:           2026-09-12T22:54:22Z
+jdk:            OpenJDK 64-Bit Server VM 25.0.4+7-LTS
+kernel:         6.17.0-1022-azure
+cpu:            AMD EPYC 9V45 96-Core Processor
+cpu flags:      avx avx2 avx512f avx512dq avx512ifma avx512cd avx512bw avx512vl avx_vnni avx512_bf16 avx512vbmi avx512_vbmi2 avx512_vnni avx512_bitalg avx512_vpopcntdq avx512_vp2intersect
+MaxVectorSize:  64
+power:          governor=n/a epp=n/a
+load at start:  1.27
+rows:           200000000
+partitions:     1
+cache:          1 of 1 partitions cached, 1.2 GiB in memory, 0.0 GiB on disk, Memory Deserialized 1x Replicated
+benchmark:      chains
+shard:          0/1
+entries:        12
+methodology:    5+ iterations over 2s windows after 2s warm-up; wall time by nanoTime, executor time as the sum of TaskMetrics.executorRunTime over the iteration
+
+make_ym_interval(year(add_months(last_day(date_add(d, i)), i) + ymy), month(d + ymm) + i) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                          20627          20903         258          9.7         103.1       1.0X
+
+make_ym_interval(year(add_months(last_day(date_add(d, i)), i) + ymy), month(d + ymm) + i) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                         20590          20865         259          9.7         103.0       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+datediff(add_months(last_day(date_add(d, i)), i) + ymy, last_day(d + ym)) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                          20993          21068          51          9.5         105.0       1.0X
+
+datediff(add_months(last_day(date_add(d, i)), i) + ymy, last_day(d + ym)) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                         20961          21029          49          9.5         104.8       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+weekofyear(add_months(last_day(d + ymm), i) + ymy) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                   25991          26267         183          7.7         130.0       1.0X
+
+weekofyear(add_months(last_day(d + ymm), i) + ymy) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                  25949          26230         185          7.7         129.7       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+quarter(add_months(last_day(date_add(d, i) + ym), i) + ymm) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                            23094          23220         133          8.7         115.5       1.0X
+
+quarter(add_months(last_day(date_add(d, i) + ym), i) + ymm) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                           23056          23178         136          8.7         115.3       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY')) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                           18214          18291          59         11.0          91.1       1.0X
+
+quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY')) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                          18183          18258          59         11.0          90.9       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+dayofyear(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                         15958          16165         148         12.5          79.8       1.0X
+
+dayofyear(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                        15919          16133         151         12.6          79.6       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                         13550          13802         221         14.8          67.8       1.0X
+
+dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                        13510          13766         222         14.8          67.6       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.3%
+
+month(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                     14314          14477         231         14.0          71.6       1.0X
+
+month(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                    14281          14442         230         14.0          71.4       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+year(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                    14243          14430         144         14.0          71.2       1.0X
+
+year(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                   14212          14395         142         14.1          71.1       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+year(add_months(last_day(date_add(d, i) + ym), i)) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                   14952          15383         307         13.4          74.8       1.0X
+
+year(add_months(last_day(date_add(d, i) + ym), i)) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                  14919          15350         306         13.4          74.6       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+dayofweek(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                         16113          16148          44         12.4          80.6       1.0X
+
+dayofweek(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                        16084          16115          43         12.4          80.4       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+datediff(add_months(last_day(date_add(d, i)), i) + ymy, d) over 200000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                           13896          14112         307         14.4          69.5       1.0X
+
+datediff(add_months(last_day(date_add(d, i)), i) + ymy, d) over 200000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                          13861          14078         308         14.4          69.3       1.0X
+# plan: projection, columnar consumer plain
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.3%
+
