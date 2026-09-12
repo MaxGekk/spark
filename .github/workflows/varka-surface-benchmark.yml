@@ -309,7 +309,12 @@ jobs:
       run: |
         echo "::notice::measuring on $GATE_CPU - $GATE_LANES lane-ops/ns at 128/256/512 bits; control $GATE_CONTROL, 512:256 $GATE_RATIO"
         # An artifact name may not contain a slash, and a shard is spelled I/N.
-        echo "slug=-${BENCHMARK}${SHARD:+-shard${SHARD//\//of}}" >> "$GITHUB_OUTPUT"
+        # The surface keeps the artifact name it has had, so a hand-typed
+        # `gh run download -n varka-surface-results` keeps working; only the new
+        # benchmark takes a suffix.
+        suffix=""
+        [ "$BENCHMARK" != "surface" ] && suffix="-$BENCHMARK"
+        echo "slug=${suffix}${SHARD:+-shard${SHARD//\//of}}" >> "$GITHUB_OUTPUT"
 
     # restore/save rather than the combined action, and the save placed directly after
     # the download rather than left to a post step. `actions/cache` does not save when
@@ -373,7 +378,9 @@ jobs:
         ARGS+=(--force --skip-build)
         [ -n "$ONLY" ] && ARGS+=(--only "$ONLY")
         [ -n "$SHARD" ] && ARGS+=(--shard "$SHARD")
-        ARGS+=(--benchmark "$BENCHMARK")
+        # Guarded like ONLY and SHARD above it: an empty value would pass
+        # `--benchmark ""` and the shell driver would reject it.
+        [ -n "$BENCHMARK" ] && ARGS+=(--benchmark "$BENCHMARK")
         # Varka last: the comparison table's ratios are the last file against the others.
         dev/varka_bench_surface.sh "${ARGS[@]}" \
           "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17" \
@@ -413,7 +420,7 @@ jobs:
         git config --local user.name "${{ github.actor }}"
         git config --local user.email "${{ github.actor }}@users.noreply.github.com"
         git add sql/varka/bench/benchmarks
-        git commit -m "Varka date surface results (${{ inputs.rows }} rows)"
+        git commit -m "Varka date ${{ inputs.benchmark }} results (${{ inputs.rows }} rows)"
         for i in {1..5}; do
           git fetch origin ${{ github.ref_name }}
           git rebase origin/${{ github.ref_name }}

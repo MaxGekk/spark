@@ -20,7 +20,6 @@ package org.apache.spark.sql.varka.bench;
 import java.util.List;
 
 import org.apache.spark.sql.SparkSession;
-import org.apache.spark.storage.StorageLevel;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -45,18 +44,12 @@ public class ChainsTest {
 
   @BeforeAll
   public static void start() {
-    spark = SparkSession.builder().master("local[1]").appName("ChainsTest")
-        .config("spark.ui.enabled", "false")
-        .config("spark.sql.shuffle.partitions", "1")
-        .getOrCreate();
-    DateSurfaceBenchmark.buildTable(spark, 1_000L, 2, StorageLevel.MEMORY_ONLY());
+    spark = BenchSession.start("ChainsTest");
   }
 
   @AfterAll
   public static void stop() {
-    if (spark != null) {
-      spark.stop();
-    }
+    BenchSession.stop(spark);
   }
 
   @Test

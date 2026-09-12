@@ -130,9 +130,11 @@ public final class Chains {
    * what costs is the arithmetic inside each operation, not how many there are.
    *
    * @param expr the projection, in the spelling a reader would write
-   * @param emitterOps IntVector and VectorMask invocations in the dense loop, from
+   * @param emitterOps {@code IntVector} invocations in {@code loopDense0}, from
    *                   {@code dev/varka_emit.sh --table "<expr>"}, which is the source of truth
-   *                   and regenerates every number here
+   *                   and regenerates every number here. Not "IntVector and VectorMask", which
+   *                   is what this said and what the tool's non-table mode prints - the table
+   *                   mode counts one of the two, and the numbers below are the table's
    */
   record Chain(String expr, int emitterOps) {}
 

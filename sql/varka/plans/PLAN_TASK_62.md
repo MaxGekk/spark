@@ -1263,7 +1263,7 @@ runtime-valued shift - so `extract(YEAROFWEEK FROM add_months(last_day(
 date_add(d, i)), i) + ymy)` declines at `[-6156431, 12144130]`, three days past
 the floor. Whether a small literal shift should re-arm - guarding it would
 decline almost no batch, unlike a shift of twenty million days - is a follow-up
-to task 93, recorded in its 9.5 rather than fixed here.
+to task 93 rather than fixed here. (It is not in that plan's 9.5, which records only the double guard; this paragraph is its record.)
 
 **The week entry sidesteps it by spelling the day shift as an interval**, and
 the difference is the saturation rather than the guard: a column day offset
