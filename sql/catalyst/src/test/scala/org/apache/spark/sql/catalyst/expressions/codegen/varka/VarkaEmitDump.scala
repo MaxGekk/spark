@@ -23,13 +23,14 @@ import java.util.Locale
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.catalyst.FunctionIdentifier
-import org.apache.spark.sql.catalyst.analysis.{FunctionRegistry, UnresolvedAttribute}
+import org.apache.spark.sql.catalyst.analysis.{FunctionRegistry, SimpleAnalyzer, UnresolvedAttribute}
 import org.apache.spark.sql.catalyst.analysis.UnresolvedFunction
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, ShortType}
+import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
+import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, ShortType, YearMonthIntervalType}
 
 /**
  * The emitter's debugging view, one command: what a projection compiles to, what the emitter
@@ -43,7 +44,8 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, Sh
  * }}}
  *
  * Expressions are SQL, parsed by Catalyst's parser and resolved against the columns given with
- * `--columns name:type,...` (default `d:date,d2:date,i:int,sh:short,by:byte`) and the built-in
+ * `--columns name:type,...` (default `d:date,d2:date,i:int,sh:short,by:byte`; `ymm`, `ymy` and
+ * `ym` declare year-month interval columns by field) and the built-in
  * function registry, then handed to [[VarkaExpressionCompiler]] exactly as a projection would
  * be. The output is the IR each entry lowered to, the shape hash production would name the
  * class by, and for every emitted method its bytecode size, its `IntVector` and `VectorMask`
@@ -195,21 +197,43 @@ object VarkaEmitDump {
       case "int" | "integer" => IntegerType
       case "short" | "smallint" => ShortType
       case "byte" | "tinyint" => ByteType
+      // Task 67's third type in the date lane. Spelled by field, because the field decides
+      // what the emitter does with it: MONTH and YEAR are the ends a column can hold, and
+      // "ym" is the YEAR TO MONTH pair make_ym_interval produces.
+      case "ymm" | "interval month" => YearMonthIntervalType(YearMonthIntervalType.MONTH)
+      case "ymy" | "interval year" => YearMonthIntervalType(YearMonthIntervalType.YEAR)
+      case "ym" | "interval year to month" => YearMonthIntervalType()
       case other => throw new IllegalArgumentException(s"unsupported column type $other")
     }
     AttributeReference(name.trim, dt)()
   }
 
-  /** Bind attributes by name and functions through the built-in registry; nothing else. */
+  /**
+   * Bind attributes by name and functions through the built-in registry, then run the
+   * analyzer over the result so that operators get the type coercion they need.
+   *
+   * The coercion pass is not optional and its absence was silent. `d + ym` parses to
+   * `Add(date, yearmonthinterval)`, which only becomes `DateAddYMInterval` when
+   * `AnsiTypeCoercion`/`TypeCoercion` rewrites it; without that the compiler sees an `Add`
+   * over two types it has no arm for and declines. So every expression written with an
+   * operator rather than a function - which is every date/interval arithmetic shape task 67
+   * added - reported "declined" here while fusing perfectly well in a real session, and the
+   * tool disagreed with `Surface`'s own `expectFused` on entries the surface has been timing
+   * for weeks. Resolving through a `LocalRelation` and `SimpleAnalyzer` costs nothing and
+   * makes the tool agree with the engine.
+   */
   private def resolve(e: Expression, childOutput: Seq[Attribute]): Expression = {
     val byName = childOutput.map(a => a.name -> a).toMap
-    e.transformUp {
+    val bound = e.transformUp {
       case UnresolvedAttribute(Seq(name)) =>
         byName.getOrElse(name, throw new IllegalArgumentException(
           s"unknown column $name; declare it with --columns"))
       case f: UnresolvedFunction =>
         FunctionRegistry.builtin.lookupFunction(FunctionIdentifier(f.nameParts.last), f.arguments)
     }
+    val analyzed = SimpleAnalyzer.execute(
+      Project(Seq(Alias(bound, "a")()), LocalRelation(childOutput)))
+    analyzed.asInstanceOf[Project].projectList.head.asInstanceOf[Alias].child
   }
 
   /** `k=v,k=v` onto the record's `with<K>` methods, by reflection. */

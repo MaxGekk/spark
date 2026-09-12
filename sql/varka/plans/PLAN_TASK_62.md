@@ -1237,13 +1237,44 @@ question - Varka against stock Spark, where it reads 18x to 25x, which is the
 milestone's headline and is not in doubt.
 
 **So the chains are a second benchmark, not a change to the surface.**
-`Chains.ENTRIES` composes the same operations three and four deep until the
-arithmetic dominates: ten entries at 152 to 218 emitter ops, against 34 for
-`year(d)` and 64 for `weekofyear(d)`, every one checked to fuse before it was
-added. `DateChainBenchmark` runs them through the surface's driver - same
-table, same harness, same residency and fixed-share guards - and writes
+`Chains.ENTRIES` composes the same operations until the arithmetic dominates:
+twelve entries at 163 to 304 emitter ops, against 34 for `year(d)` and 64 for
+`weekofyear(d)`, every one checked to fuse before it was added.
+`DateChainBenchmark` runs them through the surface's driver - same table, same
+harness, same residency and fixed-share guards - and writes
 `DateChain-<label>-results.txt`. The surface keeps its coverage job and its
 spelling; the chains answer the width question.
+
+**And they mix the three types, which is the second reason to have them.**
+Varka covers DATE, INT and the year-month interval, all int32 in one lane, and
+a benchmark of dates alone both understates that to a reader and exercises less
+of the compiler. Eight of the twelve carry a date column, an int column and an
+interval column in one expression; one produces an interval rather than
+consuming one. Counted over column references rather than substrings - the
+first version of the test that guards this counted the literal in `* 12` as int
+coverage and so passed a list where only four entries touched the int column at
+all. A literal folds into the kernel; a column is loaded and vectorised, and
+only the second demonstrates anything.
+
+**A tooling bug found while choosing them, which invalidates earlier op
+counts.** `dev/varka_emit.sh` resolved attributes and functions but never ran
+type coercion, so `d + ym` stayed an `Add` over a date and an interval instead
+of becoming `DateAddYMInterval`, and the tool reported **declined** for it -
+for an expression `Surface` has been timing with `expectFused` for weeks. Every
+operator-spelled expression was affected, which is every date/interval
+arithmetic shape task 67 added. The fix resolves through a `LocalRelation` and
+`SimpleAnalyzer`; any op count taken from this tool for an operator expression
+before 12 September 2026 should be re-taken.
+
+**Coverage gaps found the same way, and not fixed here.** `datediff(d2, d) * i`
+and `i % 20` decline - an int multiply by a column and an int remainder -
+although multiplying by a literal is fine, as `CAST(month(d) AS INTERVAL YEAR)
+* 3` shows. `make_ym_interval(i, i)` declines where
+`make_ym_interval(year(d), month(d))` fuses. And
+`dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)` declines where the
+same chain without the trailing interval fuses. These belong in the milestone's
+task table rather than in this task, and they are why several natural
+mixed-type spellings are absent from the list.
 
 **Registered prediction, to be scored against the first committed chain file.**
 From the 1e8 dispatch of 11 September, whose results were never committed:
@@ -1251,7 +1282,9 @@ the per-iteration fixed cost is near 18 ms, and fitting `year(d)` at 1.5 ns/row
 and `weekofyear(d)` at 2.1 ns/row against their op counts gives roughly
 0.02 ns per op over a memory floor near 0.8 ns. That predicts:
 
-1. every chain entry between **3.9 and 5.2 ns/row** at 1e8 rows on a runner;
+1. every chain entry above **3.6 ns/row** at 1e8 rows on a runner - the entries
+   are 163 to 304 ops where the prediction was framed at 152 to 218, so the
+   margin is wider than when it was written;
 2. therefore a worst fixed share **under 5%** at 1e8 rows, where the surface
    needed 5e8 - so one dispatch, resident table, no sharding;
 3. and a **measurable 256-to-512 difference** on these entries where the

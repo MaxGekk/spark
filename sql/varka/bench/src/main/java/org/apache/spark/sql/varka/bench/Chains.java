@@ -32,23 +32,17 @@ import java.util.List;
  * The kernel is waiting for memory, not for the vector unit, and no width of datapath moves
  * bytes faster. Roughly a third of the surface is in that regime.
  *
- * <p><b>What these are instead.</b> The same expressions composed three and four deep, so the
- * arithmetic per byte read rises by an order of magnitude and the kernel becomes bound by what
- * it computes. Op counts from {@code dev/varka_emit.sh --table}, against 34 for
- * {@code year(d)} and 64 for {@code weekofyear(d)}:
+ * <p><b>What these are instead.</b> The same operations composed until the arithmetic per byte
+ * read rises by an order of magnitude and the kernel is bound by what it computes rather than
+ * by what it loads. Op counts from {@code dev/varka_emit.sh --table}, against 34 for
+ * {@code year(d)} and 64 for {@code weekofyear(d)}.
  *
- * <pre>
- *   dayofyear(add_months(last_day(date_add(d, i)), 1))    218
- *   quarter(last_day(add_months(d, i)))                   211
- *   year(add_months(last_day(date_add(d, i)), 3))         209
- *   datediff(last_day(d), last_day(add_months(d, i)))     207
- *   dayofweek(add_months(last_day(d), i))                 191
- *   datediff(last_day(add_months(d, i)), date_add(d, 30)) 178
- *   weekofyear(add_months(d, i))                          176
- *   extract(YEAROFWEEK FROM add_months(d, i))             163
- *   year(next_day(add_months(d, i), 'MONDAY'))            162
- *   quarter(add_months(date_add(d, i), 6))                152
- * </pre>
+ * <p><b>And they mix the types on purpose.</b> Varka covers three - DATE, INT and the
+ * year-month interval, all int32 in one lane - and a benchmark of dates alone understates that
+ * to a reader and exercises less of the compiler. Seven of the twelve entries carry a date, an
+ * int and an interval in one expression; one produces an interval rather than consuming one.
+ * That is closer to real SQL than a chain of one type, and it is the claim the milestone
+ * actually wants to make.
  *
  * <p><b>Two other things follow from the arithmetic, and they are why this list exists at the
  * size it does.</b> The job-size rule of {@code DateSurfaceBenchmark} fails a row whose fixed
@@ -73,6 +67,15 @@ import java.util.List;
  * spelling of the same shape. A chain that folds is worth knowing about but not worth timing:
  * {@code datediff(date_from_unix_date(unix_date(d) + i), d)} collapses to 9 ops, because
  * {@code date_from_unix_date(unix_date(d))} is the identity and the compiler knows it.
+ *
+ * <p><b>Shapes that decline, found while choosing these and worth recording.</b>
+ * {@code datediff(d2, d) * i} and {@code i % 20} both decline - an int multiply by a column
+ * and an int remainder - although multiplying by a literal is fine, as
+ * {@code CAST(month(d) AS INTERVAL YEAR) * 3} in {@link Surface} shows. So does
+ * {@code make_ym_interval(i, i)}, where the surface's
+ * {@code make_ym_interval(year(d), month(d))} fuses. These are coverage gaps in the int32
+ * arm rather than anything wrong here, and they are why several otherwise natural mixed-type
+ * spellings are absent.
  */
 public final class Chains {
 
@@ -101,16 +104,26 @@ public final class Chains {
   static final int MIN_OPS = 150;
 
   private static final List<Chain> CHAINS = List.of(
-      new Chain("year(add_months(last_day(date_add(d, i)), 3))", 209),
-      new Chain("quarter(last_day(add_months(d, i)))", 211),
+      // Eight of the twelve carry a date, an int and an interval column at once. That is the
+      // claim the milestone wants to make and the reason this list is not about dates.
+      new Chain("(year(d + ym) - year(d2)) * 12 + month(d + ymm) + i", 304),
+      new Chain("dayofweek(last_day(d + ym) + CAST(i AS INTERVAL MONTH))", 303),
+      new Chain("weekofyear(add_months(d, i) + ymm)", 288),
+      new Chain("year(d - ymm) * 100 + dayofyear(d + ymy) + i", 280),
+      // An interval *output*, built from two decomposed dates and an int: the third type as a
+      // result and not only as an input.
+      new Chain("make_ym_interval(year(d + ym), month(d + ymm) + i)", 274),
+      new Chain("quarter(d + ymm + CAST(i AS INTERVAL MONTH))", 262),
+      new Chain("year(add_months(d + ym, i))", 258),
+      new Chain("datediff(last_day(d + ym), date_add(d, i))", 178),
+      // Four without an interval, for contrast with the surface's own date/int rows and
+      // because the last of them is the control described below.
       new Chain("dayofyear(add_months(last_day(date_add(d, i)), 1))", 218),
+      new Chain("quarter(last_day(add_months(d, i)))", 211),
+      // Two independent chains feeding one subtract: the only entry with instruction-level
+      // parallelism of its own, and so the control for whether the others are latency-bound.
       new Chain("datediff(last_day(d), last_day(add_months(d, i)))", 207),
-      new Chain("dayofweek(add_months(last_day(d), i))", 191),
-      new Chain("datediff(last_day(add_months(d, i)), date_add(d, 30))", 178),
-      new Chain("weekofyear(add_months(d, i))", 176),
-      new Chain("extract(YEAROFWEEK FROM add_months(d, i))", 163),
-      new Chain("year(next_day(add_months(d, i), 'MONDAY'))", 162),
-      new Chain("quarter(add_months(date_add(d, i), 6))", 152));
+      new Chain("extract(YEAROFWEEK FROM add_months(d, i))", 163));
 
   /**
    * The chains, ordered by family rather than by cost, the way {@link Surface#ENTRIES} is: a

@@ -98,6 +98,37 @@ public class ChainsTest {
     }
   }
 
+  /**
+   * Varka covers three types in one int32 lane - DATE, INT and the year-month interval - and
+   * the point of this list over a chain of dates is to exercise and demonstrate all three, in
+   * single expressions rather than in separate rows. A list that drifted back to dates alone
+   * would still be heavy, still fuse, and still miss what it is for, with nothing to say so.
+   *
+   * <p>Counted over column *references*, tokenised, not over substrings: an earlier version of
+   * this test looked for digits to find int arithmetic and so counted the literal in
+   * {@code * 12} as int coverage, which flattered a list where only four entries used the int
+   * column at all. A literal is folded into the kernel; a column is loaded and vectorised, and
+   * only the second demonstrates anything.
+   */
+  @Test
+  public void theChainsMixAllThreeTypes() {
+    int allThree = 0;
+    for (Surface.Entry e : Chains.ENTRIES) {
+      List<String> tokens = List.of(e.projection().split("[^A-Za-z0-9_]+"));
+      boolean date = tokens.contains("d") || tokens.contains("d2");
+      boolean integer = tokens.contains("i");
+      boolean interval = tokens.contains("ym") || tokens.contains("ymm") || tokens.contains("ymy")
+          || tokens.contains("INTERVAL");
+      assertTrue(date, e.label() + " has no date column");
+      if (date && integer && interval) {
+        allThree++;
+      }
+    }
+    assertTrue(allThree >= 8,
+        "only " + allThree + " of " + Chains.ENTRIES.size() + " entries reference a date, an int "
+            + "and an interval column together; the list has drifted back to being about dates");
+  }
+
   @Test
   public void labelsAreUniqueSoTablesAreTooAcrossFiles() {
     long distinct = Chains.ENTRIES.stream().map(Surface.Entry::label).distinct().count();
