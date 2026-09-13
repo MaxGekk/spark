@@ -25,6 +25,13 @@ bytecode emitted with the JDK 25 Class-File API, running the Vector API over
 zero-copy Panama `MemorySegment` views of Arrow `DateDayVector` buffers -
 bypassing Spark's per-row code generation on the happy path.
 
+This page is long, and the sections stand on their own. If you are new here, the
+**Glossary** is the one to read first - *lane*, *word*, *morsel* and *epilogue* all mean
+something specific in this engine and appear on almost every page after it.
+
+* Table of contents
+{:toc}
+
 ## Overview
 
 The Spark SQL runtime normally executes expressions by generating Java source,
