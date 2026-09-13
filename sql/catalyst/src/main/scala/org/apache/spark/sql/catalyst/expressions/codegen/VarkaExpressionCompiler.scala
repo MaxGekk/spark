@@ -233,13 +233,12 @@ private[sql] case class CompiledVarkaPredicate(
  * Compiles a bound projection list to the Varka vector IR, recursing where the MVP's flat matcher
  * demanded bare attributes - `datediff(date_add(d, 7), d2)` compiles where milestone 1 saw nothing,
  * and so do `CASE WHEN`/`IF` (via interior comparisons and the three-valued connectives),
- * `greatest`/`least`, `dayofweek`/`weekday` and date literals. Task 20 widened the conditions with
- * `IN` over date literals (capped, see [[MaxInLiterals]]) and the validity predicates `IS [NOT]
- * NULL` over bare columns, and the values with `coalesce`/`nvl`/`nvl2` (lowered onto the validity
- * condition) and the identity date cast. Used by both `VarkaColumnarRule` (is the projection
- * eligible?) and `VarkaKernelEvaluator` (what does the emitted loop compute?), so eligibility
- * cannot drift from execution: there is one compiler and the rule's question is
- * `compilePartial(...).isDefined`.
+ * `greatest`/`least`, `dayofweek`/`weekday` and date literals. The conditions also take `IN` over
+ * date literals (capped, see [[MaxInLiterals]]) and the validity predicates `IS [NOT] NULL` over
+ * bare columns, and the values with `coalesce`/`nvl`/`nvl2` (lowered onto the validity condition)
+ * and the identity date cast. Used by both `VarkaColumnarRule` (is the projection eligible?) and
+ * `VarkaKernelEvaluator` (what does the emitted loop compute?), so eligibility cannot drift from
+ * execution: there is one compiler and the rule's question is `compilePartial(...).isDefined`.
  *
  * Eligibility is per entry, not all or nothing: [[compilePartial]] classifies every entry as fused,
  * forwarded (a bare column of any type, zero-copy) or residual (per-row), and the projection is
@@ -247,9 +246,9 @@ private[sql] case class CompiledVarkaPredicate(
  * nothing from Varka and stays on Janino untouched. [[compile]] remains as the all-entries-fused
  * special case for callers that need exactly that.
  *
- * Task 21 adds the third entry point, [[compilePredicate]]: a filter condition compiled to a
- * single condition root - the selection mask the emitter writes as a bitmap - with the same
- * per-part eligibility, split on the predicate's `AND` spine instead of projection entries.
+ * The third entry point, [[compilePredicate]], is a filter condition compiled to a single condition
+ * root - the selection mask the emitter writes as a bitmap - with the same per-part eligibility,
+ * split on the predicate's `AND` spine instead of projection entries.
  *
  * Literal day offsets fold through [[DateVarkaSupport.foldDaysOffset]] - the same rule the MVP
  * matched on - into slots of the runtime argument table, assigned per distinct '''value''': two
@@ -325,11 +324,11 @@ private[sql] object VarkaExpressionCompiler {
           val literalsMark = literals.size
           val boundsMark = sink.boundsMark
           compileNode(e, inputs, literals, sink) match {
-            // Task 20: an accepted entry must also fit the emitter's structural budgets
-            // together with the entries accepted before it. The emitter enforces the same
-            // limits, but at emission time, where a breach can only become a silent
-            // per-batch fallback - no decline reason, and EXPLAIN still claims fusion. So
-            // the compiler mirrors them and demotes the overflowing entry to residual.
+            // An accepted entry must also fit the emitter's structural budgets together with the
+            // entries accepted before it. The emitter enforces the same limits, but at emission
+            // time, where a breach can only become a silent per-batch fallback - no decline reason,
+            // and EXPLAIN still claims fusion. So the compiler mirrors them and demotes the
+            // overflowing entry to residual.
             case Some(ir) if VarkaLoopEmitter.fitsBudgets((outputs :+ ir).asJava, inputs.size) =>
               sink.take()
               outputs += ir
@@ -461,14 +460,14 @@ private[sql] object VarkaExpressionCompiler {
       sink: DeclineSink): Option[VarkaVectorIR] = expr match {
     case br: BoundReference if br.dataType == DateType =>
       Some(columnRef(br, inputs))
-    // Task 67: a year-month interval column, on the same lane. Its value is a count of months in
-    // every unit, so nothing about the lowering changes; what makes widening the leaf safe rather
-    // than "do not open it wider" is that Spark's own typing decides where the value may appear. An
-    // interval only type-checks into DateAddYMInterval, the ordered comparisons and IN, the
-    // same-typed Least/Greatest/Coalesce/If/CaseWhen, and Cast - never into date_add's offset,
-    // datediff, a calendar extraction or AddMonths' date operand, all of which are typed DateType
-    // or IntegerType. So an interval in a date position is a type error the analyzer rejected
-    // before the compiler ran, and the leaf cannot put one there.
+    // A year-month interval column, on the same lane. Its value is a count of months in every unit,
+    // so nothing about the lowering changes; what makes widening the leaf safe rather than "do not
+    // open it wider" is that Spark's own typing decides where the value may appear. An interval
+    // only type-checks into DateAddYMInterval, the ordered comparisons and IN, the same-typed
+    // Least/Greatest/Coalesce/If/CaseWhen, and Cast - never into date_add's offset, datediff, a
+    // calendar extraction or AddMonths' date operand, all of which are typed DateType or
+    // IntegerType. So an interval in a date position is a type error the analyzer rejected before
+    // the compiler ran, and the leaf cannot put one there.
     case br: BoundReference if br.dataType.isInstanceOf[YearMonthIntervalType] =>
       Some(columnRef(br, inputs))
     // The interval literal, beside the date literal and for the same reason: the value is
@@ -503,35 +502,35 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink)
     case DateFromUnixDate(child) =>
       compileNode(child, inputs, literals, sink)
-    // Task 67's relabels, on `unix_date`'s pattern above: a cast that returns its operand unchanged
-    // is the child alone, with no node emitted. `intToYearMonthInterval` returns `v` for a MONTH
-    // end field and `yearMonthIntervalToInt` returns `v` for a MONTH-ended interval, so both
-    // directions of the MONTH unit are the identity on the lane; only the Spark type on the outside
-    // differs, and that rides on `outputTypes`. The YEAR unit is neither direction's identity - it
-    // multiplies or divides by twelve. Its outbound half is the arm below; its inbound half,
-    // `CAST(ym AS INT)` over a YEAR-ended interval, is a division by twelve, which is not supported
-    // yet - it belongs with the year-month extracts.
+    // The interval relabels, on `unix_date`'s pattern above: a cast that returns its operand
+    // unchanged is the child alone, with no node emitted. `intToYearMonthInterval` returns `v` for
+    // a MONTH end field and `yearMonthIntervalToInt` returns `v` for a MONTH-ended interval, so
+    // both directions of the MONTH unit are the identity on the lane; only the Spark type on the
+    // outside differs, and that rides on `outputTypes`. The YEAR unit is neither direction's
+    // identity - it multiplies or divides by twelve. Its outbound half is the arm below; its
+    // inbound half, `CAST(ym AS INT)` over a YEAR-ended interval, is a division by twelve, which is
+    // not supported yet - it belongs with the year-month extracts.
     case Cast(child, YearMonthIntervalType(_, YearMonthIntervalType.MONTH), _, _)
         if child.dataType == IntegerType =>
       compileIntOperand(child, "the month count", inputs, literals, sink)
-    // Task 68: the unit relabel between two year-month intervals, which is not a cast a user
-    // writes but the one type coercion inserts whenever two units meet - `ymm + ymy` widens
-    // both operands to YEAR TO MONTH before the add. `Cast.castToYearMonthInterval` computes
-    // `periodToMonths(monthsToPeriod(v), endField)`, which splits the count into whole years
-    // and a remainder and puts it back together: exactly `v` again for a MONTH end field, at
-    // every int including `Int.MinValue`, since the reassembly's `multiplyExact` is over
-    // `v / 12`. So this direction emits nothing and only `outputTypes` moves. The YEAR-ended
-    // direction drops the remainder, which is a division by twelve, and declines below.
+    // The unit relabel between two year-month intervals, which is not a cast a user writes but the
+    // one type coercion inserts whenever two units meet - `ymm + ymy` widens both operands to YEAR
+    // TO MONTH before the add. `Cast.castToYearMonthInterval` computes
+    // `periodToMonths(monthsToPeriod(v), endField)`, which splits the count into whole years and a
+    // remainder and puts it back together: exactly `v` again for a MONTH end field, at every int
+    // including `Int.MinValue`, since the reassembly's `multiplyExact` is over `v / 12`. So this
+    // direction emits nothing and only `outputTypes` moves. The YEAR-ended direction drops the
+    // remainder, which is a division by twelve, and declines below.
     case Cast(child, YearMonthIntervalType(_, YearMonthIntervalType.MONTH), _, _)
         if child.dataType.isInstanceOf[YearMonthIntervalType] =>
       compileNode(child, inputs, literals, sink)
-    // Task 68: `CAST(i AS INTERVAL YEAR)` in a value position, which is `12 * i` with an interval
-    // output. `IntervalUtils.intToYearMonthInterval` computes it with `Math.multiplyExact` whatever
-    // the session's ANSI mode, so the multiply is checked and the bound is the only thing that
-    // removes it. This is the same expression `compileMonths` admits in `add_months`' month-count
-    // position; the difference is that there the emitter has a shape check to satisfy and here it
-    // has none, which is why `PLAN_TASK_67.md` 2.1 - written about `compileMonths` - reads as if
-    // the whole cast were blocked when only that position was.
+    // `CAST(i AS INTERVAL YEAR)` in a value position, which is `12 * i` with an interval output.
+    // `IntervalUtils.intToYearMonthInterval` computes it with `Math.multiplyExact` whatever the
+    // session's ANSI mode, so the multiply is checked and the bound is the only thing that removes
+    // it. This is the same expression `compileMonths` admits in `add_months`' month-count position;
+    // the difference is that there the emitter has a shape check to satisfy and here it has none,
+    // which is why `PLAN_TASK_67.md` 2.1 - written about `compileMonths` - reads as if the whole
+    // cast were blocked when only that position was.
     case c @ Cast(child, YearMonthIntervalType(YearMonthIntervalType.YEAR,
         YearMonthIntervalType.YEAR), _, _) if child.dataType == IntegerType =>
       val mark = literals.size
@@ -638,7 +637,7 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRWeekDay(_))
     // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO'): the analyzer spells them Add(WeekDay(d), 1),
     // and so does a hand-written weekday(d) + 1. One narrow arm, either operand order, and nothing
-    // else: integer arithmetic over an output is out of scope for this compiler. Task 63: int32
+    // else: integer arithmetic over an output is out of scope for this compiler. Int32 //
     // arithmetic over int-valued operands - a fused field, an IntegerType column, an int literal,
     // or nested arithmetic. Placed after the `Add(WeekDay, 1)` arm below so that shape keeps its
     // cheaper dedicated node.
@@ -885,7 +884,7 @@ private[sql] object VarkaExpressionCompiler {
       }
   }
 
-  /** Task 57's `extract(DAYOFWEEK_ISO)` shape, which keeps its own node rather than becoming
+  /** The `extract(DAYOFWEEK_ISO)` shape, which keeps its own node rather than becoming
    *  int arithmetic over a `weekday` output. Either operand order, exactly as that arm reads. */
   private def isDayOfWeekIso(a: Add): Boolean = (a.left, a.right) match {
     case (WeekDay(_), Literal(1, IntegerType)) => true
@@ -1190,12 +1189,12 @@ private[sql] object VarkaExpressionCompiler {
             // this is scoped to the int-cast form.
             sink.note("day interval is not an int column cast to days", e)
             None
-          // Task 63: arithmetic over an int column as the offset, `date_add(d, i * 7)`. What makes
-          // this safe above rather than only here is `dayRange`, which reads any non-literal offset
-          // as a column shift: a calendar node over such a producer still gets the runtime range
-          // guard, exactly as it does for a bare column offset. Only the four arithmetic shapes,
-          // not every `IntegerType` expression - the emitter's own check on this operand admits the
-          // same three node kinds and nothing else, so the two stay a matched pair rather than one
+          // Arithmetic over an int column as the offset, `date_add(d, i * 7)`. What makes this safe
+          // above rather than only here is `dayRange`, which reads any non-literal offset as a
+          // column shift: a calendar node over such a producer still gets the runtime range guard,
+          // exactly as it does for a bare column offset. Only the four arithmetic shapes, not every
+          // `IntegerType` expression - the emitter's own check on this operand admits the same
+          // three node kinds and nothing else, so the two stay a matched pair rather than one
           // silently outgrowing the other.
           case arith @ (_: Add | _: Subtract | _: Multiply | _: UnaryMinus)
               if arith.dataType == IntegerType =>
@@ -1315,20 +1314,20 @@ private[sql] object VarkaExpressionCompiler {
             } yield r
             if (built.isEmpty) truncate(literals, mark)
             built
-          // Task 68: `d - ym_col`, which the analyzer spells `DateAddYMInterval(d,
-          // UnaryMinus(ym))`, so the count is a negation of an interval column. Its check comes off
-          // wherever a negation's does, which is any bound at all - and a bare interval column has
-          // none, so this keeps its check and is guarded on the count's value at run time exactly
-          // as a plain column count is.
+          // `d - ym_col`, which the analyzer spells `DateAddYMInterval(d, UnaryMinus(ym))`, so the
+          // count is a negation of an interval column. Its check comes off wherever a negation's
+          // does, which is any bound at all - and a bare interval column has none, so this keeps
+          // its check and is guarded on the count's value at run time exactly as a plain column
+          // count is.
           case u @ UnaryMinus(operand, _)
               if operand.dataType.isInstanceOf[YearMonthIntervalType] =>
             intervalOperand(operand, "the negated month count", inputs, literals, sink).map { x =>
               val checked = !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
               new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
             }
-          // Task 67: `d + ym_col`. The stored value is the month count in every unit, so this is
-          // the column-count `AddMonths` exactly, with the same runtime guard on the count's lanes
-          // - the guard reads the value and not the column's Spark type. It declined until now only
+          // `d + ym_col`. The stored value is the month count in every unit, so this is the
+          // column-count `AddMonths` exactly, with the same runtime guard on the count's lanes -
+          // the guard reads the value and not the column's Spark type. It declined until now only
           // because the evaluator would not read the vector, and the evaluator would not read it
           // because no arm asked.
           case br: BoundReference if br.dataType.isInstanceOf[YearMonthIntervalType] =>
@@ -1405,11 +1404,11 @@ private[sql] object VarkaExpressionCompiler {
     def literalValue(slot: LiteralSlot): Long = literals.keysIterator.drop(slot.index).next().toLong
     // `guardsBelow` marks a node that is itself a calendar consumer - which is
     // `VarkaLoopEmitter.isChrono`'s set, the `Chrono` interface *plus* `AddMonths`, not the
-    // interface alone. Task 52's guard is armed on every column-offset producer under one, so
-    // the subtree below it is guarded even when the caller above is not a calendar node.
-    // Without this, `datediff(last_day(date_add(d, i)), d2)` would report its operand
-    // unbounded although the `last_day` over it does arm the guard - a bound lost, and a check
-    // emitted, for a shape that is in fact provably in range.
+    // interface alone. The producer guard is armed on every column-offset producer under one, so
+    // the subtree below it is guarded even when the caller above is not a calendar node. Without
+    // this, `datediff(last_day(date_add(d, i)), d2)` would report its operand unbounded although
+    // the `last_day` over it does arm the guard - a bound lost, and a check emitted, for a shape
+    // that is in fact provably in range.
     def shifted(child: VarkaVectorIR, lo: Long, hi: Long,
         guardsBelow: Boolean = false): DayRange =
       dayRange(child, literals, guarded || guardsBelow) match {
@@ -1528,11 +1527,11 @@ private[sql] object VarkaExpressionCompiler {
    * Insert [[GuardedDay]] wherever the running interval would leave the range the calendar
    * lowering decomposes exactly, resetting the interval there.
    *
-   * <p>Task 52 guards one producer, and its guard promises the whole narrowed range - so a
-   * second guarded shift above it has no budget left and [[admitCalendar]] must decline the
-   * expression, although both shifts are individually fine. Re-arming spends the range again:
-   * at a node whose interval overflows, the emitted check makes everything above it start from
-   * `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` once more.
+   * <p>The producer guard covers one producer, and promises the whole narrowed range - so a second
+   * guarded shift above it has no budget left and [[admitCalendar]] must decline the expression,
+   * although both shifts are individually fine. Re-arming spends the range again: at a node whose
+   * interval overflows, the emitted check makes everything above it start from `[NARROW_MIN_DAYS,
+   * NARROW_MAX_DAYS]` once more.
    *
    * <p>It is a rewrite rather than a set of positions because the emitter cannot be told where
    * to check: it never sees literal values, so it cannot run this arithmetic, and
@@ -1630,10 +1629,10 @@ private[sql] object VarkaExpressionCompiler {
             && hi <= VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS =>
         Some(node)
       case Bounded(lo, hi) =>
-        // Task 93: the interval ran out, but if a runtime-valued shift is what carried it out
-        // then a check can spend it again. `rearm` rewrites the subtree with the checks in it
-        // and answers the interval that results; only a literal overflow, which no check can
-        // rescue, still declines.
+        // The interval ran out, but if a runtime-valued shift is what carried it out then a check
+        // can spend it again. `rearm` rewrites the subtree with the checks in it and answers the
+        // interval that results; only a literal overflow, which no check can rescue, still
+        // declines.
         val fixed = rearm(node, literals)
         fixed.range match {
           case Bounded(flo, fhi)
