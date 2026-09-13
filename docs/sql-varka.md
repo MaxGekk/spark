@@ -228,6 +228,40 @@ arithmetic over them.
 Varka is designed as a drop-in, zero-risk replacement: every Varka path falls
 back to the standard row engine on any failure, so results are always correct.
 
+## Glossary
+
+Varka's code and documents lean on about two dozen words that mean something
+specific here. Two are worth flagging before the list, because they are ordinary
+English elsewhere and technical terms here: a **lane** is one element of a
+vector register, not a code path; and a **word** is always a 64-bit validity
+bitmask, never a machine word or a token of text.
+
+| Term | What it means here |
+| :--- | :--- |
+| **lane** | One element position in a vector register. A 512-bit register holds 16 int32 lanes, a 256-bit one 8. Nearly every loop in the engine is written per lane group rather than per row. |
+| **lane group** | The rows one vector register holds - the unit every emitted loop iterates over. Its size is the JVM's preferred species width divided by four bytes, so 16 rows at 512 bits. Not a fixed number: the same kernel runs a different group size on a narrower machine. |
+| **species** | The Vector API's term for a lane type and width together, e.g. `IntVector.SPECIES_512`. What `-XX:MaxVectorSize` ultimately selects. |
+| **epilogue** | The rows left over when the row count is not a whole number of lane groups. Varka runs them as one more iteration of the *same* vector body under a partial mask, rather than as a scalar loop - so there is one body to maintain, not two. |
+| **word** | A 64-bit mask of validity bits, one bit per row, for one lane group: `0L` means every row null, `-1L` means none null, anything else is the row-by-row truth. Each node's word is computed from its children's - AND for operations that a null poisons, OR for `greatest`/`least`, a blend for `IF`. "The word" in this codebase never means anything else. |
+| **validity buffer** | Arrow's per-column null map: one bit per row, set meaning *valid*. Bit-packed, so it is read a `long` at a time and turned into a mask - reading it a byte per lane would be a correctness bug, not a slow path. |
+| **morsel** | The pair of Panama `MemorySegment`s a kernel reads and writes: an Arrow column's data buffer and its validity buffer, mapped zero-copy, off-heap. No per-row object is ever created on the fast path. |
+| **dense body / masked body** | The two loop bodies every emitted kernel carries. A batch whose referenced inputs contain no nulls at all runs the *dense* body, which does no validity bookkeeping; anything else runs the *masked* body. The choice is one test per batch, not per row. |
+| **fused kernel** | The class Varka emits at runtime for one projection or filter: a single vector loop computing every output, with intermediates living in registers. It implements `VarkaFusedKernel`. |
+| **shape** | A plan's structure with its constants removed - the thing two queries share when they differ only in literal values. Literals travel separately as runtime arguments, so `date_add(d, 1)` and `date_add(d, 7)` have one shape and share one emitted class. |
+| **shape cache** | A bounded LRU of emitted classes keyed by shape, shared *across tasks*. The cost it saves is not emission - that is about 80 microseconds - but JIT warm-up: a re-defined class is a new class to HotSpot and re-pays the whole tier ladder, 13 to 50 ms per task. Reusing the loaded class is the only thing that avoids it. |
+| **literal slot** | An index into the kernel's runtime argument array where a folded constant lives. Why the IR carries no literal *values*: keeping them out is what makes the shape the identity. |
+| **selection bitmap** | A filter's output: one bit per row, set meaning the predicate is known true. An unknown row - a null under the comparison - reads as false by construction, which is SQL's `WHERE` semantics for free. |
+| **partial eligibility** | A projection qualifies when *at least one* of its entries compiles. The rest are forwarded zero-copy or left to stock Spark, and the results merge. Eligibility is per entry, not all-or-nothing. |
+| **decline** | A compile-time refusal: the compiler cannot translate an expression, or the emitter will not build a shape. Declining is a normal outcome, not an error - the query runs on stock Spark instead. |
+| **ghost fallback** | The run-time counterpart: if an emitted kernel fails on a batch, that batch is recomputed by the ordinary row engine and the query still returns the right answer. The Janino projection behind it is compiled lazily, only if some batch actually needs it. |
+| **civil-from-days** | The calendar algorithm turning a day count since the epoch into year, month and day (Neri and Schneider's, transcribed in `sql/varka/papers`). Branch-free and 31 vector operations, which is why several outputs over one date share it. |
+| **prefix** | The shared front half of `civil-from-days`. Calendar fields over the same date compute it once per lane group and each take their own tail from it, so `year(d)` beside `month(d)` costs barely more than one of them. |
+| **range guard** | A runtime check that a date lies inside the range the decomposition is exact over. Where it sits matters: it is placed on the *producer* of a value rather than on each consumer, so one check covers every calendar field downstream. |
+| **guarded producer** | A node that carries such a check on its own result - typically `date_add`/`date_sub` with a column offset, where the shift is not knowable at compile time. |
+| **op count** | Vector operations in an emitted loop body, as `dev/varka_emit.sh --table` reports them. The project's unit for "how much work is this expression", used to size methods and to choose benchmark entries. |
+| **fixed share** | `(wall time - executor time) / wall time` for a benchmark iteration: the fraction spent scheduling rather than computing. A run is failed above 5%, because below that the number measures the kernel and above it measures Spark's job overhead. |
+| **datapath probe** | A measurement of *lanes per nanosecond* at 128, 256 and 512 bits. It answers the only question that matters for a benchmark claim - how many wide operations the machine issues per cycle - which no CPU flag reports: some server parts carry the full AVX-512 flag set and still issue 512-bit work at two thirds the rate. |
+
 ## Architecture
 
 ### Columnar morsels

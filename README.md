@@ -358,7 +358,10 @@ If you want to *add* an expression rather than read one,
 Catalyst tree to a committed benchmark case, with the files named in the order the code
 runs them.
 
-[`docs/sql-varka.md`](docs/sql-varka.md) is the full architecture guide -
+[`docs/sql-varka.md`](docs/sql-varka.md) is the full architecture guide - it opens with a
+glossary, which is worth two minutes before anything else here: *lane*, *word*, *morsel*
+and *epilogue* all mean something specific in this codebase and appear on almost every
+page -
 morsel layout, the emitted method anatomy, the null and predication algebra,
 configuration and limitations. Read it alongside step 4 when the emitter stops
 being obvious.
