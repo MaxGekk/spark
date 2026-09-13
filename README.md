@@ -353,7 +353,10 @@ gives up *into stock Spark*, per batch, and the query still returns the right
 answer. This is the "ghost fallback", and it is why a decline is a normal
 outcome in this code rather than an error path.
 
-[`docs/sql-varka.md`](docs/sql-varka.md) is the full architecture guide -
+[`docs/sql-varka.md`](docs/sql-varka.md) is the full architecture guide - it opens with a
+glossary, which is worth two minutes before anything else here: *lane*, *word*, *morsel*
+and *epilogue* all mean something specific in this codebase and appear on almost every
+page -
 morsel layout, the emitted method anatomy, the null and predication algebra,
 configuration and limitations. Read it alongside step 4 when the emitter stops
 being obvious.
