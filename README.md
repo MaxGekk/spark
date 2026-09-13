@@ -353,6 +353,11 @@ gives up *into stock Spark*, per batch, and the query still returns the right
 answer. This is the "ghost fallback", and it is why a decline is a normal
 outcome in this code rather than an error path.
 
+If you want to *add* an expression rather than read one,
+[`sql/varka/ADDING_AN_EXPRESSION.md`](sql/varka/ADDING_AN_EXPRESSION.md) is the path from a
+Catalyst tree to a committed benchmark case, with the files named in the order the code
+runs them.
+
 [`docs/sql-varka.md`](docs/sql-varka.md) is the full architecture guide -
 morsel layout, the emitted method anatomy, the null and predication algebra,
 configuration and limitations. Read it alongside step 4 when the emitter stops
