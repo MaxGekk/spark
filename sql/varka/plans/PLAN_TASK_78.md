@@ -404,3 +404,63 @@ The README's benchmark section said these rows "stay until the runner
 re-measures them", which this section refutes; it now says the table has to be
 regenerated on a machine that can hold a billion rows, and carries a short note
 explaining why the two tables are on different machines.
+
+### 9.6 Measured: one row fixed, one improved, one that was never this task's
+
+*Run of 13 September 2026, 17:33 to 23:05 Istanbul, commit `fc6a80fa5ed`: the
+whole surface at 1e9 rows on the development laptop, four distributions, canary
+ok, governor `performance`, the Varka arm's table resident at 23.2 GiB with
+nothing on disk, zero fixed-share violations. 9.5 priced this at about 5.5 hours
+and it took 5h32m.*
+
+**The three committed losses, before and after.**
+
+| row | before | after | |
+|---|---|---|---|
+| `WHERE d < d2`, columnar consumer | 0.59x | **1.14x** | fixed |
+| `WHERE d < d2`, counted | 0.56x | **0.80x** | improved, still a loss |
+| `WHERE d IS NOT NULL`, counted | 0.46x | **0.45x** | unchanged |
+
+The other two-column predicates were already winning and stayed there:
+`d = d2` at 5.5x and 5.9x, `d < d2 AND month(d) = 6` at 3.6x and 3.4x.
+
+**So the fix works, on exactly the shape it was designed for, and no further.**
+Absorbing the narrowing projection removes one operator and one column's worth
+of row conversion. Where the consumer is columnar that is the whole cost, and
+the row turns into a win. Where the consumer counts, what is left is the
+read-back floor - about 25 ns per row crossing into Spark's row world - and 0.24x
+is all the absorbed projection could buy against it.
+
+**`d IS NOT NULL` was never this task's shape, and 9.4 should have said so more
+loudly.** Section 1 does say it: that row is "task 19's read-back floor" and a
+second loss "in the same family", not the same bug. It is a *one-column*
+predicate, so Spark's own pruning removes the redundant projection long before
+the columnar rule runs and there is nothing for this task to absorb. The
+measurement is the proof: 0.46x to 0.45x, untouched by a change that moved its
+neighbour by 0.55x.
+
+**And the README said the wrong thing about it, in public.** The benchmark
+section written for task 62 (C) opened its discussion of the losses with "the
+three losses are one bug with one cause". That was mine, it contradicts this
+task's own section 1, and it is now corrected: the section names two causes,
+attributes each row to the right one, and says which rows the fix moved. The
+error is worth recording rather than quietly fixing, because of how it happened
+- three rows appeared together at the bottom of one table, and the tidier story
+was assumed rather than checked against the plan that had already separated
+them.
+
+**What is left, and it is not this task's.** Two counted rows sit below 1.0x
+because a `COUNT(*)` over a cheap predicate has almost nothing for the vector
+loop to save against the cost of crossing the row boundary. That is task 19's
+recorded decision and the debt register's `COUNT(*)` entry, not a defect here.
+Whoever prices the predicate kernel against Janino on a fully-selecting range
+owns both.
+
+**One finding outside this task's scope**, recorded here so it is not lost:
+`date_add(d, 3)` moved from 1811.6 to 1401.4 M rows/s between the 7 September
+file and this one, -22.6%, on a machine whose canary was clean both times. It is
+the surface's most memory-bandwidth-bound entry and the run in between gained six
+cached columns where there were three, so the cached table went from about 12 GiB
+to 23.2 GiB. Whether a larger working set explains it, or something in the twenty
+tasks that landed between the two runs does, is a question for its own task row
+in `PLAN_MILESTONE_5.md` rather than a note here.

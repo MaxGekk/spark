@@ -92,39 +92,51 @@ HX PRO 370 (JDK 25). This is the coverage document, and it commits the losses.
 
 | Case | vs stock 4.2 (JDK 25) |
 | :--- | ---: |
-| `dayofweek(d)`, projection | 38.8x |
-| `weekofyear(d)`, projection | 26.0x |
-| `date_add(d, 3)`, projection | 21.8x |
-| `year(d)`, projection | 18.4x |
-| `last_day(d)`, projection | 15.7x |
-| `add_months(d, i)`, projection - the heaviest single call | 11.6x |
-| `WHERE d BETWEEN ... AND ...`, columnar consumer | 7.6x |
-| `WHERE year(d) = 2020`, columnar consumer | 6.9x |
+| `dayofweek(d)`, projection | 38.0x |
+| `weekofyear(d)`, projection | 28.8x |
+| `date_add(d, 3)`, projection | 17.3x |
+| `year(d)`, projection | 17.6x |
+| `last_day(d)`, projection | 14.2x |
+| `add_months(d, i)`, projection - the heaviest single call | 12.1x |
+| `WHERE d BETWEEN ... AND ...`, columnar consumer | 7.8x |
+| `WHERE year(d) = 2020`, columnar consumer | 6.5x |
 | `WHERE d IN (3 literals)`, columnar consumer | 6.3x |
-| `WHERE d < d2 AND month(d) = 6`, counted | 3.5x |
-| `WHERE d IS NULL`, counted | 3.1x |
-| `WHERE d < d2`, columnar consumer | **0.59x** |
-| `WHERE d < d2`, counted | **0.56x** |
-| `WHERE d IS NOT NULL`, counted | **0.46x** |
+| `WHERE d < d2 AND month(d) = 6`, counted | 3.4x |
+| `WHERE d IS NULL`, counted | 2.9x |
+| `WHERE d < d2`, columnar consumer | **1.14x** |
+| `WHERE d < d2`, counted | **0.80x** |
+| `WHERE d IS NOT NULL`, counted | **0.45x** |
 
-32 projection rows span 11.6x to 38.8x with a median of 21.6x; 18 filter rows
-span 0.46x to 14.0x.
+45 projection rows span 11.5x to 38.0x with a median of 19.5x; 18 filter rows
+span 0.45x to 14.0x.
 
-**The three losses are one bug with one cause**, and it is not the kernel. A
-predicate over two columns forwards both, so a `SELECT d` above it is a genuine
-narrowing projection - and a projection of bare forwarded columns fuses
-nothing, so the rule declines it and leaves a row-based operator on top, which
-drags the discarded column across the row boundary. One-column predicates never
-hit it, because Spark's own column pruning removes the redundant projection
-before any of this runs. The fix (task 78) is written and turns the shape into a
-1.3x - 2.2x win on the development machine; these committed rows predate it and
-stay until this table is regenerated, which has to happen on a machine that can
-hold a billion rows - see the note on where the surface can run.
+**The two remaining losses have two different causes**, and neither is the
+kernel. (An earlier version of this section said all three were one bug; the
+measurement below disproved it.)
+
+The first cause is a *narrowing projection*. A predicate over two columns
+forwards both, so a `SELECT d` above it genuinely narrows - and a projection of
+bare forwarded columns fuses nothing, so the rule used to decline it and leave a
+row-based operator on top, dragging the discarded column across the row
+boundary. One-column predicates never hit this, because Spark's own column
+pruning removes the redundant projection first. Absorbing that projection into
+the filter node fixed the columnar-consumer row: **`WHERE d < d2` went from
+0.59x to 1.14x**, a loss turned into a win.
+
+The second cause is the **read-back floor**: about 25 ns for every row that
+crosses from the vector world into Spark's row world. It is why the two
+*counted* rows are still below 1.0x while both columnar rows are fine. Removing
+the operator boundary moved `WHERE d < d2` counted from 0.56x to 0.80x and could
+not take it further, and it left `WHERE d IS NOT NULL` counted at 0.45x
+essentially untouched - that one is a single-column predicate, so it never had a
+narrowing projection to remove. Heavy expressions clear the floor; a bare
+`COUNT(*)` over a cheap predicate cannot, because there is almost nothing else
+in the row for the vector loop to have saved.
 
 One row is quoted against the engine-off column instead of stock:
-`trunc(d, 'QUARTER')` reads 32.6x against stock 4.2.0 but **23.7x** against this
+`trunc(d, 'QUARTER')` reads 29.4x against stock 4.2.0 but **21.6x** against this
 fork's own row engine, because the fork tracks Spark master and its `truncDate`
-is 38% faster than 4.2.0's. That difference is upstream Spark's, not Varka's.
+is faster than 4.2.0's. That difference is upstream Spark's, not Varka's.
 It is the only row of fifty where the two baselines disagree by more than 20%.
 
 ### Why 10x and 39x are both true
