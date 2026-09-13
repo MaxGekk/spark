@@ -122,7 +122,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 38: date_add/date_sub with a column offset match the row engine") {
+  test("date_add/date_sub with a column offset match the row engine") {
     // `varka_date_pairs`'s `i` column is not nullable (it comes from zipWithIndex) - the
     // literal-offset shapes already covered that side; this exercises the new column-offset
     // path over both spellings.
@@ -134,7 +134,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 38: a null offset nulls out its row even when the date beside it is not null") {
+  test("a null offset nulls out its row even when the date beside it is not null") {
     cacheDatesNullableOffset(spark)
     cacheDatesNullableOffset(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -143,7 +143,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 38, then 56: an int column cast to a day interval fuses as the column offset it is") {
+  test("an int column cast to a day interval fuses as the column offset it is") {
     // `d + INTERVAL n DAY` with a foldable `n` already fused before task 38 (the analyzer folds
     // it to a DateAdd literal). Task 38 left the non-foldable interval column declined -
     // BinaryArithmeticWithDatetimeResolver rewrites it to
@@ -159,7 +159,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 38: a column-offset date_add fuses inside a filter predicate too") {
+  test("a column-offset date_add fuses inside a filter predicate too") {
     // The projection-side column-offset tests above never exercise the mask kernel - a
     // WHERE clause is the shape VarkaFilterExec/VarkaFilterColumnarToRowExec compile, and
     // compileOffset is shared code, so this proves the column-offset path works there too,
@@ -177,7 +177,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 78: a projection that only narrows a Varka filter leaves no Project above it") {
+  test("a projection that only narrows a Varka filter leaves no Project above it") {
     // The milestone's one shape where Varka was slower than stock Spark end to end. The
     // predicate reads two columns and the consumer wants one, so Spark's column pruning
     // cannot drop the projection - it is not redundant - and before task 78 a Janino
@@ -217,7 +217,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 67: a year-month interval column fuses in every unit, and its far counts decline") {
+  test("a year-month interval column fuses in every unit, and its far counts decline") {
     // The type's admission, end to end. The stored value is a month count whatever the unit,
     // so `d + ym` is task 60's column-count add_months with the same runtime guard - which is
     // why two of the fixture's rows sit outside MONTH_ARITH_MIN/MAX_MONTHS: the batch has to
@@ -282,7 +282,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 68: the year-month interval algebra fuses and agrees in both ANSI modes") {
+  test("the year-month interval algebra fuses and agrees in both ANSI modes") {
     // Group A of the task: the arithmetic whose operands and result are both intervals. None
     // of it has a wrapping form - Spark computes every one of these with `addExact`,
     // `subtractExact`, `negateExact` or `multiplyExact` whatever the session's ANSI mode - so
@@ -359,7 +359,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 68: an overflowing interval add raises the row engine's own error in both modes") {
+  test("an overflowing interval add raises the row engine's own error in both modes") {
     // The error identity, and the reason the fixture carries an `Int.MaxValue` month count.
     // The kernel's sign test condemns the batch, the evaluator throws the kernel's outputs
     // away, and the row engine recomputes the whole batch and raises - so the exception the
@@ -384,7 +384,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 79: a guard under a CASE arm condemns from the taken arm only") {
+  test("a guard under a CASE arm condemns from the taken arm only") {
     // The cliff, end to end and in both directions. Each shape is run twice over one fixture:
     // once with the condition routing the extreme rows to the arm *without* the guarded node,
     // where the batch must now survive, and once routing them into it, where it must still
@@ -451,7 +451,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 52: a literal day shift past the calendar range is residual, with its reason, " +
+  test("a literal day shift past the calendar range is residual, with its reason, " +
       "and an in-range one fuses") {
     // The compile-time half of the range guard: `year(date_add(d, 20000000))` is the query
     // task 51's removed differential used, and it fused - wrongly - between task 51 and this
@@ -481,7 +481,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     plan.collectFirst { case v if isVarkaNode(v) => v }
       .flatMap(_.metrics.get(name)).map(_.value).getOrElse(0L)
 
-  test("task 52: a column-offset date_add under a calendar node declines the batch that " +
+  test("a column-offset date_add under a calendar node declines the batch that " +
       "leaves the range, and the row engine answers it") {
     // The runtime half of the range guard, restoring what task 51 removed: the far rows of the
     // fixture put date_add(d, off) twenty million days past the range, the producer's guard
@@ -508,7 +508,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     assert(varkaMetric(near, "numFallbackBatchesDeclined") === 0L)
   }
 
-  test("task 52: with the guard off, the far batch runs on the kernel - asserted on the " +
+  test("with the guard off, the far batch runs on the kernel - asserted on the " +
       "metric, never on the value") {
     // The reference variant (guardDayProducers = false) is task 51's bytes: the far batch is
     // computed, and computed wrongly past the range. PLAN_TASK_51.md section 3 is why no test
@@ -531,7 +531,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 46: the width-specialised validity helpers answer what the general pair did") {
+  test("the width-specialised validity helpers answer what the general pair did") {
     // Every other test in this suite runs the specialised path, because task 46's switch
     // defaults on - so what is left to check is the other arm, and that the two agree end to
     // end rather than only in the emitter suite's hand-built batches. Both shapes that still
@@ -558,7 +558,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 47: the word writer answers what the per-group write answered, over batches " +
+  test("the word writer answers what the per-group write answered, over batches " +
       "whose length is not a whole number of words") {
     // The emitter suite compares the two arms bit for bit on hand-built batches; this runs them
     // through the evaluator, real Arrow validity buffers and the fallback route, which is where
@@ -609,7 +609,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 70: the bitmap pass answers what the per-group write answered, end to end, over " +
+  test("the bitmap pass answers what the per-group write answered, end to end, over " +
       "nulls on either side") {
     // The emitter suite holds the two settings byte-identical on hand-built batches; this holds
     // them through the evaluator, the Arrow validity buffers and the fallback route, on two
@@ -650,7 +650,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 52: the producer guard reaches a filter predicate through the same route") {
+  test("the producer guard reaches a filter predicate through the same route") {
     // The mask kernel shares the emitter and the evaluator's status route with the
     // projection; a calendar node over a column-offset producer in a WHERE clause declines the
     // far batch to the row filter, and the count agrees with the row engine.
@@ -676,7 +676,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 60: a column month count matches the row engine, declining the batch whose count " +
+  test("a column month count matches the row engine, declining the batch whose count " +
       "leaves the emitter's guarded range - the same route as task 52's day producer") {
     // varka_date_months puts two rows a further 30000 months past each end of
     // MONTH_ARITH_MIN/MAX_MONTHS beside in-range and null rows; add_months' own guard on the
@@ -722,7 +722,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 93: a calendar function over a column count above a column day offset is fused, "
+  test("a calendar function over a column count above a column day offset is fused, "
       + "and the composition it cannot bound declines the batch instead") {
     // Task 60's review found this shape answering year 87585 where the truth is -14848 -
     // silently, with no metric moving - because task 52's guard bounds date_add's result and
@@ -767,7 +767,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 69: a shift above a guarded day offset fuses up to the decomposition's own " +
+  test("a shift above a guarded day offset fuses up to the decomposition's own " +
       "ceiling, and is residual one day past it") {
     // The end-to-end half of task 69. The compiler suite asserts which shapes are admitted;
     // this asserts that the admitted ones are *right*, at the exact day the new constant
@@ -815,7 +815,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 60: the producer's own guard reaches a filter predicate through the same route " +
+  test("the producer's own guard reaches a filter predicate through the same route " +
       "as task 52's day producer") {
     // Unlike task 52's date_add offset, add_months' month count is never itself a filter
     // operand VarkaExpressionCompiler can read - a bare int column only compiles through
@@ -843,7 +843,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 60: an existing nullable int column, in range, still nulls its row on either " +
+  test("an existing nullable int column, in range, still nulls its row on either " +
       "side independently when read as a month count, and the guard stays silent") {
     // Reuses task 38's varka_dates_nullable_offset fixture as an in-range count source, rather
     // than adding a third nullability fixture for the same "either operand null nulls the
@@ -858,7 +858,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
   }
 
-  test("task 56: date +- CAST(i AS INTERVAL DAY) matches the row engine on the projection " +
+  test("date +- CAST(i AS INTERVAL DAY) matches the row engine on the projection " +
       "and filter paths, and a stored interval column stays residual") {
     cacheDatesNullableOffset(spark)
     cacheDatesNullableOffset(varkaSpark)
@@ -887,7 +887,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 56: an offset past the cast's limit raises the row engine's error through Varka") {
+  test("an offset past the cast's limit raises the row engine's error through Varka") {
     // The bound the evaluator checks per batch: Spark's CAST(i AS INTERVAL DAY) throws past
     // INTERVAL_DAY_LIMIT_DAYS in every mode. Through Varka the batch declines to the row
     // engine, so the error is the row engine's own - compared by running both sessions, as
@@ -1080,7 +1080,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 20: IN over date literals fuses to the cap and declines above it") {
+  test("IN over date literals fuses to the cap and declines above it") {
     cacheDates(spark)
     cacheDates(varkaSpark)
     // Base 2023-12-27 with step 3 intersects the table (2023-12-27 itself and 2024-01-02),
@@ -1120,7 +1120,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = false)
   }
 
-  test("task 20: coalesce, nvl, ifnull and nvl2 fuse and match the row engine") {
+  test("coalesce, nvl, ifnull and nvl2 fuse and match the row engine") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     for (q <- Seq(
@@ -1139,7 +1139,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = false)
   }
 
-  test("task 20: coalesce over all-null and null-free inputs") {
+  test("coalesce over all-null and null-free inputs") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     for (session <- Seq(spark, varkaSpark)) {
@@ -1159,7 +1159,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       "SELECT coalesce(d, d2) AS a FROM varka_all_null ORDER BY a", expectFused = true)
   }
 
-  test("task 20: IS NULL and IS NOT NULL fuse as conditions, connectives included") {
+  test("IS NULL and IS NOT NULL fuse as conditions, connectives included") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -1175,7 +1175,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 20: BETWEEN over a computed input fuses through the common-expression hoist") {
+  test("BETWEEN over a computed input fuses through the common-expression hoist") {
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     // A non-cheap BETWEEN input hoists into `_common_expr_0` in its own Project; the hoisted
@@ -1186,7 +1186,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 20: cast-wrapped date expressions fuse, folded or unwrapped before the kernel") {
+  test("cast-wrapped date expressions fuse, folded or unwrapped before the kernel") {
     cacheDates(spark)
     cacheDates(varkaSpark)
     // The optimizer folds the literal cast and drops the identity cast (SimplifyCasts); the
@@ -1198,7 +1198,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 41: unix_date and date_from_unix_date fuse as a pure relabel") {
+  test("unix_date and date_from_unix_date fuse as a pure relabel") {
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -1247,7 +1247,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 58: extract(YEAROFWEEK) matches the row engine on the rows the ISO year moves " +
+  test("extract(YEAROFWEEK) matches the row engine on the rows the ISO year moves " +
       "on, beside weekofyear and year, under both spellings and on the filter path") {
     // December 28 to January 4 of years whose week 1 starts in the old year (2004/2005,
     // 2020/2021, 2026/2027) and of years where it does not (2018/2019, 2022/2023), the century
@@ -1279,7 +1279,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 42: make_date matches the row engine in both modes - nulls for invalid dates " +
+  test("make_date matches the row engine in both modes - nulls for invalid dates " +
       "with ANSI off, the row engine's error with ANSI on, the date feeding further work") {
     cacheDateParts(spark)
     cacheDateParts(varkaSpark)
@@ -1307,7 +1307,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 37: weekofyear matches the row engine on every day across forty year " +
+  test("weekofyear matches the row engine on every day across forty year " +
       "boundaries, at Velox's fixtures, under every spelling and on the filter path") {
     // The dense sweep of the plan: every day from 1990-12-20 to 2030-01-10 built from range,
     // so the row engine and the kernel see the same 14,631 rows, beside dayofyear and year
@@ -1349,7 +1349,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 57: extract(DAYOFWEEK_ISO), date_part('DOW_ISO') and weekday(d) + 1 match the " +
+  test("extract(DAYOFWEEK_ISO), date_part('DOW_ISO') and weekday(d) + 1 match the " +
       "row engine as one node, with nulls") {
     // The three spellings the analyzer turns into Add(WeekDay(d), 1), over the shared dates
     // table (a Monday, a Tuesday, a Wednesday, a Sunday - 1969-12-31 - and a null), beside
@@ -1406,7 +1406,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 35: trunc matches the row engine at every date level, and its date output feeds " +
+  test("trunc matches the row engine at every date level, and its date output feeds " +
       "further arithmetic in the same chain") {
     // The calendar family's boundary rows plus the ones the four-way quarter select and the
     // WEEK rewrite care about: a Sunday and a Monday, the first days of each quarter, a date
@@ -1449,7 +1449,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("last_day matches the row engine across the Gregorian range (task 36)") {
+  test("last_day matches the row engine across the Gregorian range") {
     // The same boundary set task 26's own test uses, since last_day shares emitChrono's
     // prefix and can get the same things wrong, plus two far-future century years a DATE
     // literal cannot name (the SQL parser's year field is 4 digits): 14500, not divisible by
@@ -1531,7 +1531,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 59: next_day with a weekday column matches the row engine over every spelling, " +
+  test("next_day with a weekday column matches the row engine over every spelling, " +
       "the non-names and nulls, through the projection and the filter, with no fallback") {
     cacheDatesWeekday(spark)
     cacheDatesWeekday(varkaSpark)
@@ -1557,7 +1557,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 59: a projection over a Varka filter's compacted batch answers through the row " +
+  test("a projection over a Varka filter's compacted batch answers through the row " +
       "path, because the filter compacts a string column generically (recorded limitation)") {
     // The filter's compaction (task 21) rebuilds fixed-width Arrow columns as Arrow and every
     // other column through the generic on-heap pass, so the string column reaches the stacked
@@ -1579,7 +1579,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 59: under ANSI the valid rows fuse, a non-name beside a live date raises the " +
+  test("under ANSI the valid rows fuse, a non-name beside a live date raises the " +
       "row engine's own error, and one beside a null date is NULL with no error") {
     cacheDatesWeekday(spark)
     cacheDatesWeekday(varkaSpark)
@@ -1616,7 +1616,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 63: int arithmetic fuses in all three modes and agrees with the row engine") {
+  test("int arithmetic fuses in all three modes and agrees with the row engine") {
     cacheIntsSafe(spark)
     cacheIntsSafe(varkaSpark)
     // Values that cannot overflow, so every mode takes the same path and the only question is
@@ -1636,7 +1636,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 63: a multiply fuses only where the operands' bounds rule out overflow") {
+  test("a multiply fuses only where the operands' bounds rule out overflow") {
     cacheIntsSafe(spark)
     cacheIntsSafe(varkaSpark)
     // The boundary the compile-time bound draws. `year(d) * 100` is provably safe whatever
@@ -1657,7 +1657,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 63: under ANSI an overflowing row raises the row engine's own error") {
+  test("under ANSI an overflowing row raises the row engine's own error") {
     cacheIntsOverflow(spark)
     cacheIntsOverflow(varkaSpark)
     withAnsi(true) {
@@ -1677,7 +1677,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 63: the shapes whose bound was a fiction raise the row engine's error, not an " +
+  test("the shapes whose bound was a fiction raise the row engine's error, not an " +
       "answer") {
     cacheDates(spark)
     cacheDates(varkaSpark)
@@ -1722,7 +1722,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 63: try_add gives NULL for the row that would have raised, and the batch runs on") {
+  test("try_add gives NULL for the row that would have raised, and the batch runs on") {
     cacheIntsOverflow(spark)
     cacheIntsOverflow(varkaSpark)
     for (ansi <- Seq(false, true)) {
@@ -1740,7 +1740,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 63: without ANSI an overflowing row wraps exactly as the row engine wraps") {
+  test("without ANSI an overflowing row wraps exactly as the row engine wraps") {
     cacheIntsOverflow(spark)
     cacheIntsOverflow(varkaSpark)
     withAnsi(false) {
@@ -1753,7 +1753,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 63: arithmetic is admitted as a day offset, and a calendar node over it is " +
+  test("arithmetic is admitted as a day offset, and a calendar node over it is " +
       "guarded rather than declined") {
     cacheDatesNullableOffset(spark)
     cacheDatesNullableOffset(varkaSpark)
@@ -1788,7 +1788,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 59: a collated weekday column is admitted and parsed the same way") {
+  test("a collated weekday column is admitted and parsed the same way") {
     cacheDatesWeekdayCollated(spark)
     cacheDatesWeekdayCollated(varkaSpark)
     withAnsi(false) {
@@ -1979,7 +1979,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = false)
   }
 
-  test("task 21: the survey's filter shapes match the row engine, warm cache included") {
+  test("the survey's filter shapes match the row engine, warm cache included") {
     cacheDatesBig(spark, 2048)
     cacheDatesBig(varkaSpark, 2048)
     // BETWEEN - the survey's dominant date predicate; the optimizer hands it over as paired
@@ -2011,7 +2011,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     assert(filterNode.get.metrics("numFallbackBatchesNonArrow").value === 0L)
   }
 
-  test("task 21: null-as-false, and the boundary selectivities") {
+  test("null-as-false, and the boundary selectivities") {
     cacheDatesBig(spark, 1024)
     cacheDatesBig(varkaSpark, 1024)
     // The null rows (one in 17) must be dropped by every compilable predicate - SQL's WHERE
@@ -2039,7 +2039,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 21: a mixed predicate splits - the residual conjunct stays above, correct") {
+  test("a mixed predicate splits - the residual conjunct stays above, correct") {
     cacheDatesBig(spark, 1024)
     cacheDatesBig(varkaSpark, 1024)
     val plan = checkDifferential(spark, varkaSpark,
@@ -2051,7 +2051,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       s"expected the residual conjunct's row filter in the plan:\n${plan.treeString}")
   }
 
-  test("task 21 review: the driver-side residual count reaches the SQL UI store") {
+  test("the driver-side residual count reaches the SQL UI store") {
     // The listener aggregates task-end updates and posted driver updates only: a driver-side
     // `+=` that is not posted is visible to plan.metrics (what the exec suites read) but
     // never to the UI. This goes through a real tracked execution on the Arrow-backed varka
@@ -2075,7 +2075,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       s"expected the posted residual count in the store, got: $posted")
   }
 
-  test("task 21: caching a view over fused Varka work keeps the work") {
+  test("caching a view over fused Varka work keeps the work") {
     // The cache builder strips a topmost columnar-to-row transition to reach the columnar plan
     // underneath - sound for the stock transition, silently wrong for the fused Varka nodes,
     // which carry a projection or filter inside it. The Arrow serializer converts them to
@@ -2098,7 +2098,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 21 review: a nondeterministic conjunct keeps the whole filter unfused") {
+  test("a nondeterministic conjunct keeps the whole filter unfused") {
     // The conjunct split would hoist the date predicate below rand(), changing which rows
     // the seeded stream sees; the compiler declines the whole predicate instead. Plan-shape
     // assertion only: an always-true rand comparison gets optimized away entirely (leaving a
@@ -2112,7 +2112,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     assertNotFused(plan)
   }
 
-  test("task 21: filters over multiple batches and tasks share one mask kernel class") {
+  test("filters over multiple batches and tasks share one mask kernel class") {
     val batchSize = "32"
     try {
       spark.conf.set(SQLConf.COLUMN_BATCH_SIZE.key, batchSize)
@@ -2199,7 +2199,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     assert(delta < 64L * 1024 * 1024, s"Metaspace grew by $delta bytes across 100 Varka tasks")
   }
 
-  test("task 18: near-miss shapes back to back in the warm cache stay distinct") {
+  test("near-miss shapes back to back in the warm cache stay distinct") {
     cacheDates(spark)
     cacheDates(varkaSpark)
     // Same operand structure, different op kind: date_add vs date_sub must not share a class.
@@ -2218,7 +2218,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
       expectFused = true)
   }
 
-  test("task 61: trunc with a format column matches the row engine over every spelling, the " +
+  test("trunc with a format column matches the row engine over every spelling, the " +
       "sub-day and unrecognised formats and nulls, through the projection and the filter, " +
       "composed under a calendar function, with no fallback, in both ANSI modes") {
     cacheDatesTruncFormats(spark)
@@ -2252,7 +2252,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     }
   }
 
-  test("task 61: a trunc projection over a Varka filter's compacted batch answers through the " +
+  test("a trunc projection over a Varka filter's compacted batch answers through the " +
       "row path, the string-column limitation task 59 recorded") {
     cacheDatesTruncFormats(spark)
     cacheDatesTruncFormats(varkaSpark)

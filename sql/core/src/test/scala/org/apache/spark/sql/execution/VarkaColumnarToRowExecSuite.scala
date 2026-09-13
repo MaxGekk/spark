@@ -144,7 +144,7 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession {
     assert(node.metrics("numVarkaBatches").value === 0)
   }
 
-  test("a mixed projection is kernel-served: fused, forwarded and residual columns (task 12)") {
+  test("a mixed projection is kernel-served: fused, forwarded and residual columns") {
     val dates: Seq[java.lang.Integer] = Seq(0, null, -5, 20000)
     val ints: Seq[java.lang.Integer] = Seq(10, 11, null, 13)
     val child = TestColumnarBatchPlan(

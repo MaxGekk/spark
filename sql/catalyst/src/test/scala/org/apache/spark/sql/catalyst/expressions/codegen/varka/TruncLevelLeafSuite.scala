@@ -28,6 +28,18 @@ import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.ArrowColumnVector
 import org.apache.spark.unsafe.types.UTF8String
 
+/**
+ * [[TruncLevelLeaf]], the derived leaf that turns `trunc`'s format column into the int32 codes
+ * a kernel can switch on.
+ *
+ * The tests here divide in two, and the division is the point. The first three pin the
+ * *parser*: the leaf must accept exactly the spellings `DateTimeUtils.parseTruncLevel`
+ * accepts, under the same case fold, and produce exactly its codes - because the kernel
+ * switches on those codes and a disagreement would compute a real but wrong level rather
+ * than fail. The rest pin `fill`, which writes a whole column at once: the level, the
+ * validity and the null count together, and it never declines - an unrecognised format is a
+ * null lane, not a refused batch.
+ */
 class TruncLevelLeafSuite extends SparkFunSuite {
 
   /** Every spelling `parseTruncLevel` maps to a date level, with the level it maps to. */

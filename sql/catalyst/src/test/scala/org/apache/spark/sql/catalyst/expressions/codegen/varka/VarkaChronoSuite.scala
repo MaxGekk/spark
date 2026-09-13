@@ -125,7 +125,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(VarkaChrono.inNarrowRange(LocalDate.of(9999, 12, 31).toEpochDay.toInt))
   }
 
-  test("task 52: the column contract's bounds lie strictly inside the narrowed range") {
+  test("the column contract's bounds lie strictly inside the narrowed range") {
     // The compile-time range analysis starts every column at the contract and admits a
     // calendar node only if the shifted interval stays inside the narrowed range; both facts
     // it rests on are pinned here, with the slack on each side stated as a number so a plan
@@ -157,7 +157,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     }
   }
 
-  test("task 53: one affine numerator carries both the month and the day of month") {
+  test("one affine numerator carries both the month and the day of month") {
     // The whole domain, for the reason the January-turn test above gives: 366 cases are
     // cheaper to run than three lines of algebra are to trust. What is asserted is not that
     // the new block is plausible but that it is *the same function* as the two forms this file
@@ -189,7 +189,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(maxNumerator < Int.MaxValue)
   }
 
-  test("task 53: the day-of-month magic is exact over every value a 16-bit remainder can take") {
+  test("the day-of-month magic is exact over every value a 16-bit remainder can take") {
     // Not sampled. The remainder is whatever the numerator's low half happens to be, so the
     // domain is all 65536 values and checking all of them costs milliseconds. The product
     // bound is asserted with it, because exactness is worthless if the multiply overflows.
@@ -203,7 +203,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(maxProduct < Int.MaxValue.toLong, "the magic multiply must fit a signed int lane")
   }
 
-  test("task 53: the month-start map is a shift, and agrees with the magic it replaces") {
+  test("the month-start map is a shift, and agrees with the magic it replaces") {
     // Twelve cases, and the numerator's sign matters as much as the values: it never goes
     // negative, which is what lets the emitter use a logical shift rather than an arithmetic
     // one and stops the choice being a silent correctness question.
@@ -253,7 +253,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     }
   }
 
-  test("task 54: the Julian map agrees with LocalDate and with the century-then-year form " +
+  test("the Julian map agrees with LocalDate and with the century-then-year form " +
       "over a whole era") {
     // The map's two divisions have a bounded input - the day of era, 146097 values - so the
     // new part of the prefix is verified over its entire domain here, committed rather than
@@ -278,7 +278,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(VarkaChrono.narrowed(probe) === reference(probe))
   }
 
-  test("task 42: the make_date year limits are the whole years of the narrow range") {
+  test("the make_date year limits are the whole years of the narrow range") {
     val lo = LocalDate.ofEpochDay(VarkaChrono.NARROW_MIN_DAYS.toLong)
     val hi = LocalDate.ofEpochDay(VarkaChrono.NARROW_MAX_DAYS.toLong)
     assert(VarkaChrono.MAKE_DATE_MIN_YEAR === lo.getYear + 1)
@@ -290,7 +290,7 @@ class VarkaChronoSuite extends SparkFunSuite {
       VarkaChrono.NARROW_MAX_DAYS)
   }
 
-  test("task 42: the scalar makeDate is LocalDate.of at the corners, and names its two " +
+  test("the scalar makeDate is LocalDate.of at the corners, and names its two " +
       "non-answers apart") {
     def ref(y: Int, m: Int, d: Int): Int =
       try LocalDate.of(y, m, d).toEpochDay.toInt
@@ -312,7 +312,7 @@ class VarkaChronoSuite extends SparkFunSuite {
       VarkaChrono.MAKE_DATE_OUT_OF_RANGE)
   }
 
-  test("task 42: the scalar makeDate round-trips every day of the covered years " +
+  test("the scalar makeDate round-trips every day of the covered years " +
       "(opt-in: -Dvarka.sweep=true)") {
     assume(System.getProperty("varka.sweep") == "true",
       "set -Dvarka.sweep=true to run the exhaustive sweep")
@@ -329,7 +329,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(mismatches === 0)
   }
 
-  test("task 69: where the era split stops being exact, and it is not where the ceiling is") {
+  test("where the era split stops being exact, and it is not where the ceiling is") {
     // NARROW_MAX_DAYS is the ceiling of the era step's *shift* domain, w < 2^NARROW_ERA_K.
     // Task 60's review observed that what binds above is the multiply's own overflow,
     // w * NARROW_ERA_M < 2^31, which is looser. Neither is the real limit: `eraOf` corrects a
@@ -366,7 +366,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(VarkaChrono.CONTRACT_MAX_DAYS < VarkaChrono.NARROW_MAX_DAYS)
   }
 
-  test("task 69: the decomposition matches java.time over the extended range, both forms " +
+  test("the decomposition matches java.time over the extended range, both forms " +
       "(opt-in: -Dvarka.sweep=true)") {
     // The claim NARROW_DECOMPOSE_MAX_DAYS rests on, checked against the oracle rather than
     // against the era identity alone: the era split being exact is necessary and the five
@@ -392,7 +392,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(mismatches === 0, s"$mismatches mismatches, first at day $firstBad")
   }
 
-  test("task 37: the week magic is exact over the day-of-year domain and one past it") {
+  test("the week magic is exact over the day-of-year domain and one past it") {
     // (dayOfYear - 1) / 7 for dayOfYear in 1..366 is x / 7 for x in 0..365; the magic holds
     // to 684 and fails at 685, which is the number to write down rather than "it works".
     for (x <- 0 to 684) {
@@ -402,7 +402,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     assert(684L * VarkaChrono.WEEK_M < Int.MaxValue.toLong)
   }
 
-  test("task 37: the scalar weekOfYear is DateTimeUtils.getWeekOfYear at the ISO corners") {
+  test("the scalar weekOfYear is DateTimeUtils.getWeekOfYear at the ISO corners") {
     val days = Seq(
       LocalDate.of(2015, 12, 28), LocalDate.of(2016, 1, 1), LocalDate.of(2019, 12, 30),
       LocalDate.of(2020, 12, 31), LocalDate.of(2021, 1, 1), LocalDate.of(2004, 12, 31),
@@ -415,7 +415,7 @@ class VarkaChronoSuite extends SparkFunSuite {
     }
   }
 
-  test("task 37: the scalar weekOfYear matches DateTimeUtils over the covered range " +
+  test("the scalar weekOfYear matches DateTimeUtils over the covered range " +
       "(opt-in: -Dvarka.sweep=true)") {
     assume(System.getProperty("varka.sweep") == "true",
       "set -Dvarka.sweep=true to run the exhaustive sweep")
