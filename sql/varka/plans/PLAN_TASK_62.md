@@ -1580,3 +1580,49 @@ the number. 11.16's caution stands and is now measured on one machine rather
 than across two: the surface's larger ratios are largely Spark's per-row
 overhead, and this figure is what remains when that overhead has been amortised
 away. Both are true; only one of them is what the engine's arithmetic is worth.
+
+### 11.18 PR (C), the README, and the control it had to clear first
+
+The README's benchmark section is rewritten from the committed files rather
+than from the micro-benchmarks it used to quote, and it leads with the number a
+reader will reproduce rather than the largest one in the tree.
+
+**Section 6's prediction 4, scored, because (C) is where it falls due.** It said
+the fork with Varka off would sit within 20% of stock Spark 4.2.0 on JDK 25 on
+every row, "and if a row is further apart, that row is explained before the
+README quotes it". Checked across all fifty (entry, shape) pairs of the surface:
+**forty-nine hold**. The one that does not is `trunc(d, 'QUARTER')`, where the
+fork's own row engine is 38% faster than 4.2.0's - 26.1 ns against 35.9 - which
+9.4 had already flagged as needing to be read before (C) quoted it. The cause is
+upstream: the fork tracks Spark master, whose `truncDate` differs from 4.2.0's.
+So the row's 32.6x against stock overstates Varka by that margin, and the README
+quotes it at **23.7x**, against the fork's own row engine, with the reason given
+in the text. No other row needed the treatment.
+
+**What the section says, and why it is shaped that way.** It opens by
+separating two questions rather than choosing between them, because 11.16 and
+11.17 established that the answer depends entirely on how much arithmetic a
+query does: about 10x on the chains, up to 38.8x on a single call. Both are
+honest and only one generalises, so the section states the mechanism -- stock
+pays overhead plus arithmetic, Varka pays arithmetic over lanes -- and tells the
+reader to carry away 10x. Publishing the larger figure alone would have been
+defensible from the files and would have set up every outside reader who
+measured their own workload to conclude the project oversold itself.
+
+It also keeps the three losses in the table, at 0.46x to 0.59x, with the
+one-sentence version of task 78's cause and the note that the fix is written but
+not yet re-measured on a runner.
+
+**The reproduction guide is the CI job's commands, checked against it rather
+than reconstructed.** Three corrections came out of that comparison: the sbt
+build needs `-Pscala-2.13 -Phive -Phive-thriftserver` and not a bare `package`;
+the log4j step belongs in it; and the guide has to warn that a distribution with
+Varka on and no engine jar measures the row engine under the kernel's name. The
+driver's guard against that last one is also stronger than the first draft of
+the guide claimed - it fails on *any* fallback batch in a row expected to fuse,
+not only on a total decline, because a partial decline publishes a blended rate
+that looks like a kernel rate.
+
+**Still open after this**: the 128-bit companion (task 92), the same-machine
+width confirmation this task's 1.14x invites, and task 78's runner dispatch,
+which is what turns the three losses into the wins the laptop already shows.

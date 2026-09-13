@@ -48,28 +48,190 @@ and the architecture in [`sql/varka/VISION.md`](sql/varka/VISION.md):
 
 ## Benchmarks
 
-Committed results from `sql/core/benchmarks/` and `sql/catalyst/benchmarks/`
-(AMD Ryzen AI 9 HX PRO 370, JDK 25, Linux, 2M Arrow-cached rows unless noted;
-best of >= 5 iterations over 2s windows, August 2026). The honest rows are in
-the table too - this fork commits its losses:
+Two questions, and they have different answers. **How much faster is a query
+that does real arithmetic?** About **10x**. **How much faster is a single date
+call?** Up to **39x** - but most of that is Spark's per-row overhead rather than
+vectorised arithmetic, and the honest way to read the two numbers is below the
+tables.
+
+Every figure here comes from a committed file under
+[`sql/varka/bench/benchmarks/`](sql/varka/bench/benchmarks), each carrying its
+own CPU, JDK, kernel, row count, cache residency and vector-datapath probe, so
+a claim can be checked without rerunning anything. Both runs compare four
+distributions on identical data: stock Spark 4.2.0 on JDK 17, stock 4.2.0 on
+JDK 25, this fork with the engine **off**, and this fork with the engine **on**.
+The engine-off column is the control that separates "Varka" from "a fork of
+Spark that happens to be newer".
+
+### Chained expressions, on a verified 512-bit machine
+
+`DateChain-*-results.txt`. Twelve expressions three and four operations deep,
+mixing all three types Varka covers in one int32 lane - DATE, INT and the
+year-month interval - over 200M Arrow-cached rows, one partition, table fully
+resident. AMD EPYC 9V45, JDK 25, datapath probe **2.01** (a genuine 512-bit
+unit, not a double-pumped one), worst per-row fixed cost 3.5% of wall time.
+
+| Expression | ns/row | vs stock 4.2 (JDK 25) |
+| :--- | ---: | ---: |
+| `datediff(add_months(last_day(date_add(d, i)), i) + ymy, last_day(d + ym))` | 7.4 | **14.2x** |
+| `weekofyear(add_months(last_day(d + ymm), i) + ymy)` | 10.1 | **13.2x** |
+| `quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY'))` | 7.5 | **11.7x** |
+| `dayofweek(add_months(last_day(date_add(d, i)), i) + ymy)` | 7.2 | **11.3x** |
+| `make_ym_interval(year(add_months(last_day(date_add(d, i)), i) + ymy), month(d + ymm) + i)` | 9.6 | **10.9x** |
+| `year(add_months(last_day(date_add(d, i)), i) + ymy)` | 7.5 | **9.4x** |
+| all twelve | 6.9 - 11.2 | **9.4x - 14.2x**, median 10.2x |
+
+Against the fork with the engine off the same twelve read 9.5x to 14.2x, so the
+speedup is the engine and not the fork.
+
+### The date surface: one entry per supported expression
+
+`DateSurface-*-results.txt`. Every date expression the engine covers, written
+the way a reader would write it, over 1B Arrow-cached rows on an AMD Ryzen AI 9
+HX PRO 370 (JDK 25). This is the coverage document, and it commits the losses.
+
+| Case | vs stock 4.2 (JDK 25) |
+| :--- | ---: |
+| `dayofweek(d)`, projection | 38.8x |
+| `weekofyear(d)`, projection | 26.0x |
+| `date_add(d, 3)`, projection | 21.8x |
+| `year(d)`, projection | 18.4x |
+| `last_day(d)`, projection | 15.7x |
+| `add_months(d, i)`, projection - the heaviest single call | 11.6x |
+| `WHERE d BETWEEN ... AND ...`, columnar consumer | 7.6x |
+| `WHERE year(d) = 2020`, columnar consumer | 6.9x |
+| `WHERE d IN (3 literals)`, columnar consumer | 6.3x |
+| `WHERE d < d2 AND month(d) = 6`, counted | 3.5x |
+| `WHERE d IS NULL`, counted | 3.1x |
+| `WHERE d < d2`, columnar consumer | **0.59x** |
+| `WHERE d < d2`, counted | **0.56x** |
+| `WHERE d IS NOT NULL`, counted | **0.46x** |
+
+32 projection rows span 11.6x to 38.8x with a median of 21.6x; 18 filter rows
+span 0.46x to 14.0x.
+
+**The three losses are one bug with one cause**, and it is not the kernel. A
+predicate over two columns forwards both, so a `SELECT d` above it is a genuine
+narrowing projection - and a projection of bare forwarded columns fuses
+nothing, so the rule declines it and leaves a row-based operator on top, which
+drags the discarded column across the row boundary. One-column predicates never
+hit it, because Spark's own column pruning removes the redundant projection
+before any of this runs. The fix (task 78) is written and turns the shape into a
+1.3x - 2.2x win on the development machine; these committed rows predate it and
+stay until the runner re-measures them.
+
+One row is quoted against the engine-off column instead of stock:
+`trunc(d, 'QUARTER')` reads 32.6x against stock 4.2.0 but **23.7x** against this
+fork's own row engine, because the fork tracks Spark master and its `truncDate`
+is 38% faster than 4.2.0's. That difference is upstream Spark's, not Varka's.
+It is the only row of fifty where the two baselines disagree by more than 20%.
+
+### Why 10x and 39x are both true
+
+Stock Spark's cost per row is *overhead plus arithmetic*; Varka's is
+*arithmetic divided by lanes*. So the ratio between them depends entirely on
+how much arithmetic there is:
+
+* On `dayofweek(d)` - one call, a few instructions - almost all of stock's 23 ns
+  is per-row machinery, and removing it reads as 39x.
+* On a four-deep chain, that machinery is amortised across real work, and what
+  is left is the arithmetic speedup: **about 10x**.
+
+Both numbers are real; they measure different things. **10x is what to expect on
+your own workload**, and it is the figure to carry away. Anyone quoting 39x
+should say that it is a single call on cached columnar data.
+
+The surface also understates the engine in the other direction: about a third of
+its entries move four bytes in and four out per row and are limited by memory
+bandwidth, not by the vector unit - `date_add(d, 3)` runs at 0.6 ns/row, roughly
+single-core DRAM speed. No width of datapath moves those, which is why the
+chains exist as a separate list.
+
+### What the 512-bit datapath is worth
+
+Less than the lane count suggests. Comparing the same chains on a 256-bit
+machine and the 512-bit one, Varka gains 2.07x - but the three scalar arms gain
+1.78x, 1.78x and 1.84x on the same pair of machines, which is the machine
+generation and not the vector width. Subtracting that leaves roughly **1.14x**
+attributable to the wider datapath: these kernels are limited by the dependency
+chains between their operations rather than by how many vector operations issue
+per cycle. A same-machine confirmation at `MaxVectorSize` 32 against 64 is
+future work.
+
+### Reproducing it
+
+The benchmark is a standalone jar that runs on **any** Spark 4.x distribution -
+it depends on no part of this fork, so the same jar measures the fork and the
+releases it is compared against. From a clean checkout with JDK 17 and JDK 25
+installed:
+
+```bash
+# Quieter logs, as the CI run does it.
+cp conf/log4j2.properties.template conf/log4j2.properties
+sed -i 's/rootLogger.level = info/rootLogger.level = warn/g' conf/log4j2.properties
+
+# The assembly, so this checkout's own bin/spark-submit runs it as a distribution.
+./build/sbt -Pscala-2.13 -Phive -Phive-thriftserver package
+
+# The benchmark driver, compiled against the *released* Spark at provided scope,
+# and the engine jar. The engine jar is not optional - see the warning below.
+./build/mvn -f sql/varka/bench/pom.xml -DskipTests package
+./build/mvn -f sql/varka/engine/pom.xml -DskipTests package
+
+# A stock release to compare against.
+curl -sSLO https://archive.apache.org/dist/spark/spark-4.2.0/spark-4.2.0-bin-hadoop3.tgz
+tar xf spark-4.2.0-bin-hadoop3.tgz
+
+# All four distributions, one after another, into sql/varka/bench/benchmarks/.
+# Each argument is LABEL=SPARK_HOME:JAVA_HOME, with a trailing :varka switching
+# the engine on - so the third and fourth differ only by that flag.
+J17=/usr/lib/jvm/java-17-openjdk-amd64
+J25=/usr/lib/jvm/java-25-openjdk-amd64
+dev/varka_bench_surface.sh --benchmark chains --rows 200000000 \
+  spark-4.2.0-jdk17=$PWD/spark-4.2.0-bin-hadoop3:$J17 \
+  spark-4.2.0-jdk25=$PWD/spark-4.2.0-bin-hadoop3:$J25 \
+  varka-off-jdk25=$PWD:$J25 \
+  varka-jdk25=$PWD:$J25:varka
+```
+
+**Do not skip the engine jar.** A distribution with Varka switched on and no
+engine jar falls back on every batch, logs a `ClassNotFoundException` and then
+measures the *row* engine under the kernel's name - a wrong number rather than a
+failure. `dev/varka_bench_surface.sh` guards against exactly this: it fails the run
+if *any* batch of a row expected to fuse fell back to the row engine - not merely if
+all of them did, because a partial decline publishes a rate blended from kernel and
+row-engine batches, which looks like a kernel rate and is not one.
+
+`--benchmark surface` runs the coverage list instead. The script refuses a run
+whose cached table did not stay in memory or whose per-row fixed cost exceeds 5%
+of wall time, so a result that survives is one worth reading; it records the
+datapath probe and the machine in every file it writes. Sizes are for a 16 GiB
+machine - lower `--rows` if the table will not fit, and the script will tell you
+if it did not.
+
+Ratios between two files, and the tables above:
+
+```bash
+dev/varka_bench_diff.py sql/varka/bench/benchmarks/DateChain-spark-4.2.0-jdk25-results.txt \
+                        sql/varka/bench/benchmarks/DateChain-varka-jdk25-results.txt
+```
+
+### Micro-benchmarks
+
+Narrower questions - codegen cost, cold start, `CASE WHEN` predictability, the
+read-back floor - live in `sql/core/benchmarks/` and `sql/catalyst/benchmarks/`
+(same machine, 2M rows, best of >= 5 iterations over 2s windows):
 
 | Case | vs stock Spark (Janino) |
 | :--- | :--- |
-| `date_add` / `datediff`, columnar consumer | 3.6x / 4.8x |
-| Nested `datediff(date_add(d, 1), d2)` | 5.6x |
+| `CASE WHEN`, unpredictable / predictable condition | 7.0x / 5.8x - predication costs the same either way |
+| `CASE WHEN d IN (...)`, 5 / 16 literals | 3.5x / 3.9x (fused to a 16-literal cap; longer lists decline with a reason) |
 | Two outputs sharing a subchain (DAG-CSE) | 6.0x |
-| `CASE WHEN`, unpredictable condition | 7.0x |
-| `CASE WHEN`, predictable condition | 5.8x |
-| `CASE WHEN d IN (...)`, 5 / 16 literals | 3.5x / 3.9x (fused up to the 16-literal cap; longer lists decline with a reason) |
-| `WHERE d < DATE` filter to batches (mask kernel + `compress` compaction) | 2.5x at 0% selected rising to 5.4x at 100% - since task 24 the compaction is one instruction per lane group, so its cost no longer grows with the selected rows |
-| Same filter to rows (mask skip, no compaction) | 2.3x at low selectivity, decaying to 1.1x at all-selected |
-| `WHERE d IN (5 literals)` filter | 2.0x (was parity by design before task 21) |
-| `COUNT(*)` over an 85%-selective filter | 0.8x - nearly every row crosses the read-back floor into the aggregate (1.8x at 15%) |
-| Chain of 8 date ops, columnar consumer | 6.9x - flat from depth 1 to 8 since the task 18 class cache (was 1.3x, eroding) |
-| Same chains through a row consumer | 0.8x - the ~25 ns/row read-back floor; heavy shapes clear it instead (`dayofweek` 1.2x, `CASE WHEN` 1.1x through rows), task 19's recorded decision |
-| `dayofweek` | 8.8x - was 0.9x before the magic-multiply mod-7 lowering and the class cache (see the docs) |
-| Cold start: first run of a fresh plan shape (100K rows) | 1.8x (a fresh shape misses the class cache by design) |
-| Emit+define+load+instantiate a fused kernel vs one Janino compile | 66x cheaper (~99 us vs ~6.5 ms) |
+| Chain of 8 date ops, columnar consumer | 6.9x - flat from depth 1 to 8 since the task 18 class cache |
+| The same chains through a **row** consumer | 0.8x - the ~25 ns/row read-back floor; heavy shapes clear it |
+| `COUNT(*)` over an 85%-selective filter | 0.8x - nearly every row crosses the floor (1.8x at 15%) |
+| Cold start: first run of a fresh plan shape | 1.8x - a fresh shape misses the class cache by design |
+| Emit + load + instantiate a kernel vs one Janino compile | 66x cheaper (~99 us vs ~6.5 ms) |
 
 Regenerate with `SPARK_GENERATE_BENCHMARK_FILES=1`:
 
