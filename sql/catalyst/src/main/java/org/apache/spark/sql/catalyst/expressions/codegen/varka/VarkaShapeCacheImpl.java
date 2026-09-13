@@ -315,8 +315,8 @@ public final class VarkaShapeCacheImpl {
       snapshot.addAll(set);
       return set;
     });
-    // Not List.copyOf: it rejects nulls, and a null identity is storable (SparkStringUtils
-    // .abbreviate passes null through). No production caller passes one - the evaluator's
+    // Not List.copyOf: it rejects nulls, and a null identity is storable (SparkStringUtils.
+    // abbreviate passes null through). No production caller passes one - the evaluator's
     // identity is always a StringBuilder result - but the Scala this replaced tolerated it, and
     // getOrEmit is public now, so the guard the port dropped stays dropped rather than becoming
     // an NPE in a diagnostics read.
@@ -367,7 +367,7 @@ public final class VarkaShapeCacheImpl {
    * dumps. Computed on the miss path only; a hit reads the entry's stored hash.
    *
    * <p>{@link VarkaEmitOptions#canonical()} is empty for the defaults, so a production hash is
-   * byte-identical to what it was before options entered the key (task 23) - which is what makes
+   * byte-identical to what it was before options entered the key - which is what makes
    * the two committed hashes in {@code VarkaShapeCacheSuite} a valid oracle for that migration.
    * A non-default variant renders, and so gets its own name: the execution side table is keyed on
    * the hash alone while the map is keyed on the full key, so options that reached one but not
