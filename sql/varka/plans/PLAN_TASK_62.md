@@ -1486,3 +1486,97 @@ come from different machines and different row counts - chains on a runner at
 same-machine and does support the conclusion, but a surface run on the
 re-run's machine would settle it properly, and 11.17 should take one while the
 gate is fixed anyway.
+
+### 11.17 The closing measurement, on a machine the gate actually checked
+
+*Run 34721687731, 13 September 2026: 2e8 rows, one partition, 12g driver, four
+distributions over the twelve chains, 74 minutes. **AMD EPYC 9V45 96-Core**,
+full AVX-512 flag set, `MaxVectorSize: 64`, datapath probe 2.01. Eighteen
+dispatches for the hit, which is the rate 11.9's survey predicted to the
+dispatch.*
+
+**The gate is verified by agreement, not by assertion.** The probe that admitted
+this job read 2.01 on the measure VM, and the `datapath:` line that
+`dev/varka_bench_surface.sh` wrote independently into all four results files
+reads 2.01 on the same VM. Under 11.15's defect those two numbers came from
+different machines and disagreed 2.00 against 1.00; here they agree because
+there is only one machine involved. A reader who doubts the gate can check the
+committed files without leaving the tree.
+
+**The numbers.** Varka runs the twelve chains at **6.9 to 11.2 ns/row** against
+stock Spark 4.2's 68.2 to 143.9, and the table was fully resident - 4.6 GiB in
+memory, nothing on disk, zero `Not enough space` warnings, all twelve entries
+`fallback 0`.
+
+| | |
+|---|---|
+| Varka against stock Spark 4.2 (best of JDK 17 and 25) | **9.4x to 14.2x**, median 10.2x |
+| Varka against the same fork with the engine off | 9.5x to 14.2x, median 10.4x |
+| worst fixed share on a Varka row | 3.5%, against the 5% rule |
+
+The `varka-off` column agreeing with stock to within a few percent on every row
+is the control this task's admission check asked for: the fork itself is not
+what makes the difference, the engine is.
+
+**The row count had to move, and 11.12 was wrong about why it could not.** The
+first gated run (34714282714, same machine, same probe reading) failed the
+fixed-share rule with five entries between 5.0% and 5.9%. Nothing was broken:
+the table was resident and every entry fused. The full-width machine simply runs
+these kernels about twice as fast, so per-iteration executor time fell to about
+700 ms while the job's constant cost stayed where it was - and that constant is
+**36 ms median, not the 18 ms** 11.13's model assumed, which is the third figure
+in that model to come in low. The chains were sized to clear 5% at 1e8 rows on a
+*256-bit* runner, and the benchmark was outrun by the improvement it exists to
+demonstrate.
+
+The fix was more rows, and here 11.12's finding blocked the obvious answer: it
+records 2e8 as non-resident "at every partition count and driver memory tried",
+11g included. A four-rung ladder on ordinary runners says otherwise - 1.5e8 at
+8g and at 11g, and 2e8 at 11g and at 12g, all four fully resident with the Varka
+arm holding its whole table and no runner reporting a shortage. **What changed
+between the two is the storage level.** Those earlier attempts predate the
+`MEMORY_ONLY` change, so they ran under Spark's default `MEMORY_AND_DISK`, which
+does not refuse a block it cannot hold - it writes it to disk and carries on. So
+11.12 measured a spill and read it as a capacity limit. 11.12 stands as the
+record of the run it describes; its conclusion about 2e8 does not.
+
+Choosing between the rungs was arithmetic on this machine's own per-entry fixed
+costs rather than a guess: extrapolating each entry's measured constant against
+more rows puts the worst entry at 4.0% at 1.5e8 and 3.0% at 2e8. 2e8 was taken
+for the margin, and came in at 3.5% - half a point over the extrapolation, close
+enough that the method is sound and far enough to justify not having chosen
+1.5e8's predicted 4.0%.
+
+**11.13's prediction 3, scored, and it is the interesting one.** The prediction
+was a measurable 256-to-512 difference on these entries. There is one, and it is
+much smaller than the lane count suggests. Comparing the 1e8 runs on the 9V74 at
+256 bits and the 9V45 at 512 bits, Varka moves 2.07x - but so does everything
+else, because the two machines differ by more than their vector width:
+
+| arm | 9V74 to 9V45 |
+|---|---|
+| `varka-jdk25` (vectorised) | 2.07x |
+| `varka-off-jdk25` (scalar) | 1.84x |
+| `spark-4.2.0-jdk25` (scalar) | 1.78x |
+| `spark-4.2.0-jdk17` (scalar) | 1.78x |
+
+Three independent scalar arms agree within 0.06x, and that is the machine -
+Zen 4 to Zen 5, clocks and IPC. Dividing it out leaves roughly **1.14x
+attributable to the datapath**. 11.13 named this risk in the same breath as the
+prediction: it assumed the kernels are issue-bound, and a deep chain of
+dependent operations may be latency-bound instead. The evidence says latency,
+and it is consistent with task 43's ladder, which found the 256-to-512 step
+worth nothing at all on a double-pumped laptop.
+
+This is a cross-machine subtraction and should be read as one. The clean
+experiment is the same machine at `MaxVectorSize` 32 and 64, which is
+milestone 5's task 92 and now has a much sharper question to answer than "does
+width help": it has a number to confirm or refute.
+
+**What this means for the milestone's public claim.** The defensible headline
+from this run is **about 10x against stock Spark on compute-bound date
+expressions**, on a machine whose datapath is verified in the file that carries
+the number. 11.16's caution stands and is now measured on one machine rather
+than across two: the surface's larger ratios are largely Spark's per-row
+overhead, and this figure is what remains when that overhead has been amortised
+away. Both are true; only one of them is what the engine's arithmetic is worth.
