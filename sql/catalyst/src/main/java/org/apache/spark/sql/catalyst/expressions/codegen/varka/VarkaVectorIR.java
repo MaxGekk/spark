@@ -20,7 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import java.util.function.ToIntFunction;
 
 /**
- * The vector IR a fused Varka loop is emitted from (milestone 2, task 9). A node is a value over
+ * The vector IR a fused Varka loop is emitted from. A node is a value over
  * int32 lanes; {@link VarkaLoopEmitter} walks a tree of them post-order, leaving intermediates on
  * the JVM operand stack so they live in vector registers, never in memory.
  *
@@ -37,13 +37,13 @@ import java.util.function.ToIntFunction;
  * {@code equals}/{@code hashCode}, and the emitter memoizes on them, so a subtree appearing in
  * several outputs is computed once per lane group no matter how the caller built the trees.
  *
- * <p>Task 11 splits the IR into values and <i>conditions</i>: a {@link Cond} node is
+ * <p>The IR splits into values and <i>conditions</i>: a {@link Cond} node is
  * mask-valued - per lane a known-true and a known-false bit, SQL's three-valued logic.
  * {@link IfElse#cond} is typed {@code Cond}, so a value cannot appear where a condition
  * belongs; the reverse direction (a condition in a value position) is rejected by the
  * emitter's analysis, since {@code Cond} must extend {@code VarkaVectorIR} for the shared
  * memo machinery to see condition nodes at all. A condition <i>as an output root</i> is legal
- * since task 21 and means a selection bitmap - see {@link Cond} for the null rule there.
+ * and means a selection bitmap - see {@link Cond} for the null rule there.
  */
 public sealed interface VarkaVectorIR
     permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
@@ -72,7 +72,7 @@ public sealed interface VarkaVectorIR
    */
   enum TruncLevel { YEAR, MONTH, QUARTER }
 
-  /** The lane-wise integer operation an {@link IntArith} performs (task 63). */
+  /** The lane-wise integer operation an {@link IntArith} performs. */
   enum IntOp { ADD, SUB, MUL }
 
   /**
@@ -94,7 +94,7 @@ public sealed interface VarkaVectorIR
    * known-false mask, and an unknown lane (a null input somewhere below) is neither - which is
    * what makes {@code CASE WHEN}'s null condition fall through to ELSE.
    *
-   * <p>Interior until task 21; as an output root a condition is a <i>selection bitmap</i>,
+   * <p>As an output root a condition is a <i>selection bitmap</i>,
    * and the rule at the root is written down once, here: <b>unknown is false</b>. A row is
    * selected exactly where the condition is known true - SQL's {@code WHERE} semantics, where
    * a NULL predicate drops the row - and the emitter gets it for free, because the known-true
@@ -134,8 +134,8 @@ public sealed interface VarkaVectorIR
    * <p><b>What it means for the interval above it.</b> Everything above a {@code GuardedDay}
    * may assume {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]}, which is what lets a second shift
    * compose where the analysis would otherwise have run out of range and declined the whole
-   * expression. That is the node's entire purpose: task 52 guards one producer, and a second
-   * guarded shift above it has no budget left, because the first already promised the whole
+   * expression. That is the node's entire purpose: a producer guard covers one producer, and a
+   * second guarded shift above it has no budget left, because the first already promised the whole
    * range (see {@code PLAN_TASK_93.md} 2).
    *
    * <p>Its check is unconditional, not behind {@link VarkaEmitOptions#guardDayProducers}, for
@@ -147,8 +147,8 @@ public sealed interface VarkaVectorIR
 
   /**
    * {@code days + offset}, lane-wise, wrapping on overflow exactly as Spark's {@code DateAdd}
-   * does. {@code offset} is a {@link LiteralSlot} for a foldable day count, or (since task 38) a
-   * {@link ColumnRef} for an {@code IntegerType} column - a nullable one makes the result's
+   * does. {@code offset} is a {@link LiteralSlot} for a foldable day count, or a {@link ColumnRef}
+   * for an {@code IntegerType} column - a nullable one makes the result's
    * validity the AND of both children's, not just {@code days}' (see
    * {@code VarkaLoopEmitter.planWordRef}).
    */
@@ -251,14 +251,14 @@ public sealed interface VarkaVectorIR
    */
   record DayOfWeek(VarkaVectorIR days) implements VarkaVectorIR {}
 
-  /** Spark's {@code weekday} (task 11): {@code floorMod(days + 3, 7)}, Monday = 0. */
+  /** Spark's {@code weekday}: {@code floorMod(days + 3, 7)}, Monday = 0. */
   record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {}
 
   /**
    * {@code extract(DAYOFWEEK_ISO FROM d)} / {@code date_part('DOW_ISO', d)}: Monday 1
    * to Sunday 7, which the analyzer spells {@code Add(WeekDay(d), Literal(1))}. One node rather
    * than a general integer add: the value cannot overflow (a constant one over {@code 0..6}),
-   * and integer arithmetic over an output is milestone 5's task 30. The tail is {@link WeekDay}'s
+   * and integer arithmetic over an output is not supported. The tail is {@link WeekDay}'s
    * plus one lanewise add, the same op that separates {@link DayOfWeek} from {@link WeekDay}.
    */
   record DayOfWeekIso(VarkaVectorIR days) implements VarkaVectorIR {}
@@ -271,8 +271,8 @@ public sealed interface VarkaVectorIR
    * parses from the weekday argument - so {@code offset} itself ranges over {@code [-1, 5]},
    * not {@code [0, 6]}. A literal weekday resolves at compile time to a {@link LiteralSlot},
    * so one emitted class serves every weekday; a weekday column is a {@link ColumnRef} over
-   * the int32 column the evaluator derives from the names before the kernel runs (task 59,
-   * {@code WeekdayLeaf}), and the lowering is the same either way, exact for every int
+   * the int32 column the evaluator derives from the names before the kernel runs (
+   * {@code WeekdayLeaf} ), and the lowering is the same either way, exact for every int
    * {@code offset} since it reproduces Spark's wrapping arithmetic.
    */
   record NextDay(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
@@ -306,8 +306,8 @@ public sealed interface VarkaVectorIR
    * {@code date +- INTERVAL n MONTH/YEAR} and {@code add_months(date, n)}: month
    * arithmetic over a decomposed date, then Hinnant's {@code days_from_civil} recompose -
    * {@link VarkaChrono#daysFromCivil} is the scalar twin. {@code months} carries the (possibly
-   * negative) month count as a {@link LiteralSlot} for a foldable count, or (since task 60) a
-   * {@link ColumnRef} for an {@code IntegerType} column - the same widening
+   * negative) month count as a {@link LiteralSlot} for a foldable count, or a {@link ColumnRef} for
+   * an {@code IntegerType} column - the same widening
    * {@link AddDays#offset} has, with a runtime range guard on the count in place of the
    * literal's compile-time bound. Not a member of {@link Chrono} - it decomposes a date into fields
    * <i>and</i> recomposes one, roughly twice a {@link Chrono} node's cost - but the emitter
@@ -417,7 +417,7 @@ public sealed interface VarkaVectorIR
    * hash and is caught by the pinned-hash tests in {@code VarkaShapeCacheSuite} - one over a
    * plain chain, one over a key that uses every node type, so no rendering is unguarded.
    *
-   * <p>Task 23 pointed the evaluator's kernel identity at it as well - already reachable, since
+   * <p>The evaluator's kernel identity points at it as well - already reachable, since
    * an interface member is public - so a fallback warning names the shape the same way the
    * class's own {@link VarkaDebugInfo} does: a log line and the bytes it names agree, and
    * neither rides {@link Record#toString}.
@@ -467,8 +467,8 @@ public sealed interface VarkaVectorIR
 
   /**
    * The same vocabulary as {@link #canonical}, rendering one node only: children appear as the
-   * numbers {@code lineOf} gives them rather than inlined. Added by task 23 for the
-   * {@code LineNumberTable} decoding key {@link VarkaDebugInfo} carries, which rendered its nodes
+   * numbers {@code lineOf} gives them rather than inlined, for the {@code LineNumberTable} decoding
+   * key {@link VarkaDebugInfo} carries, which rendered its nodes
    * through {@link Record#toString} until then - the very format {@link #canonical} exists to
    * avoid depending on, and which no JDK promises.
    *

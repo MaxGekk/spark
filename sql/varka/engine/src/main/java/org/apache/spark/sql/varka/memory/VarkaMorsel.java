@@ -138,7 +138,7 @@ public final class VarkaMorsel {
   }
 
   /**
-   * Convenience for Task 2 and tests: whether row {@code i} is null in a bit-packed
+   * Convenience for tests: whether row {@code i} is null in a bit-packed
    * validity segment (bit set means valid).
    */
   public static boolean isNull(MemorySegment validity, int i) {

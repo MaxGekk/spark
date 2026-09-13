@@ -21,9 +21,9 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedEx
 import org.apache.spark.sql.catalyst.expressions.codegen.{ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
 
 /**
- * How a Varka node serves each entry of its projection, in words (milestone 2, task 16).
+ * How a Varka node serves each entry of its projection, in words.
  *
- * Partial eligibility (task 12) means a fused node can still evaluate entries per row, and until
+ * Partial eligibility means a fused node can still evaluate entries per row, and until
  * now nothing said which entries those were or why: [[VarkaExpressionCompiler.compilePartial]]
  * classified every entry and dropped the reason on the floor. This renders both - the
  * classification and, for a residual entry, the decline reason the compiler recorded - for the
@@ -74,7 +74,7 @@ private[sql] object VarkaFusionReport {
   }
 
   /**
-   * The filter counterpart (task 21): one line per conjunct of the predicate's `AND` spine -
+   * The filter counterpart: one line per conjunct of the predicate's `AND` spine -
    * fused into the mask kernel, or residual with the compiler's reason. On a Varka filter
    * node every line reads "fused" by construction (the rule keeps residual conjuncts in a row
    * `FilterExec` above); the mixed rendering exists for logs and for reporting the original,

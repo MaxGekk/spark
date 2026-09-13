@@ -40,7 +40,7 @@ import java.util.List;
  * the {@code SourceFile} and the plan fragment are absent for the opposite reason: the cache
  * derives all three from this key's own hash.
  *
- * <p>{@link VarkaEmitOptions} is present, and that is what task 23 changed. The emitter's other
+ * <p>{@link VarkaEmitOptions} is present, and that is what it covers. The emitter's other
  * byte-affecting inputs used to be static test hooks the key could not see, guarded by a JVM-wide
  * refusal in the cache; they are a key component now, so a variant simply gets its own entry and
  * its own class. {@link #VarkaShapeKey(List, int, int)} supplies the defaults, which is every
@@ -48,7 +48,7 @@ import java.util.List;
  *
  * <p>A wrong hit returns wrong results and the ghost fallback cannot catch it, so the compact
  * constructor takes an immutable copy of {@code outputs}: a caller holding the list it passed in
- * must not be able to mutate a key that is already sitting in the map (task 23, which ported this
+ * must not be able to mutate a key that is already sitting in the map (see which ported this
  * record from a Scala case class over an immutable {@code Seq} - where the copy was free).
  */
 public record VarkaShapeKey(

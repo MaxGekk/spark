@@ -23,10 +23,10 @@ import jdk.jfr.Label;
 import jdk.jfr.Name;
 
 /**
- * JFR event (task 22) timing one fused-kernel emission: the Class-File walk plus the class
+ * JFR event timing one fused-kernel emission: the Class-File walk plus the class
  * define, i.e. the whole miss path of {@code VarkaShapeCache} minus the lookup itself. Fires
  * only while a JFR recording has the event enabled; every field names the shape, never a
- * per-execution identity, because the emitted class is shared (task 18) - join back to
+ * per-execution identity, because the emitted class is shared - join back to
  * operators through {@code VarkaShapeCache.executionsFor} or the {@code VarkaCacheLookupEvent}
  * stream. {@code jdk.jfr} is a default root module, so no build or deployment flag is needed.
  */

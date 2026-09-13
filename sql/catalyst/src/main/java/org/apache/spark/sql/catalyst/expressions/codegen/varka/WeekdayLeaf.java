@@ -26,7 +26,7 @@ import org.apache.spark.sql.vectorized.ColumnVector;
 import org.apache.spark.unsafe.types.UTF8String;
 
 /**
- * The derived weekday leaf (task 59): maps a string column of weekday names to the int32 column
+ * The derived weekday leaf: maps a string column of weekday names to the int32 column
  * {@code k = dayOfWeek - 1} that {@code next_day}'s lowering reads, per batch and before the
  * kernel runs. The definition is {@code DateTimeUtils.getDayOfWeekFromString}: case-insensitive
  * under {@code Locale.ROOT}, three spellings per day, no trimming, and an

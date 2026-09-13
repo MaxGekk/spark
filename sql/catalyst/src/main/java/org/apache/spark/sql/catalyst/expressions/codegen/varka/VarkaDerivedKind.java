@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 /**
- * How the evaluator derives a kernel input that no child column holds directly (task 59). A
+ * How the evaluator derives a kernel input that no child column holds directly. A
  * derived input is an int32 column computed per batch, before the kernel runs, from a child
  * column the kernel cannot read - a string - by the row engine's own function for it, so the
  * kernel sees a plain int input and the semantics are the row engine's by construction. The
@@ -27,7 +27,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * than of the batch because Spark fixes {@code NextDay.failOnError} when the expression is
  * built, and the two modes differ in what an unrecognised name does: a null lane, or a decline
  * to the row engine, which then raises its own error ({@link WeekdayLeaf}). The third kind
- * (task 61) maps {@code trunc}'s format to its level code ({@link TruncLevelLeaf}); it has no
+ * maps {@code trunc}'s format to its level code ({@link TruncLevelLeaf}); it has no
  * ANSI twin because Spark's {@code TruncDate} has no error path - an unrecognised format is a
  * NULL result in either mode.
  */

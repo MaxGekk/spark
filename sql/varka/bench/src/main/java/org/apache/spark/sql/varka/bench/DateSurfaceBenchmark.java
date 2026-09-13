@@ -44,7 +44,7 @@ import org.apache.spark.storage.StorageLevel;
 import scala.jdk.javaapi.CollectionConverters;
 
 /**
- * The date-surface benchmark (task 62): every entry of {@link Surface}, in the projection shape
+ * The date-surface benchmark: every entry of {@link Surface}, in the projection shape
  * (written to the {@code noop} sink, which takes columnar batches) and the filter shape
  * (counted), over one cached table, timed by wall clock and by executor time, written in
  * Spark's harness format with a provenance block on top. Submitted with {@code spark-submit}
@@ -339,7 +339,7 @@ public final class DateSurfaceBenchmark {
             + " ELSE date_add(DATE'2020-01-01', CAST(id %% 1460 AS INT)) END AS d,"
             + " date_add(DATE'2021-01-01', CAST(id %% 1500 AS INT)) AS d2,"
             + " CAST(id %% 3650 AS INT) AS i,"
-            // Task 67: one year-month interval column per unit, over counts inside the
+            // one year-month interval column per unit, over counts inside the
             // emitter's MONTH_ARITH range so every row fuses and the rows measure the kernel
             // rather than the guard's decline path.
             + " CAST(CAST(id %% 240 AS INT) AS INTERVAL MONTH) AS ymm,"

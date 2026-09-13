@@ -24,16 +24,16 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.vectorized.ArrowColumnVector
 
 /**
- * Varka plan-level fusion (Task 6). When `spark.sql.codegen.varka.enabled` is set, a
+ * Varka plan-level fusion. When `spark.sql.codegen.varka.enabled` is set, a
  * Varka-eligible projection sitting above a columnar source runs the SIMD kernels over the Arrow
- * `DateDayVector` buffers (or an `IntVector` for a day-offset column, since task 38) instead of
+ * `DateDayVector` buffers (or an `IntVector` for a day-offset column) instead of
  * per-row codegen. A dual-mode source that currently feeds
  * rows is switched to its columnar output; projections that are not eligible are left untouched.
- * Since task 12 eligibility is partial: a projection is eligible when at least one entry
+ * eligibility is partial: a projection is eligible when at least one entry
  * compiles to the vector IR, with bare columns forwarded zero-copy and the remaining entries
  * evaluated per row alongside the kernels (see `VarkaKernelEvaluator`).
  *
- * Task 21 extends the same two-stage rewrite to filters, the engine's first plan-shape change:
+ * The same two-stage rewrite extends to filters, the engine's first plan-shape change:
  * an eligible predicate becomes a [[VarkaFilterExec]] (columnar out, compacting the selected
  * rows) or, fused with its to-row transition, a [[VarkaFilterColumnarToRowExec]] (which
  * consumes the selection bitmap at the row boundary, no compaction). Predicate eligibility is
@@ -96,7 +96,7 @@ object VarkaColumnarRule extends ColumnarRule {
           } else {
             project
           }
-        // Task 78: a projection that only narrows a Varka filter's columns, absorbed into the
+        // a projection that only narrows a Varka filter's columns, absorbed into the
         // filter node rather than left above it. This runs after the arm above rather than
         // instead of it, so a projection with anything to fuse still becomes a Varka
         // projection node; what reaches here fuses nothing, because forwarding a column is
@@ -137,7 +137,7 @@ object VarkaColumnarRule extends ColumnarRule {
    * Whether `projectList` only forwards and narrows `childOutput`: every entry is a column of
    * the child, or a rename of one, and nothing is computed.
    *
-   * This is task 78's plan-time signal, and the shape it selects is narrower than its name
+   * This is the plan-time signal, and the shape it selects is narrower than its name
    * suggests. Spark's own column pruning has already run: for a one-column predicate the
    * pruned child output is that column, the projection above it is redundant, and the
    * optimizer removed it long before this rule saw the plan. What survives to here is a

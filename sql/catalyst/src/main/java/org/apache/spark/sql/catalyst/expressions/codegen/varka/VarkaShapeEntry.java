@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
  * cache owns the loader and releases it on eviction; a running task's strong references to the
  * class and kernel keep them alive past that, which is the whole release contract.
  *
- * <p>Task 23 folded two debt-register items into this record. The constructor is resolved once, in
+ * <p>This record folds two concerns together. The constructor is resolved once, in
  * {@link VarkaShapeCacheImpl}'s emit, rather than by a {@code getConstructor} lookup on every
  * {@link #newKernel()} - which runs once per task, per kernel. And {@link #className()} /
  * {@link #sourceFile()} are derived from {@link #shapeHash()} instead of being stored beside it:

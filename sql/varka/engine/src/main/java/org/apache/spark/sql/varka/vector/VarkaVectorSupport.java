@@ -26,8 +26,8 @@ import jdk.incubator.vector.VectorMask;
  * The building blocks a Varka kernel is made of: address wrapping, bit-packed validity access
  * per whole lane group and per an epilogue's partial one, and the single-row counterparts
  * that scalar reference code and the tests use (no production loop reads a row at a time
- * since task 24 gave both the emitted loops and the kernels masked epilogues). Promoted from
- * {@link DateVectorOps} (Task 9) so that generated fused loops can call them by name, exactly as
+ * gave both the emitted loops and the kernels masked epilogues). Promoted from
+ * {@link DateVectorOps} so that generated fused loops can call them by name, exactly as
  * generated dispatchers call the kernels; the hand-written kernels keep using them and remain the
  * reference for how they compose.
  *
@@ -116,14 +116,14 @@ public final class VarkaVectorSupport {
   }
 
   // ---------------------------------------------------------------------------------------
-  // Width-specialised whole-group access (task 46).
+  // Width-specialised whole-group access.
   //
   // The two helpers above take the lane count as an argument, so each carries a four-arm
   // switch on `groupBytes(lanes)` that a caller cannot fold: 153 and 212 bytecode bytes, and
   // C2 refuses to inline the writer inside a fused loop - `NodeCountInliningCutoff` on one
   // compilation and `callee is too large` on another, with `-XX:CompileCommand=inline`
-  // changing the reason and not the outcome (task 32, SKILLS.md). Measured through task 45's
-  // A/B, one refused call costs 1.87 to 3.24 ns per lane group whatever the vector width,
+  // changing the reason and not the outcome (see SKILLS.md). One refused call // costs 1.87 to 3.24
+  // ns per lane group whatever the vector width,
   // which is why a 4-lane group pays four times per row what a 16-lane group does.
   //
   // The emitter knows the lane count when it writes the bytes, so it can name it: one method
@@ -198,7 +198,7 @@ public final class VarkaVectorSupport {
 
   /**
    * Stores a whole 64-bit word of destination validity: bit {@code b} of {@code word} is row
-   * {@code (row & ~63L) + b}. Task 47's write, and deliberately the one access in this class
+   * {@code (row & ~63L) + b}. The whole-word write, and deliberately the one access in this class
    * that addresses a fixed word rather than the bytes a lane group occupies.
    *
    * <p>Two things make that sound here and nowhere else. It is a <i>destination</i> bitmap,
@@ -231,8 +231,8 @@ public final class VarkaVectorSupport {
    * loop costs nothing that matters.
    *
    * <p>Passing {@code rows} to {@link #validityBitsAt} instead is the bug this method exists to
-   * prevent, and it is silent: {@code groupBytes(9)} is 1, so a nine-row group would read one
-   * byte and report its ninth row null (task 24 hit exactly that).
+   * prevent, and it is silent: {@code groupBytes(9)} is 1, so a nine-row group would read one byte
+   * and report its ninth row null.
    */
   public static long partialValidityBitsAt(MemorySegment validity, long row, int rows) {
     long byteOffset = row / 8;
@@ -298,9 +298,9 @@ public final class VarkaVectorSupport {
    * them: whole {@code 0xFF} bytes for {@code rows / 8}, then the low {@code rows % 8} bits of
    * the byte after those.
    *
-   * <p>Task 45's counterpart to {@link #zero}. On a dense batch the dispatcher has already
-   * proven every referenced input null-free, and task 11's invariant - every node maps valid
-   * inputs to valid outputs, and there is no null-literal node - makes every value output valid
+   * <p>The counterpart to {@link #zero}. On a dense batch the dispatcher has already
+   * proven every referenced input null-free, and the dense invariant - every node maps valid inputs
+   * to valid outputs, and there is no null-literal node - makes every value output valid
    * on every row. So the bits are known before the loop starts, and the loop's per-lane-group
    * {@code orValidityBitsAt} call is ORing a word of all ones into a bitmap the driver zeroed a
    * moment earlier.
@@ -326,7 +326,7 @@ public final class VarkaVectorSupport {
 
   /**
    * {@code dst = src} over exactly the low {@code rows} bits, and zero past them in the final
-   * byte - the single-input case of task 70's bitmap pass. Where a root's validity word is an
+   * byte - the single-input case of the whole-batch bitmap pass. Where a root's validity word is an
    * alias of one input's (every calendar extraction over a column, the mod-7 family), the
    * destination bitmap is that input's bitmap, whole-batch, and the loop's per-lane-group
    * {@code orValidityBitsAt} was writing it sixteen rows at a time.
@@ -355,7 +355,7 @@ public final class VarkaVectorSupport {
 
   /**
    * {@code dst = a & b} over exactly the low {@code rows} bits, zero past them - the
-   * null-intolerant rule of task 11's word algebra ({@code AddDays}, {@code DateDiff},
+   * null-intolerant rule of the word algebra ( {@code AddDays}, {@code DateDiff},
    * {@code AddMonths} with a column count, {@code next_day} and {@code trunc} with a derived
    * column) taken over the whole batch at once.
    *
@@ -414,7 +414,7 @@ public final class VarkaVectorSupport {
 
   /**
    * The three helpers above take bitmaps. A column does not always have one, and whether it does
-   * is known only at runtime, so these are the entry points task 70's driver pass emits: a
+   * is known only at runtime, so these are the entry points the driver's bitmap pass emits: a
    * column's validity as the morsel contract spells it, an address beside a null count, with the
    * three states resolved here rather than as a branch ladder in the emitted driver.
    *
@@ -489,8 +489,8 @@ public final class VarkaVectorSupport {
   }
 
   /**
-   * {@code dst = dst & b} over one more column: the step task 70's pass takes for the third
-   * and later operands of a flattened AND, once the first two have been written by
+   * {@code dst = dst & b} over one more column: the step the bitmap pass takes for the third and
+   * later operands of a flattened AND, once the first two have been written by
    * {@link #andColumnValidity(MemorySegment, long, int, long, int, int)}. The same three
    * states, read against a destination that already holds exactly {@code rows} bits: an
    * all-ones column leaves it as it is, an all-null one makes it all zeros, and a bitmap is

@@ -23,7 +23,7 @@ import jdk.jfr.Label;
 import jdk.jfr.Name;
 
 /**
- * JFR event (task 22) for one degradation of the Varka fast path, the event form of the
+ * JFR event for one degradation of the Varka fast path, the event form of the
  * fallback-cause metrics: {@code cause} is one of the constants below - {@link #NON_ARROW_BATCH}
  * (a non-empty batch whose referenced columns are not Arrow-backed, per batch; an empty batch
  * is served trivially and carries no cause at all), {@link #KERNEL_FAILURE} (the ghost fallback

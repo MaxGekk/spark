@@ -58,8 +58,8 @@ import java.lang.foreign.ValueLayout;
  * an exact magic multiply, and unlike the emitted lowering it is exact over <b>every</b> int32
  * day: the bias is a whole number of eras ({@code 719468 + 14699 * 146097}), which puts the
  * dividend in {@code [0, 2^32 + 719468)} where the {@code /146097} magic is exact with three
- * bits of headroom. So there is no narrow range and no guard here - the same property task 49
- * (PLAN_MILESTONE_4.md section 2.19) wants for the vector path, reachable in scalar code today
+ * bits of headroom. So there is no narrow range and no guard here - the same property
+ * `PLAN_MILESTONE_5.md` wants for the vector path, reachable in scalar code today
  * because a 64-bit multiply is ordinary. The constants are the ones
  * {@code sql/varka/plans/verify_long_lane_magic.py} derives and checks, and the algorithm was
  * swept against a reference over every day of years 1 to 9999 before it was written here;
@@ -127,7 +127,7 @@ public final class ChronoScalarOps {
       long yoe = u / 365;
       long doy = doe - (365 * yoe + (yoe >>> 2) - yoe / 100);
       long mp = (5 * doy + 2) / 153;
-      // m = mp < 10 ? mp + 3 : mp - 9, branchless; then the year turns where m <= 2.
+      // m = mp < 10 ? mp + 3: mp - 9, branchless; then the year turns where m <= 2.
       long lt10 = (mp - 10) >>> 63;
       long m = mp + 3 - 12 * (1 - lt10);
       long turned = ((2 - m) >>> 63) ^ 1L;

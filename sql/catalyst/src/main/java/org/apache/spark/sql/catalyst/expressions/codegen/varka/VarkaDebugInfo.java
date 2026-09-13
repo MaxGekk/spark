@@ -21,9 +21,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * The {@code VarkaDebugInfo} class attribute (milestone 2, task 13): the emitted fused-kernel
+ * The {@code VarkaDebugInfo} class attribute: the emitted fused-kernel
  * class carries, baked into its own bytes, the vector IR it was emitted from, the plan
- * fragment that produced that IR, and (task 16) the key that decodes its {@code LineNumberTable}
+ * fragment that produced that IR, and the key that decodes its {@code LineNumberTable}
  * back to IR nodes. A generated class dumped from a heap, a Metaspace profile or a
  * {@code -XX:+DumpLoadedClassList}-style capture is thereby self-describing - no live session
  * or log correlation is needed to answer "which projection is this loop?", nor "which node is
@@ -58,7 +58,7 @@ import java.util.Optional;
  * {@link VarkaDebugInfoReader}, which adds the {@code SourceFile} accessor and keeps all
  * class-file parsing on the Java side.
  *
- * <p>Task 18's cross-task class cache reconciled this attribute (and the emitted
+ * <p>The cross-task class cache reconciled this attribute (and the emitted
  * {@code SourceFile} name) with sharing: the bytes now describe the <i>shape</i> - the class
  * is named by its shape hash, the plan-fragment field carries {@code shape <hash>} - and the
  * per-execution identity (operator, stage, projection list) lives in
@@ -94,13 +94,13 @@ public final class VarkaDebugInfo {
   }
 
   /**
-   * The {@code LineNumberTable}'s decoding key (task 16): one {@code <line>=<node>} entry per
+   * The {@code LineNumberTable}'s decoding key: one {@code <line>=<node>} entry per
    * distinct IR node, newline separated, so a frame at
    * {@code VarkaFusedProjection_<hash>.java:7} resolves to the node the emitter attributed
    * that line to. Empty for a class emitted with
    * no nodes to map.
    *
-   * <p>A node renders through {@code VarkaVectorIR.canonicalShallow} (task 23): its own kind and
+   * <p>A node renders through {@code VarkaVectorIR.canonicalShallow}: its own kind and
    * scalar fields, with each child given as that child's line number - so {@code 5=(addDays 3 4)}
    * reads "line 5 adds line 3 to line 4". Children always carry lower numbers than their parents,
    * which is what makes a line number a schedule position. The rendering is pinned by hand for

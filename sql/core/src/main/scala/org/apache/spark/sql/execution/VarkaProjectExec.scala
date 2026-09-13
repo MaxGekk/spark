@@ -85,7 +85,7 @@ case class VarkaProjectExec(
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output)
 
-  // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
+  // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
   override def verboseStringWithOperatorId(): String = {
     s"""
@@ -105,7 +105,7 @@ case class VarkaProjectExec(
   }
 
   override protected def doExecuteColumnar(): RDD[ColumnarBatch] = {
-    // Task 22: the residual-entry count is a static plan property - added once, driver-side,
+    // the residual-entry count is a static plan property - added once, driver-side,
     // so the UI total does not multiply by task count. The per-entry reasons are in EXPLAIN.
     // Posted explicitly (task-21 review): the SQL listener aggregates task-end updates and
     // posted driver updates only, so without the post the UI would always read 0 while the

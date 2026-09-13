@@ -30,10 +30,10 @@ import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
 
 /**
- * Task 50: notices when C2 compiles the same generated kernel method to a materially different
+ * notices when C2 compiles the same generated kernel method to a materially different
  * size than it did earlier in this JVM.
  *
- * <p><b>Why this is worth a thread.</b> Task 32 spent six failed hypotheses on a kernel that ran
+ * <p><b>Why this is worth a thread.</b> Six failed hypotheses once went on a kernel that ran
  * at either 165 or 236 M rows/s under {@code -XX:MaxVectorSize=16} - stdev 0 inside a run, 42%
  * between runs - before the cause turned out to be C2's register allocator. The two compilations
  * contain identical vector op counts; the whole difference is spill traffic, four stack moves
@@ -49,8 +49,8 @@ import org.apache.spark.internal.SparkLoggerFactory;
  * later one that differs by more than {@link #DIVERGENCE_RATIO} is the report. No table, no
  * drift, and it gets more accurate the longer a JVM lives.
  *
- * <p><b>The key is a method, not a shape</b> ({@code PLAN_TASK_50.md} 2.1). A generated kernel is
- * not one method: task 24 deliberately split it into {@code run}, {@code runDense},
+ * <p><b>The key is a method, not a shape</b> ( {@code PLAN_TASK_50.md} 2.1). A generated kernel is
+ * not one method: it is deliberately split into {@code run}, {@code runDense},
  * {@code runMasked}, {@code loopDense}<i>g</i>, {@code loopMasked}<i>g</i>,
  * {@code epilogueDense} and {@code epilogueMasked}, whose compiled sizes differ from each other
  * by an order of magnitude. Keyed on the shape alone, the second method compiled for a shape
@@ -59,7 +59,7 @@ import org.apache.spark.internal.SparkLoggerFactory;
  * every part of the key: OSR 744 bytes against non-OSR 576, tier 3 576 against tier 4 696, and a
  * different method of the same class 10552. So the key is shape hash, method name and compile
  * level together, and on-stack-replacement compilations are dropped rather than keyed - they are
- * not what the steady-state path runs, and task 32 found them identical across both modes anyway.
+ * not what the steady-state path runs, and they are identical across both modes anyway.
  *
  * <p><b>It is a diagnostic and never a control loop.</b> Re-emitting a shape under a new class
  * name would give the allocator a fresh roll, and {@code PLAN_MILESTONE_4.md}'s debt register
@@ -74,7 +74,7 @@ import org.apache.spark.internal.SparkLoggerFactory;
  * do. Measured, emitting one shape twice in a JVM produced 16 compilations across 8 keys, each
  * compiled twice. So this reports that a re-emitted kernel compiled differently than the same
  * kernel did earlier in the same JVM; it cannot report that this JVM's allocation is worse than
- * another JVM's, which is the form task 32's bimodality actually took.
+ * another JVM's, which is the form the observed bimodality actually took.
  *
  * <p>Off unless {@code spark.sql.codegen.varka.compilationWatch.enabled} is set. When off, no
  * instance exists, so there is no stream, no thread and no map.

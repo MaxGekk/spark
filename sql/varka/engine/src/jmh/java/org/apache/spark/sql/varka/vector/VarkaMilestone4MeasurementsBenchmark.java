@@ -59,18 +59,20 @@ import org.openjdk.jmh.infra.Blackhole;
  *       cache lines)? Feeds the "buffer alignment enforcement" line in section 8.</li>
  *   <li><b>Boolean materialization</b> ({@code bool*}): {@code VectorMask.toVector().and(one)},
  *       {@code zero.blend(one, mask)}, and {@code mask.toLong()} (the actual bit-packed
- *       output-boundary format) as three ways to turn a comparison into a boolean column. Feeds
- *       task 27 (section 2.4).</li>
+ * output-boundary format) as three ways to turn a comparison into a boolean column. Feeds the
+ * boolean-output work (`PLAN_MILESTONE_5.md`).</li>
  *   <li><b>Lane-width conversion</b> ({@code laneWidth*}): {@code cast(int AS long) + long},
  *       driving the loop at the narrower (long) lane count versus the wider (int) one with a
- *       two-part {@code convertShape}. Feeds task 28 (section 2.5), open question 2.</li>
+ * two-part {@code convertShape}. Feeds the lane-width conversion work
+ * (`PLAN_MILESTONE_5.md`).</li>
  *   <li><b>Boolean trees</b> ({@code boolTree*}): {@code (a > b) AND (c < d)} kept in mask space
- *       throughout versus materialized as int columns at each node. Feeds task 27's compound-
- *       predicate case.</li>
+ * throughout versus materialized as int columns at each node. Feeds the boolean-output work's
+ * compound- predicate case.</li>
  *   <li><b>Trapping-op safety</b> ({@code div*}): the emitter's invariant is that inactive lanes
  *       read 0, which a division must not trap on. Blending a safe divisor (1) into inactive
  *       lanes before an unmasked {@code DIV} versus the masked lanewise {@code DIV} form, which
- *       never evaluates inactive lanes. Feeds task 30 (section 2.7).</li>
+ * never evaluates inactive lanes. Feeds the ANSI integer arithmetic work
+ * (`PLAN_MILESTONE_5.md`).</li>
  * </ul>
  *
  * <p>Every {@code @Setup} also runs a correctness check against a scalar reference (throwing on

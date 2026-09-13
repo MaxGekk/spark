@@ -33,7 +33,7 @@ import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
 
 /**
- * A hand-written measurement kernel for task 32 ({@code PLAN_TASK_32.md}): the ceiling on
+ * A hand-written measurement kernel (see {@code PLAN_TASK_32.md}): the ceiling on
  * computing {@code year}, {@code month}, {@code dayofmonth} and {@code quarter} from ONE
  * civil-from-days decomposition per row, against the 445.7 M rows/s four independently emitted
  * nodes reach today ({@code VarkaEmitterParityBenchmark-jdk25-results.txt}).
@@ -46,7 +46,7 @@ import jdk.incubator.vector.VectorSpecies;
  * analysis cannot see the allocation and its consumers in one compilation unit, so the record and
  * its four vectors were really heap-allocated once per lane group - and three of the six calls to
  * a 12-byte {@code magic} helper stopped inlining too, once the enclosing method was over budget.
- * The kernel measured 225.8 M rows/s and task 32 was declined on that number. It was measuring
+ * The kernel measured 225.8 M rows/s and the change was declined on that number. It was measuring
  * the cost of a Java abstraction, not the cost of sharing.
  *
  * <p>{@code VarkaLoopEmitter.emitChrono} - the path this kernel exists to model - emits zero call
@@ -59,8 +59,8 @@ import jdk.incubator.vector.VectorSpecies;
  * no method holding lane arithmetic exceeds 325 bytes.
  *
  * <p>This is deliberately not production code and is not wired into {@code VarkaFusedKernel} -
- * the engine module cannot depend on catalyst, which owns that interface. It exists only to
- * answer task 32's ceiling question. But it now pays what a shippable shared lowering would pay,
+ * the engine module cannot depend on catalyst, which owns that interface. It exists only to answer
+ * that ceiling question. But it now pays what a shippable shared lowering would pay,
  * because a ceiling has to charge both sides of the comparison the same things:
  *
  * <ul>
@@ -356,8 +356,8 @@ public final class ChronoVectorOps {
 
   /**
    * The same four fields, the same arithmetic and the same op count as
-   * {@link #vectorFourFields}, scheduled to keep fewer values live at once. Task 32 found the
-   * shared decomposition worth ~1.5x at AVX-512 and nothing reliable at 128-bit, where 16 vector
+   * {@link #vectorFourFields}, scheduled to keep fewer values live at once. The shared
+   * decomposition measures ~1.5x at AVX-512 and nothing reliable at 128-bit, where 16 vector
    * registers must also hold the masks; this variant exists to measure how much of that gap is
    * the schedule rather than the sharing.
    *
@@ -570,8 +570,8 @@ public final class ChronoVectorOps {
    * every other line here is identical.
    *
    * <p>Every row is assumed non-null and every output is reported valid, unconditionally - this
-   * is not a shippable null-free fast path (that is task 45's, which still owes one write per
-   * batch), it is a kernel with the validity work deleted rather than made cheap, built to
+   * is not a shippable null-free fast path (that would still owe one write per batch), it is a
+   * kernel with the validity work deleted rather than made cheap, built to
    * measure a ceiling rather than to ship.
    *
    * @param srcData address of the source int32 day values; every row is assumed non-null.
