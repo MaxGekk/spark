@@ -55,7 +55,7 @@ private[sql] case class CompiledVarkaProjection(
 }
 
 /**
- * A kernel input the evaluator derives per batch (task 59) rather than reads: kernel input
+ * A kernel input the evaluator derives per batch rather than reads: kernel input
  * `inputIndex` (a position in `inputOrdinals`, whose entry there is `sourceOrdinal`) is the
  * int32 column `kind` computes from child column `sourceOrdinal` - the first kind maps
  * `next_day`'s weekday names to `dayOfWeek - 1` - before the kernel runs. Like a bound, a
@@ -97,7 +97,7 @@ private[sql] object VarkaDerivedInput {
 
 /**
  * A closed interval every live value of kernel input `inputIndex` (a position in
- * `inputOrdinals`) must lie in for the kernel's answer to be Spark's (task 56). The compiler
+ * `inputOrdinals`) must lie in for the kernel's answer to be Spark's. The compiler
  * records one where it rewrote an expression whose row-engine form throws outside the bound -
  * the first is `CAST(i AS INTERVAL DAY)`, which overflows past
  * `VarkaChrono.INTERVAL_DAY_LIMIT_DAYS` days - and the evaluator checks it per batch before the
@@ -108,7 +108,7 @@ private[sql] object VarkaDerivedInput {
 private[sql] case class VarkaInputBound(inputIndex: Int, lo: Int, hi: Int)
 
 /**
- * How one projection entry is served under partial eligibility (task 12): computed by the fused
+ * How one projection entry is served under partial eligibility: computed by the fused
  * kernel, forwarded as the input's own vector, or evaluated per row by the residual projection.
  */
 private[sql] sealed trait VarkaOutputSpec
@@ -126,7 +126,7 @@ private[sql] case class ForwardedOutput(childOrdinal: Int) extends VarkaOutputSp
 private[sql] case object ResidualOutput extends VarkaOutputSpec
 
 /**
- * Why one entry could not be fused (task 16): the answer to "why didn't my projection fuse?",
+ * Why one entry could not be fused: the answer to "why didn't my projection fuse?",
  * which the compiler's per-entry `None` used to swallow. `reason` is the vocabulary term - the
  * same string the exec nodes' verbose `EXPLAIN` and debug logs print - and `expr` names the
  * offending expression, the innermost one that actually failed rather than the whole entry.
@@ -186,12 +186,12 @@ private final class DeclineSink(childOutput: Seq[Attribute]) {
 }
 
 /**
- * A projection classified entry by entry (task 12): `specs` has one entry per projectList
+ * A projection classified entry by entry: `specs` has one entry per projectList
  * position, in order, and `fused` is the sub-projection of just the [[FusedOutput]] entries -
  * their kernel-input and literal tables cover only what the fused trees reference, so a
  * residual entry constrains neither the emitted loop nor `canRun`'s Arrow check.
  *
- * `declines` (task 16) maps the position of each [[ResidualOutput]] entry to why it declined,
+ * `declines` maps the position of each [[ResidualOutput]] entry to why it declined,
  * for the exec nodes' verbose `EXPLAIN`; it is diagnostics only and no execution path reads it.
  */
 private[sql] case class PartialVarkaProjection(
@@ -210,7 +210,7 @@ private[sql] case class VarkaConjunctSpec(
     decline: Option[VarkaDecline])
 
 /**
- * A filter predicate compiled conjunct by conjunct (task 21): `specs` classifies every
+ * A filter predicate compiled conjunct by conjunct: `specs` classifies every
  * conjunct of the condition's `AND` spine in query order, and `fused` describes the mask
  * kernel - its single output is the fused conjuncts recombined into one condition root, and
  * its `outputTypes` entry is `BooleanType` as a description only, since a selection bitmap
@@ -265,7 +265,7 @@ private[sql] case class CompiledVarkaPredicate(
 private[sql] object VarkaExpressionCompiler {
 
   /**
-   * The most literals an `IN` list may hold and still fuse (task 20), counted after dedup.
+   * The most literals an `IN` list may hold and still fuse, counted after dedup.
    * The basis, recorded in `PLAN_TASK_20.md`: 16 is depth-safe under any fold shape
    * (`MAX_CHAIN_DEPTH` = 16 while the balanced chain here is `ceil(log2 16) + 1` = 5
    * levels), and its 31 op nodes leave half the emitter's `MAX_FUSED_NODES` = 64 budget to
@@ -371,7 +371,7 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * Compiles a filter predicate conjunct by conjunct (task 21). The condition splits on its
+   * Compiles a filter predicate conjunct by conjunct. The condition splits on its
    * `AND` spine - Kleene AND is associative, so the split changes nothing - and each conjunct
    * either joins the fused mask kernel or stays behind as a residual, mirroring
    * [[compilePartial]]'s per-entry eligibility including the table rollback: a declining
@@ -481,7 +481,7 @@ private[sql] object VarkaExpressionCompiler {
     case Literal(months: Int, _: YearMonthIntervalType) =>
       Some(new LiteralSlot(literals.getOrElseUpdate(months, literals.size)))
     // A date literal's value is already an epoch-day int, so it takes a slot in the shared
-    // per-distinct-value table like a folded day offset does (task 11) - what makes
+    // per-distinct-value table like a folded day offset does - what makes
     // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. `days: Int` does not
     // match a null-valued Literal, which falls through to the catch-all below; that is a
     // safe blind spot, not a bug, since ConstantFolding removes a null date literal from any
@@ -489,14 +489,14 @@ private[sql] object VarkaExpressionCompiler {
     // recursive paths into this same match, both equally covered by that guarantee).
     case Literal(days: Int, DateType) =>
       Some(new LiteralSlot(literals.getOrElseUpdate(days, literals.size)))
-    // The identity cast (task 20): the corpus wraps date expressions in `CAST(... AS DATE)`
+    // The identity cast: the corpus wraps date expressions in `CAST(... AS DATE)`
     // 85 times, and after optimization the wrapper is a no-op over an already-date child -
     // unwrap it. A `cast(<string literal> AS DATE)` never reaches here (constant-folded to a
     // date literal by the optimizer); a string *column* cast is a per-row parse with no
     // string lane and stays declined below.
     case c: Cast if c.dataType == DateType && c.child.dataType == DateType =>
       compileNode(c.child, inputs, literals, sink)
-    // unix_date/date_from_unix_date (task 41) are Spark's own `input.asInstanceOf[Int]` in
+    // unix_date/date_from_unix_date are Spark's own `input.asInstanceOf[Int]` in
     // full - a date IS a day count, so both are a pure type relabel with nothing to compute.
     // Unwrapping to the child rather than adding an IR node means `SELECT unix_date(d)` and
     // `SELECT d` compile to the same IR and share a shape hash - correct, since kernel
@@ -569,7 +569,7 @@ private[sql] object VarkaExpressionCompiler {
       // (pinned by VarkaExpressionCompilerSuite's "with two independently unfusable operands,
       // the child's reason is reported" test).
       days match {
-        // `date - INTERVAL n DAY` (task 56): the analyzer spells it as an add of the negated
+        // `date - INTERVAL n DAY`: the analyzer spells it as an add of the negated
         // day count, `DateAdd(d, UnaryMinus(ExtractANSIIntervalDays(r)))`. Inside the cast's
         // own bound the negation cannot overflow, so it is absorbed into SubDays - no
         // UnaryMinus node exists and none is needed.
@@ -625,7 +625,7 @@ private[sql] object VarkaExpressionCompiler {
           None
         }
       }
-    // Coalesce (task 20) right-folds onto the validity condition: `coalesce(a, b)` is
+    // Coalesce right-folds onto the validity condition: `coalesce(a, b)` is
     // `IfElse(IsNotNull(a), a, b)`, whose masked validity - (kT & valid(a)) | (~kT & valid(b))
     // with kT = valid(a) - reduces to valid(a) | valid(b), exactly SQL's coalesce. Every
     // operand before the last must be a bare date column (the IsNotNull child restriction);
@@ -643,7 +643,7 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new IRDayOfWeek(_))
     case WeekDay(child) =>
       compileNode(child, inputs, literals, sink).map(new IRWeekDay(_))
-    // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO') (task 57): the analyzer spells them
+    // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO'): the analyzer spells them
     // Add(WeekDay(d), 1), and so does a hand-written weekday(d) + 1. One narrow arm, either
     // operand order, and nothing else: integer arithmetic over an output is task 30's.
     // Task 63: int32 arithmetic over int-valued operands - a fused field, an IntegerType
@@ -735,7 +735,7 @@ private[sql] object VarkaExpressionCompiler {
       compileNode(child, inputs, literals, sink).map(new DayOfWeekIso(_))
     case Add(Literal(1, IntegerType), WeekDay(child), _) =>
       compileNode(child, inputs, literals, sink).map(new DayOfWeekIso(_))
-    // next_day (task 33): a foldable weekday is resolved at compile time and travels as a
+    // next_day: a foldable weekday is resolved at compile time and travels as a
     // runtime literal. An unrecognized or null one declines rather than throws - it is the
     // row engine's business, and it has two different behaviours for it depending on ANSI
     // mode which Varka must not try to reproduce. Evaluating a foldable-but-computed weekday
@@ -747,7 +747,7 @@ private[sql] object VarkaExpressionCompiler {
         k <- foldWeekday(dow, sink)
         d <- compileNode(start, inputs, literals, sink)
       } yield new IRNextDay(d, new LiteralSlot(literals.getOrElseUpdate(k, literals.size)))
-    // A weekday column (task 59): the kernel reads an int32 column the evaluator derives
+    // A weekday column: the kernel reads an int32 column the evaluator derives
     // from the names, per batch, by the row engine's own parser (WeekdayLeaf), so the node
     // is the same and only the offset's origin differs. ANSI mode is part of the derived
     // input's kind, since NextDay fixes failOnError at construction. Any collation is
@@ -759,9 +759,9 @@ private[sql] object VarkaExpressionCompiler {
     case n: NextDay =>
       sink.note("next_day with a weekday that is neither a literal nor a column", n)
       None
-    // The calendar extractions (task 26). One civil-from-days decomposition per node, so two
+    // The calendar extractions. One civil-from-days decomposition per node, so two
     // fields of the same date are computed twice - see VarkaVectorIR.Year for why. The child
-    // goes through `calendarInput` (task 52): the decomposition is exact only over
+    // goes through `calendarInput`: the decomposition is exact only over
     // VarkaChrono's narrowed range, and the compiler is where a shift that can leave it is
     // known before anything runs.
     case Year(child) =>
@@ -774,7 +774,7 @@ private[sql] object VarkaExpressionCompiler {
       calendarInput(child, expr, inputs, literals, sink).map(new IRQuarter(_))
     case DayOfYear(child) =>
       calendarInput(child, expr, inputs, literals, sink).map(new IRDayOfYear(_))
-    // make_date(y, m, d) (task 42): three int operands, each a column or a literal, and the
+    // make_date(y, m, d): three int operands, each a column or a literal, and the
     // evaluation mode captured on the expression - two modes are two shapes.
     case MakeDate(y, m, d, failOnError) =>
       for {
@@ -784,26 +784,26 @@ private[sql] object VarkaExpressionCompiler {
       } yield new IRMakeDate(yy, mm, dd, failOnError)
     case LastDay(child) =>
       calendarInput(child, expr, inputs, literals, sink).map(new IRLastDay(_))
-    // weekofyear, extract(WEEK) and date_part (task 37): the ISO week by the Thursday rule - the
+    // weekofyear, extract(WEEK) and date_part: the ISO week by the Thursday rule - the
     // week tail over the Thursday of the day's week, two nodes so the prefix runs over the
-    // shifted day and so extract(YEAROFWEEK) (task 58) is Year over the same ThursdayOf. The
+    // shifted day and so extract(YEAROFWEEK) is Year over the same ThursdayOf. The
     // calendar node's child is the shift, so the range analysis admits the shift, not the day.
     case WeekOfYear(child) =>
       compileNode(child, inputs, literals, sink)
         .flatMap(c => admitCalendar(new ThursdayOf(c), expr, literals, sink))
         .map(new IRWeekOfYear(_))
-    // extract(YEAROFWEEK) / date_part('YEAROFWEEK') (task 58): the ISO week-based year is the
+    // extract(YEAROFWEEK) / date_part('YEAROFWEEK'): the ISO week-based year is the
     // calendar year of the same Thursday, so Year over the same shift - one prefix for both
     // fields under CSE, and nothing in the emitter.
     case YearOfWeek(child) =>
       compileNode(child, inputs, literals, sink)
         .flatMap(c => admitCalendar(new ThursdayOf(c), expr, literals, sink))
         .map(new IRYear(_))
-    // trunc(date, fmt) (task 35): the format resolves at compile time, like next_day's weekday,
+    // trunc(date, fmt): the format resolves at compile time, like next_day's weekday,
     // because the level chooses which code is emitted. YEAR, MONTH and QUARTER are one node
     // with the level as a shape-bearing field; WEEK is Spark's own definition,
     // next_day(d - 7, 'MONDAY'), rewritten onto the nodes task 33 already has - the unix_date
-    // pattern of retiring an expression onto existing IR. A stored string column (task 61) is
+    // pattern of retiring an expression onto existing IR. A stored string column is
     // the dynamic node below. Everything else declines, each for its own reason: the row
     // engine answers those with a NULL column, which no IR node can produce.
     case TruncDate(date, format) if format.foldable =>
@@ -813,7 +813,7 @@ private[sql] object VarkaExpressionCompiler {
         case ToWeek =>
           compileNode(date, inputs, literals, sink).map { d =>
             val week = new LiteralSlot(literals.getOrElseUpdate(7, literals.size))
-            // next_day's slot holds dayOfWeek - 1 (task 33); Monday through the same parser
+            // next_day's slot holds dayOfWeek - 1; Monday through the same parser
             // foldWeekday uses, so the constant is the definition's, not a retyped 3.
             val monday = new LiteralSlot(literals.getOrElseUpdate(
               DateTimeUtils.getDayOfWeekFromString(UTF8String.fromString("MONDAY")) - 1,
@@ -821,9 +821,9 @@ private[sql] object VarkaExpressionCompiler {
             new IRNextDay(new SubDays(d, week), monday)
           }
       }
-    // A format column (task 61): the level is read per batch by the evaluator's derived leaf
+    // A format column: the level is read per batch by the evaluator's derived leaf
     // (TruncLevelLeaf) into an int32 column of parseTruncLevel's codes, on next_day's pattern
-    // (task 59), and the kernel computes every period and selects on it. No ANSI twin in the
+    //, and the kernel computes every period and selects on it. No ANSI twin in the
     // kind: TruncDate has no error path, so a null, unrecognised or sub-day format is a NULL
     // row in either mode - the leaf's null lane, through the node's word. Any collation is
     // admitted because the parser ignores it; an expression over the column stays the row
@@ -834,7 +834,7 @@ private[sql] object VarkaExpressionCompiler {
     case t: TruncDate =>
       sink.note("trunc with a non-foldable format", t)
       None
-    // Month arithmetic (task 40): add_months(d, n) and d +- INTERVAL n MONTH/YEAR are the same
+    // Month arithmetic: add_months(d, n) and d +- INTERVAL n MONTH/YEAR are the same
     // node - AddMonthsBase's two subclasses differ only in where the month count comes from,
     // both physically an Int. `d - INTERVAL n MONTH` arrives as DatetimeSub, already replaced
     // by its DateAddYMInterval(l, UnaryMinus(r)) by the time a real query reaches here.
@@ -867,7 +867,7 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * The Coalesce right-fold (task 20). Every operand except the last compiles and must be a
+   * The Coalesce right-fold. Every operand except the last compiles and must be a
    * bare date column: `IsNotNull` reads the per-input validity word, which only a column has
    * before value emission (the recorded milestone-3 restriction) - a computed operand
    * declines with its own reason. The `ColumnRef` match below is a proxy for "this operand
@@ -910,7 +910,7 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * An operand of int arithmetic (task 63): an `IntegerType` column becomes the leaf task 38
+   * An operand of int arithmetic: an `IntegerType` column becomes the leaf task 38
    * introduced, an int literal a slot, and everything else goes through `compileNode` - which
    * yields the fused int fields (`datediff`, the extractions, the ISO weekday) and nested
    * arithmetic. A `DateType` operand is refused here rather than silently treated as a day
@@ -956,7 +956,7 @@ private[sql] object VarkaExpressionCompiler {
       case slot: LiteralSlot =>
         Some(math.abs(literals.keysIterator.drop(slot.index()).next().toLong))
       // The widest year a lowered date can carry: the narrowed range runs to year 33134, and
-      // a day producer's guard keeps every decomposed date inside it (task 52).
+      // a day producer's guard keeps every decomposed date inside it.
       case _: IRYear => Some(40000L)
       case _: IRMonth => Some(12L)
       case _: IRDayOfMonth => Some(31L)
@@ -1128,7 +1128,7 @@ private[sql] object VarkaExpressionCompiler {
     new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size))
 
   /**
-   * `columnRef`'s twin for an input the evaluator derives from `br` (task 59): interned under
+   * `columnRef`'s twin for an input the evaluator derives from `br`: interned under
    * `VarkaDerivedInput.key` beside the child ordinals, so it takes the next kernel input index
    * and shares the table's rollback.
    */
@@ -1163,7 +1163,7 @@ private[sql] object VarkaExpressionCompiler {
   /**
    * The day offset of a `date_add`/`date_sub`: a folded literal keeps today's `LiteralSlot`
    * shape (existing plans and their cached kernels are untouched), a non-foldable offset
-   * (task 38) is a bare `IntegerType` column, and since task 63 it may also be int arithmetic
+   * is a bare `IntegerType` column, and since task 63 it may also be int arithmetic
    * over those - `date_add(d, i * 7)`. It is still deliberately not a general `compileNode`
    * recursion. `compileNode`'s `BoundReference` leaf stays `DateType`-only: widening it instead
    * of this dedicated path would let an int column reach every other position that calls
@@ -1186,7 +1186,7 @@ private[sql] object VarkaExpressionCompiler {
           case br: BoundReference =>
             sink.note(s"non-integer day offset column of type ${br.dataType.simpleString}", br)
             None
-          // A day interval built from an int column (task 56): `CAST(i AS INTERVAL DAY)`. The
+          // A day interval built from an int column: `CAST(i AS INTERVAL DAY)`. The
           // cast multiplies by a day's micros and the extractor divides them back out, so the
           // day count is `i` itself - wherever the cast does not throw. Past
           // INTERVAL_DAY_LIMIT_DAYS it throws in every mode, where a kernel would wrap, so the
@@ -1238,7 +1238,7 @@ private[sql] object VarkaExpressionCompiler {
 
   /**
    * "An int column, as a day interval", the one spelling of it that stays a date-lane
-   * expression (task 56): `ExtractANSIIntervalDays` over `CAST(i AS INTERVAL DAY)`, which is
+   * expression: `ExtractANSIIntervalDays` over `CAST(i AS INTERVAL DAY)`, which is
    * exactly `i` inside the cast's bound. `i * INTERVAL '1' DAY` is not a second spelling: a
    * multiplied interval widens to DAY TO SECOND, so the analyzer casts the date to a timestamp
    * and the expression leaves the date lane (`TimestampAddInterval`, milestone 5). `wrap`
@@ -1366,10 +1366,10 @@ private[sql] object VarkaExpressionCompiler {
 
 
   /**
-   * How far the IR under a calendar node can move a day (task 52). `Bounded` is an interval of
+   * How far the IR under a calendar node can move a day. `Bounded` is an interval of
    * epoch days the value is proven to lie in - which both column-driven producers still yield,
    * because each carries a runtime guard that establishes an interval: a column month count
-   * (task 60) is guarded to `MONTH_ARITH_MIN/MAX_MONTHS`, so the day it can reach is bounded by
+   * is guarded to `MONTH_ARITH_MIN/MAX_MONTHS`, so the day it can reach is bounded by
    * the same 31-day-month over-approximation the literal arm uses; and a column *day* offset
    * (`date_add`/`date_sub`, task 52) is guarded on its own result to the narrowed range, so its
    * output is `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]` by construction. Stating that interval rather
@@ -1395,7 +1395,7 @@ private[sql] object VarkaExpressionCompiler {
    *    by 28n to 31n in whichever order, `last_day` by 0 to 30 - each an over-approximation in
    *    the safe direction, and the `LastDay`/`AddMonths` outputs matter because a date they
    *    produce can be read by a further calendar node after its own input passed this check;
-   *  - `add_months` with a column count (task 60) shifts by the same 31-day-month
+   *  - `add_months` with a column count shifts by the same 31-day-month
    *    over-approximation, at the emitter's own guard bound (`MONTH_ARITH_MIN/MAX_MONTHS`)
    *    rather than one literal value - tighter than the whole contract range, and it composes;
    *  - `greatest`/`least`/`if`/`coalesce` (the last compiles to `IfElse`) take the hull of
@@ -1435,7 +1435,7 @@ private[sql] object VarkaExpressionCompiler {
         case (Bounded(alo, ahi), Bounded(blo, bhi)) =>
           Bounded(math.min(alo, blo), math.max(ahi, bhi))
       }
-    // A column day offset (task 52): the emitter guards this producer's own result per batch
+    // A column day offset: the emitter guards this producer's own result per batch
     // and declines the batch when a lane leaves the narrowed range, so what reaches whatever
     // sits above is exactly that range - not an unknowable shift. Saying so here is what makes
     // the guarantee compose: a further shift widens this interval and `admitCalendar` tests the
@@ -1474,7 +1474,7 @@ private[sql] object VarkaExpressionCompiler {
           val m = literalValue(slot)
           shifted(n.days(), math.min(28 * m, 31 * m), math.max(28 * m, 31 * m),
             guardsBelow = true)
-        // A column count is bounded by the emitter's own runtime guard (task 60) to
+        // A column count is bounded by the emitter's own runtime guard to
         // [MONTH_ARITH_MIN_MONTHS, MONTH_ARITH_MAX_MONTHS], so the day it can produce is
         // bounded too - by the same 31-day-month over-approximation the literal arm uses, at
         // the guard's own extremes rather than one literal value. This is the correction to
@@ -1486,19 +1486,19 @@ private[sql] object VarkaExpressionCompiler {
           guardsBelow = true)
       }
       case n: IRLastDay => shifted(n.days(), 0, 30, guardsBelow = true)
-      // A truncated date (task 35) is its input or an earlier day of the same period: at most
+      // A truncated date is its input or an earlier day of the same period: at most
       // 365 back, the 31st of December of a leap year truncated to its year.
       case n: IRTruncDate => shifted(n.days(), -365, 0, guardsBelow = true)
-      // The same bound for the level-column form (task 61): its week result is at most six
+      // The same bound for the level-column form: its week result is at most six
       // days back, its year result the same 365.
       case n: IRTruncDateDynamic => shifted(n.days(), -365, 0, guardsBelow = true)
-      // make_date publishes only whole years of the narrow range (task 42): every date it
+      // make_date publishes only whole years of the narrow range: every date it
       // answers lies inside it, and a year outside declines the batch before any consumer.
       case n: IRMakeDate => Bounded(
         LocalDate.of(VarkaChrono.MAKE_DATE_MIN_YEAR, 1, 1).toEpochDay,
         LocalDate.of(VarkaChrono.MAKE_DATE_MAX_YEAR, 12, 31).toEpochDay)
-      // The Thursday of a day's week is within three days of it either way (task 37).
-      // The whole point of the node (task 93): whatever its child's interval was, what leaves
+      // The Thursday of a day's week is within three days of it either way.
+      // The whole point of the node: whatever its child's interval was, what leaves
       // it is inside the range the check enforces, because a lane outside it is reported and
       // the batch recomputed on the row engine. That reset is what lets a second guarded shift
       // compose above a first, which is the composition `PLAN_TASK_93.md` 2 is about.
@@ -1539,7 +1539,7 @@ private[sql] object VarkaExpressionCompiler {
 
   /**
    * Insert [[GuardedDay]] wherever the running interval would leave the range the calendar
-   * lowering decomposes exactly, resetting the interval there (task 93).
+   * lowering decomposes exactly, resetting the interval there.
    *
    * <p>Task 52 guards one producer, and its guard promises the whole narrowed range - so a
    * second guarded shift above it has no budget left and [[admitCalendar]] must decline the
@@ -1631,7 +1631,7 @@ private[sql] object VarkaExpressionCompiler {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = {
     dayRange(node, literals, guarded = true) match {
-      // Asymmetric on purpose (task 69). Downward, `NARROW_MIN_DAYS` binds: below it the
+      // Asymmetric on purpose. Downward, `NARROW_MIN_DAYS` binds: below it the
       // narrowing is undefined and no correction rescues it. Upward, the binding limit is not
       // `NARROW_MAX_DAYS` - that is the era step's *shift* domain and the range the runtime
       // guards enforce on a producer's own result - but how far the decomposition stays exact
@@ -1664,7 +1664,7 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * Resolves `next_day`'s weekday operand (task 33) to the runtime literal
+   * Resolves `next_day`'s weekday operand to the runtime literal
    * `k = dayOfWeek - 1` the emitted lowering needs. `dayOfWeek` comes from
    * `DateTimeUtils.getDayOfWeekFromString`, whose range is `[0, 6]`
    * (`THURSDAY = 0 .. WEDNESDAY = 6`), so `k` ranges over `{-1, 0, ..., 5}`. Unlike
@@ -1699,7 +1699,7 @@ private[sql] object VarkaExpressionCompiler {
   private case object ToWeek extends TruncTarget
 
   /**
-   * Resolves `trunc`'s format operand (task 35) through `DateTimeUtils.parseTruncLevel` - the
+   * Resolves `trunc`'s format operand through `DateTimeUtils.parseTruncLevel` - the
    * definition, never a re-implementation of its spellings and case folding - to one of the
    * three date levels or the `WEEK` rewrite, or `None` with the reason noted. Like
    * `foldWeekday`, the operand is any foldable expression, so it is evaluated eagerly and every
@@ -1749,7 +1749,7 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * The condition compiler (task 11): interior comparisons and the connectives, three-valued
+   * The condition compiler: interior comparisons and the connectives, three-valued
    * at run time via the emitter's known-true/known-false pairs. `EqualNullSafe` deliberately
    * declines - its both-null-is-true case breaks the null-intolerant comparison rule and earns
    * its own algebra entry or nothing (plan section 4).
@@ -1764,7 +1764,7 @@ private[sql] object VarkaExpressionCompiler {
     case GreaterThan(l, r) => compare(CompareOp.GT, l, r, inputs, literals, sink)
     case GreaterThanOrEqual(l, r) => compare(CompareOp.GE, l, r, inputs, literals, sink)
     case EqualTo(l, r) => compare(CompareOp.EQ, l, r, inputs, literals, sink)
-    // IN over date literals (task 20): an EQ chain joined by OR, which the mask algebra
+    // IN over date literals: an EQ chain joined by OR, which the mask algebra
     // makes exactly SQL's IN inside a condition - a null value leaves every comparison
     // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
     case in @ In(value, list)
@@ -1789,7 +1789,7 @@ private[sql] object VarkaExpressionCompiler {
         right <- compileCond(r, inputs, literals, sink)
       } yield new IROr(left, right)
     case Not(child) => compileCond(child, inputs, literals, sink).map(new IRNot(_))
-    // The validity predicates (task 20): IS NOT NULL is the IR's first total condition
+    // The validity predicates: IS NOT NULL is the IR's first total condition
     // (never unknown), and IS NULL is its NOT - a slot swap in the emitter, no code.
     case IsNotNull(child) =>
       compileValidity(child, expr, inputs, literals, sink)
@@ -1817,7 +1817,7 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * Compiles an IN list (task 20): dedup and sort the literal days - Kleene OR is commutative
+   * Compiles an IN list: dedup and sort the literal days - Kleene OR is commutative
    * and EQ is pure, so the order is free, and a canonical order keeps the literal slots and
    * the shape hash deterministic (`InSet` hands the values over as an unordered set) - then a
    * '''balanced''' pairwise fold of OR over the EQ leaves. The fold shape is part of the cap
@@ -1900,7 +1900,7 @@ private[sql] object VarkaExpressionCompiler {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[Cond] = {
     // An int literal against a fused int field - `weekofyear(d) = 53`, `month(d) = 6` - is a
-    // comparison of two int lanes like any other (task 37); the literal takes a slot the way a
+    // comparison of two int lanes like any other; the literal takes a slot the way a
     // date literal does. Only here: compileNode's value leaves stay DateType, since a bare
     // int literal has no meaning as a date operand, and int arithmetic over an output is
     // task 30's, not a comparison's.
