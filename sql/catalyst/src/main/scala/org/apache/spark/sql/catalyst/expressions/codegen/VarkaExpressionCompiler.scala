@@ -813,8 +813,8 @@ private[sql] object VarkaExpressionCompiler {
           }
       }
     // A format column: the level is read per batch by the evaluator's derived leaf
-    // (TruncLevelLeaf) into an int32 column of parseTruncLevel's codes, on next_day's pattern
-    //, and the kernel computes every period and selects on it. No ANSI twin in the
+    // (TruncLevelLeaf) into an int32 column of parseTruncLevel's codes, on next_day's pattern,
+    // and the kernel computes every period and selects on it. No ANSI twin in the
     // kind: TruncDate has no error path, so a null, unrecognised or sub-day format is a NULL
     // row in either mode - the leaf's null lane, through the node's word. Any collation is
     // admitted because the parser ignores it; an expression over the column stays the row
@@ -1262,7 +1262,7 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * The month count of `add_months`/`date +- INTERVAL n MONTH/YEAR` : a foldable count folds to a
+   * The month count of `add_months`/`date +- INTERVAL n MONTH/YEAR`: a foldable count folds to a
    * bounded `LiteralSlot`, the same two reasons as before - not foldable, or foldable but outside
    * `VarkaChrono`'s `MONTH_ARITH_MIN/MAX_MONTHS`, the range the emitter's `/ 12` magic multiply
    * covers (`PLAN_TASK_40.md` section 2.2). A non-foldable count is a `ColumnRef` when it is a bare

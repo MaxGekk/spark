@@ -178,7 +178,7 @@ public final class VarkaLoopEmitter {
   public static final int MAX_CHAIN_DEPTH = 16;
 
   /**
-   * The most distinct op nodes one emitted kernel may hold, across all outputs after CSE . Depth
+   * The most distinct op nodes one emitted kernel may hold, across all outputs after CSE. Depth
    * alone no longer bounds method size once outputs multiply, so this is the total-size counterpart
    * of {@link #MAX_CHAIN_DEPTH}: a policy bound far past any real projection, kept honest by the
    * widest-shape case in the parity benchmark. The ops are spread over loop methods of at most
@@ -471,8 +471,8 @@ public final class VarkaLoopEmitter {
   private static final ClassDesc VO_COMPARISON =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Comparison;");
   /**
-   * {@code VectorOperators.Associative} , which is what {@code AND} , {@code OR} and {@code XOR}
-   * are declared as - not {@code Binary} , though it extends it. A {@code getstatic} carries the
+   * {@code VectorOperators.Associative}, which is what {@code AND}, {@code OR} and {@code XOR}
+   * are declared as - not {@code Binary}, though it extends it. A {@code getstatic} carries the
    * field's own descriptor, so reading them as {@code Binary} links cleanly and then throws
    * {@code NoSuchFieldError} the first time the kernel runs (this has been hit in practice).
    */
@@ -1138,7 +1138,7 @@ public final class VarkaLoopEmitter {
    * extraction's word to its child's, so {@code year(d)} and {@code month(d)} agree and share, but
    * {@link AddMonths} 's word is the AND of the date's and the month count's, so a column-count
    * {@code add_months(d, m)} is the first chrono node whose word is its own - and it no longer
-   * shares the forty-odd-op decomposition of {@code d} with {@code month(d)} . Only a masked body
+   * shares the forty-odd-op decomposition of {@code d} with {@code month(d)}. Only a masked body
    * pays: in a dense body no word is planned at all and the child alone decides. Dropping
    * {@code word} from the key would recover the share, and is safe as far as this analysis goes,
    * but it changes emitted bytes and so wants its own measurement.
@@ -1488,7 +1488,7 @@ public final class VarkaLoopEmitter {
      * no further calendar wrapper still needs it. Empty on every kernel with no such column-driven
      * producer - which is what makes the guard's default cheap: nothing is planned or emitted for
      * it then, and every such shape stays byte-identical under either setting of
-     * {@link VarkaEmitOptions#guardDayProducers} .
+     * {@link VarkaEmitOptions#guardDayProducers}.
      *
      * <p>The set is hand-picked, not derived: the compiler's {@code dayRange} and
      * {@code compileMonths} analyses bound every other producer at compile time and decline a node
@@ -1499,7 +1499,7 @@ public final class VarkaLoopEmitter {
     final Set<VarkaVectorIR> guardedProducers = new HashSet<>();
 
     /**
-     * The nodes that guard themselves whatever their consumers ( {@code MakeDate} : a year outside
+     * The nodes that guard themselves whatever their consumers ( {@code MakeDate}: a year outside
      * its limits, and in ANSI mode an invalid date, decline the batch). Unlike
      * {@link #guardedProducers} this set is not behind an option: the check is the node's
      * correctness, not a producer's insurance.
@@ -1524,7 +1524,7 @@ public final class VarkaLoopEmitter {
     final Map<VarkaVectorIR, List<ArmStep>> armChain = new HashMap<>();
 
     /**
-     * per value node, which word its validity is - see {@link WordOwner} . Filled by
+     * per value node, which word its validity is - see {@link WordOwner}. Filled by
      * {@link #planWordAlgebra()} once every root is analyzed; {@code Cond} nodes have no entry.
      */
     final Map<VarkaVectorIR, WordOwner> wordOwner = new HashMap<>();
@@ -1537,9 +1537,9 @@ public final class VarkaLoopEmitter {
 
     /**
      * per output position, the whole-batch bitmap expression the masked driver writes for that
-     * root, or null where the root keeps its per-group write - a {@code Cond} , a root whose word
+     * root, or null where the root keeps its per-group write - a {@code Cond}, a root whose word
      * is computed, a root whose expression mixes AND and OR, or every root when
-     * {@link VarkaEmitOptions#validityByBitmap} is off. Filled by {@link #planBitmapPass} .
+     * {@link VarkaEmitOptions#validityByBitmap} is off. Filled by {@link #planBitmapPass}.
      */
     BitmapPass[] served;
     /** How many value roots the pass declined for a mixed AND/OR tree - the safety net in
@@ -2056,7 +2056,7 @@ public final class VarkaLoopEmitter {
      * interval column, and {@code CAST(i AS INTERVAL YEAR)}, whose count is that column times
      * twelve.
      *
-     * <p>This position and {@code next_day} 's weekday once shared {@link #requireOffsetShape} ,
+     * <p>This position and {@code next_day} 's weekday once shared {@link #requireOffsetShape},
      * under one sentence covering both - that each "carries a runtime bound a derived value cannot
      * declare". That is true of the weekday and false here, which {@code PLAN_TASK_67.md} 2.1
      * recorded and this split acts on. A column-count {@code AddMonths} is in
@@ -2213,8 +2213,8 @@ public final class VarkaLoopEmitter {
      * The guard's accumulated out-of-range mask, or null when nothing in this body sets one.
      * Non-null is exactly the signal that the method returns something other than a constant zero.
      * The calendar extractions once set this; the guard now lives on the producers in
-     * {@link Analysis#guardedProducers} , so it is non-null exactly when this body's outputs reach
-     * one of those and the option is on - or reach a node in {@link Analysis#selfGuarding} , which
+     * {@link Analysis#guardedProducers}, so it is non-null exactly when this body's outputs reach
+     * one of those and the option is on - or reach a node in {@link Analysis#selfGuarding}, which
      * is not behind the option.
      */
     Integer guardAcc;
@@ -2613,8 +2613,8 @@ public final class VarkaLoopEmitter {
   /**
    * Whether {@code node} condemns the batch from this body, and so needs its own validity word kept
    * alive for {@link #emitGuardCollect} to qualify the condemning mask with. Read by
-   * {@link #liveWords} : a node that collects into the accumulator without its word surviving the
-   * liveness pass would fail loudly in {@code loadWord} , which is the failure this one predicate
+   * {@link #liveWords}: a node that collects into the accumulator without its word surviving the
+   * liveness pass would fail loudly in {@code loadWord}, which is the failure this one predicate
    * exists to make impossible for the next kind added.
    */
   /**
@@ -3276,7 +3276,7 @@ public final class VarkaLoopEmitter {
    * nine-row group handed to the whole-group form reads one byte and calls its ninth row null.
    *
    * <p>A whole group also names the width, through {@link #emitValidityRead} /
-   * {@link #emitValidityOr} : these two return the general forms, which stay the fallback for the
+   * {@link #emitValidityOr}: these two return the general forms, which stay the fallback for the
    * epilogue and for any width with no specialised sibling.
    */
   private static String validityBits(Slots s) {
@@ -3547,8 +3547,8 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Whether output {@code o}'s validity is written whole by the masked driver's bitmap pass
-   *, so the loop and epilogue skip its per-group OR. The same one-place discipline as
+   * Whether output {@code o}'s validity is written whole by the masked driver's bitmap pass,
+   * so the loop and epilogue skip its per-group OR. The same one-place discipline as
    * {@link #fillsValidityOnce}, and for the same reason: the driver's write and the elided OR
    * are decided by one predicate, read from both sides, so they cannot disagree.
    */
@@ -3808,8 +3808,8 @@ public final class VarkaLoopEmitter {
         emitModOffset(cb, s, 3);
       }
       case GuardedDay n -> {
-        // The value passes through untouched; what this node adds is two compares beside it
-        //. The word is the child's, because a range check does not change validity -
+        // The value passes through untouched; what this node adds is two compares beside it.
+        // The word is the child's, because a range check does not change validity -
         // it decides whether the batch is answered at all, not which lanes are null.
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
@@ -4023,7 +4023,7 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * {@code IntNeg} , emitted as a multiply by -1 so it needs no unary descriptor: the two agree on
+   * {@code IntNeg}, emitted as a multiply by -1 so it needs no unary descriptor: the two agree on
    * every lane, {@link Integer#MIN_VALUE} included, where both return the input. That single value
    * is the whole of the overflow test, so the check is one compare rather than the four ops
    * {@link #emitIntArith} needs, and it reads the operand rather than the result - no scratch slot
@@ -4139,11 +4139,11 @@ public final class VarkaLoopEmitter {
 
   /**
    * The runtime range guard on a column-driven producer's own result: lanes outside
-   * {@code [lo, hi]} are ORed into {@link Slots#guardAcc} , and {@link #emitStatusReturn} turns a
-   * non-empty accumulator into {@code STATUS_CHRONO_RANGE} , which the evaluator answers by
+   * {@code [lo, hi]} are ORed into {@link Slots#guardAcc}, and {@link #emitStatusReturn} turns a
+   * non-empty accumulator into {@code STATUS_CHRONO_RANGE}, which the evaluator answers by
    * recomputing the batch on the row engine. The producer guard calls this on the result of a
    * column-offset {@code AddDays} / {@code SubDays} some calendar node reads, with {@code lo} /
-   * {@code hi} = {@link VarkaChrono#NARROW_MIN_DAYS} / {@link VarkaChrono#NARROW_MAX_DAYS} ; task
+   * {@code hi} = {@link VarkaChrono#NARROW_MIN_DAYS} / {@link VarkaChrono#NARROW_MAX_DAYS}; task
    * 60 calls it on {@code AddMonths} ' own month count, with {@code lo} / {@code hi} =
    * {@link VarkaChrono#MONTH_ARITH_MIN_MONTHS} / {@link VarkaChrono#MONTH_ARITH_MAX_MONTHS} - two
    * compares are two compares regardless of what they bound. The guarded value stays on the operand
@@ -4275,8 +4275,8 @@ public final class VarkaLoopEmitter {
    * {@code 30 | (mc - (mc >>> 3))} - equal to the review's {@code 30 | (mc ^ (mc >>> 3))} on 1..12
    * without a vector XOR - blended with {@code 28 + leap} where the clamped month is 2;
    * {@code valid} is month in 1..12 and day in 1..length, {@code okY} the year inside
-   * {@link VarkaChrono#MAKE_DATE_MIN_YEAR} .. {@link VarkaChrono#MAKE_DATE_MAX_YEAR} . Two masks,
-   * two destinations: {@code !okY} , plus {@code !valid} under ANSI, goes to the guard accumulator
+   * {@link VarkaChrono#MAKE_DATE_MIN_YEAR} .. {@link VarkaChrono#MAKE_DATE_MAX_YEAR}. Two masks,
+   * two destinations: {@code !okY}, plus {@code !valid} under ANSI, goes to the guard accumulator
    * and declines the batch; under the NULL form {@code valid} is ANDed into the node's own validity
    * word instead. The value is {@code emitDaysFromCivil} over the year, the clamped month and the
    * day, garbage wherever a mask said so - a null lane's data is undefined and a declined batch is
@@ -4445,13 +4445,13 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Consumes the child's {@code IntVector} on the stack and leaves {@code floorMod(v, 7)} , full
+   * Consumes the child's {@code IntVector} on the stack and leaves {@code floorMod(v, 7)}, full
    * range. The shipped variant (the follow-up) is two 15-bit digit-sum folds (
    * {@code 2^15 = 1 mod 7} ) followed by Granlund-Montgomery magic division: the folds leave
    * {@code v <= 32771} (unsigned reading), the +3-where-negative fixup ( {@code 2^32 = 4 mod 7} )
    * raises that to at most 32774, and in that range the magic is exact in the <i>low</i> 32 bits -
-   * with {@code M = ceil(2^18 / 7) = 37450} and {@code e = 7 * M - 2^18 = 6} , {@code v * e < 2^18}
-   * makes {@code q = (v * M) >>> 18} exactly {@code v / 7} , and {@code v * M < 2^31} keeps the
+   * with {@code M = ceil(2^18 / 7) = 37450} and {@code e = 7 * M - 2^18 = 6}, {@code v * e < 2^18}
+   * makes {@code q = (v * M) >>> 18} exactly {@code v / 7}, and {@code v * M < 2^31} keeps the
    * low-half multiply from overflowing, so {@code r = v - q * 7} needs no final fixup at all. The
    * multiply-high the classic trick wants is not expressible in the Vector API; pre-folding makes
    * the low half sufficient. Measured 1.6-1.8x the digit sum at buffer level and a ~10-op-smaller
@@ -4681,19 +4681,19 @@ public final class VarkaLoopEmitter {
 
   /**
    * The civil-from-days decomposition through the March-based month, shared by every field
-   * {@link #emitChrono} computes and by {@link #emitAddMonths} , which needs three of the four
+   * {@link #emitChrono} computes and by {@link #emitAddMonths}, which needs three of the four
    * fields at once rather than one. Factored out of what was a single {@code emitChrono} method -
-   * the split changes no emitted instruction for {@link Year} , {@link Month} , {@link DayOfMonth}
-   * or {@link Quarter} , only where the Java source that emits them lives, so it moves no pinned
+   * the split changes no emitted instruction for {@link Year}, {@link Month}, {@link DayOfMonth}
+   * or {@link Quarter}, only where the Java source that emits them lives, so it moves no pinned
    * value.
    *
-   * <p>Leaves {@code era} , {@code century} , {@code yearOfCentury} and {@code marchMonth} in
+   * <p>Leaves {@code era}, {@code century}, {@code yearOfCentury} and {@code marchMonth} in
    * {@code t[1..5]} for a field's own tail to read, and the day of year in {@code t[2]} (
-   * {@code rem} , reused across the prefix the way the original method reused it). All but
+   * {@code rem}, reused across the prefix the way the original method reused it). All but
    * {@code marchMonth} unconditionally: {@code emitMonth} false drops the month step, which happens
    * exactly where no tail of this fragment reads it. Under {@link VarkaEmitOptions#julianMap}
    * {@code t[4]} holds the year of era rather than the year of century and {@code t[3]} is dead
-   * once the prefix is done; see {@link #emitJulianYearOfEra} .
+   * once the prefix is done; see {@link #emitJulianYearOfEra}.
    *
    * <p>Those five locals outliving the call is what makes the run a shareable fragment, since
    * {@link #emitChronoYear}, {@link #emitChronoMonth} and {@link #emitChronoDayOfMonth} read
@@ -4949,7 +4949,7 @@ public final class VarkaLoopEmitter {
 
   /**
    * Leaves the day of the March-based year on which March-based month {@code mp} begins:
-   * {@code (153 * mp + 2) / 5} , exact for every {@code mp} in {@code [0, 11]} - the same magic
+   * {@code (153 * mp + 2) / 5}, exact for every {@code mp} in {@code [0, 11]} - the same magic
    * multiply {@link #emitChronoDayOfMonth} runs in reverse. {@link #emitAddMonths} calls this twice
    * to get a month's length by subtraction, which is what makes a twelve-entry length table
    * unnecessary: every month but the year's last (February, here) is one subtraction between two
@@ -5159,7 +5159,7 @@ public final class VarkaLoopEmitter {
   private static void emitDaysFromCivil(CodeBuilder cb, int year, int month, int day, int yy,
       int b, int era, int yoe, int mp, int doy, int doe, int century, int centuryRem,
       int mask, int carryMask) {
-    // yy = year - (month <= 2 ? 1 : 0), the March-based year.
+    // yy = year - (month <= 2 ? 1: 0), the March-based year.
     cb.aload(month);
     cb.getstatic(VECTOR_OPERATORS, "LE", VO_COMPARISON);
     cb.loadConstant(2);
@@ -5188,7 +5188,7 @@ public final class VarkaLoopEmitter {
     cb.astore(yoe);
     emitCarry(cb, era, yoe, 400, carryMask);
 
-    // mp = month + (month <= 2 ? 9 : -3), the March-based month; doy = monthStart(mp)+day-1.
+    // mp = month + (month <= 2 ? 9: -3), the March-based month; doy = monthStart(mp)+day-1.
     cb.aload(month);
     cb.loadConstant(-3);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
@@ -5275,7 +5275,7 @@ public final class VarkaLoopEmitter {
 
   /**
    * The January-based day of year from the March-based one:
-   * {@code doy >= 306 ? doy - 305 : doy + 60 + L}, with {@code leap} the year's leap mask as
+   * {@code doy >= 306 ? doy - 305: doy + 60 + L}, with {@code leap} the year's leap mask as
    * {@link #emitLeapFlag} leaves it and {@code mask} a scratch local for the branch select.
    * Factored out of the {@code DayOfYear} arm for {@link #emitChronoTrunc}'s {@code YEAR} and
    * {@code QUARTER} forms, instruction for instruction, so the extraction's bytes did not move.
@@ -5318,8 +5318,8 @@ public final class VarkaLoopEmitter {
    * on and wrong for January to March.
    *
    * <p><b> {@code RECOMPOSE} </b> rebuilds the period's first day from its year and month through
-   * {@link #emitDaysFromCivil} : {@code (year, 1, 1)} , {@code (year, month, 1)} and
-   * {@code (year, 3 * quarter - 2, 1)} . No leap flag anywhere; the recomposition does its own era
+   * {@link #emitDaysFromCivil}: {@code (year, 1, 1)}, {@code (year, month, 1)} and
+   * {@code (year, 3 * quarter - 2, 1)}. No leap flag anywhere; the recomposition does its own era
    * arithmetic. Its value beyond the measurement is a second caller for the day-clamp helper, which
    * {@code add_months} 's own day clamp could otherwise mask a defect in.
    *
@@ -5543,7 +5543,7 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * {@code last_day(date)} : {@code days + length - dayOfMonth} , where {@code length} is the
+   * {@code last_day(date)}: {@code days + length - dayOfMonth}, where {@code length} is the
    * current March-based month's own length and {@code dayOfMonth} is {@link #emitChronoDayOfMonth}
    * 's own value. The length reuses {@link #emitMonthStart} the same way {@link #emitAddMonths}
    * does for the month it lands on: every month but the March-based year's last (February) is one
@@ -5653,8 +5653,8 @@ public final class VarkaLoopEmitter {
    * including ones CSE and the calendar fragment sharing had already proven in range together -
    * real cost with no new information on the common path. It was replaced by two halves: the
    * compiler bounds the day shift under every calendar node and declines an entry whose interval
-   * can leave this range (literal offsets, {@code next_day} , {@code add_months} , {@code last_day}
-   * , and their compositions), and the one producer it cannot bound - {@code date_add} /
+   * can leave this range (literal offsets, {@code next_day}, {@code add_months}, {@code last_day},
+   * and their compositions), and the one producer it cannot bound - {@code date_add} /
    * {@code date_sub} with a column offset - carries the check on its own result (
    * {@link #emitRangeGuard} ), once per producer instead of once per reader. This step therefore
    * trusts its input, and the {@link VarkaEmitOptions#guardDayProducers} reference variant is the

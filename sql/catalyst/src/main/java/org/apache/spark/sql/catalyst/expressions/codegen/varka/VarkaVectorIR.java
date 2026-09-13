@@ -35,8 +35,7 @@ import java.util.function.ToIntFunction;
  *
  * <p>The IR is a DAG in effect if not in shape: the records carry structural
  * {@code equals}/{@code hashCode}, and the emitter memoizes on them, so a subtree appearing in
- * several outputs is computed once per lane group no matter how the caller built the trees
- *.
+ * several outputs is computed once per lane group no matter how the caller built the trees.
  *
  * <p>Task 11 splits the IR into values and <i>conditions</i>: a {@link Cond} node is
  * mask-valued - per lane a known-true and a known-false bit, SQL's three-valued logic.
@@ -159,8 +158,8 @@ public sealed interface VarkaVectorIR
   record SubDays(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
 
   /**
-   * {@code end - start}, lane-wise, over two date operands - Spark's {@code DateDiff}
-   *. Lane math is the same {@code isub} as {@link SubDays}; the difference is at the
+   * {@code end - start}, lane-wise, over two date operands - Spark's {@code DateDiff}.
+   * Lane math is the same {@code isub} as {@link SubDays}; the difference is at the
    * Spark level, where the result is an {@code IntegerType} day count rather than a date, which
    * the compiler tracks per output so the evaluator allocates the right vector.
    */
