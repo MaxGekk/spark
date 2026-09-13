@@ -315,8 +315,8 @@ public final class VarkaShapeCacheImpl {
       snapshot.addAll(set);
       return set;
     });
-    // Not List.copyOf: it rejects nulls, and a null identity is storable (SparkStringUtils
-    // .abbreviate passes null through). No production caller passes one - the evaluator's
+    // Not List.copyOf: it rejects nulls, and a null identity is storable (SparkStringUtils.
+    // abbreviate passes null through). No production caller passes one - the evaluator's
     // identity is always a StringBuilder result - but the Scala this replaced tolerated it, and
     // getOrEmit is public now, so the guard the port dropped stays dropped rather than becoming
     // an NPE in a diagnostics read.
