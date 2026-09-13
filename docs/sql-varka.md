@@ -838,8 +838,8 @@ build/sbt "catalyst/test:runMain org.apache.spark.sql.VarkaArithmeticBenchmark"
 Two dozen scripts under `dev/` support this engine. They exist because Varka's
 correctness and its performance claims are both checked mechanically rather
 than by review, and most of them encode a lesson learned the expensive way.
-Every one prints its own usage with `--help` or by being run with no arguments;
-what follows is what each is *for*, so you can tell which one you want.
+Every one answers `--help` with its own usage; what follows is what each is
+*for*, so you can tell which one you want.
 
 ### Everyday checks
 
