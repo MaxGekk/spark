@@ -178,8 +178,8 @@ public final class VarkaLoopEmitter {
   public static final int MAX_CHAIN_DEPTH = 16;
 
   /**
-   * The most distinct op nodes one emitted kernel may hold, across all outputs after CSE
-   *. Depth alone no longer bounds method size once outputs multiply, so this is the
+   * The most distinct op nodes one emitted kernel may hold, across all outputs after CSE.
+   * Depth alone no longer bounds method size once outputs multiply, so this is the
    * total-size counterpart of {@link #MAX_CHAIN_DEPTH}: a policy bound far past any real
    * projection, kept honest by the widest-shape case in the parity benchmark. Since task 11
    * the ops are spread over loop methods of at most {@link #GROUP_BUDGET} ops each, so this
@@ -3575,8 +3575,8 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Whether output {@code o}'s validity is written whole by the masked driver's bitmap pass
-   *, so the loop and epilogue skip its per-group OR. The same one-place discipline as
+   * Whether output {@code o}'s validity is written whole by the masked driver's bitmap pass,
+   * so the loop and epilogue skip its per-group OR. The same one-place discipline as
    * {@link #fillsValidityOnce}, and for the same reason: the driver's write and the elided OR
    * are decided by one predicate, read from both sides, so they cannot disagree.
    */
@@ -3837,8 +3837,8 @@ public final class VarkaLoopEmitter {
         emitModOffset(cb, s, 3);
       }
       case GuardedDay n -> {
-        // The value passes through untouched; what this node adds is two compares beside it
-        //. The word is the child's, because a range check does not change validity -
+        // The value passes through untouched; what this node adds is two compares beside it.
+        // The word is the child's, because a range check does not change validity -
         // it decides whether the batch is answered at all, not which lanes are null.
         emitValue(cb, n.days(), dense, analysis, s, computed);
         line(cb, analysis, node);
@@ -5194,7 +5194,7 @@ public final class VarkaLoopEmitter {
   private static void emitDaysFromCivil(CodeBuilder cb, int year, int month, int day, int yy,
       int b, int era, int yoe, int mp, int doy, int doe, int century, int centuryRem,
       int mask, int carryMask) {
-    // yy = year - (month <= 2 ? 1 : 0), the March-based year.
+    // yy = year - (month <= 2 ? 1: 0), the March-based year.
     cb.aload(month);
     cb.getstatic(VECTOR_OPERATORS, "LE", VO_COMPARISON);
     cb.loadConstant(2);
@@ -5223,7 +5223,7 @@ public final class VarkaLoopEmitter {
     cb.astore(yoe);
     emitCarry(cb, era, yoe, 400, carryMask);
 
-    // mp = month + (month <= 2 ? 9 : -3), the March-based month; doy = monthStart(mp)+day-1.
+    // mp = month + (month <= 2 ? 9: -3), the March-based month; doy = monthStart(mp)+day-1.
     cb.aload(month);
     cb.loadConstant(-3);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
@@ -5310,7 +5310,7 @@ public final class VarkaLoopEmitter {
 
   /**
    * The January-based day of year from the March-based one:
-   * {@code doy >= 306 ? doy - 305 : doy + 60 + L}, with {@code leap} the year's leap mask as
+   * {@code doy >= 306 ? doy - 305: doy + 60 + L}, with {@code leap} the year's leap mask as
    * {@link #emitLeapFlag} leaves it and {@code mask} a scratch local for the branch select.
    * Factored out of the {@code DayOfYear} arm for {@link #emitChronoTrunc}'s {@code YEAR} and
    * {@code QUARTER} forms, instruction for instruction, so the extraction's bytes did not move.
