@@ -264,6 +264,94 @@ bitmask, never a machine word or a token of text.
 
 ## Architecture
 
+### One query's journey
+
+Two things happen at different times, and most confusion about this engine comes
+from mixing them up. **Plan time** decides what Varka will run and builds a
+class to run it. **Run time** executes that class over Arrow buffers, batch by
+batch.
+
+```
+PLAN TIME  - once per plan shape
+===============================================================================
+
+   Catalyst physical plan
+            |
+            v
+   VarkaColumnarRule ............ finds a projection or filter over a
+            |                     columnar source and asks: is it eligible?
+            v
+   VarkaExpressionCompiler ...... translates each entry from Catalyst
+            |                     into the IR  -- or DECLINES it
+            |
+            |  declined ------> entry stays on stock Spark. A projection is
+            |                   still taken if ANY entry compiled; the rest
+            |                   are forwarded zero-copy or left as residual.
+            v
+   VarkaVectorIR ................ records over int32 lanes. Literal VALUES
+            |                     do not appear - a folded constant becomes
+            |                     a slot index, so two queries differing only
+            |                     in constants have one shape.
+            v
+   VarkaLoopEmitter ............. walks the IR and assembles bytecode with
+            |                     the Class-File API. Intermediates stay on
+            |                     the operand stack, so they stay in vector
+            |                     registers.
+            v
+   a class implementing VarkaFusedKernel
+            |
+            +--> VarkaShapeCache  one class per shape, reused across tasks:
+                                  emitting costs ~80us, but re-defining a
+                                  class costs a fresh JIT warm-up per task.
+
+
+RUN TIME  - once per batch
+===============================================================================
+
+   Arrow ColumnarBatch
+            |
+            v
+   VarkaMorsel .................. maps each column's data and validity
+            |                     buffers onto Panama MemorySegments.
+            |                     Zero-copy: nothing is materialised.
+            v
+   the emitted kernel's run(...)
+            |
+            |   are all referenced inputs null-free for THIS batch?
+            |
+            +-- yes --> dense body ...... no validity bookkeeping at all
+            |
+            +-- no ---> masked body ..... one 64-bit validity word per lane
+            |                             group; each node's word computed
+            |                             from its children's
+            |
+            |   ...both then run the epilogue for the rows past the last
+            |   whole lane group - the same body under a partial mask,
+            |   not a scalar loop.
+            |
+            +-- refuses the batch --> the ghost fallback: this batch is
+            |                         recomputed by the row engine, and the
+            |                         query still returns the right answer.
+            v
+   output columns (+ a selection bitmap, for a filter)
+            |
+            v
+   VarkaProjectExec / VarkaFilterExec / VarkaColumnarToRowExec
+            |
+            v
+   back to Spark - columnar to the next columnar operator, or converted to
+   rows at the boundary. Crossing to rows costs about 25 ns per row, which
+   is why a cheap predicate feeding COUNT(*) can lose to stock Spark while
+   the same predicate feeding a columnar consumer wins by an order of
+   magnitude - the kernel is identical; only the boundary differs.
+```
+
+**The one property worth carrying away**: every arrow labelled *declines* or
+*refuses* leads somewhere correct. The compiler can decline an expression, the
+emitter can refuse a shape, the kernel can refuse a batch - and each falls back
+to stock Spark at that granularity. Nothing in this diagram can produce a wrong
+answer by giving up.
+
 ### Columnar morsels
 
 Spark's `DateType` columns reach Varka as Arrow `DateDayVector` (int32 days)
