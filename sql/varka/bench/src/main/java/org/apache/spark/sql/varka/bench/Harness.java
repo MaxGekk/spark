@@ -25,7 +25,7 @@ import java.util.function.LongSupplier;
 /**
  * Timing and formatting, kept apart from Spark so the tests can drive it with a fake clock.
  *
- * <p>The iteration policy is Spark's {@code Benchmark} (task 14's methodology): warm up until
+ * <p>The iteration policy is Spark's {@code Benchmark}: warm up until
  * {@code warmupNanos} have passed, then measure until both {@code minIters} iterations and
  * {@code minNanos} have passed. Each iteration records wall time from the clock and executor
  * time from a counter the caller reads after draining the listener bus, so an iteration never

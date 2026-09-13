@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 /**
- * The diagnostics helper over the task 13 telemetry: given raw bytes of an emitted fused-kernel
+ * The diagnostics helper over the telemetry attribute: given raw bytes of an emitted fused-kernel
  * class, reads back the {@code SourceFile} name and the {@link VarkaDebugInfo} payload as plain
  * strings. This is the intended entry point for tooling and tests over captured classes; the
  * typed view stays on {@link VarkaDebugInfo#read}.
@@ -54,7 +54,7 @@ public final class VarkaDebugInfoReader {
   }
 
   /**
-   * The {@code LineNumberTable} decoding key of the emitted class (task 16), or null when the
+   * The {@code LineNumberTable} decoding key of the emitted class, or null when the
    * class carries no {@code VarkaDebugInfo}: one {@code <line>=<node>} entry per distinct IR
    * node, newline separated.
    */

@@ -24,7 +24,7 @@ import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.util.Utils
 
 /**
- * The Spark-facing facade over [[VarkaShapeCacheImpl]] (task 23): everything the cache needs from
+ * The Spark-facing facade over [[VarkaShapeCacheImpl]]: everything the cache needs from
  * Spark's configuration and environment lives here, and the cache itself is plain JDK code that
  * takes those as values. Two things cross this line, and only two - the capacity and the parent
  * class loader.
@@ -68,7 +68,7 @@ private[sql] object VarkaShapeCache {
   }
 
   /**
-   * Task 50's compiled-size watch, started once per JVM and only when asked for. It hangs here
+   * The compiled-size watch, started once per JVM and only when asked for. It hangs here
    * rather than anywhere else because this object is already the JVM-wide singleton on the
    * emission path, already reads a static conf the same way, and already owns the shape hashes
    * the watch keys on - and because a `RecordingStream` owns a thread, so starting one per
@@ -111,7 +111,7 @@ private[sql] object VarkaShapeCache {
    * link the engine's support classes through, and so an input to the entry's identity.
    */
   def getOrEmit(key: VarkaShapeKey, execution: String): VarkaShapeLookup = {
-    // Task 50's watch has to be subscribed before the kernels it watches are compiled, and
+    // The watch has to be subscribed before the kernels it watches are compiled, and
     // nothing on the hot path would otherwise touch it: `compilationDivergences` is a reporting
     // call, so making the lazy val's first force happen there would mean the watch only ever
     // started for a caller already asking what it had seen. Forcing it here costs one volatile

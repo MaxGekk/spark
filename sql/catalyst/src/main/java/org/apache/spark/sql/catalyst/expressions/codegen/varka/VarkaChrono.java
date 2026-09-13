@@ -22,7 +22,7 @@ import java.time.LocalDate;
 
 /**
  * The civil-from-days decomposition {@code year}, {@code month}, {@code dayofmonth} and
- * {@code quarter} are lowered from (task 26), as scalar Java, plus every magic constant the
+ * {@code quarter} are lowered from, as scalar Java, plus every magic constant the
  * emitter loads. This class is three things at once and is written to be all three:
  *
  * <ol>
@@ -42,7 +42,7 @@ import java.time.LocalDate;
  * on any lane type, so full-range Granlund-Montgomery division is inexpressible on int lanes;
  * only a range-narrowed magic works, where the value is shrunk until the correctness condition
  * {@code v * e < 2^k} and the no-overflow condition {@code v * M < 2^31} both hold in the low 32
- * bits {@code mul} returns (task 14's follow-up; see the {@code SKILLS.md} entry). Worst-case
+ * bits {@code mul} returns (see the {@code SKILLS.md} entry). Worst-case
  * {@code e ~ d} forces {@code 2^k > d * v}, hence {@code M ~ v}, hence {@code v < 46341}: an
  * <i>exact</i> magic exists on int lanes only for dividends under roughly 46000. The two large
  * divisors here are past that, so they use a round-down magic - which never overestimates the
@@ -109,7 +109,7 @@ public final class VarkaChrono {
 
   /**
    * The last day {@link #narrowed} is actually <i>exact</i> for, which is not
-   * {@link #NARROW_MAX_DAYS} (task 69). In calendar terms, 29 February 42400.
+   * {@link #NARROW_MAX_DAYS}. In calendar terms, 29 February 42400.
    *
    * <p>Three bounds are in play and the shipped one is the tightest. {@link #NARROW_MAX_DAYS}
    * is the ceiling of the era step's <i>shift</i> domain, {@code w < 2^NARROW_ERA_K}. Looser
@@ -123,8 +123,8 @@ public final class VarkaChrono {
    * <p>Why two constants rather than a wider one: {@link #NARROW_MAX_DAYS} is what a
    * <i>value</i> may be, and it is the emitter's guard bound and the column contract's
    * neighbour. This is what an intermediate may reach and still decompose correctly, so it
-   * bounds an <i>upward</i> shift over a day the guard has already admitted - the direction
-   * task 60's review found declining conservatively. It is deliberately not used downward:
+   * bounds an <i>upward</i> shift over a day the guard has already admitted - a direction that used
+   * to decline conservatively. It is deliberately not used downward:
    * below zero the whole narrowing is undefined and {@link #NARROW_MIN_DAYS} still binds.
    *
    * <p>Verified in {@code VarkaChronoSuite} two ways, per {@code PLAN_TASK_69.md} 2: the era
@@ -135,8 +135,8 @@ public final class VarkaChrono {
 
   /**
    * The first epoch day a date column can hold under the project's column contract: 0001-01-01,
-   * the smallest date Spark SQL can write. The contract is what task 52's compile-time range
-   * analysis starts from: a bare column lies in {@code [CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]},
+   * the smallest date Spark SQL can write. The contract is what the compile-time range analysis
+   * starts from: a bare column lies in {@code [CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]},
    * every producer between it and a calendar node widens that interval by a bound the compiler
    * knows, and the calendar node fuses only if the result stays inside
    * {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]}. Derived from {@link LocalDate} rather than typed
@@ -148,7 +148,7 @@ public final class VarkaChrono {
   public static final int CONTRACT_MAX_DAYS = (int) LocalDate.of(9999, 12, 31).toEpochDay();
 
   /**
-   * The years {@code make_date} builds inside the kernel (task 42): the whole calendar years of
+   * The years {@code make_date} builds inside the kernel: the whole calendar years of
    * the narrow range, so every date the node publishes lies in
    * {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]} and a calendar node over it is admitted at compile
    * time; a year outside declines the batch to the row engine in both evaluation modes. Both
@@ -167,7 +167,7 @@ public final class VarkaChrono {
   public static final int MAKE_DATE_OUT_OF_RANGE = Integer.MIN_VALUE + 1;
 
   /**
-   * The largest day count {@code CAST(int AS INTERVAL DAY)} can produce (task 56):
+   * The largest day count {@code CAST(int AS INTERVAL DAY)} can produce:
    * {@code Long.MAX_VALUE / MICROS_PER_DAY}, since Spark builds the interval as
    * {@code Math.multiplyExact(days, MICROS_PER_DAY)} and throws a cast-overflow error - in every
    * evaluation mode - one past it. A kernel adding such a day count to a date must therefore see
@@ -235,16 +235,16 @@ public final class VarkaChrono {
    * / 153} is exact over this domain, {@code marchMonth >= 10} is {@code 5 * dayOfYear + 2
    * >= 1530}, that is {@code dayOfYear >= 305.6}, that is {@code dayOfYear >= 306} on
    * integers - an identity, not an approximation, and {@code VarkaChronoSuite} asserts it
-   * over all 366 values of the domain. Task 48 reads the year's January bit from here so a
+   * over all 366 values of the domain. The year lowering reads its January bit from here so a
    * kernel computing the year alone never computes the month.
    *
-   * <p>Task 34 reads the same threshold as a conversion rather than a bit: past it, the
+   * <p>{@code dayOfYear} reads the same threshold as a conversion rather than a bit: past it, the
    * March-based day of year becomes the January-based one by subtracting
    * {@code MARCH_TO_JANUARY_DAYS - 1}.
    */
   public static final int MARCH_TO_JANUARY_DAYS = 306;
 
-  // --- Task 53: the Neri-Schneider month block ----------------------------------------------
+  // --- The Neri-Schneider month block ----------------------------------------------
 
   /**
    * Multiplier of the single affine numerator the month index and the day of month both come
@@ -285,8 +285,8 @@ public final class VarkaChrono {
   public static final int DOM_K = 26;
 
   /**
-   * Exact magic for {@code / 7} over {@code 0..684}, the domain of {@code dayOfYear - 1}
-   * (task 37): {@code (x * WEEK_M) >>> WEEK_K} is {@code x / 7} for every {@code x} up to 684
+   * Exact magic for {@code / 7} over {@code 0..684}, the domain of {@code dayOfYear - 1}:
+   * {@code (x * WEEK_M) >>> WEEK_K} is {@code x / 7} for every {@code x} up to 684
    * and wrong at 685, with a maximum in-domain product of 200,412, nowhere near {@code 2^31}.
    * The ISO week of a Thursday is {@code (januaryDayOfYear - 1) / 7 + 1}, so this is the
    * whole of {@code weekofyear}'s arithmetic past the day of year: no correction step, no
@@ -325,14 +325,14 @@ public final class VarkaChrono {
    * <p>It agrees with {@link #MARCH_TO_JANUARY_DAYS}, which is the reassuring part: over the
    * whole domain the values of {@code monthIndex3} at or after day 306 are exactly 13 and 14
    * and those before it are 3 through 12, so {@code monthIndex3 >= 13} and
-   * {@code dayOfYear >= 306} are the same test on two axes - task 48's identity, restated.
+   * {@code dayOfYear >= 306} are the same test on two axes.
    *
-   * <p>Both axes exist at once until task 53's emitter commit: the emitter still reads
+   * <p>Both axes exist at once: the emitter still reads
    * {@link #MARCH_YEAR_JANUARY} in five places, so it cannot move until they move with it.
    */
   public static final int MONTH3_JANUARY = 13;
 
-  // --- Task 54: the Julian map, one division stage fewer ------------------------------------
+  // --- The Julian map, one division stage fewer ------------------------------------
 
   /**
    * The constant term of the scaled day of era, {@code 4 * dayOfEra + 3} (Ben Joffe, after
@@ -374,12 +374,12 @@ public final class VarkaChrono {
   /** The shift paired with {@link #JULIAN_YEAR_M}. */
   public static final int JULIAN_YEAR_K = 22;
 
-  // --- Task 40: the inverse direction, and the month arithmetic built on it ------------------
+  // --- The inverse direction, and the month arithmetic built on it ------------------
 
   /**
    * A year bias making a reported year non-negative over the range {@link #emitDaysFromCivil}
    * actually has to cover, so a division by 100 or 400 can use a magic multiply. That range is
-   * wider than task 26's narrow day range: {@code add_months}/{@code date +- INTERVAL n
+   * wider than the narrow day range: {@code add_months}/{@code date +- INTERVAL n
    * MONTH/YEAR} can push a year up to {@code MONTH_ARITH_MAX_MONTHS}/12 (about 2047 years)
    * past either end of it, so the covered year range is roughly -14848..35181, and 15200 - a
    * multiple of 400, so it changes neither leapness nor which 400-year cycle a year falls in -
@@ -392,15 +392,15 @@ public final class VarkaChrono {
    * a 1:4 ratio matching the shift, so one magic constant serves both {@link #YEAR_CENTURY_K}
    * and {@link #YEAR_QUATERCENTENNIAL_K}.
    *
-   * <p><b>This is a round-down magic, not an exact one - unlike task 34's leap flag, which
-   * covers only task 26's narrow day range and needs no correction.</b> The first version of
+   * <p><b>This is a round-down magic, not an exact one - unlike the leap flag, which covers only
+   * the narrow day range and needs no correction.</b> The first version of
    * this class claimed exactness "to 199728" and was wrong: that bound came from checking
    * {@code (v * M) >> k == v / d} with arbitrary-precision arithmetic, which is the right check
    * for the shift but silently assumes the multiply itself does not overflow. The emitter's
    * lanes are 32-bit and {@code LSHR} is unsigned, so the multiply is safe up to {@code v * M <
    * 2^32}, not {@code 2^31} - but the biased year here reaches about 50381, and {@code 50381 *
    * 167773} is over four billion either way. The wrong constant produced a silently wrong
-   * {@code era} for exactly the inputs task 40's own tests reached during development (a
+   * {@code era} for exactly the inputs the month-arithmetic tests reached during development (a
    * four-digit year plus a multi-century month offset) and nothing smaller - the failure was
    * findable only by testing the actual range this class has to cover, not a plausible-looking
    * subrange of it. One correction step (the same shape {@link #CENTURY_M} already uses) fixes
@@ -471,7 +471,7 @@ public final class VarkaChrono {
   }
 
   /**
-   * Exact magic for {@code / 12} (task 40's month arithmetic), over the dividend
+   * Exact magic for {@code / 12} (the month arithmetic), over the dividend
    * {@code (month - 1) + monthsOffset + MONTH_ARITH_BIAS} - kept small by construction rather
    * than folding the year in, which would put the dividend near 400,000: past the ~46341 bound
    * an exact magic needs, and past the ~160,000 a round-down-plus-one-correction reaches.
@@ -529,12 +529,12 @@ public final class VarkaChrono {
         : narrowedCenturyYear(days);
   }
 
-  /** {@link #narrowed} through the century-then-year split (task 26). */
+  /** {@link #narrowed} through the century-then-year split. */
   public static Fields narrowedCenturyYear(int days) {
     return fromEra(eraOf(days), dayOfEraOf(days));
   }
 
-  /** {@link #narrowed} through the Julian map (task 54). */
+  /** {@link #narrowed} through the Julian map. */
   public static Fields narrowedJulian(int days) {
     return fromEraJulian(eraOf(days), dayOfEraOf(days));
   }
@@ -591,7 +591,7 @@ public final class VarkaChrono {
   }
 
   /**
-   * Day of era to the five fields through the Julian map (task 54): the same input domain as
+   * Day of era to the five fields through the Julian map: the same input domain as
    * {@link #fromEra}, one division stage fewer, and the exact lane arithmetic the emitter
    * emits under {@link VarkaEmitOptions#julianMap}. Scale the day by four, take the century by
    * one round-down magic and a carry, add four back per century, and the count now lives in a
@@ -620,7 +620,7 @@ public final class VarkaChrono {
 
   /**
    * The tail both prefix forms share, from the year of era and the March-based day of year.
-   * Task 53: one affine numerator carries both the month and the day of month, where the
+   * one affine numerator carries both the month and the day of month, where the
    * 0-based form needed a magic multiply for the month and then DAY_M's magic run forwards to
    * recover the day.
    */
@@ -637,7 +637,7 @@ public final class VarkaChrono {
     return new Fields(year, month, dayOfMonth, quarter, januaryDayOfYear);
   }
 
-  // --- The ISO week, by the Thursday rule (task 37) ------------------------------------------
+  // --- The ISO week, by the Thursday rule ------------------------------------------
 
   /**
    * Spark's {@code weekofyear} as the emitter computes it, over {@link #narrowed}'s fields:
@@ -655,7 +655,7 @@ public final class VarkaChrono {
     return ((x * WEEK_M) >>> WEEK_K) + 1;
   }
 
-  // --- The January-based day of year, and the leap flag it needs (task 34) ------------------
+  // --- The January-based day of year, and the leap flag it needs ------------------
 
   /**
    * The January-based day of year of 1 March in a common year ({@code 31 + 28 + 1}). A leap
@@ -664,13 +664,13 @@ public final class VarkaChrono {
   public static final int MARCH_DAY_OF_YEAR = 60;
 
   /**
-   * Task 40: Hinnant's {@code days_from_civil}, the exact inverse of {@link #narrowed}, over a
+   * Hinnant's {@code days_from_civil}, the exact inverse of {@link #narrowed}, over a
    * biased (non-negative) March-based year. {@code / 4} is a shift and {@code / 5} (inside
    * {@code dayOfYear}) is an exact magic multiply over its small dividend, the same one
    * {@link #narrowed}'s day tail uses; {@code / 400} and {@code / 100} are round-down magics
    * with one correction each, {@link #YEAR_CENTURY_M}'s javadoc records why an exact one does
-   * not reach far enough here even though the dividend (up to about 50381) is smaller than
-   * task 26's forward-direction ones.
+   * not reach far enough here even though the dividend (up to about 50381) is smaller than the
+   * forward-direction ones.
    *
    * <p>{@code month} must be 1-12 and {@code dayOfMonth} the already-clamped day; this method
    * does no clamping itself; {@link VarkaLoopEmitter}'s {@code emitAddMonths} does the clamp
@@ -680,7 +680,7 @@ public final class VarkaChrono {
    * {@code PLAN_TASK_40.md}.
    */
   /**
-   * Spark's {@code make_date} as the emitter computes it (task 42), the scalar twin of the
+   * Spark's {@code make_date} as the emitter computes it, the scalar twin of the
    * kernel's arm: the month clamped into 1..12 for the length test, the length as the closed
    * form {@code 30 | (m ^ (m >>> 3))} except February's {@code 28 + leap}, validity as
    * "month in 1..12 and day in 1..length", and {@link #daysFromCivil} over the valid triple.

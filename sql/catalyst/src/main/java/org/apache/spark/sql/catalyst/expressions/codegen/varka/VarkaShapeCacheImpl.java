@@ -39,8 +39,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
 import org.apache.spark.util.SparkStringUtils$;
 
 /**
- * The bounded cross-task cache of loaded fused-kernel classes (task 18, {@code
- * PLAN_MILESTONE_3.md} 2.1). Task 14's diagnosis set its design: emission costs ~80 us and was
+ * The bounded cross-task cache of loaded fused-kernel classes (see {@code
+ * PLAN_MILESTONE_3.md} 2.1). The diagnosis behind its design: emission costs ~80 us and was
  * never the problem, but a re-defined class is a new class to HotSpot and re-pays the whole tier
  * ladder - a fixed 13-50 ms per task. Only reusing the loaded class amortises that, so this is an
  * LRU over classes each held by its own {@link VarkaGeneratedClassLoader}, released (and so
@@ -51,8 +51,8 @@ import org.apache.spark.util.SparkStringUtils$;
  * <p><b>Correctness before performance.</b> A wrong hit returns wrong results and the ghost
  * fallback cannot catch it - it catches failures, not silently different answers. The key is
  * therefore {@link VarkaShapeKey}, derived structurally from the same records the emitter walks,
- * never assembled by hand at a call site; the differential suites run warm as well as cold. Since
- * task 23 the key covers <i>every</i> byte-affecting emit input, {@link VarkaEmitOptions}
+ * never assembled by hand at a call site; the differential suites run warm as well as cold. The key
+ * covers <i>every</i> byte-affecting emit input, {@link VarkaEmitOptions}
  * included, so there is no longer a class of emission this cache has to refuse to serve - the
  * guard stack that used to do the refusing is gone, and with it the three races inside it.
  *
@@ -109,7 +109,7 @@ import org.apache.spark.util.SparkStringUtils$;
  * with no second code path to keep in step. (Racing lookups of one shape may still share the one
  * in-flight load; that is fine - nothing is retained either way.)
  *
- * <p><b>What is deliberately not here</b> (task 23, which split this class out of the Scala
+ * <p><b>What is deliberately not here</b> (see which split this class out of the Scala
  * {@code VarkaShapeCache}): nothing that reads Spark's configuration or environment. Capacity and
  * the parent class loader arrive as plain values, so this class has one behaviour per constructed
  * instance rather than one per whichever thread happened to touch a singleton first - which is
@@ -214,7 +214,7 @@ public final class VarkaShapeCacheImpl {
     } else {
       hits.increment();
     }
-    // Task 22: the counters' JFR twin - one event per task-level resolution, carrying the
+    // the counters' JFR twin - one event per task-level resolution, carrying the
     // per-execution identity that must not ride the shared bytes.
     VarkaCacheLookupEvent lookupEvent = new VarkaCacheLookupEvent();
     if (lookupEvent.isEnabled()) {
@@ -342,8 +342,9 @@ public final class VarkaShapeCacheImpl {
   }
 
   /**
-   * Everything before the shape hash in a generated class name. Task 50 matches on it to tell a
-   * Varka kernel's compilation from every other method the JVM compiles, so it is a constant
+   * Everything before the shape hash in a generated class name. The compiled-size watch matches on
+   * it to tell a Varka kernel's compilation from every other method the JVM compiles, so it is a
+   * constant
    * here rather than a literal repeated there.
    */
   public static final String CLASS_NAME_PREFIX =
@@ -388,7 +389,7 @@ public final class VarkaShapeCacheImpl {
     String hash = shapeHash(key);
     String className = classNameFor(hash);
     String sourceFile = sourceFileFor(hash);
-    // Task 22: the emission event times the Class-File walk plus the define - the whole miss
+    // the emission event times the Class-File walk plus the define - the whole miss
     // cost minus the lookup - identified by shape only (the class is shared).
     VarkaEmissionEvent emissionEvent = new VarkaEmissionEvent();
     emissionEvent.begin();
@@ -424,7 +425,7 @@ public final class VarkaShapeCacheImpl {
    * <p>One atomic remapping, which is what makes it correct: {@code compute} holds the bin lock
    * across the whole update, so the set cannot be evicted between reading it and writing to it -
    * the race the hand-rolled {@code getIfPresent}/{@code putIfAbsent} retry loop this replaced
-   * existed to converge on (task 23, sweeping the task-18 debt register).
+   * existed to converge on (see sweeping the task-18 debt register).
    */
   private void recordExecution(String hash, String identity) {
     executions.asMap().compute(hash, (h, existing) -> {

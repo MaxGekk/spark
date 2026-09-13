@@ -38,7 +38,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * Kernel microbenchmark for {@link DateVectorOps} (Task 2 follow-up, Task 7): the three SIMD
+ * Kernel microbenchmark for {@link DateVectorOps}: the three SIMD
  * kernels against scalar-loop baselines over int32 date buffers laid out exactly as Arrow
  * {@code DateDayVector} (int32 days since epoch + bit-packed validity, bit set = valid), over
  * ~10k and ~1M rows with null-free and mixed-null validity.

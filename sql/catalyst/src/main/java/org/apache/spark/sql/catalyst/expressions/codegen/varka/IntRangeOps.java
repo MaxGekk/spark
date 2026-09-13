@@ -28,7 +28,7 @@ import jdk.incubator.vector.VectorSpecies;
 
 /**
  * A range check over an int32 Arrow column: whether every <i>live</i> value lies in a closed
- * interval (task 56). The evaluator runs it over an input column the compiler has bounded -
+ * interval. The evaluator runs it over an input column the compiler has bounded -
  * first use: a day offset that came from {@code CAST(i AS INTERVAL DAY)}, which Spark's cast
  * throws on past {@link VarkaChrono#INTERVAL_DAY_LIMIT_DAYS} - and declines the batch to the
  * row engine when the answer is no, so the row engine can raise the error the kernel cannot.

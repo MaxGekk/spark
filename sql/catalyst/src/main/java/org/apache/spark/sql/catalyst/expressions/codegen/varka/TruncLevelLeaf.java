@@ -25,7 +25,7 @@ import org.apache.spark.sql.vectorized.ColumnVector;
 import org.apache.spark.unsafe.types.UTF8String;
 
 /**
- * The derived input behind {@code trunc(date, fmt)} with a format column (task 61): the level
+ * The derived input behind {@code trunc(date, fmt)} with a format column: the level
  * code {@code DateTimeUtils.parseTruncLevel} gives each row's format, written per batch into an
  * int32 column the kernel selects on. The lane holds the parser's own code - {@link #WEEK}
  * through {@link #YEAR}, never re-mapped - and is null wherever the parser answers anything
@@ -35,8 +35,8 @@ import org.apache.spark.unsafe.types.UTF8String;
  * mode, so unlike {@link WeekdayLeaf} this leaf never declines a batch and its kind has no ANSI
  * twin; the derived column's validity is the output's validity for the format's part.
  *
- * <p>One parser only, the row engine's: the value set is nine spellings under a case fold, and
- * task 59's measurement said a leaf's cost is the parse itself; an ASCII fast path would be a
+ * <p>One parser only, the row engine's: the value set is nine spellings under a case fold, and a
+ * leaf's cost is the parse itself; an ASCII fast path would be a
  * measured change of its own, not a default.
  */
 public final class TruncLevelLeaf {

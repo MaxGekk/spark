@@ -23,7 +23,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * fault injector. Everything here changes the bytes {@link VarkaLoopEmitter#emit} produces for a
  * given {@link VarkaShapeKey}, so it is part of that key rather than beside it.
  *
- * <p>Task 23 introduced this record to replace five {@code private static volatile} hook fields
+ * <p>This record replaces five {@code private static volatile} hook fields
  * on the emitter, an {@code AtomicLong} write generation, five package-private setters, two
  * package-private queries, a re-export shim in the catalyst test jar, a reflection-based
  * completeness test, and three reads in the shape cache: a JVM-wide gate that refused every
@@ -58,7 +58,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *                    {@link VarkaLoopEmitter#GROUP_BUDGET} for the measured reason it is 16, and
  *                    for the retuning question the parity benchmark prices by varying it.
  * @param fusedCeiling the most vector ops one emitted loop method may carry when the outputs
- *                     in it share a civil-from-days prefix (task 32 step B2): an output joins a
+ *                     in it share a civil-from-days prefix: an output joins a
  *                     group past {@link #groupBudget} only when doing so lets it skip a prefix
  *                     the group already computes, and never past this. See
  *                     {@link VarkaLoopEmitter#FUSED_CEILING} for the ladder that set it.
@@ -66,33 +66,33 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *            is an optimization, never a semantics change - and the emitter suite pins exactly
  *            that; the parity benchmark uses it to price CSE itself.
  * @param shareChronoPrefix whether two calendar nodes over the same date compute the
- *                          civil-from-days decomposition once between them rather than once each
- *                          (task 32 step B). Like {@link #cse} it is an optimization and never a
+ * civil-from-days decomposition once between them rather than once each. Like {@link #cse} it is an
+ * optimization and never a
  *                          semantics change, and it is pinned the same way; unlike CSE it shares
  *                          <i>inside</i> a node's emitted run rather than between whole nodes,
  *                          which is why the emitter needs a separate notion of a fragment for
  *                          it. See {@code VarkaLoopEmitter.FragmentKey}.
  * @param denseValidityOnce whether a dense batch's value outputs have their validity bits set
- *        once by the driver rather than OR-ed in per lane group by the loop (task 45). On a
- *        dense batch the dispatcher has proven every referenced input null-free and task 11's
- *        invariant makes every value output valid on every row, so the loop's per-group call
+ *        once by the driver rather than OR-ed in per lane group by the loop. On a
+ * dense batch the dispatcher has proven every referenced input null-free and the dense invariant
+ * makes every value output valid on every row, so the loop's per-group call
  *        writes ones over ones. `false` reproduces the older bytes exactly and stays a
  *        reference variant the differential checks against, on {@link FloorMod7}'s precedent.
  * @param elideChronoMonth whether the civil-from-days prefix skips its March-month step in a
- *                         body where no tail reads the month (task 48). The year tail is the
+ *                         body where no tail reads the month. The year tail is the
  *                         one of the four fields that does not: it reads the January turn off
  *                         the day of year instead, which is the same test one step earlier in
  *                         the chain. Like {@link #cse} it is an optimization and never a
  *                         semantics change - the step it removes is dead work where it is
  *                         removed - and it is a switch only so the A/B stays re-runnable.
  * @param neriSchneiderMonth whether the month index and the day of month come out of one
- *        affine numerator (Neri-Schneider 2022, task 53) or from the magic multiply plus
+ *        affine numerator (Neri-Schneider 2022) or from the magic multiply plus
  *        forward month-start this project shipped first. The two compute the same fields on
  *        two different month axes - March = 3 against March = 0 - and are differentially
  *        checked against each other, so the older one stays a live reference variant rather
  *        than dead code, on {@link FloorMod7}'s precedent.
  * @param julianMap whether the civil-from-days prefix takes the year of era through Ben Joffe's
- *        Julian map (task 54) - the day of era scaled by four, one division by 146097 for the
+ *        Julian map - the day of era scaled by four, one division by 146097 for the
  *        century, four added back per century, and one division by 1461 for the year, whose
  *        remainder is the day of year with the leap day right by construction - or through the
  *        century-then-year split this project shipped first, with its leap-day underflow
@@ -100,47 +100,47 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        older form stays a live reference variant, on {@link FloorMod7}'s precedent.
  * @param shareWholeNodes whether an output that reuses whole nodes the group already computes
  *        may join it past {@link #groupBudget}, the way one reusing a civil-from-days prefix
- *        already may (task 71). {@code groupBudget} bounds the *method*, while the marginal cost
+ *        already may. {@code groupBudget} bounds the *method*, while the marginal cost
  *        it is compared against already excludes nodes the group holds - so two outputs over a
  *        shared chain are rejected for a method of 20 nodes although splitting them costs 28
  *        nodes of work. The reuse is the same kind clause 2 was written for: joining lets the
- *        output skip work the group does anyway, which is less work rather than a trade. Off
- *        until task 71's measurement chooses it.
+ * output skip work the group does anyway, which is less work rather than a trade. Off until a
+ * measurement chooses it.
  * @param guardUnderArm whether a batch-condemning guard on a node under a {@code CASE}/{@code IF}
- *        arm is qualified by that arm's condition (task 79), so a lane the condition sends to
+ *        arm is qualified by that arm's condition, so a lane the condition sends to
  *        the other arm cannot decline the batch. A vector body computes both arms, and a guard
  *        condemns rather than producing a value the blend can discard, so without this a row the
  *        query never uses declines the batch it is in. Off, the guard condemns from the untaken
- *        arm as it did before task 79 - the reference variant the A/B prices against, on
+ *        arm as it did before arm qualification - the reference variant the A/B prices against, on
  *        {@link FloorMod7}'s precedent. It qualifies only where every use of the node sits under
  *        one and the same arm chain; see {@code Analysis.armChain}.
  * @param guardDayProducers whether a {@code date_add}/{@code date_sub} whose offset is a column,
  *        and whose result a calendar node reads, carries a per-lane check on that result against
- *        the range the civil-from-days lowering is exact over (task 52), declining the batch to
+ *        the range the civil-from-days lowering is exact over, declining the batch to
  *        the row engine when a lane leaves it. The compiler bounds every other day producer at
  *        compile time; this is the shape it cannot, so the check is at run time and at the
- *        producer rather than at each extraction (task 51 removed the latter). Off, a shape that
- *        existed at task 51 keeps task 51's bytes exactly and such a lane is computed wrongly
+ * producer rather than at each extraction (rather than at each extraction, as an earlier design
+ * did). Off, such a shape keeps its previous bytes exactly and such a lane is computed wrongly
  *        rather than declined - a reference variant for the A/B that priced the guard, on
- *        {@link FloorMod7}'s precedent. This does <em>not</em> reach task 60's guard on an
+ *        {@link FloorMod7}'s precedent. This does <em>not</em> reach the month-count guard on an
  *        {@code add_months} / {@code date + INTERVAL n MONTH} column month count: that one is
  *        checked on the count itself rather than on a result, it guards the node's own magic
  *        multiply rather than a consumer's lowering, and the compiler's {@code dayRange} bounds
- *        such a count on the strength of it firing - so it is unconditional, like task 42's
- *        {@code make_date}. (The minus spelling declines at compile time, so no kernel exists
+ * such a count on the strength of it firing - so it is unconditional, like {@code make_date}. (The
+ * minus spelling declines at compile time, so no kernel exists
  *        for either setting to gate.)
  * @param validityByWord whether a destination bitmap's validity is accumulated in a register
  *        and stored a whole 64-bit word at a time, instead of read-modify-written once per lane
- *        group (task 47). The read is what goes: {@code orValidityBitsAt*} loads the group's
+ *        group. The read is what goes: {@code orValidityBitsAt*} loads the group's
  *        bytes, ORs and stores them back, and at four lanes a group is half a byte, so two
- *        consecutive groups rewrite the same byte and serialise on it - the regime task 76
- *        measured its helper choice inverting inside. Sound only because the destination is a
+ * consecutive groups rewrite the same byte and serialise on it - the regime where the helper choice
+ * inverts inside. Sound only because the destination is a
  *        bitmap the evaluator allocated: {@code VarkaKernelEvaluatorSuite} pins that an Arrow
  *        validity buffer owns whole 64-bit words at every length, the driver zeroes exactly the
  *        outputs this writes, and {@code groupOutputs} gives each output one writer. Applies to
  *        a loop body at a baked lane count that divides 64; the epilogue's partial group keeps
- *        the read-modify-write, once per batch. Off is the per-group form, which is task 46's
- *        bytes exactly - a live reference variant on {@link FloorMod7}'s precedent, and the arm
+ * the read-modify-write, once per batch. Off is the per-group form - a live reference variant on
+ * {@link FloorMod7} 's precedent, and the arm
  *        the A/B that prices this measures against.
  *
  *        <p>Two other options go inert under it and say so in their own text: with no helper
@@ -149,16 +149,16 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * @param validityByWidth whether a whole lane group's validity is read and written through the
  *        helper named for the emission's lane count - {@code orValidityBitsAt16} and its
  *        siblings, each with the general form's four-arm switch already resolved - and the
- *        concrete {@code VectorSpecies} constant baked in beside it (task 46). The general pair
+ *        concrete {@code VectorSpecies} constant baked in beside it. The general pair
  *        takes the lane count as an argument, so it carries a switch the caller cannot fold; at
  *        212 bytes the writer does not inline inside a fused loop, and one refused call costs
  *        1.87 to 3.24 ns per lane group at any width. Off, the emitter reads
- *        {@code SPECIES_PREFERRED} at run time and calls the general pair, which is task 45's
- *        bytes exactly - a live reference variant, on {@link FloorMod7}'s precedent, and the
+ * {@code SPECIES_PREFERRED} at run time and calls the general pair - a live reference variant, on
+ * {@link FloorMod7} 's precedent, and the
  *        arm the A/B that priced this measures against.
  * @param validityOrFirst whether a value root's validity OR is emitted <i>before</i> its vector
  *        computation, wherever its word is already known - an input word in the masked body,
- *        the constant in the dense one - rather than after the store (task 46, second half).
+ *        the constant in the dense one - rather than after the store (see second half).
  *        Same bytes, different order; what it changes is where C2's parser meets the call.
  *        Emitted last, after the body's Vector API intrinsics, the OR helper was refused with
  *        {@code NodeCountInliningCutoff} in every arm - a develop-only limit of 18000 nodes on
@@ -168,14 +168,14 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * @param validityByBitmap whether a value root whose validity word is a pure AND/OR over input
  *        bitmaps has that bitmap written once per batch by the masked driver - a copy, an AND
  *        or an OR of whole input bitmaps, through {@code VarkaVectorSupport}'s column-taking
- *        entry points - instead of ORed in per lane group by the loop (task 70). With the write
+ *        entry points - instead of ORed in per lane group by the loop. With the write
  *        gone, a word no consumer left in the method reads is not computed either: no input
  *        word stored, no own word ANDed, and no null-state prologue for an input whose word is
  *        dead, so a masked method whose every word is dead is the dense method's bytes. What
  *        stays per group is what is not a function of input bitmaps - a {@code Cond} root's
- *        selection, an {@code IfElse}'s blend, {@code make_date}'s validity test - and what
- *        still reads a word: task 52 and 60's guards, the pick's null substitution, every
- *        condition. On since task 70's measurement (PLAN_TASK_70.md 9): every served row
+ * selection, an {@code IfElse} 's blend, {@code make_date} 's validity test - and what still reads
+ * a word: the range guards, the pick's null substitution, every condition. On, from the measurement
+ * in PLAN_TASK_70.md 9: every served row
  *        faster at both widths, the four-field shape by 1.59x at AVX-512 and 1.89x at 128-bit,
  *        where it lands on its dense twin. One row reads past its dense twin by more than run
  *        noise - {@code next_day} with a weekday column at 128-bit - on loop bytecode the tests
@@ -183,11 +183,11 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        a property of the lowering. Off reproduces the per-group bytes exactly and stays a
  *        reference variant the differential checks against, on {@link FloorMod7}'s precedent.
  * @param checkIntOverflow whether an int arithmetic node in Spark's ANSI or TRY evaluation
- *        mode emits its overflow check (task 63). On is the only correct setting for those
+ *        mode emits its overflow check. On is the only correct setting for those
  *        modes: with it off the node emits as though it were `LEGACY`, wrapping silently,
  *        which is a wrong answer rather than a slower one. It exists so the A/B can price the
- *        check against the arithmetic it protects, exactly as {@link #guardDayProducers}
- *        prices task 52's range guard, and the differential runs it only as that variant.
+ * check against the arithmetic it protects, exactly as {@link #guardDayProducers} prices the
+ * producer range guard, and the differential runs it only as that variant.
  *        A `WRAP` node is unaffected either way - it has no check to skip.
  * @param lanesOverride the lane count to emit for, or 0 to emit for the JVM's own
  *        {@code IntVector.SPECIES_PREFERRED} - which is what production always does, so
@@ -198,7 +198,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        matching species, so it computes the right answers at that width wherever it runs,
  *        slowly if the hardware is narrower.
  * @param truncDate which lowering {@code trunc(date, ...)} uses at the {@code YEAR} and
- *        {@code QUARTER} levels (task 35): {@link TruncDateForm#SUBTRACT} takes the day of year
+ *        {@code QUARTER} levels: {@link TruncDateForm#SUBTRACT} takes the day of year
  *        off the date ({@code d - dayofyear + start}), {@link TruncDateForm#RECOMPOSE} rebuilds
  *        the period's first day from the year and month through {@code emitDaysFromCivil}. Same
  *        dates either way, differentially checked against each other, and {@code MONTH} follows
@@ -211,7 +211,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *                       the failure surfaces on first execution as a {@code NoSuchMethodError}
  *                       naming {@code IntVector.add}. The suite pins that, so a future descriptor
  *                       regression is diagnosable from the error alone.
- * @param misdescribeWordLiveness inverts task 70's word-liveness verdict on every word: what
+ * @param misdescribeWordLiveness inverts the word-liveness verdict on every word: what
  *        the rule declares dead is treated as live and stored, what it declares live is treated
  *        as dead and never stored. A pure fault injector for the two halves of the emitter's own
  *        invariant - a word stored but never loaded fails at the end of the body, a word loaded
@@ -244,9 +244,9 @@ public record VarkaEmitOptions(
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
-   * by an exact Granlund-Montgomery magic division (task 14's follow-up). The other two are the
+   * by an exact Granlund-Montgomery magic division. The other two are the
    * reference variants the parity benchmark and the differential suite check it against -
-   * {@link #DIGIT_SUM} is the full base-8 digit sum that shipped with task 11, and {@link #DIV} is
+   * {@link #DIGIT_SUM} is the full base-8 digit sum, and {@link #DIV} is
    * the certainly-correct lanewise divide, which scalarizes on every lane type this JVM has.
    */
   public enum FloorMod7 { MAGIC, DIV, DIGIT_SUM }
@@ -396,10 +396,10 @@ public record VarkaEmitOptions(
   }
 
   /**
-   * Task 79: whether a batch-condemning guard under a {@code CASE}/{@code IF} arm is qualified
+   * whether a batch-condemning guard under a {@code CASE}/{@code IF} arm is qualified
    * by that arm's condition, so a lane the condition sends to the other arm cannot decline the
-   * batch. Off, the guard condemns from the untaken arm exactly as it did before task 79 - the
-   * reference variant for the A/B, on {@link FloorMod7}'s precedent, and the setting every
+   * batch. Off, the guard condemns from the untaken arm exactly as it did before arm qualification
+   * - the reference variant for the A/B, on {@link FloorMod7} 's precedent, and the setting every
    * "unchanged bytes" assertion compares against.
    */
   public VarkaEmitOptions withGuardUnderArm(boolean enabled) {
@@ -468,7 +468,7 @@ public record VarkaEmitOptions(
    * {@link #DEFAULTS}, so a production hash is byte-identical to what it was before options
    * existed; otherwise every field, in declaration order, so two variants can never collide.
    *
-   * <p>"Every field" was not true until task 46: {@code truncDate} had been left out since task
+   * <p>"Every field" has not always held: {@code truncDate} was once left out
    * 35, so two option values differing only in the {@code trunc} lowering rendered the same
    * string and shared one execution identity in the cache's side table, which is exactly the
    * hazard this class doc describes. {@code VarkaShapeCacheSuite} now walks the record's

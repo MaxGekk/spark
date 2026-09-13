@@ -21,7 +21,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 /**
- * The read side of a selection bitmap (task 21): the bit-packed mask a filter kernel writes
+ * The read side of a selection bitmap: the bit-packed mask a filter kernel writes
  * into its {@code dstValidity} slot, one bit per row, set exactly where the predicate is known
  * true (see {@link VarkaFusedKernel}'s selection-output contract). The layout is Arrow's
  * validity layout - LSB of byte 0 is row 0 - because the kernel writes it with the same

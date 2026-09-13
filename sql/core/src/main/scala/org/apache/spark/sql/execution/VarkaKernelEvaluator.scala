@@ -44,9 +44,9 @@ import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
 
 /**
- * The Varka-specific SQL metrics one exec node threads to its factory and evaluator (task 22),
- * bundled so the parameter lists stop growing metric by metric (task 18 threaded two options;
- * this task would have made it five). Every field is optional: suites and diagnostics
+ * The Varka-specific SQL metrics one exec node threads to its factory and evaluator,
+ * bundled so the parameter lists stop growing metric by metric (an earlier signature threaded two
+ * options; this one would have made it five). Every field is optional: suites and diagnostics
  * construct evaluators with none. Deliberately Scala rather than a Java record (the task-21
  * review's call, recorded): every construction site is forced-Scala code leaning on named
  * arguments and defaults over seven same-typed fields, where a record's positional constructor
@@ -87,7 +87,7 @@ private[sql] object VarkaExecMetrics {
     "numFallbackBatchesRowPath" -> SQLMetrics.createMetric(
       sparkContext, "batches falling back: per-row machinery failure beside the kernel"),
     "numFallbackBatchesDeclined" -> SQLMetrics.createMetric(
-      sparkContext, "batches falling back: a value outside a lowering's range (task 26)"),
+      sparkContext, "batches falling back: a value outside a lowering's range"),
     "numEmissionFailures" -> SQLMetrics.createMetric(
       sparkContext, "tasks that could not emit or define the kernel class"),
     "numSuspectAllocationSamples" -> SQLMetrics.createMetric(
@@ -121,10 +121,10 @@ private[sql] object VarkaExecMetrics {
 private[execution] class VarkaKernelFailure(cause: Throwable) extends Exception(cause)
 
 /**
- * The batch was declined to the row engine: the kernel ran and returned a non-zero status
- * (task 26), meaning some lane lay outside the range a partial lowering is defined over, or
+ * The batch was declined to the row engine: the kernel ran and returned a non-zero status,
+ * meaning some lane lay outside the range a partial lowering is defined over, or
  * the evaluator's own pre-check found an input lane outside a bound the compiler recorded
- * (task 56, [[VarkaKernelEvaluator.STATUS_INPUT_BOUND]]). Not an error - it carries no cause
+ * (see [[VarkaKernelEvaluator.STATUS_INPUT_BOUND]]). Not an error - it carries no cause
  * and no stack trace, because it is control flow on a designed path, and [[serveBatch]] turns
  * it into the row-engine fallback.
  */
@@ -133,7 +133,7 @@ private[execution] class VarkaBatchDeclined(val status: Int)
 
 /**
  * The task-lifetime machinery shared by every Varka evaluator (split out of
- * [[VarkaKernelEvaluator]] in task 21, when the filter evaluator became its second user): the
+ * [[VarkaKernelEvaluator]] when the filter evaluator became its second user): the
  * shape-cached kernel runner and its argument arrays, the task's Arrow allocator, the
  * open-batch ledger with its task-completion safety net, the Arrow-backed `canRun` test, and
  * the telemetry names. A concrete evaluator supplies the compiled fused sub-plan the kernel
@@ -196,7 +196,7 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * Whether this task tried and failed to obtain its kernel class (task 22): the plan
+   * Whether this task tried and failed to obtain its kernel class: the plan
    * compiled but the runner could not be built. The exec nodes use it to keep the per-batch
    * fallback cause honest - after an emission failure every batch fails `canRun`, which
    * without this test would count as "input not Arrow-backed".
@@ -204,7 +204,7 @@ private[sql] abstract class VarkaEvaluatorBase(
   private[execution] def emissionFailed: Boolean = fusedPlan.nonEmpty && fusedRunner.isEmpty
 
   /**
-   * This execution's identity - the operator and this task's stage - which since task 18 goes
+   * This execution's identity - the operator and this task's stage - which goes
    * to [[VarkaShapeCache]]'s side table rather than into the shared class bytes. Outside a
    * task (diagnostics, tests) the stage reads as -1 rather than throwing.
    */
@@ -236,7 +236,7 @@ private[sql] abstract class VarkaEvaluatorBase(
       VarkaColumnarToRowExec.currentEmitOptions)
 
   /**
-   * The kernel named the way its telemetry names it (task 16, shape-based since task 18): the
+   * The kernel named the way its telemetry names it: the
    * `SourceFile` of the shared class, the IR it computes, and this execution's operator and
    * stage. Every fallback warning - here and in the exec nodes - says which kernel it gave up
    * on, so a log line identifies both the class and the plan node without correlation.
@@ -244,8 +244,8 @@ private[sql] abstract class VarkaEvaluatorBase(
    * A lazy val (task-21 review): the rendering hashes the canonical IR, and it is constant
    * per evaluator, so per-batch fallback paths must not recompute it.
    *
-   * The IR renders through `VarkaVectorIR.canonical` rather than `Record.toString` (task 23,
-   * with the line map): the same rendering the class's own `VarkaDebugInfo` carries, so a log
+   * The IR renders through `VarkaVectorIR.canonical` rather than `Record.toString` (with the line
+   * map): the same rendering the class's own `VarkaDebugInfo` carries, so a log
    * line and the bytes it names describe the shape the same way - and neither depends on a
    * format no JDK promises.
    */
@@ -372,7 +372,7 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * A batch the kernel itself declined (task 26): a lowering that is correct only over part of
+   * A batch the kernel itself declined: a lowering that is correct only over part of
    * its input domain met a value outside it - a date beyond the narrowed civil-from-days range
    * - and reported it rather than publishing an answer it does not have. Logged at debug
    * rather than warning: unlike the ghost fallback this is a designed outcome, not a defect,
@@ -448,8 +448,8 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /**
    * Whether the kernel can run over this batch: every referenced column must be an Arrow
-   * `DateDayVector` or `IntVector` (task 38 - a day-offset column) holding exactly the batch's
-   * rows, no more - or, for an input the evaluator derives (task 59), an Arrow `VarCharVector`
+   * `DateDayVector` or `IntVector` (a day-offset column) holding exactly the batch's
+   * rows, no more - or, for an input the evaluator derives, an Arrow `VarCharVector`
    * of the same row count, the one string vector the Arrow cache produces and the derived
    * leaf reads; the large and view string vectors refuse the batch like any other column type.
    *
@@ -474,7 +474,7 @@ private[sql] abstract class VarkaEvaluatorBase(
           (acv.getValueVector(), plan.derivedAt(i)) match {
             case (v: DateDayVector, None) => v.getValueCount() == rows
             case (v: IntVector, None) => v.getValueCount() == rows
-            // Task 67: a year-month interval is a count of months in an int32 buffer whatever
+            // a year-month interval is a count of months in an int32 buffer whatever
             // its unit, and `IntervalYearVector` is a BaseFixedWidthVector of width four - the
             // same buffer layout the kernels already read. The list is by vector class rather
             // than by Spark type, so admitting the type is exactly this line: the serializer
@@ -497,7 +497,7 @@ private[sql] abstract class VarkaEvaluatorBase(
    * closes - the filter evaluator releases its selection buffer here. */
   protected def onTaskCleanup(): Unit = {}
 
-  // The derived inputs' scratch buffers (task 59), one data and one validity buffer per kernel
+  // The derived inputs' scratch buffers, one data and one validity buffer per kernel
   // input the evaluator derives, reused across batches and grown on demand under the filter's
   // maskBuf discipline; released by the task-completion listener before the allocator closes.
   // Read only inside kernel.run, so a batch never sees another batch's fill.
@@ -659,10 +659,10 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * Writes the emitted class to the configured dump directory under its `SourceFile` name
-   * (task 16), so `javap -c -p` reaches a generated loop with no debugger. Diagnostics only:
+   * Writes the emitted class to the configured dump directory under its `SourceFile` name,
+   * so `javap -c -p` reaches a generated loop with no debugger. Diagnostics only:
    * every failure is logged and swallowed, because a query must not fail over a debug write.
-   * Every task of a shape holds identical bytes (task 18), so a per-JVM memo makes the
+   * Every task of a shape holds identical bytes, so a per-JVM memo makes the
    * shape's first task with the directory configured write the file once, instead of every
    * task re-writing it on the task-setup path. The memo is per-process on purpose: the file
    * name derives from the shape, not the bytes, so a file left by an *older* emitter must be
@@ -691,12 +691,12 @@ private[sql] abstract class VarkaEvaluatorBase(
   /**
    * Fills the runner's source-side argument arrays from the input batch - one morsel per
    * referenced input column, in dense kernel-input order. `canRun` has vouched for every
-   * column this reads. A derived input (task 59) is computed here, before the kernel runs,
+   * column this reads. A derived input is computed here, before the kernel runs,
    * into the task's scratch buffers: the string column goes through the row engine's own
    * parser and the kernel reads the int32 result like any other input. The leaves never throw;
    * under ANSI an unrecognised weekday name declines the batch, and the row engine - which
    * parses a name only beside a non-null date - raises its own error where one is due. The
-   * trunc level (task 61) has no such route: an unrecognised format is a null lane in every
+   * trunc level has no such route: an unrecognised format is a null lane in every
    * mode, as it is a NULL result on the row engine.
    */
   protected def fillSources(runner: FusedRunner, input: ColumnarBatch, len: Int): Unit = {
@@ -742,7 +742,7 @@ private[sql] abstract class VarkaEvaluatorBase(
       }
       i += 1
     }
-    // Task 56: an input the compiler bounded - today a day offset that came from
+    // an input the compiler bounded - today a day offset that came from
     // CAST(i AS INTERVAL DAY), which Spark's cast throws on past the bound - is checked before
     // the kernel runs, over its live lanes only. A lane outside declines the batch the same
     // way a kernel status does: the row engine recomputes it and raises the error the kernel
@@ -779,7 +779,7 @@ private[sql] abstract class VarkaEvaluatorBase(
     }
     if (sampled) recordAllocationSample(VarkaAllocationSampler.allocatedBytes() - before, len)
     // A non-zero status means the kernel met a value its lowering is not defined over and
-    // declined the batch (task 26). The outputs it wrote are not answers; the batch takes the
+    // declined the batch. The outputs it wrote are not answers; the batch takes the
     // caller's fallback path, which recomputes it row by row. Signalled by a throw because
     // that is the one path every caller of this method already routes to the fallback - the
     // vectors already allocated are released by the task-completion listener like any other.
@@ -789,7 +789,7 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * Maps a `DateDayVector` or `IntVector` (task 38) to its data and validity segments
+   * Maps a `DateDayVector` or `IntVector` to its data and validity segments
    * (zero-copy), mirroring the engine's `VarkaMorsel.extractDate` contract: the validity
    * segment is null for an all-null column, and callers pass a `0L` address in that case
    * because the kernels never dereference it then. Both vector kinds are four bytes wide with
@@ -814,7 +814,7 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /**
    * The fused loop serving one task, plus the `run` argument arrays, allocated once here and
-   * refilled per batch - nothing is allocated per call. Since task 18 the class comes from
+   * refilled per batch - nothing is allocated per call. the class comes from
    * [[VarkaShapeCache]] - shared across tasks and released on cache eviction, so its C2 code
    * survives the task boundary - and only the kernel instance and these arrays are the
    * task's own. The cache owns the loader in every configuration: with `maxEntries` = 0 it
@@ -860,18 +860,18 @@ private[sql] abstract class VarkaEvaluatorBase(
  * into a batch of the projection's output, and owns everything that costs a task to set up - the
  * compiled IR, the fused-loop kernel instance, the Arrow allocator and the batches handed out.
  *
- * Since task 10 the compute is one [[VarkaFusedKernel]] emitted by
+ * the compute is one [[VarkaFusedKernel]] emitted by
  * `VarkaLoopEmitter` for the whole projection - every output computed in a single pass with
  * intermediates in vector registers - instead of one dispatcher call per output op. The
  * projection is compiled to IR by [[VarkaExpressionCompiler]], the same call
  * `VarkaColumnarRule` decided eligibility with, so the plan the rule fused is by construction a
- * plan this evaluator serves. Since task 18 the emitted ''class'' is not per-task state: it
+ * plan this evaluator serves. the emitted ''class'' is not per-task state: it
  * comes from [[VarkaShapeCache]], the JVM-wide cache keyed on the kernel's structural shape,
  * so tasks (and sessions) computing the same shape share one loaded class and skip its
  * per-task JIT warm-up - the fixed 13-50 ms `PLAN_TASK_14.md` 7.5 diagnosed. Only the kernel
  * ''instance'' and its argument arrays stay per-task.
  *
- * Since task 12 eligibility is partial and the output batch is assembled column by column in
+ * eligibility is partial and the output batch is assembled column by column in
  * projection order: fused entries come from the kernel's freshly allocated Arrow vectors,
  * bare-column entries are '''forwarded''' - the output batch references `input.column(ordinal)`
  * itself, zero copy - and the remaining ('''residual''') entries are evaluated in one per-row
@@ -891,7 +891,7 @@ private[sql] abstract class VarkaEvaluatorBase(
  * nodes' iterators already obeyed this order for memory reasons; with forwarding it is
  * load-bearing for correctness.
  *
- * '''Telemetry''' (tasks 13 and 16, reconciled with the shared class in task 18). The emitted
+ * '''Telemetry''' (reconciled with the shared class). The emitted
  * class is named by its shape (`VarkaFusedProjection_<hash>`, `SourceFile` to match), and its
  * `VarkaDebugInfo` attribute and `LineNumberTable` describe the shape - the vector IR, the
  * line-to-node map - because the bytes are shared and must not replay one query's identity for
@@ -908,7 +908,7 @@ private[sql] abstract class VarkaEvaluatorBase(
  *
  * @param operatorName the exec node this evaluator serves, for the telemetry names above.
  * @param classDumpDirectory where to write each emitted class, or None to write none.
- * @param metrics the exec node's Varka metric set (task 22); every field is optional, and
+ * @param metrics the exec node's Varka metric set; every field is optional, and
  *                suites or diagnostics that construct the evaluator directly pass none.
  */
 private[sql] class VarkaKernelEvaluator(
@@ -925,7 +925,7 @@ private[sql] class VarkaKernelEvaluator(
   // but be safe).
   private lazy val compiled: Option[PartialVarkaProjection] = {
     val partial = VarkaExpressionCompiler.compilePartial(projectList, childOutput)
-    // Task 16: the same per-entry account verbose EXPLAIN prints, once per task at debug level.
+    // the same per-entry account verbose EXPLAIN prints, once per task at debug level.
     partial.foreach { plan =>
       logDebug(s"Varka $operatorName fusion: " +
         VarkaFusionReport.lines(plan, projectList, childOutput).mkString("; "))
@@ -937,8 +937,8 @@ private[sql] class VarkaKernelEvaluator(
 
   override protected def identityEntries: Iterator[String] = projectList.iterator.map(_.toString)
 
-  // The residual entries and their per-row machinery. All lazy (task 15's discipline): a
-  // kernel-only projection has no residual entries, and even a mixed one pays the Janino
+  // The residual entries and their per-row machinery. All lazy: a // kernel-only projection has no
+  // residual entries, and even a mixed one pays the Janino
   // compile only when the first batch actually reaches [[project]].
   private lazy val residualExprs: Seq[NamedExpression] =
     compiled.toSeq.flatMap(_.specs.zip(projectList).collect {
@@ -1073,7 +1073,7 @@ private[sql] class VarkaKernelEvaluator(
    * Allocates one destination Arrow vector: a `DateDayVector` for a date output, an `IntVector`
    * for a `datediff` day count. The fused loop writes its validity and data buffers directly
    * (zero-copy), and every valid row's bit is set exactly once per batch however the kernel
-   * gets there: since task 70 an output whose validity is a pure AND/OR of the input bitmaps
+   * gets there: an output whose validity is a pure AND/OR of the input bitmaps
    * has its whole bitmap written by the driver's bitmap pass, and the outputs that keep the
    * per-group write have their validity zeroed by the driver first. Null lanes of the data
    * buffer are undefined either way, matching the engine contract.
@@ -1086,7 +1086,7 @@ private[sql] class VarkaKernelEvaluator(
     val vector: ValueVector = dataType match {
       case DateType => new DateDayVector(s"varka$ordinal", allocator)
       case IntegerType => new IntVector(s"varka$ordinal", allocator)
-      // Task 67: the output side of the same admission. The unit rides on the Spark type and
+      // the output side of the same admission. The unit rides on the Spark type and
       // never on the buffer, so every year-month unit writes one vector class; the row path
       // reads it back through the accessor `ArrowColumnVector` already has.
       case _: YearMonthIntervalType => new IntervalYearVector(s"varka$ordinal", allocator)
@@ -1104,7 +1104,7 @@ private[sql] class VarkaKernelEvaluator(
 }
 
 /**
- * An Arrow-backed column vector the Varka evaluator owns (task 21): `closeIfFreeable` is a
+ * An Arrow-backed column vector the Varka evaluator owns: `closeIfFreeable` is a
  * no-op, per Spark's two-tier close convention, because the vector's lifecycle belongs to the
  * evaluator's release paths - and a consumer that frees the batches it drains (the Arrow
  * cache writer calls `ColumnarBatch.closeIfFreeable()` per batch) must not close what it
@@ -1119,14 +1119,14 @@ private[execution] class VarkaOwnedArrowColumnVector(vector: ValueVector)
 }
 
 /**
- * One batch's selection (task 21): the bitmap the filter kernel wrote - valid until the
+ * One batch's selection: the bitmap the filter kernel wrote - valid until the
  * evaluator's next [[VarkaFilterEvaluator.filterMask]] call, since the buffer is reused - and
  * the number of selected rows. Read through `VarkaSelectionBitmap`.
  */
 private[sql] case class VarkaSelection(mask: MemorySegment, count: Int)
 
 /**
- * The kernel half of the Varka filter, for one partition (task 21): it runs the mask kernel -
+ * The kernel half of the Varka filter, for one partition: it runs the mask kernel -
  * a fused loop whose single output root is the predicate's condition - over an Arrow-backed
  * batch and hands back the selection bitmap, leaving what to do with it (compact a fresh
  * batch, or skip rows at the row boundary) to the exec node. Shares every task-lifetime
@@ -1150,7 +1150,7 @@ private[sql] class VarkaFilterEvaluator(
   private lazy val compiled = {
     val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput)
       .filter(_.residualConjuncts.isEmpty)
-    // Task 16's account for a filter, once per task at debug level - the projection
+    // The account for a filter, once per task at debug level - the projection
     // evaluator's counterpart, which the base-class split had dropped (task-21 review,
     // second pass) although the docs promise it.
     predicate.foreach { _ =>
@@ -1167,7 +1167,7 @@ private[sql] class VarkaFilterEvaluator(
   // The selection buffer, reused across batches and grown on demand; released by the
   // task-completion listener before the allocator closes. The kernel writes the leading
   // (len + 7) / 8 bytes itself, so a stale tail from a longer earlier batch is never read -
-  // the bitmap readers stop at `len` bits. Two facts keep that true since task 70, which
+  // the bitmap readers stop at `len` bits. Two facts keep that true which
   // stopped the driver from zeroing the validity of an output its bitmap pass serves: a
   // filter's root is a `Cond`, which the pass never serves, so this buffer is still zeroed
   // by the driver; and every pass arm writes exactly (len + 7) / 8 bytes anyway.
@@ -1262,7 +1262,7 @@ private[sql] class VarkaFilterEvaluator(
    * the next Varka node); every other column goes through one per-row pass with the standard
    * row-to-column converter, the same machinery as the projection residuals.
    *
-   * Two selectivity extremes skip that work entirely (task 24). At `count == len` nothing has
+   * Two selectivity extremes skip that work entirely. At `count == len` nothing has
    * to be shortened, and a vector that does not have to be shortened does not have to be
    * copied, so the child's columns are forwarded: the earlier rule that a compacting filter
    * owns every output column holds only where the compaction is real. At `count == 0` the
@@ -1349,9 +1349,9 @@ private[sql] class VarkaFilterEvaluator(
   }
 
   /**
-   * The `compress(mask)` compaction (task 24, milestone 4 item 11) for 4-byte fixed-width
-   * Arrow vectors - date32 and int32, every width Varka produces today. Width 8 arrives with
-   * task 29's lane type and everything else keeps the per-row typed copy below. It is a width
+   * The `compress(mask)` compaction (see milestone 4 item 11) for 4-byte fixed-width
+   * Arrow vectors - date32 and int32, every width Varka produces today. Width 8 would arrive with a
+   * new lane type and everything else keeps the per-row typed copy below. It is a width
    * check rather than a type check on purpose: a future Arrow type of the right width is
    * served correctly by a bit-for-bit lane move.
    *
@@ -1405,7 +1405,7 @@ private[sql] class VarkaFilterEvaluator(
     val wrapped = new VarkaOwnedArrowColumnVector(dst)
     owned += wrapped
     // Nothing selected means nothing to scan for: the bitmap walk below is O(len) whatever it
-    // finds, and at 0% selectivity that walk was the whole cost of the column (task 24).
+    // finds, and at 0% selectivity that walk was the whole cost of the column.
     if (count > 0) {
       var i = 0
       var pos = 0
@@ -1467,13 +1467,13 @@ private[execution] object VarkaKernelEvaluator {
   // and restore the default in a finally.
   /**
    * The decline status the evaluator itself reports when an input lane lies outside a bound
-   * the compiler recorded (task 56) - bit 1, beside the kernels' `STATUS_CHRONO_RANGE` (bit 0),
+   * the compiler recorded - bit 1, beside the kernels' `STATUS_CHRONO_RANGE` (bit 0),
    * so a log line tells the two apart. Never returned by an emitted kernel.
    */
   private[execution] val STATUS_INPUT_BOUND: Int = 2
 
   /**
-   * The decline status the evaluator reports when a derived input (task 59) met a value its
+   * The decline status the evaluator reports when a derived input met a value its
    * row-engine definition raises on under ANSI - an unrecognised weekday name - bit 2. The
    * row engine recomputes the batch and raises where a non-null date sits beside the name.
    */

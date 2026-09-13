@@ -23,8 +23,8 @@ import jdk.jfr.Label;
 import jdk.jfr.Name;
 
 /**
- * JFR event (task 22) for one shape-cache lookup: the per-task resolution of a kernel class,
- * hit or miss - the event form of the counters task 18 left for exactly this. The execution
+ * JFR event for one shape-cache lookup: the per-task resolution of a kernel class,
+ * hit or miss - the event form of the cache counters. The execution
  * field carries the caller's truncated identity ({@code Varka_<operator>_Stage<n>: ...}), so a
  * recording joins shape-named classes back to the operators that ran them without the identity
  * riding the shared bytes. Fires only while a recording has the event enabled.

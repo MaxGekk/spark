@@ -38,7 +38,7 @@ import java.util.List;
  * <p>And a single operation is where stock Spark is least disadvantaged. Its generated code
  * pays its per-row costs once there; over a chain it pays them at every link, while the kernel
  * here fuses the whole chain into one vectorised loop and shares the civil-from-days prefix
- * across the calendar nodes that read one date (task 32). So the ratio against stock should
+ * across the calendar nodes that read one date. So the ratio against stock should
  * *grow* with depth, and the surface's 18x to 25x is the floor of what this engine is worth
  * rather than the headline. These entries are where that is visible.
  *
@@ -74,8 +74,9 @@ import java.util.List;
  * {@code dev/varka_quote_allowlist.txt} means it, and they are written here as the reasoning
  * that chose the list rather than as measurements anyone should quote.
  *
- * <p><b>Most of these were impossible before task 93.</b> A chain that shifts a date by a
- * column of days and then by a column month count declined at compile time, because task 52's
+ * <p><b>Most of these were impossible until the guard learned to re-arm.</b> A chain that shifts a
+ * date by a
+ * column of days and then by a column month count declined at compile time, because the producer
  * guard promised the whole narrowed range and the shift above it had none left; the entry at
  * 332 ops below is the shape that opened that task. Re-arming the guard admits them, which is
  * why this list is 293 to 483 emitter ops where its first version was 163 to 304.
@@ -85,17 +86,17 @@ import java.util.List;
  * not re-armed - so {@code extract(YEAROFWEEK FROM add_months(last_day(date_add(d, i)), i) +
  * ymy)} declines at {@code [-6156431, 12144130]}, three days past the floor. Whether a small
  * literal shift should re-arm - guarding it would decline almost no batch, unlike a shift of
- * twenty million days - is a follow-up to task 93 rather than a defect in it.
+ * twenty million days - is a follow-up rather than a defect.
  *
  * <p>The week entry here avoids that by spelling its day shift as an interval rather than as
  * {@code date_add(d, i)}, and the difference is the saturation and not the guard: a column day
  * offset makes {@code dayRange} answer the whole of
- * {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]} on the strength of task 52's runtime guard, which
+ * {@code [NARROW_MIN_DAYS, NARROW_MAX_DAYS]} on the strength of the producer's runtime guard, which
  * leaves the shifts above it nothing, while a month shift over a plain column keeps the
  * interval additive from the contract range and it stays inside. So that entry lowers to
  * {@code (weekOfYear (thursdayOf (addMonths (addMonths (lastDay (addMonths col:0 col:1)) col:2)
  * col:3)))} - no {@code GuardedDay} anywhere in it - and is admitted on {@code admitCalendar}'s
- * first case. It is the one entry of the twelve that does not exercise task 93.
+ * first case. It is the one entry of the twelve with no re-armed guard in it.
  *
  * <p>The other eleven do, and one of them twice:
  * {@code quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY'))} lowers to
@@ -143,7 +144,7 @@ public final class Chains {
    * the class comment's model - roughly 0.02 ns per op over a 0.8 ns memory floor against a
    * 3.6 ns/row threshold - puts it near 140 ops. This sits well above that on purpose, because
    * the list is not trying to perch at the edge of the fixed-share rule but to be firmly
-   * compute-bound, and every entry task 93 admits clears it comfortably. A later editor who
+   * compute-bound, and every entry the re-arm admits clears it comfortably. A later editor who
    * recomputes the model, reads 280 as a typo and lowers it to 150 would admit entries that
    * pass this test and then fail --max-fixed-share after a gated runner dispatch, which is a
    * much more expensive place to find out.
@@ -162,7 +163,7 @@ public final class Chains {
       new Chain("quarter(add_months(last_day(date_add(d, i) + ym), i) + ymm)", 444),
       new Chain("quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY'))", 346),
       new Chain("dayofyear(add_months(last_day(date_add(d, i)), i) + ymy)", 335),
-      // The shape task 93 was opened by: it declined until the guard learned to re-arm.
+      // The shape that motivated the re-arm: it declined until the guard learned to reset.
       new Chain("dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy)", 332),
       new Chain("month(add_months(last_day(date_add(d, i)), i) + ymy)", 327),
       new Chain("year(add_months(last_day(date_add(d, i)), i) + ymy)", 326),

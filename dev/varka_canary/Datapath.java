@@ -38,7 +38,7 @@ import jdk.incubator.vector.VectorSpecies;
  * 256-bit halves takes twice as long for twice the lanes, so the rate is flat. The ratio of the
  * two runs is therefore about 2 on a full-width unit and about 1 on a double-pumped one.
  *
- * <p><b>Why this file exists.</b> Task 62's shell driver and its results files carried a
+ * <p><b>Why this file exists.</b> The surface driver and its results files carried a
  * `datapath` line built from {@code Canary.compute} at those two flag settings. That loop is a
  * scalar xorshift over a single {@code long} with a self-dependency - {@code Canary}'s own
  * javadoc calls it "a scalar multiply-add recurrence [...] This is the control" - so
@@ -55,7 +55,7 @@ import jdk.incubator.vector.VectorSpecies;
  *
  * <p><b>The negative control this ships with.</b> On the development machine (AMD Ryzen AI 9 HX
  * PRO 370, Zen 5 mobile) the answer must be about 1, because {@code SKILLS.md}'s "This machine's
- * AVX-512 is 256 bits wide" establishes that independently, from task 43's op-count ladder where
+ * AVX-512 is 256 bits wide" establishes that independently, from the op-count ladder where
  * 256 to 512 buys 0.95x. A positive control - a machine where this reads about 2 - is what
  * validates the probe in the other direction, and until one is observed the honest reading of a
  * 1.00 is "this machine is not full width, or this probe cannot tell", not the first alone.

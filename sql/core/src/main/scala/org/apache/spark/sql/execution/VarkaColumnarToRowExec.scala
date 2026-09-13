@@ -46,21 +46,21 @@ private[sql] trait VarkaFusedTransition extends ColumnarToRowTransition {
 }
 
 /**
- * The Varka columnar-to-row transition (Task 6). It projects an Arrow-backed `ColumnarBatch`
+ * The Varka columnar-to-row transition. It projects an Arrow-backed `ColumnarBatch`
  * with the Varka SIMD kernels instead of per-row codegen, and hands the result on as rows: it is
  * what [[VarkaColumnarRule]] leaves in the plan when the consumer above the projection wants
  * rows, by fusing the to-row transition that would otherwise sit above a [[VarkaProjectExec]].
  *
  * Per batch: when `spark.sql.codegen.varka.enabled` is set, every input column the fused
  * entries reference is an [[org.apache.spark.sql.vectorized.ArrowColumnVector]] over an Arrow
- * `DateDayVector` (or, for a day-offset column since task 38, an `IntVector`), and the
- * projection is Varka-eligible (since task 12: at least one entry compiles),
+ * `DateDayVector` (or, for a day-offset column an `IntVector`), and the
+ * projection is Varka-eligible (at least one entry compiles),
  * [[VarkaKernelEvaluator]] runs the fused kernel into freshly allocated Arrow
  * vectors. An all-fused projection converts that batch to rows with the standard copy
  * projection; a mixed one merges at the row instead - forwarded and residual entries are read
  * and evaluated during the same per-row pass that produces the output row, because
- * materialising them into vectors just to read them back measured slower than Janino (the
- * task 12 escape-hatch decision; see `mergeProjection` below). The kernel batch is released as
+ * materialising them into vectors just to read them back measured slower than Janino (see
+ * `mergeProjection` below). The kernel batch is released as
  * soon as its rows are consumed, so only one is held at a time.
  * Anything else - a non-Arrow batch, an empty batch, a kernel
  * failure - falls back to the standard per-row projection over the input batch, which is cheaper
@@ -75,7 +75,7 @@ private[sql] trait VarkaFusedTransition extends ColumnarToRowTransition {
  * projection. Machinery that strips a topmost transition to reach the columnar plan
  * underneath must convert this node to its columnar sibling ([[VarkaProjectExec]], identical
  * kernels) instead of dropping it - `ArrowCachedBatchSerializer.convertToColumnarPlanIfPossible`
- * does exactly that, after task 21 found the default strip silently discarding the fused work
+ * does exactly that, because the default strip would silently discard the fused work
  * on the cache-population path.
  *
  * The engine module (`varka-engine`) is deliberately kept off the main compile classpath: only
@@ -115,7 +115,7 @@ case class VarkaColumnarToRowExec(
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output)
 
-  // Task 16: verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
+  // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
   override def verboseStringWithOperatorId(): String = {
     s"""
@@ -128,7 +128,7 @@ case class VarkaColumnarToRowExec(
   }
 
   override def doExecute(): RDD[InternalRow] = {
-    // Task 22: the residual-entry count is a static plan property - added once, driver-side,
+    // the residual-entry count is a static plan property - added once, driver-side,
     // so the UI total does not multiply by task count. The per-entry reasons are in EXPLAIN.
     // Posted explicitly (task-21 review): the SQL listener aggregates task-end updates and
     // posted driver updates only, so without the post the UI would always read 0 while the
@@ -189,7 +189,7 @@ private[sql] object VarkaColumnarToRowExec {
   // batch takes the fallback path with `numEmissionFailures` counted once. Same discipline as
   // the one above - static because Spark runs tasks on other threads, reset in a finally block.
   //
-  // It exists because task 23 removed the emitter's static test hooks, and with them the shape
+  // It exists because the emitter has no static test hooks, and with them the shape
   // cache's JVM-wide refusal to serve any lookup while one was set. Two suites used that refusal
   // as a fault injector: they set a hook and relied on the cache throwing. Emit options ride the
   // key now, so such an emission succeeds - correctly - and the injection has to happen at the
@@ -206,7 +206,7 @@ private[sql] object VarkaColumnarToRowExec {
   private[sql] def isFailEmissionForTesting: Boolean = failEmissionForTesting
 
   // Test-only hook that emits every kernel with these options instead of the defaults, so an
-  // end-to-end suite can drive a reference variant - task 52's guard-off bytes, whose only
+  // end-to-end suite can drive a reference variant - the guard-off bytes, whose only
   // observable difference is a metric - through the real evaluator. The options ride the shape
   // key, so a variant is cached under its own identity and nothing has to be flushed
   // when the hook is reset. Same discipline as the three above: static because Spark runs
@@ -248,7 +248,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     // do not get from the standard path either. The projected row holds its own bytes rather
     // than a view of the batch, so it also outlives the release of the kernel result batch it
     // came from.
-    // All three projections are lazy (task 15's discipline): a task compiles only the ones its
+    // All three projections are lazy: a task compiles only the ones its
     // batches actually take - `toRow` on the all-fused kernel path, `mergeProjection` on the
     // mixed kernel path, `fallbackProjection` on the fallback path.
     private lazy val fallbackProjection = UnsafeProjection.create(projectList, childOutput)
@@ -261,7 +261,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
       projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "ProjectToRow",
       classDumpDirectory, varkaMetrics)
 
-    // Merge-at-row (task 12, 2.3): for a projection with forwarded or residual entries the
+    // Merge-at-row (see 2.3): for a projection with forwarded or residual entries the
     // kernels produce only the fused columns, and this projection - over the input row joined
     // with the fused-output row - reads fused values, copies forwarded ones and evaluates
     // residual expressions in the same per-row pass that produces the output row anyway.

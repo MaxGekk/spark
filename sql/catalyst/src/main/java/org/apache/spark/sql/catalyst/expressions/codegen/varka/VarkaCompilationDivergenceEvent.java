@@ -23,11 +23,11 @@ import jdk.jfr.Label;
 import jdk.jfr.Name;
 
 /**
- * JFR event (task 50) reporting that C2 compiled the same generated method to a materially
+ * JFR event reporting that C2 compiled the same generated method to a materially
  * different size than it did earlier in this JVM. Since the bytecode behind a shape hash is
  * byte-identical by construction, two compilations of the same method at the same tier are
- * compiling exactly the same input, so a size difference is the register allocator's doing -
- * task 32 measured a 2x spread (1581 instructions against 3000) between a clean allocation and
+ * compiling exactly the same input, so a size difference is the register allocator's doing - a 2x
+ * spread has been measured (1581 instructions against 3000) between a clean allocation and
  * a spilling one, worth 30-40% of throughput, with nothing anywhere reporting it.
  *
  * <p>Fires only while a JFR recording has the event enabled <i>and</i>

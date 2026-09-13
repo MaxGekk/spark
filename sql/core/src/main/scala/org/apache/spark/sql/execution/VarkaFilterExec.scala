@@ -73,7 +73,7 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   @transient private lazy val fusionLines =
     VarkaFusionReport.predicateLines(condition, child.output)
 
-  // Task 16's question for a filter is "why didn't my predicate fuse?", answered per conjunct.
+  // The question for a filter is "why didn't my predicate fuse?", answered per conjunct.
   // The condition renders as FilterExec renders its own - a plain line, because
   // ExplainUtils.generateFieldString does not accept a bare expression (formatted EXPLAIN of
   // any Varka filter node used to throw on exactly that; caught writing the PR description).
@@ -99,8 +99,8 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
  * Batch ownership follows [[VarkaProjectExec]]'s convention, with one difference the class doc
  * of the compaction records: a compacting filter owns every output column it actually
  * compacts, because a forwarded vector cannot be shortened. The exception is the one case
- * where nothing needs shortening - every row selected - where task 24 forwards the child's
- * columns untouched and the batch owns nothing.
+ * where nothing needs shortening - every row selected - where the child's columns are forwarded
+ * untouched and the batch owns nothing.
  *
  * A batch the kernel cannot serve falls back to the per-row predicate into a fresh writable
  * batch, mirroring [[VarkaProjectExec]]'s fallback.
@@ -190,7 +190,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
         // Same one-batch-at-a-time discipline as VarkaProjectExec: released before the next
         // input batch is requested. Two things now depend on that ordering, not one. The
         // selection buffer is task state, so the previous batch must be done before the mask
-        // is overwritten - and since task 24 an all-selected batch *forwards* the child's
+        // is overwritten - and an all-selected batch *forwards* the child's
         // vectors rather than copying them, so an output batch can alias input memory that a
         // buffer-reusing child recycles on its next(). Release-before-next is what makes both
         // sound; reordering it (prefetching input, holding two batches) is a use-after-free
@@ -286,13 +286,13 @@ private[sql] class VarkaFilterEvaluatorFactory(
  * dominant `WHERE`-plus-aggregate shape.
  *
  * The node is not `CodegenSupport`; whole-stage codegen splits at this boundary, exactly as at
- * [[VarkaColumnarToRowExec]] - the read-back cost task 19 measured and accepted. And exactly as
+ * [[VarkaColumnarToRowExec]] - the read-back cost this path measures and accepts. And exactly as
  * there, the [[ColumnarToRowTransition]] tag carries the caveat that this transition is NOT
  * semantics-free: machinery that strips a topmost transition must convert this node to
  * [[VarkaFilterExec]] instead (the cache serializer does), or it silently drops the filter -
- * the wrong-cached-view bug task 21 found and fixed.
+ * the wrong-cached-view bug this guards against.
  *
- * `narrowing` is task 78: the projection above this node, absorbed, when its consumer wants
+ * `narrowing` is the projection above this node, absorbed, when its consumer wants
  * fewer columns than the predicate reads. A filter forwards every column it was given, so
  * `SELECT d FROM t WHERE d < d2` leaves a `Project [d]` above this node - Spark's column
  * pruning cannot remove it, because with two columns below it is not redundant - and that
@@ -302,8 +302,8 @@ private[sql] class VarkaFilterEvaluatorFactory(
  * `UnsafeProjection` this node already built converts exactly the columns asked for.
  *
  * It is `None` whenever the shapes are equal - a one-column predicate's projection is
- * redundant and Spark removed it long before this rule ran - so every shape that fused before
- * task 78 plans and runs exactly as it did.
+ * redundant and Spark removed it long before this rule ran - so every shape that fused before this
+ * plans and runs exactly as it did.
  */
 case class VarkaFilterColumnarToRowExec(
     condition: Expression,
@@ -318,10 +318,10 @@ case class VarkaFilterColumnarToRowExec(
     narrowing.map(_.map(_.toAttribute)).getOrElse(super.output)
 
   /**
-   * The columnar-out node computing what this one computes, which after task 78 has to carry
-   * the absorbed projection too: a sibling that dropped it would hand the cache a wider
-   * schema than the plan promised, which is the same class of error as task 21's dropped
-   * filter and is why [[VarkaFusedTransition]] asks for "exactly what this transition
+   * The columnar-out node computing what this one computes, which has to carry the absorbed
+   * projection too: a sibling that dropped it would hand the cache a wider
+   * schema than the plan promised, which is the same class of error as a dropped filter and is why
+   * [[VarkaFusedTransition]] asks for "exactly what this transition
    * computes" rather than "the kernels this transition runs".
    */
   override def columnarSibling: SparkPlan = {
@@ -384,7 +384,7 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     // The emitted rows hold their own bytes (an UnsafeProjection copy), so they outlive the
     // input batch exactly as VarkaColumnarToRowExec's rows do; the fallback predicate is the
     // per-row form of the same condition. Both lazy.
-    // Task 78: the absorbed projection's expressions where there is one, and the identity over
+    // the absorbed projection's expressions where there is one, and the identity over
     // every child column otherwise - the same object either way, so the narrowed shape costs
     // nothing extra and the unnarrowed one is byte for byte what it was.
     private lazy val toUnsafe =

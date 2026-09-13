@@ -34,8 +34,8 @@ import jdk.incubator.vector.VectorSpecies;
  * </ul>
  *
  * Why three: the same code on the same machine measured its memory-bound kernels 20-27%
- * apart on different days with every compute-bound control flat (task 54's regeneration
- * against master's committed parity file, and a same-day run of master that reproduced the
+ * apart on different days with every compute-bound control flat (a regeneration against the
+ * committed parity file, and a same-day run of master that reproduced the
  * gap). A control that only checks the clock cannot see that; these two loops can. Each rate
  * is the best of five two-second windows after a warm-up, printed as {@code name=M/s} lines
  * the shell wrapper compares against a committed baseline.
