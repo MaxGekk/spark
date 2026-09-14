@@ -392,9 +392,11 @@ was measured and where a prediction turned out wrong, and they keep the wrong
 predictions in place rather than editing them away - which makes them long
 (2 MB across 78 files), and makes them the wrong place to learn what Varka is.
 For that, read [`docs/sql-varka.md`](docs/sql-varka.md) and the "Reading the
-source" section above. The same goes for [`SKILLS.md`](SKILLS.md): it is a
-lab notebook of measured lessons, most of them negative results kept so nobody
-re-litigates a settled question, and it assumes you already know the codebase.
+source" section above. The same goes for the lesson files under
+[`sql/varka/skills/`](sql/varka/skills/), indexed by [`SKILLS.md`](SKILLS.md):
+they are a lab notebook of measured lessons, most of them negative results kept
+so nobody re-litigates a settled question, and they assume you already know the
+codebase.
 
 The milestones:
 
@@ -456,7 +458,8 @@ The milestones:
 
 Docs map: [`docs/sql-varka.md`](docs/sql-varka.md) (user-facing guide),
 [`sql/varka/VISION.md`](sql/varka/VISION.md) (architecture),
-[`SKILLS.md`](SKILLS.md) (measured lessons the project keeps).
+[`SKILLS.md`](SKILLS.md) (the index over the measured lessons the project keeps,
+which live in [`sql/varka/skills/`](sql/varka/skills/)).
 
 ## About Apache Spark
 

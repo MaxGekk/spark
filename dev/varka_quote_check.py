@@ -48,7 +48,7 @@ import subprocess
 import sys
 
 DOCS = ["SKILLS.md", "README.md", "docs/sql-varka.md", "sql/varka/AGENTS.md"]
-DOC_GLOBS = ["sql/varka/plans/*.md"]
+DOC_GLOBS = ["sql/varka/plans/*.md", "sql/varka/skills/*.md"]
 RESULT_GLOBS = [
     "sql/*/benchmarks/*.txt",
     "sql/varka/engine/benchmarks/*.txt",

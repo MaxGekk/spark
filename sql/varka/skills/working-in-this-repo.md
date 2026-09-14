@@ -1,0 +1,129 @@
+# Working in this repository
+
+Process lessons about this repository rather than about the engine.
+
+One of Varka's lesson files; the index over all of them is
+[`SKILLS.md`](../../../SKILLS.md) at the repository root, which is generated from
+these files by `dev/varka_toc.py`.
+
+## Repo Workflow (vecbricks/varka)
+
+- Remotes here: `origin` = `vecbricks/varka` (PR base, `master`), `fork` =
+  `MaxGekk/spark` (PR head). Push the PR branch to `fork`, then open against
+  `vecbricks/varka:master`.
+- No JIRA IDs. Titles are `[VARKA] <short summary>`; PR descriptions are prose in
+  the five standard template sections; sign off with a `Generated-by:` line naming
+  the actual tool (recent PRs: `Generated-by: Claude Code (Claude Fable 5)`).
+- Branch naming: `varka-<topic>` tracks `origin/master` and stays one commit ahead
+  per PR.
+- The standing gate is one command, `dev/varka_gate.sh`: compile, the Varka suites
+  at both widths, the opt-in exhaustive sweeps, `catalyst/doc`, both linters, each
+  step logged under `target/varka-gate/`, one summary table, non-zero exit on any
+  failure. `--only`/`--skip` take step names, `--list` shows them. It finds
+  `hsdis-<arch>.so` for the assembly suite in the usual local places and says
+  whether it did, so a run whose instruction assertions cancelled is visible.
+- After every merge to master, `dev/varka_pr_sweep.sh` dry-merges every open PR
+  against master and against each other through GitHub's `refs/pull/<n>/head`,
+  and exits with the number of conflicts. It uses `git merge-tree --write-tree`;
+  the legacy three-argument `merge-tree` prints a diff, so its conflict markers
+  carry a leading `+` and a grep for `^<<<<<<<` sees none - the script's first
+  version passed a conflicting PR that way.
+- Benchmark files are regenerated with `dev/varka_bench_regen.sh` and read with
+  `dev/varka_bench_diff.py`; `sql/varka/AGENTS.md`'s "Measurements" section says
+  how and why, including the committed 128-bit companion file, the machine canary
+  (`dev/varka_bench_canary.sh`) the regen script runs first, and the quote check
+  (`dev/varka_quote_check.py`, a gate step) that holds every quoted number to a
+  committed file. A bare class name resolves to `org.apache.spark.sql.<name>`
+  (the script's `*.*) ... *) fqcn="org.apache.spark.sql.$klass"` fallback);
+  `VarkaThroughputBenchmark` actually lives under
+  `org.apache.spark.sql.execution.benchmark`, so the bare name sends `runMain`
+  looking for a class that is not there. The wide run's own stdout - where
+  sbt's "No main class detected" would show - is redirected to `/dev/null` by
+  the regen script, so this fails in about twenty seconds with no visible
+  error at all, just a bare exit 1: pass the fully-qualified name for any
+  benchmark outside `org.apache.spark.sql` directly, rather than trying a bare
+  name first and reading the silence as a machine or environment problem.
+- Run `dev/varka_precommit.sh` before committing, or install it as the pre-commit hook:
+  non-ASCII outside strings, lines over 100 columns, TODO/FIXME under Varka
+  directories, the quote check, and ruff (`check` and `format --check`) on Python
+  files. Each of those has reached CI or a reviewer at least once; the formatter
+  reached CI on five PRs at once, because `dev/lint-python` skips ruff silently
+  when it is not installed. Git hooks live in the main repository's `.git/hooks`
+  and are shared by every worktree, so the installed hook resolves the script
+  through `git rev-parse --show-toplevel` at run time rather than through the
+  installing worktree's path: the earlier form hardcoded one worktree, and
+  pruning the merged worktrees (`dev/varka_worktree.sh gc`) deleted it and
+  broke commits in every remaining worktree at once.
+- `VarkaIrFuzzSuite` fuzzes the emitter: random IR over random null patterns, lengths
+  and option variants against the shared reference evaluator, reproducible by seed
+  and iteration.
+- A task starts with `dev/varka_task_new.sh <n> "<title>"` (worktree, branch, plan from
+  `sql/varka/plans/TEMPLATE_TASK.md`, hook); a regeneration ends with
+  `dev/varka_bench_diff.py --git HEAD <file> --requote`; the volume checks run from
+  `dev/varka_nightly.sh`.
+- Before registering op counts in a plan, print them: `dev/varka_emit.sh "<sql>"`
+  gives the IR, the shape hash and per-method `IntVector` invocation counts on the
+  suite's own scale; `--asm` adds C2's assembly for the dense loop; `--table
+  --variant k=v` prints the plan's op-count table with deltas against the defaults.
+  **A count taken from that tool before 12 September 2026 for an expression written
+  with an operator rather than a function is wrong, and wrong in the direction that
+  hides work**: the tool resolved attributes and functions but never ran type
+  coercion, so `d + ym` stayed an `Add` over a date and an interval instead of
+  becoming `DateAddYMInterval`, and it reported `declined` for shapes the surface had
+  been timing with `expectFused` for weeks. Every date/interval arithmetic spelling
+  task 67 added was affected. It resolves through the analyzer now, so re-take any
+  such number rather than trusting it - and note the general shape, since this is the
+  second tool in the same family to have carried it: a hand-rolled resolver that
+  binds names and looks up functions is enough for `year(d)` and silently not enough
+  for `d + ym`, because the operator needs a rule the analyzer owns.
+- `dev/varka_hsdis_build.sh` builds `hsdis-<arch>.so` from the JDK's single source
+  file against the distribution's libcapstone, no JDK build needed;
+  `dev/varka_worktree.sh gc` removes the worktrees whose PRs merged.
+
+## A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic
+
+Task 35, the third of the four recipe tasks (34-37) to be executed. Its section 2 arithmetic
+was verified in planning and was right on the first run under every variant; every correction
+the build needed was to the recipe's picture of the emitter, and the re-plan written six weeks
+earlier (its section 7) had itself gone stale in three places by build time: the leap flag's
+signature (seven parameters, then one), a helper the re-plan assumed would exist (it did not;
+the code was inline in another arm), and the weight constants (two values each moved twice).
+The lesson for writing such recipes: pin the arithmetic in a verification script, which
+survives, and describe the emitter by *what to look for* - "the method that leaves the leap
+mask", "the switch that throws on an unknown calendar node" - rather than by signatures and
+numbers, which do not. The one thing that reliably told the builder what had moved was the
+compiler: every exhaustive switch over the sealed IR family fails to compile until the new
+record is handled, and the two that are not exhaustive (`tailReadsMarchMonth`, `chronoChild`)
+throw at emit time on the first test. The hand-maintained lists are the ones to check by hand:
+the fuzzer's node generator and the two pinned fixtures.
+
+## A value that depends on repo state is queried, not chosen
+
+Adding a case to `VarkaEmitterParityBenchmark` needs a free case id, and the id
+names the emitted kernel's class. Picking one by reading the ids near where you
+are editing fails: not every id in that file is a literal - the trunc block
+computes `id` and `id + 1` from a tuple list - so a grep can hand you one that is
+already taken, and the emitter's `require` then reports it twenty minutes into a
+regeneration, after every earlier case has been timed. That happened twice in one
+evening, on two different guesses.
+
+`dev/varka_bench_ids.sh` is the answer to the question the guess was trying to
+answer. It runs the benchmark with `-Dvarka.bench.dryRun=true`, which emits and
+registers every case and times none, and prints the ids in use and the next free
+one - the file's own answer, in about as long as a JVM takes to start. The id
+space is per file, since each benchmark names its kernels with its own class
+prefix.
+
+The general form is worth more than the script. A value whose correctness depends
+on something already in the repository should be computed from that something,
+never chosen because it looks right: the next free id from the set of ids, a
+test's expected value from the same function that builds its data, a fixture's
+selectivity from a count query rather than from the arithmetic meant to produce
+it, the safety of widening a shared fixture from a grep for who reads it. The
+cost asymmetry is what makes it a rule rather than a habit - where the repository
+has a guard the mistake is loud and costs one round trip, and where it has none
+the run succeeds and publishes something other than what its name says.
+
+A dry run is a check on structure and says nothing about numbers. It is not a
+faster regeneration, and the script's header says so where someone tired might
+reach for it.

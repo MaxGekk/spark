@@ -20,14 +20,14 @@
 # the review of #145 forced: section 9 scores its predictions against the run the
 # default was decided from and records what two earlier runs read, and those runs
 # were committed on the task branch only.
-SKILLS.md	3573.9	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
-SKILLS.md	2379.8	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
-SKILLS.md	2368.3	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
-SKILLS.md	3766.3	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
-SKILLS.md	4630.0	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
-SKILLS.md	2166.5	quoted from PLAN_TASK_48.md 9.2: an interleaved re-run compared by minimums, per-iteration output not committed
-SKILLS.md	36524.25	not a measurement: 146097 / 4, the mean Gregorian century in days
-SKILLS.md	26.04	not a measurement: the release number in "Ubuntu 26.04"
+sql/varka/skills/vector-api-and-width.md	3573.9	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
+sql/varka/skills/vector-api-and-width.md	2379.8	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
+sql/varka/skills/vector-api-and-width.md	2368.3	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
+sql/varka/skills/vector-api-and-width.md	3766.3	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
+sql/varka/skills/vector-api-and-width.md	4630.0	the gather/arithmetic/scalar table is from a run that was never committed; neither committed version of the probe file carries these rows
+sql/varka/skills/benchmarking.md	2166.5	quoted from PLAN_TASK_48.md 9.2: an interleaved re-run compared by minimums, per-iteration output not committed
+sql/varka/skills/calendar-algorithms.md	36524.25	not a measurement: 146097 / 4, the mean Gregorian century in days
+sql/varka/skills/build-and-environment.md	26.04	not a measurement: the release number in "Ubuntu 26.04"
 sql/varka/plans/PLAN_MILESTONE_5.md	3573.9	probe figures from a throwaway run the text itself calls a scratch probe
 sql/varka/plans/PLAN_MILESTONE_5.md	2379.8	probe figures from a throwaway run the text itself calls a scratch probe
 sql/varka/plans/PLAN_MILESTONE_5.md	2368.3	probe figures from a throwaway run the text itself calls a scratch probe
@@ -82,7 +82,7 @@ sql/varka/plans/PLAN_TASK_46.md	6498.7	interleaved order/helper A/B across three
 sql/varka/plans/PLAN_TASK_46.md	6349.3	interleaved order/helper A/B across three runs (9.2, 9.3); the per-run numbers were never a single committed file's content
 sql/varka/plans/PLAN_TASK_46.md	7766.5	interleaved order/helper A/B across three runs (9.2, 9.3); the per-run numbers were never a single committed file's content
 sql/varka/plans/PLAN_TASK_46.md	7722.3	interleaved order/helper A/B across three runs (9.2, 9.3); the per-run numbers were never a single committed file's content
-SKILLS.md	12754.1	the disturbed AVX-512 run of 7 September 2026, quoted on purpose to record what the re-run corrected; PLAN_TASK_70.md 2.4 explains it, and the commit that carried the number in a results file was squashed away when PR #142 merged
+sql/varka/skills/benchmarking.md	12754.1	the disturbed AVX-512 run of 7 September 2026, quoted on purpose to record what the re-run corrected; PLAN_TASK_70.md 2.4 explains it, and the commit that carried the number in a results file was squashed away when PR #142 merged
 sql/varka/plans/PLAN_TASK_70.md	12754.1	the disturbed AVX-512 run of 7 September 2026, quoted on purpose to record what the re-run corrected; PLAN_TASK_70.md 2.4 explains it, and the commit that carried the number in a results file was squashed away when PR #142 merged
 sql/varka/plans/PLAN_TASK_70.md	1034.6	the first of task 70's two regenerations, on which the default was decided (PLAN_TASK_70.md 9.3); its results file was committed at 1f4d3e12404 inside PR's branch and does not survive the squash-merge
 sql/varka/plans/PLAN_TASK_70.md	1644.5	the first of task 70's two regenerations, on which the default was decided (PLAN_TASK_70.md 9.3); its results file was committed at 1f4d3e12404 inside PR's branch and does not survive the squash-merge
