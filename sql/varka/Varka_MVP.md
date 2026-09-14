@@ -1,6 +1,14 @@
 # Project Varka MVP: Date Arithmetic Over ArrowColumnarBatch (JDK 25)
 
-**Objective:** Build a production-ready MVP for `DATE ± INTEGER` (days) and `DATEDIFF` expressions, processing data from `ArrowColumnarBatch` directly via the JDK 25 Class-File API and Vector API.
+> **Status: historical (September 2026).** The brief the project started from, written
+> before any code existed. Its scope - `DATE +/- INTEGER` in days and `DATEDIFF` - is the
+> first milestone's, and four milestones have overtaken it; several of its implementation
+> hints describe an approach the code no longer takes. It is kept because the early plans
+> cite it (`PLAN_MILESTONE_1.md`, `PLAN_TASK_2.md` section 5). For what Varka does today
+> read `docs/sql-varka.md` and the coverage table in it; for the architecture that still
+> governs, `VISION.md`.
+
+**Objective:** Build a production-ready MVP for `DATE +/- INTEGER` (days) and `DATEDIFF` expressions, processing data from `ArrowColumnarBatch` directly via the JDK 25 Class-File API and Vector API.
 
 ---
 
@@ -85,7 +93,7 @@ public final class DateVectorOps {
 }
 ```
 
-**Observability Hook:** If the bytecode generation for this method exceeds the adaptive threshold (default 64 bytes), Varka falls back to generating a standard scalar loop via `ClassFile.of()`—still **10x faster** than Janino parsing.
+**Observability Hook:** If the bytecode generation for this method exceeds the adaptive threshold (default 64 bytes), Varka falls back to generating a standard scalar loop via `ClassFile.of()` - still **10x faster** than Janino parsing.
 
 ---
 
@@ -203,7 +211,7 @@ To avoid infinite retries on complex data types or unsupported JVM environments:
 
 1. The first failure triggers Janino string generation.
 2. The resulting `Class` is cached in a `ConcurrentHashMap` under the expression tree's structural hash.
-3. Subsequent identical queries bypass Varka entirely and use the cached Janino class—ensuring the job never fails and never wastes CPU recomputing the same string.
+3. Subsequent identical queries bypass Varka entirely and use the cached Janino class - ensuring the job never fails and never wastes CPU recomputing the same string.
 
 ---
 

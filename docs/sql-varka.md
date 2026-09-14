@@ -235,6 +235,127 @@ arithmetic over them.
 Varka is designed as a drop-in, zero-risk replacement: every Varka path falls
 back to the standard row engine on any failure, so results are always correct.
 
+## Expression coverage
+
+One row per expression the compiler fuses, in the spelling you would write it,
+over the columns of the benchmark's `varka_dates` table: `d` and `d2` are dates,
+`i` an int, and `ymm`, `ymy` and `ym` year-month intervals of the three unit
+ranges. The Overview above states the conditions in prose; this is the list to
+scan when the question is simply whether an expression is covered.
+
+Anything absent declines and runs on Spark's row engine. A decline is a normal
+outcome, not an error: the entries that fuse still fuse, and the rest of the
+projection is unaffected.
+
+Two conditions are worth stating before the list, because they decide several
+rows and are invisible in the spelling. A comparison reads the date lane, so a
+bare `IntegerType` column in comparison position declines - `year(d) = 2021`
+fuses, `i > 0` does not, although `i` is fine in arithmetic. And a checked
+multiply fuses only where a bound proves it cannot overflow, which is why the
+multiply rows below are written over a calendar field rather than over a plain
+column.
+
+The table is generated, not written. `VarkaCoverageSuite` compiles every row
+below through `VarkaExpressionCompiler` and fails if any of them declines, fails
+if the compiler matches an expression class that no row exercises, and fails if
+this file differs from what it renders. So a table claiming an expression the
+engine does not have, and a table missing one the engine gained, are both build
+failures. Regenerate it after adding a row with:
+
+```
+VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
+```
+
+<!-- BEGIN generated coverage table -->
+#### Day arithmetic
+
+| Expression | Notes |
+|---|---|
+| `date_add(d, 3)` |  |
+| `date_add(d, i)` | a column offset, under a per-batch bound on its range |
+| `date_sub(d, 5)` |  |
+| `d + CAST(i AS INTERVAL DAY)` | the day-interval spelling of a column offset |
+| `datediff(d2, d)` |  |
+| `unix_date(d)` |  |
+| `date_from_unix_date(unix_date(d))` |  |
+
+#### Calendar fields
+
+| Expression | Notes |
+|---|---|
+| `year(d)` |  |
+| `month(d)` |  |
+| `day(d)` |  |
+| `quarter(d)` |  |
+| `dayofyear(d)` |  |
+| `dayofweek(d)` |  |
+| `weekday(d)` |  |
+| `extract(DAYOFWEEK_ISO FROM d)` |  |
+| `weekofyear(d)` |  |
+| `extract(YEAROFWEEK FROM d)` |  |
+| `last_day(d)` |  |
+| `next_day(d, 'MONDAY')` | the day name must be a literal |
+| `make_date(2021, i, 1)` |  |
+| `trunc(d, 'YEAR')` |  |
+| `trunc(d, 'MONTH')` |  |
+| `trunc(d, 'QUARTER')` |  |
+| `trunc(d, 'WEEK')` |  |
+
+#### Months and year-month intervals
+
+| Expression | Notes |
+|---|---|
+| `add_months(d, 3)` |  |
+| `add_months(d, i)` |  |
+| `d + INTERVAL 3 MONTH` |  |
+| `d + ym` |  |
+| `d - ym` |  |
+| `make_ym_interval(year(d), month(d))` | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines |
+| `make_ym_interval(year(d), month(d)) * 2` | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines |
+| `abs(ym)` |  |
+| `ym - ymm` |  |
+| `CAST(ymy AS INTERVAL MONTH)` |  |
+
+#### Integer arithmetic
+
+| Expression | Notes |
+|---|---|
+| `i + 1` |  |
+| `i - 1` |  |
+| `year(d) * 2` | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines |
+| `-i` |  |
+| `year(d) + i` |  |
+
+#### Choice and nulls
+
+| Expression | Notes |
+|---|---|
+| `if(d < d2, d, d2)` |  |
+| `CASE WHEN d < d2 THEN d ELSE d2 END` |  |
+| `coalesce(d, d2)` |  |
+| `greatest(d, d2)` |  |
+| `least(d, d2)` |  |
+
+#### Predicates
+
+| Predicate | Notes |
+|---|---|
+| `d IS NULL` |  |
+| `d IS NOT NULL` |  |
+| `d = d2` |  |
+| `d < d2` |  |
+| `d <= d2` |  |
+| `d > d2` |  |
+| `d >= d2` |  |
+| `year(d) = 2021` |  |
+| `NOT (d = d2)` |  |
+| `d IN (DATE '2021-01-01', DATE '2021-06-01')` | up to 16 literals |
+| `year(d) = 2021 AND i > 0` |  |
+| `year(d) = 2021 OR month(d) = 3` |  |
+| `d IN (11 to 16 date literals)` | an IN list this long arrives from the optimizer as an InSet and fuses the same way |
+
+<!-- END generated coverage table -->
+
 ## Glossary
 
 Varka's code and documents lean on about two dozen words that mean something
@@ -974,8 +1095,9 @@ Every one answers `--help` with its own usage; what follows is what each is
 
 | Tool | What it is for |
 | :--- | :--- |
-| `varka_precommit.sh` | The house rules that slip most often - a non-ASCII byte outside a string, a source line over 100 columns, a `TODO` marker under a Varka directory, the quote check when a document changed, `ruff` on Python - over the files about to be committed. Install once with `--install-hook`. |
+| `varka_precommit.sh` | The house rules that slip most often - a non-ASCII byte outside a string, a source line over 100 columns, a `TODO` marker under a Varka directory, the quote check when a document changed, `SKILLS.md`'s contents block, `ruff` on Python - over the files about to be committed. Install once with `--install-hook`. |
 | `varka_gate.sh` | The full standing gate in one command: everything a task plan's "Verification" section lists, in order, each step logged. Run before proposing a change. |
+| `varka_toc.py` | Regenerates the contents block of a long Markdown document from its own headings, and `--check` reports a stale one. `SKILLS.md` has sixty-odd sections and no other way to navigate; the pre-commit hook runs the check whenever it changes. |
 | `varka_quote_check.py` | Does every performance number quoted in the plans, `SKILLS.md`, the docs and the README trace to a committed results file? Numbers that predate the tool live in `varka_quote_allowlist.txt` with a reason each, and that list only shrinks. |
 | `varka_worktree.sh` | Lists the task worktrees this repository accumulates and removes the merged ones (`list`, `gc`). |
 | `varka_pr_sweep.sh` | Dry-merges every open pull request against master, and every pair of open pull requests against each other, without touching the working tree - so a conflict between two in-flight branches is found before one of them merges. |

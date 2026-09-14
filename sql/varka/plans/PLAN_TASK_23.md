@@ -279,10 +279,10 @@ real ARM hardware, and the emitted loops are not** - they still rely on
 capped-width simulation on x86. Three sites say otherwise today:
 
 * `PLAN_MILESTONE_3.md:224-226` - wrong for the kernels, right for the emitter.
-* `ISSUES.md:594-599` - the "Suggested order" item 9 still lists the aarch64
+* `ISSUES.md:600-605` - the "Suggested order" item 9 still lists the aarch64
   runner as outstanding, contradicting items 1 and 3 of its own list and the
   finding's own `Status: FIXED`.
-* `ISSUES.md:77-79` - finding 1's caveat, "no `IntVector` path has actually
+* `ISSUES.md:83-85` - finding 1's caveat, "no `IntVector` path has actually
   executed at 4 lanes", is now false for the engine kernels.
 
 One more found in passing: `sql/varka/engine/pom.xml:159-160` still asserts

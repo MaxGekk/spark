@@ -1,0 +1,301 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.spark.sql.catalyst.expressions.codegen.varka
+
+import java.nio.file.Files
+
+import scala.util.Try
+
+import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression, InSet, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
+import org.apache.spark.sql.types.{DateType, IntegerType, YearMonthIntervalType}
+import org.apache.spark.util.Utils
+
+/**
+ * The expression coverage table in `docs/sql-varka.md`, generated and checked rather than
+ * written by hand.
+ *
+ * The question a newcomer asks first is "does Varka cover the expression I care about", and
+ * before this suite the only answer was to read a 1900-line Scala match. A table answers it,
+ * but a hand-written table drifts: it can claim an expression the compiler declines, and it
+ * can silently miss one the compiler gained. Both failures are checked here.
+ *
+ *  - Every documented row is resolved and put through the real compiler, and must fuse. The
+ *    table cannot claim support that does not exist.
+ *  - Every Catalyst expression class the compiler matches on must appear in some documented
+ *    row's resolved tree. The table cannot omit an expression the compiler admits, so adding
+ *    an arm to the compiler without documenting it fails here.
+ *  - The committed markdown must equal what this suite renders, so the file in the repository
+ *    is the generated artifact and not a copy of it.
+ *
+ * Regenerate after adding a row with:
+ * {{{
+ *   VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
+ * }}}
+ *
+ * The same shape as Spark's own `SQLKeywordSuite`, which fails when the ANSI keyword
+ * documentation and the parser grammar disagree.
+ */
+class VarkaCoverageSuite extends SparkFunSuite {
+
+  // The columns every row is written against. They are the columns of the benchmark's
+  // `varka_dates` table (`Surface.java`), so an expression in the table can be pasted into
+  // the reproduction guide's queries unchanged.
+  private val d = AttributeReference("d", DateType)()
+  private val d2 = AttributeReference("d2", DateType)()
+  private val i = AttributeReference("i", IntegerType)()
+  private val ymm = AttributeReference("ymm",
+    YearMonthIntervalType(YearMonthIntervalType.MONTH, YearMonthIntervalType.MONTH))()
+  private val ymy = AttributeReference("ymy",
+    YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.YEAR))()
+  private val ym = AttributeReference("ym",
+    YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.MONTH))()
+
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym)
+
+  /**
+   * One documented expression. `sql` is both what the table prints and what the check
+   * compiles, except where `built` overrides it - the one case is `InSet`, which no SQL
+   * spelling produces directly because Spark's optimizer, not its parser, creates it.
+   */
+  private case class Row(sql: String, note: String = "", built: Option[Expression] = None)
+
+  private case class Family(title: String, predicates: Boolean, rows: Seq[Row])
+
+  private val families: Seq[Family] = Seq(
+    Family("Day arithmetic", predicates = false, Seq(
+      Row("date_add(d, 3)"),
+      Row("date_add(d, i)", "a column offset, under a per-batch bound on its range"),
+      Row("date_sub(d, 5)"),
+      Row("d + CAST(i AS INTERVAL DAY)", "the day-interval spelling of a column offset"),
+      Row("datediff(d2, d)"),
+      Row("unix_date(d)"),
+      Row("date_from_unix_date(unix_date(d))"))),
+
+    Family("Calendar fields", predicates = false, Seq(
+      Row("year(d)"),
+      Row("month(d)"),
+      Row("day(d)"),
+      Row("quarter(d)"),
+      Row("dayofyear(d)"),
+      Row("dayofweek(d)"),
+      Row("weekday(d)"),
+      Row("extract(DAYOFWEEK_ISO FROM d)"),
+      Row("weekofyear(d)"),
+      Row("extract(YEAROFWEEK FROM d)"),
+      Row("last_day(d)"),
+      Row("next_day(d, 'MONDAY')", "the day name must be a literal"),
+      Row("make_date(2021, i, 1)"),
+      Row("trunc(d, 'YEAR')"),
+      Row("trunc(d, 'MONTH')"),
+      Row("trunc(d, 'QUARTER')"),
+      Row("trunc(d, 'WEEK')"))),
+
+    Family("Months and year-month intervals", predicates = false, Seq(
+      Row("add_months(d, 3)"),
+      Row("add_months(d, i)"),
+      Row("d + INTERVAL 3 MONTH"),
+      Row("d + ym"),
+      Row("d - ym"),
+      Row("make_ym_interval(year(d), month(d))",
+        "the operands must be bounded - over a bare int column the checked multiply inside "
+          + "it keeps its overflow test and declines"),
+      Row("make_ym_interval(year(d), month(d)) * 2",
+        "a checked multiply, so bounded operands again: `ym * 2` over a stored interval "
+          + "column declines"),
+      Row("abs(ym)"),
+      Row("ym - ymm"),
+      Row("CAST(ymy AS INTERVAL MONTH)"))),
+
+    Family("Integer arithmetic", predicates = false, Seq(
+      Row("i + 1"),
+      Row("i - 1"),
+      Row("year(d) * 2",
+        "a multiply is checked, and only bounded operands take the check off: `i * 2` over "
+          + "a bare int column declines"),
+      Row("-i"),
+      Row("year(d) + i"))),
+
+    Family("Choice and nulls", predicates = false, Seq(
+      Row("if(d < d2, d, d2)"),
+      Row("CASE WHEN d < d2 THEN d ELSE d2 END"),
+      Row("coalesce(d, d2)"),
+      Row("greatest(d, d2)"),
+      Row("least(d, d2)"))),
+
+    Family("Predicates", predicates = true, Seq(
+      Row("d IS NULL"),
+      Row("d IS NOT NULL"),
+      Row("d = d2"),
+      Row("d < d2"),
+      Row("d <= d2"),
+      Row("d > d2"),
+      Row("d >= d2"),
+      Row("year(d) = 2021"),
+      Row("NOT (d = d2)"),
+      Row("d IN (DATE '2021-01-01', DATE '2021-06-01')", "up to 16 literals"),
+      Row("year(d) = 2021 AND i > 0"),
+      Row("year(d) = 2021 OR month(d) = 3"),
+      // Over `spark.sql.optimizer.inSetConversionThreshold` (10 by default) the optimizer
+      // rewrites the list to an `InSet`, which fuses up to the compiler's own cap of 16.
+      Row("d IN (11 to 16 date literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(d, (1 to 11).map(v => v.asInstanceOf[Any]).toSet)))))
+  )
+
+  private def out(e: Expression): NamedExpression = Alias(e, "c")()
+
+  /** The expression a row checks: its SQL resolved against `columns`, or its override. */
+  private def expressionOf(row: Row): Expression =
+    row.built.getOrElse(VarkaSqlResolve.resolve(
+      org.apache.spark.sql.catalyst.parser.CatalystSqlParser.parseExpression(row.sql), columns))
+
+  test("every documented expression compiles to a fused kernel") {
+    val failures = families.flatMap { family =>
+      family.rows.flatMap { row =>
+        val expr = expressionOf(row)
+        // The decline reason comes from the partial compile, which records one per entry. A
+        // row that declines is a documentation bug, and the reason is what says which.
+        val reason =
+          if (family.predicates) {
+            VarkaExpressionCompiler.compilePredicate(expr, columns) match {
+              case Some(p) if p.specs.exists(_.fused) => None
+              case Some(p) => Some(p.specs.flatMap(_.decline).map(_.reason).mkString("; "))
+              case None => Some("the predicate compiled to nothing")
+            }
+          } else {
+            VarkaExpressionCompiler.compile(Seq(out(expr)), columns) match {
+              case Some(_) => None
+              case None =>
+                val partial = VarkaExpressionCompiler.compilePartial(Seq(out(expr)), columns)
+                Some(partial.map(_.declines.values.map(_.reason).mkString("; "))
+                  .getOrElse("no entry fused"))
+            }
+          }
+        reason.map(r => s"${family.title}: ${row.sql}  ->  $r")
+      }
+    }
+    assert(failures.isEmpty,
+      "documented as covered, but the compiler declines:\n  " + failures.mkString("\n  "))
+  }
+
+  test("the table documents every expression the compiler admits") {
+    val documented = families.flatMap(_.rows).flatMap { row =>
+      expressionOf(row).collect { case e: Expression => e.getClass.getSimpleName }
+    }.toSet
+    val missing = (admittedByCompiler -- infrastructure -- documented).toSeq.sorted
+    assert(missing.isEmpty,
+      "VarkaExpressionCompiler matches on these, and no row in the coverage table exercises\n" +
+        "them - add a row to VarkaCoverageSuite and regenerate the table:\n  " +
+        missing.mkString(", "))
+  }
+
+  test("docs/sql-varka.md carries the generated coverage table") {
+    val doc = getWorkspaceFilePath("docs", "sql-varka.md")
+    val text = Files.readString(doc)
+    val rendered = render()
+    if (regen) {
+      Files.writeString(doc, replaceBetween(text, rendered))
+      logInfo(s"regenerated the coverage table in $doc")
+    } else {
+      val current = between(text)
+      assert(current === rendered,
+        "docs/sql-varka.md is not what this suite renders. Regenerate it with\n" +
+          "  VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'")
+    }
+  }
+
+  /**
+   * Whether to rewrite the documentation instead of checking it.
+   *
+   * The environment variable is the short form and the one the documentation quotes: sbt forks
+   * the test JVM, so a `-D` on the `build/sbt` command line reaches sbt and not the tests, and
+   * the property form needs `set Test/javaOptions += ...` the way `dev/varka_nightly.sh`
+   * passes the fuzzer its seed. Both are accepted.
+   */
+  private def regen: Boolean =
+    sys.env.get("VARKA_COVERAGE_REGEN").contains("true") ||
+      sys.props.get("varka.coverage.regen").contains("true")
+
+  // --- the compiler's own list ------------------------------------------------------------
+
+  /**
+   * The Catalyst expression classes `VarkaExpressionCompiler` matches on, read from its source
+   * because there is no runtime list to ask: the arms are a `match`, not a registry.
+   *
+   * Every `case` pattern naming a capitalised type is collected, then kept only if it names a
+   * real class in `org.apache.spark.sql.catalyst.expressions`. That filter is what removes the
+   * IR nodes, the data types and the local extractors without a hand-maintained exclusion list.
+   */
+  private lazy val admittedByCompiler: Set[String] = {
+    val source = Files.readString(getWorkspaceFilePath("sql", "catalyst", "src", "main", "scala",
+      "org", "apache", "spark", "sql", "catalyst", "expressions", "codegen",
+      "VarkaExpressionCompiler.scala"))
+    val patterns = Seq(
+      """case\s+([A-Z]\w*)\s*\(""".r,
+      """case\s+\w+\s*@\s*([A-Z]\w*)\s*\(""".r,
+      """case\s+\w+\s*:\s*([A-Z]\w*)""".r,
+      """_\s*:\s*([A-Z]\w*)""".r)
+    val names = patterns.flatMap(_.findAllMatchIn(source).map(_.group(1))).toSet
+    assert(names.size > 40, s"the pattern scan found only ${names.size} names; has the " +
+      "compiler been restructured? This check is worthless if it silently matches nothing.")
+    names.filter { n =>
+      Try(Utils.classForName(s"org.apache.spark.sql.catalyst.expressions.$n"))
+        .map(classOf[Expression].isAssignableFrom).getOrElse(false)
+    }
+  }
+
+  /**
+   * Matched by the compiler but not expressions a reader writes: `Alias` wraps every
+   * projection entry, `BoundReference` is what a column becomes once bound, `Literal` is a
+   * constant inside another row, and `RuntimeReplaceable` is a trait the compiler unwraps.
+   */
+  private val infrastructure =
+    Set("Alias", "BoundReference", "Literal", "RuntimeReplaceable")
+
+  // --- rendering --------------------------------------------------------------------------
+
+  private val beginMark = "<!-- BEGIN generated coverage table -->"
+  private val endMark = "<!-- END generated coverage table -->"
+
+  private def render(): String = {
+    val sb = new StringBuilder
+    families.foreach { family =>
+      sb.append(s"#### ${family.title}\n\n")
+      sb.append(if (family.predicates) "| Predicate | Notes |\n" else "| Expression | Notes |\n")
+      sb.append("|---|---|\n")
+      family.rows.foreach(r => sb.append(s"| `${r.sql}` | ${r.note} |\n"))
+      sb.append("\n")
+    }
+    sb.toString
+  }
+
+  private def between(text: String): String = {
+    val from = text.indexOf(beginMark)
+    val to = text.indexOf(endMark)
+    assert(from >= 0 && to > from, s"docs/sql-varka.md has no $beginMark ... $endMark block")
+    text.substring(from + beginMark.length, to).stripPrefix("\n")
+  }
+
+  private def replaceBetween(text: String, body: String): String = {
+    val from = text.indexOf(beginMark)
+    val to = text.indexOf(endMark)
+    text.substring(0, from + beginMark.length) + "\n" + body + text.substring(to)
+  }
+}

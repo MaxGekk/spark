@@ -19,7 +19,10 @@ measure honestly.
 ## Main ideas
 
 Each one line, with the details in [`docs/sql-varka.md`](docs/sql-varka.md)
-and the architecture in [`sql/varka/VISION.md`](sql/varka/VISION.md):
+and the architecture in [`sql/varka/VISION.md`](sql/varka/VISION.md). For the
+question those do not answer at a glance - *is my expression covered?* - see the
+[expression coverage table](docs/sql-varka.md#expression-coverage), which is
+generated from the compiler and fails the build when it drifts from it.
 
 * **Generate the loop, not a call to it**: every projection becomes its own
   emitted class, so call sites stay monomorphic where a shared interpreter

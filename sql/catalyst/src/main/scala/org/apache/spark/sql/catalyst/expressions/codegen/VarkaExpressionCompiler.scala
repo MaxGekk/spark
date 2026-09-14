@@ -695,10 +695,12 @@ private[sql] object VarkaExpressionCompiler {
       if (built.isEmpty) truncate(literals, mark)
       built
     case m @ MultiplyYMInterval(iv, num) =>
-      // `Math.multiplyExact(months, num)` for the int-family arms. A literal multiplier is
-      // bounded and the check comes off; an int column is an unbounded checked multiply and
-      // declines like any other. The `Long`, `Decimal` and `Double` arms are not int32 lanes
-      // and decline by type rather than reaching `intOperand`, which would report them as
+      // `Math.multiplyExact(months, num)` for the int-family arms. Both operands have to be
+      // bounded before the check comes off, and a stored interval column never is, so a
+      // literal multiplier alone does not buy it: `ym * 2` declines, while
+      // `make_ym_interval(year(d), month(d)) * 2` fuses over a bounded interval. The `Long`,
+      // `Decimal` and `Double` arms are not int32 lanes and decline by type rather than
+      // reaching `intOperand`, which would report them as
       // "not an int column or literal" and hide which of the two is wrong.
       num.dataType match {
         case IntegerType =>
