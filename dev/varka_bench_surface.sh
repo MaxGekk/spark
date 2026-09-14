@@ -20,7 +20,7 @@
 #
 #   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--driver-memory 16g] \
 #       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--shard I/N] [--skip-build] \
-#       [--benchmark surface|chains] \
+#       [--benchmark surface|chains] [--table-columns all|dates] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
 #
 # --benchmark chains runs Chains through the same driver instead of Surface, writing
@@ -92,7 +92,7 @@ cd "$(git rev-parse --show-toplevel)"
 # precisely what a usage error is about. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
-shard=""; benchmark=surface
+shard=""; benchmark=surface; table_columns=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --rows) rows="$2"; shift 2 ;;
@@ -103,6 +103,7 @@ while [ "$#" -gt 0 ]; do
     --only) only="$2"; shift 2 ;;
     --shard) shard="$2"; shift 2 ;;
     --benchmark) benchmark="$2"; shift 2 ;;
+    --table-columns) table_columns="$2"; shift 2 ;;
     --skip-build) build=0; shift ;;
     --help|-h) usage 0 ;;
     *=*) dists+=("$1"); shift ;;
@@ -218,7 +219,8 @@ for spec in "${dists[@]}"; do
   JAVA_HOME="$java_home" "$spark_home/bin/spark-submit" "${submit[@]}" \
     --class "$main_class" "$jar" \
     --label "$label" --rows "$rows" --partitions "$partitions" --out "$out" \
-    ${only:+--only "$only"} ${shard:+--shard "$shard"} "${driver[@]}" \
+    ${only:+--only "$only"} ${shard:+--shard "$shard"} \
+    ${table_columns:+--table-columns "$table_columns"} "${driver[@]}" \
     --provenance "commit=$commit" --provenance "datapath=$datapath" \
     --provenance "canary=$canary" --provenance "host=$(hostname -s)" \
     --provenance "spark home=$spark_home"

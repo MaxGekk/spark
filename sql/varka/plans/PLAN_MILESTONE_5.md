@@ -1863,6 +1863,78 @@ owner, because both questions are about what a predicate kernel is worth when th
 consumer counts rather than reads.
 
 
+### 2.34 The Varka arm may be measured in the session's worst memory state (task 99)
+
+*Opened 14 September 2026, out of task 97's measurement.*
+
+Task 97 eliminated three explanations for a 22.6% swing in `date_add(d, 3)`
+between two committed surfaces, with numbers for each: the lowering is
+unchanged, the six-column table costs about 6% and costs it nearly uniformly
+across a four-op and a sixty-four-op entry alike, and running the Varka arm
+fourth rather than first costs 1% in the favourable direction.
+
+**The control is what makes the remainder worth a task.** Stock Spark measured
+82.9 M rows/s for that entry on 13 September and 82.7 today, a difference of
+0.2%. The machine was in the same state. The Varka arm on the same entry, same
+fixture and same ordinal position reads 28% higher today than it did then.
+
+The one variable task 97 did not hold fixed is *how long the machine had been
+working when the arm began*: five hours and twenty minutes on 13 September,
+forty minutes in task 97's run. Ordinal position and elapsed duration are
+different things and only the first was controlled.
+
+The mechanism that would fit is memory. The Varka arm allocates a 56g heap and
+holds 23.2 GiB of Arrow-cached data; the stock arms hold 1.2 GiB. Hours of
+allocation churn degrade huge-page availability and fragment the address space,
+and the entry most exposed to the resulting TLB cost is exactly the one that
+reads four bytes per row and does almost no arithmetic - which would also
+explain why the stock arm shows nothing.
+
+**What this would mean if it holds.** The committed surface understates Varka
+rather than flattering it: every Varka number is taken in the most degraded
+memory state of the session and divided by a baseline taken in the least. A
+ratio wrong in the unflattering direction is not a lie, but it is not the
+engine's number either, and it should be settled before the surface is quoted
+publicly.
+
+**The experiment.** Two full-length surface runs differing only in what precedes
+the Varka arm - one in the committed order, one with the Varka arm first - on the
+same host on the same day. About eleven hours of a quiet machine. If the two
+Varka arms disagree by anything like 28%, the arm order in
+`dev/varka_bench_surface.sh` is a measurement artefact and the script needs to
+say so or stop producing it.
+
+### 2.35 An `--only` run silently truncates its label's committed file (task 100)
+
+*Opened 14 September 2026, found while running task 97's measurement.*
+
+`dev/varka_bench_surface.sh --only <regex>` writes `DateSurface-<label>-results.txt`
+for the entries it ran. It does not merge into the existing file and it does not
+refuse: the file is replaced. So a three-entry partial run in a checkout turns
+that label's committed fifty-two-entry coverage table into a three-entry one, and
+`git status` reports an ordinary modification.
+
+This happened during task 97. The measurement's Varka arms used custom labels and
+wrote new files, but its two stock arms were passed under the canonical
+`spark-4.2.0-jdk17` and `spark-4.2.0-jdk25` names and truncated both committed
+files. They were restored before staging, and only because the working tree was
+read before the commit rather than after.
+
+The sharded path already solves this: task 62 gave `--shard I/N` a filename
+suffix precisely so shards of one run could share a directory without
+overwriting each other. `--only` never got the same treatment, and it is the flag
+a person reaches for by hand.
+
+**The fix is small.** With `--only` set, either refuse a label whose committed
+file holds more entries than this run will write, or write to a name that says
+the file is partial. The first is better: it fails at the start rather than
+leaving a file to notice.
+
+A partial file that looks complete is the same class of defect as the ones task
+62 spent a week on - a run that reports success and measures something other than
+what its name says.
+
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
@@ -1911,8 +1983,10 @@ independent of both and of each other.
 | 94 | The bench module's tests are enforced by hand or not at all (section 2.29). **Scoped** (12 September 2026), from the review of task 62's chains PR: `sql/varka/bench` is only ever `-DskipTests package`d - three call sites, all of them - so `ChainsTest` and `SurfaceTest` run when someone types the Maven line and never in CI. The review found two of their invariants already weakened, which is the shape of it: right when written, and nothing to say when they stopped being | A `varka-bench` module in `dev/sparktestsupport/modules.py`, the `precondition` wiring that consumes `dev/is-changed.py -m varka-bench`, and a job modelled on `varka-engine` | The suites run on a pull request that touches `sql/varka/bench` and not on one that does not; a deliberately broken `ChainsTest` invariant fails that job |
 | 95 | Two int32 shapes decline that a reader would expect to fuse (section 2.30). **Scoped** (12 September 2026), while choosing task 62's chain entries: `datediff(d2, d) * i` and `i % 20` both decline, though multiplying by a *literal* is fine - so it is an int multiply whose right operand is a column, and an int remainder at all | Whichever of `MUL` with a runtime operand and `REM` is worth the lowering, under task 63's existing checked/wrapping overflow discipline rather than beside it | Both spellings fuse or one is declined with a reason a reader can act on; the differential covers the overflow edge of whichever lands |
 | 96 | `make_ym_interval` takes only arguments derived from a date (section 2.31). **Scoped** (12 September 2026), the same way: `make_ym_interval(year(d), month(d))` fuses and is in the surface, `make_ym_interval(i, i)` declines - so the constructor for the third type cannot be fed from the int columns the engine already reads, which is the obvious spelling and part of the three-types claim | Establish whether the restriction is the admission rule or something the lowering needs, and lift it if it is the former | `make_ym_interval` over two int columns fuses and matches the row engine over the ANSI overflow edge, or declines with a reason that says why it must |
-| 97 | A bandwidth-bound row lost 22.6% between two surface regenerations and nothing in its lowering changed (section 2.32). **Scoped** (14 September 2026), out of task 78's run: `date_add(d, 3)` went 1811.6 to 1401.4 M rows/s with a clean canary both times, while emitting the same four `IntVector` ops it always has and taking none of the paths the one nearby commit added. The table it is measured over grew from three int32 columns to six between the runs, and from about 12 GiB to 23.2 GiB cached, which is the hypothesis to test on the row where memory is everything and arithmetic is nothing | Time the same entry over a three-column and a six-column table, same host and row count, and attribute the 22.6% | Either the working set explains it - in which case a third of the surface is measured against a fixture shaped by columns those rows never read, and the fixture needs a decision - or fifty-four other commits are in scope |
+| 97 | A bandwidth-bound row lost 22.6% between two surface regenerations and nothing in its lowering changed (section 2.32). **DONE** (`PLAN_TASK_97.md` 9): three explanations eliminated with numbers - the lowering is unchanged, the six-column table costs about 6% and costs it near-uniformly across a four-op and a sixty-four-op entry, and ordinal arm position costs 1% in the favourable direction. The control settles the rest: stock read 82.9 M rows/s on 13 September and 82.7 today while the Varka arm reads 28% higher, so the machine was not slower and only the Varka arm was. The surviving hypothesis - elapsed session time before the arm - becomes task 99, and a hazard found on the way becomes task 100. Scoped 14 September 2026, out of task 78's run: `date_add(d, 3)` went 1811.6 to 1401.4 M rows/s with a clean canary both times, while emitting the same four `IntVector` ops it always has and taking none of the paths the one nearby commit added. The table it is measured over grew from three int32 columns to six between the runs, and from about 12 GiB to 23.2 GiB cached, which is the hypothesis to test on the row where memory is everything and arithmetic is nothing | Time the same entry over a three-column and a six-column table, same host and row count, and attribute the 22.6% | Either the working set explains it - in which case a third of the surface is measured against a fixture shaped by columns those rows never read, and the fixture needs a decision - or fifty-four other commits are in scope |
 | 98 | Two filter rows stay under 1.0x because the consumer counts (section 2.33). **Scoped** (14 September 2026), out of task 78's outcome: `WHERE d < d2` counted at 0.80x and `WHERE d IS NOT NULL` counted at 0.45x are the only losses left in the surface, and the same `d IS NOT NULL` predicate reads 9.5x with a columnar consumer at 1.2 ns/row against 11.7 ns counted - identical kernel, and 968 million of a billion rows crossing the read-back floor at about 25 ns each | Price making the filter node `CodegenSupport` so a counting consumer fuses into the vector loop instead of reading rows back - milestone 4's scope item 13, which task 78 declined to inherit and these two rows now need | The two rows at or above 1.0x, or a recorded measurement saying what the boundary costs and why it cannot go; the debt register's `COUNT(*)` entry belongs to the same owner |
+| 99 | The Varka arm may be measured in the session's worst memory state (section 2.34). **Scoped** (14 September 2026), out of task 97: three explanations for a 22.6% swing in `date_add(d, 3)` are eliminated with numbers, and the control is what makes the rest worth a task - stock Spark read 82.9 M rows/s on 13 September and 82.7 today, 0.2% apart, while the Varka arm on the same entry, fixture and ordinal position reads 28% higher today. The uncontrolled variable is elapsed session time before the arm: five hours twenty on 13 September, forty minutes in task 97's run, against a 23.2 GiB Arrow-cached table where the stock arms hold 1.2 GiB | Two full-length surface runs on one host on one day, differing only in whether the Varka arm runs first or last, about eleven hours | The two Varka arms agree, or they do not and the arm order is a measurement artefact the script must stop producing; either way the committed surface's ratios get a stated confidence |
+| 100 | An `--only` run silently truncates its label's committed results file (section 2.35). **Scoped** (14 September 2026), found while running task 97: the driver replaces `DateSurface-<label>-results.txt` rather than merging, so a three-entry partial run turned two committed fifty-two-entry files into three-entry ones and `git status` showed an ordinary modification. Restored before staging, and only because the tree was read first | With `--only` set, refuse a label whose committed file holds more entries than this run will write, or write a name that says the file is partial - the sharded path already suffixes filenames for exactly this reason | A partial run cannot overwrite a fuller committed file; a test covers the refusal |
 
 ## 4. Files
 

@@ -27,6 +27,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -104,5 +105,60 @@ public class SurfaceTest {
     String state = DateSurfaceBenchmark.cacheState(spark, 2);
     assertTrue(state.startsWith("2 of 2 partitions cached"), state);
     assertTrue(state.endsWith("0.0 GiB on disk"), state);
+  }
+
+  /**
+   * The two table shapes carry exactly the columns they claim.
+   *
+   * <p>This is the check whose absence produced task 97: the benchmark table gained three
+   * interval columns, every bandwidth-bound row in the surface was then measured over a table
+   * twice as wide as before, and nothing said so. A shape whose column list and whose built
+   * schema disagree would make any comparison between them meaningless.
+   */
+  @Test
+  public void eachTableShapeBuildsTheColumnsItClaims() {
+    try {
+      for (DateSurfaceBenchmark.TableShape shape : DateSurfaceBenchmark.TableShape.values()) {
+        DateSurfaceBenchmark.buildTable(spark, 1_000L, 1,
+            org.apache.spark.storage.StorageLevel.MEMORY_ONLY(), shape);
+        List<String> built = List.of(spark.table("varka_dates").schema().fieldNames());
+        assertEquals(shape.columns(), built, shape + " builds a different set than it claims");
+      }
+    } finally {
+      // `varka_dates` is the shared session's fixture and every other test in this class
+      // reads it, so a shape left behind here fails them instead of this one. Restoring it
+      // is not tidiness: the first version of this test did not, and two unrelated tests
+      // failed with an unresolved interval column and a cache that was no longer cached.
+      DateSurfaceBenchmark.buildTable(spark, 1_000L, 2,
+          org.apache.spark.storage.StorageLevel.MEMORY_ONLY(), DateSurfaceBenchmark.TableShape.ALL);
+    }
+  }
+
+  /**
+   * An entry reading a column the shape does not build is refused, and the message names it.
+   *
+   * <p>Skipping it instead would produce a results file with fewer rows that looks exactly
+   * like a complete one - so two shapes could be compared over different entry sets with
+   * neither file saying so, which is the failure this whole task exists to rule out.
+   */
+  @Test
+  public void anEntryNeedingAnAbsentColumnIsRefusedRatherThanSkipped() {
+    Surface.Entry interval = Surface.ENTRIES.stream()
+        .filter(e -> (e.projection() != null ? e.projection() : e.filter()).contains("ymm"))
+        .findFirst().orElseThrow(() -> new AssertionError("no entry reads an interval column"));
+    var thrown = assertThrows(IllegalArgumentException.class,
+        () -> DateSurfaceBenchmark.requireColumns(interval, DateSurfaceBenchmark.TableShape.DATES));
+    assertTrue(thrown.getMessage().contains("ymm"), thrown.getMessage());
+    assertTrue(thrown.getMessage().contains(interval.label()), thrown.getMessage());
+    // and the same entry is accepted by the shape that does build the column
+    DateSurfaceBenchmark.requireColumns(interval, DateSurfaceBenchmark.TableShape.ALL);
+  }
+
+  /** Every entry runs under the full shape - so the refusal above cannot fire on a normal run. */
+  @Test
+  public void everyEntryIsSatisfiedByTheFullTable() {
+    for (Surface.Entry e : Surface.ENTRIES) {
+      DateSurfaceBenchmark.requireColumns(e, DateSurfaceBenchmark.TableShape.ALL);
+    }
   }
 }

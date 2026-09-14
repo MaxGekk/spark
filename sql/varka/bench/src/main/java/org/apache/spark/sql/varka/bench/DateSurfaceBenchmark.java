@@ -170,6 +170,7 @@ public final class DateSurfaceBenchmark {
     boolean expectFused = false;
     boolean allowNonresidentCache = false;
     StorageLevel storageLevel = StorageLevel.MEMORY_ONLY();
+    TableShape tableShape = TableShape.ALL;
     double maxFixedShare = Double.NaN;
     final Map<String, String> provenance = new LinkedHashMap<>();
 
@@ -201,6 +202,7 @@ public final class DateSurfaceBenchmark {
             i--;
           }
           case "--storage-level" -> a.storageLevel = StorageLevel.fromString(need(k, v));
+          case "--table-columns" -> a.tableShape = TableShape.of(need(k, v));
           case "--allow-nonresident-cache" -> {
             a.allowNonresidentCache = true;
             i--;
@@ -275,7 +277,7 @@ public final class DateSurfaceBenchmark {
     };
     PrintStream log = System.out;
     try {
-      buildTable(spark, args.rows, args.partitions, args.storageLevel);
+      buildTable(spark, args.rows, args.partitions, args.storageLevel, args.tableShape);
       String cache = cacheState(spark, args.partitions);
       if (!cacheResident(spark, args.partitions) && !args.allowNonresidentCache) {
         throw new IllegalStateException("the cached table is not resident: " + cache
@@ -291,6 +293,7 @@ public final class DateSurfaceBenchmark {
       // Always written, so a whole-surface file says "0/1" rather than being silent about it
       // and leaving a reader to wonder whether it is complete. The merge reads this.
       prov.put("cache", cache + ", " + args.storageLevel.description());
+      prov.put("table columns", args.tableShape.provenance());
       // Which benchmark wrote this file, as data rather than as a file name. The merge groups
       // on it: name-parsing let a chains merge collect the committed whole-surface files that
       // ride inside every artifact tar and write its output over them, because a group of one
@@ -313,6 +316,7 @@ public final class DateSurfaceBenchmark {
         if (args.only != null && !args.only.matcher(entry.label()).find()) {
           continue;
         }
+        requireColumns(entry, args.tableShape);
         String block = runEntry(spark, executor, batches, drain, entry, args, log, violations);
         file.append(block);
         log.print(block);
@@ -333,19 +337,79 @@ public final class DateSurfaceBenchmark {
    * The table: the generator {@code VarkaThroughputBenchmark} uses, in the given number of
    * partitions (one by default; see the class comment on what a task costs).
    */
-  static void buildTable(SparkSession spark, long rows, int partitions, StorageLevel level) {
+  /**
+   * Refuses an entry that reads a column the table shape does not build.
+   *
+   * <p>The alternative - skipping it - produces a results file with fewer rows that is
+   * indistinguishable from a complete one, so two shapes could be compared over different
+   * entry sets without either file saying so.
+   */
+  static void requireColumns(Surface.Entry entry, TableShape shape) {
+    String sql = entry.projection() == null ? entry.filter() : entry.projection();
+    List<String> present = shape.columns();
+    for (String token : sql.split("[^A-Za-z0-9_]+")) {
+      // Only the table's own column names matter; anything else in the expression is a
+      // function, a keyword or a literal.
+      if (TableShape.ALL.columns().contains(token) && !present.contains(token)) {
+        throw new IllegalArgumentException("entry \"" + entry.label() + "\" reads column '"
+            + token + "', which --table-columns " + shape.name().toLowerCase(Locale.ROOT)
+            + " does not build");
+      }
+    }
+  }
+
+  /**
+   * Which columns the benchmark table carries.
+   *
+   * <p>{@link #ALL} is the table every committed file was measured over. {@link #DATES} is the
+   * three columns it carried before the year-month interval columns were added, and exists for
+   * one question: whether a memory-bandwidth-bound entry - one reading four bytes and writing
+   * four, where the arithmetic is irrelevant and the memory system is everything - is measured
+   * differently when the rest of the row is twice as wide. The kernel reads the same column
+   * either way; what changes is how far apart its values sit.
+   *
+   * <p>An entry that reads a column the shape does not carry is refused rather than skipped,
+   * because a silently shorter run produces a file that looks comparable and is not.
+   */
+  enum TableShape {
+    ALL, DATES;
+
+    static TableShape of(String s) {
+      return switch (s) {
+        case "all" -> ALL;
+        case "dates" -> DATES;
+        default -> throw new IllegalArgumentException(
+            "--table-columns takes all or dates, not '" + s + "'");
+      };
+    }
+
+    /** The columns this shape builds, in the order the table declares them. */
+    java.util.List<String> columns() {
+      return this == ALL
+          ? java.util.List.of("d", "d2", "i", "ymm", "ymy", "ym")
+          : java.util.List.of("d", "d2", "i");
+    }
+
+    String provenance() {
+      return this == ALL ? "all (6)" : "dates only (3)";
+    }
+  }
+
+  static void buildTable(SparkSession spark, long rows, int partitions, StorageLevel level,
+      TableShape shape) {
+    String dates = "CASE WHEN id %% 31 = 0 THEN NULL"
+        + " ELSE date_add(DATE'2020-01-01', CAST(id %% 1460 AS INT)) END AS d,"
+        + " date_add(DATE'2021-01-01', CAST(id %% 1500 AS INT)) AS d2,"
+        + " CAST(id %% 3650 AS INT) AS i";
+    // One year-month interval column per unit, over counts inside the emitter's MONTH_ARITH
+    // range so every row fuses and the rows measure the kernel rather than the guard's
+    // decline path.
+    String intervals = " CAST(CAST(id %% 240 AS INT) AS INTERVAL MONTH) AS ymm,"
+        + " CAST(CAST(id %% 20 AS INT) AS INTERVAL YEAR) AS ymy,"
+        + " make_ym_interval(CAST(id %% 20 AS INT), CAST(id %% 12 AS INT)) AS ym";
+    String select = shape == TableShape.ALL ? dates + "," + intervals : dates;
     spark.sql(String.format(Locale.ROOT,
-        "SELECT CASE WHEN id %% 31 = 0 THEN NULL"
-            + " ELSE date_add(DATE'2020-01-01', CAST(id %% 1460 AS INT)) END AS d,"
-            + " date_add(DATE'2021-01-01', CAST(id %% 1500 AS INT)) AS d2,"
-            + " CAST(id %% 3650 AS INT) AS i,"
-            // one year-month interval column per unit, over counts inside the
-            // emitter's MONTH_ARITH range so every row fuses and the rows measure the kernel
-            // rather than the guard's decline path.
-            + " CAST(CAST(id %% 240 AS INT) AS INTERVAL MONTH) AS ymm,"
-            + " CAST(CAST(id %% 20 AS INT) AS INTERVAL YEAR) AS ymy,"
-            + " make_ym_interval(CAST(id %% 20 AS INT), CAST(id %% 12 AS INT)) AS ym"
-            + " FROM range(0, %d, 1, %d)", rows, partitions))
+        "SELECT " + select + " FROM range(0, %d, 1, %d)", rows, partitions))
         .createOrReplaceTempView("varka_dates");
     // MEMORY_ONLY, not Spark's MEMORY_AND_DISK default, and the difference is not academic:
     // the default is right for a workload, which should finish rather than fail, and exactly
