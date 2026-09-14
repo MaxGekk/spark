@@ -38,7 +38,8 @@ final class BenchSession {
         .config("spark.ui.enabled", "false")
         .config("spark.sql.shuffle.partitions", "1")
         .getOrCreate();
-    DateSurfaceBenchmark.buildTable(spark, 1_000L, 2, StorageLevel.MEMORY_ONLY());
+    DateSurfaceBenchmark.buildTable(spark, 1_000L, 2, StorageLevel.MEMORY_ONLY(),
+        DateSurfaceBenchmark.TableShape.ALL);
     return spark;
   }
 
