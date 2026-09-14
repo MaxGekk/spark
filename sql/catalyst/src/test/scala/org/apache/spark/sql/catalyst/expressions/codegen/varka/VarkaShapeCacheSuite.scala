@@ -83,7 +83,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(cache.size === 1)
   }
 
-  test("task 21: a condition-root shape - the filter kernel - caches and hits like any other") {
+  test("a condition-root shape - the filter kernel - caches and hits like any other") {
     val cache = new VarkaShapeCacheImpl(8)
     val cond = new VarkaVectorIR.Compare(VarkaVectorIR.CompareOp.LT, columnRef, literal)
     val first = cache.getOrEmit(parent, keyOf(cond), "execFilterA")
@@ -291,7 +291,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
   }
 
-  test("task 46: every option component can change the canonical rendering") {
+  test("every option component can change the canonical rendering") {
     // `truncDate` was left out of canonical() from task 35 until task 46, so two option values
     // differing only in the trunc lowering rendered the same string: different keys in the
     // cache's map, one shared execution identity in the side table keyed on the hash, which is
@@ -371,7 +371,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(cache.getOrEmit(parent, key, "sessionC").hit)
   }
 
-  test("task 22: JFR events cover emission and lookups, joined by the shape hash") {
+  test("JFR events cover emission and lookups, joined by the shape hash") {
     val cache = new VarkaShapeCacheImpl(8)
     val key = keyOf(chain(bits = 11, depth = 4))
     val hash = VarkaShapeCache.shapeHash(key)

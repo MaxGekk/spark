@@ -454,7 +454,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("AddDays/SubDays with a column offset (task 38) match the reference evaluator") {
+  test("AddDays/SubDays with a column offset match the reference evaluator") {
     // The trap this task exists to catch: `s.wordRef` used to alias the result's validity to
     // `days` alone, which was correct only because the offset used to always be a literal
     // (all-valid). A null offset on a non-null date must still make the row null - checkMatrix's
@@ -566,7 +566,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 41: a bare ColumnRef output root - a loop that only loads and stores") {
+  test("a bare ColumnRef output root - a loop that only loads and stores") {
     // unix_date/date_from_unix_date unwrap to their child rather than compiling to a node,
     // so an output whose IR root is a plain column reference is a shape this task makes
     // reachable for the first time - exercise it directly at the emitter level.
@@ -639,7 +639,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     checkMatrix(Seq(root), 3, Array(11), Seq(17, 64, 1000), combos(3), ctx = "kleene")
   }
 
-  test("task 20: coalesce lowers to IfElse over IsNotNull and matches the reference") {
+  test("coalesce lowers to IfElse over IsNotNull and matches the reference") {
     val a = new ColumnRef(0)
     val b = new ColumnRef(1)
     val c = new ColumnRef(2)
@@ -652,7 +652,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     checkMatrix(roots, 3, Array(9), Seq(1, 17, 64, 65, 1000), combos(3), ctx = "coalesce")
   }
 
-  test("task 20: a validity predicate among the connectives keeps Kleene's rules") {
+  test("a validity predicate among the connectives keeps Kleene's rules") {
     // IsNotNull is the first *total* condition - never unknown - and the pair algebra must
     // absorb it unchanged: AND/OR against an unknown comparison, and IS NULL as NOT over it
     // (a slot swap in the masked body).
@@ -669,7 +669,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ctx = "validity-forced-masked")
   }
 
-  test("task 20: IsNotNull over a computed operand is rejected at analysis") {
+  test("IsNotNull over a computed operand is rejected at analysis") {
     // The compiler already declines this shape; the emitter re-checks because its emission
     // reads the child's per-input validity word, which only a column has before value walks.
     val bad = new IfElse(new IsNotNull(new AddDays(new ColumnRef(0), new LiteralSlot(0))),
@@ -678,7 +678,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(e.getMessage.contains("IsNotNull child must be a ColumnRef"))
   }
 
-  test("task 59 + task 60: neither next_day's weekday nor add_months' month count trips " +
+  test("neither next_day's weekday nor add_months' month count trips " +
       "analysis anymore, now that both widened from a literal-only offset to a column") {
     // The check that used to reject both nodes together (and whose message the IR fuzzer's
     // first failure quoted for the wrong one, #110) required a literal for either operand.
@@ -711,7 +711,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(badSubOffset.getMessage.contains("date_sub's day offset"), badSubOffset.getMessage)
   }
 
-  test("task 68: the month count takes int arithmetic, next_day's weekday still does not") {
+  test("the month count takes int arithmetic, next_day's weekday still does not") {
     // Task 68 split `requireOffsetShape` in two. The month count and the weekday shared it
     // under one sentence - that each "carries a runtime bound a derived value cannot declare" -
     // which is true of the weekday and false of the count: a column-count `AddMonths` is in
@@ -732,7 +732,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(badWeekday.getMessage.contains("next_day's weekday"), badWeekday.getMessage)
   }
 
-  test("task 93: the re-armed check fires on the composed day, in every body") {
+  test("the re-armed check fires on the composed day, in every body") {
     // The runtime half of task 93. The compiler admits year(add_months(date_add(d, i), i))
     // because it inserts a check between the month add and the decomposition; this is that
     // check doing its job, built here as IR rather than through the compiler so the emitter is
@@ -783,7 +783,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 68: task 60's guard covers a derived month count, which is why the split is safe") {
+  test("the month-count guard covers a derived count, which is why the split is safe") {
     // The claim the split rests on, tested rather than asserted: the guard reads the count's
     // lanes after the arithmetic, so a count that only leaves the range *because* of the
     // negation still condemns the batch. Without this the split would be a way to smuggle an
@@ -812,7 +812,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 59: next_day with a column weekday matches the reference evaluator over every " +
+  test("next_day with a column weekday matches the reference evaluator over every " +
       "null pattern of both columns, in and out of the leaf's range") {
     // The trap is task 38's again: the node's word used to alias the date's alone, which was
     // right only while the weekday was always a literal. combos(2) drives every (date,
@@ -826,7 +826,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       data = data, ctx = "next_day column weekday")
   }
 
-  test("task 59: the column and literal next_day forms cost what PLAN_TASK_59.md 3.3 " +
+  test("the column and literal next_day forms cost what PLAN_TASK_59.md 3.3 " +
       "registered, and the literal form's bytes did not move") {
     val literal = emitMulti(Seq(new NextDay(new ColumnRef(0), new LiteralSlot(0))), 1, 1)._2
     val column = emitMulti(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0)._2
@@ -834,7 +834,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(laneOps(column, "loopDense0") === 18, "the column form")
   }
 
-  test("task 20: fitsBudgets mirrors the analysis caps, distinct ops across outputs") {
+  test("fitsBudgets mirrors the analysis caps, distinct ops across outputs") {
     def chain(base: Int, depth: Int): VarkaVectorIR =
       (0 until depth).foldLeft[VarkaVectorIR](new ColumnRef(base)) { (n, _) =>
         new AddDays(n, new LiteralSlot(0))
@@ -944,7 +944,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay, ctx = "narrowed")
   }
 
-  test("task 54: both prefix forms match LocalDate over the calendar boundaries, last_day too") {
+  test("both prefix forms match LocalDate over the calendar boundaries, last_day too") {
     // The Julian map and the century-then-year split, each held to LocalDate over the same
     // boundary set on every calendar tail plus last_day, whose month-length arithmetic reads
     // the prefix's year. Agreeing with LocalDate here is also them agreeing with each other,
@@ -973,7 +973,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private val truncForms = Seq(VarkaEmitOptions.TruncDateForm.SUBTRACT,
     VarkaEmitOptions.TruncDateForm.RECOMPOSE)
 
-  test("task 35: trunc matches DateTimeUtils.truncDate over the calendar boundaries, under " +
+  test("trunc matches DateTimeUtils.truncDate over the calendar boundaries, under " +
       "both lowerings and both prefix forms, and its date output feeds further arithmetic") {
     // The boundary set is the calendar family's: year and era edges, February in leap, common
     // and century years, every month-length boundary, and the covered range's own ends. The
@@ -993,7 +993,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 35: every trunc level and every month of two years, quarter starts included") {
+  test("every trunc level and every month of two years, quarter starts included") {
     // Day-by-day over 2023 (common) and 2024 (leap), so every quarter start and every month
     // start is crossed in both year kinds rather than sampled - the four-way quarter select
     // and the leap-adjusted starts are what this sweep is for.
@@ -1007,7 +1007,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 35: trunc shares the calendar prefix with a sibling extraction over the same date") {
+  test("trunc shares the calendar prefix with a sibling extraction over the same date") {
     // trunc(d, 'MONTH') beside year(d) in one loop method runs the civil-from-days prefix once,
     // asserted the way task 32's own tests do: the shared kernel's dense loop carries fewer
     // IntVector calls than the unshared one, by at least the prefix's own op count.
@@ -1051,7 +1051,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       Array(a.nullCount, b.nullCount, c.nullCount),
       Array(out._1.address()), Array(out._2.address()), Array.empty[Int], length)
 
-  test("task 42: make_date matches LocalDate.of over the validity corners - nulls for invalid " +
+  test("make_date matches LocalDate.of over the validity corners - nulls for invalid " +
       "dates under the NULL form, the valid triples under both forms - at every length and " +
       "null pattern of its three inputs") {
     // The NULL form runs every triple: an invalid date is a null output and the status stays 0.
@@ -1065,7 +1065,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 42: an invalid date under the ANSI form declines the batch, in a loop lane and " +
+  test("an invalid date under the ANSI form declines the batch, in a loop lane and " +
       "an epilogue lane, and not under a null input; a year past the limit declines under " +
       "both forms and is not confused with an invalid date") {
     val (ansi, loaderA) = load(emitMulti(Seq(makeDateAnsi), 3, 0))
@@ -1126,7 +1126,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 42: a null-free batch with an invalid date under the NULL form yields a null " +
+  test("a null-free batch with an invalid date under the NULL form yields a null " +
       "lane - the dense fast path is not taken by a kernel that nulls a valid input") {
     val (nul, loader) = load(emitMulti(Seq(makeDateNull), 3, 0))
     try {
@@ -1157,7 +1157,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 42: the NULL form's kernel has no dense methods and the ANSI form's has both") {
+  test("the NULL form's kernel has no dense methods and the ANSI form's has both") {
     val nulNames = methodNames(emitMulti(Seq(makeDateNull), 3, 0))
     assert(!nulNames.contains("runDense") && !nulNames.contains("loopDense0"), nulNames)
     assert(nulNames.contains("runMasked") && nulNames.contains("loopMasked0"), nulNames)
@@ -1165,7 +1165,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(ansiNames.contains("runDense") && ansiNames.contains("runMasked"), ansiNames)
   }
 
-  test("task 42: make_date costs what PLAN_TASK_42.md 3.6 registered under both forms, and " +
+  test("make_date costs what PLAN_TASK_42.md 3.6 registered under both forms, and " +
       "no sibling moved") {
     val col = new ColumnRef(0)
     def ops(root: VarkaVectorIR, inputs: Int, literals: Int = 0,
@@ -1200,7 +1200,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private def isoWeekDay(c: Int, i: Int): Int =
     if (i < isoWeekDays.length) isoWeekDays(i) else i * 9973 - 400000
 
-  test("task 37: weekofyear matches IsoFields over the ISO corners, Velox's fixtures and the " +
+  test("weekofyear matches IsoFields over the ISO corners, Velox's fixtures and the " +
       "calendar boundaries, under both prefix forms and every mod-7 lowering") {
     // The shift alone and Year over it (task 58's shape) ride along: the oracle for the
     // shift is java.time's own adjuster, and Year over the Thursday is the ISO week-based
@@ -1215,7 +1215,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 37: weekofyear matches IsoFields on every day from 1990-12-20 to 2030-01-10") {
+  test("weekofyear matches IsoFields on every day from 1990-12-20 to 2030-01-10") {
     // Forty year boundaries in both directions. The Thursday rule claims the boundaries are
     // automatic; this is the check, at a length that puts every one of them in a loop lane
     // and at one that leaves some in a tail lane.
@@ -1226,7 +1226,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       nullPatterns.map(p => Seq(p._2)), data = (_, i) => start + i, ctx = "dense")
   }
 
-  test("task 37: WeekOfYear over anything but a ThursdayOf is refused at analysis") {
+  test("WeekOfYear over anything but a ThursdayOf is refused at analysis") {
     // The lowering is the ISO week of a Thursday only; the compiler builds the pair, and the
     // emitter refuses any other tree rather than emitting a plausible wrong week.
     val col = new ColumnRef(0)
@@ -1237,7 +1237,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 37: the Thursday shift and the week tail cost what PLAN_TASK_37.md 3.3 " +
+  test("the Thursday shift and the week tail cost what PLAN_TASK_37.md 3.3 " +
       "registered, and adding the nodes moved no sibling's bytes") {
     // Off the class file, like the task 35 register, at the shipped options.
     val col = new ColumnRef(0)
@@ -1257,7 +1257,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       s"the register moved; re-pin from these dense-loop IntVector counts:\n  " +
         table.mkString("\n  "))
   }
-  test("task 57: dayofweek_iso matches getWeekDay + 1 over two whole weeks and the calendar " +
+  test("dayofweek_iso matches getWeekDay + 1 over two whole weeks and the calendar " +
       "boundaries, under every mod-7 lowering") {
     // A full week around 1970-01-01 and one around 2024-01-01, so the Sunday wrap (7, never 0)
     // is in a loop lane and a tail lane, plus the boundary set at both ends of the range.
@@ -1274,7 +1274,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 57: dayofweek_iso costs weekday plus one, and neither sibling moved") {
+  test("dayofweek_iso costs weekday plus one, and neither sibling moved") {
     val col = new ColumnRef(0)
     def ops(root: VarkaVectorIR): Int =
       laneOps(emitMulti(Seq(root), 1, 0, VarkaEmitOptions.DEFAULTS)._2, "loopDense0")
@@ -1288,7 +1288,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         table.mkString("\n  "))
   }
 
-  test("task 37: the week tail and Year over one ThursdayOf share a prefix, and neither " +
+  test("the week tail and Year over one ThursdayOf share a prefix, and neither " +
       "shares with year over the bare date") {
     // weekofyear(d) and yearofweek(d) (task 58) in one loop method decompose the Thursday
     // once, asserted the way the task 32 and 35 sharing tests are; year(d) beside them runs
@@ -1310,7 +1310,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       s"year(d) beside the pair should run its own prefix: $withYear vs $shared")
   }
 
-  test("task 35: the trunc tails cost what PLAN_TASK_35.md section 8 registered, per level " +
+  test("the trunc tails cost what PLAN_TASK_35.md section 8 registered, per level " +
       "and form, and adding the node moved no other node's bytes") {
     // Off the class file, like the task 53 and 54 registers, at the shipped prefix options.
     // The DayOfYear arm was refactored onto emitJanuaryDayOfYear for this task, so its count
@@ -1368,7 +1368,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   /** The leaf's four codes, cycled by row; nothing else ever reaches a live level lane. */
   private def levelByRow(i: Int): Int = TruncLevelLeaf.WEEK + i % 4
 
-  test("task 61: trunc with a level column matches DateTimeUtils.truncDate over the calendar " +
+  test("trunc with a level column matches DateTimeUtils.truncDate over the calendar " +
       "boundaries and every null pattern of both columns, under every prefix and mod-7 form") {
     // The level cycles the four codes the leaf can hand the kernel, so every boundary date
     // meets every level somewhere in the matrix; combos(2) drives the null-level-on-a-live-date
@@ -1385,7 +1385,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 61: every level over every day of two years, beside the literal node sharing " +
+  test("every level over every day of two years, beside the literal node sharing " +
       "its prefix") {
     // Day by day over 2023 and 2024 at one level per pass, so every week, month, quarter and
     // year start is crossed in both year kinds at the level that reads it - the week rows are
@@ -1402,13 +1402,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 61: a literal level is rejected at analysis - that shape is the literal node") {
+  test("a literal level is rejected at analysis - that shape is the literal node") {
     val e = intercept[IllegalArgumentException](
       emitMulti(Seq(new TruncDateDynamic(new ColumnRef(0), new LiteralSlot(0))), 1, 1))
     assert(e.getMessage.contains("trunc's level must be a column"), e.getMessage)
   }
 
-  test("task 61: the dynamic tail costs what PLAN_TASK_61.md 3.3 registered") {
+  test("the dynamic tail costs what PLAN_TASK_61.md 3.3 registered") {
     // The literal nodes' own counts are the task 35 register above; their exact bytes were
     // hashed before and after the factoring (PLAN_TASK_61.md 9). This pins the dynamic form.
     assert(laneOps(emitMulti(Seq(dynamicTrunc), 2, 0)._2, "loopDense0") === 91)
@@ -1614,7 +1614,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       nullPatterns.map(p => Seq(p._2)), data = days, ctx = "last_day narrowed")
   }
 
-  test("task 40: add_months matches DateTimeUtils across clamp boundaries and month offsets") {
+  test("add_months matches DateTimeUtils across clamp boundaries and month offsets") {
     val root = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
     // Every one of these has a different day-of-month than the month it lands in, at both
     // ends of the year and across a common/leap February - the clamp is where a wrong
@@ -1837,7 +1837,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("a day outside the covered range is no longer declined (task 51)") {
+  test("a day outside the covered range is no longer declined") {
     // Tasks 26 through 40 guarded every calendar extraction against a day outside
     // VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS, declining the whole batch to the row
     // engine. Task 51 removed that guard: the arithmetic is still only proven exact inside
@@ -1872,7 +1872,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 32 B2: calendar siblings over one date share a loop method; plain chains, other " +
+  test("calendar siblings over one date share a loop method; plain chains, other " +
       "dates and the ceiling keep them apart") {
     // PLAN_TASK_32.md 10.2's table, pinned by loop-method count. Before B2 this test asserted
     // the opposite for the four fields - one method each, "whatever GROUP_BUDGET would say" -
@@ -2005,7 +2005,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("the guard's removal reaches the shared prefix too (task 51)") {
+  test("the guard's removal reaches the shared prefix too") {
     // This PR predates task 51 and originally asserted the opposite: that the guard, sharing
     // the prefix across the three outputs below, still fired and declined the batch. Task 51
     // removed the guard from emitEra, which emitChronoPrefixOnce - the fragment-sharing entry
@@ -2053,7 +2053,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   // Task 79's A/B arm: the arm context off, which is what every shape emitted before it.
   private val armOff = VarkaEmitOptions.DEFAULTS.withGuardUnderArm(false)
 
-  test("task 79: a guarded producer under a CASE arm no longer condemns from the untaken arm") {
+  test("a guarded producer under a CASE arm no longer condemns from the untaken arm") {
     // `CASE WHEN c < 1 THEN year(date_add(d, off)) ELSE year(d) END`, on the day-producer guard
     // task 52 built. Whether a lane is out of range and which arm it takes are set by two
     // different columns - `off` and `c` - so a lane index chooses one without deciding the
@@ -2116,7 +2116,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 79: an unknown condition sends its lane to ELSE, and the guard there still fires") {
+  test("an unknown condition sends its lane to ELSE, and the guard there still fires") {
     // The polarity test. SQL's CASE routes an *unknown* condition to ELSE, so the else arm's
     // context is NOT known-true - known-false plus unknown - and never the known-false word.
     // Here the condition's own column is null on the out-of-range lane, so the condition is
@@ -2155,7 +2155,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 79: a guard whose node's uses do not agree on one arm stays unqualified") {
+  test("a guard whose node's uses do not agree on one arm stays unqualified") {
     // The three shapes 3.3 refuses to narrow, each asserted to keep declining on a lane the
     // arm would have excused. These are the silent-wrong-answer cases: narrowing any of them
     // would stop a batch declining that must decline.
@@ -2208,7 +2208,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 79: a shape with no guarded node under an arm is byte-identical either way") {
+  test("a shape with no guarded node under an arm is byte-identical either way") {
     // The assertion that the context reached only the guards: every shape without a
     // batch-condemning node under an arm emits exactly what it did before task 79.
     val shapes = Seq(
@@ -2255,7 +2255,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     vs((i + col * 3) % vs.length)
   }
 
-  test("task 63: WRAP and NULL arithmetic match the reference over the extremes, and FAIL " +
+  test("WRAP and NULL arithmetic match the reference over the extremes, and FAIL " +
       "matches wherever it does not have to decline") {
     val a = new ColumnRef(0)
     val b = new ColumnRef(1)
@@ -2315,7 +2315,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ctx = "year(d) * 100 + month(d)")
   }
 
-  test("task 63: a FAIL lane that overflows condemns the batch - in a loop lane, in an " +
+  test("a FAIL lane that overflows condemns the batch - in a loop lane, in an " +
       "epilogue lane, not under a null, and not with the check off") {
     val root = new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1))
     val (kernel, loader) = load(emitMulti(Seq[VarkaVectorIR](root), 2, 0))
@@ -2359,7 +2359,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 68: abs is a blend whose negation arm alone condemns, at Int.MinValue") {
+  test("abs is a blend whose negation arm alone condemns, at Int.MinValue") {
     // `abs` is not an op the IR has. The compiler spells it `if (x < 0) -x else x`, so what
     // the emitter sees is task 79's shape - a guarded node under a CASE arm - built from task
     // 63's nodes. There is nothing new to lower here, and that is the claim: the blend
@@ -2410,7 +2410,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 63: the check costs bytes only where it is emitted, and none with it off") {
+  test("the check costs bytes only where it is emitted, and none with it off") {
     val a = new ColumnRef(0)
     val b = new ColumnRef(1)
     val bodies = Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")
@@ -2433,7 +2433,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(sizes(wrap, checkOff) === sizes(wrap, VarkaEmitOptions.DEFAULTS))
   }
 
-  test("task 63: a TRY node forfeits the dense body, and a checked one does not") {
+  test("a TRY node forfeits the dense body, and a checked one does not") {
     val a = new ColumnRef(0)
     val b = new ColumnRef(1)
     // A NULL node can null a lane whose operands are both valid, so the analysis marks the
@@ -2449,7 +2449,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(failAdd.contains("loopDense0") && failAdd.contains("epilogueDense"))
   }
 
-  test("task 63: the composite key's masked body is its dense twin's bytes") {
+  test("the composite key's masked body is its dense twin's bytes") {
     // PLAN_TASK_63.md 6.1 prediction 6. `year(d) * 100 + month(d)` under WRAP has the word of
     // a single input, so task 70's driver pass writes the whole output bitmap once per batch
     // and every word in the loop dies - which leaves the masked method with nothing the dense
@@ -2471,7 +2471,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "FAIL: the masked loop carries the word the guard reads")
   }
 
-  test("task 63: the registered op counts, and the controls that must not move") {
+  test("the registered op counts, and the controls that must not move") {
     // PLAN_TASK_63.md 3.3, filled from the emitted bytes. The point of pinning these is that
     // an arm that quietly emits twice the ops it should still passes every value test. The
     // counts are `IntVector` calls in `loopDense0`, so they include the loop's unrolling -
@@ -2530,7 +2530,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // again would pin the same bytes under a second name.
   }
 
-  test("task 63: make_date over a shifted year - the documented compile-time shape - " +
+  test("make_date over a shifted year - the documented compile-time shape - " +
       "actually runs and matches the reference") {
     // `compileIntOperand`'s own doc says `make_date(y + 1, m, d)` fuses, and
     // `VarkaExpressionCompilerSuite` pins the IR that widening produces - but nothing had ever
@@ -2557,7 +2557,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 52: a column-offset producer under a calendar node declines the batch whose " +
+  test("a column-offset producer under a calendar node declines the batch whose " +
       "result leaves the range - in a loop lane, in an epilogue lane, and not under a null") {
     val add = new Year(new AddDays(new ColumnRef(0), new ColumnRef(1)))
     val sub = new Month(new SubDays(new ColumnRef(0), new ColumnRef(1)))
@@ -2612,7 +2612,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 52: the guard is emitted only where a calendar node reads a column-offset " +
+  test("the guard is emitted only where a calendar node reads a column-offset " +
       "producer, and adds bytes nowhere else") {
     val producer = new AddDays(new ColumnRef(0), new ColumnRef(1))
     val bodies = Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")
@@ -2640,7 +2640,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 52: in-range column offsets under calendar nodes match the reference evaluator " +
+  test("in-range column offsets under calendar nodes match the reference evaluator " +
       "under both settings, and CSE off repeats the guard without breaking it") {
     val producer = new AddDays(new ColumnRef(0), new ColumnRef(1))
     val roots = Seq[VarkaVectorIR](new Year(producer), new Month(producer),
@@ -2679,7 +2679,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   // task 52's `emitProducerGuard`) on AddMonths' own month count, wherever it sits - the guard
   // protects the node's own magic-multiply arithmetic, not a further calendar consumer's.
 
-  test("task 60: a column month count declines the batch whose count leaves the range - in a " +
+  test("a column month count declines the batch whose count leaves the range - in a " +
       "loop lane, in an epilogue lane, and not under a null; the bounds themselves compute") {
     val root = new AddMonths(new ColumnRef(0), new ColumnRef(1))
     val (kernel, loader) = load(emitMulti(Seq(root), 2, 0))
@@ -2749,7 +2749,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 60: a literal date with a column count guards the same, on the branch that has " +
+  test("a literal date with a column count guards the same, on the branch that has " +
       "no word of its own") {
     // Every other test builds AddMonths(ColumnRef, ColumnRef), which owns its validity word.
     // A literal date gives the node no word of its own: planWordRef aliases the count input's,
@@ -2786,7 +2786,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 60: in-range column month counts match the reference evaluator under both " +
+  test("in-range column month counts match the reference evaluator under both " +
       "option values, with and without a further calendar reader") {
     val root = new AddMonths(new ColumnRef(0), new ColumnRef(1))
     val roots = Seq[VarkaVectorIR](root, new Year(root))
@@ -2804,7 +2804,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 60: the guard is emitted only for a column-driven month count, and the literal " +
+  test("the guard is emitted only for a column-driven month count, and the literal " +
       "form's bytes do not move") {
     val literal = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
     val column = new AddMonths(new ColumnRef(0), new ColumnRef(1))
@@ -2830,7 +2830,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 60: the register PLAN_TASK_60.md 3.3 predicted - the guard costs two IntVector " +
+  test("the register PLAN_TASK_60.md 3.3 predicted - the guard costs two IntVector " +
       "compares on top of a column's load replacing a literal's broadcast") {
     val literal = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
     val column = new AddMonths(new ColumnRef(0), new ColumnRef(1))
@@ -2881,7 +2881,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ctx = "two dates", options = sharing)
   }
 
-  test("task 71: whole-node reuse groups what a wider budget would, and nothing else") {
+  test("whole-node reuse groups what a wider budget would, and nothing else") {
     // Clause 2 lets an output join a group past the budget when joining lets it skip work the
     // group already does. B2 wrote that for a civil-from-days prefix; `shareWholeNodes`
     // generalises it to any node the group holds, which is the same argument - a reused prefix
@@ -2951,7 +2951,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 71: a budget change reaches only the shapes whose grouping it decides") {
+  test("a budget change reaches only the shapes whose grouping it decides") {
     // The guard section 2.35 believed already existed and did not. B2's byte-identity test
     // above compares `shareChronoPrefix` off against on at ONE budget; nothing asserted that
     // moving the budget itself touches only what it should. Task 71 measured the cost of a
@@ -3000,7 +3000,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 32 B2: with no prefix to reuse, sharing changes no loop method - the guard that " +
+  test("with no prefix to reuse, sharing changes no loop method - the guard that " +
       "clause 2 admits fragment reuse and nothing else") {
     // Before B2 this test asserted every calendar loop method byte for byte unchanged under
     // sharing, which was the proof that no committed number could move; its own comment said
@@ -3048,7 +3048,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 53: the numerator costs what PLAN_TASK_53.md 3.4 registered, per tail") {
+  test("the numerator costs what PLAN_TASK_53.md 3.4 registered, per tail") {
     // Registered before the work and asserted after, off the class file rather than reasoned
     // from the helpers. A miss here is a bug in the lowering, not a surprise about it: the
     // deltas are arithmetic on ops that either are or are not emitted.
@@ -3073,7 +3073,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "the year tail must not change when only the month axis does")
   }
 
-  test("task 54: the Julian map costs what PLAN_TASK_54.md 3.3 registered, per node") {
+  test("the Julian map costs what PLAN_TASK_54.md 3.3 registered, per node") {
     // Off the class file, like task 53's: the prefix loses the century fold and the year-step
     // underflow correction and gains the map and a second carry, and the year assembly loses
     // the `100 * century` multiply-add. Registered before the run; a miss is a bug in the
@@ -3097,7 +3097,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 32 B2: every calendar weight is the prefix plus the tail the emitter emits") {
+  test("every calendar weight is the prefix plus the tail the emitter emits") {
     // The register PLAN_TASK_32.md 10.3 asked for, asserted off the class file the way the
     // task 53 and 54 registers are. Each calendar node alone emits its prefix plus its tail,
     // and beside month(d) in one loop method it adds exactly its tail - which is the
@@ -3152,7 +3152,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(VarkaLoopEmitter.CHRONO_FIELD_TAIL_WEIGHT === 7)
   }
 
-  test("task 48: a year-only body computes no month, and the switch says so") {
+  test("a year-only body computes no month, and the switch says so") {
     assert(VarkaEmitOptions.DEFAULTS.elideChronoMonth(),
       "the elision is no longer the default - the case for it is in PLAN_TASK_48.md section " +
         "3.3, so say why here if it was deliberately turned off")
@@ -3183,7 +3183,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 48: the month step follows the group's consumers, not the emission order") {
+  test("the month step follows the group's consumers, not the emission order") {
     val col = new ColumnRef(0)
     for ((roots, ctx) <- Seq(
         (Seq[VarkaVectorIR](new Year(col), new Month(col)), "year first"),
@@ -3216,7 +3216,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       s"expected exactly one loop method to elide the month step, saved $saved")
   }
 
-  test("task 48: with sharing off the decision is per node, not per fragment") {
+  test("with sharing off the decision is per node, not per fragment") {
     // Unshared, year(d) and month(d) name different locals even though their fragment keys are
     // equal, so the year's own prefix elides and the month's does not - keying the decision on
     // the fragment there would make the year pay for a month it shares nothing with.
@@ -3233,7 +3233,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       options = unshared)
   }
 
-  test("task 34: dayofyear elides the month step too, and month(d) beside it does not") {
+  test("dayofyear elides the month step too, and month(d) beside it does not") {
     // The bounded counterpart of the sweep: dayofyear's tail reads the January turn off the
     // day of year (like Year's, task 48), so its prefix has no reason to run the month step.
     // A regression here is silent - the tail would read a local nothing wrote - so the count
@@ -3268,7 +3268,8 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing, and task 70 moves " +
+  test("sharing the prefix moves the epilogue's HugeMethodLimit crossing, and the bitmap " +
+    "pass moves " +
       "it again: unshared 21 to 22, shared 44 to 49") {
     // This is what step B1 is for, and the only thing it is for under today's grouping. The
     // epilogue is one method over *every* output by task 24's deliberate decision, so its size
@@ -3334,7 +3335,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       forceMasked = true, ctx = "forced-masked")
   }
 
-  test("task 70: the validity-word algebra agrees with planWordRef on the shapes the plan " +
+  test("the validity-word algebra agrees with planWordRef on the shapes the plan " +
       "reasons about, and every word a body stores is loaded") {
     // Two emit-time assertions arm this task before it changes a byte. planSlots asserts, on
     // every masked body it plans, that the symbolic word algebra (Analysis.pureWord and
@@ -3396,7 +3397,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private def supportNames(bytes: Array[Byte]): Set[String] =
     VarkaEmitterTestSupport.invokedNames(bytes, supportClass).asScala.toSet
 
-  test("task 70: byte-identical validity with the bitmap pass on and off, every null pattern " +
+  test("byte-identical validity with the bitmap pass on and off, every null pattern " +
       "and length, over the shapes the plan names") {
     // The existing oracle is the assertion: checkMatrix compares every output's validity byte
     // for byte against the reference evaluator and asserts status 0, and makeInputData poisons
@@ -3450,7 +3451,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 70: the validity work per masked loop method, as PLAN_TASK_70.md 3.3 registered " +
+  test("the validity work per masked loop method, as PLAN_TASK_70.md 3.3 registered " +
       "it, and no IntVector op moves") {
     val d = new ColumnRef(0)
     val d2 = new ColumnRef(1)
@@ -3486,7 +3487,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 70: a single-operator word tree of any depth is served through the chain entry " +
+  test("a single-operator word tree of any depth is served through the chain entry " +
       "points; a mixed AND/OR tree is declined and keeps its per-group write") {
     val d = new ColumnRef(0)
     val d2 = new ColumnRef(1)
@@ -3512,7 +3513,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(validityOps(mixed, "loopMasked0") === 5, "four reads for the picks, one write")
   }
 
-  test("task 70: the served and declined root counts, per shape") {
+  test("the served and declined root counts, per shape") {
     // The safety net PLAN_TASK_70.md 3.1 promised. Without it a regression that stopped
     // serving every root would revert the whole lowering to the per-group path and pass the
     // suite: the byte-identity test compares the two settings, which agree when nothing is
@@ -3554,7 +3555,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       === (0, 0))
   }
 
-  test("task 70: the word-liveness invariant is armed, in both directions") {
+  test("the word-liveness invariant is armed, in both directions") {
     // misdescribeWordLiveness inverts the verdict on every word. year(d): its only word is
     // dead - the root is served and nothing else reads it - so the fault makes it live: stored
     // at the top of the lane group, loaded by nobody, refused at the end of the body.
@@ -3589,7 +3590,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       bitmapOff.withMisdescribeWordLiveness(true))._2.nonEmpty)
   }
 
-  test("task 70: a masked method whose every word is dead is its dense twin's bytes - one " +
+  test("a masked method whose every word is dead is its dense twin's bytes - one " +
       "body, not two") {
     // No per-group read, no per-group write, no null-state prologue, no own-word slot: what is
     // left is the dense method. Asserted on size rather than on the byte string because the
@@ -3612,7 +3613,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 70: the driver stays under HugeMethodLimit on the output ladder, with the pass " +
+  test("the driver stays under HugeMethodLimit on the output ladder, with the pass " +
       "on and off, and the pass costs the 48-output driver what prediction 6 said") {
     // Nothing measured the driver before this task; it is one method for every output and the
     // one method every batch runs. Measured before the work: 2409 bytes at 44 outputs against
@@ -3637,7 +3638,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       s"48 outputs: the driver went from $off to $on bytes; prediction 6 said under 500 more")
   }
 
-  test("task 45: the driver's fill writes the bits the loop used to OR, exactly") {
+  test("the driver's fill writes the bits the loop used to OR, exactly") {
     // The narrow claim: the dense path writes the same bits from a different place. So the
     // check is byte-for-byte identity against today's path, at every length where the last
     // byte is partial - which is the byte that fails if setValid fills whole bytes rather than
@@ -3659,7 +3660,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 45: a Cond root keeps its per-group OR under both option values") {
+  test("a Cond root keeps its per-group OR under both option values") {
     // The selection bitmap's bits mean "known true", not "valid", so the driver must not fill
     // it - a filled selection bitmap selects every row. This is the test that fails if the
     // fill is applied to a Cond root, and it is why fillsValidityOnce excludes them rather
@@ -3672,7 +3673,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 45: the masked path's bytes do not move, and the dense path's shrink") {
+  test("the masked path's bytes do not move, and the dense path's shrink") {
     // The guard that keeps this task off the masked path, asserted the way task 32 asserted
     // its own: the masked bodies are byte for byte as they were, so no masked case can have
     // changed, and only the dense loop is allowed to have lost anything.
@@ -3700,7 +3701,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private val support = "org.apache.spark.sql.varka.vector.VarkaVectorSupport"
   private val intVector = "jdk.incubator.vector.IntVector"
 
-  test("task 46: a whole lane group calls the helper named for the emitted width") {
+  test("a whole lane group calls the helper named for the emitted width") {
     // The emitter knows the lane count when it writes the bytes, so the callee can carry it and
     // the four-arm switch on the width disappears from the call. Asserted on the names in the
     // class rather than on a timing, and by exact match: "orValidityBitsAt" is a prefix of
@@ -3728,7 +3729,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 46: a width with no specialised helper falls back to the general pair") {
+  test("a width with no specialised helper falls back to the general pair") {
     // 32 int lanes is a 1024-bit shape: SVE reaches it, the Vector API has no named species
     // constant for it, and VarkaVectorSupport has no pair. The fallback is what keeps such a
     // machine correct, so it is emitted and asserted rather than reasoned about.
@@ -3743,7 +3744,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       .contains("SPECIES_PREFERRED"))
   }
 
-  test("task 46: with the option off the emission is the pre-task form") {
+  test("with the option off the emission is the pre-task form") {
     // The A/B's other arm, and the reference variant: no width anywhere - not in a callee name
     // and not in the species - so what the benchmark compares against is what shipped before.
     // Both of task 46's arms are reached through task 70's per-group reference arm now.
@@ -3764,7 +3765,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "the baked emission still calls VectorSpecies.length()")
   }
 
-  test("task 47: the word writer's bitmap is the per-group writer's, at every length, width " +
+  test("the word writer's bitmap is the per-group writer's, at every length, width " +
       "and null state") {
     // The failure mode this task has and its predecessors did not: a store eight bytes wide
     // where the group is one or two, into a bitmap whose nominal size is (length + 7) / 8. Both
@@ -3857,7 +3858,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     Seq("loopDense0", "loopMasked0", "epilogueDense", "epilogueMasked")
       .map(VarkaEmitterTestSupport.codeSize(named._2, _))
 
-  test("task 47: the word writer reaches the outputs that keep a per-group write, and only " +
+  test("the word writer reaches the outputs that keep a per-group write, and only " +
       "those") {
     // The blast radius, asserted rather than described. An output task 45 fills once, and one
     // task 70's pass writes whole, must emit the same bytes under both arms - the word writer
@@ -3898,7 +3899,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "a 64-lane group must not word-write, since its lane mask would be zero")
   }
 
-  test("task 47: the write-count ladder really is one shape family, so its steps are runtime") {
+  test("the write-count ladder really is one shape family, so its steps are runtime") {
     // Read the ladder's own emissions before reading its numbers. PLAN_TASK_76.md 3.2 built
     // these four rungs to "hold the shape family constant and vary only the count", and task 47
     // measured a step at k=3 that neither task's model predicts: both arms that write per lane
@@ -3934,7 +3935,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       s"the rungs should grow by one write's worth of bytes each: $bytes (steps $steps)")
   }
 
-  test("task 76: every arm of task 46's A/B still emits two different kernels") {
+  test("every arm of the width-specialisation A/B still emits two different kernels") {
     // The failure this task is downstream of, made loud. Task 70's pass removed the per-group
     // validity call for a served root, which left both of task 46's arms emitting the same
     // bytes - each pair timed one kernel against itself, and the committed numbers said so for
@@ -3979,7 +3980,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       "validityByBitmap is not inert for a Cond root, so the filter A/B varies two things")
   }
 
-  test("task 46: the specialised helpers answer what the general pair answered") {
+  test("the specialised helpers answer what the general pair answered") {
     // The correctness statement, and the only one that matters: results identical under both
     // settings, at every null pattern and every length where the last byte is partial. The
     // helpers' own equivalence is pinned in the engine's VarkaVectorSupportWidthTest; this is
@@ -4001,7 +4002,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 46: the specialised helpers are still reached under task 70's default") {
+  test("the specialised helpers are still reached under the bitmap pass default") {
     // What the two A/B tests above cannot check once they run on the reference arm: that the
     // width-specialised writer is still emitted, and still right, on the shipped default. A
     // root the bitmap pass declines is what keeps a per-group write there - here a tree that
@@ -4026,7 +4027,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 46: a Cond root's selection bitmap is identical under both settings") {
+  test("a Cond root's selection bitmap is identical under both settings") {
     // The shape this task helps that task 45 could not: a filter kernel ORs its selection
     // bitmap per lane group in both bodies, because those bits are computed rather than known.
     // Identical bitmaps under both settings is what says the specialised writer's lane mask is
@@ -4039,7 +4040,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 46: the validity OR before the compute answers what the OR after it answered") {
+  test("the validity OR before the compute answers what the OR after it answered") {
     // The order moved so C2 meets the OR helper before the body's intrinsics have spent its
     // node budget; the bytes are the same either way and the results must be. The second root
     // is the shape that caught the first version of this: a Year over an IfElse, whose word
@@ -4068,7 +4069,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
-  test("task 46: an emission for a foreign width still computes that width's answers") {
+  test("an emission for a foreign width still computes that width's answers") {
     // lanesOverride exists so one JVM can exercise every arm, which is only honest if the
     // emitted class is self-consistent: it carries the species its helper names were chosen
     // for, so it computes correctly (slowly, if the hardware is narrower) rather than writing
@@ -4105,7 +4106,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       options = VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM))
   }
 
-  test("task 21: a comparison root emits the selection bitmap with null-as-false") {
+  test("a comparison root emits the selection bitmap with null-as-false") {
     // The simplest filter kernel: one Compare root, its bitmap checked against the Kleene
     // reference with unknown collapsed to false at the root - across lengths (partial lane
     // groups included) and every pair of null patterns, all-null included (the all-null
@@ -4115,7 +4116,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ctx = "cmp-root")
   }
 
-  test("task 21: BETWEEN- and IN-shaped roots match the reference") {
+  test("BETWEEN- and IN-shaped roots match the reference") {
     // The survey's two dominant filter shapes: BETWEEN as And over paired comparisons
     // against literals, and IN as the balanced OR chain of EQ leaves (task 20's lowering,
     // now at a root). Data cycles a small range so both selects and rejects occur.
@@ -4133,7 +4134,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       nullPatterns.map(p => Seq(p._2)), ctx = "in-root")
   }
 
-  test("task 21: an Or root over one all-null column still selects on the live column") {
+  test("an Or root over one all-null column still selects on the live column") {
     // The all-null-shortcut counterexample, pinned: Or(unknown, known-true) is known true,
     // so with column 0 all-null and column 1 live the rows where column 1 matches must
     // still select. A shortcut that fired on "some referenced column is all-null" would
@@ -4148,7 +4149,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     checkMatrix(Seq(root), 2, Array(4), Seq(65), combos(2), ctx = "or-matrix")
   }
 
-  test("task 21: validity-predicate roots - IS NOT NULL, and IS NULL as its NOT") {
+  test("validity-predicate roots - IS NOT NULL, and IS NULL as its NOT") {
     val isNotNull = new IsNotNull(new ColumnRef(0))
     checkMatrix(Seq(isNotNull), 1, Array.emptyIntArray, Seq(5, 64, 65, 1000),
       nullPatterns.map(p => Seq(p._2)), ctx = "isnotnull-root")
@@ -4156,7 +4157,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       Seq(5, 64, 65, 1000), nullPatterns.map(p => Seq(p._2)), ctx = "isnull-root")
   }
 
-  test("task 21: a mask root beside a value root shares the kernel and its subtrees") {
+  test("a mask root beside a value root shares the kernel and its subtrees") {
     // The emitter serves mixed outputs even though milestone 3's filter kernels are
     // single-root: the mask and the value share one CSE'd subtree, and each output keeps
     // its own contract (bitmap with no data store; value with data plus validity).
@@ -4167,7 +4168,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     checkMatrix(roots, 2, Array(7), Seq(5, 64, 65, 1000), combos(2), ctx = "mixed-roots")
   }
 
-  test("task 21: the masked body agrees with the dense body on a null-free mask root") {
+  test("the masked body agrees with the dense body on a null-free mask root") {
     val root = new And(
       new Compare(CompareOp.GE, new ColumnRef(0), new LiteralSlot(0)),
       new Compare(CompareOp.LE, new ColumnRef(0), new LiteralSlot(1)))
@@ -4338,7 +4339,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(e.getMessage.contains("options"), e.getMessage)
   }
 
-  test("task 23: the shallow rendering of every node type is pinned, like the shape hash") {
+  test("the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
     // session, so its rendering is a contract, not an implementation detail - and it used to
     // ride Record.toString, whose format no JDK promises. One key using all 24 node types (and

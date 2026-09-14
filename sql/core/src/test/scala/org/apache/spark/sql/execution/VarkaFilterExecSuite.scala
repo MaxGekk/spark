@@ -286,7 +286,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 24: an all-selected batch forwards the child's columns instead of copying") {
+  test("an all-selected batch forwards the child's columns instead of copying") {
     // The one case where compaction has nothing to shorten, and the only place a Varka filter
     // hands back a vector it does not own. Two things are asserted, and the second is the
     // hazard: the output column must be the *same object* as the input's, and releasing the
@@ -326,7 +326,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 21 review: the row node counts rows as they are emitted, not per batch") {
+  test("the row node counts rows as they are emitted, not per batch") {
     // Pre-charging the batch's whole selected count overcounts under early termination
     // (a LIMIT) and double-counts when a later throw routes the batch to the fallback.
     val dates = Seq(Int.box(1), Int.box(2), Int.box(3), Int.box(4))
@@ -337,7 +337,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     assert(plan.metrics("numOutputRows").value === 1)
   }
 
-  test("task 21 review: a columnar child declaring non-Arrow vectors is not rewritten") {
+  test("a columnar child declaring non-Arrow vectors is not rewritten") {
     // supportsColumnar alone is satisfied by Parquet/ORC vectorized scans whose batches
     // fail canRun every time; the plan-time vectorTypes gate keeps such filters on the
     // stock plan instead of a permanently falling-back Varka node.
@@ -383,7 +383,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     assert(columnar.output(1).nullable)
   }
 
-  test("task 21 review: formatted EXPLAIN renders both filter nodes without throwing") {
+  test("formatted EXPLAIN renders both filter nodes without throwing") {
     // Caught while writing the PR description: ExplainUtils.generateFieldString rejects a
     // bare expression, so formatted EXPLAIN of any Varka filter node threw. The condition
     // renders as a plain line, exactly as FilterExec renders its own.
@@ -459,7 +459,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 78: a narrowing projection is absorbed into the row-out filter") {
+  test("a narrowing projection is absorbed into the row-out filter") {
     val child = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr))
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
       // `SELECT d FROM t WHERE d < ...` after transitions: a Project the optimizer could not
@@ -487,7 +487,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 78: the absorbed projection travels to the columnar sibling") {
+  test("the absorbed projection travels to the columnar sibling") {
     // VarkaFusedTransition promises "the columnar-out node computing exactly what this fused
     // transition computes", and the cache serializer swaps one for the other when a cached
     // view's top is this node. A sibling that dropped the narrowing would hand the cache a
@@ -504,7 +504,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
       VarkaFilterExec(dLess10, child))
   }
 
-  test("task 78: the row node emits only the narrowed columns, values unchanged") {
+  test("the row node emits only the narrowed columns, values unchanged") {
     val dates = Seq(Int.box(1), Int.box(50), Int.box(3))
     val ints = Seq(Int.box(7), Int.box(8), Int.box(9))
     // Unnarrowed, the node emits both columns; narrowed to `d`, only the first - and the same

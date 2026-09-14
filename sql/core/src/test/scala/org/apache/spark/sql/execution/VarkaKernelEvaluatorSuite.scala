@@ -201,7 +201,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 16: the emitted class is dumped under its SourceFile name, byte for byte") {
+  test("the emitted class is dumped under its SourceFile name, byte for byte") {
     withTempDir { dumpDir =>
       withTask { (input, completeTask) =>
         val kernels = evaluator(classDumpDirectory = Some(dumpDir.getAbsolutePath))
@@ -221,7 +221,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 67: an interval column serves the kernel, and an interval output is allocated") {
+  test("an interval column serves the kernel, and an interval output is allocated") {
     // Both sides of the admission in one run: `IntervalYearVector` accepted as an input by
     // `isArrowBacked`, and `YearMonthIntervalType` allocated as an output by
     // `allocateVector`. Nothing between them changes - the value is a month count in an int32
@@ -265,7 +265,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 68: an interval output takes the int output's write path, byte for byte") {
+  test("an interval output takes the int output's write path, byte for byte") {
     // What `PLAN_TASK_68.md` 6.1 called the Arrow write path, and what is actually there.
     // The kernel never touches an Arrow vector object: `project` reads
     // `getDataBuffer().memoryAddress()` off each output and the emitted loop writes four-byte
@@ -331,7 +331,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 16: the fusion report names each entry's fate and the residual entry's reason") {
+  test("the fusion report names each entry's fate and the residual entry's reason") {
     val lines = VarkaFusionReport.lines(mixedList, childOutput)
     assert(lines.length === 3)
     assert(lines(0) === "a: fused")
@@ -341,7 +341,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     assert(lines(2).contains("i"), lines(2))
   }
 
-  test("task 16: a declined offset and a missing ELSE report their own reasons") {
+  test("a declined offset and a missing ELSE report their own reasons") {
     // A bare int column offset fuses since task 38 and int arithmetic over one since task 63,
     // so the declining shape here is `i % 7`: an offset expression built from an operator
     // neither task lowered, which is what still reaches this reason.
@@ -357,7 +357,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     assert(elseLines(0).contains("CASE WHEN without an ELSE branch"), elseLines(0))
   }
 
-  test("task 52: a day shift past the calendar range reports its interval as the reason") {
+  test("a day shift past the calendar range reports its interval as the reason") {
     val farYear = Seq[NamedExpression](
       Alias(Year(DateAdd(attrD, Literal(20000000))), "far")(),
       Alias(Year(attrD), "near")())
@@ -367,7 +367,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     assert(lines(1) === "near: fused", lines(1))
   }
 
-  test("task 20: the IN cap and the validity-operand declines report their reasons") {
+  test("the IN cap and the validity-operand declines report their reasons") {
     val overCap = Seq[NamedExpression](
       Alias(If(In(attrD, (1 to 17).map(k => Literal(k, DateType))), attrD,
         DateAdd(attrD, Literal(1))), "picked")(),
@@ -437,7 +437,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     (0 until out.numRows()).map(r =>
       if (out.column(0).isNullAt(r)) null else Int.box(out.column(0).getInt(r)))
 
-  test("task 59: the derived weekday input serves the kernel from a string column, grows " +
+  test("the derived weekday input serves the kernel from a string column, grows " +
       "its scratch across batch sizes, and leaves no Arrow memory behind") {
     val initial = ArrowUtils.rootAllocator.getAllocatedMemory
     val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-test", 0, Long.MaxValue)
@@ -476,7 +476,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 59 review: a scratch grow that runs out of memory leaves the previous buffer " +
+  test("a scratch grow that runs out of memory leaves the previous buffer " +
       "usable, and the task's cleanup closes it exactly once") {
     // `grown` used to close the old buffer before allocating the replacement. `buffer` throws
     // Arrow's OutOfMemoryException, a plain RuntimeException that `serveBatch` catches as a
@@ -553,7 +553,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 59: a weekday source that is not an Arrow VarCharVector refuses the batch, and " +
+  test("a weekday source that is not an Arrow VarCharVector refuses the batch, and " +
       "under ANSI an unrecognised name declines it") {
     val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-test", 0, Long.MaxValue)
     val context = TaskContext.empty()
@@ -600,7 +600,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     else Int.box(DateTimeUtils.truncDate(d, level))
   }
 
-  test("task 61: the derived trunc-level input serves the kernel from a string column, an " +
+  test("the derived trunc-level input serves the kernel from a string column, an " +
       "all-invalid batch is all NULL with nothing declined, an on-heap source is refused, and " +
       "no Arrow memory is left behind") {
     val initial = ArrowUtils.rootAllocator.getAllocatedMemory
@@ -652,7 +652,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 47: a destination validity buffer carries whole 64-bit words, at every length") {
+  test("a destination validity buffer carries whole 64-bit words, at every length") {
     // Task 47's admission check, and the reason it is a committed test rather than a comment:
     // the answer is a property of the Arrow version this repository depends on, and the whole
     // task rests on it. `VarkaLoopEmitter` writes a destination bitmap one lane group at a

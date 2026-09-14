@@ -173,7 +173,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 16: the fallback warning names the kernel it gave up on") {
+  test("the fallback warning names the kernel it gave up on") {
     // Before task 16 this line carried only the exception, so a log could not say which plan
     // node or projection had fallen back.
     VarkaColumnarToRowExec.setFailKernelForTesting(true)
@@ -198,7 +198,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 56: an interval-cast offset past the cast's limit declines the batch, a null " +
+  test("an interval-cast offset past the cast's limit declines the batch, a null " +
       "offset with the same data does not, and an in-range batch runs on the kernel") {
     // The evaluator's pre-check: the compiler bounded the offset column because Spark's
     // CAST(i AS INTERVAL DAY) throws past INTERVAL_DAY_LIMIT_DAYS in every mode, so a batch
@@ -232,7 +232,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     assert(causes === Seq(VarkaFallbackEvent.RANGE_DECLINED), causes.mkString("; "))
   }
 
-  test("task 16: verbose EXPLAIN accounts for every entry, with the residual entry's reason") {
+  test("verbose EXPLAIN accounts for every entry, with the residual entry's reason") {
     val plan = node(
       project(
         Alias(DateAdd(attrD, Literal(3)), "a")(),
@@ -373,7 +373,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
   }
 
 
-  test("task 21 review: a residual-machinery failure is counted under its own cause") {
+  test("a residual-machinery failure is counted under its own cause") {
     // Under CODEGEN_ONLY the residual projection's Janino compile throws inside the kernel
     // try; the VarkaKernelFailure marker keeps it out of the kernel-failure metric and it
     // lands under row-path-failure - once - before the fallback re-throws the same failure.
@@ -415,7 +415,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("task 22: an emission failure counts once per task, evented, not mislabeled") {
+  test("an emission failure counts once per task, evented, not mislabeled") {
     // The injected emission failure makes the class lookup throw, so the runner cannot be
     // built: the evaluator counts one emission failure and emits the JFR fallback event, and
     // the per-batch fallbacks are NOT counted as non-Arrow (the carve-out under test).
