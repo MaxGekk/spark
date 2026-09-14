@@ -1790,6 +1790,79 @@ task 67 built the type's arithmetic and this is the one shape of it that is
 column-hostile - and to lift it if it is only the former.
 
 
+### 2.32 A bandwidth-bound row lost 22.6% and nothing in its lowering changed (task 97)
+
+*Opened 14 September 2026, out of task 78's regeneration.*
+
+`date_add(d, 3)` read 1811.6 M rows/s in the surface committed on 7 September and
+1401.4 M/s in the one committed on 13 September - **-22.6%** - with a clean
+machine canary on both runs and the same host, governor and row count.
+
+**It is not the lowering.** The expression emits four `IntVector` operations
+today, which is what it has always emitted; `date_add(d, i)` emits four as well.
+Of the fifty-five commits between the two runs, one touches the `AddDays`
+neighbourhood at all, and every hunk of it is a `case GuardedDay` arm or a slot
+allocation behind `reachesGuardedDay`, which a literal-offset tree never reaches.
+The column-offset support that the shape might otherwise be blamed on predates
+the first of the two runs.
+
+**The hypothesis to test, and it is only that.** This is the most
+memory-bandwidth-bound entry in the surface - about 0.7 ns/row, four bytes in and
+four out, roughly single-core DRAM speed - so it is the row where the arithmetic
+is irrelevant and the memory system is everything. Between the two runs the
+benchmark table went from three int32 columns to six, because task 67 added the
+year-month interval columns, and the cached table grew from about 12 GiB to
+23.2 GiB. The kernel still reads only `d`, the same four gigabytes, but that
+column is now interleaved among twice as much data across the batch sequence.
+
+**What the task is.** Build the table at three columns and at six, time the same
+entry against both, and settle it. If the working set explains it, then every
+bandwidth-bound row in the surface - roughly a third of the entries - is being
+measured against a table shaped by columns those rows never read, and the
+surface's fixture needs a decision rather than a drift. If it does not, fifty-four
+other commits are in scope and the question is a real regression hunt.
+
+This is worth doing before the numbers are quoted publicly, because it decides
+whether a third of the coverage table is understated.
+
+### 2.33 Two filter rows stay under 1.0x, and the boundary is why (task 98)
+
+*Opened 14 September 2026, out of task 78's outcome.*
+
+Task 78 fixed the loss it was opened for - `WHERE d < d2` with a columnar
+consumer went 0.59x to 1.14x - and two counted rows stayed below stock Spark:
+`WHERE d < d2` counted at 0.80x, and `WHERE d IS NOT NULL` counted at 0.45x.
+They are the only losses left in the surface.
+
+**The cause is the same for both and it is not the kernel.** The same
+`d IS NOT NULL` predicate runs at 1.2 ns/row with a columnar consumer - 9.5x over
+stock - and at 11.7 ns/row counted. Identical kernel, identical data; the only
+difference is what happens after the filter. The results file names the reason on
+the next line: the predicate selects 96.8% of a billion rows, so about 968 million
+of them cross into Spark's row world at roughly 25 ns each, which is task 19's
+read-back floor and very nearly the whole 11.7 ns.
+
+What makes these two rows the worst in the table rather than middling is that
+both variables are at their extremes at once: **the maximum number of rows
+crossing the floor, and the minimum amount of work saved before it**. A null-bit
+test is nearly free for stock Spark, so a vector loop has almost nothing to win
+back. Move either variable and the loss goes: a columnar consumer gives 9.5x, and
+a heavier predicate counted (`d < d2 AND month(d) = 6`) gives 3.4x with the same
+crossing.
+
+**What the task is.** Price the one lever that removes the boundary rather than
+narrowing it: making the filter node `CodegenSupport`, so an aggregate consuming
+it fuses into the vector loop instead of reading rows back. That is milestone 4's
+scope item 13, which task 78's outcome explicitly declined to inherit on the
+evidence that the narrowing fix alone was enough for the shapes it owned. It is
+not enough for these two, and they are what is left.
+
+The debt register's `COUNT(*)` entry - the kernel at 0.9x and 0.8x on a
+fully-selecting range with nothing crossing the boundary - belongs to the same
+owner, because both questions are about what a predicate kernel is worth when the
+consumer counts rather than reads.
+
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. 28 opens
@@ -1838,6 +1911,8 @@ independent of both and of each other.
 | 94 | The bench module's tests are enforced by hand or not at all (section 2.29). **Scoped** (12 September 2026), from the review of task 62's chains PR: `sql/varka/bench` is only ever `-DskipTests package`d - three call sites, all of them - so `ChainsTest` and `SurfaceTest` run when someone types the Maven line and never in CI. The review found two of their invariants already weakened, which is the shape of it: right when written, and nothing to say when they stopped being | A `varka-bench` module in `dev/sparktestsupport/modules.py`, the `precondition` wiring that consumes `dev/is-changed.py -m varka-bench`, and a job modelled on `varka-engine` | The suites run on a pull request that touches `sql/varka/bench` and not on one that does not; a deliberately broken `ChainsTest` invariant fails that job |
 | 95 | Two int32 shapes decline that a reader would expect to fuse (section 2.30). **Scoped** (12 September 2026), while choosing task 62's chain entries: `datediff(d2, d) * i` and `i % 20` both decline, though multiplying by a *literal* is fine - so it is an int multiply whose right operand is a column, and an int remainder at all | Whichever of `MUL` with a runtime operand and `REM` is worth the lowering, under task 63's existing checked/wrapping overflow discipline rather than beside it | Both spellings fuse or one is declined with a reason a reader can act on; the differential covers the overflow edge of whichever lands |
 | 96 | `make_ym_interval` takes only arguments derived from a date (section 2.31). **Scoped** (12 September 2026), the same way: `make_ym_interval(year(d), month(d))` fuses and is in the surface, `make_ym_interval(i, i)` declines - so the constructor for the third type cannot be fed from the int columns the engine already reads, which is the obvious spelling and part of the three-types claim | Establish whether the restriction is the admission rule or something the lowering needs, and lift it if it is the former | `make_ym_interval` over two int columns fuses and matches the row engine over the ANSI overflow edge, or declines with a reason that says why it must |
+| 97 | A bandwidth-bound row lost 22.6% between two surface regenerations and nothing in its lowering changed (section 2.32). **Scoped** (14 September 2026), out of task 78's run: `date_add(d, 3)` went 1811.6 to 1401.4 M rows/s with a clean canary both times, while emitting the same four `IntVector` ops it always has and taking none of the paths the one nearby commit added. The table it is measured over grew from three int32 columns to six between the runs, and from about 12 GiB to 23.2 GiB cached, which is the hypothesis to test on the row where memory is everything and arithmetic is nothing | Time the same entry over a three-column and a six-column table, same host and row count, and attribute the 22.6% | Either the working set explains it - in which case a third of the surface is measured against a fixture shaped by columns those rows never read, and the fixture needs a decision - or fifty-four other commits are in scope |
+| 98 | Two filter rows stay under 1.0x because the consumer counts (section 2.33). **Scoped** (14 September 2026), out of task 78's outcome: `WHERE d < d2` counted at 0.80x and `WHERE d IS NOT NULL` counted at 0.45x are the only losses left in the surface, and the same `d IS NOT NULL` predicate reads 9.5x with a columnar consumer at 1.2 ns/row against 11.7 ns counted - identical kernel, and 968 million of a billion rows crossing the read-back floor at about 25 ns each | Price making the filter node `CodegenSupport` so a counting consumer fuses into the vector loop instead of reading rows back - milestone 4's scope item 13, which task 78 declined to inherit and these two rows now need | The two rows at or above 1.0x, or a recorded measurement saying what the boundary costs and why it cannot go; the debt register's `COUNT(*)` entry belongs to the same owner |
 
 ## 4. Files
 
