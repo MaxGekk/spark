@@ -127,3 +127,30 @@ the run succeeds and publishes something other than what its name says.
 A dry run is a check on structure and says nothing about numbers. It is not a
 faster regeneration, and the script's header says so where someone tired might
 reach for it.
+
+## A red Build here may be failing on code this repository does not contain
+
+The fork's CI does not build the branch. It builds the branch *merged with a newer
+upstream Spark* - the Precompile job's log opens with a page of `Auto-merging` lines
+across the workflows, `AGENTS.md` and the error-condition tables. So the tree under
+test is this repository plus upstream commits it does not carry, and a failing test
+can belong entirely to Spark rather than to anything here.
+
+That is not hypothetical. `AvroSchemaHelperSuite."SPARK-59311: a pathologically
+nested map-key type names the map-key property on overflow"` fails on every branch
+in this fork, including documentation-only ones, and the test exists nowhere in this
+repository: `grep -rn "SPARK-59311" .` finds nothing outside CI logs, and the local
+copy of that suite has no such case.
+
+**The check, and the order to do it in.** Before investigating a failing test, grep
+this repository for its name. If the test is not here, the failure is upstream's and
+nothing in the branch can have caused it - stop. Only if it is here does the usual
+question arise, which is whether the branch or the machine caused it, and which
+`.github` documents under "Investigating PR CI Failures".
+
+Doing that backwards is expensive and the expense is invisible: comparing a failure
+across several branches establishes only that it is widespread, which is a weaker
+fact than the grep gives in one command, and it invites the conclusion that a
+widespread failure is *this project's* problem to schedule. It is not. A failure in
+code this repository does not contain is not Varka work and does not become a
+milestone task row; at most it becomes a line here, which is what this is.

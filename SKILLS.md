@@ -92,5 +92,6 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Repo Workflow (vecbricks/varka)](sql/varka/skills/working-in-this-repo.md#repo-workflow-vecbricksvarka)
 * [A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic](sql/varka/skills/working-in-this-repo.md#a-recipe-for-a-cheap-agent-ages-at-the-rate-of-the-emitter-not-of-the-arithmetic)
 * [A value that depends on repo state is queried, not chosen](sql/varka/skills/working-in-this-repo.md#a-value-that-depends-on-repo-state-is-queried-not-chosen)
+* [A red Build here may be failing on code this repository does not contain](sql/varka/skills/working-in-this-repo.md#a-red-build-here-may-be-failing-on-code-this-repository-does-not-contain)
 
 <!-- END generated contents -->
