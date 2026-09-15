@@ -19,10 +19,13 @@ micro-optimisations (82, 87) and the read-back floor (98); boolean outputs (27)
 went with them as the one borderline call, recorded in 1.1. Five rows were added
 (102 to 106, sections 2.37 to 2.41): the `TIME` expressions, the day-time
 interval expressions, `Long` arithmetic, the `TIME` benchmark, and the quote check
-in CI - and, added the same day at the owner's request, seven rows (107 to 113,
-sections 2.42 to 2.48) for `TIME` features vanilla Spark does not have yet, to be
-built in the fork's row engine during the milestone and lowered into the lane
-where they fit. Task 29 was widened rather than replaced: `TIME` nanoseconds, day-time
+in CI - and, added the same day at the owner's request, rows 107 to 117
+(sections 2.42 to 2.52): `TIME` features vanilla Spark does not have yet, each
+linked to its ticket under the upstream umbrella [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) where
+one exists, to be built in the fork's row engine during the milestone and
+lowered into the lane where they fit; one of them (111, Avro) withdrawn the same
+day when the umbrella showed it done; the Arrow-cache proof (116); and a sync of
+the fork with `apache/spark` master (117), which it trails by 375 commits. Task 29 was widened rather than replaced: `TIME` nanoseconds, day-time
 interval microseconds, timestamp microseconds and `bigint` are one lane. Section
 1.1 has the order; the sections below it are as they were, with a note under each
 moved heading so citations still resolve.
@@ -114,12 +117,14 @@ Five facts, checked against the tree on the day, decided the shape:
   `TimeFrom*`/`TimeTo*` pairs are all in its catalyst jar), so the baseline arm
   exists with the flag turned on.
 * Arrow can carry it: `ArrowUtils.isSupportedByArrow` admits `TimeType`
-  (`Time64`, precision in field metadata) and `DayTimeIntervalType`
-  (`Duration(MICROSECOND)`). But `ArrowCachedBatchSerializer`'s column-stats
-  switch has arms for `LongType`, the timestamps and `YearMonthIntervalType` and
-  none for `TimeType` or `DayTimeIntervalType`. Whether a `TIME` column survives
-  cache-write is therefore the milestone's first admission check, not a
-  formality (2.37).
+  (`Time64`, precision in field metadata, [SPARK-57661](https://issues.apache.org/jira/browse/SPARK-57661)) and
+  `DayTimeIntervalType` (`Duration(MICROSECOND)`), and
+  `ArrowCachedBatchSerializer`'s column-stats switch has a `LongColumnStats` arm
+  for each. *An earlier draft of this section said it had neither; that read
+  stopped one line short, and the correction is recorded here rather than
+  erased.* What nothing has done is cache a `TIME` column through Varka's
+  serializer path and map its buffer as eight-byte lanes, so that proof is a
+  task (116) rather than a formality.
 * The emitter's `LaneType` enum has one member, `INT`. Everything above sits
   behind widening it, which is task 85, which its own row says follows 84.
 * Long lanes have no division. The Vector API has no 64-bit divide, and a
@@ -142,21 +147,30 @@ as 85 touches them - run alongside; 81 extends to `time.sql` and `interval.sql`
 once the first `TIME` expression fuses; 106 (the quote check in CI) can go any
 time.
 
-**The vanilla gaps (107 to 113).** The owner asked that features vanilla Spark is
-missing for `TIME` become rows here too, to be implemented during the milestone.
-Each was checked against the tree rather than assumed: the registry has
-`time_diff` but no additive `time_add` where timestamps have both `timestampdiff`
-and `timestampadd`; `make_time` has no `try_` variant where dates and timestamps
-do; `sequence()` has arms for dates and timestamps and none for `TIME`; `avg`
-admits numerics and both interval types and not `TIME`; Avro's
-`SchemaConverters` has no `TimeType` arm while CSV, JSON, Parquet, ORC and JDBC
-all do; and `date + time` has no coercion rule although `make_timestamp(date,
-time)` exists as a function. Everything else checked - `extract`, the casts, the
-data sources just named, the Connect proto, the Python type and the pandas
-conversion, and DSL parity for every `TIME` function - is present. What could
-not be settled by reading is 2.48's survey. Each row is written as an
-upstream-shaped change so it can be offered to `apache/spark`, and the fork
-carries it either way.
+**The vanilla gaps (107 to 115).** The owner asked that features vanilla Spark is
+missing for `TIME` become rows here too, to be implemented during the milestone,
+and then that they be checked against the upstream umbrella
+[SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) ("Extend support for the TIME data type", 58 subtasks).
+Two facts from that check frame every row. First, **the fork carries every
+resolved subtask of that umbrella** - each resolved ticket's commit is in
+`origin/master` as it is in `upstream/master` - so nothing here is a sync of
+`TIME` work; what the fork lacks is 375 unrelated upstream commits (task 117).
+Second, the umbrella's open subtasks are the authoritative list of what vanilla
+Spark still lacks, and the rows link to them. Five gaps found by reading the tree
+hold and four have tickets: no additive `time_add` where timestamps have
+`timestampadd` (107, no ticket; its wrap semantics are [SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853)'s
+open question); no `try_make_time` (108, [SPARK-57846](https://issues.apache.org/jira/browse/SPARK-57846)); no
+`sequence()` arm (109, [SPARK-57852](https://issues.apache.org/jira/browse/SPARK-57852)); no `avg` over `TIME` (110,
+[SPARK-58044](https://issues.apache.org/jira/browse/SPARK-58044)); no `date + time` operator (112, no ticket). Two more
+come from the umbrella: `time_bucket` over `TIME` (114, [SPARK-54507](https://issues.apache.org/jira/browse/SPARK-54507))
+and `time_format` (115, [SPARK-54588](https://issues.apache.org/jira/browse/SPARK-54588)). One reading was wrong and is
+withdrawn rather than renumbered: Avro `TIME` (111) is implemented, by
+[SPARK-54473](https://issues.apache.org/jira/browse/SPARK-54473) and [SPARK-57581](https://issues.apache.org/jira/browse/SPARK-57581), under `sql/core`'s Avro code
+rather than `connector/avro`, which is where the grep looked. `to_char` over
+`TIME` ([SPARK-57575](https://issues.apache.org/jira/browse/SPARK-57575), in `ToStringBase`) and Hive interop
+([SPARK-57556](https://issues.apache.org/jira/browse/SPARK-57556)) are likewise present, which shortens 2.48's survey. Each
+remaining row is written as an upstream-shaped change so it can be offered to
+`apache/spark` against its ticket, and the fork carries it either way.
 
 **Boolean outputs (27) is the borderline call.** `SELECT t1 < t2 AS flag` is a
 projection output, distinct from filters, which already run through masks.
@@ -2139,15 +2153,14 @@ compiler admits a long-lane column where it admits a date one. Out: `ToTime`
 (string parsing), `CurrentTime` (foldable anyway), and `DateFormatClass` over
 `TIME` (a string result).
 
-**The admission check, first.** `ArrowCachedBatchSerializer.columnStats` has
-arms for `LongType`, the timestamps and `YearMonthIntervalType` and none for
-`TimeType` or `DayTimeIntervalType`; `ArrowUtils.isSupportedByArrow` admits both
-and would let a `TIME` column through to that switch. Cache a `TIME` column under
-`spark.sql.cache.serializer` set to the Arrow serializer, read it back, and map
-its buffer through the morsel as eight-byte lanes. If the switch throws or falls
-to a default that misdescribes the column, that is a small `sql/core` fix and the
-first task of the milestone; if it silently works, say so with the test that
-proves it. Nothing else in this section should be built until that is known.
+**The admission check, first - task 116.** The serializer's stats switch has
+`LongColumnStats` arms for both `TimeType` and `DayTimeIntervalType` (an earlier
+draft here said it did not; 1.1 records the correction), and upstream's
+[SPARK-54203](https://issues.apache.org/jira/browse/SPARK-54203) put `TimeType` through `RowToColumnConverter`. What no test
+has done is cache a `TIME` column under `spark.sql.cache.serializer` set to the
+Arrow serializer, read it back, and map its buffer through the morsel as
+eight-byte lanes at the declared precision. Task 116 is that test, for both
+types, and nothing else in this section is built until it passes.
 
 **Coverage.** `VarkaCoverageSuite` enforces that every Catalyst class the
 compiler matches is documented, so the new arms cannot land undocumented; the
@@ -2197,7 +2210,11 @@ milestone 6. `/` is a double and stays out with item 3.
 
 ### 2.40 The `TIME` benchmark: its own class and its own files (task 105)
 
-*Opened 15 September 2026 by the re-scope; the number the message quotes.*
+*Opened 15 September 2026 by the re-scope; the number the message quotes.
+Upstream's [SPARK-57562](https://issues.apache.org/jira/browse/SPARK-57562) ("Add benchmarks for the TIME data type") is
+open, and milestone 6's item 8 already argues for extending Spark's benchmarks
+rather than only writing our own - so the inventory built here is shaped to be
+offered there as well.*
 
 A new feature family gets its own benchmark class and its own committed results
 files, not rows in `DateSurfaceBenchmark`: `TimeSurfaceBenchmark` in
@@ -2243,17 +2260,19 @@ and nothing additive. `t + INTERVAL '2' HOUR` covers the literal case through
 `TimeAddInterval`, but the unit-and-quantity form is what a query with a
 column of quantities writes, and its absence is a parity gap a user of
 `timestampadd` will hit on day one. The expression is `TimeAdd(unit, quantity,
-time)`: quantity times the unit's nanoseconds, added with the wrap into the day
-that `timeAddInterval` performs, unit a foldable string as `timestampadd`'s is.
+time)`: quantity times the unit's nanoseconds, added under whatever out-of-range rule
+[SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) settles - that ticket is open on exactly this, modulo-24
+against overflow, and `time_add` must not decide it by accident, so the row waits
+on or contributes to that decision - unit a foldable string as `timestampadd`'s
+is. No upstream ticket exists for `time_add` itself; this row is the candidate.
 In the lane it is a multiply and an add under the modular wrap - the same kernel
 as `TimeAddInterval` with the interval built from two operands. Ships with a
 `try_time_add` only if the wrap can fail, which for a day-modular result it
-cannot; the plan records that rather than adding a variant that never returns
-null.
+cannot under modulo-24 and can under overflow; which, follows 57853.
 
 ### 2.43 `try_make_time` (task 108)
 
-*Opened 15 September 2026: a vanilla Spark gap.*
+*Opened 15 September 2026: a vanilla Spark gap, [SPARK-57846](https://issues.apache.org/jira/browse/SPARK-57846) (open).*
 
 `make_date` has `try_make_date`, `make_timestamp` has `try_make_timestamp`,
 `make_time(h, m, s)` has no `try_` form and throws on `25:00:00`. The variant
@@ -2264,7 +2283,7 @@ a type feel finished.
 
 ### 2.44 `sequence()` over `TIME` (task 109)
 
-*Opened 15 September 2026: a vanilla Spark gap.*
+*Opened 15 September 2026: a vanilla Spark gap, [SPARK-57852](https://issues.apache.org/jira/browse/SPARK-57852) (open).*
 
 `sequence(start, stop, step)` generates dates and timestamps by an interval step
 and has no `TIME` arm, so a query cannot produce the half-hours of a day. The arm
@@ -2276,7 +2295,10 @@ times.
 
 ### 2.45 `avg` over `TIME` (task 110)
 
-*Opened 15 September 2026: a vanilla Spark gap.*
+*Opened 15 September 2026: a vanilla Spark gap, [SPARK-58044](https://issues.apache.org/jira/browse/SPARK-58044) (open);
+the quantile and sketch aggregates are already done upstream and in the fork
+([SPARK-57557](https://issues.apache.org/jira/browse/SPARK-57557), [SPARK-57847](https://issues.apache.org/jira/browse/SPARK-57847), [SPARK-57848](https://issues.apache.org/jira/browse/SPARK-57848)), and
+`approxQuantile`/`summary`/`describe` are [SPARK-57849](https://issues.apache.org/jira/browse/SPARK-57849) (open).*
 
 `Average` admits `NumericType`, `YearMonthIntervalType` and
 `DayTimeIntervalType`; `TIME` is a fixed-width long like the intervals and the
@@ -2287,9 +2309,15 @@ long. Aggregation is milestone 6's item 7 on the Varka side, so this row is the
 row engine only, and it says so; `median`, `percentile` and `mode` over `TIME`
 are 2.48's to check before they become rows.
 
-### 2.46 Avro `TIME` (task 111)
+### 2.46 Avro `TIME` (task 111) - withdrawn
 
-*Opened 15 September 2026: a vanilla Spark gap.*
+*Opened 15 September 2026 as a vanilla Spark gap and withdrawn the same day: the
+support exists, by [SPARK-54473](https://issues.apache.org/jira/browse/SPARK-54473) (fix 4.2.0) and [SPARK-57581](https://issues.apache.org/jira/browse/SPARK-57581)
+(the unit-correct logical type), and both commits are in the fork. The reading
+that opened the row grepped `connector/avro/src/main` for `TimeType`, and the
+Avro serializer, deserializer and schema converter live under `sql/core` since
+Spark 4. The number is not reused, on the house rule that a row is a record; the
+text below is what was believed for a few hours and why it was wrong.*
 
 Avro has `time-micros` and `time-millis` logical types over long and int, and
 `connector/avro`'s `SchemaConverters` has no `TimeType` arm, so a `TIME` column
@@ -2301,7 +2329,9 @@ Varka side.
 
 ### 2.47 `DATE + TIME`, the operator form of `make_timestamp(date, time)` (task 112)
 
-*Opened 15 September 2026: a vanilla Spark gap.*
+*Opened 15 September 2026: a vanilla Spark gap with no upstream ticket; the
+function form's own ticket, [SPARK-53579](https://issues.apache.org/jira/browse/SPARK-53579), is resolved. This row is the
+candidate for the operator.*
 
 `MakeTimestampFromDateTime` exists as a function and
 `BinaryArithmeticWithDatetimeResolver` has no rule for `Add(date, time)`, so the
@@ -2318,17 +2348,82 @@ nanoseconds divided by a thousand - a 2.19 division exact by range.
 The six rows above are the gaps a reading of the tree could settle. This row is
 the rest: an admission check whose deliverable is a checklist with a verdict per
 line, and new rows for the lines that turn out to be gaps. Lines to check,
-written down so the check cannot quietly shrink: `to_char(time, fmt)` (the
-`ToCharacter` code has no `TimeType` arm, but `date_format` over `TIME` exists
-and `to_char` may route through it); `median`, `percentile`, `percentile_approx`
-and `mode` over `TIME`; `min_by`/`max_by` and `first`/`last` with `TIME` keys;
-`TIME` in `PIVOT` and in `GROUPING SETS`; `time_bucket`'s coverage against
-`time-bucket.sql`; `TIME` as a bucketing and partitioning column at the data
-source level; the Python and Arrow UDF conversions of `TIME` in both
-directions, including `pandas_udf`; `TIME` in Spark Connect's Scala and Python
-clients end to end, not only in the proto; the Hive module, where the answer is
-"Hive has no `TIME`" and the row is a documented refusal. Each line closes with
-a test that proves the verdict, and the survey closes when every line has one.
+written down so the check cannot quietly shrink, with the upstream ticket where
+one exists. Settled by the umbrella before the survey started, and struck:
+`to_char` over `TIME` ([SPARK-57575](https://issues.apache.org/jira/browse/SPARK-57575), in `ToStringBase`, present),
+the quantile and sketch aggregates ([SPARK-57557](https://issues.apache.org/jira/browse/SPARK-57557)), Hive interop
+([SPARK-57556](https://issues.apache.org/jira/browse/SPARK-57556), `HiveInspectors` carries the type - the earlier line
+saying Hive has no `TIME` was wrong), Connect test coverage
+([SPARK-57566](https://issues.apache.org/jira/browse/SPARK-57566)). Still to check: `median`, `mode`, `min_by`/`max_by`,
+`first`/`last` with `TIME` keys, and `approxQuantile`/`summary`/`describe`
+([SPARK-57849](https://issues.apache.org/jira/browse/SPARK-57849), open); `TIME` in `PIVOT` and `GROUPING SETS`; window
+`RANGE` frames over a `TIME` order ([SPARK-57785](https://issues.apache.org/jira/browse/SPARK-57785), open); the ANSI
+`OVERLAPS` predicate ([SPARK-57586](https://issues.apache.org/jira/browse/SPARK-57586), open); casts from numerics to
+`TIME` ([SPARK-54281](https://issues.apache.org/jira/browse/SPARK-54281), open); datetime functions rejecting `TIME`
+cleanly ([SPARK-57561](https://issues.apache.org/jira/browse/SPARK-57561), open); statistics and the CBO
+([SPARK-54582](https://issues.apache.org/jira/browse/SPARK-54582), [SPARK-57784](https://issues.apache.org/jira/browse/SPARK-57784), [SPARK-57805](https://issues.apache.org/jira/browse/SPARK-57805), open);
+the Python and Arrow UDF conversions in both directions including `pandas_udf`
+([SPARK-57567](https://issues.apache.org/jira/browse/SPARK-57567), [SPARK-57696](https://issues.apache.org/jira/browse/SPARK-57696), [SPARK-57574](https://issues.apache.org/jira/browse/SPARK-57574),
+[SPARK-57565](https://issues.apache.org/jira/browse/SPARK-57565), all open); `TIME` as a bucketing and partitioning column
+at the data source level; the parenthesized interval-qualified difference syntax
+([SPARK-57854](https://issues.apache.org/jira/browse/SPARK-57854), open). The flag's own history is
+[SPARK-54609](https://issues.apache.org/jira/browse/SPARK-54609): disabled by default ahead of 4.1, no ticket yet to turn it
+on. Each line closes with a test that proves the verdict, and the survey closes
+when every line has one.
+
+### 2.49 `time_bucket` over `TIME` (task 114)
+
+*Opened 15 September 2026 from the umbrella: [SPARK-54507](https://issues.apache.org/jira/browse/SPARK-54507) (open).*
+
+The fork's `TimeBucket` returns `TimestampType` and takes timestamps only, so
+the bucketing a `TIME` column most wants - the quarter-hour of the day - does not
+resolve. The arm is a `TIME` input with a day-time interval width and a `TIME`
+result, floor division by the width in nanoseconds; in the lane it is 2.19's
+division, exact by range, followed by a multiply, the same kernel as
+`time_trunc` with a literal width instead of a level.
+
+### 2.50 `time_format` (task 115)
+
+*Opened 15 September 2026 from the umbrella: [SPARK-54588](https://issues.apache.org/jira/browse/SPARK-54588) (open).*
+
+`date_format` accepts `TIME` and `to_char` does, so the formatting exists; what
+the ticket asks for is the function by the name a `TIME` user reaches for. A
+registry entry and a builder over the existing formatter path, DSL in Scala and
+Python, golden tests. A string result, so no Varka side; it is here because the
+message says the type is supported and the first thing a user does with a time
+is print it.
+
+### 2.51 A `TIME` column through Varka's Arrow cache, proven (task 116)
+
+*Opened 15 September 2026 at the owner's request, from 1.1's admission check.*
+
+The pieces exist upstream and in the fork - `isSupportedByArrow` admits the
+type, the cache serializer's stats switch has its `LongColumnStats` arm,
+[SPARK-54203](https://issues.apache.org/jira/browse/SPARK-54203) put it through `RowToColumnConverter`,
+[SPARK-57661](https://issues.apache.org/jira/browse/SPARK-57661) preserves its precision across the Arrow boundary - and no
+test composes them along Varka's path. The task is that test, in `sql/core`'s
+Varka suites: a `TIME(p)` column for p in {0, 3, 6, 9} and a day-time interval
+column cached under `spark.sql.cache.serializer` set to the Arrow serializer,
+read back equal, and the batch's buffers mapped through the morsel as
+eight-byte lanes with the validity word right at every null pattern the date
+fixtures use. It passes before any long-lane code is written, or it fails and
+becomes the milestone's first fix; either way it is known rather than assumed.
+
+### 2.52 Sync the fork with `apache/spark` master (task 117)
+
+*Opened 15 September 2026, found while checking the umbrella.*
+
+`origin/master` is 375 commits behind `upstream/master` and 209 ahead of it.
+None of the missing commits is `TIME` work - every resolved subtask of
+[SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) is already here - but a milestone that ends in a message
+about tracking vanilla Spark should not be a month behind it, and every one of
+the vanilla-gap rows above is meant to be offered upstream, which is easier from
+a tree that matches. The task is the merge, the conflict list written down
+(Varka's 209 commits touch `modules.py`, the workflows and `AGENTS.md`, which
+CI's `Auto-merging` lines already show colliding), and the gate green after it.
+Infrastructure, and best done before 102 opens rather than after.
+
+
 
 ## 3. Task breakdown
 
@@ -2395,15 +2490,19 @@ into their design sections stay valid; their text is unchanged and
 | 102 | `TIME` expressions over the long lane (section 2.37). **Scoped** (15 September 2026) by the re-scope; the milestone's subject. `TimeType` is nanoseconds of day in a long, below 2^53, so every division it needs is exact through 2.19 | The admission check first - a `TIME` column cached under the Arrow serializer and mapped as eight-byte lanes, since `ArrowCachedBatchSerializer`'s stats switch has no `TimeType` arm; then `hour`/`minute`/`second`, `make_time`, `time_trunc`, `t + INTERVAL`, `t - t`, `time_diff`, the `time_from_*`/`time_to_*` pairs, and the generic comparison, `IN`, `CASE` and choice arms over a long-lane column; coverage-suite columns `t`, `t2`, `l`, `dt` | Differential against the row engine over every shape and null pattern at both vector widths with `spark.sql.timeType.enabled=true`; every arm documented, which the coverage suite enforces; `to_time`, decimal seconds and string formatting demonstrably declined |
 | 103 | Day-time interval expressions, absorbing task 39 (section 2.38). **Scoped** (15 September 2026) | `+`, `-`, negate, `abs`, comparisons, `MultiplyDTInterval` under the checked-multiply rule; `DivideDTInterval` and the `extract` family under 2.19's bound or a recorded decline; `MakeDTInterval`; `date - date` (`SubtractDates`), `DateAddInterval` for whole days, `TimestampAddInterval`, `SubtractTimestamps` as one mixed-width kernel family | Differential at both widths over intervals spanning the int64 including the overflow edges; each division either exact under its bound or declined with the reason in the plan; `PLAN_TASK_39.md`'s recipe outcome written here |
 | 104 | `Long` arithmetic, task 30's int64 half (section 2.39). **Scoped** (15 September 2026) | Checked and wrapping `+`, `-`, `*`, negate over `bigint` under the 2.15 lattice; comparisons; int-to-long `Cast` through 2.2; `div`, `%`, `pmod` only under a proven bound | The error-identity differential from section 5 at the long width; the halved-headroom number committed per shape, not discovered |
-| 105 | The `TIME` benchmark: `TimeSurfaceBenchmark`, its own files (section 2.40). **Scoped** (15 September 2026); the number the message quotes | The class and inventory in `sql/varka/bench`, a `--benchmark time` selector in `dev/varka_bench_surface.sh`, both arms with the flag on against stock 4.2.0, committed results files per label, `TimeChains` after | Every entry `--expect-fused`; the fixed-share rule met; measured under task 101's band before any figure is quoted, and the message quotes a median and a banded range |
+| 105 | The `TIME` benchmark: `TimeSurfaceBenchmark`, its own files (section 2.40). **Scoped** (15 September 2026); the number the message quotes; upstream's [SPARK-57562](https://issues.apache.org/jira/browse/SPARK-57562) is open for the same | The class and inventory in `sql/varka/bench`, a `--benchmark time` selector in `dev/varka_bench_surface.sh`, both arms with the flag on against stock 4.2.0, committed results files per label, `TimeChains` after | Every entry `--expect-fused`; the fixed-share rule met; measured under task 101's band before any figure is quoted, and the message quotes a median and a banded range |
 | 106 | The quote check runs in no workflow (section 2.41). **Scoped** (15 September 2026), found while closing task 94 | A `varka-docs` module in `modules.py` over the plans, the lesson files, the docs and the READMEs, and a job on task 94's pattern running `dev/varka_quote_check.py` and the `SKILLS.md` index check | The job green on its own PR in minutes; the next documentation-only PR shows `Varka bench drivers` skipped, closing task 94's open half |
-| 107 | `time_add(unit, quantity, time)` (section 2.42). **Scoped** (15 September 2026): a vanilla gap - `time_diff` has no additive counterpart where timestamps have `timestampadd` | `TimeAdd` in `timeExpressions.scala` with the day-modular wrap, registry entry, DSL in Scala and Python, golden tests; lowered into the lane as `TimeAddInterval`'s kernel over two operands once task 29 exists | Golden-file coverage in `time.sql`'s style for every unit; the differential at both widths once lowered; offered upstream |
-| 108 | `try_make_time` (section 2.43). **Scoped** (15 September 2026): a vanilla gap - `make_date` and `make_timestamp` have `try_` forms, `make_time` does not | The variant returning null where `make_time` throws, registry and DSL entries, golden tests; the null-on-overflow lowering from task 63 over `make_date`'s range check | `try_make_time(25, 0, 0)` is null and `make_time(25, 0, 0)` still throws, in both engines; offered upstream |
-| 109 | `sequence()` over `TIME` (section 2.44). **Scoped** (15 September 2026): a vanilla gap, row engine only | The `TIME` arm of `Sequence` with a day-time interval step, bounded by the day | Golden tests including a step that would wrap; no Varka side, and the row says so |
-| 110 | `avg` over `TIME` (section 2.45). **Scoped** (15 September 2026): a vanilla gap, row engine only | The `Average` arm at nanoseconds returning `TIME` of the input's precision; `median`/`percentile`/`mode` deferred to 2.48 | Golden tests with nulls and an empty group; no Varka side until milestone 6's item 7 |
-| 111 | Avro `TIME` (section 2.46). **Scoped** (15 September 2026): a vanilla gap - every other built-in source carries the type | `SchemaConverters` arms for `time-micros`, the precision rule above 6, read and write | The round-trip test the other sources have, at precisions 0, 3, 6 and the documented behaviour at 9 |
-| 112 | `DATE + TIME` as an operator (section 2.47). **Scoped** (15 September 2026): a vanilla gap - the function exists, the operator does not | One coercion rule producing `MakeTimestampFromDateTime`, commuted; lowered as a mixed-width kernel after task 39's | `d + t` equals `make_timestamp(d, t)` in golden tests; the differential once lowered |
-| 113 | The survey of what else vanilla Spark lacks for `TIME` (section 2.48). **Scoped** (15 September 2026) | The checklist in 2.48 with a verdict and a proving test per line, and a new row per confirmed gap | Every line has its test; no line closed by reading alone |
+| 107 | `time_add(unit, quantity, time)` (section 2.42). **Scoped** (15 September 2026): a vanilla gap with no upstream ticket - `time_diff` has no additive counterpart where timestamps have `timestampadd`; its out-of-range rule is [SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853)'s open question | `TimeAdd` in `timeExpressions.scala` with the day-modular wrap, registry entry, DSL in Scala and Python, golden tests; lowered into the lane as `TimeAddInterval`'s kernel over two operands once task 29 exists | Golden-file coverage in `time.sql`'s style for every unit; the differential at both widths once lowered; offered upstream |
+| 108 | `try_make_time` (section 2.43). **Scoped** (15 September 2026): a vanilla gap, [SPARK-57846](https://issues.apache.org/jira/browse/SPARK-57846) - `make_date` and `make_timestamp` have `try_` forms, `make_time` does not | The variant returning null where `make_time` throws, registry and DSL entries, golden tests; the null-on-overflow lowering from task 63 over `make_date`'s range check | `try_make_time(25, 0, 0)` is null and `make_time(25, 0, 0)` still throws, in both engines; offered upstream |
+| 109 | `sequence()` over `TIME` (section 2.44). **Scoped** (15 September 2026): a vanilla gap, [SPARK-57852](https://issues.apache.org/jira/browse/SPARK-57852), row engine only | The `TIME` arm of `Sequence` with a day-time interval step, bounded by the day | Golden tests including a step that would wrap; no Varka side, and the row says so |
+| 110 | `avg` over `TIME` (section 2.45). **Scoped** (15 September 2026): a vanilla gap, [SPARK-58044](https://issues.apache.org/jira/browse/SPARK-58044), row engine only | The `Average` arm at nanoseconds returning `TIME` of the input's precision; `median`/`percentile`/`mode` deferred to 2.48 | Golden tests with nulls and an empty group; no Varka side until milestone 6's item 7 |
+| 111 | Avro `TIME` (section 2.46). **Withdrawn** (15 September 2026): the support exists - [SPARK-54473](https://issues.apache.org/jira/browse/SPARK-54473) and [SPARK-57581](https://issues.apache.org/jira/browse/SPARK-57581), both in the fork, under `sql/core`'s Avro code rather than `connector/avro` where the grep that opened the row looked. Number not reused | - | - |
+| 112 | `DATE + TIME` as an operator (section 2.47). **Scoped** (15 September 2026): a vanilla gap with no upstream ticket - the function exists ([SPARK-53579](https://issues.apache.org/jira/browse/SPARK-53579)), the operator does not | One coercion rule producing `MakeTimestampFromDateTime`, commuted; lowered as a mixed-width kernel after task 39's | `d + t` equals `make_timestamp(d, t)` in golden tests; the differential once lowered |
+| 113 | The survey of what else vanilla Spark lacks for `TIME` (section 2.48). **Scoped** (15 September 2026) | The checklist in 2.48 - each line with its upstream ticket where one exists, four lines already struck as present - with a verdict and a proving test per line, and a new row per confirmed gap | Every line has its test; no line closed by reading alone |
+| 114 | `time_bucket` over `TIME` (section 2.49). **Scoped** (15 September 2026) from the umbrella, [SPARK-54507](https://issues.apache.org/jira/browse/SPARK-54507) | The `TIME` arm of `TimeBucket` with an interval width and a `TIME` result; lowered as `time_trunc`'s kernel with a literal width | Golden tests at the day's edges; the differential once lowered; offered upstream against its ticket |
+| 115 | `time_format` (section 2.50). **Scoped** (15 September 2026) from the umbrella, [SPARK-54588](https://issues.apache.org/jira/browse/SPARK-54588); row engine only | The registry entry and builder over the existing `TIME` formatter, DSL in Scala and Python, golden tests | Output identical to `date_format` over the same `TIME` for every pattern the golden tests use |
+| 116 | A `TIME` column through Varka's Arrow cache, proven (section 2.51). **Scoped** (15 September 2026) at the owner's request; the milestone's first admission check | A `sql/core` Varka suite caching `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval column under the Arrow serializer, reading back equal, and mapping the buffers through the morsel as eight-byte lanes | Passes at every null pattern the date fixtures use before any long-lane code is written, or fails and becomes the first fix |
+| 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026); infrastructure, before 102 opens | The merge of the 375 upstream commits, the conflict list recorded, the gate green | `dev/varka_gate.sh` green on the merged tree; every resolved [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtask still present, which a grep of the log confirms |
 
 ## 4. Files
 
@@ -2445,10 +2544,12 @@ adds:
   fallback.
 * **Half the lanes.** Every int64 shape has roughly half the headroom of its
   int32 sibling; task 29 commits that number rather than discovering it.
-* **`TIME` may not survive the cache.** `ArrowCachedBatchSerializer.columnStats`
-  has no `TimeType` or `DayTimeIntervalType` arm while `isSupportedByArrow`
-  admits both. This is 2.37's first check and it comes before any lane work,
-  because a milestone whose subject cannot be cached has no benchmark.
+* **`TIME` through the cache is assumed, not proven.** Every piece exists - the
+  serializer's stats arm, `isSupportedByArrow`, upstream's converter and
+  precision work - and no test composes them along Varka's path. Task 116 is
+  that test and comes before any lane work, because a milestone whose subject
+  cannot be cached has no benchmark. (An earlier draft called the stats arm
+  missing; it is not, and 1.1 keeps the correction.)
 * **Long lanes have no division.** Exact through double lanes only below 2^53:
   always for `TIME`, only under a bound for intervals and `bigint`. Every
   division either carries its bound or is a recorded decline; none is
