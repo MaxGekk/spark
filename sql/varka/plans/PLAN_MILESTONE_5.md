@@ -18,12 +18,14 @@ the int32 performance work (25, 64, 72, 73), the calendar algorithms (49, 65,
 micro-optimisations (82, 87) and the read-back floor (98); boolean outputs (27)
 went with them as the one borderline call, recorded in 1.1.
 
-Seven rows were added. 102 to 106 (sections 2.37 to 2.41) are the `TIME`
+Eight rows were added. 102 to 106 (sections 2.37 to 2.41) are the `TIME`
 expressions, the day-time interval expressions, `Long` arithmetic, the `TIME`
 benchmark and the quote check in CI; 116 (2.51) is the proof that a `TIME`
 column survives Varka's Arrow cache, which comes before any lane code; and 117
 (2.52) is the sync of the fork with `apache/spark` master, which it trails by 375
-commits and which the owner made the milestone's first task. Task 29 was widened
+commits and which the owner made the milestone's first task; and 118 (2.53),
+the closing task in task 62's shape - the final benchmarks on a proven
+full-width runner, the README, and the post - last by definition. Task 29 was widened
 rather than replaced: `TIME` nanoseconds, day-time interval microseconds,
 timestamp microseconds and `bigint` are one lane.
 
@@ -165,7 +167,9 @@ write; `wordWrites` already accepts four lanes mechanically (`64 % lanes == 0`),
 so 92 is the `lanes < 8` default 2.23 specifies and nothing structural -> 88 (division) -> 102 (`TIME` expressions), 103 (day-time interval
 expressions, absorbing 39), 104 (`Long` arithmetic, task 30's int64 half) ->
 105 (the `TIME` benchmark) -> 101 (the band, required before any per-entry
-number is quoted). Gaps in the supported types - 95, 96, 89, and 83/86 folded in
+number is quoted) -> 118 (the closing task: the final measurement on a proven
+full-width runner, the README, and the post - task 62's shape, last by
+definition). Gaps in the supported types - 95, 96, 89, and 83/86 folded in
 as 85 touches them - run alongside; 81 extends to `time.sql` and `interval.sql`
 once the first `TIME` expression fuses; 106 (the quote check in CI) can go any
 time.
@@ -2408,6 +2412,66 @@ the message will be about.
 
 
 
+### 2.53 The closing task: final benchmarks, the README, and the post (task 118)
+
+*Opened 15 September 2026 on the owner's instruction: the milestone ends the way
+milestone 4 did, with task 62's shape.*
+
+Task 62 closed milestone 4 in three parts - (A) the plan of the measurement,
+(B) the measurement itself on a runner proven full-width by the datapath probe,
+(C) the README written from those files - and the LinkedIn post followed from
+(C). This task is the same three parts for the `TIME` story, plus the post,
+because the milestone's stated exit is the message and nothing before this task
+produces it.
+
+**(A) The plan of the measurement.** Which arms: stock 4.2.0 on JDK 17 and JDK
+25 with `spark.sql.timeType.enabled=true`, the fork with the engine off, and
+Varka - the four the date surface has, so the two tables read alike. Which
+benchmarks: the `TIME` surface (105) and, if it exists by then, `TimeChains`;
+and the date surface and chains again only if task 117's merge or anything since
+is suspected to have moved a committed number, decided by the canary and a
+`dev/varka_bench_diff.py --git` against the committed files rather than by
+assumption. Which machine: the same rule as 62 - a runner the datapath probe
+proves full-width at 512 bits (`require-datapath=512` through
+`varka-surface-benchmark.yml`, the Zen 5 lottery), because that is where the
+lane story is true without qualification; the laptop's double-pumped 1.14 is
+recorded beside it as the other end of the range, as it was for dates.
+
+**(B) The measurement.** Under task 101's band from the first regeneration, so
+every per-entry figure carries its tier and no single row is quoted bare; the
+fixed-share rule met; provenance complete (CPU, flags, datapath, canary, rows,
+table shape, both flags' values). Two numbers the message needs that the date
+close did not: the split of the surface into rows where Varka beats an
+allocation (`hour`, `minute`, `second`, `time_trunc`, `make_time` - vanilla's
+`LocalTime` path) and rows where it beats arithmetic (the rest), reported apart;
+and the engine-off ratio beside the stock ratio on every row, which is what
+isolates Varka's part from vanilla's baseline.
+
+**(C) The README and the docs.** The benchmark section gains the `TIME` table
+beside the date ones - one row per expression, the query text beside the
+number, losses printed beside wins, the median and the banded range leading and
+the per-row figures under them - and the "which figure generalises" paragraph
+says plainly that the allocation rows measure vanilla's baseline as much as
+Varka's lane. The reproduction guide gains the flag on both arms and the
+`--benchmark time` selector. The coverage table and `coverage.json` are already
+current by construction (`VarkaCoverageSuite`), so (C) checks them rather than
+edits them. "Reading the source" gains the long-lane entry points.
+
+**The post.** Ideas first, numbers last, the shape the milestone 4 post took:
+what a 64-bit lane is in this engine and why one lane serves five types; why
+`TIME` is the type to show it on (a new type, about to be on by default, whose
+vanilla implementation allocates per row); the honest split of the ratio; and
+the median, never the best row. A short and a long variant, as before; the
+short one is what gets posted, the long one is the blog. The draft lives in a
+file the way `LINKEDIN_POST_VARKA.md` did, quotes only committed figures, and is
+checked by `dev/varka_quote_check.py` like every other document before it is
+pasted anywhere.
+
+**Done when** the four results files per benchmark are committed with the band,
+the README quotes them and nothing else, the quote check is at zero orphans,
+and the two post drafts exist and name their sources. The message itself is the
+owner's to send.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -2445,7 +2509,7 @@ inferred.* An arrow reads "must land before".
     116 cache ---+                 |                    |                     |   (closes w/ 103) |
       proof      |                 +--> 91 guard bound  +--> 29 long lane ----+--> 88 division ---+--> 102 TIME exprs --+
                  |                                      ^                     |                   |                     |
-                 +--------------------------------------+                     +--> 104 Long arith |--> 103 DT exprs ----+--> 105 TIME bench
+                 +--------------------------------------+                     +--> 104 Long arith |--> 103 DT exprs ----+--> 105 TIME bench --> 118 close
                                                                                   (closes 30)     |                     ^
                                                                                                   +--> 89 YM divisions  |
     101 band -----------------------------------------------------------------------------------------------------------+
@@ -2466,11 +2530,12 @@ between them; within a wave the order is free):
 | 4 | 88, 104, 39 | 88 at the long lane needs 29; 104 needs 29, 84 and 28's cast; 39 needs 28 and 29 |
 | 5 | 102, 103, 89 | 102 and 103 need 29 and 88 (and 103 absorbs 39); 89 needs 88 |
 | 6 | 105 | after 102 and 103, under 101's band |
+| 7 | 118 | last by definition: the final measurement, the README and the post need every number above it committed |
 
 Three rows are not nodes of their own: 30 closes when 104 does (its int32
 half shipped in task 63), 39 closes when 103 does, and 90 is absorbed by 101.
-The critical path is 117 -> 84 -> 85 -> 29 -> 88 -> 102 -> 105, seven tasks
-deep, and it is serial: each of those needs the previous one's code. The ten
+The critical path is 117 -> 84 -> 85 -> 29 -> 88 -> 102 -> 105 -> 118, eight
+tasks deep, and it is serial: each of those needs the previous one's code. The ten
 wave-0 tasks are what fills the time while it runs, and three of them belong
 *with* a spine task rather than merely before it: 86 folds into 85 (the same
 code), 92 lands with 29 (its default only matters once four-lane vectors
@@ -2537,6 +2602,7 @@ can start has.
 | 115 | `time_format` (section 2.50). **Withdrawn** (15 September 2026): vanilla Spark's work, not Varka's; section 8 has the survey and the ticket | - | - |
 | 116 | A `TIME` column through Varka's Arrow cache, proven (section 2.51). **Scoped** (15 September 2026) at the owner's request; the milestone's first admission check | A `sql/core` Varka suite caching `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval column under the Arrow serializer, reading back equal, and mapping the buffers through the morsel as eight-byte lanes | Passes at every null pattern the date fixtures use before any long-lane code is written, or fails and becomes the first fix |
 | 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026) and **first in the milestone** by the owner's instruction: infrastructure, done before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; every resolved [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtask still present, which a grep of the log confirms |
+| 118 | The closing task: final benchmarks, the README, and the post (section 2.53). **Scoped** (15 September 2026) on the owner's instruction - the milestone ends as milestone 4 did, with task 62's shape; **last in the milestone**, after 105 and 101 | (A) the measurement's plan - arms, benchmarks, the full-width runner; (B) the `TIME` surface and chains measured under the band on a runner the datapath probe proves, with the allocation/arithmetic split and the engine-off ratio beside stock; (C) the README's `TIME` table and reproduction guide, the docs checked; the short and long post drafts, ideas first, numbers last | Four results files per benchmark committed with provenance and band; the README quotes them and nothing else; `dev/varka_quote_check.py` at zero orphans; both drafts exist and name their sources |
 
 ## 4. Files
 
