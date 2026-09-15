@@ -2424,6 +2424,22 @@ Infrastructure, and the first thing the milestone does: before 84 opens, so
 that the lane work, the `TIME` rows and the benchmark are all built on the tree
 the message will be about.
 
+**Done, 15 September 2026, by the owner by hand.** `origin/master` is
+`2219f51c76a`, "Merge branch 'apache:master' into master": **0 commits behind
+`upstream/master`, 212 ahead**, and SPARK-53368 - the one resolved `TIME`
+subtask the fork lacked - is present. The dry run's prediction held: the merge
+had no conflicting file. The gate was then run on the real merged master rather
+than the scratch commit: `compile` in 218 seconds, `wide` in 220 seconds,
+**297 + 183 tests succeeded, 0 failed**, the ten canceled being the opt-in sweep
+and JFR cases that cancel on every master. Two things it brought besides the
+sync: the fork's `CLAUDE.md`/`AGENTS.md` and the workflows took upstream's
+edits, and local and CI now test the same tree, so the upstream Avro test that
+had been failing "on code not in this repository" is now failing on code that
+is - which makes it, for the first time, something this repository can look at.
+The behavioural risk named above - a committed Varka number moving - is not
+settled by the gate and is left to the canary at the next regeneration, which
+the first `TIME` surface (105) will be.
+
 
 
 ### 2.53 The closing task: final benchmarks, the README, and the post (task 118)
@@ -2671,7 +2687,7 @@ can start has.
 | 114 | `time_bucket` over `TIME` (section 2.49). **Withdrawn** (15 September 2026): vanilla Spark's work, not Varka's; section 8 has the survey and the ticket | - | - |
 | 115 | `time_format` (section 2.50). **Withdrawn** (15 September 2026): vanilla Spark's work, not Varka's; section 8 has the survey and the ticket | - | - |
 | 116 | A `TIME` column through Varka's Arrow cache, proven (section 2.51). **Scoped** (15 September 2026) at the owner's request; the milestone's first admission check | A `sql/core` Varka suite caching `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval column under the Arrow serializer, reading back equal, and mapping the buffers through the morsel as eight-byte lanes | Passes at every null pattern the date fixtures use before any long-lane code is written, or fails and becomes the first fix |
-| 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026) and **first in the milestone** by the owner's instruction: infrastructure, done before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; [SPARK-53368](https://issues.apache.org/jira/browse/SPARK-53368) present afterwards, and the 36 traceable [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtasks still present, by a full-message grep of the log rather than a title prefix |
+| 117 | Sync the fork with `apache/spark` master (section 2.52). **Done** (15 September 2026, by the owner, by hand): `origin/master` is now `2219f51c76a`, a merge of `apache:master`, 0 commits behind upstream and 212 ahead; SPARK-53368 is present; the gate's `compile` (218 s) and `wide` (220 s) steps are green on it, 297 + 183 tests, 0 failed, the 10 canceled being the opt-in sweep and JFR cases. Was: first in the milestone by the owner's instruction, infrastructure before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; [SPARK-53368](https://issues.apache.org/jira/browse/SPARK-53368) present afterwards, and the 36 traceable [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtasks still present, by a full-message grep of the log rather than a title prefix |
 | 118 | The closing task: final benchmarks, the README, and the post (section 2.53). **Scoped** (15 September 2026) on the owner's instruction - the milestone ends as milestone 4 did, with task 62's shape; **last in the milestone**, after 105 and 101 | (A) the measurement's plan - arms, benchmarks, the full-width runner; (B) the `TIME` surface and chains measured under the band on a runner the datapath probe proves, with the allocation/arithmetic split and the engine-off ratio beside stock; (C) the README's `TIME` table and reproduction guide, the docs checked; the short and long post drafts, ideas first, numbers last | Four results files per benchmark committed with provenance and band; the README quotes them and nothing else; `dev/varka_quote_check.py` at zero orphans; both drafts exist and name their sources |
 | 119 | The oracle for the long lane: reference evaluator and fuzzer at `long` (section 2.54). **Scoped** (15 September 2026); lands with 29 | `VarkaReferenceEvaluator` over long lanes including both exact-division lowerings, the range guards, `TIME`'s day-modular arithmetic and the interval checks; the fuzz grammar over long, `TIME` and day-time interval trees; the reaches-every-node assertion at the long lane | The fuzzer at ten thousand iterations clean at both vector widths over the long-lane grammar; a deliberately wrong evaluator arm is caught by the fuzzer, not only by the differential |
 | 120 | The coverage table as a differential corpus (section 2.55). **Scoped** (15 September 2026); independent, starts on today's rows | A `sql/core` suite running every `coverage.json` row through both engines over the null-pattern fixtures, projection and predicate forms, both consumers | Every row of the committed table passes; adding an arm without a row fails `VarkaCoverageSuite`, adding a row without correctness fails this suite - the two together are the guarantee |
