@@ -550,7 +550,10 @@ rather than as a silent 1.0x.
   because item 4 has to come first regardless.
 * **Sorting, `ORDER BY`, `LIMIT`** (128 `ORDER BY`s): not Varka's operator.
   Worth noting only because it caps the whole-query speedup any of these
-  targets can show.
+  targets can show - and because someone else measured it: Ishizaki's DAIS 2021
+  prototype (`VISION.md` section 14) found a SIMD comb sort slower than scalar
+  radix sort, 117 ms against 84 ms on a million pairs, with the exchange
+  dominating regardless.
 * **`ROLLUP` / `CUBE` / `grouping()`** (16 uses): a grouping-set expansion above
   the aggregate; out.
 * **Scalar subqueries** (TPC-DS q9's fifteen): Catalyst's problem. The shape
