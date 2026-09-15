@@ -157,9 +157,12 @@ Five facts, checked against the tree on the day, decided the shape:
 **The spine, in dependency order:** 117 first (the sync with `apache/spark`
 master, so everything below is built on the tree the message is about) -> 84
 (the lattice) -> 85 (the lane parameter)
--> 29 (the long lane, widened) with 28 (width conversion) and 92 (the validity
-write at four lanes per group, which 64-bit lanes make the common case) beside
-it -> 88 (division) -> 102 (`TIME` expressions), 103 (day-time interval
+-> 29 (the long lane, widened) with 28 (width conversion) and 92 beside it - 92
+because `VarkaEmitOptions.DEFAULTS` has `validityByWord = false` today, so at the
+four lanes a 256-bit long vector holds, the emitter takes the byte
+read-modify-write that task 47 measured as a 6 to 9% loss against the word
+write; `wordWrites` already accepts four lanes mechanically (`64 % lanes == 0`),
+so 92 is the `lanes < 8` default 2.23 specifies and nothing structural -> 88 (division) -> 102 (`TIME` expressions), 103 (day-time interval
 expressions, absorbing 39), 104 (`Long` arithmetic, task 30's int64 half) ->
 105 (the `TIME` benchmark) -> 101 (the band, required before any per-entry
 number is quoted). Gaps in the supported types - 95, 96, 89, and 83/86 folded in
@@ -2162,8 +2165,14 @@ here; it applies to intervals.
 that `make_date` already has for dates, with the fractional-second argument a
 decimal and therefore declined unless it is a literal. `TimeTrunc(level, t)` is a
 division and a multiply at a level that must be foldable, `trunc(d, fmt)`'s rule.
-`TimeAddInterval(t, dt)` is `t + micros * 1000` with the wrap into the day that
-Spark's `timeAddInterval` performs, and `SubtractTimes(t1, t2)` and `TimeDiff`
+`TimeAddInterval(t, dt)` is `t + micros * 1000` under a range guard, because
+vanilla's `timeAddInterval` does **not** wrap: it is `addExact` and a check that
+the result lies in `[0, 24h)`, throwing otherwise (`timeAddIntervalOverflowError`;
+SPARK-57853 is open on whether that becomes ANSI's modulo-24). So the lowering is
+`make_date`'s pattern - the guard fails the batch into the ghost fallback, which
+raises the same error, or returns null under `TRY` - and it changes to a
+`floorMod` by `NANOS_PER_DAY` the day 57853 says so. `SubtractTimes(t1, t2)` and
+`TimeDiff`
 produce a day-time interval in microseconds, a division by 1000 that is again
 exact by range. `TimeFromSeconds/Millis/Micros` and `TimeToSeconds/Millis/Micros`
 are multiplies and divisions by powers of ten. Comparisons, `IN`, `CASE WHEN`,
@@ -2246,14 +2255,24 @@ the stock arm is the same 4.2.0 distribution the date surface uses, which
 carries the type and the functions. Run through `dev/varka_bench_surface.sh`
 with a `--benchmark time` selector beside `surface` and `chains`, so the
 canary, the datapath probe, the fixed-share rule and task 100's guard all apply
-unchanged; `TimeChains` follows once the single expressions are measured, since
-the chains are where milestone 4's engine pulled furthest ahead.
+unchanged; `TimeChains` follows once the single expressions are measured - with one
+expectation registered now. The date chains reached `MIN_OPS = 280` because every
+calendar field pays the 31-op civil-from-days prefix and the chains compose four
+of them; a `TIME` field is a division - four or five ops in either lowering - so
+`hour(time_trunc('MINUTE', t + INTERVAL '90' MINUTE))` is perhaps twenty ops and
+nothing over `TIME` reaches the compute-bound regime the date chains live in. The
+`TIME` story's number is the surface's, not a chain's, and `TimeChains` exists to
+show the composition works rather than to set the headline.
 
 **What the stock arm is made of, and the prediction that forces.** Vanilla
 Spark's `TIME` field extraction goes through `java.time`: `getHoursOfTime(nanos)`
-is `nanosToLocalTime(nanos).getHour`, `getMinutesOfTime` likewise, and `timeTrunc`
-builds a `LocalTime`, truncates it and converts back - each a `StaticInvoke` per
-row, each allocating. The date family's baseline was integer arithmetic; this
+is `nanosToLocalTime(nanos).getHour`, `getMinutesOfTime` and `getSecondsOfTime`
+likewise, `timeTrunc` builds a `LocalTime`, truncates it and converts back, and
+`makeTime` constructs one - each a `StaticInvoke` per row, each allocating. The
+rest is integer arithmetic already: `timeAddInterval`, `subtractTimes`,
+`timeDiff`, `getSecondsOfTimeWithFraction` and the `time_to_*` / `time_from_*`
+family. So the surface will split in two: rows where Varka beats an allocation,
+and rows where it beats arithmetic - and the honest message quotes them apart. The date family's baseline was integer arithmetic; this
 one is object construction. So the registered prediction, written before any
 `TIME` kernel exists: **the `hour(t)`/`minute(t)`/`time_trunc` rows read a larger
 ratio than `year(d)` did, and most of the difference is the baseline's
@@ -2335,8 +2354,19 @@ Varka suites: a `TIME(p)` column for p in {0, 3, 6, 9} and a day-time interval
 column cached under `spark.sql.cache.serializer` set to the Arrow serializer,
 read back equal, and the batch's buffers mapped through the morsel as
 eight-byte lanes with the validity word right at every null pattern the date
-fixtures use. It passes before any long-lane code is written, or it fails and
-becomes the milestone's first fix; either way it is known rather than assumed.
+fixtures use. Two facts from reading the path on 15 September shape the test.
+The serializer writes the Arrow schema with `losslessInternalTypes = true`, so
+the precision rides in field metadata under `SPARK::time::precision`; but the
+*read* side rebuilds column vectors from the Spark schema
+(`DataTypeUtils.fromAttributes`), not from that metadata - so precision reaches
+Varka through Catalyst's `DataType`, and the test asserts it on the output of
+`time_trunc` at each `p`, where a wrong `p` would show. And
+`VarkaKernelEvaluator`'s output allocation switches on `DateType`,
+`IntegerType` and `YearMonthIntervalType` only (line ~1087): the `LongType`,
+`TimeType` and `DayTimeIntervalType` arms are task 29's, and this test is what
+they are written against. It passes before any long-lane code is written, or it
+fails and becomes the milestone's first fix; either way it is known rather than
+assumed.
 
 ### 2.52 Sync the fork with `apache/spark` master (task 117) - the milestone's first task
 
@@ -2525,19 +2555,26 @@ under its own band file, built with task 101's tooling.
   division either carries its bound or is a recorded decline; none is computed
   wrongly - and 2.19's admission check states the error constant it relies on
   rather than the "fits a double" shorthand an earlier draft of this plan used.
-* **The long-to-double conversion may not vectorise everywhere.** 2.19's
-  division needs `LongVector -> DoubleVector -> LongVector` casts in the loop.
-  On x86 the packed conversions (`vcvtqq2pd`, `vcvttpd2qq`) are AVX-512DQ
-  instructions; an AVX2 machine has no direct form, and what C2 emits there for
-  `convertShape(L2D)` is not yet known - it may be a lane-by-lane sequence that
-  costs more than the division saves, or a refusal to vectorise the loop at
-  all. The CI pool's Zen 3 runners are AVX2-only and the Intel Xeons carry DQ,
-  so this decides on which machines the `TIME` extractions are fast. It is an
-  admission check for 2.19 at the long width, answered from C2's own output
-  (`dev/varka_emit.sh --asm` once a long-lane shape exists, under
-  `-XX:UseAVX=2` and at the host's width), not from a timing. The fallback if
-  AVX2 loses is a lane-by-lane scalar division inside the vector loop for that
-  width, with the number committed either way.
+* **The long-to-double conversion does not vectorise on AVX2 - settled, with
+  the fallback in hand.** Checked on 15 September 2026 from C2's own output
+  (`dev/varka_canary/L2DProbe.java`, `-XX:+PrintIntrinsics` and hsdis): at the
+  host width `VectorSupport::convert` inlines and the loop is `vcvtqq2pd` /
+  `vcvttpd2qq`; under `-XX:UseAVX=2` the convert intrinsic **fails to inline
+  every time** and the loop degrades to scalar `vcvttsd2si` / `vcvtsi2sdq` with
+  reboxing - slower than a scalar loop, on the CI pool's Zen 3 and every AVX2
+  machine. The fallback is not a scalar tail. It is the magic-number
+  conversion (`dev/varka_canary/MagicProbe.java`): for `v < 2^52`,
+  `(v | 0x4330000000000000) reinterpreted as double, minus 2^52` is exactly
+  `v`; the quotient is rounded with the same `+2^52 -2^52` trick and stepped
+  down where rounding went up (there is no lanewise floor in the Vector API);
+  and `+2^52, reinterpret, mask` recovers the integer. Under `UseAVX=2` C2
+  compiles that to 18 `vsubpd`, 12 `vaddpd`, 6 `vpor`, 6 `vpand`, 6 `vmulpd`,
+  6 `vcmpgtpd` - no conversion, no extraction, no call - and it returns 0
+  wrong quotients over 65 536 nanos-of-day values at 4 and at 8 lanes. So 2.19
+  at the long lane is **two lowerings selected by `UseAVX`**, or the magic form
+  everywhere if its cost at AVX-512 is within the band of the native casts -
+  which is the one measurement 2.19's admission check still owes, and it is a
+  timing, so it comes with a committed file.
 * **The epilogue (task 87) moved out and may move back.** It is the one method no
   budget bounds, kept for a future fix at the owner's request; 64-bit lanes
   widen every node, so a `TIME` shape may reach the 65535-byte cap sooner than
@@ -2562,10 +2599,11 @@ From milestone 4's section 7, the two owned by these tasks:
 
 *Added 15 September 2026:*
 
-3. **How does C2 lower the long-to-double casts at each width?** Section 6's
-   risk, settled from `-XX:+PrintAssembly` under `-XX:UseAVX=2` and at the host
-   width before 2.19 is built at the long lane. The answer decides whether the
-   `TIME` extractions are one lowering or two.
+3. **How does C2 lower the long-to-double casts at each width?** *Answered 15
+   September 2026* - see section 6: native `vcvtqq2pd`/`vcvttpd2qq` at
+   AVX-512, no intrinsic at all under AVX2, and the magic-number conversion
+   vectorises fully at both. What remains is the timing: the magic form's cost
+   against the native casts at AVX-512, which decides one lowering or two.
 4. **`TIME + INTERVAL` out of range: modulo-24 or overflow?** Upstream's
    SPARK-57853 is open on it, and 102's `TimeAddInterval` lowering must match
    whatever vanilla does on the day and follow the ticket if it changes. The
