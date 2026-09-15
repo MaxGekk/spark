@@ -19,8 +19,10 @@ micro-optimisations (82, 87) and the read-back floor (98); boolean outputs (27)
 went with them as the one borderline call, recorded in 1.1. Five rows were added
 (102 to 106, sections 2.37 to 2.41): the `TIME` expressions, the day-time
 interval expressions, `Long` arithmetic, the `TIME` benchmark, and the quote check
-in CI - and 116, the proof that a `TIME` column survives Varka's Arrow cache,
-which comes before any lane code. Rows 107 to 115 and 117 were opened the same
+in CI - 116, the proof that a `TIME` column survives Varka's Arrow cache, which
+comes before any lane code - and 117, the sync of the fork with `apache/spark`
+master, which it trails by 375 commits and which the owner made the milestone's
+first task. Rows 107 to 115 were opened the same
 day for `TIME` features vanilla Spark lacks, surveyed against the upstream
 umbrella [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550), and then **withdrawn from the milestone** on the
 owner's decision that it takes only what Varka needs - vectorised expressions
@@ -137,7 +139,9 @@ Five facts, checked against the tree on the day, decided the shape:
   only under a range bound - which task 29's row already anticipated as
   "range-narrowed constants or a recorded decline".
 
-**The spine, in dependency order:** 84 (the lattice) -> 85 (the lane parameter)
+**The spine, in dependency order:** 117 first (the sync with `apache/spark`
+master, so everything below is built on the tree the message is about) -> 84
+(the lattice) -> 85 (the lane parameter)
 -> 29 (the long lane, widened) with 28 (width conversion) and 92 (the validity
 write at four lanes per group, which 64-bit lanes make the common case) beside
 it -> 88 (division) -> 102 (`TIME` expressions), 103 (day-time interval
@@ -148,7 +152,7 @@ as 85 touches them - run alongside; 81 extends to `time.sql` and `interval.sql`
 once the first `TIME` expression fuses; 106 (the quote check in CI) can go any
 time.
 
-**The vanilla gaps (107 to 115, 117) - surveyed, then withdrawn.** The owner
+**The vanilla gaps (107 to 115) - surveyed, then withdrawn.** The owner
 first asked that `TIME` features vanilla Spark lacks become rows here, then that
 they be checked against the upstream umbrella [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) ("Extend
 support for the TIME data type", 58 subtasks), and then - with the survey in hand
@@ -164,9 +168,10 @@ were wrong and are corrected in place rather than erased: Avro `TIME` is
 implemented ([SPARK-54473](https://issues.apache.org/jira/browse/SPARK-54473), [SPARK-57581](https://issues.apache.org/jira/browse/SPARK-57581), under `sql/core`'s
 Avro code rather than `connector/avro`, where the grep looked), and the
 Arrow-cache stats switch has its `TimeType` and `DayTimeIntervalType` arms - the
-read that said otherwise stopped one line short. The one row that survives the
-withdrawal is 116, because proving a `TIME` column through Varka's own cache
-path is Varka's work and nobody else's.
+read that said otherwise stopped one line short. Two rows survive the
+withdrawal because they are Varka's own: 116, proving a `TIME` column through
+Varka's cache path, and 117, the sync with upstream, which the owner then made
+the milestone's first task.
 
 **Boolean outputs (27) is the borderline call.** `SELECT t1 < t2 AS flag` is a
 projection output, distinct from filters, which already run through masks.
@@ -2421,11 +2426,13 @@ eight-byte lanes with the validity word right at every null pattern the date
 fixtures use. It passes before any long-lane code is written, or it fails and
 becomes the milestone's first fix; either way it is known rather than assumed.
 
-### 2.52 Sync the fork with `apache/spark` master (task 117)
+### 2.52 Sync the fork with `apache/spark` master (task 117) - the milestone's first task
 
-*Withdrawn from milestone 5 on 15 September 2026, hours after it was opened: vanilla Spark's row-engine work, which the owner decided this milestone does not take - it keeps vectorised expressions and benchmarking. Upstream: no ticket; 375 commits behind on 15 September 2026, none of them `TIME`. The text below is what the row would have been, kept as the record a later gap starts from; the heading stays so citations resolve.*
-
-*Opened 15 September 2026, found while checking the umbrella.*
+*Opened 15 September 2026, found while checking the umbrella; withdrawn with the
+vanilla rows for an hour, then made **the first task of the milestone** on the
+owner's instruction - a sync is Varka's own infrastructure, not vanilla Spark's
+feature work, and everything after it merges more easily from a tree that
+matches upstream.*
 
 `origin/master` is 375 commits behind `upstream/master` and 209 ahead of it.
 None of the missing commits is `TIME` work - every resolved subtask of
@@ -2435,7 +2442,9 @@ the vanilla-gap rows above is meant to be offered upstream, which is easier from
 a tree that matches. The task is the merge, the conflict list written down
 (Varka's 209 commits touch `modules.py`, the workflows and `AGENTS.md`, which
 CI's `Auto-merging` lines already show colliding), and the gate green after it.
-Infrastructure, and best done before 102 opens rather than after.
+Infrastructure, and the first thing the milestone does: before 84 opens, so
+that the lane work, the `TIME` rows and the benchmark are all built on the tree
+the message will be about.
 
 
 
@@ -2456,9 +2465,9 @@ third and let the next lane inherit the bugs task 63's review found. 83 and 86 a
 independent of both and of each other.
 
 **After the 15 September 2026 re-scope** (section 1.1) the order that matters is
-the long-lane spine: 84, 85, then 29 with 28 and 92 beside it, then 88, then 102,
-103 and 104, then 105, with 101 before anything from 105 is quoted. 116 comes
-before any of it. Rows marked
+the long-lane spine: 117 first, then 84, 85, then 29 with 28 and 92 beside it,
+then 88, then 102, 103 and 104, then 105, with 101 before anything from 105 is
+quoted. 116 comes before any lane code. Rows marked
 *moved to milestone 6* are kept in this table so the numbers and the citations
 into their design sections stay valid; their text is unchanged and
 `SCOPE_MILESTONE_6.md` item 15 has the reason for each.
@@ -2515,7 +2524,7 @@ into their design sections stay valid; their text is unchanged and
 | 114 | **Withdrawn from milestone 5** (15 September 2026): vanilla Spark's row-engine work, not Varka's; the survey and its ticket are in section 8. `time_bucket` over `TIME` (section 2.49). **Scoped** (15 September 2026) from the umbrella, [SPARK-54507](https://issues.apache.org/jira/browse/SPARK-54507) | The `TIME` arm of `TimeBucket` with an interval width and a `TIME` result; lowered as `time_trunc`'s kernel with a literal width | Golden tests at the day's edges; the differential once lowered; offered upstream against its ticket |
 | 115 | **Withdrawn from milestone 5** (15 September 2026): vanilla Spark's row-engine work, not Varka's; the survey and its ticket are in section 8. `time_format` (section 2.50). **Scoped** (15 September 2026) from the umbrella, [SPARK-54588](https://issues.apache.org/jira/browse/SPARK-54588); row engine only | The registry entry and builder over the existing `TIME` formatter, DSL in Scala and Python, golden tests | Output identical to `date_format` over the same `TIME` for every pattern the golden tests use |
 | 116 | A `TIME` column through Varka's Arrow cache, proven (section 2.51). **Scoped** (15 September 2026) at the owner's request; the milestone's first admission check | A `sql/core` Varka suite caching `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval column under the Arrow serializer, reading back equal, and mapping the buffers through the morsel as eight-byte lanes | Passes at every null pattern the date fixtures use before any long-lane code is written, or fails and becomes the first fix |
-| 117 | **Withdrawn from milestone 5** (15 September 2026): vanilla Spark's row-engine work, not Varka's; the survey and its ticket are in section 8. Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026); infrastructure, before 102 opens | The merge of the 375 upstream commits, the conflict list recorded, the gate green | `dev/varka_gate.sh` green on the merged tree; every resolved [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtask still present, which a grep of the log confirms |
+| 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026) and **first in the milestone** by the owner's instruction: infrastructure, done before 84 opens | The merge of the 375 upstream commits, the conflict list recorded, the gate green | `dev/varka_gate.sh` green on the merged tree; every resolved [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtask still present, which a grep of the log confirms |
 
 ## 4. Files
 
@@ -2598,7 +2607,7 @@ text and numbers unchanged, each with its reason there: 25, 27, 49, 64, 65, 66,
 name in 1.1 and section 6 what that argument would be.
 
 **Vanilla Spark's `TIME` gaps - surveyed on 15 September 2026, left to upstream.**
-Rows 107 to 115 and 117 were opened for them and withdrawn the same day, on the
+Rows 107 to 115 were opened for them and withdrawn the same day, on the
 owner's decision that this milestone takes only what Varka needs: vectorised
 expressions and benchmarking. Vectorising an expression vanilla Spark does not
 have means first adding it to vanilla Spark, which is upstream's work under
@@ -2616,7 +2625,6 @@ row of task 102's family, not a task of its own. The survey, so it is not redone
 | 113 | the rest, unverified | see 2.48's list, each with its ticket | - |
 | 114 | `time_bucket` returns timestamps only | [SPARK-54507](https://issues.apache.org/jira/browse/SPARK-54507) | `time_trunc`'s kernel with a literal width |
 | 115 | no `time_format` | [SPARK-54588](https://issues.apache.org/jira/browse/SPARK-54588) | none - a string |
-| 117 | the fork is 375 commits behind `apache/spark` | - | infrastructure; none of the missing commits is `TIME` |
 
 Present and confirmed, so not gaps: `extract`, every cast, CSV, JSON, Parquet,
 ORC, JDBC and Avro, `to_char` ([SPARK-57575](https://issues.apache.org/jira/browse/SPARK-57575)), Hive interop
