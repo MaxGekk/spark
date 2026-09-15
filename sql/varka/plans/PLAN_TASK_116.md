@@ -138,4 +138,62 @@ None.
 
 ## 9. Outcome
 
-*To be written from the run.*
+Done, 15 September 2026, on the fork's master after the sync (task 117). The
+suite is `sql/core/src/test/scala/org/apache/spark/sql/execution/VarkaTimeArrowCacheSuite.scala`,
+fifteen tests, and it passes:
+
+    build/sbt -batch "sql/testOnly *VarkaTimeArrowCacheSuite"
+    Tests: succeeded 15, failed 0, canceled 0, ignored 0, pending 0
+
+**What the cache does with a `TIME` column, now proven rather than read.** For
+`TIME(p)` at every `p` in {0, 3, 6, 9} and for `INTERVAL DAY TO SECOND`, at each
+of the three null patterns:
+
+1. the cached frame answers what the uncached one did, and the relation the cache
+   manager holds for it carries `TimeType(p)` with `p` unchanged (prediction 2
+   held: the type comes from the Spark schema);
+2. the serializer's own `convertCachedBatchToColumnarBatch` yields an
+   `ArrowColumnVector` over a `TimeNanoVector` (`DurationVector` for the
+   interval) whose value count is the batch's row count;
+3. the data buffer, mapped with the same `MemorySegment.ofAddress(...).reinterpret`
+   call `extractMorsel` uses, read as longs at stride eight, is the nanoseconds of
+   day (microseconds for the interval) at every non-null row, with no
+   per-precision scaling (prediction 3 held: `TimeNanoVector` stores nanoseconds
+   whatever `p` is);
+4. `getNullCount` is the pattern's count, `rows` for the all-null pattern, and the
+   validity buffer mapped the same way has exactly the pattern's bits.
+
+So the day the emitter admits an eight-byte lane (tasks 85 and 29), the bytes
+`isArrowBacked` would hand it are already the right bytes. Nothing in production
+code changed, as section 3.2 required.
+
+**Prediction 1 was wrong in the letter and right in the substance.** The first run
+failed all fifteen tests, and not one failure was about the cache. Section 3.1
+said the test would reach the relation through `InMemoryTableScanExec` in
+`df.queryExecution.executedPlan`; but a `Dataset` memoises its `queryExecution`,
+and each test collects the frame *before* caching it, so the executed plan the
+test inspected was the uncached one forever and held no such scan. The two
+symptoms were `None did not equal Some(TimeType(0))` on the type assertion and
+"no InMemoryTableScanExec in the cached plan" on the lane check. The fix is the
+lookup the cache manager itself performs,
+`spark.sharedState.cacheManager.lookupCachedData(df).cachedRepresentation`,
+which is also the stronger witness: it says the cache holds *this* plan, not that
+some scan appears somewhere. The second attempt did not compile - that lookup
+takes `classic.Dataset`, and the helpers were typed with the API `DataFrame` - and
+the third run passed all fifteen. Both are the harness, not the cache; the cache
+facts held on the first run that reached them.
+
+**What the test does not prove, so no one reads more into it.** It does not
+prove Varka evaluates over the column: `isArrowBacked` still admits only the
+int32 and string vectors, and the emitter's `LaneType` still has one member.
+That is task 85's and task 29's work, and this suite is the fixture they will
+widen rather than write.
+
+**Upstream.** `ArrowCachedBatchSerializer` is upstream code (SPARK-57268), and
+upstream's `ArrowCachedBatchSerializerSuite` already round-trips a `TIME(6)`
+column, checks its `LongColumnStats`, and writes a `TimeNanoVector` in its
+schema-to-vector test. What this suite adds over that - every precision, both
+signs of interval, the three null patterns, and the raw-buffer reading - is
+worth offering upstream only in its first three parts; the raw
+`MemorySegment` mapping is Varka's contract with its own evaluator and means
+nothing to a reader of vanilla Spark.
