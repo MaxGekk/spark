@@ -2470,7 +2470,18 @@ between them; within a wave the order is free):
 Three rows are not nodes of their own: 30 closes when 104 does (its int32
 half shipped in task 63), 39 closes when 103 does, and 90 is absorbed by 101.
 The critical path is 117 -> 84 -> 85 -> 29 -> 88 -> 102 -> 105, seven tasks
-deep, and the ten wave-0 tasks are what fills the time while it runs.
+deep, and it is serial: each of those needs the previous one's code. The ten
+wave-0 tasks are what fills the time while it runs, and three of them belong
+*with* a spine task rather than merely before it: 86 folds into 85 (the same
+code), 92 lands with 29 (its default only matters once four-lane vectors
+exist), and 101 has to exist before 105 quotes anything. 81's date corpus can
+start at once; its `TIME` half waits for 102.
+
+**The first week, read off the graph:** 117 and 116 in parallel - one is a
+merge, the other a test, and they touch nothing in common - with 106 and 101
+alongside, since neither touches the engine; then 84 the moment 117's gate is
+green. Nothing on the critical path can start before that, and everything that
+can start has.
 
 
 | # | Task | Deliverables | Validation |
