@@ -2434,6 +2434,45 @@ quoted. 116 comes before any lane code. Rows marked
 into their design sections stay valid; their text is unchanged and
 `SCOPE_MILESTONE_6.md` item 15 has the reason for each.
 
+### 3.1 The dependency graph, and the order it sorts to
+
+*Built 15 September 2026 from the rows' own "after / blocked on / before" text
+and 1.1's spine; every edge below is stated in a row or in 1.1, none is
+inferred.* An arrow reads "must land before".
+
+    117 sync ----+
+                 +--> 84 lattice --+--> 85 lane param --+--> 28 width conv ---+--> 39 date-date --+
+    116 cache ---+                 |                    |                     |   (closes w/ 103) |
+      proof      |                 +--> 91 guard bound  +--> 29 long lane ----+--> 88 division ---+--> 102 TIME exprs --+
+                 |                                      ^                     |                   |                     |
+                 +--------------------------------------+                     +--> 104 Long arith |--> 103 DT exprs ----+--> 105 TIME bench
+                                                                                  (closes 30)     |                     ^
+                                                                                                  +--> 89 YM divisions  |
+    101 band -----------------------------------------------------------------------------------------------------------+
+
+    no predecessor, any time:  106 quote check in CI   83 one refusal   86 one admission (fold into 85)
+                               92 validity at 4 lanes (land with 29)    95, 96 int32 gaps
+                               81 differential corpus (its TIME half after 102)   90 -> absorbed by 101
+
+Sorted by dependency, independent tasks first (a wave holds tasks with no edge
+between them; within a wave the order is free):
+
+| wave | tasks | why they wait |
+| ---: | :--- | :--- |
+| 0 | **117**, **116**, 101, 106, 83, 86, 92, 95, 96, 81 | nothing - 117 and 116 are first by decision, the rest by independence |
+| 1 | 84 | after 117: the lattice is built on the merged tree |
+| 2 | 85, 91 | after 84: the lane parameter and the guard bound both take the lattice's interval type |
+| 3 | 28, 29 | after 85 (its row: 85 blocks both); 29 also after 116 |
+| 4 | 88, 104, 39 | 88 at the long lane needs 29; 104 needs 29, 84 and 28's cast; 39 needs 28 and 29 |
+| 5 | 102, 103, 89 | 102 and 103 need 29 and 88 (and 103 absorbs 39); 89 needs 88 |
+| 6 | 105 | after 102 and 103, under 101's band |
+
+Three rows are not nodes of their own: 30 closes when 104 does (its int32
+half shipped in task 63), 39 closes when 103 does, and 90 is absorbed by 101.
+The critical path is 117 -> 84 -> 85 -> 29 -> 88 -> 102 -> 105, seven tasks
+deep, and the ten wave-0 tasks are what fills the time while it runs.
+
+
 | # | Task | Deliverables | Validation |
 |---|---|---|---|
 | 25 | **Moved to milestone 6** (15 September 2026, `SCOPE_MILESTONE_6.md` item 15): int32 tuning with a harness to re-establish first. ILP: the unroll factor as a plan decision (section 2.24). **Not started** and **moved from milestone 4** (11 September 2026), where nothing waited on it: its harness stopped measuring a degraded JIT state with PR #105, so its first job is re-establishing what it measures rather than measuring | The registered prediction, then the three-confounder matrix (K x broadcast strategy x `GROUP_BUDGET`) on `dayofweek`, unpredictable `CASE WHEN`, and the depth-8 chain; if K > 1 pays, per-shape K chosen from the live-temporary count the emitter already computes; the `SKILLS.md` bullet rewritten with the numbers; the batch-size knee sweep (question 6) on a wide fused shape | A committed number per candidate shape against its existing baseline; prediction scored honestly; no committed number regresses on shapes where K stays 1 |
