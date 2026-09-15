@@ -31,6 +31,7 @@ alone and reported, rather than having a block inserted at a guessed position.
 """
 
 import argparse
+import os
 import re
 import sys
 
@@ -45,17 +46,45 @@ def anchor(heading: str) -> str:
     return re.sub(r"\s+", "-", slug)
 
 
-def contents(text: str) -> str:
-    """One line per `##` heading, in document order, as a Markdown list."""
-    lines = []
+def headings(text: str, level: str) -> list:
+    """The headings of one level, in document order, skipping fenced code blocks."""
+    found = []
     in_code = False
     for line in text.split("\n"):
         if line.startswith("```"):
             in_code = not in_code
-        elif not in_code and line.startswith("## "):
-            title = line[3:].strip()
-            lines.append(f"* [{title}](#{anchor(title)})")
-    return "\n".join(lines) + "\n"
+        elif not in_code and line.startswith(level):
+            found.append(line[len(level) :].strip())
+    return found
+
+
+def contents(text: str) -> str:
+    """One line per `##` heading of this document, as a Markdown list."""
+    return "\n".join(f"* [{t}](#{anchor(t)})" for t in headings(text, "## ")) + "\n"
+
+
+def index(directory: str) -> str:
+    """One group per file in `directory`, titled by its `# ` heading, listing its lessons.
+
+    Groups come out in path order, which is arbitrary but stable: the alternative is an
+    order stored somewhere, which is one more thing that can disagree with the files.
+    """
+    groups = []
+    for name in sorted(os.listdir(directory)):
+        if not name.endswith(".md"):
+            continue
+        path = os.path.join(directory, name)
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        titles = headings(text, "# ")
+        if not titles:
+            print(f"{path}: no `# ` title; skipped")
+            continue
+        lessons = headings(text, "## ")
+        groups.append(f"#### [{titles[0]}]({path})\n")
+        groups.append("".join(f"* [{t}]({path}#{anchor(t)})\n" for t in lessons))
+        groups.append("\n")
+    return "".join(groups)
 
 
 def rewrite(text: str, body: str) -> str:
@@ -66,6 +95,7 @@ def rewrite(text: str, body: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=True, description=__doc__)
     parser.add_argument("--check", action="store_true", help="report staleness, write nothing")
+    parser.add_argument("--from", dest="source", help="index this directory instead")
     parser.add_argument("files", nargs="+")
     args = parser.parse_args()
 
@@ -77,12 +107,15 @@ def main() -> int:
             print(f"{path}: no {BEGIN} block; nothing to generate")
             findings += 1
             continue
-        body = contents(text)
+        body = index(args.source) if args.source else contents(text)
         current = text[text.index(BEGIN) + len(BEGIN) : text.index(END)].lstrip("\n")
         if current == body:
             continue
         if args.check:
-            print(f"{path}: the contents block is stale; run dev/varka_toc.py {path}")
+            fix = f"dev/varka_toc.py {path}"
+            if args.source:
+                fix += f" --from {args.source}"
+            print(f"{path}: the contents block is stale; run {fix}")
             findings += 1
         else:
             with open(path, "w", encoding="utf-8") as handle:

@@ -26,8 +26,8 @@
 #   * no TODO or FIXME marker under sql/varka or in a Varka source directory
 #     (sql/varka/AGENTS.md: open work is recorded in a plan, never left as a
 #     marker);
-#   * the generated contents block of SKILLS.md is up to date with its headings
-#     (dev/varka_toc.py), when SKILLS.md changed;
+#   * SKILLS.md's generated index still matches the lesson files under
+#     sql/varka/skills/ (dev/varka_toc.py), when either changed;
 #   * every number the documents quote traces to a committed results file
 #     (dev/varka_quote_check.py), when a document changed;
 #   * Python files pass `ruff check` and `ruff format --check`, the two halves of
@@ -148,10 +148,12 @@ if printf '%s\n' "${files[@]}" | grep -qE '^sql/.*/benchmarks/Varka.*-results\.t
   done < <(printf '%s\n' "${files[@]}" | grep -E '^sql/.*/benchmarks/Varka.*-results\.txt$')
 fi
 
-# The contents block of SKILLS.md is generated from its own headings, so a lesson added
-# without regenerating it leaves the list wrong rather than merely short.
-if printf '%s\n' "${files[@]}" | grep -qx 'SKILLS.md' && [ -x dev/varka_toc.py ]; then
-  out="$(dev/varka_toc.py --check SKILLS.md 2>&1)"; rc=$?
+# SKILLS.md is generated from the lesson files under sql/varka/skills/, so a lesson added
+# without regenerating it leaves the index wrong rather than merely short - and the index is
+# the only way anything finds a lesson now.
+if printf '%s\n' "${files[@]}" | grep -qE '^(SKILLS\.md|sql/varka/skills/.*\.md)$' \
+    && [ -x dev/varka_toc.py ]; then
+  out="$(dev/varka_toc.py --check SKILLS.md --from sql/varka/skills 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "$out" | sed 's/^/contents: /'
     findings=$((findings + rc))
