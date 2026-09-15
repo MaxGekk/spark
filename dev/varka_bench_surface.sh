@@ -19,7 +19,8 @@
 # after another on an idle machine, and print the table that compares them.
 #
 #   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--driver-memory 16g] \
-#       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--shard I/N] [--skip-build] \
+#       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--replace] [--shard I/N] \
+#       [--skip-build] \
 #       [--benchmark surface|chains] [--table-columns all|dates] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
 #
@@ -31,6 +32,17 @@
 # computes. See the Chains javadoc. The chains also clear the fixed-share rule at 1e8
 # rows, where the surface needs 5e8, because more work per row buys the same executor
 # time as more rows without needing the memory to hold them.
+#
+# --only REGEX runs the matching entries only, and the file it writes holds just those:
+# the driver replaces the file rather than merging into it. So an --only run under a
+# label that already has a committed file would turn that label's fifty-two-entry
+# coverage table into a three-entry one, which git reports as an ordinary
+# modification. That is refused before the first arm runs, for every label whose
+# results file is tracked by git; an untracked file is this run's own scratch and is
+# replaced without comment. Give the run a label of its own, or use --shard, or pass
+# --replace to overwrite a committed file deliberately. --replace is separate from
+# --force on purpose: --force says the machine is not in its measured state, which is
+# a common thing to say and has nothing to do with discarding a results file.
 #
 # --shard I/N runs entries I, I+N, I+2N ... of whichever list --benchmark selected -
 # 52 surface entries or 12 chains, so N is bounded by that list and not by the
@@ -92,6 +104,7 @@ cd "$(git rev-parse --show-toplevel)"
 # precisely what a usage error is about. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
+replace=0
 shard=""; benchmark=surface; table_columns=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -100,6 +113,7 @@ while [ "$#" -gt 0 ]; do
     --max-fixed-share) share="$2"; shift 2 ;;
     --driver-memory) memory="$2"; shift 2 ;;
     --force) force=1; shift ;;
+    --replace) replace=1; shift ;;
     --only) only="$2"; shift 2 ;;
     --shard) shard="$2"; shift 2 ;;
     --benchmark) benchmark="$2"; shift 2 ;;
@@ -116,6 +130,29 @@ case "$benchmark" in
   chains)  main_class=org.apache.spark.sql.varka.bench.DateChainBenchmark;   stem=DateChain ;;
   *) echo "--benchmark wants surface or chains, got '$benchmark'" >&2; exit 2 ;;
 esac
+
+# The --only truncation guard (task 100). Checked before the machine checks below, not just
+# before the first arm: it reads the arguments and one git index entry, and a run that may
+# not legally write its file should not first spend ten seconds proving the machine is quiet.
+# Failing on the fourth arm after three hours would be barely better than not failing at all.
+# `git ls-files` is the test for "committed": an untracked file is this run's own scratch.
+# --shard is exempt - its filenames carry a suffix and cannot collide with a committed one.
+if [ -n "$only" ] && [ -z "$shard" ] && [ "$replace" -eq 0 ]; then
+  for spec in "${dists[@]}"; do
+    guard_label="${spec%%=*}"
+    guard_out="sql/varka/bench/benchmarks/$stem-$guard_label-results.txt"
+    git ls-files --error-unmatch "$guard_out" >/dev/null 2>&1 || continue
+    guard_n="$(sed -n 's/^entries: *\([0-9][0-9]*\).*/\1/p' "$guard_out" | head -1)"
+    {
+      echo "$guard_label: --only would replace the committed ${guard_n:-?}-entry"
+      echo "  $guard_out"
+      echo "  with this run's subset, which is how a coverage table becomes three rows."
+      echo "  Give the run a label of its own, or use --shard I/N (its files carry a suffix"
+      echo "  and merge with dev/varka_bench_merge.py), or pass --replace to overwrite it."
+    } >&2
+    exit 1
+  done
+fi
 
 load="$(cut -d' ' -f1 /proc/loadavg)"
 if [ "$force" -eq 0 ] && awk -v l="$load" 'BEGIN { exit !(l > 1.0) }'; then
