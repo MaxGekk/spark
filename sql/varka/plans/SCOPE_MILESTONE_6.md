@@ -24,6 +24,8 @@ the project scores its predictions.
 Task numbering continues the single sequence, and no task numbers are assigned
 here: this milestone's plan takes the next free numbers when it is written
 (milestone 4's plan reached 55, and milestone 5 carries 27-30, 39 and 49).
+*On 15 September 2026 milestone 5 was re-scoped to 64-bit lanes and `TIME`, and
+fourteen of its rows moved here as item 15; their numbers stay theirs.*
 
 ## 1. The survey
 
@@ -1019,6 +1021,34 @@ the kernels' own and stay as they are. The targets in section 3 run on
 Arrow-cached copies (item 7), so this floor is in every number this
 milestone will publish.
 
+### Item 15. Moved from milestone 5 on 15 September 2026
+
+Milestone 5 was re-scoped that day to one lane - the long lane - and the types
+that share it (`bigint`, `TIME`, day-time intervals, the timestamps), ending in
+a public message about `TIME`. Fourteen open rows had no bearing on that and
+moved here, on the 4 and 11 September precedents: text and task numbers
+unchanged, each design section still where it was in `PLAN_MILESTONE_5.md`
+with a note under its heading, so every citation resolves. None is ordered
+against this milestone's spine (section 5); each re-enters with its own
+argument, and the reason it left is the start of that argument.
+
+| task | what it is | `PLAN_MILESTONE_5.md` | why it left milestone 5 |
+| ---: | :--- | :--- | :--- |
+| 25 | ILP: the unroll factor as a plan decision | 2.24 | int32 tuning, and its harness has to be re-established before it measures anything |
+| 27 | Boolean outputs | 2.1 | a projection output the `TIME` message does not need; the borderline call - a `TIME` benchmark row wanting `SELECT t1 < t2 AS flag` argues it back |
+| 49 | Exact civil-from-days in long lanes | 2.6 | date-algorithm precision; uses the long lane but serves dates |
+| 64 | Statistics-directed guard selection | 2.28 | int32 guard tuning; also what task 104's `div`/`%` over unbounded `bigint` would need, so it may be the first back |
+| 65 | Joffe's `fast32` civil-from-days | 2.7 | a calendar algorithm for the int32 date path |
+| 66 | Second-level chrono fragments | 2.8 | a calendar refactor for the int32 date path |
+| 72 | Output order for prefix affinity | 2.25 | calendar-prefix tuning |
+| 73 | A stopping rule for the guard walk | 2.26 | int32 guard-walk tuning; its admission check is done and recorded there |
+| 74 | The validity-word algebra's missing axioms | 2.9 | an optimisation of the existing validity pass |
+| 75 | Zero-copy validity for leaf words | 2.10 | an optimisation whose bound moved below its own decline line |
+| 80 | String-column compaction keeping the Arrow layout | 2.27 | strings, sized for this milestone's item 3 |
+| 82 | The mask-to-long disposal in a checked kernel | 2.12 | a micro-optimisation of the int32 checked path |
+| 87 | The epilogue is the one method no budget bounds | 2.18 | kept for a future fix at the owner's request; milestone 5's section 6 says when it would come back |
+| 98 | Two filter rows under 1.0x because the consumer counts | 2.33 | the read-back floor - this milestone's item 13, which is where it now belongs |
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
@@ -1049,6 +1079,12 @@ and aggregation spine. If that measurement comes back the way the single-field
 one did, it becomes a task in its own right and is scheduled then; if it does
 not, the catalogue entry is the record of why the idea was dropped, which is
 worth as much.
+
+Item 15's fourteen tasks are also absent from the table, deliberately: each
+arrived with the reason it left milestone 5 rather than with an argument for a
+place here, and the two that already have one - 98, which is item 13's row
+boundary by another name, and 64, which task 104's divisions would need - are
+scheduled when those arguments are made, not before.
 
 Items 13 and 14 sit beside the table rather than in it: each opens with an
 admission check (a JMH pair, a profile and a batch-size sweep) that costs a
