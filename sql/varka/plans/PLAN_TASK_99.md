@@ -141,4 +141,75 @@ whole session. Three comparisons come out of it:
 
 ## 9. Outcome
 
-*To be written from the measurement.*
+*Measured overnight 14-15 September 2026 on the laptop, five arms, 22:52 to 04:35,
+canary clean on every arm (`compute +0.2% cache +2.4% memory -0.7%`), datapath probe
+1.14. All five results files are committed beside this plan.*
+
+**The hypothesis is dead, and prediction 1 was wrong.** Section 6.1 registered
+`date_add(d, 3)` reading 25-30% higher in `varka-first` than in `varka-last`. It
+reads **1.1% lower**: 1763.5 M rows/s fresh against 1783.7 M/s after five hours and
+twenty minutes of the same session. Across all 52 entries the two Varka arms differ
+by a median of 0.1%, the largest single deviation is 3.3%, and not one entry is 10%
+apart. Elapsed time does not degrade the Varka arm, and the memory mechanism that
+would have explained it - huge-page availability and address-space fragmentation
+under a 56g heap - is not happening, or is not costing anything measurable.
+
+**What is actually going on is better, and it is not about Varka.** Every arm
+reproduces its committed counterpart almost exactly at the median, and every arm
+carries exactly one entry that does not:
+
+| arm | median vs committed | entries over 3% | over 8% | worst entry |
+| :--- | ---: | ---: | ---: | :--- |
+| `varka` | -0.1% | 1 | 1 | `date_add(d, 3)` +27.3% |
+| `varka-off` | -0.2% | 8 | 1 | `d = d2` +8.5% |
+| stock 4.2.0 JDK 25 | +0.0% | 1 | 1 | `weekofyear(d)` +14.2% |
+| stock 4.2.0 JDK 17 | -0.1% | 1 | 1 | `trunc(d, 'MONTH')` -9.1% |
+
+One outlier per arm, a different entry each time, in both directions, and **stock
+Spark carries them as readily as Varka does**. A 14.2% swing on stock's
+`weekofyear(d)` cannot be about a Varka heap, a Varka kernel or a Varka arm's
+position, and it is the same phenomenon as the 22.6% that opened task 97.
+
+**So the committed `date_add(d, 3)` is the outlier, not tonight's numbers.** Four
+independent measurements of that entry over the identical six-column fixture:
+
+| the arm's start, relative to its session | rate |
+| :--- | ---: |
+| committed, 13 September, 5h16m in | 1401.4 M/s |
+| task 97, 14 September, 40 min in | 1780.6 M/s |
+| tonight, first arm, 0 min in | 1763.5 M/s |
+| tonight, last arm, 5h20m in | 1783.7 M/s |
+
+Three agree within 1.2% across two days and three sessions; the fourth sits 21%
+below all of them. Task 97 spent its effort asking what was different about the
+13 September *session* - the fixture, the position, the machine, and now the
+duration - when the answer is that one entry in that run drew badly, the way one
+entry in each of tonight's four arms did.
+
+**Predictions scored.**
+
+1. *`date_add(d, 3)` reads 25-30% higher fresh.* **Wrong**, and wrong in the
+   informative direction: -1.1%, which is what kills the hypothesis outright rather
+   than leaving it half-supported.
+2. *The arithmetic-heavy entries move less than 5%.* **Right** - `trunc(d,
+   'QUARTER')` +0.3%, `weekofyear(d)` -0.3% - but it carries no weight, because
+   nothing moved.
+3. *The stock arms reproduce their committed numbers within 2%.* **Right at the
+   median and wrong in the tail**, which turned out to be the whole story: both stock
+   arms sit at 0.0% and -0.1% across 52 entries while each carries one entry 9% to
+   14% away.
+
+**What this means for numbers this project publishes.** The surface's *aggregate*
+figures are solid: four arms reproduced their committed medians to within 0.2% over
+52 entries each, two days apart. A *single entry's* figure is not: any one of them
+can land 8% to 27% off, and the README quotes per-entry rows. Nothing needs
+correcting today - the fastest-row and median figures are unaffected, and the
+LinkedIn post quotes a median - but no single-entry ratio should be quoted again
+without a band behind it, which is what the follow-up row asks for.
+
+**What does not follow.** This does not say the benchmark is unreliable, and it does
+not license re-running until a number looks good. It says the per-entry
+distribution has a tail that four runs are enough to see and one run is not, and
+that `dev/varka_bench_band.py` - which already reports exactly this, per case, and
+whose own documentation records that *which* cases are noisy reproduces strongly -
+has never been pointed at the surface.

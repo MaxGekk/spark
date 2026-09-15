@@ -1937,6 +1937,46 @@ A partial file that looks complete is the same class of defect as the ones task
 62 spent a week on - a run that reports success and measures something other than
 what its name says.
 
+### 2.36 The surface's per-entry numbers have a tail that one run cannot see (task 101)
+
+*Opened 15 September 2026, out of task 99's measurement.*
+
+Task 99 ran five surface arms in one session to test whether elapsed time
+degrades the Varka arm. It does not - the two Varka arms, five hours and twenty
+minutes apart, differ by a median of 0.1%. What the session did show is a
+property of the benchmark rather than of the engine.
+
+Each of the four arms with a committed counterpart reproduced it almost exactly
+at the median - `varka` -0.1%, `varka-off` -0.2%, stock JDK 25 +0.0%, stock
+JDK 17 -0.1%, over 52 entries each - and each carried **exactly one entry** 8%
+to 27% away from it, a different entry in every arm, in both directions:
+`date_add(d, 3)` +27.3%, `d = d2` +8.5%, `weekofyear(d)` +14.2%,
+`trunc(d, 'MONTH')` -9.1%.
+
+**Stock Spark carries these as readily as Varka does**, which is what settles
+what they are. A 14.2% swing on stock's `weekofyear(d)` is not about a Varka
+heap, a Varka kernel or a Varka arm's position. The 22.6% that opened task 97,
+and the 27.3% on the same entry here, are draws from this distribution rather
+than events with causes of their own - four independent measurements of
+`date_add(d, 3)` over the identical fixture read 1780.6, 1763.5 and 1783.7,
+and the committed 1401.4.
+
+**What to do about it.** `dev/varka_bench_repeat.sh` and
+`dev/varka_bench_band.py` already answer exactly this question per case, and
+`band.py`'s own documentation records the finding that makes a band worth
+committing: over ten runs, *which* cases are noisy reproduces strongly - 37 of
+52 in the worst quartile - while *how* noisy a given case is reproduces only
+weakly. Neither has ever been pointed at the surface. Doing so gives the
+surface a band file, lets `dev/varka_bench_diff.py` stop reporting a
+single-entry move inside the band as a change, and decides what the README does
+with its per-entry rows.
+
+**What this does not mean.** The aggregate figures are unaffected and were
+confirmed by this session: four arms, two days apart, reproducing their
+committed medians to within 0.2%. The rule this yields is narrow - do not quote
+a *single entry's* ratio without a band behind it - and it is not a licence to
+re-run a benchmark until a number looks better.
+
 
 ## 3. Task breakdown
 
@@ -1988,8 +2028,9 @@ independent of both and of each other.
 | 96 | `make_ym_interval` takes only arguments derived from a date (section 2.31). **Scoped** (12 September 2026), the same way: `make_ym_interval(year(d), month(d))` fuses and is in the surface, `make_ym_interval(i, i)` declines - so the constructor for the third type cannot be fed from the int columns the engine already reads, which is the obvious spelling and part of the three-types claim | Establish whether the restriction is the admission rule or something the lowering needs, and lift it if it is the former | `make_ym_interval` over two int columns fuses and matches the row engine over the ANSI overflow edge, or declines with a reason that says why it must |
 | 97 | A bandwidth-bound row lost 22.6% between two surface regenerations and nothing in its lowering changed (section 2.32). **DONE** (`PLAN_TASK_97.md` 9): three explanations eliminated with numbers - the lowering is unchanged, the six-column table costs about 6% and costs it near-uniformly across a four-op and a sixty-four-op entry, and ordinal arm position costs 1% in the favourable direction. The control settles the rest: stock read 82.9 M rows/s on 13 September and 82.7 today while the Varka arm reads 28% higher, so the machine was not slower and only the Varka arm was. The surviving hypothesis - elapsed session time before the arm - becomes task 99, and a hazard found on the way becomes task 100. Scoped 14 September 2026, out of task 78's run: `date_add(d, 3)` went 1811.6 to 1401.4 M rows/s with a clean canary both times, while emitting the same four `IntVector` ops it always has and taking none of the paths the one nearby commit added. The table it is measured over grew from three int32 columns to six between the runs, and from about 12 GiB to 23.2 GiB cached, which is the hypothesis to test on the row where memory is everything and arithmetic is nothing | Time the same entry over a three-column and a six-column table, same host and row count, and attribute the 22.6% | Either the working set explains it - in which case a third of the surface is measured against a fixture shaped by columns those rows never read, and the fixture needs a decision - or fifty-four other commits are in scope |
 | 98 | Two filter rows stay under 1.0x because the consumer counts (section 2.33). **Scoped** (14 September 2026), out of task 78's outcome: `WHERE d < d2` counted at 0.80x and `WHERE d IS NOT NULL` counted at 0.45x are the only losses left in the surface, and the same `d IS NOT NULL` predicate reads 9.5x with a columnar consumer at 1.2 ns/row against 11.7 ns counted - identical kernel, and 968 million of a billion rows crossing the read-back floor at about 25 ns each | Price making the filter node `CodegenSupport` so a counting consumer fuses into the vector loop instead of reading rows back - milestone 4's scope item 13, which task 78 declined to inherit and these two rows now need | The two rows at or above 1.0x, or a recorded measurement saying what the boundary costs and why it cannot go; the debt register's `COUNT(*)` entry belongs to the same owner |
-| 99 | The Varka arm may be measured in the session's worst memory state (section 2.34). **Planned** (`PLAN_TASK_99.md`, 14 September 2026), out of task 97: three explanations for a 22.6% swing in `date_add(d, 3)` are eliminated with numbers, and the control is what makes the rest worth a task - stock Spark read 82.9 M rows/s on 13 September and 82.7 today, 0.2% apart, while the Varka arm on the same entry, fixture and ordinal position reads 28% higher today. The uncontrolled variable is elapsed session time before the arm: five hours twenty on 13 September, forty minutes in task 97's run, against a 23.2 GiB Arrow-cached table where the stock arms hold 1.2 GiB | Two full-length surface runs on one host on one day, differing only in whether the Varka arm runs first or last, about eleven hours | The two Varka arms agree, or they do not and the arm order is a measurement artefact the script must stop producing; either way the committed surface's ratios get a stated confidence |
+| 99 | The Varka arm may be measured in the session's worst memory state (section 2.34). **Done, negative** (`PLAN_TASK_99.md`, 15 September 2026): the two Varka arms of one session, five hours and twenty minutes apart, differ by a median of 0.1% and by 1.1% on the entry in question, so elapsed time is not the variable. What the five arms did show is section 2.36's finding. Originally, out of task 97: three explanations for a 22.6% swing in `date_add(d, 3)` are eliminated with numbers, and the control is what makes the rest worth a task - stock Spark read 82.9 M rows/s on 13 September and 82.7 today, 0.2% apart, while the Varka arm on the same entry, fixture and ordinal position reads 28% higher today. The uncontrolled variable is elapsed session time before the arm: five hours twenty on 13 September, forty minutes in task 97's run, against a 23.2 GiB Arrow-cached table where the stock arms hold 1.2 GiB | Two full-length surface runs on one host on one day, differing only in whether the Varka arm runs first or last, about eleven hours | The two Varka arms agree, or they do not and the arm order is a measurement artefact the script must stop producing; either way the committed surface's ratios get a stated confidence |
 | 100 | An `--only` run silently truncates its label's committed results file (section 2.35). **Scoped** (14 September 2026), found while running task 97: the driver replaces `DateSurface-<label>-results.txt` rather than merging, so a three-entry partial run turned two committed fifty-two-entry files into three-entry ones and `git status` showed an ordinary modification. Restored before staging, and only because the tree was read first | With `--only` set, refuse a label whose committed file holds more entries than this run will write, or write a name that says the file is partial - the sharded path already suffixes filenames for exactly this reason | A partial run cannot overwrite a fuller committed file; a test covers the refusal |
+| 101 | The surface's per-entry numbers have a tail that one run cannot see (section 2.36). **Scoped** (15 September 2026), out of task 99: each of four arms measured overnight reproduced its committed twin to within 0.2% at the median over 52 entries, and each carried exactly one entry 8% to 27% away from it, in both directions, stock Spark as readily as Varka | Point `dev/varka_bench_repeat.sh` and `dev/varka_bench_band.py` at the surface the way they are pointed at the parity benchmark: N repeats per arm, the per-case band written and committed, and the split-half check run to see whether *which* entries are noisy reproduces here as it does there | A committed band file for the surface at both widths; the README's per-entry rows either carry their band or are replaced by the aggregate figures; `dev/varka_bench_diff.py` reads the band so a single-entry move inside it stops being reported as a change |
 
 ## 4. Files
 
