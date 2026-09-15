@@ -195,6 +195,7 @@ jobs:
           build=`./dev/is-changed.py -m "core,unsafe,kvstore,avro,utils,utils-java,network-common,network-shuffle,repl,launcher,examples,sketch,variant,api,catalyst,hive-thriftserver,mllib-local,mllib,graphx,streaming,sql-kafka-0-10,streaming-kafka-0-10,streaming-kinesis-asl,credential-aws,kubernetes,hadoop-cloud,spark-ganglia-lgpl,profiler,protobuf,yarn,connect,sql,hive,pipelines"`
           build_core_utils=`./dev/is-changed.py -m "core,unsafe,kvstore,utils,utils-java,network-common,network-shuffle,sketch,variant,launcher"`
           varka_engine=`./dev/is-changed.py -m varka-engine`
+          varka_bench=`./dev/is-changed.py -m varka-bench`
           # Disabled on this fork since 7 September 2026: the Kubernetes integration job
           # cannot build its Docker image, because booting buildx's own builder fails with
           # "failed to inspect pulled image moby/buildkit:buildx-stable-1: Error response
@@ -209,6 +210,7 @@ jobs:
               \"build\": \"$build\",
               \"build-core-utils\": \"$build_core_utils\",
               \"varka-engine\": \"$varka_engine\",
+              \"varka-bench\": \"$varka_bench\",
               \"pyspark\": \"$pyspark\",
               \"pyspark-pandas\": \"$pandas\",
               \"pyspark-install\": \"$pyspark_install\",
@@ -1156,6 +1158,43 @@ jobs:
       uses: ./.github/actions/install-varka-engine
       with:
         run-tests: 'true'
+
+  # The Varka benchmark drivers' own suites (task 94). `sql/varka/bench` builds against a
+  # *released* Spark at provided scope rather than against this checkout, so this job needs a
+  # JDK and Maven and nothing else - no assembly, no engine jar - and runs in minutes. One
+  # architecture is enough, unlike the engine's job: these suites assert inventory invariants
+  # and run no Vector API kernel, so there is no lane count to differ between x86_64 and arm.
+  #
+  # Before this job the module's sources matched no entry in modules.py, which had both
+  # consequences at once: a change here fell through to `root` and ran the whole matrix, and
+  # the suites that hold the Surface and Chains invariants ran in no job at all.
+  varka-bench:
+    needs: [precondition]
+    if: fromJson(needs.precondition.outputs.required).varka-bench == 'true'
+    name: Varka bench drivers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Bootstrap composite actions
+      uses: actions/checkout@v6
+    - name: Checkout and sync Spark repository
+      uses: ./.github/actions/checkout-and-sync
+      with:
+        ref: ${{ needs.precondition.outputs.head_sha }}
+    - name: Install Java ${{ inputs.java }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: ${{ inputs.java }}
+    - name: Cache Maven local repository
+      uses: actions/cache@v5
+      with:
+        path: ~/.m2/repository
+        key: varka-bench-m2-${{ runner.os }}-${{ hashFiles('sql/varka/bench/pom.xml') }}
+        restore-keys: |
+          varka-bench-m2-${{ runner.os }}-
+    - name: Run the bench module's tests
+      run: ./build/mvn -f sql/varka/bench/pom.xml test
 
   # Documentation build
   docs:

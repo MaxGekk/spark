@@ -365,6 +365,24 @@ varka_engine = Module(
     sbt_test_goals=[],
 )
 
+# The Varka benchmark drivers, `sql/varka/bench`: the Surface and Chains inventories, the
+# harness, and the suites that hold their invariants - every entry parses and runs, carries
+# the columns it claims, and clears MIN_OPS. Like the engine it had no module, with both
+# consequences at once: a change here matched nothing, so it fell through to `root` and ran
+# the entire matrix, while the module's own tests ran in neither that matrix nor any other
+# job. It declares no sbt goals because it builds under Maven against a *released* Spark
+# (`<spark.version>` in its pom, at provided scope), which is also why its CI job needs no
+# assembly and no engine jar. Nothing depends on it: it is a leaf, and a change to it should
+# test it and nothing else.
+varka_bench = Module(
+    name="varka-bench",
+    dependencies=[],
+    source_file_regexes=[
+        "sql/varka/bench/",
+    ],
+    sbt_test_goals=[],
+)
+
 catalyst = Module(
     name="catalyst",
     dependencies=[tags, sketch, variant, core, api, varka_engine],
