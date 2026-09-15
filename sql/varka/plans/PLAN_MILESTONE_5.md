@@ -2249,6 +2249,22 @@ canary, the datapath probe, the fixed-share rule and task 100's guard all apply
 unchanged; `TimeChains` follows once the single expressions are measured, since
 the chains are where milestone 4's engine pulled furthest ahead.
 
+**What the stock arm is made of, and the prediction that forces.** Vanilla
+Spark's `TIME` field extraction goes through `java.time`: `getHoursOfTime(nanos)`
+is `nanosToLocalTime(nanos).getHour`, `getMinutesOfTime` likewise, and `timeTrunc`
+builds a `LocalTime`, truncates it and converts back - each a `StaticInvoke` per
+row, each allocating. The date family's baseline was integer arithmetic; this
+one is object construction. So the registered prediction, written before any
+`TIME` kernel exists: **the `hour(t)`/`minute(t)`/`time_trunc` rows read a larger
+ratio than `year(d)` did, and most of the difference is the baseline's
+allocation, not the lane.** The message says so, the way the README explains
+the date surface's 38x as per-row overhead rather than arithmetic - and the
+honest companion number is the ratio against the fork with the engine off, which
+runs the same `LocalTime` path and isolates what Varka adds. Whether vanilla
+should compute those fields in integer arithmetic is upstream's question
+(section 8's rule), and worth a ticket from whoever benchmarks it first; until
+then the plan records that a chunk of the `TIME` ratio is vanilla's to close.
+
 **Before the message, the band.** Task 99 showed one entry in every arm of a
 surface landing 8% to 27% from its committed value with stock as exposed as
 Varka, and task 101 exists to give the surface a band. The `TIME` surface is
@@ -2340,9 +2356,12 @@ reason: the fork's CI already tests the branch *merged with upstream master*
 the tree CI has tested has not been the tree in the repository - which is how an
 upstream test that exists nowhere in this repository has been failing every
 pull request. After the sync, local and CI test the same tree. The task is the
-merge, the conflict list written down (Varka's 209 commits touch `modules.py`,
-the workflows and `AGENTS.md`, which those `Auto-merging` lines already show
-colliding), and the gate green after it. Two things it can move: the committed
+merge and the gate green after it. A dry run on 15 September - `git merge-tree
+--write-tree origin/master upstream/master` - reports **no conflicting file**
+across the 375 upstream and 209 fork commits: the `Auto-merging` lines CI prints
+are clean three-way merges of `modules.py`, the workflows and `AGENTS.md`, not
+conflicts. So the task is hours of gate, not days of resolution, and its real
+risk is the behavioural one below. Two things it can move: the committed
 Varka numbers, since both fork arms run on the merged tree while the stock arm
 is a fixed 4.2.0 distribution - so the canary runs and the requote rule applies
 if a surface has to be regenerated - and the `TIME` functions themselves, if
@@ -2506,6 +2525,19 @@ under its own band file, built with task 101's tooling.
   division either carries its bound or is a recorded decline; none is computed
   wrongly - and 2.19's admission check states the error constant it relies on
   rather than the "fits a double" shorthand an earlier draft of this plan used.
+* **The long-to-double conversion may not vectorise everywhere.** 2.19's
+  division needs `LongVector -> DoubleVector -> LongVector` casts in the loop.
+  On x86 the packed conversions (`vcvtqq2pd`, `vcvttpd2qq`) are AVX-512DQ
+  instructions; an AVX2 machine has no direct form, and what C2 emits there for
+  `convertShape(L2D)` is not yet known - it may be a lane-by-lane sequence that
+  costs more than the division saves, or a refusal to vectorise the loop at
+  all. The CI pool's Zen 3 runners are AVX2-only and the Intel Xeons carry DQ,
+  so this decides on which machines the `TIME` extractions are fast. It is an
+  admission check for 2.19 at the long width, answered from C2's own output
+  (`dev/varka_emit.sh --asm` once a long-lane shape exists, under
+  `-XX:UseAVX=2` and at the host's width), not from a timing. The fallback if
+  AVX2 loses is a lane-by-lane scalar division inside the vector loop for that
+  width, with the number committed either way.
 * **The epilogue (task 87) moved out and may move back.** It is the one method no
   budget bounds, kept for a future fix at the owner's request; 64-bit lanes
   widen every node, so a `TIME` shape may reach the 65535-byte cap sooner than
@@ -2527,6 +2559,18 @@ From milestone 4's section 7, the two owned by these tasks:
 2. **Mixed-width loop shape**: measured before task 28 opens (2.2);
    narrowest-drive, unless a wider mixed-type shape measures differently once
    28 is under way.
+
+*Added 15 September 2026:*
+
+3. **How does C2 lower the long-to-double casts at each width?** Section 6's
+   risk, settled from `-XX:+PrintAssembly` under `-XX:UseAVX=2` and at the host
+   width before 2.19 is built at the long lane. The answer decides whether the
+   `TIME` extractions are one lowering or two.
+4. **`TIME + INTERVAL` out of range: modulo-24 or overflow?** Upstream's
+   SPARK-57853 is open on it, and 102's `TimeAddInterval` lowering must match
+   whatever vanilla does on the day and follow the ticket if it changes. The
+   differential catches a divergence; the plan records the dependency so the
+   divergence is expected rather than discovered.
 
 ## 8. Explicitly out of milestone 5
 
