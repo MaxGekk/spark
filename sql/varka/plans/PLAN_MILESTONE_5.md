@@ -2390,8 +2390,14 @@ merge and the gate green after it. A dry run on 15 September - `git merge-tree
 --write-tree origin/master upstream/master` - reports **no conflicting file**
 across the 375 upstream and 209 fork commits: the `Auto-merging` lines CI prints
 are clean three-way merges of `modules.py`, the workflows and `AGENTS.md`, not
-conflicts. So the task is hours of gate, not days of resolution, and its real
-risk is the behavioural one below. Two things it can move: the committed
+conflicts. The same day the merged tree was built and run as a scratch commit:
+`build/sbt catalyst/Test/compile sql/Test/compile` in 276 seconds, then the
+gate's `wide` step - every `*Varka*` suite in catalyst and `sql/core` at the
+host width - in 199 seconds, **297 and 183 tests succeeded, 0 failed**, the ten
+canceled being the opt-in sweep and JFR cases that cancel on master too. So the
+task is an afternoon of gate rather than days of resolution, and its real risk
+is the behavioural one below: whether a committed Varka number moves, which only
+a regeneration under the canary answers. Two things it can move: the committed
 Varka numbers, since both fork arms run on the merged tree while the stock arm
 is a fixed 4.2.0 distribution - so the canary runs and the requote rule applies
 if a surface has to be regenerated - and the `TIME` functions themselves, if
@@ -2480,7 +2486,7 @@ into their design sections stay valid; their text is unchanged and
 | 114 | `time_bucket` over `TIME` (section 2.49). **Withdrawn** (15 September 2026): vanilla Spark's work, not Varka's; section 8 has the survey and the ticket | - | - |
 | 115 | `time_format` (section 2.50). **Withdrawn** (15 September 2026): vanilla Spark's work, not Varka's; section 8 has the survey and the ticket | - | - |
 | 116 | A `TIME` column through Varka's Arrow cache, proven (section 2.51). **Scoped** (15 September 2026) at the owner's request; the milestone's first admission check | A `sql/core` Varka suite caching `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval column under the Arrow serializer, reading back equal, and mapping the buffers through the morsel as eight-byte lanes | Passes at every null pattern the date fixtures use before any long-lane code is written, or fails and becomes the first fix |
-| 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026) and **first in the milestone** by the owner's instruction: infrastructure, done before 84 opens | The merge of the 375 upstream commits, the conflict list recorded, the gate green | `dev/varka_gate.sh` green on the merged tree; every resolved [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtask still present, which a grep of the log confirms |
+| 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026) and **first in the milestone** by the owner's instruction: infrastructure, done before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; every resolved [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtask still present, which a grep of the log confirms |
 
 ## 4. Files
 
