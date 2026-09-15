@@ -299,7 +299,7 @@ private object RowToColumnConverter {
       case LongType | TimestampType | TimestampNTZType | _: DayTimeIntervalType | _: TimeType =>
         LongConverter
       case DoubleType => DoubleConverter
-      case StringType => StringConverter
+      case _: StringType => StringConverter
       case _: GeographyType | _: GeometryType => BinaryViewConverter
       case CalendarIntervalType => CalendarConverter
       case VariantType => VariantConverter
