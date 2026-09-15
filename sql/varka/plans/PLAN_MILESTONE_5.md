@@ -182,10 +182,18 @@ support for the TIME data type", 58 subtasks), and then - with the survey in han
 benchmarking. So the rows were withdrawn the same day - their sections cut to
 one-line stubs - and what the survey found is kept in section 8 with a ticket per
 line, because it is the record a later gap starts from. Two of its findings matter to the rows that stay. **The fork
-carries every resolved subtask of the umbrella** - each ticket's commit is in
-`origin/master` as in `upstream/master` - so the expressions 102 lowers are the
-ones vanilla Spark has today, and the fork's 375-commit lag behind `apache/spark`
-master is unrelated to `TIME`. And two readings made while opening those rows
+carries nearly every resolved subtask of the umbrella, and one it does not.** Of
+the 42 resolved tickets, 36 trace to commits in both histories (three of them
+inside other tickets' commits - 51403 under 57587, 57552 and 57554 under 57551);
+[SPARK-53368](https://issues.apache.org/jira/browse/SPARK-53368), reading Parquet `TIME` written with `isAdjustedToUTC`, is
+in `upstream/master` and **not** in the fork; and five (52617, 53520, 57553,
+57559, 53579) leave no commit message in either history - 57559's feature is
+present anyway through `TimeTypeOps`, and the other four are checked by feature
+in 116 rather than by ticket. So the expressions 102 lowers are the ones
+vanilla Spark has today, and task 117 carries one piece of `TIME` work after
+all. *An earlier draft of this paragraph said the fork carried every resolved
+subtask; that rested on a title-prefix grep that passed silently for tickets
+absent from both histories, and the correction stands here.* And two readings made while opening those rows
 were wrong and are corrected in place rather than erased: Avro `TIME` is
 implemented ([SPARK-54473](https://issues.apache.org/jira/browse/SPARK-54473), [SPARK-57581](https://issues.apache.org/jira/browse/SPARK-57581), under `sql/core`'s
 Avro code rather than `connector/avro`, where the grep looked), and the
@@ -2381,8 +2389,9 @@ feature work, and everything after it merges more easily from a tree that
 matches upstream.*
 
 `origin/master` is 375 commits behind `upstream/master` and 209 ahead of it.
-None of the missing commits is `TIME` work - every resolved subtask of
-[SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) is already here - but a milestone that ends in a message
+One of the missing commits is `TIME` work - [SPARK-53368](https://issues.apache.org/jira/browse/SPARK-53368), reading Parquet
+`TIME` written with `isAdjustedToUTC`, is upstream and not here (1.1 has the
+count) - and a milestone that ends in a message
 about tracking vanilla Spark should not be a month behind it, and the record in
 section 8 is easier to act on from a tree that matches. There is a second
 reason: the fork's CI already tests the branch *merged with upstream master*
@@ -2601,7 +2610,7 @@ can start has.
 | 114 | `time_bucket` over `TIME` (section 2.49). **Withdrawn** (15 September 2026): vanilla Spark's work, not Varka's; section 8 has the survey and the ticket | - | - |
 | 115 | `time_format` (section 2.50). **Withdrawn** (15 September 2026): vanilla Spark's work, not Varka's; section 8 has the survey and the ticket | - | - |
 | 116 | A `TIME` column through Varka's Arrow cache, proven (section 2.51). **Scoped** (15 September 2026) at the owner's request; the milestone's first admission check | A `sql/core` Varka suite caching `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval column under the Arrow serializer, reading back equal, and mapping the buffers through the morsel as eight-byte lanes | Passes at every null pattern the date fixtures use before any long-lane code is written, or fails and becomes the first fix |
-| 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026) and **first in the milestone** by the owner's instruction: infrastructure, done before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; every resolved [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtask still present, which a grep of the log confirms |
+| 117 | Sync the fork with `apache/spark` master (section 2.52). **Scoped** (15 September 2026) and **first in the milestone** by the owner's instruction: infrastructure, done before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; [SPARK-53368](https://issues.apache.org/jira/browse/SPARK-53368) present afterwards, and the 36 traceable [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtasks still present, by a full-message grep of the log rather than a title prefix |
 | 118 | The closing task: final benchmarks, the README, and the post (section 2.53). **Scoped** (15 September 2026) on the owner's instruction - the milestone ends as milestone 4 did, with task 62's shape; **last in the milestone**, after 105 and 101 | (A) the measurement's plan - arms, benchmarks, the full-width runner; (B) the `TIME` surface and chains measured under the band on a runner the datapath probe proves, with the allocation/arithmetic split and the engine-off ratio beside stock; (C) the README's `TIME` table and reproduction guide, the docs checked; the short and long post drafts, ideas first, numbers last | Four results files per benchmark committed with provenance and band; the README quotes them and nothing else; `dev/varka_quote_check.py` at zero orphans; both drafts exist and name their sources |
 
 ## 4. Files
