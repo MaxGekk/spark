@@ -238,3 +238,44 @@ section is never read as delivered:
 Until a milestone plans that work, the ghost fallback and the columnar fast path remain
 the engine's shipped identity, and `docs/sql-varka.md` remains the statement of what is
 actually built.
+
+## 14. Prior art
+
+Vectorising Spark's expression evaluation inside the JVM has been tried before,
+and a reader arriving here should be able to find out what those attempts
+learned. Two are on the record, and this engine is closer to the second than to
+the first.
+
+**Kazuaki Ishizaki (IBM Research Tokyo), "Enabling Vectorized Engine in Apache
+Spark", DAIS 2021.** A prototype that made Catalyst's generated code call the
+Vector API inside the columnar batch loop instead of evaluating a row at a time,
+alongside SIMD experiments on BLAS routines and sort. It vectorised addition and
+multiplication over floats and measured about 1.7x end to end against 2.8x in
+the pure-SIMD nano-benchmark; SIMD comb sort lost to scalar radix sort, and the
+exchange dominated the sort anyway. Its two conclusions read as a description of
+what this project later measured on its own: "to vectorize computation is
+effective... to use SIMD is also effective, but not huge improvement", and "the
+interface between computation units is important for performance". Task 62 put
+the 512-bit datapath's share of Varka's speedup at about 1.14x, with the rest
+coming from the loop shape - no per-row objects, no megamorphic calls, no
+branches - and the read-back floor at the columnar-to-row boundary is the
+subject of `SCOPE_MILESTONE_6.md` items 13 and 14. The deck also reports the
+Vector API losing to JNI by an order of magnitude on `daxpy` on the JDK 16 of
+its day; the kernels here run on JDK 25, where the intrinsics that were missing
+then exist, and `SKILLS.md` records where they still do not (the long-to-double
+casts under AVX2, found in milestone 5's planning).
+
+**"Vectorized Query Execution in Apache Spark at Facebook" (2019)**, cited by
+that deck as the earlier attempt: a batch-at-a-time evaluator inside Spark's
+row engine.
+
+What this engine does that neither did: it emits the loop as bytecode with the
+Class-File API rather than as Java source through Janino, so every projection
+is its own class and its call sites stay monomorphic; it fuses the whole
+projection with common subtrees computed once across outputs; it carries SQL's
+three-valued null logic in mask algebra so `CASE WHEN` runs without branches;
+it reads Arrow buffers as `MemorySegment`s with no per-row object on the fast
+path; and any failure degrades to the row engine per batch, so declining is a
+normal outcome. The measurements that separate the lane from the loop shape,
+and the losses printed beside the wins, are the other difference, and they are
+what the READMEs of the two earlier attempts did not have to offer.

@@ -49,6 +49,10 @@ generated from the compiler and fails the build when it drifts from it.
   attribute with its IR and plan fragment, so profilers and heap dumps name
   the plan node with no mapping table.
 
+This is not the first attempt to vectorise Spark's expressions inside the JVM;
+[`sql/varka/VISION.md`](sql/varka/VISION.md) section 14 records the two earlier
+ones, what they found, and what this engine does differently.
+
 ## Benchmarks
 
 Two questions, and they have different answers. **How much faster is a query
