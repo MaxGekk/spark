@@ -153,7 +153,15 @@ alone and CI adds the resolve, which the job caches on `bench/pom.xml`'s hash.
 has not widened over its neighbour; `modules.py`'s doctests pass; and the workflow
 parses as YAML with the new job present and gated on the new precondition key.
 
-**Prediction 2 is confirmed and prediction 1 is answered only in part** - the local
-twenty seconds is not the CI figure, and the first run is what settles it. Scored
-when the job has run once on a pull request that touches this module, which this
-one does.
+**The job has now run, on this task's own pull request, and it passed in 101
+seconds** - every step green including `Run the bench module's tests`. That settles
+prediction 1, which said under five minutes on a cold Maven cache.
+
+It also corrects an expectation recorded while the pull request was open: that the
+job would be *skipped* on its own PR, since nothing under `sql/varka/bench/` changed
+here. It ran, and the reason is in `determine_modules_for_files`' own docstring - the
+`.github` directory is counted when running in GitHub Actions, so a change to the
+workflow is a `root` change and everything is required. Worth knowing in both
+directions: a workflow edit exercises every job, and a job whose first proof comes
+from a PR that touches `.github` has not yet been proven to be *skipped* when it
+should be. That second half is what the next bench-only change will show.
