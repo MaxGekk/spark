@@ -128,6 +128,17 @@ A dry run is a check on structure and says nothing about numbers. It is not a
 faster regeneration, and the script's header says so where someone tired might
 reach for it.
 
+## Run `dev/scalastyle` before pushing Scala; its parser is older than the language
+
+The pre-commit hook's line-length and non-ASCII scans are hints, not the linter. CI's
+Scala linter job runs `dev/scalastyle`, whose parser (scalariform) predates parts of
+Scala 2.13 it will meet in new code: it rejects underscore separators in numeric
+literals (`86_400_000_000_000L` fails with "Expected token RPAREN but got
+Token(INTEGER_LITERAL ...)") although scalac accepts them. That failed the linter
+job on task 116's suite after every test in it had passed locally. `dev/scalastyle`
+takes about a minute on a warm build; run it before the first push of any Scala
+change, and spell large literals without separators.
+
 ## A red Build here may be failing on code this repository does not contain
 
 The fork's CI does not build the branch. It builds the branch *merged with a newer
