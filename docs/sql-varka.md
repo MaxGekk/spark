@@ -350,7 +350,7 @@ VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
 | `year(d) = 2021` |  |
 | `NOT (d = d2)` |  |
 | `d IN (DATE '2021-01-01', DATE '2021-06-01')` | up to 16 literals |
-| `year(d) = 2021 AND i > 0` |  |
+| `year(d) = 2021 AND month(d) > 6` | every conjunct of an AND fuses or the predicate is not in this table; a comparison over a bare int column, `i > 0`, is a residual conjunct today (task 122) |
 | `year(d) = 2021 OR month(d) = 3` |  |
 | `d IN (11 to 16 date literals)` | an IN list this long arrives from the optimizer as an InSet and fuses the same way |
 
@@ -934,7 +934,8 @@ exist.
   define/release lifecycle, and ghost-fallback injection.
 * **sql/core tests** (`VarkaColumnarToRowExecSuite`, `VarkaProjectExecSuite`,
   `VarkaFilterExecSuite`, `VarkaColumnarWriteSuite`, `VarkaEndToEndSuite`,
-  `VarkaDifferentialSuite`, `VarkaAutoRegistrationSuite`) prove plan fusion,
+  `VarkaDifferentialSuite`, `VarkaCoverageDifferentialSuite`,
+  `VarkaAutoRegistrationSuite`) prove plan fusion,
   `checkAnswer` equality over a query matrix - re-run warm so a cache hit is
   differentially checked too - `numVarkaBatches > 0` on fused plans,
   Metaspace bounds, and config-driven activation.
