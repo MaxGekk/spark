@@ -1182,6 +1182,84 @@ Two things are worth taking.
    emitter; it is the same question Item 16's selection narrowing asks of `AND`,
    and should be measured with it rather than separately.
 
+
+### Item 18. Velox's expression evaluator, compared
+
+Recorded on 16 September 2026, from a survey of `velox/expression` and
+`velox/vector` at commit `484ef82`, made at the owner's request. Velox's calendar
+functions were read earlier for a different question and the record of that is
+`sql/varka/skills/calendar-algorithms.md`, "Velox is a semantics reference for
+the calendar family, not a performance one"; this item is the evaluator, which
+that read did not cover. As with Items 16 and 17, most of what it shows is this
+engine's design arrived at independently, and the value is in the three things
+it does that this engine does not.
+
+**Arrived at twice.** `Expr::evalArgsDefaultNulls` narrows the row set word by
+word as each argument's nulls become known (`rowBits[j] &= flatNulls[j] |
+errorNulls[j]`, `Expr.cpp`), so a function body never sees a null row: the
+validity-word algebra in lanes. ANSI arithmetic returns a status per row rather
+than throwing (`velox/functions/sparksql/Arithmetic.h`, `CheckedAddFunction`),
+which is the checked-arithmetic mask; `TRY` ORs an error bitmap into the result's
+nulls (`TryExpr.cpp`, `nullOutErrors`), which is the `NULL` overflow mode; the
+error bitmap itself allocates exception objects lazily and is one word scan when
+empty (`EvalCtx.h`, `EvalErrors`). The flat-no-nulls path that skips every piece
+of bookkeeping (`Expr::evalFlatNoNulls`) is the dense body.
+`SimpleFunctionAdapter` turns one scalar signature into a family of loops chosen
+per batch from facts - no nulls, all ASCII, all inputs flat or constant - and
+says in a comment why the duplication is deliberate ("applying this check once
+per batch instead of once per row"); this engine makes the same choice per shape
+at emission and per batch on the null count. Constant folding before compilation
+(`ExprCompiler.cpp`, `expression::optimize`) is the optimizer's job here.
+
+**Where this engine is right to differ.** Velox raises an ANSI error per row;
+here `FAIL` declines the batch to the row engine, because Spark's error carries
+the offending row's values and its exact message, which the row engine produces
+and a kernel would have to reconstruct. And Velox keeps rows that errored active
+under `AND` so a later conjunct may short-circuit them to false
+(`ConjunctExpr.cpp`, `extraActive`); Spark evaluates conjuncts in order and an
+erroring left conjunct fails the query, so the rule does not transfer.
+
+**Three things worth taking.**
+
+1. **Dictionary peeling with cross-batch memoisation.** `Expr::peelEncodings`
+   and `PeeledEncoding::peel` (`PeeledEncoding.cpp`) evaluate the whole expression
+   once over a dictionary's values and re-wrap the result with the indices, when
+   every non-constant input shares the same indices buffer; `Expr::evalWithMemo`
+   then caches the evaluated dictionary across batches, keyed on the identity of
+   the dictionary's base buffer, starting only when the same base is seen a second
+   time (`baseOfDictionaryRepeats_`) so memory stays bounded, and excluding rows
+   that errored. This is the general form of Item 16's sixth point, the
+   constant-only trick, and it is the shape of the Arrow dictionary-encoded
+   strings this engine declines today. It belongs with Item 3 and supersedes
+   16.6: the fused loop runs over the dictionary, the indices are re-wrapped, and
+   the second batch over the same dictionary costs nothing.
+2. **The conjunct metric.** Where Items 16 and 17 speak of cost ordering, Velox
+   orders by clocks per row eliminated - `timeClocks_ / (numIn_ - numOut_)`,
+   `velox/common/base/SelectivityInfo.h` - accumulated across batches, with the
+   sort run only when a scan finds an inversion (`maybeReorderInputs`). If
+   selection narrowing across `AND` is ever built here, this measured metric
+   replaces a static cost.
+3. **Benchmark sets as differential tests.** `ExpressionBenchmarkBuilder::
+   testBenchmarks()` evaluates every expression in a benchmark set and asserts it
+   equals the first before anything is timed. This engine's surface driver
+   asserts fusion and counts fallen-back batches, but writes both arms to the
+   noop sink and never compares their answers; a checksum per arm, computed once
+   outside the timed loop and required equal, would catch a fast wrong kernel
+   that the differential suites happen not to cover. It is a small infrastructure
+   task and should land before task 118's final benchmarks; it is to be filed as
+   a milestone 5 row beside task 123 once #220 has merged, since both land on the
+   same table lines.
+
+**Noted for later.** The expression fuzzer wraps several input columns in one
+shared dictionary and randomly deselects rows so that the peeling thresholds are
+crossed (`ExpressionFuzzerVerifier.cpp`); that is the fuzzing the IR fuzzer will
+need the day dictionaries arrive. Its three-way check - common path, a naive
+per-row evaluator inside Velox, and an external engine through SQL - is what this
+engine already has as the reference evaluator plus the row engine. Its shared
+subexpression cache is keyed on the identity of the input vectors with a
+partial-row top-up (`Expr::evaluateSharedSubexpr`), which an interpreter needs
+and a fused loop with compile-time common subtrees does not.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
