@@ -22,7 +22,6 @@ import java.nio.file.Files
 import java.security.MessageDigest
 
 import scala.jdk.CollectionConverters._
-import scala.util.Random
 
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 
@@ -61,7 +60,7 @@ import org.apache.spark.sql.types.{DateType, IntegerType, YearMonthIntervalType}
  */
 class VarkaEmittedBytesSuite extends SparkFunSuite {
 
-  private val seed = 20260916L
+  private val seed = fuzzSeed
   private val shapes = 10000
   private val blockSize = 100
   private val widths = Seq(4, 16)
@@ -85,15 +84,24 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
     digest.take(8).map(b => f"$b%02x").mkString
   }
 
-  /** Method name and descriptor to the hash of its rendered body, in declaration order. */
+  /**
+   * What the emitted class is, hashed: one entry per method - its name and descriptor to the
+   * hash of its rendered body, in declaration order - and one for the class around them, under
+   * the key `<class>`, which no method entry can collide with because a method's key always
+   * carries its descriptor's parentheses. The class entry covers what the bodies cannot: the
+   * flags, the interfaces, the attribute names, and each method's own flags. Without it a
+   * refactor could drop the `VarkaFusedKernel` interface or the telemetry attribute and every
+   * body would still render identically.
+   */
   private def methodHashes(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
       lanes: Int): Seq[(String, String)] = {
     val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
     val bytes = VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null,
       options)
-    VarkaEmitterTestSupport.methodBodies(bytes).asScala.toSeq.map { case (m, body) =>
-      m -> sha(body)
-    }
+    ("<class>" -> sha(VarkaEmitterTestSupport.classSummary(bytes))) +:
+      VarkaEmitterTestSupport.methodBodies(bytes).asScala.toSeq.map { case (m, body) =>
+        m -> sha(body)
+      }
   }
 
   // ---------------------------------------------------------------------------------------
@@ -103,17 +111,6 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
   private case class CoverageShape(sql: String, roots: Seq[VarkaVectorIR], numInputs: Int,
       numLiterals: Int)
 
-  /**
-   * Every row of the table as IR, through the compiler: a projection row's compiled outputs, a
-   * predicate row's fused condition root.
-   *
-   * Two ways a row can fail to produce IR, and they are not the same thing. A row whose SQL does
-   * not parse is recorded as skipped, by name, so the file says what it does not pin; the table
-   * carries an `executable` spelling for every row today, so the list is empty and a name
-   * appearing in it is a table that grew a caption. A row that parses and then declines is a
-   * coverage regression - `VarkaCoverageSuite` asserts every row fuses - so it fails here
-   * rather than quietly moving into that list, where a regeneration would bless it.
-   */
   /**
    * The row as the optimizer would hand it to the compiler. There is no optimizer here - the SQL
    * is parsed and resolved and that is all - so a row the table records as arriving as an `InSet`
@@ -132,6 +129,17 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
     case other => other
   }
 
+  /**
+   * Every row of the table as IR, through the compiler: a projection row's compiled outputs, a
+   * predicate row's fused condition root.
+   *
+   * Two ways a row can fail to produce IR, and they are not the same thing. A row whose SQL does
+   * not parse is recorded as skipped, by name, so the file says what it does not pin; the table
+   * carries an `executable` spelling for every row today, so the list is empty and a name
+   * appearing in it is a table that grew a caption. A row that parses and then declines is a
+   * coverage regression - `VarkaCoverageSuite` asserts every row fuses - so it fails here
+   * rather than quietly moving into that list, where a regeneration would bless it.
+   */
   private lazy val coverage: (Seq[CoverageShape], Seq[String]) = {
     val file = getWorkspaceFilePath("sql", "varka", "coverage.json").toFile
     val doc = new ObjectMapper().readTree(file)
@@ -143,11 +151,13 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
       val form = e.get("form").asText()
       val catalyst = Option(e.get("catalyst"))
         .map(_.elements().asScala.map(_.asText()).toSet).getOrElse(Set.empty[String])
-      val resolved: Option[Expression] =
-        try Some(asCatalystClaims(
-          VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(executable), columns),
-          catalyst))
+      // The parse guard covers the parse and the resolve, and nothing else: `asCatalystClaims`
+      // fails the suite on purpose when a row's spelling and its catalyst field disagree, and a
+      // catch around it would turn that into a silent skip.
+      val parsed: Option[Expression] =
+        try Some(VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(executable), columns))
         catch { case _: Exception => None }
+      val resolved = parsed.map(asCatalystClaims(_, catalyst))
       val compiled = resolved.flatMap { expr =>
         if (form == "predicate") {
           VarkaExpressionCompiler.compilePredicate(expr, columns).map(_.fused)
@@ -174,13 +184,17 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
   private case class FuzzShape(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int)
 
   /**
-   * Shape `k` of the sequence, from the same draw and the same seed arithmetic
-   * `VarkaIrFuzzSuite.runOne` uses, so a shape pinned here is a shape that suite ran against the
-   * reference evaluator. The draw lives in `VarkaIrGrammar` for that reason: two copies of it
-   * would let the two corpora part company without any test noticing.
+   * Shape `k` of the sequence: `VarkaIrGrammar`'s draw, from `VarkaIrGrammar`'s seed, through
+   * `VarkaIrGrammar`'s generator - all three shared with `VarkaIrFuzzSuite`, so shape `k` here
+   * is shape `k` there. This suite pins ten thousand of them and that suite checks the first
+   * three hundred against the reference evaluator by default, so the corpora are one sequence
+   * with two depths rather than two sequences: every shape the fuzzer checks is pinned here,
+   * and a shape beyond that prefix is one the fuzzer checks when its iteration count is raised.
+   * Copies of the draw, the seed or the generator in each suite would let them part company
+   * with no test noticing, which is why none of the three lives here.
    */
   private def fuzzShape(k: Int): FuzzShape = {
-    val drawn = drawShape(new Random(seed * 1000003L + k))
+    val drawn = drawShape(shapeRandom(seed, k))
     FuzzShape(drawn.roots, drawn.numInputs, drawn.numLiterals)
   }
 

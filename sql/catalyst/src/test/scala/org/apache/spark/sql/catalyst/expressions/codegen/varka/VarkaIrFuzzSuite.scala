@@ -63,7 +63,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  */
 class VarkaIrFuzzSuite extends SparkFunSuite {
 
-  private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(20260903L)
+  private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(fuzzSeed)
   private val iterations = sys.props.get("varka.fuzz.iterations").map(_.toInt).getOrElse(300)
   private val only = sys.props.get("varka.fuzz.only").map(_.toInt)
   private val classCounter = new AtomicInteger(0)
@@ -112,7 +112,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     arena.allocate(math.max(bytes, 1L), 8)
 
   private def runOne(iteration: Int): Unit = {
-    val rnd = new Random(seed * 1000003L + iteration)
+    val rnd = shapeRandom(seed, iteration)
     // The shape itself comes from the shared draw, so this suite and the emitted-bytes oracle
     // run over one corpus; `rnd` is left where the lane values and null patterns below pick up.
     val Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal) = drawShape(rnd)
