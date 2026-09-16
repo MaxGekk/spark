@@ -293,6 +293,20 @@ platform needs. Gandiva aborts the batch on the first error, division by zero
 included, with no fallback; here a failure declines the batch to the row engine.
 And Gandiva has no differential oracle, no fuzzer and no committed benchmarks.
 
+**Outside Spark: Trino (`core/trino-main/src/main/java/io/trino/sql/gen`).** The
+JVM engine nearest to this one in situation, surveyed on 16 September 2026
+(`SCOPE_MILESTONE_6.md`, item 19). Its columnar filter path generates a class per
+filter with a null-checking loop and a bare one chosen per batch on
+`mayHaveNull`, runs conjuncts in an order learned from time per row eliminated,
+reorders only terms that cannot fail, evaluates a dictionary once and reuses the
+answer, and compacts nullable columns with `compress` behind a CPU-flag gate
+because the JDK cannot say whether `compress` is native or emulated. Every one of
+those is a decision this engine also made, or one it has now recorded. Where the
+two part: Trino requires the Vector API at startup and uses it for Parquet
+decoding and serialisation, but its filter loops are scalar bytecode left to
+C2's auto-vectoriser, the same bet as Gandiva's, and its calendar functions run
+row by row over Joda. The evaluator that emits lanes is the step neither took.
+
 What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole
