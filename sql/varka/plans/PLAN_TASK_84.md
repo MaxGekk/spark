@@ -491,6 +491,22 @@ must lie in `[NARROW_MIN_DAYS, NARROW_DECOMPOSE_MAX_DAYS]` on the row, and
 compiler would never admit, and the field constants are stated for admitted
 inputs - which is exactly the fact the year bug was about.
 
+**One thing the gate found that no suite did.** `catalyst/doc` died with a
+`StackOverflowError` in scaladoc's typer while typing the compiler's match over
+`VarkaValueRange.Range`. `Unknown` was a Java enum implementing the sealed
+interface; scalac models an enum constant as a child of the enum type when it
+populates a sealed hierarchy for exhaustiveness, and that child's type is the enum
+again, so the walk never ends. Compile, the suites and scalastyle all passed on
+that code; only scaladoc walks the hierarchy that way. `Unknown` is a
+zero-component record now, `UNKNOWN` its one instance, and the doc step is
+green. The house rule that Scala cannot see `java.lang.classfile` types has a
+sibling: a Java enum that implements a sealed interface Scala matches over is
+one scaladoc cannot see either.
+
+**The gate, on the final tree.** `dev/varka_gate.sh`: compile, wide, narrow,
+sweep, doc, bench, lint and quotes all `ok`, 16 September 2026, after the
+record change above; the first run had failed only on doc.
+
 **The debt registered.** Two cells of table 3.4 are looser than the arithmetic
 allows and were kept so on purpose: the hull nodes under `INT` (unknown where a
 hull is exact) and the symmetric `INT` intervals generally. The entry is in

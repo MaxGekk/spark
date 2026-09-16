@@ -214,7 +214,7 @@ public final class VarkaRangeAnalysis {
       return VarkaValueRange.UNKNOWN;
     }
     Range child = range(days, Kind.DAY, policy, literals);
-    return child == VarkaValueRange.UNKNOWN ? VarkaValueRange.UNKNOWN : NARROW;
+    return child instanceof VarkaValueRange.Unknown ? VarkaValueRange.UNKNOWN : NARROW;
   }
 
   /**

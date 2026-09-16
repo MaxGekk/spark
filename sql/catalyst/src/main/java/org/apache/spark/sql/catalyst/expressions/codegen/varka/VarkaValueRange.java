@@ -75,10 +75,13 @@ public final class VarkaValueRange {
     boolean within(long lo, long hi);
   }
 
-  /** The unknown range: absorbs every operation, proves nothing. */
-  public enum Unknown implements Range {
-    INSTANCE;
-
+  /**
+   * The unknown range: absorbs every operation, proves nothing. A record with no components
+   * rather than an enum: scalac models an enum constant as a child of the enum type when it
+   * populates a sealed hierarchy for exhaustiveness, and a Scala match over {@link Range} then
+   * sends scaladoc into a cycle. Every instance is equal to every other; use {@link #UNKNOWN}.
+   */
+  public record Unknown() implements Range {
     @Override public Range shift(long lo, long hi) { return this; }
     @Override public Range hull(Range other) { return this; }
     @Override public Range add(Range other) { return this; }
@@ -203,7 +206,7 @@ public final class VarkaValueRange {
   }
 
   /** The unknown range. */
-  public static final Range UNKNOWN = Unknown.INSTANCE;
+  public static final Range UNKNOWN = new Unknown();
 
   /** The interval {@code [lo, hi]}. */
   public static Range of(long lo, long hi) {
