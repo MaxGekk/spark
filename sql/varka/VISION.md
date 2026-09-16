@@ -269,7 +269,31 @@ casts under AVX2, found in milestone 5's planning).
 that deck as the earlier attempt: a batch-at-a-time evaluator inside Spark's
 row engine.
 
-What this engine does that neither did: it emits the loop as bytecode with the
+**Outside Spark: Gandiva, Apache Arrow's expression compiler
+(`arrow/cpp/src/gandiva`).** The closest architectural relative this engine has -
+a per-expression compiler producing native code over Arrow buffers - and a
+survey of it on 16 September 2026 found the two had made the same decisions
+independently. Its decomposer splits every expression into a value expression
+and a list of validity sources (`expr_decomposer.cc`), ANDs the validity
+bitmaps word by word outside the per-record loop (`bitmap_accumulator.cc`),
+keeps intermediate validity in clear-only bitmaps pre-filled with ones, and
+classifies every function as null-if-null, null-never or null-internal to decide
+whether validity is merged, dropped or written to scratch (`native_function.h`);
+error-capable functions are invoked only when all their arguments are valid, so
+garbage in a null slot cannot raise. That is this engine's validity-word algebra,
+its `IsNotNull` and `make_date` cases, and its guards' exclusion of null lanes,
+arrived at twice. Its month arithmetic clamps to the month's end and its
+truncation floors negative epochs (`precompiled/time.cc`), both of which the
+differential holds this engine to; its calendar decomposition is the same
+civil-from-days. Where the two part is instructive. Gandiva's vectorisation is
+LLVM's auto-vectoriser over the scalar loop it emits (`engine.cc` schedules
+`LoopVectorize` and `SLPVectorizer`); on the JVM that bet does not pay, which the
+AVX2 investigation showed, and explicit Vector API emission is the answer this
+platform needs. Gandiva aborts the batch on the first error, division by zero
+included, with no fallback; here a failure declines the batch to the row engine.
+And Gandiva has no differential oracle, no fuzzer and no committed benchmarks.
+
+What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole
 projection with common subtrees computed once across outputs; it carries SQL's
