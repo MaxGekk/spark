@@ -2574,6 +2574,39 @@ guard question is nil, since a comparison cannot overflow. The table's row becam
 correctness of the split is covered by `VarkaCoverageDifferentialSuite` either
 way, since the residual conjunct runs above the fused one.
 
+### 2.58 The module gates measure the pull request, not the fork's delta (task 123)
+
+*Opened 16 September 2026 by task 106, whose documents-only run - #222, one plan
+file changed - was required to run all 36 jobs.*
+
+`checkout-and-sync` checks out apache/spark master, squash-merges the fork
+branch on top and exports the apache commit as `APACHE_SPARK_REF`; `Check
+changes` then runs `git diff --name-only "$APACHE_SPARK_REF" HEAD`, which is
+this fork's whole
+delta from upstream - 331 files on 16 September - and not the pull request's own
+change. So `determine_modules_for_files` sees every Varka source, every module
+gate answers true whatever the pull request touched, and a plan-file edit costs
+about 36 jobs and about an hour while its job list says nothing about what
+changed. The three gates that do skip - SparkR, buf, the UI - skip because the
+fork's delta happens to contain no R, protobuf or UI file.
+
+The reference the gates want is the pull request's own base on this repository.
+It is available before the squash: the precondition already fetches the branch
+as `FETCH_HEAD`, and a pull-request event carries its base in
+`github.event.pull_request.base.sha`, so `Check changes` can diff against
+`git merge-base <base sha> FETCH_HEAD` and fall back to today's reference for a
+push event, which has no base. `APACHE_SPARK_REF` stays where an upstream
+comparison is the point - the dependency-exception check at
+`build_and_test.yml` 1068 is one - and a pull request opened from this fork
+against apache/spark keeps the upstream reference, so the choice is by base
+repository rather than unconditional.
+
+**Done when** a documents-only pull request on this fork runs the documents jobs
+and skips the engine, bench and module shards; task 94's open half, a bench-only
+change running the bench job alone, can be shown; and the lesson in
+`working-in-this-repo.md` is rewritten to say what a job list means once it
+means something. Size: small.
+
 ### 2.59 The no-fallback proof: `PrintIntrinsics` in CI (task 124)
 
 *Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
@@ -2970,6 +3003,7 @@ can start has.
 | 120 | The coverage table as a differential corpus (section 2.55). **Done** (`PLAN_TASK_120.md`, 16 September 2026): `VarkaCoverageDifferentialSuite` runs every `coverage.json` row on three fixtures under both consumers, 58 tests in 42 seconds. Its first run found the table carrying `year(d) = 2021 AND i > 0` while `i > 0` ran in a row filter above the Varka node - the coverage suite had accepted a predicate if any conjunct fused; it now requires all, the row is `year(d) = 2021 AND month(d) > 6`, and the gap is task 122. Originally scoped (15 September 2026); independent, started on the 57 rows | A `sql/core` suite running every `coverage.json` row through both engines over the null-pattern fixtures, projection and predicate forms, both consumers | Every row of the committed table passes; adding an arm without a row fails `VarkaCoverageSuite`, adding a row without correctness fails this suite - the two together are the guarantee |
 | 121 | The AVX2 arm: the `TIME` surface under `-XX:UseAVX=2` (section 2.56). **Scoped** (15 September 2026); after 105, quoted by 118 | Companion results files for the `TIME` surface under `UseAVX=2` on the laptop and on a Zen 3 runner via the workflow, provenance naming the lowering; the one-or-two-lowerings decision for 2.19 recorded from the numbers | Files committed with datapath and flags; the decision written in 2.19 with its numbers; 118's README table shows the AVX2 column beside the full-width one |
 | 122 | A comparison over a bare int column stays on the row engine (section 2.57). **Scoped** (16 September 2026) by task 120, which tightened the coverage suite to require every conjunct of a predicate row to fuse and found `i > 0` residual | `compare`'s non-literal operand accepts an `IntegerType` column the way `intOperand` does; `i > 0`, `i = 5` and `i < i2` fuse, alone and as conjuncts; a coverage row for each | The three shapes in the coverage table and through `VarkaCoverageDifferentialSuite`; the end-to-end plan for `year(d) = 2021 AND i > 0` has no row filter above the Varka node |
+| 123 | The module gates measure the pull request, not the fork's delta (section 2.58). **Scoped** (16 September 2026) by task 106, whose documents-only run (#222, one plan file) was required to run all 36 jobs | `Check changes` diffs against the merge base of the pull request's head and its base on this repository, taken before `checkout-and-sync` squashes, and keeps `APACHE_SPARK_REF` where an upstream comparison is the point | A documents-only pull request runs the documents jobs and skips the engine, bench and module shards; task 94's bench-only half can be shown |
 | 124 | The no-fallback proof: `PrintIntrinsics` in CI (section 2.59). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | A test that runs the emitter and kernel suites in a forked JVM under `-XX:+UnlockDiagnosticVMOptions -XX:+PrintIntrinsics` and fails on any `** not supported` or `** Rejected` line whose method is a Varka class; a line in `dev/varka_datapath.sh` asserting `EnableVectorSupport=true` from `-Xlog:compilation` | The Varka engine CI job carries the test; a kernel deliberately given an operation the match rules refuse fails it |
 | 125 | A checksum per arm in the surface driver (section 2.60). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `DateSurfaceBenchmark` computes one checksum per entry per arm outside the timed loop and asserts the arms agree; the checksum is written beside the timing in the results file | A deliberately wrong kernel fails the run; the committed results files carry the checksums |
 | 126 | The fifth arm: Arrow cache on, engine off (section 2.61). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `dev/varka_bench_surface.sh` takes the engine flag and the Arrow-cache flag as separate tokens; a fifth distribution runs the Arrow cache with the engine off; the README sentence saying the arms "differ only by that flag" is corrected and cache build time is named as excluded | The surface results attribute the published ratio between cache format and kernel; `dev/varka_quote_check.py` passes on the rewritten README |
