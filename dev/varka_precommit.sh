@@ -20,7 +20,9 @@
 #
 #   * no non-ASCII byte in Scala, Java, Python or Markdown outside a string
 #     literal (CLAUDE.md: typographic quotes, dashes and ellipses creep into
-#     comments; benchmark results files are exempt, JMH writes its own +-);
+#     comments; benchmark results files are exempt, JMH writes its own +-, and
+#     so are the third-party transcriptions under sql/varka/papers, whose Greek
+#     letters and symbols are the papers' own text);
 #   * no source line over 100 columns in Scala, Java or Python, imports, package
 #     lines and URLs excepted (the linters enforce this; this is the cheap hint);
 #   * no TODO or FIXME marker under sql/varka or in a Varka source directory
@@ -76,7 +78,7 @@ fi
 findings=0
 note() { findings=$((findings + 1)); echo "$1"; }
 is_code() { [[ "$1" =~ \.(scala|java|py)$ ]]; }
-is_text() { [[ "$1" =~ \.(scala|java|py|md|sh)$ ]] && [[ "$1" != */benchmarks/* ]]; }
+is_text() { [[ "$1" =~ \.(scala|java|py|md|sh)$ ]] && [[ "$1" != */benchmarks/* ]] && [[ "$1" != sql/varka/papers/* ]]; }
 is_varka() { [[ "$1" == sql/varka/* || "$1" == */varka/* ]]; }
 
 docs_changed=0

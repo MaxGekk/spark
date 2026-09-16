@@ -11,342 +11,399 @@
   },
   "expressions" : [ {
     "sql" : "date_add(d, 3)",
+    "executable" : "date_add(d, 3)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateAdd" ],
     "note" : ""
   }, {
     "sql" : "date_add(d, i)",
+    "executable" : "date_add(d, i)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateAdd" ],
     "note" : "a column offset, under a per-batch bound on its range"
   }, {
     "sql" : "date_sub(d, 5)",
+    "executable" : "date_sub(d, 5)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateSub" ],
     "note" : ""
   }, {
     "sql" : "d + CAST(i AS INTERVAL DAY)",
+    "executable" : "d + CAST(i AS INTERVAL DAY)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "Cast", "DateAdd", "ExtractANSIIntervalDays" ],
     "note" : "the day-interval spelling of a column offset"
   }, {
     "sql" : "datediff(d2, d)",
+    "executable" : "datediff(d2, d)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateDiff" ],
     "note" : ""
   }, {
     "sql" : "unix_date(d)",
+    "executable" : "unix_date(d)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "UnixDate" ],
     "note" : ""
   }, {
     "sql" : "date_from_unix_date(unix_date(d))",
+    "executable" : "date_from_unix_date(unix_date(d))",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateFromUnixDate", "UnixDate" ],
     "note" : ""
   }, {
     "sql" : "year(d)",
+    "executable" : "year(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Year" ],
     "note" : ""
   }, {
     "sql" : "month(d)",
+    "executable" : "month(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Month" ],
     "note" : ""
   }, {
     "sql" : "day(d)",
+    "executable" : "day(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfMonth" ],
     "note" : ""
   }, {
     "sql" : "quarter(d)",
+    "executable" : "quarter(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Quarter" ],
     "note" : ""
   }, {
     "sql" : "dayofyear(d)",
+    "executable" : "dayofyear(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfYear" ],
     "note" : ""
   }, {
     "sql" : "dayofweek(d)",
+    "executable" : "dayofweek(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfWeek" ],
     "note" : ""
   }, {
     "sql" : "weekday(d)",
+    "executable" : "weekday(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "WeekDay" ],
     "note" : ""
   }, {
     "sql" : "extract(DAYOFWEEK_ISO FROM d)",
+    "executable" : "extract(DAYOFWEEK_ISO FROM d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Add", "Extract", "WeekDay" ],
     "note" : ""
   }, {
     "sql" : "weekofyear(d)",
+    "executable" : "weekofyear(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "WeekOfYear" ],
     "note" : ""
   }, {
     "sql" : "extract(YEAROFWEEK FROM d)",
+    "executable" : "extract(YEAROFWEEK FROM d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Extract", "YearOfWeek" ],
     "note" : ""
   }, {
     "sql" : "last_day(d)",
+    "executable" : "last_day(d)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "LastDay" ],
     "note" : ""
   }, {
     "sql" : "next_day(d, 'MONDAY')",
+    "executable" : "next_day(d, 'MONDAY')",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "NextDay" ],
     "note" : "the day name must be a literal"
   }, {
     "sql" : "make_date(2021, i, 1)",
+    "executable" : "make_date(2021, i, 1)",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "MakeDate" ],
     "note" : ""
   }, {
     "sql" : "trunc(d, 'YEAR')",
+    "executable" : "trunc(d, 'YEAR')",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
     "note" : ""
   }, {
     "sql" : "trunc(d, 'MONTH')",
+    "executable" : "trunc(d, 'MONTH')",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
     "note" : ""
   }, {
     "sql" : "trunc(d, 'QUARTER')",
+    "executable" : "trunc(d, 'QUARTER')",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
     "note" : ""
   }, {
     "sql" : "trunc(d, 'WEEK')",
+    "executable" : "trunc(d, 'WEEK')",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
     "note" : ""
   }, {
     "sql" : "add_months(d, 3)",
+    "executable" : "add_months(d, 3)",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
     "note" : ""
   }, {
     "sql" : "add_months(d, i)",
+    "executable" : "add_months(d, i)",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
     "note" : ""
   }, {
     "sql" : "d + INTERVAL 3 MONTH",
+    "executable" : "d + INTERVAL 3 MONTH",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
     "note" : ""
   }, {
     "sql" : "d + ym",
+    "executable" : "d + ym",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
     "note" : ""
   }, {
     "sql" : "d - ym",
+    "executable" : "d - ym",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval", "DatetimeSub", "UnaryMinus" ],
     "note" : ""
   }, {
     "sql" : "make_ym_interval(year(d), month(d))",
+    "executable" : "make_ym_interval(year(d), month(d))",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "Year" ],
     "note" : "the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines"
   }, {
     "sql" : "make_ym_interval(year(d), month(d)) * 2",
+    "executable" : "make_ym_interval(year(d), month(d)) * 2",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "MultiplyYMInterval", "Year" ],
     "note" : "a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines"
   }, {
     "sql" : "abs(ym)",
+    "executable" : "abs(ym)",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Abs" ],
     "note" : ""
   }, {
     "sql" : "ym - ymm",
+    "executable" : "ym - ymm",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Cast", "Subtract" ],
     "note" : ""
   }, {
     "sql" : "CAST(ymy AS INTERVAL MONTH)",
+    "executable" : "CAST(ymy AS INTERVAL MONTH)",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Cast" ],
     "note" : ""
   }, {
     "sql" : "i + 1",
+    "executable" : "i + 1",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Add" ],
     "note" : ""
   }, {
     "sql" : "i - 1",
+    "executable" : "i - 1",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Subtract" ],
     "note" : ""
   }, {
     "sql" : "year(d) * 2",
+    "executable" : "year(d) * 2",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Multiply", "Year" ],
     "note" : "a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines"
   }, {
     "sql" : "-i",
+    "executable" : "-i",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "UnaryMinus" ],
     "note" : ""
   }, {
     "sql" : "year(d) + i",
+    "executable" : "year(d) + i",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Add", "Year" ],
     "note" : ""
   }, {
     "sql" : "if(d < d2, d, d2)",
+    "executable" : "if(d < d2, d, d2)",
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "If", "LessThan" ],
     "note" : ""
   }, {
     "sql" : "CASE WHEN d < d2 THEN d ELSE d2 END",
+    "executable" : "CASE WHEN d < d2 THEN d ELSE d2 END",
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "CaseWhen", "LessThan" ],
     "note" : ""
   }, {
     "sql" : "coalesce(d, d2)",
+    "executable" : "coalesce(d, d2)",
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "Coalesce" ],
     "note" : ""
   }, {
     "sql" : "greatest(d, d2)",
+    "executable" : "greatest(d, d2)",
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "Greatest" ],
     "note" : ""
   }, {
     "sql" : "least(d, d2)",
+    "executable" : "least(d, d2)",
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "Least" ],
     "note" : ""
   }, {
     "sql" : "d IS NULL",
+    "executable" : "d IS NULL",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNull" ],
     "note" : ""
   }, {
     "sql" : "d IS NOT NULL",
+    "executable" : "d IS NOT NULL",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNotNull" ],
     "note" : ""
   }, {
     "sql" : "d = d2",
+    "executable" : "d = d2",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo" ],
     "note" : ""
   }, {
     "sql" : "d < d2",
+    "executable" : "d < d2",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "LessThan" ],
     "note" : ""
   }, {
     "sql" : "d <= d2",
+    "executable" : "d <= d2",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "LessThanOrEqual" ],
     "note" : ""
   }, {
     "sql" : "d > d2",
+    "executable" : "d > d2",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThan" ],
     "note" : ""
   }, {
     "sql" : "d >= d2",
+    "executable" : "d >= d2",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThanOrEqual" ],
     "note" : ""
   }, {
     "sql" : "year(d) = 2021",
+    "executable" : "year(d) = 2021",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Year" ],
     "note" : ""
   }, {
     "sql" : "NOT (d = d2)",
+    "executable" : "NOT (d = d2)",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Not" ],
     "note" : ""
   }, {
     "sql" : "d IN (DATE '2021-01-01', DATE '2021-06-01')",
+    "executable" : "d IN (DATE '2021-01-01', DATE '2021-06-01')",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "In" ],
     "note" : "up to 16 literals"
   }, {
-    "sql" : "year(d) = 2021 AND i > 0",
+    "sql" : "year(d) = 2021 AND month(d) > 6",
+    "executable" : "year(d) = 2021 AND month(d) > 6",
     "family" : "Predicates",
     "form" : "predicate",
-    "catalyst" : [ "And", "EqualTo", "GreaterThan", "Year" ],
-    "note" : ""
+    "catalyst" : [ "And", "EqualTo", "GreaterThan", "Month", "Year" ],
+    "note" : "every conjunct of an AND fuses or the predicate is not in this table; a comparison over a bare int column, `i > 0`, is a residual conjunct today (task 122)"
   }, {
     "sql" : "year(d) = 2021 OR month(d) = 3",
+    "executable" : "year(d) = 2021 OR month(d) = 3",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Month", "Or", "Year" ],
     "note" : ""
   }, {
     "sql" : "d IN (11 to 16 date literals)",
+    "executable" : "d IN (DATE '2021-01-01', DATE '2021-02-01', DATE '2021-03-01', DATE '2021-04-01', DATE '2021-05-01', DATE '2021-06-01', DATE '2021-07-01', DATE '2021-08-01', DATE '2021-09-01', DATE '2021-10-01', DATE '2021-11-01')",
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "InSet" ],

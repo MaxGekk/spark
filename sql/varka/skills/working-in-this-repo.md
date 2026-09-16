@@ -139,6 +139,19 @@ job on task 116's suite after every test in it had passed locally. `dev/scalasty
 takes about a minute on a warm build; run it before the first push of any Scala
 change, and spell large literals without separators.
 
+## A run's job list on this fork says nothing about what the pull request changed
+
+Every pull request on the fork runs the full matrix - about 36 jobs, about an
+hour - however small the change, and that is not a sign the change touched
+something wide. The `Check changes` job diffs the checked-out tree against
+apache/spark master (`APACHE_SPARK_REF`), which is the fork's whole delta from
+upstream, so every module gate answers true; the documents-only pull request that
+recorded this (#222, one plan file) was required to run the Varka engine on two
+architectures, the bench module, the Java 25 Maven build and every test shard.
+Do not read a skipped job as "this PR did not touch that module" or a required
+one as "it did", and do not plan a task around a gate skipping until the
+precondition measures the pull request's own files (`PLAN_TASK_106.md` 9).
+
 ## A red Build here may be failing on code this repository does not contain
 
 The fork's CI does not build the branch. It builds the branch *merged with a newer
