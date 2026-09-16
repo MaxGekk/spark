@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import java.util.Locale
+
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
@@ -73,6 +75,11 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     new TruncDateDynamic(intCol, intCol),
     new WeekOfYear(intCol))
 
+  /** The node types whose lane is their operands' rather than INT by construction. */
+  private val derivesItsLane: Set[Class[_]] = Set(
+    classOf[IntArith], classOf[IntNeg], classOf[Greatest], classOf[Least], classOf[IfElse],
+    classOf[Compare], classOf[And], classOf[Or], classOf[Not], classOf[IsNotNull])
+
   /** Every concrete node type the sealed hierarchy permits, nested interfaces expanded. */
   private def concreteNodeTypes(root: Class[_]): Set[Class[_]] =
     root.getPermittedSubclasses.toSeq.flatMap { c =>
@@ -123,36 +130,64 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
   test("a calendar node over a wider child is refused when it is built") {
     // The calendar lowerings decompose a 32-bit epoch day. A 64-bit child would be
     // reinterpreted rather than converted, so the constructor refuses it and names the lane.
-    val refusals: Seq[(String, () => Any)] = Seq(
-      "year" -> (() => new Year(longCol)),
-      "month" -> (() => new Month(longCol)),
-      "truncDate" -> (() => new TruncDate(longCol, TruncLevel.MONTH)),
-      "truncDateDynamic" -> (() => new TruncDateDynamic(longCol, intCol)),
-      "addDays" -> (() => new AddDays(longCol, intLit)),
-      "addDays" -> (() => new AddDays(intCol, longLit)),
-      "subDays" -> (() => new SubDays(longCol, intLit)),
-      "dateDiff" -> (() => new DateDiff(longCol, intCol)),
-      "nextDay" -> (() => new NextDay(longCol, intLit)),
-      "addMonths" -> (() => new AddMonths(intCol, longLit)),
-      "makeDate" -> (() => new MakeDate(intCol, longLit, intLit, false)),
-      "guardedDay" -> (() => new GuardedDay(longCol)),
-      "dayOfWeek" -> (() => new DayOfWeek(longCol)),
-      "thursdayOf" -> (() => new ThursdayOf(longCol)),
-      "weekOfYear" -> (() => new WeekOfYear(longCol)))
-    refusals.foreach { case (what, build) =>
+    //
+    // Every node that takes epoch days appears here, and every operand position of each: the
+    // twenty checks are near-identical lines, which is exactly the shape a copy-paste slip
+    // survives in, and a node left unchecked would report the int lane over a 64-bit subtree.
+    // The completeness assertion below is what keeps the list honest as nodes are added.
+    val refusals: Seq[(String, Int, () => Any)] = Seq(
+      ("guardedDay", 0, () => new GuardedDay(longCol)),
+      ("addDays", 0, () => new AddDays(longCol, intLit)),
+      ("addDays", 1, () => new AddDays(intCol, longLit)),
+      ("subDays", 0, () => new SubDays(longCol, intLit)),
+      ("subDays", 1, () => new SubDays(intCol, longLit)),
+      ("dateDiff", 0, () => new DateDiff(longCol, intCol)),
+      ("dateDiff", 1, () => new DateDiff(intCol, longCol)),
+      ("dayOfWeek", 0, () => new DayOfWeek(longCol)),
+      ("weekDay", 0, () => new WeekDay(longCol)),
+      ("dayOfWeekIso", 0, () => new DayOfWeekIso(longCol)),
+      ("nextDay", 0, () => new NextDay(longCol, intLit)),
+      ("nextDay", 1, () => new NextDay(intCol, longLit)),
+      ("thursdayOf", 0, () => new ThursdayOf(longCol)),
+      ("addMonths", 0, () => new AddMonths(longCol, intLit)),
+      ("addMonths", 1, () => new AddMonths(intCol, longLit)),
+      ("makeDate", 0, () => new MakeDate(longCol, intLit, intLit, true)),
+      ("makeDate", 1, () => new MakeDate(intCol, longLit, intLit, false)),
+      ("makeDate", 2, () => new MakeDate(intCol, intLit, longLit, true)),
+      ("year", 0, () => new Year(longCol)),
+      ("month", 0, () => new Month(longCol)),
+      ("dayOfMonth", 0, () => new DayOfMonth(longCol)),
+      ("quarter", 0, () => new Quarter(longCol)),
+      ("dayOfYear", 0, () => new DayOfYear(longCol)),
+      ("lastDay", 0, () => new LastDay(longCol)),
+      ("truncDate", 0, () => new TruncDate(longCol, TruncLevel.MONTH)),
+      ("truncDateDynamic", 0, () => new TruncDateDynamic(longCol, intCol)),
+      ("truncDateDynamic", 1, () => new TruncDateDynamic(intCol, longCol)),
+      ("weekOfYear", 0, () => new WeekOfYear(longCol)))
+    refusals.foreach { case (what, position, build) =>
       val e = intercept[IllegalArgumentException](build())
-      assert(e.getMessage.contains(what), e.getMessage)
-      assert(e.getMessage.contains("LONG"), e.getMessage)
+      assert(e.getMessage.contains(what), s"$what operand $position: ${e.getMessage}")
+      assert(e.getMessage.contains("LONG"), s"$what operand $position: ${e.getMessage}")
     }
+    // Every node whose lane is INT by construction rather than derived from its operands takes
+    // epoch days, so every one of them has to appear above.
+    val covered = refusals.map(_._1.toLowerCase(Locale.ROOT)).toSet
+    val calendarNodes = everyIntNode
+      .filterNot(n => n.isInstanceOf[ColumnRef] || n.isInstanceOf[LiteralSlot])
+      .filterNot(n => derivesItsLane.contains(n.getClass))
+      .map(_.getClass.getSimpleName.toLowerCase(Locale.ROOT))
+      .toSet
+    assert(calendarNodes -- covered === Set.empty[String],
+      "a node that takes epoch days has no refusal case")
   }
 
   test("a node whose operands disagree on their lane is refused when it is built") {
     // One node is emitted over one species: an add whose operands are different widths, or a
     // blend whose mask and values are, has no lowering. Widening is a conversion node's job.
     val refusals: Seq[(String, () => Any)] = Seq(
-      "int:ADD" -> (() => new IntArith(IntOp.ADD, Overflow.WRAP, intCol, longLit)),
-      "int:MUL" -> (() => new IntArith(IntOp.MUL, Overflow.NULL, longCol, intLit)),
-      "cmp:LT" -> (() => new Compare(CompareOp.LT, longCol, intLit)),
+      "int arithmetic" -> (() => new IntArith(IntOp.ADD, Overflow.WRAP, intCol, longLit)),
+      "int arithmetic" -> (() => new IntArith(IntOp.MUL, Overflow.NULL, longCol, intLit)),
+      "a comparison" -> (() => new Compare(CompareOp.LT, longCol, intLit)),
       "greatest" -> (() => new Greatest(longCol, intCol)),
       "least" -> (() => new Least(intCol, longLit)),
       "and" -> (() => new And(new IsNotNull(intCol), new IsNotNull(longCol))),

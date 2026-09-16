@@ -99,7 +99,19 @@ public sealed interface VarkaVectorIR
       case ThursdayOf n -> LaneType.INT;
       case AddMonths n -> LaneType.INT;
       case MakeDate n -> LaneType.INT;
-      case Chrono n -> LaneType.INT;
+      // The nine calendar extractions are named one by one rather than caught by a `Chrono`
+      // arm: an umbrella would let a member added later inherit the int lane silently, which is
+      // the opposite of what an exhaustive switch is here for. `canonical` and
+      // `canonicalShallow` enumerate them for the same reason.
+      case Year n -> LaneType.INT;
+      case Month n -> LaneType.INT;
+      case DayOfMonth n -> LaneType.INT;
+      case Quarter n -> LaneType.INT;
+      case DayOfYear n -> LaneType.INT;
+      case LastDay n -> LaneType.INT;
+      case TruncDate n -> LaneType.INT;
+      case TruncDateDynamic n -> LaneType.INT;
+      case WeekOfYear n -> LaneType.INT;
     };
   }
 
@@ -111,8 +123,11 @@ public sealed interface VarkaVectorIR
   private static void requireInt(String what, VarkaVectorIR... children) {
     for (VarkaVectorIR child : children) {
       if (child.laneType() != LaneType.INT) {
-        throw new IllegalArgumentException(
-            what + " takes int lanes, not " + child.laneType() + ": " + canonical(child));
+        // The child's type name, not `canonical(child)`: that rendering recurses without a memo
+        // over what is a DAG in effect, so a shared subtree is re-rendered once per edge and a
+        // deep tree would cost exponential time to build a message nobody needs it in.
+        throw new IllegalArgumentException(what + " takes int lanes, not " + child.laneType()
+            + ", from a " + child.getClass().getSimpleName());
       }
     }
   }
@@ -124,10 +139,11 @@ public sealed interface VarkaVectorIR
    * them is a conversion, which is a node in its own right rather than a silent widening here.
    */
   private static void requireSameLane(String what, VarkaVectorIR first, VarkaVectorIR... rest) {
+    LaneType lane = first.laneType();
     for (VarkaVectorIR other : rest) {
-      if (other.laneType() != first.laneType()) {
+      if (other.laneType() != lane) {
         throw new IllegalArgumentException(
-            what + " mixes lanes: " + first.laneType() + " and " + other.laneType());
+            what + " mixes lanes: " + lane + " and " + other.laneType());
       }
     }
   }
@@ -141,7 +157,7 @@ public sealed interface VarkaVectorIR
     return lane == LaneType.INT ? "" : ":" + lane.name().toLowerCase(Locale.ROOT);
   }
 
-  /** The comparison a {@link Compare} node performs; lane math is signed int ordering. */
+  /** The comparison a {@link Compare} node performs; lane math is signed integer ordering. */
   enum CompareOp { LT, LE, GT, GE, EQ }
 
   /**
@@ -205,8 +221,14 @@ public sealed interface VarkaVectorIR
 
   /**
    * The runtime scalar argument at {@code index}, broadcast into every lane once per call,
-   * outside the loop, into a lane of {@code lane}'s width. A slot's index is into the table for
-   * its own lane, so an int slot 0 and a long slot 0 are different arguments.
+   * outside the loop, into a lane of {@code lane}'s width.
+   *
+   * <p><b>One index space, for now.</b> {@link VarkaFusedKernel#run} takes a single
+   * {@code int[] scalarArgs} and {@link VarkaShapeKey} carries a single literal count, so
+   * {@code index} addresses one table whatever the lane says - a slot that names a 64-bit lane
+   * would read the int argument at that index. Nothing builds one yet: the compiler folds only
+   * int constants. The second table, and the {@code run} overload that carries it, arrive with
+   * the emitter's lane descriptor.
    *
    * <p>The one-argument form is the int lane, as {@link ColumnRef}'s is.
    */
@@ -286,8 +308,10 @@ public sealed interface VarkaVectorIR
   }
 
   /**
-   * {@code left OP right} over two int32 lanes: Spark's {@code Add}, {@code Subtract}
-   * and {@code Multiply} where both operands and the result are {@code IntegerType}. The
+   * {@code left OP right} over two lanes of one width - Spark's {@code Add}, {@code Subtract}
+   * and {@code Multiply}. The node's lane is its operands', which the constructor requires to
+   * agree; the emitter serves the int lane, where both operands and the result are
+   * {@code IntegerType}. The
    * operands are int-valued nodes - a fused field such as {@link Year} or {@link DateDiff}, an
    * {@code IntegerType} column, an int literal, or nested arithmetic - never a date, which is
    * what separates this from {@link AddDays}, whose left operand is a date and whose result is
@@ -303,27 +327,32 @@ public sealed interface VarkaVectorIR
   record IntArith(IntOp op, Overflow mode, VarkaVectorIR left, VarkaVectorIR right)
       implements VarkaVectorIR {
     public IntArith {
-      requireSameLane("int:" + op, left, right);
+      requireSameLane("int arithmetic", left, right);
     }
   }
 
   /**
-   * {@code -child} over an int32 lane, Spark's {@code UnaryMinus}. Only
+   * {@code -child} over one lane, Spark's {@code UnaryMinus}. Only
    * {@link Overflow#WRAP} and {@link Overflow#FAIL} occur: Spark has no {@code try_negative},
    * so a negation never nulls a valid lane, and the emitter rejects {@link Overflow#NULL}
    * here rather than emitting a form nothing can produce.
    *
-   * <p>The one overflowing input is {@link Integer#MIN_VALUE}, whose negation is itself.
+   * <p>The one overflowing input is the lane's most negative value, whose negation is itself:
+   * {@link Integer#MIN_VALUE} at the int lane, {@link Long#MIN_VALUE} at a wider one. A guard
+   * written against a constant rather than against the lane is wrong on both sides - it misses
+   * the overflow it exists for, and condemns a value the wider lane represents exactly.
    */
   record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
 
   /**
-   * {@code left OP right} over two date-valued operands. Null-intolerant: the result
-   * is known (true or false) exactly where both operands are valid, unknown elsewhere.
+   * {@code left OP right} over two operands on one lane, which the constructor requires to
+   * agree - dates at the int lane, and the mask this produces is of that lane's species.
+   * Null-intolerant: the result is known (true or false) exactly where both operands are valid,
+   * unknown elsewhere.
    */
   record Compare(CompareOp op, VarkaVectorIR left, VarkaVectorIR right) implements Cond {
     public Compare {
-      requireSameLane("cmp:" + op, left, right);
+      requireSameLane("a comparison", left, right);
     }
   }
 

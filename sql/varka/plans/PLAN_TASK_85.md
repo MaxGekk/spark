@@ -519,6 +519,53 @@ deriving long; the calendar refusals; the mixed-operand refusals; the rendering
 and the two shape hashes; and the emitter refusing `LONG` by name, which is what
 tells "refused" apart from "emitted as int by accident" until step 4.
 
+**Reviewed at the highest effort, and seven things in this step came back.**
+Four were fixed here. The lane derivation caught the nine calendar extractions
+with one `case Chrono` arm, which defeats the very forcing its comment claims: a
+64-bit chrono node added later would compile unchanged and answer `INT` through
+the umbrella while holding a wider child. They are enumerated one by one now, as
+`canonical` and `canonicalShallow` already do. `requireInt`'s message rendered
+`canonical(child)`, which recurses without a memo over what is a DAG in effect,
+so a deep shared tree would spend exponential time building a message that names
+only the node and the lane; it prints the child's type instead.
+`requireSameLane` built its label on every successful construction of the two
+hottest nodes the compiler makes, and re-derived the first operand's lane once
+per comparison. And `LiteralSlot`'s new comment claimed a slot table per lane,
+which nothing implements - there is one `int[] scalarArgs` and one literal count
+in the key - so it now says the index space is shared and names the step that
+splits it.
+
+**The range analysis needed a guard of its own, and got one.**
+`VarkaRangeAnalysis` is the IR's other consumer and it runs inside the compiler,
+before the emitter could refuse anything: a wider column would have been handed
+the int32 epoch-day contract and a wider literal read through an
+`IntUnaryOperator` that cannot hold it, and the caller would have concluded that
+a checked add cannot overflow and elided the guard. A node on a lane wider than
+int32 answers `UNKNOWN`, which is the safe direction, and the class's premise -
+"the IR is untyped" - is corrected to what this step made true.
+
+**Two findings are real and deliberately not fixed here, because the code that
+would make them reachable is step 4's.** A constructor refusal is an
+`IllegalArgumentException`, and the compiler's contract is to decline through
+`DeclineSink` rather than throw: `VarkaColumnarRule` catches nothing, so once a
+`LONG` leaf exists a mixed-lane conjunct would fail a query at planning time
+rather than fall back to the row engine, against the rule in
+`sql/varka/AGENTS.md`. And `fitsBudgets`, which exists to mirror every emit-time
+throw at admission time, was not extended with the lane refusal, so such a tree
+would pass admission and produce the ghost fallback that function exists to
+prevent. **Both are prerequisites of step 4**: no leaf maker outside `intSlot`,
+`columnRef` and `derivedRef` may exist until the compiler turns a refusal into a
+decline and `fitsBudgets` refuses a non-`INT` tree.
+
+**One is a design question this step should not have settled, and step 4 will.**
+`IsNotNull` inherits its operand's lane, and `IfElse` requires its condition to
+agree, so `CASE WHEN bigint_col IS NOT NULL THEN d1 ELSE d2 END` is refused
+although it has a good lowering: `IsNotNull` reads a validity bitmap, which has
+no lane width of its own and can be materialised at whichever species the blend
+wants. The refusal is right for a mask that is a comparison result and wrong for
+one that is a validity read, and telling them apart needs the lane descriptor to
+price the alternative. Recorded here rather than loosened blind.
+
 **`LaneType.LONG` exists a step earlier than section 8 said.** The sequencing
 put it in step 4, with steps 2 and 3 on `INT` alone. But a refusal that cannot
 be built cannot be tested: with one member in the enum, every constructor check
