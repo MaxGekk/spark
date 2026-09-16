@@ -428,6 +428,62 @@ the `IN` row's eight method hashes, replaces the renamed row's six, and empties
 matters: the emitter produces what it produced, and the file grew because the
 table did.
 
+### 9.2 Step 2, landed: the lane is in the IR
+
+`LaneType` is a component of the two leaves and derived everywhere else, 16
+September 2026, with the int lane emitting exactly what it emitted.
+
+**What carries a lane and what derives one.** `ColumnRef(int ordinal, LaneType
+lane)` and `LiteralSlot(int index, LaneType lane)` carry it; a one-argument form
+means the int lane, which keeps the several hundred int trees in the suites
+reading as they did and is what the compiler's two leaf makers pass. Everything
+else derives: a value node answers its operands' lane, a condition answers the
+lane it compares in, and every calendar node answers `INT`. The derivation is
+one exhaustive switch beside `canonical` and `canonicalShallow`, so a node type
+added later does not compile until it says which lane it is on - the property
+those two switches already had, now covering the lane as well.
+
+**Where a malformed tree stops.** In the record constructors, as section 3.1
+decided: `requireInt` on the twenty calendar and date nodes, whose children are
+epoch days, and `requireSameLane` on the nine lane-generic ones. The reason to
+refuse mixed operands rather than widen silently is that one node is emitted
+over one species - an add needs its operands to agree as much as a blend needs
+its mask and its values to - so a mixed node has no lowering at all; widening is
+a conversion node, which is task 28's.
+
+**A consequence worth naming before task 104 meets it.** Tying a condition's
+lane to the lane it compares in, and requiring an `IfElse` to agree with its
+condition, means `CASE WHEN <64-bit comparison> THEN <32-bit value> END` is
+refused rather than built. That is the right refusal - the blend and the mask it
+selects with are one species in the emitted code - but it is a shape the
+compiler will meet as soon as a `TIME` predicate guards a date result, and the
+answer is a mask conversion node, task 28's, not a loosening here.
+
+**The one design decision this step had to make.**
+`VarkaShapeCacheImpl.shapeHash` is built from `canonical`, and the emitted class
+is named after it, so a lane that rendered would move every committed hash while
+an int lane that did not render would let two lanes collide on one class name.
+The lane renders as nothing at `INT` and as `:long` otherwise - exactly the
+elision `VarkaEmitOptions.canonical()` already makes for its defaults, and for
+the same reason. `VarkaShapeCacheSuite`'s two pinned hashes are the check that
+it worked, and they did not move.
+
+**Checked.** `VarkaEmittedBytesSuite` green with no regeneration, which is the
+step's own admission rule: no int32 method body moved. The compiler, coverage,
+fuzz, range-analysis and loop-emitter suites green unchanged.
+`VarkaLaneTypeSuite` is new and holds seven cases: every node type's derivation,
+with the list checked against the sealed hierarchy's permitted subclasses so a
+new node type cannot slip past it; the leaves' short form; a long subtree
+deriving long; the calendar refusals; the mixed-operand refusals; the rendering
+and the two shape hashes; and the emitter refusing `LONG` by name, which is what
+tells "refused" apart from "emitted as int by accident" until step 4.
+
+**`LaneType.LONG` exists a step earlier than section 8 said.** The sequencing
+put it in step 4, with steps 2 and 3 on `INT` alone. But a refusal that cannot
+be built cannot be tested: with one member in the enum, every constructor check
+above is unreachable code. The member is added here, the emitter refuses it, and
+the refusals have tests; nothing else about step 4 moved.
+
 **What it does not yet pin.** Random emit options: every shape is emitted at
 the defaults plus the width. Task 85's refactor touches the default path first;
 an option-matrix oracle is a widening for a later step if a site turns out to

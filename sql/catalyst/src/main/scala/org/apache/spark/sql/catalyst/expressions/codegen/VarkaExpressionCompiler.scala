@@ -27,7 +27,7 @@ import org.apache.spark.SparkIllegalArgumentException
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaValueRange, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, StringType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -475,7 +475,7 @@ private[sql] object VarkaExpressionCompiler {
     // already the int the lane holds, so `ym > INTERVAL '6' MONTH` and
     // `coalesce(ym, INTERVAL '0' MONTH)` become a slot rather than a decline.
     case Literal(months: Int, _: YearMonthIntervalType) =>
-      Some(new LiteralSlot(literals.getOrElseUpdate(months, literals.size)))
+      Some(intSlot(months, literals))
     // A date literal's value is already an epoch-day int, so it takes a slot in the shared
     // per-distinct-value table like a folded day offset does - what makes
     // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. `days: Int` does not
@@ -484,7 +484,7 @@ private[sql] object VarkaExpressionCompiler {
     // real query before it can reach here (unix_date/date_from_unix_date add two more
     // recursive paths into this same match, both equally covered by that guarantee).
     case Literal(days: Int, DateType) =>
-      Some(new LiteralSlot(literals.getOrElseUpdate(days, literals.size)))
+      Some(intSlot(days, literals))
     // The identity cast: the corpus wraps date expressions in `CAST(... AS DATE)`
     // 85 times, and after optimization the wrapper is a no-op over an already-date child -
     // unwrap it. A `cast(<string literal> AS DATE)` never reaches here (constant-folded to a
@@ -675,7 +675,7 @@ private[sql] object VarkaExpressionCompiler {
       // and that is deliberate: the guard is qualified by the arm, so only the lanes that actually
       // negate can condemn the batch.
       intervalOperand(c, "the absolute interval", inputs, literals, sink).map { x =>
-        val zero = new LiteralSlot(literals.getOrElseUpdate(0, literals.size))
+        val zero = intSlot(0, literals)
         val checked = !magnitude(x, literals).exists(_ <= Int.MaxValue.toLong)
         new IfElse(new Compare(CompareOp.LT, x, zero),
           new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x), x)
@@ -740,7 +740,7 @@ private[sql] object VarkaExpressionCompiler {
       for {
         k <- foldWeekday(dow, sink)
         d <- compileNode(start, inputs, literals, sink)
-      } yield new IRNextDay(d, new LiteralSlot(literals.getOrElseUpdate(k, literals.size)))
+      } yield new IRNextDay(d, intSlot(k, literals))
     // A weekday column: the kernel reads an int32 column the evaluator derives
     // from the names, per batch, by the row engine's own parser (WeekdayLeaf), so the node
     // is the same and only the offset's origin differs. ANSI mode is part of the derived
@@ -806,12 +806,11 @@ private[sql] object VarkaExpressionCompiler {
           calendarInput(date, expr, inputs, literals, sink).map(new IRTruncDate(_, level))
         case ToWeek =>
           compileNode(date, inputs, literals, sink).map { d =>
-            val week = new LiteralSlot(literals.getOrElseUpdate(7, literals.size))
+            val week = intSlot(7, literals)
             // next_day's slot holds dayOfWeek - 1; Monday through the same parser
             // foldWeekday uses, so the constant is the definition's, not a retyped 3.
-            val monday = new LiteralSlot(literals.getOrElseUpdate(
-              DateTimeUtils.getDayOfWeekFromString(UTF8String.fromString("MONDAY")) - 1,
-              literals.size))
+            val monday = intSlot(
+              DateTimeUtils.getDayOfWeekFromString(UTF8String.fromString("MONDAY")) - 1, literals)
             new IRNextDay(new SubDays(d, week), monday)
           }
       }
@@ -916,7 +915,7 @@ private[sql] object VarkaExpressionCompiler {
       sink: DeclineSink): Option[VarkaVectorIR] = e match {
     case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
     case Literal(v: Int, IntegerType) =>
-      Some(new LiteralSlot(literals.getOrElseUpdate(v, literals.size)))
+      Some(intSlot(v, literals))
     case _ if e.dataType != IntegerType =>
       sink.note(s"int arithmetic operand of type ${e.dataType.simpleString}", e)
       None
@@ -1083,7 +1082,16 @@ private[sql] object VarkaExpressionCompiler {
 
   /** The slot holding `12`, the months in a year - `make_ym_interval` and the YEAR casts. */
   private def twelve(literals: mutable.LinkedHashMap[Int, Int]): LiteralSlot =
-    new LiteralSlot(literals.getOrElseUpdate(12, literals.size))
+    intSlot(12, literals)
+
+  /**
+   * Interns `value` into the per-distinct-value literal table and wraps it as a `LiteralSlot` on
+   * the int lane. Every folded constant the compiler admits is an int - a day count, a month
+   * count, a date's epoch day - so this is the one place a literal's lane is chosen, as
+   * `columnRef` is for a column's.
+   */
+  private def intSlot(value: Int, literals: mutable.LinkedHashMap[Int, Int]): LiteralSlot =
+    new LiteralSlot(literals.getOrElseUpdate(value, literals.size), LaneType.INT)
 
   /**
    * Interns `br`'s ordinal into `inputs` and wraps it as a `ColumnRef` - shared by
@@ -1091,7 +1099,7 @@ private[sql] object VarkaExpressionCompiler {
    * kinds the compiler admits.
    */
   private def columnRef(br: BoundReference, inputs: mutable.LinkedHashMap[Int, Int]): ColumnRef =
-    new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size))
+    new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size), LaneType.INT)
 
   /**
    * `columnRef`'s twin for an input the evaluator derives from `br`: interned under
@@ -1100,7 +1108,8 @@ private[sql] object VarkaExpressionCompiler {
    */
   private def derivedRef(br: BoundReference, kind: VarkaDerivedKind,
       inputs: mutable.LinkedHashMap[Int, Int]): ColumnRef =
-    new ColumnRef(inputs.getOrElseUpdate(VarkaDerivedInput.key(br.ordinal, kind), inputs.size))
+    new ColumnRef(
+      inputs.getOrElseUpdate(VarkaDerivedInput.key(br.ordinal, kind), inputs.size), LaneType.INT)
 
   /**
    * An int operand of a node that is not a day: a foldable int literal as a slot, a bare
@@ -1118,7 +1127,7 @@ private[sql] object VarkaExpressionCompiler {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = e match {
     case Literal(v: Int, IntegerType) =>
-      Some(new LiteralSlot(literals.getOrElseUpdate(v, literals.size)))
+      Some(intSlot(v, literals))
     case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
     case other if other.dataType != IntegerType =>
       sink.note(s"$position is not an int column or literal", other)
@@ -1143,7 +1152,7 @@ private[sql] object VarkaExpressionCompiler {
       sink: DeclineSink): Option[VarkaVectorIR] = {
     DateVarkaSupport.foldDaysOffset(days) match {
       case Some(offset) =>
-        Some(new LiteralSlot(literals.getOrElseUpdate(offset, literals.size)))
+        Some(intSlot(offset, literals))
       case None =>
         days match {
           case br: BoundReference if br.dataType == IntegerType =>
@@ -1262,7 +1271,7 @@ private[sql] object VarkaExpressionCompiler {
         sink.note("month count outside the range the emitter's magic multiply covers", months)
         None
       case Some(m) =>
-        Some(new LiteralSlot(literals.getOrElseUpdate(m, literals.size)))
+        Some(intSlot(m, literals))
       case None =>
         months match {
           case br: BoundReference if br.dataType == IntegerType =>
@@ -1649,7 +1658,7 @@ private[sql] object VarkaExpressionCompiler {
         compileNode(value, inputs, literals, sink).map { compiledValue =>
           val leaves: Seq[Cond] = days.map { d =>
             new Compare(CompareOp.EQ, compiledValue,
-              new LiteralSlot(literals.getOrElseUpdate(d, literals.size)))
+              intSlot(d, literals))
           }
           balancedOr(leaves)
         }
@@ -1711,7 +1720,7 @@ private[sql] object VarkaExpressionCompiler {
     // comparison's.
     def operand(e: Expression): Option[VarkaVectorIR] = e match {
       case Literal(v: Int, IntegerType) =>
-        Some(new LiteralSlot(literals.getOrElseUpdate(v, literals.size)))
+        Some(intSlot(v, literals))
       case _ => compileNode(e, inputs, literals, sink)
     }
     for {
