@@ -393,10 +393,10 @@ that branch extracted, and rebased onto master when that branch merged.
 since task 120 landed, see below - and ten thousand fuzz shapes at seed
 20260916, drawn exactly as
 `VarkaIrFuzzSuite.runOne` draws its trees, each at `lanesOverride` 4 and 16. Per
-coverage row and width, one hash per emitted method (448 method hashes per
+coverage row and width, one hash per emitted method (456 method hashes per
 width); per width, a hundred block digests over the fuzz sequence, so a
 difference names a block of a hundred shapes rather than everything or nothing.
-The file is 62 KB, 1147 lines.
+The file is 61 KB, 1167 lines.
 
 **How a method is hashed.** Not the `Code` attribute's bytes, which section 5
 first proposed: those embed constant-pool indices, and a refactor that builds
@@ -427,6 +427,23 @@ the `IN` row's eight method hashes, replaces the renamed row's six, and empties
 `coverage_rows_skipped`. No fuzz block digest moved, which is the statement that
 matters: the emitter produces what it produced, and the file grew because the
 table did.
+
+**Reviewed, 16 September 2026, and five things came back.** The failure
+diagnostic walked only the newly generated document, so a coverage row, a method
+or a fuzz block that *vanished* - the more alarming direction, since it means a
+shape the table claims stopped reaching the emitter - printed nothing at all; it
+now walks both documents and reports the skip list's changes too. A row that
+parses and then declines was recorded as skipped beside a row that does not
+parse, which would let a regeneration bless a coverage regression; a decline now
+fails the suite, since `VarkaCoverageSuite` guarantees it cannot happen. The
+diagnostic dereferenced two nodes one line before the null check meant to guard
+them. The fuzz draw was a verbatim copy of `VarkaIrFuzzSuite.runOne`'s preamble,
+so one extra call to the generator in either would have split the two corpora
+silently; it is one `VarkaIrGrammar.drawShape` now, and the oracle staying green
+is the proof the sequence did not move. And the `InSet` row was pinned through
+the compiler's `In` arm, because this suite has no optimizer - it applies that
+one rewrite itself now, and fails if a row the table records as an `InSet` does
+not become one.
 
 **What it does not yet pin.** Random emit options: every shape is emitted at
 the defaults plus the width. Task 85's refactor touches the default path first;
