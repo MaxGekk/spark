@@ -1127,6 +1127,61 @@ blocks with the surviving selection handed back to still-undecoded projection
 columns (`operator/scan/impl/AbstractScanWork.java`, `rebuildProject`), which is
 a reader-boundary shape for the Arrow datasource.
 
+
+### Item 17. Compared against Apache Druid's vectorized engine
+
+Recorded on 16 September 2026, from a survey of Apache Druid
+(`github.com/apache/druid`, `processing/src/main/java/org/apache/druid/math/expr/vector`
+and `segment/vector`) made at the owner's request the same day as Item 16.
+Druid is a mirror more than a source: it made several of Varka's choices
+independently and, in places, chose the option Varka measured and rejected. Its
+vector engine decides vectorisability per query and segment, works over primitive
+arrays with a `boolean[]` null vector beside them (or `null` when a batch has
+none), gives every operator its own final class so call sites stay monomorphic,
+and since 2024 carries an optional `jdk.incubator.vector` package
+(`math/expr/vector/simd/`, off by default) in which each op is a class with a
+`loopBound` main loop and a scalar tail that reuses the non-SIMD processor's
+lambda. Its calendar functions (`timestamp_floor`, `timestamp_extract`,
+`query/expression/TimestampFloorExprMacro.java`) call Joda per row. Its guarantee
+that the two engines agree is `VectorExprResultConsistencyTest`: a corpus of
+expression strings run both ways at vector sizes 3, 8, 17 and 67, with a random
+and a sequential binding generator, comparing errors as well as values, and a
+twelve-line subclass that re-runs the whole corpus with the Vector API flag on.
+
+What Varka already has or has measured past: lengths that are not multiples of
+any lane count (the fuzzer's and the emitter matrices' 1, 3, 7, 15, 17, 33, 65,
+257); the flag flip, as the gate's `narrow` step; one lowering for the dense loop
+and the masked epilogue rather than a shared scalar lambda; bitmaps rather than a
+`boolean[]` shadow, which is the representation the validity-word work timed
+against; duplicate column reads deduplicated at the kernel's input mapping; and
+guards with a per-batch decline where Druid's SIMD rule excludes any op that can
+throw mid-lane (`SimdSupportedBinaryOp.DIV`). Task 81's error entries are the
+corpus shape Druid's consistency test confirms.
+
+Two things are worth taking.
+
+1. **Bucket short-circuit for time-ordered batches.** Druid never floors
+   `__time` per row when grouping by granularity: because segments are
+   time-sorted, `query/vector/VectorCursorGranularizer.java` walks bucket
+   boundaries and splits the vector into ranges, and skips reading the time
+   column when one bucket covers the whole interval. Varka has the ingredient
+   without a sortedness assumption: the Arrow cache's per-batch column statistics,
+   the ones the in-memory scan already prunes on. When a batch's minimum and
+   maximum date fall in one month, `trunc(d, 'MONTH')`, `year(d)`, `month(d)` and
+   `add_months(d, n)` over it are one decomposition and a broadcast, not one per
+   lane. Time-series data is exactly the shape milestone 5's `TIME` work is about,
+   so this is a candidate for the first task after it that has a benchmark row to
+   show it on. The first step is the measurement: how often the surface's cached
+   batches are single-bucket at day, month and year.
+2. **Cost-ordered conjuncts with an early exit.** `query/filter/FilterBundle.java`
+   sorts an `AND`'s children by `estimatedComputeCost()` and
+   `segment/filter/AndFilter.java` stops as soon as the selection is empty.
+   Varka's fused filter computes every conjunct's mask for every lane. Ordering
+   conjuncts by a static cost from the value-range analysis, and leaving the rest
+   of the batch once the running mask is all-false, is a bounded change in the
+   emitter; it is the same question Item 16's selection narrowing asks of `AND`,
+   and should be measured with it rather than separately.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
