@@ -947,9 +947,9 @@ private[sql] object VarkaExpressionCompiler {
     node match {
       case slot: LiteralSlot =>
         Some(math.abs(literals.keysIterator.drop(slot.index()).next().toLong))
-      // The widest year a lowered date can carry: the narrowed range runs to year 33134, and
-      // a day producer's guard keeps every decomposed date inside it.
-      case _: IRYear => Some(40000L)
+      // The widest year a lowered date can carry, over the days `admitCalendar` admits - which
+      // reach `NARROW_DECOMPOSE_MAX_DAYS`, year 42400, not only the guard's own ceiling of 33134.
+      case _: IRYear => Some(VarkaChrono.YEAR_FIELD_MAGNITUDE.toLong)
       case _: IRMonth => Some(12L)
       case _: IRDayOfMonth => Some(31L)
       case _: IRQuarter => Some(4L)

@@ -685,10 +685,29 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(declineReason(Cast(ymy, IntegerType), withIntervals).nonEmpty)
   }
 
+  test("SPARK-VARKA-84: year's bound covers the whole admitted day range, not the guard's") {
+    // `admitCalendar` admits a date up to NARROW_DECOMPOSE_MAX_DAYS, year 42400, through a
+    // literal shift above a guarded column offset. The bound `year` reported was a typed-in
+    // 40000, so `year(...) * 53000` proved itself safe at 2.12e9 while a row in year 42400
+    // would have wrapped at 2.25e9 - a checked multiply emitted unchecked, which is the one
+    // class of failure the ghost fallback cannot catch. Derived from the range now.
+    assert(VarkaChrono.YEAR_FIELD_MAGNITUDE ===
+      java.time.LocalDate.ofEpochDay(VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS).getYear)
+    val farYear = Year(DateAdd(DateAdd(d, i), Literal(3000000)))
+    assert(declineReason(Multiply(farYear, Literal(53000), EvalMode.ANSI), childOutput) ===
+      "checked int multiply whose operands do not rule out overflow")
+    // The corrected bound still proves the products it should: 42400 * 50000 is inside int32.
+    val safe = VarkaExpressionCompiler.compile(
+      Seq(out(Multiply(farYear, Literal(50000), EvalMode.ANSI))), childOutput).get
+    assert(safe.outputs.head.isInstanceOf[IntArith])
+    assert(safe.outputs.head.asInstanceOf[IntArith].mode() === Overflow.WRAP)
+  }
+
   test("the YEAR-unit cast is a checked 12x, in both positions, bound permitting") {
     // `intToYearMonthInterval` multiplies by twelve with `Math.multiplyExact` whatever the
     // session's ANSI mode, so the multiply is checked and only a bound removes it. `year(d)`
-    // is bounded at 40000 and 40000 * 12 is inside int32; a bare int column is not bounded and
+    // is bounded (`YEAR_FIELD_MAGNITUDE`, 42400) and 42400 * 12 is inside int32; a bare int
+    // column is not bounded and
     // declines like every other unbounded checked multiply.
     val bounded = VarkaExpressionCompiler.compile(
       Seq(out(Cast(Year(d), ymy.dataType))), withIntervals).get
