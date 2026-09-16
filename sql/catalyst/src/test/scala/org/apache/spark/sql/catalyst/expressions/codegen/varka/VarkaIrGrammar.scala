@@ -177,6 +177,45 @@ object VarkaIrGrammar {
    *  produce and the node would be fuzzed outside its contract. `runOne` draws this one from
    *  the four codes instead, which is what lets `TruncDateDynamic` be generated at all - it
    *  was the one IR node type this suite could not reach. */
+  /**
+   * One drawn shape: the kernel's roots, the input and literal counts they were drawn over, and
+   * the two special columns, which a caller drawing lane values has to honour - the values a
+   * column holds are bounded by the arms that may read it.
+   */
+  case class Drawn(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
+      smallOrdinal: Int, levelOrdinal: Int)
+
+  /**
+   * Draw one shape from `rnd`: the column and literal counts, the special columns, the depth and
+   * the roots, in that order, leaving `rnd` positioned where a caller that needs lane values and
+   * null patterns picks up.
+   *
+   * It lives here rather than in either caller because two of them must draw the *same* corpus
+   * from the same seed: [[VarkaIrFuzzSuite]] runs each shape against the reference evaluator, and
+   * `VarkaEmittedBytesSuite` pins the bytes the same shape emits. A copy of the preamble in each
+   * would let one extra `rnd.next*` call in one of them silently split the corpus in two, and the
+   * oracle would go on pinning shapes nothing checks for correctness.
+   */
+  def drawShape(rnd: Random): Drawn = {
+    val numInputs = 1 + rnd.nextInt(3)
+    val numLiterals = rnd.nextInt(3)
+    // The last input, when there is more than one, holds month-count-magnitude values so a
+    // *column* month count can be fuzzed; see Shapes' doc. With a single input there is no
+    // ordinal to spare - that one has to stay a day column for every other arm.
+    val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
+    // The second special column, and only when there are three: with two, taking one for
+    // trunc levels would leave a single day column and starve every other arm.
+    val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
+    val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
+    val depth = 1 + rnd.nextInt(4)
+    // Either a projection of value roots or one selection root: the two kinds of kernel
+    // production emits, never mixed in one class.
+    val roots: Seq[VarkaVectorIR] =
+      if (rnd.nextInt(5) == 0) Seq(shapes.cond(depth))
+      else Seq.fill(1 + rnd.nextInt(3))(shapes.value(depth).node).distinct
+    Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal)
+  }
+
   class Shapes(rnd: Random, numInputs: Int, numLiterals: Int, smallOrdinal: Int,
       levelOrdinal: Int) {
     private var budget = 20

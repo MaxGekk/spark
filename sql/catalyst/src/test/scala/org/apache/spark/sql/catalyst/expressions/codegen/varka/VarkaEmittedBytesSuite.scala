@@ -24,10 +24,11 @@ import java.security.MessageDigest
 import scala.jdk.CollectionConverters._
 import scala.util.Random
 
-import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference,
+  Expression, In, InSet, Literal}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
@@ -104,10 +105,33 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
 
   /**
    * Every row of the table as IR, through the compiler: a projection row's compiled outputs, a
-   * predicate row's fused condition root. A row whose SQL does not parse - the `InSet` caption,
-   * until the table carries an executable spelling for it - is recorded as skipped, by name, so
-   * the file says what it does not pin.
+   * predicate row's fused condition root.
+   *
+   * Two ways a row can fail to produce IR, and they are not the same thing. A row whose SQL does
+   * not parse is recorded as skipped, by name, so the file says what it does not pin; the table
+   * carries an `executable` spelling for every row today, so the list is empty and a name
+   * appearing in it is a table that grew a caption. A row that parses and then declines is a
+   * coverage regression - `VarkaCoverageSuite` asserts every row fuses - so it fails here
+   * rather than quietly moving into that list, where a regeneration would bless it.
    */
+  /**
+   * The row as the optimizer would hand it to the compiler. There is no optimizer here - the SQL
+   * is parsed and resolved and that is all - so a row the table records as arriving as an `InSet`
+   * would otherwise be pinned through the compiler's `In` arm, which is not the arm production
+   * takes. `OptimizeIn`'s rewrite is the only such difference the table has; the row's own
+   * `catalyst` field says which rows it applies to.
+   */
+  private def asCatalystClaims(expr: Expression, catalyst: Set[String]): Expression = expr match {
+    case In(value, list) if catalyst.contains("InSet") && list.forall(_.isInstanceOf[Literal]) =>
+      InSet(value, list.map(_.asInstanceOf[Literal].value).toSet)
+    case other if catalyst.contains("InSet") =>
+      // The rewrite is the only thing standing between this row and the wrong compiler arm, so
+      // a row that claims InSet and does not get one fails rather than being pinned quietly.
+      fail(s"a row the table records as an InSet resolved to ${other.getClass.getSimpleName}: " +
+        "the executable spelling and the catalyst field disagree")
+    case other => other
+  }
+
   private lazy val coverage: (Seq[CoverageShape], Seq[String]) = {
     val file = getWorkspaceFilePath("sql", "varka", "coverage.json").toFile
     val doc = new ObjectMapper().readTree(file)
@@ -117,8 +141,12 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
       val sql = e.get("sql").asText()
       val executable = Option(e.get("executable")).map(_.asText()).getOrElse(sql)
       val form = e.get("form").asText()
+      val catalyst = Option(e.get("catalyst"))
+        .map(_.elements().asScala.map(_.asText()).toSet).getOrElse(Set.empty[String])
       val resolved: Option[Expression] =
-        try Some(VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(executable), columns))
+        try Some(asCatalystClaims(
+          VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(executable), columns),
+          catalyst))
         catch { case _: Exception => None }
       val compiled = resolved.flatMap { expr =>
         if (form == "predicate") {
@@ -130,7 +158,10 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
       compiled match {
         case Some(c) =>
           shapes += CoverageShape(sql, c.outputs, c.inputOrdinals.size, c.literals.size)
-        case None => skipped += sql
+        case None if resolved.isEmpty => skipped += sql
+        case None =>
+          fail(s"coverage row does not fuse, so the oracle cannot pin it: $sql. " +
+            "VarkaCoverageSuite asserts every row fuses; fix that first.")
       }
     }
     (shapes.result(), skipped.result())
@@ -142,19 +173,15 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
 
   private case class FuzzShape(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int)
 
-  /** Shape `k` of the sequence, drawn the way `VarkaIrFuzzSuite.runOne` draws its trees. */
+  /**
+   * Shape `k` of the sequence, from the same draw and the same seed arithmetic
+   * `VarkaIrFuzzSuite.runOne` uses, so a shape pinned here is a shape that suite ran against the
+   * reference evaluator. The draw lives in `VarkaIrGrammar` for that reason: two copies of it
+   * would let the two corpora part company without any test noticing.
+   */
   private def fuzzShape(k: Int): FuzzShape = {
-    val rnd = new Random(seed * 1000003L + k)
-    val numInputs = 1 + rnd.nextInt(3)
-    val numLiterals = rnd.nextInt(3)
-    val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
-    val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
-    val grammar = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
-    val depth = 1 + rnd.nextInt(4)
-    val roots: Seq[VarkaVectorIR] =
-      if (rnd.nextInt(5) == 0) Seq(grammar.cond(depth))
-      else Seq.fill(1 + rnd.nextInt(3))(grammar.value(depth).node).distinct
-    FuzzShape(roots, numInputs, numLiterals)
+    val drawn = drawShape(new Random(seed * 1000003L + k))
+    FuzzShape(drawn.roots, drawn.numInputs, drawn.numLiterals)
   }
 
   /** The digest of one block of the sequence at one width. */
@@ -218,35 +245,69 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
       val committed = new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
       if (committed != rendered) {
         // Name what moved before failing: the coverage rows and methods whose hash differs,
-        // and the fuzz blocks, so the reader goes straight to a shape.
+        // and the fuzz blocks, so the reader goes straight to a shape. Both directions are
+        // walked - a row or a method that *vanished* is the more alarming of the two, since it
+        // means a shape the table claims stopped reaching the emitter, and reporting only
+        // additions would leave the loudest failure with nothing to print.
         val mapper = new ObjectMapper()
         val before = mapper.readTree(committed)
         val after = mapper.readTree(rendered)
         val moved = Seq.newBuilder[String]
+        def keysOf(node: JsonNode): Set[String] =
+          if (node == null) Set.empty else node.fieldNames().asScala.toSet
+        def hashOf(node: JsonNode, key: String): Option[String] =
+          Option(node).flatMap(n => Option(n.get(key))).map(_.asText())
+        def skipsOf(doc: JsonNode): Set[String] =
+          Option(doc.get("coverage_rows_skipped"))
+            .map(_.elements().asScala.map(_.asText()).toSet).getOrElse(Set.empty)
+        val committedSkips = skipsOf(before)
+        val renderedSkips = skipsOf(after)
+        (committedSkips -- renderedSkips).foreach(r => moved += s"no longer skipped: $r")
+        (renderedSkips -- committedSkips).foreach(r => moved += s"newly skipped: $r")
         widths.foreach { lanes =>
-          val b = before.get("lanes").get(lanes.toString)
+          val b = Option(before.get("lanes")).map(_.get(lanes.toString)).orNull
           val a = after.get("lanes").get(lanes.toString)
           if (b == null) {
             moved += s"lanes $lanes: no committed entry"
           } else {
-            a.get("coverage").fields().asScala.foreach { entry =>
-              val was = b.get("coverage").get(entry.getKey)
-              if (was == null) moved += s"lanes $lanes: new row ${entry.getKey}"
-              else entry.getValue.fields().asScala.foreach { m =>
-                val old = was.get(m.getKey)
-                if (old == null || old.asText() != m.getValue.asText()) {
-                  moved += s"lanes $lanes: ${entry.getKey} method ${m.getKey}"
-                }
+            val bCoverage = b.get("coverage")
+            val aCoverage = a.get("coverage")
+            (keysOf(bCoverage) -- keysOf(aCoverage)).foreach { row =>
+              moved += s"lanes $lanes: row gone $row"
+            }
+            (keysOf(aCoverage) -- keysOf(bCoverage)).foreach { row =>
+              moved += s"lanes $lanes: new row $row"
+            }
+            (keysOf(aCoverage) intersect keysOf(bCoverage)).foreach { row =>
+              val was = bCoverage.get(row)
+              val now = aCoverage.get(row)
+              (keysOf(was) -- keysOf(now)).foreach { m =>
+                moved += s"lanes $lanes: $row method gone $m"
+              }
+              (keysOf(now) -- keysOf(was)).foreach { m =>
+                moved += s"lanes $lanes: $row new method $m"
+              }
+              (keysOf(now) intersect keysOf(was)).foreach { m =>
+                if (hashOf(was, m) != hashOf(now, m)) moved += s"lanes $lanes: $row method $m"
               }
             }
-            val bb = b.get("fuzz").get("blocks")
-            a.get("fuzz").get("blocks").elements().asScala.zipWithIndex.foreach { case (n, k) =>
+            val bb = Option(b.get("fuzz")).map(_.get("blocks")).orNull
+            val ab = a.get("fuzz").get("blocks")
+            ab.elements().asScala.zipWithIndex.foreach { case (n, k) =>
               if (bb == null || bb.size <= k || bb.get(k).asText() != n.asText()) {
                 moved += s"lanes $lanes: fuzz block $k (shapes ${k * blockSize} to " +
                   s"${(k + 1) * blockSize - 1})"
               }
             }
+            if (bb != null && bb.size > ab.size) {
+              moved += s"lanes $lanes: ${bb.size - ab.size} committed fuzz block(s) gone"
+            }
           }
+        }
+        if (moved.result().isEmpty) {
+          // Every hash matched, so the difference is in the file around them: the preamble,
+          // the fuzz parameters, or the formatting. Say so rather than printing nothing.
+          moved += "no hash differs; the file's other content or its formatting changed"
         }
         fail("sql/varka/emitted_bytes.json does not match what the emitter produces. If the " +
           "emitted code was meant to change, regenerate with\n" +
