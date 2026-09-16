@@ -1131,6 +1131,9 @@ a reader-boundary shape for the Arrow datasource.
 *Added 16 September 2026.* Item 24 records Comet's working form of the per-node
 fallback above: Spark's own generated code for one expression, compiled into a
 batch kernel over the Arrow columns and run inside the columnar pipeline.
+Item 28 records Gluten's: a partial project that converts only the needed
+input columns to rows, evaluates the unsupported expressions with Spark's
+`UnsafeProjection`, and composes the result column back into the batch.
 
 ### Item 17. Compared against Apache Druid's vectorized engine
 
@@ -2403,6 +2406,97 @@ steppings these papers measured.
 6. A per-shape time-to-tier-4 ladder and a batches-below-C2 counter join the
    cold-start benchmark; Kohn's remaining-time rule is a decline rule for tiny
    tasks.
+
+
+### Item 28. Gluten, the other Spark accelerator
+
+Recorded on 16 September 2026, from a survey of `gluten-core`,
+`gluten-substrait`, `backends-velox`, `gluten-ui`, `gluten-ut` and
+`docs/developers` at commit `90186c196`, made at the owner's request. Gluten
+was not in the record. Its kernels are Velox's (Item 18) or ClickHouse's (Item
+23), read there; what it owns is the Spark side, and the comparison is with
+Item 24's Comet: the same contract, a different set of answers to the planning
+questions.
+
+**Arrived at twice.** Fallback reasons are tags on plan nodes (`FallbackTags`),
+collected by a reporter rule that logs each one, can fail the query on any
+fallback under a test switch (`spark.gluten.sql.columnar.failOnFallback`), and
+posts one event per query to a Gluten tab in the SQL UI carrying the counts of
+native and fallen-back nodes and the node-to-reason map
+(`GlutenFallbackReporter`, `GlutenSQLAppStatusListener`); a `Dataset` helper
+returns the same summary programmatically (`GlutenImplicits.fallbackSummary`).
+A per-expression blacklist (`spark.gluten.expression.blacklist`) is Item 24's
+kill switch, and the support-progress tables are generated. Under `ANSI` the
+default is the whole plan falling back - "Gluten currently doesn't support
+ANSI mode", with an issue tracking it (`FallbackOnANSIMode`,
+`velox-backend-limitations.md`) - the strongest form of Item 18's choice, made
+by declining everything rather than the batch. Spark's own test suites run
+against the engine as an in-repo module with a per-test exclusion list: for
+Spark 3.4 on Velox, 285 suites enabled and 414 tests excluded, many of them
+timestamp and cast cases (`gluten-ut`, `VeloxTestSettings`); that is the
+widest differential Items 24 and 25 named, built as a module with its
+exclusions written down, and the shape task 81's plan should compare itself
+with. The default batch is 4096 rows (`spark.gluten.sql.columnar.maxBatchSize`),
+one more data point for Item 14.
+
+**Three things worth taking.**
+
+1. **A fallback policy that counts transitions, with a threshold and a
+   comparison.** `ExpandFallbackPolicy` walks a stage (under adaptive
+   execution) or the whole query, counts every columnar-to-row transition and
+   every vanilla leaf as a unit of cost, optionally ignores row-to-columnar,
+   and if the count reaches a threshold (`wholeStage.fallback.threshold`,
+   `query.fallback.threshold`, both off by default) reverts the stage or query
+   to rows - but only after costing the reverted plan too, because a reverted
+   stage may still need a transition to adapt to the previous columnar stage,
+   and it keeps the native plan when the vanilla one would not have fewer
+   transitions (`preferColumnar`). Item 24 noted Comet's stage revert; this is
+   the version with the accounting written out, and its two subtleties - the
+   cost of the plan you fall back to, and table caches counting as a hidden
+   transition - are the ones a Varka pivot budget would otherwise rediscover.
+   With it comes a second rule worth quoting for VISION: a project or filter
+   whose nested expression count reaches fifty falls back to Spark
+   "considering Spark codegen can bring better performance for such case"
+   (`fallback.expressions.threshold`), an accelerator's own statement that a
+   vectorised interpreter loses to whole-stage codegen on deep expression
+   trees, which is exactly the regime a fused emitted loop is built for.
+2. **The partial project.** `ColumnarPartialProjectExec` splits a project the
+   backend cannot take whole into a native project plus a JVM island: only the
+   input columns the unsupported expressions read are converted to rows, Spark's
+   `UnsafeProjection` evaluates those expressions, the result columns are
+   converted back and composed into the batch (`VeloxColumnarBatches.compose`),
+   and the native project consumes them as ordinary columns. Its admission
+   rules are the design constraints Item 16's per-node fallback needs written
+   down: only user-defined or blacklisted expressions qualify, the number of
+   columns converted to rows must be smaller than the project's own width, and
+   the complex-expression threshold still applies (`doValidateInternal`). It is
+   Comet's codegen dispatch (Item 24) at the operator level rather than the
+   expression level, and the two together settle how a fused kernel takes a
+   derived input.
+3. **Transitions as a shortest path over conventions.** Every operator declares
+   the batch convention it consumes and produces - vanilla, Velox, Arrow Java,
+   Arrow native - and `TransitionGraph` runs Floyd-Warshall over the registered
+   conversions with a cost model to insert the cheapest chain
+   (`transition/TransitionGraph.scala`, `Convention.BatchType`). The costers are
+   deliberately rough: a columnar-to-row or row-to-columnar transition ten, a
+   columnar-to-columnar conversion five, a native operator ten, a vanilla
+   project a hundred, any other vanilla operator a thousand, a row-to-columnar
+   over complex types infinite, and a project of only cheap expressions costed
+   like a native one "to reduce unnecessary c2r and r2c" (`LegacyCoster`,
+   `RoughCoster`). Item 11 plans several physical representations per type;
+   when a second Arrow form exists, the conversions between forms and the row
+   boundary become exactly this graph, and the rough costs are a starting
+   table until Items 13 and 14 supply measured ones.
+
+**Noted for later.** The reporter copies each fallback reason onto the node's
+logical link, because under adaptive execution the next stage's physical plan
+is a new instance that does not carry the tag; this engine's decline reasons
+in verbose `EXPLAIN` should be checked for the same loss under adaptive
+execution. `FallbackMultiCodegens` leaves a chain of several wide joins to
+Spark's whole-stage codegen on purpose, a second admission in the same
+direction as the fifty-expression threshold. The metrics framework maps native
+operator statistics onto Spark's metrics by treefying both plans in one order
+(`MetricsFramework.md`); an in-JVM engine has no such boundary to cross.
 
 ## 5. Ordering
 
