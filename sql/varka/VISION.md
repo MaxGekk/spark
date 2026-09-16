@@ -269,6 +269,18 @@ casts under AVX2, found in milestone 5's planning).
 that deck as the earlier attempt: a batch-at-a-time evaluator inside Spark's
 row engine.
 
+**Shen, Xiong and Jiang, "Using Vectorized Execution to Improve SQL Query
+Performance on Spark", ICPP 2021.** The third attempt, read on 16 September
+2026 (`SCOPE_MILESTONE_6.md`, item 25): a whole-engine fork of Spark 2.4 in
+Java that relies on the JIT for any SIMD, with no Vector API and no fused
+expression loop, and vectorised shuffle, sort and aggregation beside project and
+filter. Its own decomposition is the useful result: plain X100-style
+vectorisation on Spark was slower than whole-stage codegen on 21 of 22 TPC-H
+queries, and the gain it did report came from the shuffle format and
+cache-aware operators. That is the published reason this engine's numbers
+separate the kernel from the boundary, and why a vectorised evaluator alone,
+without emitted lanes, was never going to be the answer on the JVM.
+
 **Outside Spark: Gandiva, Apache Arrow's expression compiler
 (`arrow/cpp/src/gandiva`).** The closest architectural relative this engine has -
 a per-expression compiler producing native code over Arrow buffers - and a
@@ -363,6 +375,22 @@ expression inside the columnar pipeline, which is the per-node fallback this
 engine has planned and not built. Its kernels are DataFusion's; the emitter
 that writes lanes is, again, the step not taken.
 
+**In the literature.** Kersten, Leis, Kemper, Neumann, Pavlo and Boncz (PVLDB
+2018) built both designs in one system and measured the difference this engine
+rests on: fused loops ran TPC-H Q1 in 68 instructions per tuple against 162 for
+vectorised primitives, because intermediates stay in registers, and they note
+that fusing adjacent vectorised primitives into one JIT-compiled loop had not
+been integrated into any system. The same paper marks where the argument stops:
+hash probing favours simple loops that keep more loads in flight, gather buys a
+tenth, and SIMD adds little once memory dominates, which this engine's own
+boundary measurements confirm and which is why grouping and joins are planned
+as separate loops behind a batch boundary. Lang, Passing, Kipf, Boncz, Neumann
+and Kemper (VLDB Journal 2020) measured what idle lanes cost inside a fused
+pipeline and found materialising survivors at an operator boundary the best
+remedy on out-of-order cores, which is the compaction this engine does at its
+filter node. The reading notes are `SCOPE_MILESTONE_6.md` item 25, and the
+open-access papers are in `sql/varka/papers`.
+
 What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole
@@ -372,4 +400,4 @@ it reads Arrow buffers as `MemorySegment`s with no per-row object on the fast
 path; and any failure degrades to the row engine per batch, so declining is a
 normal outcome. The measurements that separate the lane from the loop shape,
 and the losses printed beside the wins, are the other difference, and they are
-what the READMEs of the two earlier attempts did not have to offer.
+what the READMEs of the earlier attempts did not have to offer.

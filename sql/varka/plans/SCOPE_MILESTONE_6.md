@@ -1885,6 +1885,200 @@ enabled by patching the test base (`spark-sql-tests.md`); this engine is a
 fork and can flip its default in one job, which is the widest differential
 available and not yet in the record as a row.
 
+
+### Item 25. Fifteen papers, read against the engine
+
+Recorded on 16 September 2026. The owner downloaded fifteen papers on SIMD
+query execution to `/home/max/Documents/SIMD`; they were transcribed
+mechanically the same day (the method of `sql/varka/papers/README.md`) and read
+against Items 1 to 24, `VISION.md` section 14, the design doc and the skills.
+Four whose printed terms permit a copy - Lang 2020, Ngom 2021, Benson 2023,
+Schmidt 2025 - are in `sql/varka/papers`; the other eleven are ACM copyright,
+Creative Commons BY-NC-ND or arXiv postings, so this item is their record. Page
+numbers below are the PDFs' pages. Where the papers disagree with each other,
+the disagreement is written down rather than resolved, because it is a
+measurement.
+
+**What the papers confirm.** The three structural choices this engine made
+without them are the ones they defend by measurement. Lang (VLDB Journal 2020,
+section 6) finds that materialising a filter's survivors at an operator
+boundary is the best form on out-of-order cores and that leaving lanes
+protected inside a pipeline ("partial consume") loses by up to half; that is
+`VarkaFilterExec`'s compaction into a dense batch, and partial consume is
+excluded from the option space. Kersten et al. (PVLDB 2018, pp. 4-5) find that
+fused loops win compute-bound work because intermediates stay in registers -
+Typer ran Q1 in 68 instructions per tuple against Tectorwise's 162 - which is
+the register-resident argument of `VISION.md` section 14 with a number, and
+they report that fusing adjacent vectorised primitives into one JIT-compiled
+loop "has not (yet) been integrated into any system" (p. 11), which locates
+this engine. Benson, Ebeling and Rabl (ADMS 2023) reach in C++ the conclusion
+this engine reached for the JVM: one portable vector layer, explicit emission
+rather than the auto-vectoriser (good in two of eight cases), and one
+platform-specific island where no portable form reaches the instruction -
+compress-store, for them as for Item 19.
+
+**A. Selection, divergence and narrowing** (Lang 2018 and 2020; Ngom et al.,
+DaMoN 2021; Raducanu, Boncz and Zukowski, SIGMOD 2013; Polychroniou and Ross,
+DaMoN 2019). Lang's cost model gives Item 16 a rule in place of "build both":
+with one vector to refill, the best threshold is all lanes, so a heavy remainder
+should never run with idle lanes, and the optimum falls to about five of eight
+when five vectors must be refilled (pp. 10, 15); the no-op case costs a
+popcount and a branch, under six percent (p. 17); static register allocation
+charges for refill buffers even when unused (p. 16), which is the dead-local
+effect in `vector-api-and-width.md` and the reason any in-kernel buffer must be
+measured at 128 bits too. Ngom's model - tuples processed times per-tuple
+iteration cost plus operation cost - puts the Full-versus-Selective crossover
+above about fifteen straight-line operations (pp. 4-5); this engine's calendar
+arms are about thirty; strings and integer division should run over the
+compacted batch, never under a mask (pp. 3-4); and bitmap-to-selection
+conversion costs a fraction of a percent (pp. 5-6), the number behind keeping
+the bitmap canonical. Raducanu's Table 9 (p. 10) is the loss case the task must
+register: forced full computation cost 43 percent overall and 13x on single
+instances, and it paid from 30 percent selectivity on 32-bit lanes and never on
+64-bit ones (p. 6), so no int32 threshold carries to milestone 5's long lanes.
+Raducanu's chooser itself - explore and exploit phases on a recent-window mean,
+parameters 1024, 8 and 2 (pp. 7-9) - is a fourth candidate policy beside Items
+18 to 20, with two JVM caveats it never faced: an unexercised body never
+reaches C2, and JIT bimodality makes a body's cost non-stationary within a run.
+Polychroniou 2019 (p. 2) adds the cheapest variant, skipping a whole lane group
+when the running conjunction word is zero for it, with no data movement; the
+ByteSlice early-stop argument (below) says such a skip pays only where the
+branch is almost always taken and narrowing should be batch-granular. The two
+readings disagree on granularity, and Item 16's task settles it on a
+low-selectivity ladder with a heavy remainder. Kersten's Q6 cascade (pp. 6-7)
+rules out one form outright: a selection vector that turns contiguous loads
+into gathers collapses the SIMD gain to scalar parity below fifty percent
+selectivity, so narrowing is in-register compress or lane-group skip, never a
+selection vector feeding gathers.
+
+**B. Compilation, vectorisation and the earlier Spark attempts** (Kersten 2018;
+Shen, Xiong and Jiang, ICPP 2021; Behm et al., SIGMOD 2022). Kersten's limit is
+as useful as his support: vectorised interpretation wins hash-probe work
+because simple loops keep more loads in flight, gather buys 1.1x, and the gain
+vanishes once the table leaves cache (pp. 5, 7), so Item 4 should keep probes
+as simple loops behind a batch boundary and not fuse them into the kernel.
+Vector size between one and four thousand rows was best, under 64 and over 64K
+hurt (pp. 5-6), which frames Item 14's sweep. He warns that IPC misleads (Q1:
+40 percent higher IPC and 74 percent slower, p. 5), so comparisons rest on
+stall cycles and op counts, and that branch-free all-lanes selection lost 20
+percent at 20 threads from bandwidth (p. 8, footnote 8), the many-task rung
+below. Shen's VEE is the third JVM attempt, missing from section 14 until this
+item: a whole-engine fork of Spark 2.4 in Java relying on the JIT, no Vector
+API, no fused loop, with vectorised shuffle, sort and aggregation; its own
+decomposition shows plain X100-style vectorisation on Spark slower than
+whole-stage codegen on 21 of 22 TPC-H queries, and the whole gain coming from
+shuffle and cache-aware operators (p. 10). That is the published reason the
+write-up leads with kernel-against-boundary attribution. Shen's batch length
+is derived from the working set a step touches against the last-level cache
+(p. 6), with an in-cache optimum near one megabyte of touched vectors (p. 8):
+for a fused kernel the touched set is known at emission, so Item 14's batch
+length can be per shape. Photon is Item 24's contract in native code: column
+batches with a position list of active rows, kernels templated on
+has-nulls times all-rows-active (Listing 2, p. 7), per-batch adaptivity on
+nulls, active rows and ASCII-ness (p. 7), a rule that never starts an island
+mid-plan because each costs a pivot (p. 8), a buffer pool sized by the fixed
+number of allocations per batch (pp. 6-7), and a testing regime that runs one
+expected table through every specialisation and hooks Spark's own expression
+unit tests through the function registry (p. 9). Its reasons for leaving the
+JVM and codegen (pp. 2, 4-5) each have a named answer here; the 64 KB epilogue
+(task 87) is the one cliff the write-up should own, and the two parity hazards
+it names, native casts and time zone database versions, do not exist in the
+same JVM.
+
+**C. SIMD scans and layouts** (Willhalm et al., VLDB 2009; Feng, Lo, Kao and Xu,
+SIGMOD 2015; Polychroniou, Raghavan and Ross, SIGMOD 2015). SIMD-Scan's rule,
+shift the constant rather than the data (p. 7), transfers to literal slots and
+to Item 11's frame-of-reference form: compare rebased narrow lanes against the
+rebased literal and fold an out-of-range literal to a constant mask. ByteSlice
+gives the early-stop probability, one minus two to the minus t, to the power of
+lanes over eight (Eq. 2, p. 6): at register width the branch is taken almost
+always, at a 64-row word about three quarters of the time, at a batch never -
+which is why task 24's per-group branch was declined and why any word-level
+skip must be justified as a predictable branch on the running conjunction mask,
+not on validity; its column-first pipelining beat predicate-first (p. 10), and
+its census that ninety percent of TPC-H columns encode under 24 bits (p. 13)
+supports the sixteen-lane form, with byte-slicing itself at most a filter-side
+cache layout, since reconstruction costs a load per slice. Polychroniou 2015
+supplies two designs: a vertical `IN` probe - a collision-free table built from
+the compile-time literals, then hash, one index-map gather over a heap array,
+one compare (p. 5) - as the second arm Item 19 leaves unmeasured, lifting the
+sixteen-literal cap; and the vectorised Bloom filter probe (pp. 6, 10), which
+matters because Spark's optimizer injects `BloomFilterMightContain` on the
+probe side of most joins, it is a filter expression inside this engine's
+contract, it needs only milestone 5's long lanes and a lane hash, and it is
+absent from the record. His Haswell result that every vector selection variant
+saturates bandwidth and branchless scalar catches up at ten percent
+selectivity (p. 9) is the reading rule for filter benchmarks: once a selection
+is at bandwidth, further kernel work is invisible, and Items 13 and 14 gate
+every filter number.
+
+**D. Hardware and intrinsics** (Benson 2023; Boether, Benson, Klimovic and Rabl,
+PVLDB 2023; Schmidt et al., CIDR 2025; Boivin and Legaux, arXiv 2026). Benson
+measured the compress gate's two instructions: native compress-store is worth
+several times the best shuffle path on Ice Lake and scales 3.4x from 128 to 512
+bits where table-lookup variants scale 2x (pp. 8, 10), PEXT loses to shuffles
+even on Intel (p. 7), and Velox's PDEP unpacker ran at a tenth of scalar speed
+on AMD Rome (p. 9); Items 19 and 22 cite it. His Ice Lake finding that the
+core retires two 256-bit operations per 512-bit one (p. 7) is prior art for
+`PLAN_TASK_62.md` section 11, and his long-multiply emulation losing on
+AVX2-only parts (p. 5) is a row milestone 5 must add under `-XX:UseAVX=2`
+before any Zen 3 runner number. He and Boether both found mask-to-bitmask the
+worst code generation on NEON, with different best answers per shape (Benson
+p. 6; Boether pp. 5-7, 12); this engine's validity words lean on that
+conversion, so it is the first Graviton measurement. Boether's bucket-based
+comparison - 16 to 64 one-byte fingerprints compared per operation, taken from
+the bits the index does not use, tested for any match before extracting one
+(pp. 4-8) - is the other candidate for hash-based `IN`, lane-friendly and
+needing no gather; the test-before-extract rule applies to the compare chain
+today. Schmidt shows a 48-core socket's DRAM saturating at about twelve scalar
+threads with SIMD only lowering that count (p. 2): this engine's headline
+numbers are one partition on one core, and the write-up must say per shape
+whether a win is compute-bound; a partitions ladder on the Zen 5, committed,
+makes that a measurement. Boivin's one useful citation is the AVX-512 frequency
+licence effect (p. 3), unmeasured here and to be named in the hardware
+section; his data-dependent-branch results (p. 10) are the compiler-specific
+case for explicit vector code that this engine settles by measurement.
+
+**Applicable now, as rows or amendments.**
+
+1. Item 16 gets Lang's threshold rule, Ngom's crossover, Raducanu's loss case,
+   Kersten's exclusion of gather-fed selection vectors, and the granularity
+   disagreement as the thing to measure.
+2. Milestone 5 re-measures selectivity policy and long multiply at 64-bit lanes
+   (Raducanu p. 6; Benson p. 5) before inheriting any int32 number.
+3. Item 14 sweeps batch size from one to sixteen thousand rows and derives a
+   per-shape length from the touched set (Kersten pp. 5-6; Shen pp. 6, 8) and
+   an output-pool size from the plan (Photon pp. 6-7).
+4. The public write-up states the concurrency regime from a committed
+   partitions ladder (Schmidt p. 2; Kersten p. 8) and names the frequency
+   licence as unmeasured (Boivin p. 3).
+5. Items 19 and 22 cite Benson's measurements for the compress gate.
+6. Benchmarks gain a log-scale low-selectivity ladder with a heavy projection
+   stacked on the filter, stall-cycle counters beside throughput, and a rule to
+   read Intel-runner bimodality against code alignment first (Lang p. 9; Kersten
+   p. 5; Benson pp. 8-9).
+7. Testing gains Photon's two forms: every coverage row through both bodies
+   and a lane tail with poisoned null lanes, and a hook so Spark's own
+   `checkEvaluation` rows also run through a fused plan when the compiler admits
+   them (p. 9).
+8. The planner gains a "would add a pivot" decline reason and a per-node split
+   of kernel time from conversion time (Photon p. 8; Item 24).
+9. Two code rules: transform a literal once rather than per lane (Willhalm
+   p. 7); test the mask before extracting a match in the `IN` chain (Boether
+   p. 6).
+
+**Applicable later.** The vertical probe and the fingerprint bucket as the two
+arms against the sorted `IN` chain; `BloomFilterMightContain` as a filter
+kernel on long lanes; probes kept out of fused kernels and lane-replicated
+accumulators for Item 4; ASCII-ness as a batch fact (Photon: 3x on `upper`,
+p. 10) and the missing cross-lane byte shuffle on AVX2 (Benson p. 7) for Item
+3; the sixteen-lane frame-of-reference form with rebased literals for Item 11;
+mask-to-bitmask before any NEON number; micro-adaptivity as a fourth policy.
+
+**For `VISION.md` section 14**, done in this item's commit: VEE as the third
+attempt with its 21-of-22 result, and a paragraph on what the literature says
+about where the fused-loop argument holds and where it stops.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
