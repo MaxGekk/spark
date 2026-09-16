@@ -427,4 +427,71 @@ checked.
 
 ## 9. Outcome
 
-*To be written from the oracles and the property test.*
+Done, 16 September 2026, in six commits on one branch, in the order section 8
+gives with one addition at the front.
+
+**A live bug, found by writing table 3.4 and fixed first in its own commit.**
+`intBound` gave a lowered `year` a typed-in magnitude of 40 000, from the narrow
+range's top at year 33134. Since task 69, `admitCalendar` admits a date up to
+`NARROW_DECOMPOSE_MAX_DAYS` - 29 February 42400 - through a literal shift above a
+guarded column offset, so `year(date_add(date_add(d, i), 3000000)) * 53000`
+proved itself safe (40 000 x 53 000 is inside int32) and was emitted as a
+wrapping multiply, while a row in year 42400 reaches 2.25e9 and wraps: an ANSI
+query answering a wrong number instead of raising, which is the one class of
+failure the ghost fallback cannot catch. The bound is now
+`VarkaChrono.YEAR_FIELD_MAGNITUDE`, derived from the two range constants, and the
+compiler suite pins both the derivation and the shape. The property test would
+not have found this: the fuzz grammar's columns and literals cannot push a date
+past year 10 000, and the plan's section 2 said as much about what that test can
+reach. The table found it because a table asks "over which inputs is this
+constant true", and the answer was "not all of the admitted ones".
+
+**Prediction 1 held: today's code passes the property test.** Run against the
+adapter over `intBound` and `dayRange` before any line of the compiler moved:
+10 000 trees from the shared grammar, 634 177 values checked against a bounded
+interval, 42 370 queries answered unknown, no failure. Then the other half, which
+the plan did not ask for and which is the stronger statement: over the same
+trees, at every node, kind and policy, the analysis and the legacy pair agree bit
+for bit - 129 412 answers compared, none different. Both tests went with the
+legacy functions in step 4; the commit before it holds them.
+
+**Prediction 2 held: zero oracle differences.** The compiler suite, 92 tests (91
+plus the new regression), green. `VarkaCoverageSuite`'s four checks green with
+`coverage.json` byte-identical. `VarkaDifferentialSuite`, 88 tests, green. The
+fuzz suite, over the extracted grammar, green. And the seven shapes of section 5
+through `dev/varka_emit.sh` before and after, on the untouched tree and on the
+finished branch: identical verdicts (six `FusedOutput(0)`) and identical shape
+hashes, with one caveat - `greatest(year(d), month(d)) * 5` produced no report
+from the tool either time, which is the debt register's "reports a crash as an
+empty success" and not this task's; the shape is covered by the equivalence test
+and by the hull row of the per-node tests instead.
+
+**Prediction 3, roughly.** The compiler lost 183 lines (66 added, 249 removed);
+`VarkaValueRange.java` is 230 lines and `VarkaRangeAnalysis.java` 260, half of
+each documentation; the suite is 531. The plan said about 150 and about 250.
+
+**What the plan got wrong, recorded rather than erased.** Section 4 said the
+shared grammar would give each input ordinal a kind and draw leaves only from
+ordinals of the kind the slot wants. It does not: the fuzzer's coverage *is* its
+mixed shapes - `year(int_arith(...))`, `date_add(datediff(...), 1)` - and typing
+the grammar would have removed them from the differential. The grammar moved
+unchanged, and the property test derives the kind per slot as it walks a tree
+and draws each column's rows from the most demanding slot it sits in: trunc level
+codes, then the month-count guard, then the date contract, then the offset
+magnitude, then the whole of int32. Section 5's promise is kept - an int-only
+column is drawn over int32 - by a different mechanism than the one written.
+Section 4 also listed `intBound` and `dayRange` as removed; the traversals are
+removed, and two three-line wrappers of those names remain as the compiler's
+spelling of the two queries, beside `literalAt` and `decomposesExactly`.
+
+**The row filter needed one more clause than section 5 listed.** Beside the
+producer, `GuardedDay` and month-count clauses: every calendar consumer's child
+must lie in `[NARROW_MIN_DAYS, NARROW_DECOMPOSE_MAX_DAYS]` on the row, and
+`make_date`'s year in its own range. Random IR builds `year` over things the
+compiler would never admit, and the field constants are stated for admitted
+inputs - which is exactly the fact the year bug was about.
+
+**The debt registered.** Two cells of table 3.4 are looser than the arithmetic
+allows and were kept so on purpose: the hull nodes under `INT` (unknown where a
+hull is exact) and the symmetric `INT` intervals generally. The entry is in
+`PLAN_MILESTONE_4.md` section 9 with this task's number and the shape to watch.

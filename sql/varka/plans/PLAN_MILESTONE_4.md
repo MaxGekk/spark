@@ -2250,6 +2250,20 @@ One bullet per debt: what it is, why it is a debt, and what closing it would
 take. Opened during task 24, per `sql/varka/AGENTS.md` - a swept entry is
 rewritten in the past tense with what the sweep found, never deleted.
 
+* **The range analysis's `INT` answers are looser than interval arithmetic allows
+  (task 84).** `VarkaRangeAnalysis` answers every `INT` query with an interval
+  symmetric about zero, so `+` and `-` bound as the sum of magnitudes even over
+  operands of opposite sign, and `greatest`/`least`/`if` over ints answer unknown
+  where a hull would be exact. Both reproduce the magnitude arithmetic the compiler
+  used before task 84 on purpose: that task's contract was that every shape is
+  admitted or declined identically, and its per-node tests are written from the
+  old rule. Closing this is a tightening with its own before-and-after: drop the
+  symmetrisation (a literal becomes `[v, v]` under `INT`, a field `[1, 12]` rather
+  than `[-12, 12]`), let the hull nodes hull under `INT`, and let the coverage table
+  and the differential say which shapes newly fuse - `greatest(year(d), month(d))
+  * 5` under ANSI is the shape to watch. The lattice already has the operations;
+  only the transfer functions and the tests move.
+
 * **`dev/varka_emit.sh` reports a crash as an empty success.** The script runs the
   dump into a log and prints the lines it greps out, so a run that throws produces
   no output and exits 0 - indistinguishable from a run where nothing matched. Found
