@@ -46,6 +46,18 @@ object VarkaIrGrammar {
   val columnBound = 2500000L
   val literalBound = 4000
 
+  /**
+   * The seed both shape corpora are drawn from: `VarkaIrFuzzSuite` runs shape `k` against the
+   * reference evaluator, and `VarkaEmittedBytesSuite` pins the bytes shape `k` emits. One seed
+   * here rather than one in each, so that the oracle's shapes really are the fuzzer's - it pins
+   * many more of them than the fuzzer checks by default, but every shape the fuzzer checks is
+   * one the oracle pins, which is what makes "the emitter produces what it produced" a statement
+   * about code that was also checked for correctness. The fuzz suite's own system property
+   * overrides its seed for a one-off hunt; the oracle's corpus is the committed file's, so it
+   * does not follow the override.
+   */
+  val fuzzSeed = 20260903L
+
   // The generator's magnitude bounds saturate rather than wrap, in *every* arm that combines
   // two of them - `boundsOf` and the generator alike. Four nested multiplies of a column's own
   // bound pass 2^63, and a bound that came back negative would let `fitsUnderChrono` admit an
@@ -159,24 +171,6 @@ object VarkaIrGrammar {
     }
   }
 
-  /** One iteration's shape generator; keeps a node budget so trees stay well inside the
-   *  emitter's `MAX_FUSED_NODES` and `MAX_CHAIN_DEPTH`.
-   *
-   *  `smallOrdinal` is the input column whose values `runOne` keeps inside
-   *  `MONTH_ARITH_MIN/MAX_MONTHS`, or -1 when this iteration has only one input. Every other
-   *  column holds day-magnitude values, which as a month count would trip the runtime guard on
-   *  every batch and decline it - leaving the status-zero assertions nothing to check. Giving
-   *  one ordinal a small range is what lets a *column* month count be fuzzed at all, and it is
-   *  the operand shape task 63 will want too. Its `Gen` bound stays `columnBound` wherever the
-   *  generic leaf draws it, which over-approximates its real range in the safe direction.
-   *
-   *  `levelOrdinal` is the same idea for task 61's `trunc` with a format column, or -1 when
-   *  this iteration has fewer than three inputs. `TruncLevelLeaf` hands the kernel
-   *  `DateTimeUtils.parseTruncLevel`'s codes - 6 (`WEEK`) to 9 (`YEAR`) - or a null lane, and
-   *  nothing else, so a level column drawn at day magnitude would be a lane the leaf can never
-   *  produce and the node would be fuzzed outside its contract. `runOne` draws this one from
-   *  the four codes instead, which is what lets `TruncDateDynamic` be generated at all - it
-   *  was the one IR node type this suite could not reach. */
   /**
    * One drawn shape: the kernel's roots, the input and literal counts they were drawn over, and
    * the two special columns, which a caller drawing lane values has to honour - the values a
@@ -194,8 +188,12 @@ object VarkaIrGrammar {
    * from the same seed: [[VarkaIrFuzzSuite]] runs each shape against the reference evaluator, and
    * `VarkaEmittedBytesSuite` pins the bytes the same shape emits. A copy of the preamble in each
    * would let one extra `rnd.next*` call in one of them silently split the corpus in two, and the
-   * oracle would go on pinning shapes nothing checks for correctness.
+   * oracle would go on pinning shapes nothing checks for correctness. `fuzzSeed` and
+   * `shapeRandom` are here for the same reason.
    */
+  /** The generator for shape `k` of the sequence, the same in both suites. */
+  def shapeRandom(seed: Long, k: Int): Random = new Random(seed * 1000003L + k)
+
   def drawShape(rnd: Random): Drawn = {
     val numInputs = 1 + rnd.nextInt(3)
     val numLiterals = rnd.nextInt(3)
@@ -216,6 +214,24 @@ object VarkaIrGrammar {
     Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal)
   }
 
+  /** One iteration's shape generator; keeps a node budget so trees stay well inside the
+   *  emitter's `MAX_FUSED_NODES` and `MAX_CHAIN_DEPTH`.
+   *
+   *  `smallOrdinal` is the input column whose values `runOne` keeps inside
+   *  `MONTH_ARITH_MIN/MAX_MONTHS`, or -1 when this iteration has only one input. Every other
+   *  column holds day-magnitude values, which as a month count would trip the runtime guard on
+   *  every batch and decline it - leaving the status-zero assertions nothing to check. Giving
+   *  one ordinal a small range is what lets a *column* month count be fuzzed at all, and it is
+   *  the operand shape task 63 will want too. Its `Gen` bound stays `columnBound` wherever the
+   *  generic leaf draws it, which over-approximates its real range in the safe direction.
+   *
+   *  `levelOrdinal` is the same idea for task 61's `trunc` with a format column, or -1 when
+   *  this iteration has fewer than three inputs. `TruncLevelLeaf` hands the kernel
+   *  `DateTimeUtils.parseTruncLevel`'s codes - 6 (`WEEK`) to 9 (`YEAR`) - or a null lane, and
+   *  nothing else, so a level column drawn at day magnitude would be a lane the leaf can never
+   *  produce and the node would be fuzzed outside its contract. `runOne` draws this one from
+   *  the four codes instead, which is what lets `TruncDateDynamic` be generated at all - it
+   *  was the one IR node type this suite could not reach. */
   class Shapes(rnd: Random, numInputs: Int, numLiterals: Int, smallOrdinal: Int,
       levelOrdinal: Int) {
     private var budget = 20

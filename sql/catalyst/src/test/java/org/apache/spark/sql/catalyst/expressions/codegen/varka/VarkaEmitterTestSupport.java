@@ -17,11 +17,16 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.lang.classfile.Attribute;
 import java.lang.classfile.ClassFile;
+import java.lang.classfile.ClassModel;
 import java.lang.classfile.CodeElement;
 import java.lang.classfile.Instruction;
 import java.lang.classfile.Label;
 import java.lang.classfile.MethodModel;
+import java.lang.classfile.Opcode;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.lang.classfile.instruction.BranchInstruction;
 import java.lang.classfile.instruction.ConstantInstruction;
 import java.lang.classfile.instruction.ExceptionCatch;
@@ -222,6 +227,43 @@ public final class VarkaEmitterTestSupport {
    * Line-number and local-variable tables are left out: they are the emitter's IR map, not
    * behaviour. Exception ranges are kept, with their labels.
    */
+  /**
+   * Everything about an emitted class that is not a method body: its flags, what it extends and
+   * implements, the names of its attributes, and each method's flags beside its name. The method
+   * bodies are hashed one by one; without this, a refactor could drop the
+   * {@code VarkaFusedKernel} interface or the telemetry attribute, or widen a loop method to
+   * public, and every body would still render identically.
+   */
+  public static String classSummary(byte[] bytes) {
+    ClassModel model = ClassFile.of().parse(bytes);
+    StringBuilder sb = new StringBuilder();
+    sb.append("flags ").append(model.flags().flagsMask()).append('\n');
+    sb.append("super ").append(model.superclass().map(ClassEntry::asInternalName).orElse("-"))
+        .append('\n');
+    model.interfaces().forEach(i -> sb.append("implements ").append(i.asInternalName())
+        .append('\n'));
+    model.attributes().stream().map(Attribute::attributeName).map(Utf8Entry::stringValue)
+        .sorted().forEach(n -> sb.append("attribute ").append(n).append('\n'));
+    for (MethodModel m : model.methods()) {
+      sb.append("method ").append(m.flags().flagsMask()).append(' ')
+          .append(m.methodName().stringValue()).append(m.methodType().stringValue()).append('\n');
+    }
+    return sb.toString();
+  }
+
+  /**
+   * LDC, LDC_W and LDC2_W render alike: which of the three the Class-File API picks depends on
+   * where the constant lands in the pool, so rendering the opcode would move a method's hash
+   * when an unrelated constant was added ahead of it. bipush, sipush and the iconst family are
+   * left as they are, since those are chosen by the value rather than by the pool.
+   */
+  private static String ldcNormalized(Opcode opcode) {
+    return switch (opcode) {
+      case LDC, LDC_W, LDC2_W -> "LDC";
+      default -> opcode.toString();
+    };
+  }
+
   public static LinkedHashMap<String, String> methodBodies(byte[] bytes) {
     LinkedHashMap<String, String> out = new LinkedHashMap<>();
     for (MethodModel method : ClassFile.of().parse(bytes).methods()) {
@@ -248,7 +290,7 @@ public final class VarkaEmitterTestSupport {
           case FieldInstruction f -> sb.append(f.opcode()).append(' ')
               .append(f.owner().asInternalName()).append('.').append(f.name().stringValue())
               .append(':').append(f.type().stringValue()).append('\n');
-          case ConstantInstruction c -> sb.append(c.opcode()).append(' ')
+          case ConstantInstruction c -> sb.append(ldcNormalized(c.opcode())).append(' ')
               .append(c.constantValue()).append('\n');
           case LoadInstruction l -> sb.append(l.opcode()).append(' ').append(l.slot()).append('\n');
           case StoreInstruction s -> sb.append(s.opcode()).append(' ').append(s.slot())

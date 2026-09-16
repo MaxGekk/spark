@@ -393,10 +393,10 @@ that branch extracted, and rebased onto master when that branch merged.
 since task 120 landed, see below - and ten thousand fuzz shapes at seed
 20260916, drawn exactly as
 `VarkaIrFuzzSuite.runOne` draws its trees, each at `lanesOverride` 4 and 16. Per
-coverage row and width, one hash per emitted method (456 method hashes per
-width); per width, a hundred block digests over the fuzz sequence, so a
+coverage row and width, one hash per emitted method and one for the class
+around them (513 entries per width); per width, a hundred block digests over the fuzz sequence, so a
 difference names a block of a hundred shapes rather than everything or nothing.
-The file is 61 KB, 1167 lines.
+The file is 68 KB, 1281 lines.
 
 **How a method is hashed.** Not the `Code` attribute's bytes, which section 5
 first proposed: those embed constant-pool indices, and a refactor that builds
@@ -444,6 +444,25 @@ is the proof the sequence did not move. And the `InSet` row was pinned through
 the compiler's `In` arm, because this suite has no optimizer - it applies that
 one rewrite itself now, and fails if a row the table records as an `InSet` does
 not become one.
+
+**Reviewed again, at the highest effort, and five more came back - four of them
+about claims the suite made and did not keep.** The two corpora were drawn from
+different seeds, so the sentence that every pinned shape had been run against
+the reference evaluator was simply false; one `fuzzSeed` and one `shapeRandom`
+in `VarkaIrGrammar` make it true, and the oracle's ten thousand shapes now
+extend the fuzzer's three hundred rather than diverging from them. The rendering
+called a constant's opcode symbolic, but `LDC` and `LDC_W` are chosen by where
+the constant lands in the pool, so adding a constant ahead of another would have
+moved hashes with no instruction changing - the three forms render as one token
+now, while `bipush`, `sipush` and `iconst` stay as they are, being chosen by the
+value. The `InSet` guard added in the previous round threw inside the parse
+`catch` that surrounds it, so it recorded a skip instead of failing; the catch
+covers the parse and the resolve only. And the oracle never looked at the class
+around the methods, so dropping the kernel interface or the telemetry attribute
+would have left every hash identical - each shape carries a `<class>` entry now,
+over the flags, the superclass, the interfaces, the attribute names and each
+method's flags. The fifth was two scaladocs orphaned by members inserted between
+them and what they describe, which is the repository's own named failure mode.
 
 **What it does not yet pin.** Random emit options: every shape is emitted at
 the defaults plus the width. Task 85's refactor touches the default path first;
