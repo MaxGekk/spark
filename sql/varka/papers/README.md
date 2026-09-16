@@ -82,3 +82,14 @@ different set of losses and silently invalidate the header.
 | file | paper | read by |
 |---|---|---|
 | `neri-schneider-2022-euclidean-affine-functions.md` | Neri and Schneider, "Euclidean affine functions and their application to calendar algorithms", SPE 53(4), 2023 | `plans/PLAN_TASK_53.md`, and the background for `PLAN_TASK_26.md`'s admission check |
+| `lang-2020-simd-control-flow-divergence.md` | Lang, Passing, Kipf, Boncz, Neumann and Kemper, "Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines", VLDB Journal 29, 2020 | `plans/SCOPE_MILESTONE_6.md` Items 16, 17, 23 and 25 (selection narrowing and its threshold) |
+| `ngom-2021-filter-representation.md` | Ngom, Menon, Butrovich, Ma, Lim, Mowry and Pavlo, "Filter Representation in Vectorized Query Execution", DaMoN 2021 | `plans/SCOPE_MILESTONE_6.md` Items 3, 16 and 25 (bitmap against selection vector, and the crossover model) |
+| `benson-2023-simd-compiler-intrinsics.md` | Benson, Ebeling and Rabl, "Evaluating SIMD Compiler-Intrinsics for Database Systems", ADMS 2023 | `plans/SCOPE_MILESTONE_6.md` Items 19, 22 and 25 (the compress and PEXT gate), `plans/PLAN_TASK_62.md` section 11 |
+| `schmidt-2025-mimd-simd-interplay.md` | Schmidt, Pietrzyk, Hildebrandt and co-authors, "Rethinking MIMD-SIMD Interplay for Analytical Query Processing in In-Memory Database Engines", CIDR 2025 | `plans/SCOPE_MILESTONE_6.md` Item 25 (the concurrency regime the public write-up must state) |
+
+Eleven further papers were read for `plans/SCOPE_MILESTONE_6.md` Item 25 on 16
+September 2026 (Willhalm 2009, Raducanu 2013, Polychroniou 2015 and 2019, Feng
+2015, Lang 2018, Kersten 2018, Shen 2021, Behm 2022, Boether 2023, Boivin 2026).
+Their printed terms - ACM copyright with a permission notice, Creative Commons
+BY-NC-ND, or an arXiv posting - do not permit a copy here, so Item 25 keeps the
+reading notes and the citations instead, as the licensing section above says.

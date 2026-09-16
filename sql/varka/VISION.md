@@ -269,7 +269,129 @@ casts under AVX2, found in milestone 5's planning).
 that deck as the earlier attempt: a batch-at-a-time evaluator inside Spark's
 row engine.
 
-What this engine does that neither did: it emits the loop as bytecode with the
+**Shen, Xiong and Jiang, "Using Vectorized Execution to Improve SQL Query
+Performance on Spark", ICPP 2021.** The third attempt, read on 16 September
+2026 (`SCOPE_MILESTONE_6.md`, item 25): a whole-engine fork of Spark 2.4 in
+Java that relies on the JIT for any SIMD, with no Vector API and no fused
+expression loop, and vectorised shuffle, sort and aggregation beside project and
+filter. Its own decomposition is the useful result: plain X100-style
+vectorisation on Spark was slower than whole-stage codegen on 21 of 22 TPC-H
+queries, and the gain it did report came from the shuffle format and
+cache-aware operators. That is the published reason this engine's numbers
+separate the kernel from the boundary, and why a vectorised evaluator alone,
+without emitted lanes, was never going to be the answer on the JVM.
+
+**Outside Spark: Gandiva, Apache Arrow's expression compiler
+(`arrow/cpp/src/gandiva`).** The closest architectural relative this engine has -
+a per-expression compiler producing native code over Arrow buffers - and a
+survey of it on 16 September 2026 found the two had made the same decisions
+independently. Its decomposer splits every expression into a value expression
+and a list of validity sources (`expr_decomposer.cc`), ANDs the validity
+bitmaps word by word outside the per-record loop (`bitmap_accumulator.cc`),
+keeps intermediate validity in clear-only bitmaps pre-filled with ones, and
+classifies every function as null-if-null, null-never or null-internal to decide
+whether validity is merged, dropped or written to scratch (`native_function.h`);
+error-capable functions are invoked only when all their arguments are valid, so
+garbage in a null slot cannot raise. That is this engine's validity-word algebra,
+its `IsNotNull` and `make_date` cases, and its guards' exclusion of null lanes,
+arrived at twice. Its month arithmetic clamps to the month's end and its
+truncation floors negative epochs (`precompiled/time.cc`), both of which the
+differential holds this engine to; its calendar decomposition is the same
+civil-from-days. Where the two part is instructive. Gandiva's vectorisation is
+LLVM's auto-vectoriser over the scalar loop it emits (`engine.cc` schedules
+`LoopVectorize` and `SLPVectorizer`); on the JVM that bet does not pay, which the
+AVX2 investigation showed, and explicit Vector API emission is the answer this
+platform needs. Gandiva aborts the batch on the first error, division by zero
+included, with no fallback; here a failure declines the batch to the row engine.
+And Gandiva has no differential oracle, no fuzzer and no committed benchmarks.
+
+**Outside Spark: Trino (`core/trino-main/src/main/java/io/trino/sql/gen`).** The
+JVM engine nearest to this one in situation, surveyed on 16 September 2026
+(`SCOPE_MILESTONE_6.md`, item 19). Its columnar filter path generates a class per
+filter with a null-checking loop and a bare one chosen per batch on
+`mayHaveNull`, runs conjuncts in an order learned from time per row eliminated,
+reorders only terms that cannot fail, evaluates a dictionary once and reuses the
+answer, and compacts nullable columns with `compress` behind a CPU-flag gate
+because the JDK cannot say whether `compress` is native or emulated. Every one of
+those is a decision this engine also made, or one it has now recorded. Where the
+two part: Trino requires the Vector API at startup and uses it for Parquet
+decoding and serialisation, but its filter loops are scalar bytecode left to
+C2's auto-vectoriser, the same bet as Gandiva's, and its calendar functions run
+row by row over Joda. The evaluator that emits lanes is the step neither took.
+
+**Outside Spark: DuckDB (`src/execution/expression_executor`).** Surveyed on 16
+September 2026 (`SCOPE_MILESTONE_6.md`, item 20). An interpreter over precompiled
+templates with no explicit SIMD in its source, it makes the same structural
+choices in a different medium: validity in sixty-four-bit entries with a bare
+loop for an all-valid entry and a skip for an all-null one, comparisons that
+produce selections rather than booleans, a filter whose output is a slice rather
+than a copy, and conjunct order learned at run time by trial swaps, disabled the
+moment a term can throw. Where it is ahead is the optimizer: a monotone function
+of a column compared with a constant is rewritten into a range on the column by
+bisection, and statistics that rule out overflow swap the checked kernel for the
+unchecked one. This engine has the second of those in scope and should take the
+first.
+
+**Outside Spark: DataFusion (`datafusion/physical-expr`, `datafusion/spark`).**
+Surveyed on 16 September 2026 (`SCOPE_MILESTONE_6.md`, item 21). An interpreter
+over Arrow arrays in Rust whose kernels are arrow-rs's, and the home of Comet's
+Spark-compatible functions, so the nearest published attempt at this engine's
+contract. It short-circuits `AND` and `OR` per batch and narrows to the rare
+side behind a measured threshold, compiles `CASE` into one of five shapes, and
+declares the preimage of `year` so that `year(d) = 2021` becomes a range on `d`,
+citing ClickHouse as the origin. What it has that this engine does not is an
+interval lattice run in both directions: bottom-up to bound an expression, as
+task 84's analysis does, and top-down from a known result to its operands, so a
+conjunct can bound its sibling and a guard can be retired by a predicate that
+sits beside it. That second pass is the next thing the range analysis grows.
+
+**Outside Spark: ClickHouse (`src/Functions`, `src/Interpreters/JIT`).** The
+calendar was read for milestone 6's lookup-table item; the evaluator was
+surveyed on 16 September 2026 (`SCOPE_MILESTONE_6.md`, item 23). It is the one
+engine in the survey that both interprets over columns and compiles: functions
+declare their contract as flags, a generic layer strips nulls, constants and
+dictionaries before the kernel, columns carry sixty-four bytes of padding so no
+kernel needs a tail, three-valued logic is `min` and `max` on a two-bit code,
+and an LLVM JIT fuses chains of arithmetic, comparison, conversion and logic
+into one loop once an expression has been seen three times. Its short-circuit
+evaluation runs an `if` arm or an `and` operand only on the undecided rows, and
+only when the arm's function says it can throw or is heavy, which is the rule
+this engine should adopt for blending against narrowing. Its compiled loop is
+scalar IR left to LLVM, Gandiva's bet with Gandiva's compiler; the emitter that
+writes lanes is the step it did not take.
+
+**Outside Spark, but for Spark: Comet (`spark/src/main/scala/org/apache/comet`,
+`native/spark-expr`).** Surveyed on 16 September 2026 (`SCOPE_MILESTONE_6.md`,
+item 24). The one system with this engine's exact contract: a plug-in over
+Spark's physical plan that runs what it can elsewhere, falls back for the rest,
+and must answer what Spark answers under `ANSI`. It arrived at the same
+planning surface - a support level per expression, fallback reasons in
+`EXPLAIN`, a support table generated from the code - and it shows the price of
+the other `ANSI` choice: raising Spark's errors natively took a query-context
+pipeline from the plan to the kernel and back, and the compatibility guide
+still lists the ways the errors differ. Its most useful piece is the batch
+kernel it compiles from Spark's own generated code to evaluate one inexact
+expression inside the columnar pipeline, which is the per-node fallback this
+engine has planned and not built. Its kernels are DataFusion's; the emitter
+that writes lanes is, again, the step not taken.
+
+**In the literature.** Kersten, Leis, Kemper, Neumann, Pavlo and Boncz (PVLDB
+2018) built both designs in one system and measured the difference this engine
+rests on: fused loops ran TPC-H Q1 in 68 instructions per tuple against 162 for
+vectorised primitives, because intermediates stay in registers, and they note
+that fusing adjacent vectorised primitives into one JIT-compiled loop had not
+been integrated into any system. The same paper marks where the argument stops:
+hash probing favours simple loops that keep more loads in flight, gather buys a
+tenth, and SIMD adds little once memory dominates, which this engine's own
+boundary measurements confirm and which is why grouping and joins are planned
+as separate loops behind a batch boundary. Lang, Passing, Kipf, Boncz, Neumann
+and Kemper (VLDB Journal 2020) measured what idle lanes cost inside a fused
+pipeline and found materialising survivors at an operator boundary the best
+remedy on out-of-order cores, which is the compaction this engine does at its
+filter node. The reading notes are `SCOPE_MILESTONE_6.md` item 25, and the
+open-access papers are in `sql/varka/papers`.
+
+What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole
 projection with common subtrees computed once across outputs; it carries SQL's
@@ -278,4 +400,4 @@ it reads Arrow buffers as `MemorySegment`s with no per-row object on the fast
 path; and any failure degrades to the row engine per batch, so declining is a
 normal outcome. The measurements that separate the lane from the loop shape,
 and the losses printed beside the wins, are the other difference, and they are
-what the READMEs of the two earlier attempts did not have to offer.
+what the READMEs of the earlier attempts did not have to offer.
