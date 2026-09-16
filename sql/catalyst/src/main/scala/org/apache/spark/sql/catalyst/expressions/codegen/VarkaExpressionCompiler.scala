@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen
 
-import java.time.LocalDate
+import java.util.function.IntUnaryOperator
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
@@ -25,7 +25,8 @@ import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaValueRange, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, StringType, YearMonthIntervalType}
@@ -653,7 +654,7 @@ private[sql] object VarkaExpressionCompiler {
     // widened gate is how an interval reaches a position that reads it as a day count. Every one of
     // them is checked in every evaluation mode - Spark computes them with `addExact`,
     // `subtractExact`, `negateExact` and `multiplyExact`, and there is no `LEGACY` or `try_`
-    // spelling for an interval - so the mode is `FAIL` and `intBound` is the only thing that takes
+    // spelling for an interval - so the mode is `FAIL` and the bound is the only thing that takes
     // the check off.
     case a: Add if a.dataType.isInstanceOf[YearMonthIntervalType] =>
       intervalArith(IntOp.ADD, a.left, a.right, a, inputs, literals, sink)
@@ -663,7 +664,7 @@ private[sql] object VarkaExpressionCompiler {
       // `IntervalMathUtils.negateExact`, which throws on `Int.MinValue` alone, so any bound at
       // all rules it out - `IntNeg`'s reasoning over an interval operand.
       intervalOperand(c, "the negated interval", inputs, literals, sink).map { x =>
-        val checked = !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+        val checked = !magnitude(x, literals).exists(_ <= Int.MaxValue.toLong)
         new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
       }
     case n @ Abs(c, _) if n.dataType.isInstanceOf[YearMonthIntervalType] =>
@@ -675,7 +676,7 @@ private[sql] object VarkaExpressionCompiler {
       // negate can condemn the batch.
       intervalOperand(c, "the absolute interval", inputs, literals, sink).map { x =>
         val zero = new LiteralSlot(literals.getOrElseUpdate(0, literals.size))
-        val checked = !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+        val checked = !magnitude(x, literals).exists(_ <= Int.MaxValue.toLong)
         new IfElse(new Compare(CompareOp.LT, x, zero),
           new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x), x)
       }
@@ -721,7 +722,7 @@ private[sql] object VarkaExpressionCompiler {
       // overflows on exactly one value, `Int.MinValue`, so any bound at all rules it out and
       // the check comes off - the same reasoning the binary arms use, on a narrower fact.
       intOperand(c, inputs, literals, sink).map { x =>
-        val checked = failOnError && !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+        val checked = failOnError && !magnitude(x, literals).exists(_ <= Int.MaxValue.toLong)
         new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
       }
     case Add(WeekDay(child), Literal(1, IntegerType), _) =>
@@ -923,87 +924,61 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * How large an int-valued node's result can be in absolute value, or `None` where nothing
-   * bounds it. The calendar fields are bounded by their own definitions, a literal by its
-   * value, and `datediff` by its two operands' own day ranges - not by the date contract
-   * alone, which is true of a date column but not of every operand a `datediff` accepts. An
-   * `IntegerType` column is not bounded at all, and neither is anything built on one.
-   *
-   * This exists so a checked operation that provably cannot overflow needs no check - which is
-   * what makes `year(d) * 100 + month(d)` fuse under ANSI, the shape `PLAN_TASK_63.md` 6
-   * measures. The compiler can do this and the emitter cannot: a `LiteralSlot` carries a slot
-   * index, and the value behind it only arrives in `scalarArgs` at run time.
-   *
-   * Deliberately conservative. A bound is returned only where it is certain, so a `None` costs
-   * a check or a decline and never a wrong answer.
+   * The literal table as [[VarkaRangeAnalysis]] reads it: slot index to value. The table is keyed
+   * by value in slot order, so a slot's value is its key's position; and it is read at call time,
+   * never snapshotted, because the table grows as compilation proceeds and is truncated on every
+   * decline.
    */
-  private[codegen] def intBound(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]):
-      Option[Long] = {
-    // Exact, because a bound that wraps is worse than no bound at all: two nested bounds whose
-    // product passes 2^63 would come back a small non-negative number and "prove" a checked
-    // operation safe. `None` is the conservative answer and costs only a check.
-    def both(l: VarkaVectorIR, r: VarkaVectorIR)(f: (Long, Long) => Long): Option[Long] =
-      for (a <- intBound(l, literals); b <- intBound(r, literals); v <- exactly(f(a, b))) yield v
-    node match {
-      case slot: LiteralSlot =>
-        Some(math.abs(literals.keysIterator.drop(slot.index()).next().toLong))
-      // The widest year a lowered date can carry, over the days `admitCalendar` admits - which
-      // reach `NARROW_DECOMPOSE_MAX_DAYS`, year 42400, not only the guard's own ceiling of 33134.
-      case _: IRYear => Some(VarkaChrono.YEAR_FIELD_MAGNITUDE.toLong)
-      case _: IRMonth => Some(12L)
-      case _: IRDayOfMonth => Some(31L)
-      case _: IRQuarter => Some(4L)
-      case _: IRDayOfYear => Some(366L)
-      case _: IRWeekOfYear => Some(53L)
-      case _: IRDayOfWeek => Some(7L)
-      case _: IRWeekDay => Some(6L)
-      case _: DayOfWeekIso => Some(7L)
-      // A difference of two days, bounded only where both of those days are. The contract
-      // width is the answer for two date columns, but not for every `datediff`: `date_add(d,
-      // 2147483647)` is a legal operand whose int32 lane wraps, and a contract-width bound
-      // over it would be a fiction that removes the very check that would have caught it. So
-      // both operands are asked for their own day interval with no guard assumed at the top,
-      // because a `datediff` is not a calendar node and so arms none itself; a calendar node
-      // *inside* an operand still does, which `shifted`'s `guardsBelow` restores. An interval
-      // that leaves the int range is refused, because a lane that produced it wrapped on the
-      // way in.
-      case n: IRDateDiff =>
-        (dayRange(n.end(), literals, guarded = false),
-            dayRange(n.start(), literals, guarded = false)) match {
-          case (Bounded(elo, ehi), Bounded(slo, shi)) if withinInt(elo) && withinInt(ehi) &&
-              withinInt(slo) && withinInt(shi) =>
-            exactly(math.max(math.abs(ehi - slo), math.abs(elo - shi)))
-          case _ => None
-        }
-      case n: IntArith => n.op() match {
-        case IntOp.MUL => both(n.left(), n.right())(Math.multiplyExact)
-        case _ => both(n.left(), n.right())(Math.addExact)
-      }
-      case n: IntNeg => intBound(n.child(), literals)
-      // A column, a date-valued node used as an int, anything else: unbounded.
-      case _ => None
-    }
+  private def literalAt(literals: mutable.LinkedHashMap[Int, Int]): IntUnaryOperator =
+    slot => literals.keysIterator.drop(slot).next()
+
+  /**
+   * How large an int-valued node's result can be in absolute value, or `None` where nothing
+   * bounds it: [[VarkaRangeAnalysis]]'s `INT` query. This exists so a checked operation that
+   * provably cannot overflow needs no check - which is what makes `year(d) * 100 + month(d)`
+   * fuse under ANSI, the shape `PLAN_TASK_63.md` 6 measures. The compiler can do this and the
+   * emitter cannot: a `LiteralSlot` carries a slot index, and the value behind it only arrives in
+   * `scalarArgs` at run time. Conservative by construction: a `None` costs a check or a decline
+   * and never a wrong answer.
+   */
+  private def magnitude(
+      node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]): Option[Long] = {
+    val m = VarkaRangeAnalysis.magnitude(node, literalAt(literals))
+    if (m.isPresent) Some(m.getAsLong) else None
   }
 
-  /** `Some(v)` unless computing it overflowed `Long`, which makes the bound meaningless. */
-  private def exactly(v: => Long): Option[Long] =
-    try Some(v) catch { case _: ArithmeticException => None }
+  /**
+   * The epoch days a day-valued node can produce: [[VarkaRangeAnalysis]]'s `DAY` query, under
+   * `ARMED` for a calendar consumer - which arms the runtime guard on every column-offset
+   * producer below it - and `NONE` for anything else.
+   */
+  private def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int],
+      policy: GuardPolicy): VarkaValueRange.Range =
+    VarkaRangeAnalysis.range(node, Kind.DAY, policy, literalAt(literals))
 
-  /** Whether a day count fits an int32 lane, so producing it cannot have wrapped. */
-  private def withinInt(v: Long): Boolean = v >= Int.MinValue.toLong && v <= Int.MaxValue.toLong
+  /**
+   * Whether every day in the interval decomposes exactly. Asymmetric on purpose. Downward,
+   * `NARROW_MIN_DAYS` binds: below it the narrowing is undefined and no correction rescues it.
+   * Upward, the binding limit is not `NARROW_MAX_DAYS` - that is the era step's *shift* domain and
+   * the range the runtime guards enforce on a producer's own result - but how far the
+   * decomposition stays exact on a value already in hand, which `eraOf`'s one-era correction
+   * carries about 9,266 years further. So an upward shift over a guarded day producer, which used
+   * to decline conservatively, is admitted where it is genuinely exact.
+   */
+  private def decomposesExactly(b: VarkaValueRange.Bounded): Boolean =
+    b.within(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS)
 
   /**
    * Whether the operation on operands of these bounds cannot leave the int32 range. Read
-   * through `intBound`'s own `IntArith` arm rather than re-dispatched here: the candidate node
-   * is never emitted, so building one to ask the question is free, and the two answers cannot
-   * drift apart the way two copies of "MUL multiplies, else adds" once could. The bound is
-   * always non-negative by construction (every base case and every combinator in `intBound`
-   * preserves that), so the only thing left to ask is whether it stays at or under
-   * `Int.MaxValue` - one past it, `2^31`, is the first magnitude that overflows.
+   * through the analysis's own `IntArith` transfer function rather than re-dispatched here: the
+   * candidate node is never emitted, so building one to ask the question is free, and the two
+   * answers cannot drift apart the way two copies of "MUL multiplies, else adds" once could. A
+   * magnitude is non-negative by construction, so the only thing left to ask is whether it stays
+   * at or under `Int.MaxValue` - one past it, `2^31`, is the first magnitude that overflows.
    */
   private def cannotOverflow(op: IntOp, l: VarkaVectorIR, r: VarkaVectorIR,
       literals: mutable.LinkedHashMap[Int, Int]): Boolean =
-    intBound(new IntArith(op, Overflow.WRAP, l, r), literals).exists(_ <= Int.MaxValue.toLong)
+    magnitude(new IntArith(op, Overflow.WRAP, l, r), literals).exists(_ <= Int.MaxValue.toLong)
 
   /**
    * The shared body of the three binary arithmetic arms. A checked multiply declines unless
@@ -1324,7 +1299,7 @@ private[sql] object VarkaExpressionCompiler {
           case u @ UnaryMinus(operand, _)
               if operand.dataType.isInstanceOf[YearMonthIntervalType] =>
             intervalOperand(operand, "the negated month count", inputs, literals, sink).map { x =>
-              val checked = !intBound(x, literals).exists(_ <= Int.MaxValue.toLong)
+              val checked = !magnitude(x, literals).exists(_ <= Int.MaxValue.toLong)
               new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
             }
           // `d + ym_col`. The stored value is the month count in every unit, so this is the
@@ -1354,152 +1329,6 @@ private[sql] object VarkaExpressionCompiler {
 
 
   /**
-   * How far the IR under a calendar node can move a day. `Bounded` is an interval of epoch days the
-   * value is proven to lie in - which both column-driven producers still yield, because each
-   * carries a runtime guard that establishes an interval: a column month count is guarded to
-   * `MONTH_ARITH_MIN/MAX_MONTHS`, so the day it can reach is bounded by the same 31-day-month
-   * over-approximation the literal arm uses; and a column *day* offset (`date_add`/`date_sub`) is
-   * guarded on its own result to the narrowed range, so its output is `[NARROW_MIN_DAYS,
-   * NARROW_MAX_DAYS]` by construction. Stating that interval rather than a distinct "shifted"
-   * verdict is what lets the two compose: whatever sits above a guarded producer shifts a known
-   * interval, and `admitCalendar` tests the result. `Unknown` means a node this analysis does not
-   * know, which `calendarInput` declines rather than trusts.
-   */
-  private[codegen] sealed trait DayRange
-  private[codegen] case class Bounded(lo: Long, hi: Long) extends DayRange
-  private[codegen] case object Unknown extends DayRange
-
-  /**
-   * The compile-time half of the calendar range guard (see `PLAN_TASK_52.md` 3.1 and 10.3). The
-   * civil-from-days decomposition is exact only over `VarkaChrono.NARROW_MIN_DAYS ..
-   * NARROW_MAX_DAYS`, and there is no per-lane check on each calendar node, on the argument that
-   * the range is decidable once, here, for everything except a column offset. This is that
-   * decision, over the IR already built for the calendar node's child:
-   *
-   *  - a column holds `[CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]` by the project's contract, and
-   *    a date literal is itself (the parser cannot write one outside the contract, but a
-   *    hand-built `Literal` can, so it is read back rather than assumed);
-   *  - a literal day offset shifts by exactly its value, `next_day` by 1 to 7, `add_months(n)`
-   *    by 28n to 31n in whichever order, `last_day` by 0 to 30 - each an over-approximation in
-   *    the safe direction, and the `LastDay`/`AddMonths` outputs matter because a date they
-   *    produce can be read by a further calendar node after its own input passed this check;
-   *  - `add_months` with a column count shifts by the same 31-day-month
-   *    over-approximation, at the emitter's own guard bound (`MONTH_ARITH_MIN/MAX_MONTHS`)
-   *    rather than one literal value - tighter than the whole contract range, and it composes;
-   *  - `greatest`/`least`/`if`/`coalesce` (the last compiles to `IfElse`) take the hull of
-   *    their date operands.
-   *
-   * `guarded` says whether the caller is a calendar consumer, which is what arms the runtime guard
-   * on a column-offset producer: with it on, such a producer answers the narrowed range on the
-   * strength of that guard, and with it off it answers `Unknown`, because nothing keeps it in
-   * range. It has no default on purpose - the safe value is not the one a caller gets by forgetting
-   * - and it turns back on below a calendar node in the subtree, which `shifted`'s `guardsBelow`
-   * does.
-   *
-   * Values are `Long` so two literals of two billion cannot wrap the sum. A field-typed output
-   * (`year`, `dayofweek`, `datediff`...) never reaches here as a calendar node's child - the
-   * Spark type gate forbids it - and anything else is `Unknown`. The literal table is keyed by
-   * value in slot order and untyped, so a slot's value is read by its IR position only.
-   */
-  private[codegen] def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int],
-      guarded: Boolean): DayRange = {
-    def literalValue(slot: LiteralSlot): Long = literals.keysIterator.drop(slot.index).next().toLong
-    // `guardsBelow` marks a node that is itself a calendar consumer - which is
-    // `VarkaLoopEmitter.isChrono`'s set, the `Chrono` interface *plus* `AddMonths`, not the
-    // interface alone. The producer guard is armed on every column-offset producer under one, so
-    // the subtree below it is guarded even when the caller above is not a calendar node. Without
-    // this, `datediff(last_day(date_add(d, i)), d2)` would report its operand unbounded although
-    // the `last_day` over it does arm the guard - a bound lost, and a check emitted, for a shape
-    // that is in fact provably in range.
-    def shifted(child: VarkaVectorIR, lo: Long, hi: Long,
-        guardsBelow: Boolean = false): DayRange =
-      dayRange(child, literals, guarded || guardsBelow) match {
-        case Bounded(clo, chi) => Bounded(clo + lo, chi + hi)
-        case other => other
-      }
-    def hull(a: VarkaVectorIR, b: VarkaVectorIR): DayRange =
-      (dayRange(a, literals, guarded), dayRange(b, literals, guarded)) match {
-        case (Unknown, _) | (_, Unknown) => Unknown
-        case (Bounded(alo, ahi), Bounded(blo, bhi)) =>
-          Bounded(math.min(alo, blo), math.max(ahi, bhi))
-      }
-    // A column day offset: the emitter guards this producer's own result per batch
-    // and declines the batch when a lane leaves the narrowed range, so what reaches whatever
-    // sits above is exactly that range - not an unknowable shift. Saying so here is what makes
-    // the guarantee compose: a further shift widens this interval and `admitCalendar` tests the
-    // widened one, where treating the subtree as unbounded-but-guarded would let a shift above
-    // the producer carry the day back out of the range with nothing left to catch it. The child
-    // still has to be a shape the analysis knows, or the offset is added to an unknown day.
-    def columnShifted(child: VarkaVectorIR): DayRange =
-      if (!guarded) {
-        // `guarded = false` asks what this node produces with no runtime guard behind it. The
-        // narrowed range below is true only because a calendar consumer arms the guard on the
-        // producer; a caller that is not one - `datediff`, which `intBound` bounds - gets no such
-        // promise, so the honest answer there is that nothing bounds it.
-        Unknown
-      } else {
-        dayRange(child, literals, guarded) match {
-          case Unknown => Unknown
-          case _ => Bounded(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS)
-        }
-      }
-    node match {
-      case _: ColumnRef => Bounded(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS)
-      case slot: LiteralSlot =>
-        val v = literalValue(slot)
-        Bounded(v, v)
-      case n: AddDays => n.offset() match {
-        case slot: LiteralSlot => shifted(n.days(), literalValue(slot), literalValue(slot))
-        case _ => columnShifted(n.days())
-      }
-      case n: SubDays => n.offset() match {
-        case slot: LiteralSlot => shifted(n.days(), -literalValue(slot), -literalValue(slot))
-        case _ => columnShifted(n.days())
-      }
-      case n: IRNextDay => shifted(n.days(), 1, 7)
-      case n: IRAddMonths => n.months() match {
-        case slot: LiteralSlot =>
-          val m = literalValue(slot)
-          shifted(n.days(), math.min(28 * m, 31 * m), math.max(28 * m, 31 * m),
-            guardsBelow = true)
-        // A column count is bounded by the emitter's own runtime guard to
-        // [MONTH_ARITH_MIN_MONTHS, MONTH_ARITH_MAX_MONTHS], so the day it can produce is
-        // bounded too - by the same 31-day-month over-approximation the literal arm uses, at
-        // the guard's own extremes rather than one literal value. This is the correction to
-        // `PLAN_MILESTONE_4.md` 2.27, which expected a column count to be unbounded here: a
-        // runtime-bounded count still yields a `Bounded` day range, which composes with the
-        // interval a guarded day offset contributes and needs no second guard of its own.
-        case _ => shifted(n.days(),
-          31L * VarkaChrono.MONTH_ARITH_MIN_MONTHS, 31L * VarkaChrono.MONTH_ARITH_MAX_MONTHS,
-          guardsBelow = true)
-      }
-      case n: IRLastDay => shifted(n.days(), 0, 30, guardsBelow = true)
-      // A truncated date is its input or an earlier day of the same period: at most
-      // 365 back, the 31st of December of a leap year truncated to its year.
-      case n: IRTruncDate => shifted(n.days(), -365, 0, guardsBelow = true)
-      // The same bound for the level-column form: its week result is at most six
-      // days back, its year result the same 365.
-      case n: IRTruncDateDynamic => shifted(n.days(), -365, 0, guardsBelow = true)
-      // make_date publishes only whole years of the narrow range: every date it
-      // answers lies inside it, and a year outside declines the batch before any consumer.
-      case n: IRMakeDate => Bounded(
-        LocalDate.of(VarkaChrono.MAKE_DATE_MIN_YEAR, 1, 1).toEpochDay,
-        LocalDate.of(VarkaChrono.MAKE_DATE_MAX_YEAR, 12, 31).toEpochDay)
-      // The Thursday of a day's week is within three days of it either way.
-      // The whole point of the node: whatever its child's interval was, what leaves
-      // it is inside the range the check enforces, because a lane outside it is reported and
-      // the batch recomputed on the row engine. That reset is what lets a second guarded shift
-      // compose above a first, which is the composition `PLAN_TASK_93.md` 2 is about.
-      case n: GuardedDay => Bounded(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS)
-      case n: ThursdayOf => shifted(n.days(), -3, 3)
-      case n: IRGreatest => hull(n.left(), n.right())
-      case n: IRLeast => hull(n.left(), n.right())
-      case n: IfElse => hull(n.thenNode(), n.elseNode())
-      case _ => Unknown
-    }
-  }
-
-  /**
    * Compiles a calendar node's child and admits it only if `dayRange` says the decomposition will
    * see a day inside the narrowed range. A bounded interval that leaves it declines the entry -
    * free at run time, and the row engine computes it correctly. A column-driven producer
@@ -1523,7 +1352,7 @@ private[sql] object VarkaExpressionCompiler {
    * [[GuardedDay]] - which is what decides whether a further overflow can be guarded or has to
    * decline.
    */
-  private case class Rearmed(node: VarkaVectorIR, range: DayRange, runtime: Boolean)
+  private case class Rearmed(node: VarkaVectorIR, range: VarkaValueRange.Range, runtime: Boolean)
 
   /**
    * Insert [[GuardedDay]] wherever the running interval would leave the range the calendar
@@ -1598,12 +1427,9 @@ private[sql] object VarkaExpressionCompiler {
       // own interval is whatever `dayRange` already says.
       case other => (other, false, false)
     }
-    dayRange(rebuilt, literals, guarded = true) match {
-      case Bounded(lo, hi)
-          if ownRuntime
-            && (lo < VarkaChrono.NARROW_MIN_DAYS || hi > VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS) =>
-        Rearmed(new GuardedDay(rebuilt),
-          Bounded(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS), runtime = false)
+    dayRange(rebuilt, literals, GuardPolicy.ARMED) match {
+      case b: VarkaValueRange.Bounded if ownRuntime && !decomposesExactly(b) =>
+        Rearmed(new GuardedDay(rebuilt), VarkaRangeAnalysis.NARROW, runtime = false)
       case other => Rearmed(rebuilt, other, ownRuntime || childRuntime)
     }
   }
@@ -1618,36 +1444,27 @@ private[sql] object VarkaExpressionCompiler {
       calendar: Expression,
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = {
-    dayRange(node, literals, guarded = true) match {
-      // Asymmetric on purpose. Downward, `NARROW_MIN_DAYS` binds: below it the narrowing is
-      // undefined and no correction rescues it. Upward, the binding limit is not `NARROW_MAX_DAYS`
-      // - that is the era step's *shift* domain and the range the runtime guards enforce on a
-      // producer's own result - but how far the decomposition stays exact on a value already in
-      // hand, which `eraOf`'s one-era correction carries about 9,266 years further. So an upward
-      // shift over a guarded day producer, which used to decline conservatively, is admitted where
-      // it is genuinely exact.
-      case Bounded(lo, hi)
-          if lo >= VarkaChrono.NARROW_MIN_DAYS
-            && hi <= VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS =>
-        Some(node)
-      case Bounded(lo, hi) =>
+    dayRange(node, literals, GuardPolicy.ARMED) match {
+      case b: VarkaValueRange.Bounded if decomposesExactly(b) => Some(node)
+      case b: VarkaValueRange.Bounded =>
         // The interval ran out, but if a runtime-valued shift is what carried it out then a check
         // can spend it again. `rearm` rewrites the subtree with the checks in it and answers the
         // interval that results; only a literal overflow, which no check can rescue, still
         // declines.
         val fixed = rearm(node, literals)
         fixed.range match {
-          case Bounded(flo, fhi)
-              if flo >= VarkaChrono.NARROW_MIN_DAYS
-                && fhi <= VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS =>
-            Some(fixed.node)
+          case f: VarkaValueRange.Bounded if decomposesExactly(f) => Some(fixed.node)
           case _ =>
-            sink.note(s"day range [$lo, $hi] leaves the calendar lowering's range", calendar)
+            sink.note(s"day range [${b.lo}, ${b.hi}] leaves the calendar lowering's range",
+              calendar)
             None
         }
-      case Unknown =>
+      case _: VarkaValueRange.Unknown =>
         sink.note("day producer the calendar range analysis does not bound", calendar)
         None
+      // The range type is sealed in Java, which Scala cannot see; a third member would land
+      // here, and answering for it would be a wrong answer rather than a decline.
+      case other => throw new IllegalStateException(s"unexpected range $other")
     }
   }
 

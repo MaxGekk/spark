@@ -24,7 +24,6 @@ import scala.collection.mutable
 import scala.util.Random
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaValueRange.{Bounded, Range, UNKNOWN}
@@ -43,16 +42,16 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * kind its slot gives it, the interval the analysis reports contains the value the reference
  * evaluator computes, on every row the runtime guards would let through.
  *
- * The property test can be pointed at the two functions the analysis replaced
- * (`-Dvarka.range.oracle=legacy`), which is how the plan scored its first prediction before any
- * line of the compiler moved; the default is the analysis. Budget: `-Dvarka.range.trees`
- * (default 10000) and `-Dvarka.range.seed` (default fixed), on the fuzz suite's precedent.
+ * Before the compiler was switched over, this property test was also run against the two
+ * functions the analysis replaced, and an equivalence test compared the two answer for answer
+ * over the same trees (`PLAN_TASK_84.md` section 9 has the numbers); both went with the old
+ * functions. Budget: `-Dvarka.range.trees` (default 10000) and `-Dvarka.range.seed` (default
+ * fixed), on the fuzz suite's precedent.
  */
 class VarkaRangeAnalysisSuite extends SparkFunSuite {
 
   private val seed = sys.props.get("varka.range.seed").map(_.toLong).getOrElse(20260916L)
   private val trees = sys.props.get("varka.range.trees").map(_.toInt).getOrElse(10000)
-  private val oracleName = sys.props.getOrElse("varka.range.oracle", "analysis")
 
   private def lits(values: Int*): IntUnaryOperator = i => values(i)
   private val noLits: IntUnaryOperator = _ => throw new IllegalStateException("no literal slots")
@@ -335,13 +334,6 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
   // The property test
   // ---------------------------------------------------------------------------------------
 
-  /** The oracle under test: the analysis, or the two compiler functions it replaced. */
-  private def oracle(node: VarkaVectorIR, kind: Kind, policy: GuardPolicy,
-      literals: Array[Int]): Range = oracleName match {
-    case "legacy" => LegacyRangeOracle.range(node, kind, policy, literals)
-    case _ => analysis(node, kind, policy, i => literals(i))
-  }
-
   /** How a column's lanes are drawn, from the slots it sits in; the first listed wins. */
   private object Role extends Enumeration {
     val Level, Months, Day, Offset, Int = Value
@@ -482,38 +474,8 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
     go(node, armed)
   }
 
-  test(s"the analysis answers exactly what the two functions it replaces answer (seed $seed)") {
-    // Step 1 of the plan, the other half: not only is each answer sound, it is the same answer.
-    // Over the same trees the property test draws, at every node, kind and policy, the analysis
-    // and the legacy pair agree bit for bit - which is "reproduced, not tightened" as a test.
-    // Removed with the legacy functions.
-    val rnd = new Random(seed + 1)
-    var compared = 0L
-    for (t <- 0 until trees) {
-      val numInputs = 1 + rnd.nextInt(3)
-      val numLiterals = rnd.nextInt(3)
-      val shapes = new Shapes(rnd, numInputs, numLiterals,
-        if (numInputs > 1) numInputs - 1 else -1, if (numInputs > 2) numInputs - 2 else -1)
-      val root = shapes.value(1 + rnd.nextInt(4)).node
-      val literals = {
-        val drawn = mutable.LinkedHashSet.empty[Int]
-        while (drawn.size < numLiterals) drawn += rnd.nextInt(2 * literalBound + 1) - literalBound
-        drawn.toArray
-      }
-      for ((node, kind) <- walk(root)._1; policy <- Seq(GuardPolicy.NONE, GuardPolicy.ARMED)) {
-        val legacy = LegacyRangeOracle.range(node, kind, policy, literals)
-        val now = analysis(node, kind, policy, i => literals(i))
-        compared += 1
-        assert(now === legacy, s"seed=$seed tree=$t root=${VarkaVectorIR.canonical(root)} " +
-          s"node=${VarkaVectorIR.canonical(node)} kind=$kind policy=$policy " +
-          s"literals=${literals.mkString(",")}: analysis $now, legacy $legacy")
-      }
-    }
-    logInfo(s"range equivalence: $compared answers compared")
-  }
-
   test(s"the interval a node reports contains what the reference computes " +
-      s"(oracle $oracleName, seed $seed, $trees trees)") {
+      s"(seed $seed, $trees trees)") {
     val rnd = new Random(seed)
     var checked = 0L
     var vacuous = 0L
@@ -545,7 +507,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
       val rows = Seq.fill(8)((0 until numInputs).map(c =>
         if (rnd.nextInt(8) == 0) None else Some(draw(c))))
       for ((node, kind) <- asked; policy <- Seq(GuardPolicy.NONE, GuardPolicy.ARMED)) {
-        val range = oracle(node, kind, policy, literals)
+        val range = analysis(node, kind, policy, i => literals(i))
         if (range == UNKNOWN) {
           vacuous += 1
         } else {
@@ -565,29 +527,5 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
     logInfo(s"range property: $checked values checked against a bounded interval, " +
       s"$vacuous queries answered unknown")
     assert(checked > 0)
-  }
-}
-
-/**
- * The two compiler functions the analysis replaced, asked the analysis's question: the adapter
- * step 1 of `PLAN_TASK_84.md` runs the property test against, so the plan learns whether the
- * code being replaced passed it. Removed with those functions.
- */
-private[varka] object LegacyRangeOracle {
-  def range(node: VarkaVectorIR, kind: Kind, policy: GuardPolicy, literals: Array[Int]): Range = {
-    val table = mutable.LinkedHashMap.empty[Int, Int]
-    literals.zipWithIndex.foreach { case (v, i) => table.put(v, i) }
-    require(table.size == literals.length, "literal values must be distinct")
-    kind match {
-      case Kind.INT => VarkaExpressionCompiler.intBound(node, table) match {
-        case Some(m) => VarkaValueRange.symmetric(m)
-        case None => UNKNOWN
-      }
-      case Kind.DAY =>
-        VarkaExpressionCompiler.dayRange(node, table, guarded = policy == GuardPolicy.ARMED) match {
-          case VarkaExpressionCompiler.Bounded(lo, hi) => VarkaValueRange.of(lo, hi)
-          case VarkaExpressionCompiler.Unknown => UNKNOWN
-        }
-    }
   }
 }
