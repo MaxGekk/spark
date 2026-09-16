@@ -1359,7 +1359,9 @@ more reference to hold the row engine's fixtures against, not an authority.
    scalar tail; and `Long.compress` becomes `PEXT` wherever `UseBMI2Instructions`
    is on, which HotSpot enables on every CPU that advertises BMI2 with no
    generation check, although Arrow's `CpuInfo::HasEfficientBmi2` trusts the
-   instruction on Intel only. The gate has two instructions to consider, not one.
+   instruction on Intel only. The gate has two instructions to consider, not one. ClickHouse's rule is the third data point (Item 23): its filter takes the
+   compress-store path only on Ice Lake and later, where every width has the
+   native instruction, and the plain copy-or-skip path everywhere else.
 
 **Noted for later.** `PageProcessor` sizes projection batches by output bytes,
 halving when a page exceeds sixteen megabytes and doubling below four, with a
@@ -1525,7 +1527,8 @@ wraps, as Spark's does.
    DuckDB, from January 2026 (commit `c2f3d6541`, `ScalarUDFImpl::preimage`,
    `udf_preimage.rs`), and it cites ClickHouse's VLDB 2024 paper as the origin -
    so the idea is in three engines, and ClickHouse's `getMonotonicityForRange`
-   is the part of its evaluator the calendar read did not cover. The difference
+   is the part of its evaluator the calendar read did not cover (it is covered
+   in Item 23). The difference
    from DuckDB is the mechanism: a function *declares* its preimage - `date_part`
    returns `[year-01-01, (year+1)-01-01)` for `YEAR` and nothing else, `floor`
    returns `[c, c+1)` - as a half-open interval so `=` becomes `>= lo AND <
@@ -1654,6 +1657,115 @@ is a literal, which is constant folding at run time for a plan the optimizer
 did not fold. `BitBlockCounter::NextFourWords` reads five words to produce a
 256-bit block when the bitmap is unaligned, which is the same slack-past-the-end
 requirement this engine's compaction places on its destination.
+
+
+### Item 23. ClickHouse's evaluator, the part the calendar read left
+
+Recorded on 16 September 2026, from a survey of `src/Functions/IFunction.h` and
+`IFunction.cpp`, `src/Functions/FunctionsLogical.h`, `src/Columns/MaskOperations
+.cpp`, `src/Columns/ColumnVector.cpp`, `src/Common/PODArray.h`,
+`src/Interpreters/ExpressionActions.cpp`, `src/Interpreters/ExpressionJIT.cpp`,
+`src/Interpreters/JIT`, `src/Analyzer/Passes/OptimizeDateOrDateTimeConverter
+WithPreimagePass.*`, `src/Storages/MergeTree/KeyCondition.cpp` and
+`src/Core/Settings.cpp` at commit `ab12a1449`, made at the owner's request.
+Item 10 read ClickHouse's calendar - the date lookup table, `toYear`, "the
+rest of ClickHouse's date code, read so it need not be read again" - and
+nothing else of it is in the record; this item is the evaluator, and the
+calendar is not reopened.
+
+**Arrived at twice.** A function declares its contract as flags on `IFunction`
+- `useDefaultImplementationForNulls`, `ForConstants`, `ForLowCardinalityColumns`,
+`ForSparseColumns`, `isSuitableForConstantFolding`, `isDeterministic` - and a
+generic layer honours them before `executeImpl` runs: nullable arguments are
+replaced by their nested columns, the kernel runs over every row "with garbage
+input for the null rows", and the result is wrapped with the OR of the
+arguments' null maps (`IFunction.cpp`, `defaultImplementationForNulls`); a
+single low-cardinality argument with constant companions runs the kernel over
+the dictionary and keeps the indexes (`IFunction.cpp`, "single-dictionary fast
+path"). That is Gandiva's classification, Velox's and Trino's dictionary rule
+and this engine's validity algebra, stated once as function metadata. Nulls
+are a byte per row (`ColumnNullable`, a `ColumnUInt8` null map), not a bitmap.
+Every column is a `PaddedPODArray` with sixty-four bytes of slack after the
+data and sixty-three before (`PODArray_fwd.h`, `Defines.h`), so a kernel may
+read or write a whole register at the last element without a tail, and the
+default block size is sixty-five thousand four hundred and nine rows so that a
+block plus its padding is exactly sixty-four kibibytes. The filter over a
+numeric column turns sixty-four mask bytes into one word with four
+`movemask`s, copies the sixty-four values when the word is all ones, skips
+them when it is zero, and otherwise compress-stores by the word
+(`ColumnVector.cpp`, `doFilterAligned`); the compress path is compiled as a
+separate target variant and taken at run time only where `isArchSupported(
+x86_64_icelake)`, so every width has the native instruction and no width
+falls to emulation. Three-valued `AND` and `OR` are computed on a two-bit
+code chosen so that `False < Null < True` and the operators become `min` and
+`max` (`FunctionsLogical.h`, `namespace Ternary`), one vectorisable op each
+after an encode of three. Arithmetic wraps; overflow checks exist for
+decimals only (`FunctionBinaryArithmetic.h`, `check_overflow`), so nothing
+about `ANSI` transfers. The preimage API is here in full - `getPreimage`
+returning a left-closed right-open interval, the analyzer pass that turns
+`toYear(c) = 2023` into a range on `c` behind `optimize_time_filter_with_preimage`,
+and `getMonotonicityForRange` chains that let the primary-key index answer a
+predicate on a function of the key (`KeyCondition`,
+`applyMonotonicFunctionsChainToRange`) - which is the origin DataFusion cites
+(Item 21) and DuckDB reinvents by bisection (Item 20). An `if` chain is
+folded to one `multiIf` (`IfChainToMultiIfPass`).
+
+**Two things worth taking, and one to measure.**
+
+1. **Lazy arguments gated per function.** `and`, `or`, `if` and `multiIf`
+   declare themselves short-circuit (`isShortCircuit`), and their arguments
+   arrive as unevaluated `ColumnFunction`s that are run only over the rows the
+   operator has not decided: the argument's inputs are filtered by the mask,
+   the function runs on the survivors, and the result is expanded back with
+   defaults in the unselected rows (`MaskOperations.cpp`, `maskedExecute`);
+   an all-zero mask evaluates nothing, an all-one mask evaluates without the
+   filter. The policy that makes this pay is per function: an argument is
+   evaluated lazily only if its function says it is suitable
+   (`isSuitableForShortCircuitArgumentsExecution`), which the comment defines
+   as "can throw an exception or it's computationally heavy" - integer
+   division and modulo say yes, plain arithmetic says no, and
+   `short_circuit_function_evaluation = force_enable` overrides for every
+   function. This is the answer to the question Items 20 and 21 left open,
+   when a `CASE` arm or an `AND` operand should be narrowed rather than
+   blended: not by selectivity, which is not known at compile time, but by
+   the arm's own cost and fallibility, which are. This engine knows both at
+   emission - a chrono decomposition in an arm is heavy, an armed guard is the
+   analogue of "can throw" - so the rule can be applied per node with no
+   measurement of the data, and the surface benchmark's `CASE` rows are its
+   measurement. It is a candidate row.
+2. **Filter the nulls out before an expensive function.** When the fraction of
+   rows with a null in any argument reaches
+   `short_circuit_function_evaluation_for_nulls_threshold`, the default
+   implementation filters every argument down to the non-null rows, runs the
+   kernel on those, and expands the result (`IFunction.cpp`, "If short circuit
+   is enabled"); the threshold defaults to one, so out of the box only the
+   all-null batch is skipped, which this engine also does. The knob is the
+   point: the same per-node cost that decides item 1 decides whether a
+   mostly-null batch is worth compacting before a heavy kernel rather than
+   running it masked over every lane, and this engine's compaction (`SelectionVectorOps`)
+   is the filter step already written.
+3. **The ternary code, to measure.** `min` and `max` on a two-bit code is the
+   cheapest three-valued `AND` and `OR` on record, and this engine computes
+   them on separate value and validity words with several ops each. Encoding
+   costs three ops and decoding two, so a chain of several logical operators
+   would have to be long before the code wins, and the words are already what
+   the guards and the compaction consume. Recorded as a shape for the IR
+   fuzzer's op-count oracle to price, not as a task.
+
+**Where it stops, and this engine goes on.** ClickHouse is the one engine in
+this survey that does both things: it interprets over padded columns, and an
+LLVM JIT (`ExpressionJIT.cpp`, `CompileDAG`) fuses a chain of compilable
+functions - arithmetic, comparison, conversion, logic, `isNull`, `isNotNull`,
+`assumeNotNull`, `toNullable`, fourteen files declare `isCompilableImpl` -
+into one loop per DAG fragment, with nullable values carried inside the
+compiled code as value-and-flag pairs, and lazily evaluated arguments excluded
+from compilation. Two policies differ from this engine's. The JIT compiles an
+expression only after it has been seen three times (`min_count_to_compile_expression`),
+caching by hash; this engine compiles on first sight and lets the JVM's tiers
+defer the expensive optimisation, which is the right split for bytecode. And
+the compiled loop is scalar IR left to LLVM to vectorise, the same bet as
+Gandiva's with the same compiler; the emitter that writes lanes is still the
+step not taken.
 
 ## 5. Ordering
 

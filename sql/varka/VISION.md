@@ -333,6 +333,21 @@ task 84's analysis does, and top-down from a known result to its operands, so a
 conjunct can bound its sibling and a guard can be retired by a predicate that
 sits beside it. That second pass is the next thing the range analysis grows.
 
+**Outside Spark: ClickHouse (`src/Functions`, `src/Interpreters/JIT`).** The
+calendar was read for milestone 6's lookup-table item; the evaluator was
+surveyed on 16 September 2026 (`SCOPE_MILESTONE_6.md`, item 23). It is the one
+engine in the survey that both interprets over columns and compiles: functions
+declare their contract as flags, a generic layer strips nulls, constants and
+dictionaries before the kernel, columns carry sixty-four bytes of padding so no
+kernel needs a tail, three-valued logic is `min` and `max` on a two-bit code,
+and an LLVM JIT fuses chains of arithmetic, comparison, conversion and logic
+into one loop once an expression has been seen three times. Its short-circuit
+evaluation runs an `if` arm or an `and` operand only on the undecided rows, and
+only when the arm's function says it can throw or is heavy, which is the rule
+this engine should adopt for blending against narrowing. Its compiled loop is
+scalar IR left to LLVM, Gandiva's bet with Gandiva's compiler; the emitter that
+writes lanes is the step it did not take.
+
 What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole
