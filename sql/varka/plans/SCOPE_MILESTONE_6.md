@@ -2069,7 +2069,9 @@ case for explicit vector code that this engine settles by measurement.
 
 **Applicable later.** The vertical probe and the fingerprint bucket as the two
 arms against the sorted `IN` chain; `BloomFilterMightContain` as a filter
-kernel on long lanes; probes kept out of fused kernels and lane-replicated
+kernel on long lanes (Item 27 carries the exact recipe Spark's filter
+imposes, and corrects "needs only long lanes and a lane hash"); probes kept out
+of fused kernels and lane-replicated
 accumulators for Item 4 (Item 26 adds that the index-map scatter those accumulators need is
 lowered only under AVX-512 and is a Java loop on AVX2 machines); ASCII-ness as
 a batch fact (Photon: 3x on `upper`,
@@ -2220,6 +2222,187 @@ body size and profitability, not the address kind.
    there is no masked access, no compress and no gather, and on SVE1 no
    `fromLong`; the design of the validity word on those parts is different, not
    slower.
+
+
+### Item 27. Twelve more papers, the ones Item 25 asked for
+
+Recorded on 16 September 2026. After Item 25 the owner downloaded the papers it
+had named as unread, to `/home/max/Downloads/Worth_Papers`; they were
+transcribed by the same method and read against the record in the same way.
+None of the twelve prints a Creative Commons Attribution licence - VOILA and
+the 2017 Gubner paper are BY-NC-ND, the rest carry ACM or IEEE notices or none
+- so none is copied into `sql/varka/papers`, and this item is their record.
+Page numbers are the PDFs'. Where a reader's claim was about this repository,
+it was checked against the source before it was written here.
+
+**A. Plans for conjunctions, and the staging point** (Ross, PODS 2002; Menon,
+Mowry and Pavlo, PVLDB 2017). Ross is the theory behind the four engine
+policies of Items 17 to 20 and 23. His cost model has three loop bodies -
+branching `&&`, one-branch `&`, and a branch-free form that writes every row's
+index and advances the output by the conjunction's value - each best in a
+selectivity band and about twice worse than optimal outside it (pp. 3-4); the
+normal form is a chain of branch-free `&`-blocks separated by `&&` points, the
+cost of splitting `E & F` into `E && F` is paid back only when
+`(1 - p_E) * cost(F)` exceeds the misprediction term, and the terms inside a
+block order by `(p - 1) / cost` (pp. 5-7). Read in lanes, this engine's fused
+conjunction is the branch-free plan, the only orderable thing is the position
+of group-granular skip points, `cost` is the emitter's op count and `p` a
+per-batch popcount; a skip point in front of a cheap remainder never pays, one
+in front of a thirty-op calendar arm pays only when the group mask is almost
+always zero, which is Lang's and Ngom's answer in Item 25 derived a third way.
+His Appendix C is the warning aimed at this engine's kernels: on a superscalar
+core every `&&` point serialises the blocks around it, so plans should have few
+points and wide blocks, and the measurement needs stall cycles beside time
+(p. 12). His precondition that reordered terms must never error (p. 2) is
+Trino's rule (Item 19). Menon's relaxed operator fusion puts a stage boundary
+on every SIMD operator's output so it delivers a full vector of valid ids, and
+at the input of any operator doing random access into a structure larger than
+cache, so it can prefetch in groups (pp. 4-6); his microbenchmark shows a
+vertical SIMD probe losing to a scalar probe with prefetching even when the
+table is cache-resident (p. 4), and stage vector sizes from 64 to 256 thousand
+rows made no difference on seven of eight queries while the prefetch group
+size did (pp. 9-10). For Item 4 the staging point is the dense batch this
+engine already produces plus a companion column of lane-computed hashes, and
+the probe is a scalar loop over it; the caveat is that JDK 25 has no software
+prefetch, so the substitute is independent iterations that keep loads in
+flight, to be confirmed from the disassembly.
+
+**B. The design space, and compact types** (Gubner and Boncz, PVLDB 2021 and
+ADMS 2017). VOILA generates the space between vectorised interpretation and
+data-centric compilation from four components - computation (scalar, vector
+primitives, or an eight-lane AVX-512 target), control (goto or state
+machines), prefetch, and a buffer that physically removes filtered tuples - and
+measures ten thousand flavours of one query ranging over ninety times (Table
+6, p. 8). In that vocabulary this engine is a Spark data-centric row pipeline
+with a fragment of the AVX-512 flavour spliced in for Project and Filter: goto
+control, no prefetch, buffered at the filter and at the row boundary, with the
+Arrow decode as the input buffer and `VarkaColumnarToRowExec` as the output
+buffer. FUJI measured that computation flavour as the middle point on both its
+queries, and its Table 6 says each flavour transition costs a buffer - which is
+Items 13 and 14 with a published mechanism, and the argument for widening the
+columnar span before tuning kernels. Its Q6 result is Item 16's missing loss
+case: computing every predicate over all rows and building one selection from
+the conjunction ran 2.2 times slower than a selection per predicate on a
+selective filter (Table 7, p. 10). The 2017 paper's lever is compact types:
+Q1's arithmetic fits bytes, shorts and ints, turning 320 bits of SIMD work into
+128 (p. 3), and compact types pay only in vectorised flavours, which is Item
+11's narrow-lane form as the paper's central result; its overflow rule -
+prevent rather than detect, or OR the lanes' overflow flags and raise once per
+morsel (p. 4) - is a data-driven alternative to this engine's range-derived
+guards that milestone 5's long multiply should measure against
+`inputBounds`; its identity hash for few-group aggregation, seven instructions
+per sixty-four ids (p. 4), and its finding that fusing in-register aggregation
+primitives "can even be detrimental" (p. 7) both go to Item 4.
+
+**C. Tiers** (Kohn, Leis and Neumann, ICDE 2018; Kersten, Leis and Neumann,
+VLDB Journal 2021). Kohn's adaptive execution maps onto the JVM exactly and
+unflatteringly: his bytecode interpreter is HotSpot's interpreter, unoptimised
+LLVM is C1, optimised LLVM is C2, his per-morsel function-pointer swap is
+on-stack replacement, and his 0.7 ms code generation is this engine's 99
+microseconds; his remaining-time arithmetic, run interpreted while the compile
+would not finish sooner (Fig. 7, p. 5), is a cheap decline rule for tiny tasks
+whose row count is known, and his per-morsel rate tracking is the measurement
+this engine lacks - batches executed before a kernel's tier-4 compile landed,
+recordable through the telemetry attribute and JFR. Kersten's Flying Start
+makes the cheap tier only 1.2 times off optimal (Table 3, p. 18) so that "the
+performance cliff becomes a small performance step"; the JVM inverts that
+premise, since C1 with boxed vectors is about a hundred times off, so no
+switching policy closes the gap and time-to-C2 per shape is the only lever,
+which is why `the-jit.md`'s small-methods rule is this engine's Flying Start
+and a per-shape time-to-tier-4 ladder belongs beside the cold-start benchmark.
+Both papers confirm Item 23's compile-on-first-sight: Kohn says caching cannot
+hide the first query's cost, and on the JVM running the kernel is the warm-up.
+
+**D. Layouts, block statistics, and the Bloom filter** (Lang et al., SIGMOD
+2016; Raman et al., PVLDB 2013; Polychroniou and Ross, DaMoN 2014). Data
+Blocks keeps compression byte-addressable, evaluates predicates on the codes
+after converting the constant once per block, and narrows scans with two
+indexes: per-attribute minimum and maximum, and positional small materialized
+aggregates, a 256-entry table keyed by the leading byte of the value minus the
+block minimum that maps to a row range (pp. 3-5). Its numbers say byte-aligned
+codes beat bit-packing on predicates and unpacking by large factors except when
+everything qualifies (p. 12), which is the case for Item 11's narrow
+frame-of-reference form over SIMD-BP128 in Item 7, and that predicates on
+64-bit codes gained at most 1.5x (p. 9), a milestone 5 warning. For this
+engine: Item 15's batch bounds should be computed at cache-write time as a
+minimum and maximum per column per batch, so the guard decision is a compare
+of the batch interval against the guard interval rather than a pass over the
+data; and the positional table is a new batch-granular narrowing form for Item
+16, turning an equality or range filter into a row range the lane loop runs
+over, at cache-write cost and with no new Vector API. BLU's frequency
+partitioning gives common values short codes and orders each partition so range
+predicates work on codes (pp. 2-3); its rule of a cheap redundant minimum and
+maximum check ahead of a long `IN` list (p. 4) is a one-rule change to
+`compileInList` that composes with batch bounds to skip the chain for a whole
+batch, and its evaluate-once-over-the-dictionary is Items 16, 18 and 19. The
+Bloom paper's lane algorithm probes one hash per lane per iteration, gathers
+32-bit words, permutes finished lanes to the tail and refills with a masked
+load (pp. 2-4), 1.4 to 3.3 times scalar with the filter in cache (p. 5). The
+correction to Item 25 is that the kernel cannot choose the hash: Spark's
+`BloomFilterImpl` (`common/sketch`) fixes h1 as Murmur3 of the long, h2 as
+Murmur3 seeded by h1, k from the bit and item counts, and the index as the
+absolute value of `h1 + i * h2` modulo the bit size, with a 64-bit variant in
+`BloomFilterImplV2` that multiplies h1 by `Integer.MAX_VALUE`; the word is the
+index divided by sixty-four in an on-heap `long[]`. So the kernel needs Murmur3
+in int lanes, a modulo by a per-filter runtime constant (a multiply-and-shift
+pair in a literal slot for the int form; the 64-bit form needs a high multiply
+the Vector API lacks and may have to decline), a gather from `long[]` by an int
+index map whose intrinsification is a `PrintIntrinsics` check, and the
+int-to-long lane mismatch of Item 1. With k fixed by the build side, the first
+arm to measure is k unrolled gathers per lane group with a running conjunction
+word and Item 25's lane-group skip, against the paper's permute-and-refill.
+
+**E. Benchmark credibility, and the frequency licence** (Raasveldt, Holanda,
+Gubner and Muehleisen, DBTest 2018; Gottschlag and Bellosa, 2019; Gottschlag,
+Brantsch and Bellosa, 2020). Against Raasveldt's pitfalls the record covers
+reproducibility, hot against cold, hot against warm, overly specific tuning
+and disclosure; three are open. The engine-off control does not isolate what
+the README says: `dev/varka_bench_surface.sh` sets both
+`spark.sql.codegen.varka.enabled` and the Arrow cache serializer from the one
+`varka` token, while the README says the third and fourth arms "differ only by
+that flag" - the engine needs the Arrow cache to run at all, so the missing
+arm is engine off with the Arrow cache on, which attributes the cache format's
+share of the published ratio. Cache build time is measured by nothing and
+should be named as excluded. And the driver never compares the arms' answers,
+which is Item 18's checksum row. Gottschlag gives the licence mechanism the
+record lacked: three per-core frequency levels on Intel server parts since
+Skylake-SP, the middle one entered by heavy 256-bit or light 512-bit
+instructions, the lowest by heavy 512-bit ones, where heavy means floating
+point and integer multiply; the core drops throughput at once, the voltage
+settles in up to half a millisecond, and the level is held for about two
+milliseconds after the last qualifying instruction (2020, pp. 3, 6); a Xeon Gold
+6130 ran 2.8, 2.4 and 1.9 GHz at the three levels, and scalar neighbours
+slowed by a tenth with under one percent of time in AVX-512 code (2020, p. 3).
+Neither paper measures AMD or anything after Skylake-SP, so the census
+machines are outside their evidence. For this engine the shape is the bad one:
+kernel calls of microseconds against a two-millisecond hold mean a Skylake
+core never returns to the top level, and the calendar kernels are
+multiply-heavy while the datapath probe uses only adds. Three effect-based
+probes fit the existing survey job and need no root: a heavy multiply variant
+of the datapath probe beside the light one; a tail probe timing the scalar
+canary in short windows after a 512-bit burst; and a sibling probe with a
+scalar control pinned to the other hyperthread. The Zen 5 is the negative
+control, and Item 26 adds that HotSpot itself defaults to AVX2 on the Skylake
+steppings these papers measured.
+
+**Worth taking, as rows or amendments.**
+
+1. Item 16 takes Ross's plan structure and VOILA's Q6 loss case; Item 15 takes
+   batch bounds at cache-write time in Data Blocks' form; the positional table
+   is a candidate narrowing form.
+2. The surface benchmark gains a fifth arm, engine off with the Arrow cache on,
+   and the README's "differ only by that flag" is corrected; cache build time
+   is named as excluded.
+3. The datapath probe gains a heavy multiply reading and the two licence
+   probes, so the hardware section states a measurement rather than a name.
+4. Milestone 5 measures the OR-the-flags overflow form against range-derived
+   guards on long multiply, and reads Data Blocks' 64-bit result as the
+   expectation to beat.
+5. `compileInList` gains BLU's cheap bounds check ahead of the chain; the Bloom
+   item carries Spark's recipe and its first arm.
+6. A per-shape time-to-tier-4 ladder and a batches-below-C2 counter join the
+   cold-start benchmark; Kohn's remaining-time rule is a decline rule for tiny
+   tasks.
 
 ## 5. Ordering
 
