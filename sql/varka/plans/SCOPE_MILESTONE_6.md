@@ -2070,7 +2070,9 @@ case for explicit vector code that this engine settles by measurement.
 **Applicable later.** The vertical probe and the fingerprint bucket as the two
 arms against the sorted `IN` chain; `BloomFilterMightContain` as a filter
 kernel on long lanes; probes kept out of fused kernels and lane-replicated
-accumulators for Item 4; ASCII-ness as a batch fact (Photon: 3x on `upper`,
+accumulators for Item 4 (Item 26 adds that the index-map scatter those accumulators need is
+lowered only under AVX-512 and is a Java loop on AVX2 machines); ASCII-ness as
+a batch fact (Photon: 3x on `upper`,
 p. 10) and the missing cross-lane byte shuffle on AVX2 (Benson p. 7) for Item
 3; the sixteen-lane frame-of-reference form with rebased literals for Item 11;
 mask-to-bitmask before any NEON number; micro-adaptivity as a fourth policy.
@@ -2078,6 +2080,146 @@ mask-to-bitmask before any NEON number; micro-adaptivity as a fourth policy.
 **For `VISION.md` section 14**, done in this item's commit: VEE as the third
 attempt with its 21-of-22 result, and a paragraph on what the literature says
 about where the fused-loop argument holds and where it stops.
+
+
+### Item 26. HotSpot, read as a system
+
+Recorded on 16 September 2026, from the JDK 25 sources at
+`/home/max/proj/openjdk-build/jdk25`: `src/hotspot/cpu/x86/x86.ad` (the
+instruction selectors and `Matcher::match_rule_supported_vector`),
+`cpu/x86/matcher_x86.hpp`, `cpu/x86/c2_MacroAssembler_x86.cpp`,
+`cpu/x86/vm_version_x86.cpp`, `cpu/aarch64/aarch64_vector.ad` and
+`c2_MacroAssembler_aarch64.cpp`, `share/opto/vectorIntrinsics.cpp`,
+`share/opto/loopTransform.cpp`, `share/opto/mempointer.hpp`,
+`share/classfile/modules.cpp`, and `src/jdk.incubator.vector`'s `IntVector.java`.
+The skills (`the-jit.md`, `vector-api-and-width.md`) established most of what
+follows by measurement; this item is the mechanism, read from the source, and
+the few places where the source says something the measurements did not reach.
+Everything below is a statement about which selector matches, not about speed;
+speed stays a measurement.
+
+**Three outcomes, not two.** A Vector API call ends in one of three places. If
+`match_rule_supported_vector` accepts the node for the CPU's features, an
+instruction selector matches it, and the selector is either a single
+instruction or a hand-written sequence in the macro assembler. If it does not,
+the intrinsic is refused at `LibraryCallKit` and the call runs the Java
+fallback in the API's own code (`IntVector.java`, `compressTemplate` and its
+kin pass a lambda that loops over lanes), which is correct, slow and silent.
+The only place the refusal is visible is `-XX:+UnlockDiagnosticVMOptions
+-XX:+PrintIntrinsics`, which prints lines beginning `  ** not supported:`
+(`vectorIntrinsics.cpp`, `log_if_needed`), and nothing at run time counts
+them. Intrinsics exist at all only because `modules.cpp` sets
+`EnableVectorSupport`, and with it the two reboxing flags, when
+`jdk.incubator.vector` is defined to the boot loader at startup, and logs
+`EnableVectorSupport=true` under `-Xlog:compilation`; a JVM that reaches the
+module any other way runs every call as the Java fallback with no error.
+
+**Which selector, per operation, on x86** (feature names are the source's).
+
+* `compress`, `expand`: `vcompress_expand_reg_evex` under AVX-512VL or at 512
+  bits; otherwise `vcompress_reg_avx`, a permutation through a stub table, and
+  for mask compress (`CompressM`) AVX-512 plus BMI2 only (Items 19 and 22).
+* `VectorMask.toLong`: with mask registers `kmov`, one instruction; on AVX2 one
+  `vmovmskps` or `vmovmskpd` for int and long lanes (`vector_mask_operation`),
+  with a `pext` only for the sub-word lane types. Cheap everywhere on x86.
+* `VectorMask.fromLong`: `kmovq` with mask registers; on AVX2
+  `vector_long_to_maskvec`, which begins with `pdepq` and continues with moves
+  and a sign-extending widen, about eight instructions. So the skill's lesson
+  that a guard costs its `fromLong` has its mechanism, and the AMD-before-Zen-3
+  `PDEP` caution of Item 22 applies to `fromLong` as well as to
+  `Long.compress`.
+* Gather, `fromArray` with an index map: `vpgatherdd` and `vpgatherdq` on AVX2
+  up to 256 bits for int and long; the masked form needs AVX-512VL or a 512-bit
+  vector, otherwise Java; sub-word gathers are scalar loops emitted by C2. There
+  is no gather from a `MemorySegment` in the API at all.
+* Scatter, `intoArray` with an index map: `match_rule_supported` refuses it
+  below `UseAVX=3`, so on AVX2 it is a Java loop. This corrects Item 25's note
+  that lane-replicated accumulators are "expressible today": they are, on
+  AVX-512 machines only.
+* Long multiply: `evpmullq` needs AVX-512DQ (plus VL below 512 bits); otherwise
+  `vmulL_reg`, a sequence of `vpmulld`, `vpmuludq`, shifts and `vpaddq`, and
+  `matcher_x86.hpp` charges it six nodes against the unroll limit. Long
+  minimum and maximum below 512 bits without AVX-512 are a compare and a blend;
+  long absolute value (`AbsVL`) is refused below `UseAVX=3` and is Java on AVX2.
+  Long reductions need AVX-512DQ for the single-instruction form, and long
+  min and max reductions are refused without AVX-512VL, BW and DQ. Milestone 5's
+  64-bit lanes meet all of these on the Zen 3 runners.
+* Masked loads and stores: `vpmaskmovd` and `vpmaskmovq` from AVX1 for int and
+  long lanes; the sub-word forms need AVX-512BW and are Java below it, which
+  Item 3's byte kernels will meet on AVX2 machines.
+* `rearrange`: `vpermd` for int lanes on AVX (256 bits needs AVX2); for long
+  lanes below eight without AVX-512VL an emulation; for byte lanes at 256 bits
+  a multi-instruction sequence with two temporaries unless AVX-512VBMI, which
+  is Benson's "no cross-lane byte shuffle on AVX2" (Item 25) read from the
+  selector.
+* Lane popcount: one instruction only with AVX-512 VPOPCNTDQ (BITALG for
+  sub-word); otherwise a table sequence charged forty to fifty nodes.
+  Counting leading or trailing zeros needs AVX-512CD for one instruction.
+  Rotates are one instruction under AVX-512 and shift-shift-or otherwise, in
+  C2, not Java.
+* `anyTrue`, `allTrue`: `vptest` from SSE4.1, `ktest` with mask registers, one
+  instruction.
+* The default width: `MaxVectorSize` is set to the highest the CPU supports, 64
+  when `UseAVX` is 3, with one exception written into the source: "Don't use
+  AVX-512 on older Skylakes unless explicitly requested" - on Skylake server
+  parts below stepping 5, that is before Cascade Lake, HotSpot itself defaults
+  `UseAVX` to 2 (`vm_version_x86.cpp`). That is the JVM's own answer to the
+  frequency licence Item 25 names, and the hardware section can cite it.
+
+**On AArch64.** `aarch64_vector.ad` refuses under NEON alone every one of
+`LoadVectorMasked`, `StoreVectorMasked`, `VectorMaskGen`, `CompressV`,
+`CompressM`, gather and scatter: on a NEON-only part such as Graviton2 all of
+them are Java loops. Gather needs SVE and is refused for sub-word types; expand
+needs SVE2. `toLong` on NEON is `fmov` plus a three-`orr` byte-mask compress
+for up to eight lanes and twice that plus an `orr` for sixteen, about eight
+instructions, and on SVE a path that wants the bit-permute extension.
+`fromLong` needs `svebitperm`, which is SVE2, and is refused otherwise: on an
+SVE1 part such as Graviton3 the validity word's `fromLong` per lane group would
+be a Java loop. This is the concrete form of Item 25's "mask-to-bitmask is the
+first NEON measurement": the selectors say which conversions are not lowered at
+all, before anything is timed.
+
+**Unrolling, from the source.** `policy_unroll` sums a body size in which most
+vector nodes count one and a few count more (`vector_op_pre_select_sz_estimate`:
+long multiply six without AVX-512DQ, gathers of sub-word types fifty, lane
+popcount forty or fifty without the instruction, float-to-int casts thirty),
+and refuses to unroll when that exceeds `LoopUnrollLimit`, sixty on x86, with a
+four-times allowance only for sub-word loops. A fused calendar body is far past
+sixty, which is the mechanism behind the skill's measured "entered zero times".
+`LoopMaxUnroll` is sixteen and profile trip counts cap it further.
+
+**SuperWord and native memory.** JDK 25's `MemPointer` parses native addresses,
+including a `MemorySegment` over native memory (`mempointer.hpp`, example 6),
+and `vectorization.cpp` adds a speculative alignment check for a native base
+or gives up. So the auto-vectoriser is not blind to off-heap loops in
+principle; the skill's measurement that a trivial `MemorySegment` loop gained
+almost nothing and the calendar loop was never entered stands, and its cause is
+body size and profitability, not the address kind.
+
+**Worth taking, as rows or amendments.**
+
+1. A no-fallback proof in CI: run the kernel suites once under
+   `-XX:+UnlockDiagnosticVMOptions -XX:+PrintIntrinsics` and fail on any
+   `** not supported` or `** Rejected` line whose method is a Varka class. It is
+   the JVM's own statement that every emitted operation was lowered, the kind of
+   evidence the project prefers, and it is the only way a silent Java fallback
+   on a new runner or a new lane type shows itself before a benchmark does. A
+   startup line under `-Xlog:compilation` confirming `EnableVectorSupport=true`
+   belongs beside the datapath probe for the same reason.
+2. Milestone 5's 64-bit plan lists the operations above that are sequences or
+   Java on AVX2 - long multiply, absolute value, min and max reductions, masked
+   sub-word access - and measures each on the Zen 3 runner before any long-lane
+   number is published; Item 25's `-XX:UseAVX=2` row covers the multiply, and
+   the others are the same run.
+3. Item 19's gate reads two more selectors: `fromLong` on AVX2 is `PDEP`, and
+   scatter and long absolute value are AVX-512 only. The gate is a table of
+   operations against features, which the match rules already are; the
+   engine's version of that table is what the emitter should consult when it
+   chooses a body.
+4. The ARM plan, when there is one, starts from the refused list: on NEON alone
+   there is no masked access, no compress and no gather, and on SVE1 no
+   `fromLong`; the design of the validity word on those parts is different, not
+   slower.
 
 ## 5. Ordering
 
