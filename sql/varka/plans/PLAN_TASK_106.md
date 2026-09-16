@@ -200,4 +200,35 @@ None. No committed number moves.
 
 ## 9. Outcome
 
-*To be written from the run.*
+Merged 16 September 2026 as #218, with this section still reading "to be
+written from the run"; written here, from the run, in the documents-only pull
+request that also proves the half of the gate #218 could not.
+
+**The job ran on its own pull request and passed, as predicted.** Section 2 said
+it would: a change under `.github/` counts as a root change when `is-changed.py`
+runs in Actions, so every job was required, the docs job included. In #218's run
+`Check changes` took three minutes, and `Varka docs checks` started at 08:36 UTC
+and finished at 08:37, green on both steps - the quote check and the index
+check - beside `Varka bench drivers`, which also ran and passed in a minute.
+Prediction 1 said under two minutes, checkout included; it was about one.
+
+**The skip half needed a second pull request, and it needed a branch cut after
+the merge.** The first documents-only pull request after #218 was #221, task
+81's plan, and it could not have proven the gate: the fork's CI checks a branch
+out by merging it onto apache/spark master, not onto this repository's master,
+so a branch cut before #218 landed runs with the module list it was cut with.
+Under that list the plan files were ignored outright, the precondition would
+have found no changed module and required nothing, and the run would have
+looked like the new behaviour for the old reason, with no docs job in it. So
+the proof is this pull request: cut from master after #218, changing one plan
+file, whose run is recorded below.
+
+**The gate, observed.** *Filled in from this pull request's run before merge.*
+
+**What else the merge changed, for the record.** The quote check now reads the
+four `sql/varka/*.md` it did not (`VISION.md`, `ADDING_AN_EXPRESSION.md`,
+`ISSUES.md`, `Varka_MVP.md`); they added no orphans. The `/sql/varka/plans/`
+entry left the ignore list, so a plan-only pull request is no longer one that
+runs nothing; it runs the docs job. Task 94's own open half - that a bench-only
+change runs the bench job and nothing else - stays open until such a change
+comes.
