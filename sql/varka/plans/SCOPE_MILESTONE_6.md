@@ -2596,6 +2596,106 @@ the interpreter with a warning. This engine declines the batch instead, and
 the message that names the switch is the form Item 24's per-expression kill
 switch should take when a kernel is disabled by hand.
 
+
+### Item 30. The JDK's own Vector API microbenchmarks
+
+Recorded on 16 September 2026, from `test/micro/org/openjdk/bench/jdk/incubator/vector`
+in the JDK 25 tree at `/home/max/proj/openjdk-build/jdk25` (a single-commit
+snapshot, so no file histories), with the correctness tests under
+`test/jdk/jdk/incubator/vector` and `doc/testing.md` for how they run. Item 26
+read the match rules for which operation is lowered to what; these are the
+cases the people who write the intrinsics keep to measure them, and they are
+the reference beside which this engine's own costs can be told apart from the
+platform's. The snapshot holds thirty hand-written benchmark classes and no
+generated per-species ones, and eighty-nine correctness test files. Two facts
+about using them first: they need a JMH bundle the tree does not carry
+(`configure --with-jmh`, `make/devkit/createJMHBundle.sh`), and they are GPL
+with the Classpath exception, so they are run from the JDK tree and never
+copied into this repository; a case worth keeping here is rewritten from its
+call shape, not its source.
+
+**The cases that are this engine's operations, by name.**
+
+* `ColumnFilterBenchmark`: a column filter by `compare`, `compress` and
+  `trueCount` into an output array, int and long lanes, one to four thousand
+  rows - `SelectionVectorOps` in twelve lines - and its fork pins
+  `-XX:UseAVX=2`. The JDK measures its own compress at the AVX2 lowering
+  (Item 26's permutation stub), which is the number Item 19's gate needs and
+  has an upstream case for.
+* `MaskFromLongBenchmark` per species and `MaskQueryOperationsBenchmark`
+  (`trueCount`, `firstTrue`, `lastTrue`, `toLong`), `StoreMaskTrueCount`: the
+  guard's `fromLong` and the validity word's `toLong`, the conversions whose
+  AVX2 and NEON lowerings Item 26 read.
+* `MaskCastOperationsBenchmark`: a mask cast from int lanes to long lanes and
+  back, the int-to-long lane mismatch Item 1 and the Bloom recipe of Item 27
+  both meet.
+* `MaskedLogicOpts`: fully masked lanewise operations against partially
+  masked ones, which is predicated execution under AVX-512 against a blend
+  everywhere else, the masked body's cost in one case.
+* `GatherOperationsBenchmark`, masked and unmasked per width;
+  `LoadMaskedIOOBEBenchmark`, `StoreMaskedIOOBEBenchmark`,
+  `StoreMaskedBenchmark`: masked loads and stores that run past an array's
+  end, the tail problem the emitter solves with slack.
+* `MemorySegmentVectorAccess`: vector loads from native against heap segments,
+  and five degrees of profile pollution when one call site sees several
+  segment kinds; `TestLoadStoreBytes` and `TestLoadStoreShorts`: the same
+  loads from a native segment under an automatic arena against a confined
+  one. This engine reads Arrow buffers through native segments; how they are
+  wrapped, and whether any shared helper takes both heap and native segments
+  at one site, is a measurement these two cases make cheap.
+* `VectorMultiplyOptBenchmark`: six patterns of a long-lane multiply whose
+  operands are masked or shifted to thirty-two bits. The benchmark exists
+  because C2 recognises them: `MulVLNode::has_uint_inputs` accepts an operand
+  that is an `AND` with a constant at most `0xFFFFFFFF` or an unsigned right
+  shift by at least thirty-two, and `has_int_inputs` accepts a widening cast
+  from int lanes or a signed shift by at least thirty-two, and lowers the
+  product to one `vpmuludq` or `vpmuldq` instead of the five-instruction
+  emulation of Item 26 (`vectornode.cpp`, `x86.ad` `vmuludq_reg`,
+  `vmuldq_reg`). That is the rule for milestone 5's `TIME` kernels: a product
+  of an int part widened to long lanes and a constant that fits thirty-two
+  bits is one instruction on every runner, if the emitter keeps the widening
+  cast or the mask adjacent to the multiply; `VectorXXH3HashingBenchmark`
+  uses the same split into low and high halves for its lane hash.
+* `VectorCommutativeOperSharingBenchmark`: `a op b` and `b op a` for `ADD`,
+  `MUL`, `AND` and `OR`, kept as a benchmark because C2 shares them; the
+  emitter's common-subexpression pass need not canonicalise operand order for
+  those four, and the benchmark is the check that it still holds.
+* `VectorZeroExtend` (`convertShape` from int to long, zero-extended) and
+  `IndexInRangeBenchmark` (`indexInRange` tail masks), `SelectFromBenchmark`
+  (`selectFrom` against `rearrange` over two sources, a lookup of up to twice
+  the lane count of entries, which is the small-table form of Item 29's bitset
+  `IN` and of a dictionary of a few entries), `RearrangeBytesBenchmark` (byte
+  shuffles at each width, Item 3), `SpiltReplicate` (broadcasts hoisted out
+  of loops, the skill's own lesson), `VectorExtractBenchmark` (lane extraction
+  and `laneIsSet` by constant and variable index, the cost of any scalar tail
+  that reads lanes one at a time).
+
+**Worth taking.**
+
+1. **A reference table beside Item 26.** Run the cases above, at the widths
+   the emitter uses and under `-XX:UseAVX=2`, on the Zen 5 and through the
+   survey job on the runners, and keep the numbers as a results file. Where a
+   Varka kernel's cost exceeds the sum of its operations' reference costs, the
+   difference is the engine's; where it does not, the cost is the platform's
+   and no emitter change will move it. This is the file the skills cite today
+   from memory of individual measurements.
+2. **The thirty-two-bit multiply rule for long lanes.** An emitter rule, not
+   a measurement: when a long-lane multiply has an operand that is a widened
+   int or a constant under thirty-two bits, emit the cast or the mask so C2's
+   pattern matches, and assert `vpmuludq` or `vpmuldq` in the disassembly test.
+   It removes the five-instruction emulation from every `TIME` kernel that
+   scales a part, on the AVX2 runners too.
+3. **Two segment measurements**, from the two segment cases: the arena kind
+   under which Arrow buffers are wrapped, and whether any helper's call site
+   sees both heap and native segments, which the pollution cases price at up
+   to five kinds.
+
+**Noted for later.** The correctness tests under `test/jdk/jdk/incubator/vector`
+are generated per species and cover `compress`, `expand`, the masked loads and
+stores and the conversions with the JDK's own oracle; when a Vector API
+operation behaves unexpectedly on a runner, they are the first thing to run
+there, before any Varka suite.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
