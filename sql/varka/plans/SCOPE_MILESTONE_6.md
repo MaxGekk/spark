@@ -1128,6 +1128,10 @@ columns (`operator/scan/impl/AbstractScanWork.java`, `rebuildProject`), which is
 a reader-boundary shape for the Arrow datasource.
 
 
+*Added 16 September 2026.* Item 24 records Comet's working form of the per-node
+fallback above: Spark's own generated code for one expression, compiled into a
+batch kernel over the Arrow columns and run inside the columnar pipeline.
+
 ### Item 17. Compared against Apache Druid's vectorized engine
 
 Recorded on 16 September 2026, from a survey of Apache Druid
@@ -1766,6 +1770,120 @@ defer the expensive optimisation, which is the right split for bytecode. And
 the compiled loop is scalar IR left to LLVM to vectorise, the same bet as
 Gandiva's with the same compiler; the emitter that writes lanes is still the
 step not taken.
+
+
+### Item 24. Comet, the accelerator built for the same contract
+
+Recorded on 16 September 2026, from a survey of `datafusion-comet` at commit
+`8c229a703`: `spark/src/main/scala/org/apache/comet` (`serde`, `rules`,
+`codegen`, `CometConf`, `ExtendedExplainInfo`, `SparkErrorConverter`),
+`native/spark-expr`, the contributor guide (`sql_error_propagation.md`,
+`adding_a_new_expression.md`, `optimizing_expressions.md`, `expression-audits`)
+and the test base, made at the owner's request. Comet was not in the record.
+It is the one system in this survey with this engine's exact contract - a
+plug-in that takes Spark's physical plan, runs what it can in another engine,
+falls back for the rest, and must answer what Spark answers under `ANSI` - so
+the comparison is of contracts and process more than of kernels, and its
+kernels are DataFusion's (Item 21), read there.
+
+**Arrived at twice.** Every expression has a serde object that says at
+planning time whether it is `Compatible`, `Incompatible` with notes, or
+`Unsupported` with a reason (`SupportLevel`), and the reasons are tagged on
+the plan node and printed by `EXPLAIN` as `[COMET: ...]` (`ExtendedExplainInfo`,
+`withFallbackReason`), which is this engine's decline reason in verbose
+`EXPLAIN` (`docs/sql-varka.md`). The support table and the compatibility guide
+are generated from those objects (`GenerateDocs`), as `coverage.json` is from
+the compiler, and a rule that all data-producing children must be native
+before an operator converts keeps islands whole. `EvalMode` is `Legacy`,
+`Ansi`, `Try` (`native/spark-expr/src/lib.rs`), this engine's overflow modes.
+Its recent kernel tuning is the arithmetic this engine started with:
+`dayofweek` computed from the epoch day in one modulo instead of a calendar
+date per row (`day_of_week.rs`, recorded in the audit as about nine times
+faster), `hour`, `minute` and `second` by Euclidean division on the stored
+microseconds; `date_trunc` still builds a `chrono` date per row
+(`kernels/temporal.rs`). Its optimisation guide says what this repository's
+skills say: measure first, keep the output bit-identical, prove the win with a
+benchmark over the shapes where the change could backfire, and do not submit
+without one.
+
+**Where Comet paid for what this engine declined to buy.** Under `ANSI`, Comet
+raises Spark's errors natively: each expression's query context - the start
+and stop character offsets and the SQL text - is serialised into the plan,
+interned into a pool, registered in a native map by expression id, attached
+to the error the kernel raises, carried back as JSON and converted by a
+per-Spark-version shim into the typed Spark exception with its
+`SQLQueryContext` (`sql_error_propagation.md`, `QueryContextInterner`,
+`SparkErrorConverter`, `ShimSparkErrorConverter`). It is a pipeline of its own,
+and the compatibility guide still lists residual divergences - a byte or short
+overflow raising `ARITHMETIC_OVERFLOW` where Spark raises
+`BINARY_ARITHMETIC_OVERFLOW`, a long overflow reported as "integer overflow",
+Rust type names in `abs` messages - and the contributor guide forbids wiring
+any expression that exposes `failOnError`, `evalMode`, `nullOnOverflow` or
+`ansiEnabled` through the generic scalar path, failing closed instead. This is
+the evidence for the choice Item 18 recorded: declining the batch under `FAIL`
+and letting the row engine raise costs nothing to keep exact, and the
+alternative is a subsystem with a published list of the ways it is not.
+
+**Three things worth taking.**
+
+1. **The per-expression switch, and the honest tier.** Every Comet expression
+   can be disabled alone (`spark.comet.expression.<Class>.enabled=false`) and
+   an expression with known differences runs only if the user opts in for
+   that expression (`.allowIncompatible=true`); there is no global opt-in
+   (`CometConf.isExprEnabled`, `getExprAllowIncompatConfigKey`,
+   `expressions.md`). This engine has one switch. A per-expression kill switch
+   is the escape hatch a user needs when one kernel is wrong in production and
+   the rest are not, and it is cheap: the compiler already declines by node,
+   and a declined node with a reason is what the switch produces. The
+   incompatible tier is not needed while every fused arm is exact, and should
+   stay unneeded; the switch is a candidate row.
+2. **The batch kernel from Spark's own codegen.** `CometBatchKernelCodegen`
+   compiles a bound Catalyst expression plus an Arrow schema into one
+   Janino-compiled method per expression and schema that reads the Arrow
+   columns through `InternalRow` views, runs Spark's generated code for the
+   expression, and writes one Arrow output vector - with a `NullIntolerant`
+   short circuit and a common-subexpression variant - and Comet routes an
+   expression through it by default whenever its native path is inexact,
+   because "a byte-exact match to Spark matters more than the native speedup"
+   (`compatibility/index.md`). It is Item 16's per-node fallback, built and
+   shipped: an unsupported or inexact node evaluated by the row engine over
+   the batch, its result handed to the columnar neighbours as a derived
+   column, at the cost of one crossing per batch. Here the crossing has no
+   JNI in it, which makes the case stronger, and the design question Item 16
+   left - how the fused kernel takes a derived input - has Comet's answer:
+   as one more Arrow vector in the batch.
+3. **Tests that assert the reason.** The test base has, beside the answer
+   check, `checkSparkAnswerAndOperator` (every operator replaced except a
+   named list), `checkSparkAnswerAndFallbackReason` (the answer matches *and*
+   the plan carries this fallback text), and `checkSparkAnswerMaybeThrows`
+   (both engines throw, or both agree) (`CometTestBase`). This engine's
+   compiler suite asserts decline reasons and its differential asserts fusion;
+   the "maybe throws" form is the one it lacks and the one `ANSI` rows need:
+   under `FAIL` the assertion is that Varka and the row engine either both
+   raise the same error or both agree, which is stronger than "declined". A
+   small addition to `VarkaSharedSessions`, best made when the first `ANSI`
+   overflow row lands in the coverage table.
+
+**Noted for later.** Comet reverts a whole stage to Spark rows when it counts
+more than a configured number of columnar-to-row transitions in it
+(`transitionRevert.enabled`, `maxTransitions`), which is the plan-shape cost
+this engine's fused filter-to-row node already avoids for one node and does
+not yet count across a stage. Its native columnar-to-row converter writes
+`UnsafeRow`s into one reused buffer that the rows point into, and it keeps an
+isolated conversion benchmark with the scan excluded (`CometC2RIsolatedBench`);
+this engine measures the row consumer inside the throughput benchmark, and an
+isolated number belongs with whatever task next touches `VarkaColumnarToRowExec`.
+Its expression audits (`expression-audits/*.md`) keep, per expression, dated
+notes across Spark versions, a "tuned on" line with the PR and the speedup, and
+a native-candidate assessment, updated by an agent skill; this repository keeps
+the same facts per task in the plans, and the per-expression index is the view
+a newcomer asks for first. Its fuzz data generator has switches for nulls,
+`NaN`, negative zero, infinities, a base date and custom strings
+(`DataGenOptions`); the date and string switches are the ones the IR fuzzer's
+fixtures could take. And it runs Spark's own SQL test suites with Comet
+enabled by patching the test base (`spark-sql-tests.md`); this engine is a
+fork and can flip its default in one job, which is the widest differential
+available and not yet in the record as a row.
 
 ## 5. Ordering
 

@@ -348,6 +348,21 @@ this engine should adopt for blending against narrowing. Its compiled loop is
 scalar IR left to LLVM, Gandiva's bet with Gandiva's compiler; the emitter that
 writes lanes is the step it did not take.
 
+**Outside Spark, but for Spark: Comet (`spark/src/main/scala/org/apache/comet`,
+`native/spark-expr`).** Surveyed on 16 September 2026 (`SCOPE_MILESTONE_6.md`,
+item 24). The one system with this engine's exact contract: a plug-in over
+Spark's physical plan that runs what it can elsewhere, falls back for the rest,
+and must answer what Spark answers under `ANSI`. It arrived at the same
+planning surface - a support level per expression, fallback reasons in
+`EXPLAIN`, a support table generated from the code - and it shows the price of
+the other `ANSI` choice: raising Spark's errors natively took a query-context
+pipeline from the plan to the kernel and back, and the compatibility guide
+still lists the ways the errors differ. Its most useful piece is the batch
+kernel it compiles from Spark's own generated code to evaluate one inexact
+expression inside the columnar pipeline, which is the per-node fallback this
+engine has planned and not built. Its kernels are DataFusion's; the emitter
+that writes lanes is, again, the step not taken.
+
 What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole
