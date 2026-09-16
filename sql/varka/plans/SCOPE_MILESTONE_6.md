@@ -1351,6 +1351,15 @@ more reference to hold the row engine's fixtures against, not an authority.
    gate is a few lines beside the datapath probe task 62 already has. It is to
    be filed as a milestone 5 row beside task 123 and Item 18's checksum row once
    #220 has merged.
+   Item 22 adds what HotSpot itself does: on a machine without AVX-512VL, C2
+   still matches the vector compress node and lowers it to a permutation
+   through a stub table (`x86.ad`, `vcompress_reg_avx`; `c2_MacroAssembler_x86
+   .cpp`, `vector_compress_expand_avx2`), so the "emulation" is a permute
+   sequence, not a Java loop, and the measurement decides whether it beats the
+   scalar tail; and `Long.compress` becomes `PEXT` wherever `UseBMI2Instructions`
+   is on, which HotSpot enables on every CPU that advertises BMI2 with no
+   generation check, although Arrow's `CpuInfo::HasEfficientBmi2` trusts the
+   instruction on Intel only. The gate has two instructions to consider, not one.
 
 **Noted for later.** `PageProcessor` sizes projection batches by output bytes,
 halving when a page exceeds sixteen megabytes and doubling below four, with a
@@ -1546,6 +1555,105 @@ implementation of Spark's calendar semantics, in Rust over Arrow days, that the
 differential could be run against if a case ever needs a third opinion
 (`spark/src/function/datetime`: `add_months`, `date_add`, `date_diff`,
 `date_trunc`, `last_day`, `next_day`, `trunc`, `weekday` and others).
+
+
+### Item 22. Arrow's compute kernels, compared
+
+Recorded on 16 September 2026, from a survey of `arrow/cpp/src/arrow/compute`
+(`kernel.h`, `exec.cc`, `function.cc`, `expression.cc`,
+`kernels/codegen_internal.h`, `kernels/vector_selection_filter_internal.cc`,
+`kernels/scalar_if_else.cc`, `kernels/scalar_boolean.cc`,
+`kernels/scalar_arithmetic.cc`, `kernels/scalar_temporal_unary.cc`),
+`arrow/util/bit_block_counter.h`, `arrow/visit_data_inline.h` and
+`arrow/util/cpu_info.h` at commit `b274238283`, made at the owner's request.
+The earlier Arrow read was Gandiva only (`VISION.md`, section 14); this is the
+library of precompiled kernels beside it, over the same buffers this engine
+reads, so its choices are about the same bits.
+
+**Arrived at twice, on the same buffers.** A kernel declares how its validity
+is produced (`NullHandling`): `INTERSECTION`, the bitwise AND of the arguments'
+bitmaps computed by the executor before the kernel runs, is the default and is
+the validity-word algebra outside the loop; the executor's null propagator does
+nothing when no argument has nulls and reuses the one bitmap without copying
+when exactly one does and its offset is a multiple of eight (`exec.cc`,
+"Null propagation implementation"). Kernels then run over the values through a
+block visitor (`VisitBitBlocks`): an `OptionalBitBlockCounter` walks the
+validity bitmap in blocks of 64 or 256 bits - or pretends every block is all
+set when there is no bitmap, which is one code path for both cases - and the
+visitor takes a bare loop for an all-set block, skips a none-set block and
+checks bits only in a mixed one. That is DuckDB's entry dispatch (Item 20)
+with a wider block and the missing-bitmap case folded in. `BinaryBitBlockCounter`
+popcounts the AND, AND-NOT, OR or OR-NOT of two bitmaps a word at a time
+without materialising the result, which is how the filter kernel counts "true
+and not null" (`DropNullCounter`). The filter kernel itself is a block
+dispatch: a filter block all set over data all valid copies the segment; all
+set over some nulls copies values and validity; none set under `DROP` skips
+the block "for this exceedingly common case in low-selectivity filters"; the
+mixed block walks bits. `AND` and `OR` are Kleene three-valued, word by word
+(`ComputeKleene`), and the file says in an assertion that the three-valued
+path "is unnecessarily expensive for the non-null case", so it is taken only
+when a side has nulls. Arithmetic comes in two functions, `add` and
+`add_checked`, the checked one raising `Status::Invalid("overflow")` from a
+per-element `AddWithOverflow`; the caller picks the function, which is this
+engine's overflow mode chosen at compile time. `if_else` copies every value,
+null slots included, unless the input is more than four fifths null, and only
+then pays for bit-masked copying. `is_in` is a hash memo table always. Kernels
+write into slices of one contiguous preallocation across execution chunks
+(`can_write_into_slices`, `exec_chunksize`, default sixty-four thousand rows),
+which is the batch as a cache-sized window over a larger output. Year, month
+and the rest go through Hinnant's `year_month_day` per element
+(`scalar_temporal_unary.cc`, `struct Year`) with a localiser for the zone; the
+record already has that decomposition, and there is no calendar kernel here to
+learn from.
+
+**Where it stops.** Scalar kernels carry a `SimdLevel` so that a function may
+hold several kernels of one signature and the dispatcher pick the best the CPU
+supports (`function.cc`, `DispatchBest`) - and the only kernels that use it are
+the aggregates (`aggregate_basic_avx2.cc`, `aggregate_basic_avx512.cc`); every
+scalar kernel is plain C++ left to the compiler's auto-vectoriser over the
+all-set blocks the visitor hands it. It is the fourth engine on that bet after
+Gandiva, Trino and DuckDB, with the most honest structure for it: the visitor
+guarantees the compiler a contiguous, branch-free loop whenever the data allow
+one. `ARROW_USER_SIMD_LEVEL` caps the level from the environment, the
+measurement lever the compress question (Item 19.2) needs and this engine has
+as `-XX:UseAVX`.
+
+**Two things worth taking, and a fact.**
+
+1. **A proven comparison reuses the validity bitmap.** `SimplifyWithGuarantee`
+   (`expression.cc`) simplifies a filter under a guarantee - a predicate known
+   true, in Arrow's case a partition expression such as `x = 5` or `x > 3`
+   (`Inequality`, `ExtractKnownFieldValues`) - and when a comparison on a
+   nullable field is proved true by the guarantee it does not become the
+   literal `true`: it becomes `true_unless_null(x)`, which "purely reuses the
+   validity bitmap for the values buffer", because the comparison is still
+   `NULL` where `x` is. This engine's range analysis (task 84) proves
+   comparisons true or false the same way, and Item 21's backward pass will
+   prove more; when it does, the result of a proven compare is the operand's
+   validity word, one load and no compare, and the proven-false case is the
+   zero word. A proven `IN` is deliberately not simplified to `true` for the
+   same null reason, which is the case a first version gets wrong.
+2. **`PEXT` is not free everywhere.** `CpuInfo::HasEfficientBmi2` returns true
+   only for Intel: "BMI2 (pext, pdep) is only efficient on Intel X86
+   processors", and Arrow's AVX2 index-extraction paths (`compute/util.cc`,
+   `bits_to_indexes`) fall back to scalar code elsewhere. This engine's
+   compaction uses `Long.compress` on the validity bits, which HotSpot lowers
+   to `PEXT` wherever BMI2 is advertised; on AMD before Zen 3 that instruction
+   is microcoded and slow, on Zen 3 and later it is fast, and Arrow's rule is
+   older than that change. The gate Item 19.2 files should consider both
+   instructions and read HotSpot's own match rules (recorded there) rather
+   than a vendor name; Zen 5 is the development machine and Zen 3 the common
+   runner, so neither pays today, and the measurement is for the machines the
+   public post will be read on.
+
+**Noted for later.** `FilterOptions::NullSelectionBehavior` names the choice a
+filter makes for a `NULL` predicate - `DROP` or `EMIT_NULL` - as an option;
+SQL is `DROP` and this engine has only that, rightly. The all-scalar shortcut
+in `ExecuteScalarExpression` evaluates a batch of length one when every input
+is a literal, which is constant folding at run time for a plan the optimizer
+did not fold. `BitBlockCounter::NextFourWords` reads five words to produce a
+256-bit block when the bitmap is unaligned, which is the same slack-past-the-end
+requirement this engine's compaction places on its destination.
 
 ## 5. Ordering
 
