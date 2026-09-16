@@ -1052,6 +1052,81 @@ argument, and the reason it left is the start of that argument.
 | 87 | The epilogue is the one method no budget bounds | 2.18 | kept for a future fix at the owner's request; milestone 5's section 6 says when it would come back |
 | 98 | Two filter rows under 1.0x because the consumer counts | 2.33 | the read-back floor - this milestone's item 13, which is where it now belongs |
 
+
+### Item 16. Borrowed from PolarDB-X's vectorized executor
+
+Recorded on 16 September 2026, from a survey of PolarDB-X SQL
+(`github.com/polardb/polardbx-sql`, module `polardbx-executor`) made at the
+owner's request while milestone 5's first PRs waited on CI. PolarDB-X solved the
+same problem with the opposite toolkit: it targets Java 8, so it has no Vector
+API and every kernel is a plain loop shaped for C2's auto-vectorizer; the kernels
+are generated at build time by FreeMarker into one class per operator, type pair
+and column-or-constant shape (`src/main/codegen/templates/*.ftl`), with a
+registry that lets a hand-written kernel displace a generated one; columnar data
+is ORC, decoded lazily; nulls are a `boolean[]` per block rather than a bitmap;
+and its vectorized tests are YAML-driven type matrices with hand-written expected
+values - no differential against the row engine, no fuzzer, no committed
+benchmarks. On emission, null handling and testing Varka keeps its own answers.
+Four mechanisms are worth this milestone's attention, ranked, each with the file
+that shows it. A fifth, the packed MySQL datetime layout whose `EXTRACT(YEAR)` is
+a shift and a division (`polardbx-common/.../time/core/TimeStorage.java`,
+`vectorized/ExtractVectorizedExpression.java`), is deliberately not on the list:
+Varka's sources are Spark's physical types, epoch days and nanoseconds of day,
+so the decomposition PolarDB-X avoids is the conversion Varka would have to pay
+to reach that layout; it belongs in the design notes of the Arrow datasource, if
+that ever chooses its own storage layout, and nowhere else.
+
+1. **Per-node fallback through a derived input.** PolarDB-X falls back per
+   expression node: a function with no vectorized kernel becomes a row loop
+   writing one intermediate slot of the chunk while its siblings stay vectorized
+   (`vectorized/BuiltInFunctionVectorizedExpression.java`; the tree is built by
+   `vectorized/build/Rex2VectorizedExpressionVisitor.java`, slots by
+   `addOutput()`). Varka falls back per projection entry and per batch. The hook
+   already exists: task 59's derived inputs compute a column per batch ahead of
+   the kernel. A declined subtree could become a derived input evaluated by
+   Spark's row path, and the rest of the expression stays fused, which shrinks
+   the ghost fallback's blast radius from the whole entry to one node. The first
+   Varka task here is a measurement: what a declined subtree costs today against
+   the same entry with the subtree derived.
+2. **Overflow that widens instead of falling back.** Decimal subtraction runs
+   the batch at 64 bits with a branchless accumulated flag,
+   `overflow |= ((l ^ r) & (l ^ result)) < 0`, and only if it fired re-runs the
+   batch at 128 bits (`vectorized/math/FastSubDecimalColDecimalColVectorizedExpression.java`,
+   `doDecimal64SameScaleSubTo128`; `DecimalBlock` carries a runtime state that
+   picks the narrow form when both inputs allow it). Varka accumulates a
+   checked-arithmetic mask the same way and, on overflow, declines the batch to
+   rows. Once task 29's long lanes exist, an int32 batch that overflows can
+   re-run at 64-bit lanes in the same kernel class rather than leave it. Depends
+   on 29 and on task 28's lane-width conversion; not before.
+3. **Selection narrowing across `AND` and `CASE`.** The right arm is evaluated
+   only over the rows the left arm selected, by swapping a temporary selection
+   onto the chunk and restoring it (`vectorized/logical/FastAndLongColLongColVectorizedExpression.java`,
+   generalised as `VectorizedExpressionUtils.conditionalEval` and used by
+   `CaseVectorizedExpression` and `CoalesceVectorizedExpression`). Varka
+   evaluates both arms under masks and blends, which task 62 measured at 7.0x for
+   `CASE WHEN`; for a cheap arm the blend wins. For an expensive arm behind a
+   selective predicate - a calendar decomposition of thirty ops - compress,
+   evaluate, expand may win, and the Vector API's `compress` and `expand` make it
+   expressible. A build-both-and-measure task, per the house rule, over the
+   `CASE` shapes the surface already times.
+4. **An adaptive dense-versus-selection choice per batch.** The lazy evaluator
+   picks among no selection, a full selection vector, partial selection and
+   evaluate-dense-then-intersect from the measured cardinality against a ratio
+   (`operator/scan/impl/DefaultLazyEvaluator.java`, `EvaluationStrategy.get`).
+   Varka's columnar filter always compacts into a fresh dense batch. For a filter
+   that keeps most rows, passing the mask and evaluating dense is cheaper than
+   compaction; for a selective one, compaction is right. Measurable on the
+   filter shapes in the surface, and it touches only the filter node.
+
+Two more are on the record for later milestones rather than this one:
+dictionary pre-evaluation of constants - a constant mapped to a dictionary id
+once, the batch compared as ints, a constant absent from the dictionary making
+the whole batch false (`vectorized/compare/EQVarcharColCharConstVectorizedExpression.java`)
+- which fits Varka the day it reads dictionary-encoded Arrow strings; and lazy
+blocks with the surviving selection handed back to still-undecoded projection
+columns (`operator/scan/impl/AbstractScanWork.java`, `rebuildProject`), which is
+a reader-boundary shape for the Arrow datasource.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
