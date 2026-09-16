@@ -937,7 +937,7 @@ private[sql] object VarkaExpressionCompiler {
    * Deliberately conservative. A bound is returned only where it is certain, so a `None` costs
    * a check or a decline and never a wrong answer.
    */
-  private def intBound(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]):
+  private[codegen] def intBound(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]):
       Option[Long] = {
     // Exact, because a bound that wraps is worse than no bound at all: two nested bounds whose
     // product passes 2^63 would come back a small non-negative number and "prove" a checked
@@ -1365,9 +1365,9 @@ private[sql] object VarkaExpressionCompiler {
    * interval, and `admitCalendar` tests the result. `Unknown` means a node this analysis does not
    * know, which `calendarInput` declines rather than trusts.
    */
-  private sealed trait DayRange
-  private case class Bounded(lo: Long, hi: Long) extends DayRange
-  private case object Unknown extends DayRange
+  private[codegen] sealed trait DayRange
+  private[codegen] case class Bounded(lo: Long, hi: Long) extends DayRange
+  private[codegen] case object Unknown extends DayRange
 
   /**
    * The compile-time half of the calendar range guard (see `PLAN_TASK_52.md` 3.1 and 10.3). The
@@ -1401,7 +1401,7 @@ private[sql] object VarkaExpressionCompiler {
    * Spark type gate forbids it - and anything else is `Unknown`. The literal table is keyed by
    * value in slot order and untyped, so a slot's value is read by its IR position only.
    */
-  private def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int],
+  private[codegen] def dayRange(node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int],
       guarded: Boolean): DayRange = {
     def literalValue(slot: LiteralSlot): Long = literals.keysIterator.drop(slot.index).next().toLong
     // `guardsBelow` marks a node that is itself a calendar consumer - which is
