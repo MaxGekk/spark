@@ -165,3 +165,11 @@ workflow is a `root` change and everything is required. Worth knowing in both
 directions: a workflow edit exercises every job, and a job whose first proof comes
 from a PR that touches `.github` has not yet been proven to be *skipped* when it
 should be. That second half is what the next bench-only change will show.
+
+**Corrected 16 September 2026, from task 106's documents-only run.** The "second
+half" above cannot be shown on this fork as its precondition is written: it diffs
+the checked-out tree against apache/spark master, so every pull request's changed
+set is the fork's whole delta and every module gate answers true. A bench-only
+change will run the bench job, and everything else too, until task 123 makes the
+precondition measure the pull request's own files (`PLAN_TASK_106.md` 9,
+`PLAN_MILESTONE_5.md` 2.58).

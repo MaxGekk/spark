@@ -123,6 +123,10 @@ multiplies and inserting the separators with a shuffle, paired with ClickHouse's
 
 ## Velox is a semantics reference for the calendar family, not a performance one
 
+This is the calendar read. Velox's expression evaluator - encoding peeling, per-row error
+bitmaps, the conjunct metric - was surveyed separately on 16 September 2026 and is
+`SCOPE_MILESTONE_6.md` item 18.
+
 Read in September 2026 for the same question as ClickHouse, `datealgo-rs` and Lemire's repository:
 is there anything to borrow. There is not, and the reason is worth one paragraph so nobody reads it
 again for speed. Every Spark-compatible date function in `velox/functions/sparksql` converts the

@@ -39,7 +39,8 @@ import org.apache.spark.util.Utils
  * but a hand-written table drifts: it can claim an expression the compiler declines, and it
  * can silently miss one the compiler gained. Both failures are checked here.
  *
- *  - Every documented row is resolved and put through the real compiler, and must fuse. The
+ *  - Every documented row is resolved and put through the real compiler, and must fuse - a
+ *    predicate row conjunct by conjunct, since a residual conjunct runs on the row engine. The
  *    table cannot claim support that does not exist.
  *  - Every Catalyst expression class the compiler matches on must appear in some documented
  *    row's resolved tree. The table cannot omit an expression the compiler admits, so adding
@@ -81,9 +82,15 @@ class VarkaCoverageSuite extends SparkFunSuite {
   /**
    * One documented expression. `sql` is both what the table prints and what the check
    * compiles, except where `built` overrides it - the one case is `InSet`, which no SQL
-   * spelling produces directly because Spark's optimizer, not its parser, creates it.
+   * spelling produces directly because Spark's optimizer, not its parser, creates it. Such a
+   * row also gives `executable`, SQL that a query can run and that the optimizer turns into the
+   * same expression, so that `VarkaCoverageDifferentialSuite` can run every row of the table.
    */
-  private case class Row(sql: String, note: String = "", built: Option[Expression] = None)
+  private case class Row(
+      sql: String,
+      note: String = "",
+      built: Option[Expression] = None,
+      executable: Option[String] = None)
 
   private case class Family(title: String, predicates: Boolean, rows: Seq[Row])
 
@@ -159,13 +166,16 @@ class VarkaCoverageSuite extends SparkFunSuite {
       Row("year(d) = 2021"),
       Row("NOT (d = d2)"),
       Row("d IN (DATE '2021-01-01', DATE '2021-06-01')", "up to 16 literals"),
-      Row("year(d) = 2021 AND i > 0"),
+      Row("year(d) = 2021 AND month(d) > 6",
+        "every conjunct of an AND fuses or the predicate is not in this table; a comparison "
+          + "over a bare int column, `i > 0`, is a residual conjunct today (task 122)"),
       Row("year(d) = 2021 OR month(d) = 3"),
       // Over `spark.sql.optimizer.inSetConversionThreshold` (10 by default) the optimizer
       // rewrites the list to an `InSet`, which fuses up to the compiler's own cap of 16.
       Row("d IN (11 to 16 date literals)",
         "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
-        Some(InSet(d, (1 to 11).map(v => v.asInstanceOf[Any]).toSet)))))
+        Some(InSet(d, (1 to 11).map(v => v.asInstanceOf[Any]).toSet)),
+        Some((1 to 11).map(m => f"DATE '2021-$m%02d-01'").mkString("d IN (", ", ", ")")))))
   )
 
   private def out(e: Expression): NamedExpression = Alias(e, "c")()
@@ -183,8 +193,10 @@ class VarkaCoverageSuite extends SparkFunSuite {
         // row that declines is a documentation bug, and the reason is what says which.
         val reason =
           if (family.predicates) {
+            // Every conjunct has to fuse, not just one: the table documents the predicate as
+            // written, and a residual conjunct runs in a row filter above the Varka node.
             VarkaExpressionCompiler.compilePredicate(expr, columns) match {
-              case Some(p) if p.specs.exists(_.fused) => None
+              case Some(p) if p.specs.forall(_.fused) => None
               case Some(p) => Some(p.specs.flatMap(_.decline).map(_.reason).mkString("; "))
               case None => Some("the predicate compiled to nothing")
             }
@@ -331,6 +343,7 @@ class VarkaCoverageSuite extends SparkFunSuite {
           .filterNot(_ == "AttributeReference")
         ordered(
           "sql" -> row.sql,
+          "executable" -> row.executable.getOrElse(row.sql),
           "family" -> family.title,
           "form" -> (if (family.predicates) "predicate" else "projection"),
           "catalyst" -> classes.distinct.sorted.asJava,

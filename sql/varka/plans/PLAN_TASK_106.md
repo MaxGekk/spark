@@ -223,7 +223,34 @@ looked like the new behaviour for the old reason, with no docs job in it. So
 the proof is this pull request: cut from master after #218, changing one plan
 file, whose run is recorded below.
 
-**The gate, observed.** *Filled in from this pull request's run before merge.*
+**The gate, observed: it does not skip, and cannot on this fork as the
+precondition is written.** The documents-only pull request (#222, one plan file
+changed) got a run of 36 jobs: `Varka engine` on both architectures, `Varka bench
+drivers`, `Precompile Spark`, `Java 25 build with Maven`, the UI tests, every
+`Build modules` shard, and `Varka docs checks` among them. Its `Check changes`
+job printed `changed files vs base: 331` and required every module:
+`"build": "true", "varka-engine": "true", "varka-bench": "true", "varka-docs":
+"true", "pyspark": "true"`. The reason is one line of the precondition and one
+line of `is-changed.py`. `checkout-and-sync` checks out apache/spark master and
+squash-merges the fork branch on top, exporting the apache commit as
+`APACHE_SPARK_REF`; `is-changed.py` then diffs `HEAD` against that reference,
+which is the whole of this fork's delta from upstream - 331 files on 16
+September - and not the pull request's own change. So `determine_modules_for_
+files` sees every Varka source and the module gates answer true for every pull
+request, whatever it touched. Section 2's mapping table was right about the
+modules and wrong about the premise: the files the precondition classifies are
+never the pull request's files. The three gates that do skip on this fork -
+SparkR, buf, the UI - skip because the fork's entire delta happens to contain no
+R, protobuf or UI file, not because a given pull request does not.
+
+Two consequences, both recorded. Task 94's open half - a bench-only change
+running the bench job alone - cannot be shown either, for the same reason. And
+the fix is not in this task's module entry, which is correct, but in what the
+precondition measures: the fork branch's diff against its merge-base with this
+repository's master, both of which the precondition can fetch. That is task 123
+(`PLAN_MILESTONE_5.md` 2.58). Until it lands, every pull request on this fork
+runs the full matrix, about an hour, and a run's job list says nothing about
+what the pull request changed.
 
 **What else the merge changed, for the record.** The quote check now reads the
 four `sql/varka/*.md` it did not (`VISION.md`, `ADDING_AN_EXPRESSION.md`,
