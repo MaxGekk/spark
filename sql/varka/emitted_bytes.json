@@ -1,7 +1,7 @@
 {
   "generated_by" : "VarkaEmittedBytesSuite; regenerate with VARKA_BYTES_REGEN=true build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'",
   "description" : "Hashes of every emitted method body, rendered symbolically, for every coverage row and for a fixed sequence of fuzz shapes, at lanesOverride 4 and 16. A difference is a change in what an emitted method does.",
-  "coverage_rows_skipped" : [ "d IN (11 to 16 date literals)" ],
+  "coverage_rows_skipped" : [ ],
   "lanes" : {
     "4" : {
       "coverage" : {
@@ -545,15 +545,15 @@
           "epilogueMasked([J[J[I[J[J[II)I" : "319e05e5859d2b15",
           "loopMasked0([J[J[I[J[J[II)I" : "2445ba39ae5be2a2"
         },
-        "year(d) = 2021 AND i > 0" : {
+        "year(d) = 2021 AND month(d) > 6" : {
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
-          "runDense([J[J[I[J[J[II)I" : "928391ff460581ae",
-          "epilogueDense([J[J[I[J[J[II)I" : "64bb9d0831ccedbf",
-          "loopDense0([J[J[I[J[J[II)I" : "5dedd36c04430277",
-          "runMasked([J[J[I[J[J[II)I" : "bafc6c02ef1f5dc9",
-          "epilogueMasked([J[J[I[J[J[II)I" : "717dd4db4c1db7df",
-          "loopMasked0([J[J[I[J[J[II)I" : "41b0b93172656e15"
+          "runDense([J[J[I[J[J[II)I" : "1bbebf25f8bfed66",
+          "epilogueDense([J[J[I[J[J[II)I" : "d8267d044474ce0d",
+          "loopDense0([J[J[I[J[J[II)I" : "66ce31e86f47817f",
+          "runMasked([J[J[I[J[J[II)I" : "1101d1f8920bd787",
+          "epilogueMasked([J[J[I[J[J[II)I" : "ad5c5a7fbecf56e0",
+          "loopMasked0([J[J[I[J[J[II)I" : "17e3a62581f924af"
         },
         "year(d) = 2021 OR month(d) = 3" : {
           "<init>()V" : "e2c903051ec05d17",
@@ -564,6 +564,16 @@
           "runMasked([J[J[I[J[J[II)I" : "1101d1f8920bd787",
           "epilogueMasked([J[J[I[J[J[II)I" : "661233f6db1a7472",
           "loopMasked0([J[J[I[J[J[II)I" : "089cb6ebd624d369"
+        },
+        "d IN (11 to 16 date literals)" : {
+          "<init>()V" : "e2c903051ec05d17",
+          "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
+          "runDense([J[J[I[J[J[II)I" : "065a71434b2528b3",
+          "epilogueDense([J[J[I[J[J[II)I" : "22e674e11f49061e",
+          "loopDense0([J[J[I[J[J[II)I" : "97c97467683beda1",
+          "runMasked([J[J[I[J[J[II)I" : "d44570c37bdd4035",
+          "epilogueMasked([J[J[I[J[J[II)I" : "cb824029722eacc6",
+          "loopMasked0([J[J[I[J[J[II)I" : "8ed1c6d130751ddc"
         }
       },
       "fuzz" : {
@@ -1115,15 +1125,15 @@
           "epilogueMasked([J[J[I[J[J[II)I" : "412b1eabe33282b1",
           "loopMasked0([J[J[I[J[J[II)I" : "315d74eee531e066"
         },
-        "year(d) = 2021 AND i > 0" : {
+        "year(d) = 2021 AND month(d) > 6" : {
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
-          "runDense([J[J[I[J[J[II)I" : "3e9a61d18dc9eef9",
-          "epilogueDense([J[J[I[J[J[II)I" : "c0b2768fe3e3a363",
-          "loopDense0([J[J[I[J[J[II)I" : "57957c494e21a6f2",
-          "runMasked([J[J[I[J[J[II)I" : "9ee505e0a63447a9",
-          "epilogueMasked([J[J[I[J[J[II)I" : "ed0f4d4e9d990802",
-          "loopMasked0([J[J[I[J[J[II)I" : "75ed8731055052c0"
+          "runDense([J[J[I[J[J[II)I" : "0a6f10d2c3f1b504",
+          "epilogueDense([J[J[I[J[J[II)I" : "a5f8d5e0981ede23",
+          "loopDense0([J[J[I[J[J[II)I" : "5ab69c6f383b1dca",
+          "runMasked([J[J[I[J[J[II)I" : "79cb53e657247fe6",
+          "epilogueMasked([J[J[I[J[J[II)I" : "9d51929302ed954c",
+          "loopMasked0([J[J[I[J[J[II)I" : "bdb335b8018af527"
         },
         "year(d) = 2021 OR month(d) = 3" : {
           "<init>()V" : "e2c903051ec05d17",
@@ -1134,6 +1144,16 @@
           "runMasked([J[J[I[J[J[II)I" : "79cb53e657247fe6",
           "epilogueMasked([J[J[I[J[J[II)I" : "39794b5fc5e39fdc",
           "loopMasked0([J[J[I[J[J[II)I" : "03455178ab344fa2"
+        },
+        "d IN (11 to 16 date literals)" : {
+          "<init>()V" : "e2c903051ec05d17",
+          "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
+          "runDense([J[J[I[J[J[II)I" : "1dc675573857d061",
+          "epilogueDense([J[J[I[J[J[II)I" : "22e34d8ad8745011",
+          "loopDense0([J[J[I[J[J[II)I" : "2771c47480a36214",
+          "runMasked([J[J[I[J[J[II)I" : "89574244f38d9c29",
+          "epilogueMasked([J[J[I[J[J[II)I" : "6892b0787ee884c1",
+          "loopMasked0([J[J[I[J[J[II)I" : "34579a2661729e4d"
         }
       },
       "fuzz" : {
