@@ -18,7 +18,32 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.lang.classfile.ClassFile;
+import java.lang.classfile.CodeElement;
+import java.lang.classfile.Instruction;
+import java.lang.classfile.Label;
+import java.lang.classfile.MethodModel;
+import java.lang.classfile.instruction.BranchInstruction;
+import java.lang.classfile.instruction.ConstantInstruction;
+import java.lang.classfile.instruction.ExceptionCatch;
+import java.lang.classfile.instruction.FieldInstruction;
+import java.lang.classfile.instruction.IncrementInstruction;
+import java.lang.classfile.instruction.InvokeDynamicInstruction;
+import java.lang.classfile.instruction.InvokeInstruction;
+import java.lang.classfile.instruction.LabelTarget;
+import java.lang.classfile.instruction.LoadInstruction;
+import java.lang.classfile.instruction.LookupSwitchInstruction;
+import java.lang.classfile.instruction.NewMultiArrayInstruction;
+import java.lang.classfile.instruction.NewObjectInstruction;
+import java.lang.classfile.instruction.NewPrimitiveArrayInstruction;
+import java.lang.classfile.instruction.NewReferenceArrayInstruction;
+import java.lang.classfile.instruction.StoreInstruction;
+import java.lang.classfile.instruction.SwitchCase;
+import java.lang.classfile.instruction.TableSwitchInstruction;
+import java.lang.classfile.instruction.TypeCheckInstruction;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -183,5 +208,89 @@ public final class VarkaEmitterTestSupport {
           .ifPresent(table -> table.lineNumbers().forEach(info -> lines.add(info.lineNumber())));
     }
     return new java.util.ArrayList<>(lines);
+  }
+
+  /**
+   * Every method's body as a canonical text, keyed by name and descriptor, for the emitted-bytes
+   * oracle (task 85). One line per instruction: the opcode and its operands rendered
+   * symbolically - a callee by owner, name and descriptor, a constant by its value, a branch by
+   * a label numbered in order of first appearance - never by constant-pool index. So two
+   * classes whose constant pools are laid out differently but whose methods do the same thing
+   * render the same, and a difference in the rendering is a difference in what the method does.
+   * Line-number and local-variable tables are left out: they are the emitter's IR map, not
+   * behaviour. Exception ranges are kept, with their labels.
+   */
+  public static LinkedHashMap<String, String> methodBodies(byte[] bytes) {
+    LinkedHashMap<String, String> out = new LinkedHashMap<>();
+    for (MethodModel method : ClassFile.of().parse(bytes).methods()) {
+      if (method.code().isEmpty()) {
+        continue;
+      }
+      Map<Label, Integer> labels = new IdentityHashMap<>();
+      java.util.function.Function<Label, String> name =
+          l -> "L" + labels.computeIfAbsent(l, k -> labels.size());
+      StringBuilder sb = new StringBuilder();
+      for (CodeElement element : method.code().get()) {
+        switch (element) {
+          case LabelTarget t -> sb.append(name.apply(t.label())).append(":\n");
+          case ExceptionCatch c -> sb.append("try ").append(name.apply(c.tryStart())).append(' ')
+              .append(name.apply(c.tryEnd())).append(" handler ").append(name.apply(c.handler()))
+              .append(' ').append(c.catchType().map(t -> t.asInternalName()).orElse("any"))
+              .append('\n');
+          case InvokeInstruction i -> sb.append(i.opcode()).append(' ')
+              .append(i.owner().asInternalName()).append('.').append(i.name().stringValue())
+              .append(i.type().stringValue()).append('\n');
+          case InvokeDynamicInstruction i -> sb.append(i.opcode()).append(' ')
+              .append(i.name().stringValue()).append(i.type().stringValue()).append(' ')
+              .append(i.bootstrapMethod()).append(i.bootstrapArgs()).append('\n');
+          case FieldInstruction f -> sb.append(f.opcode()).append(' ')
+              .append(f.owner().asInternalName()).append('.').append(f.name().stringValue())
+              .append(':').append(f.type().stringValue()).append('\n');
+          case ConstantInstruction c -> sb.append(c.opcode()).append(' ')
+              .append(c.constantValue()).append('\n');
+          case LoadInstruction l -> sb.append(l.opcode()).append(' ').append(l.slot()).append('\n');
+          case StoreInstruction s -> sb.append(s.opcode()).append(' ').append(s.slot())
+              .append('\n');
+          case IncrementInstruction i -> sb.append(i.opcode()).append(' ').append(i.slot())
+              .append(' ').append(i.constant()).append('\n');
+          case BranchInstruction b -> sb.append(b.opcode()).append(' ')
+              .append(name.apply(b.target())).append('\n');
+          case TableSwitchInstruction t -> {
+            sb.append(t.opcode()).append(' ').append(t.lowValue()).append(' ')
+                .append(t.highValue()).append(" default ").append(name.apply(t.defaultTarget()));
+            for (SwitchCase c : t.cases()) {
+              sb.append(' ').append(c.caseValue()).append("->").append(name.apply(c.target()));
+            }
+            sb.append('\n');
+          }
+          case LookupSwitchInstruction t -> {
+            sb.append(t.opcode()).append(" default ").append(name.apply(t.defaultTarget()));
+            for (SwitchCase c : t.cases()) {
+              sb.append(' ').append(c.caseValue()).append("->").append(name.apply(c.target()));
+            }
+            sb.append('\n');
+          }
+          case TypeCheckInstruction t -> sb.append(t.opcode()).append(' ')
+              .append(t.type().asInternalName()).append('\n');
+          case NewObjectInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.className().asInternalName()).append('\n');
+          case NewPrimitiveArrayInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.typeKind()).append('\n');
+          case NewReferenceArrayInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.componentType().asInternalName()).append('\n');
+          case NewMultiArrayInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.arrayType().asInternalName()).append(' ').append(n.dimensions())
+              .append('\n');
+          // Operators, stack ops, conversions, array loads and stores, returns, throws, monitors,
+          // nops: the opcode says everything.
+          case Instruction i -> sb.append(i.opcode()).append('\n');
+          // Line numbers, local variable tables, character ranges: not behaviour.
+          default -> { }
+        }
+      }
+      out.put(
+          method.methodName().stringValue() + method.methodType().stringValue(), sb.toString());
+    }
+    return out;
   }
 }

@@ -381,4 +381,44 @@ rule applied to the task that owns the number.
 
 ## 9. Outcome
 
-*To be written from the oracle and the proof lane's numbers.*
+*Steps 2 to 6 are still to come; this section grows step by step.*
+
+### 9.1 Step 1, landed: the oracle exists
+
+`VarkaEmittedBytesSuite` and `sql/varka/emitted_bytes.json`, 16 September 2026,
+built on task 84's branch because the fuzz shapes come from the shared grammar
+that branch extracted, and rebased onto master when that branch merged.
+
+**What is pinned.** Every coverage row the compiler produces IR for - 56 of the
+57; the `InSet` caption is skipped by name in the file until task 120's
+`executable` spelling lands, and the suite reads that field when it is there -
+and ten thousand fuzz shapes at seed 20260916, drawn exactly as
+`VarkaIrFuzzSuite.runOne` draws its trees, each at `lanesOverride` 4 and 16. Per
+coverage row and width, one hash per emitted method (448 method hashes per
+width); per width, a hundred block digests over the fuzz sequence, so a
+difference names a block of a hundred shapes rather than everything or nothing.
+The file is 62 KB, 1147 lines.
+
+**How a method is hashed.** Not the `Code` attribute's bytes, which section 5
+first proposed: those embed constant-pool indices, and a refactor that builds
+descriptors per lane would reorder the pool and move every index while changing
+no instruction, which is the false alarm this oracle must not raise. Instead
+`VarkaEmitterTestSupport.methodBodies` renders each method symbolically -
+opcode, callee by owner, name and descriptor, constants by value, branches by
+labels numbered in order of first appearance, exception ranges kept, line
+number and local variable tables dropped - and the rendering is hashed. Two
+classes that do the same thing render the same whatever their pools look like;
+a difference in the rendering is a difference in what the method does. The
+Class-File API stays in Java, per the house rule Scala cannot see it.
+
+**Checked rather than assumed.** A second run without the regenerate switch
+compares byte for byte and passes, so the generation is deterministic across
+JVMs. A shape emitted at 4 and 16 lanes renders differently, so the width knob
+reaches the bytes and the second width pins something. The whole suite takes
+eight seconds, which is cheap enough that every step of section 8 runs it
+without thought; the `wide` gate step already picks it up through `*Varka*`.
+
+**What it does not yet pin.** Random emit options: every shape is emitted at
+the defaults plus the width. Task 85's refactor touches the default path first;
+an option-matrix oracle is a widening for a later step if a site turns out to
+be reached only under a non-default option.
