@@ -2498,6 +2498,104 @@ direction as the fifty-expression threshold. The metrics framework maps native
 operator statistics onto Spark's metrics by treefying both plans in one order
 (`MetricsFramework.md`); an in-JVM engine has no such boundary to cross.
 
+
+### Item 29. StarRocks, an interpreter that grew an expression JIT
+
+Recorded on 16 September 2026, from a survey of `be/src/exprs/jit`,
+`be/src/exprs` (arithmetic, predicates, `case`, `time_functions`),
+`be/src/base/simd/filter.cpp`, `be/src/column`, `be/src/storage_primitive`
+(`column_predicate.h`, `column_in_predicate.cpp`), `be/src/types`
+(`date_value.h`, `time_types`), the low-cardinality rules under
+`fe/fe-core/.../optimizer/rule/tree/lowcardinality`, and the session-variable
+documentation, at commit `a5dc21cf97d`, made at the owner's request. StarRocks
+was not in the record. It is a ClickHouse-descended vectorised C++ engine that
+added an LLVM expression JIT in its third major version, so it is the newest
+instance of the path ClickHouse took (Item 23), and its admission policy for
+what to compile is the thing to read.
+
+**Arrived at twice.** Nulls are a byte per row with a `has_null` flag
+(`NullableColumn`); chunks are 4096 rows (`vector_chunk_size`); a kernel sees
+its arguments after a generic layer unfolds constants and wraps or unwraps
+nullability (`JITExpr::evaluate_checked`); filters are selector bytes; storage
+predicates evaluate into a byte selection with `evaluate_and` and
+`evaluate_or`, or over a `uint16_t` index list in `evaluate_branchless`, so
+both of Ngom's representations coexist at the storage layer
+(`column_predicate.h`), beside zone maps, bitmap indexes and Bloom filters.
+Dates decompose through a lookup table of year, month, day and week per day
+for two hundred years from the Unix epoch, with arithmetic beyond it
+(`to_date_with_cache`, `CACHE_JULIAN_DAYS`), which is Item 10's ClickHouse
+table again; the calendar functions run per row over it, and there is no
+calendar kernel to learn from. Dictionary predicates are rewritten onto codes
+at the segment level with an always-true, always-false, changed or unchanged
+verdict (`ColumnPredicateRewriter`), and the planner rewrites whole plans over
+low-cardinality string columns onto their global dictionary codes bottom-up,
+inserting a decode only where strings are needed and evaluating string
+expressions once over the dictionary (`AddDecodeNodeForDictStringRule`,
+`DecodeRewriter`, `DecodeCollector`), which is Items 16, 18 and 19 lifted from
+the batch to the plan, with a benefit estimate per column. The JIT's LLVM
+pipeline is O3 with the loop and SLP vectorisers added explicitly
+(`jit_engine.cpp`), and its generated code is a per-row loop over values and
+null-flag bytes: the fifth engine in this catalogue to leave lanes to the
+auto-vectoriser.
+
+**Three things worth taking.**
+
+1. **Admission by benefit vote.** `jit_level` is a bit mask over expression
+   classes - arithmetic, cast, case, comparison, logical, division, modulo -
+   and its default, one, means adaptive (`expr_jit_types.h`,
+   `System_variable.md`). Under adaptive admission every node of a compilable
+   subtree returns a score and a count (`compute_jit_score`): most nodes vote
+   one, literals vote nothing, a logical `AND` or `OR` counts itself but adds
+   no benefit, and a `CASE` counts each `WHEN` and `THEN` branch as valid only
+   if that branch's own ratio exceeds three tenths (`case_expr_tpl.hpp`); the
+   subtree is compiled only if its score exceeds eighty-eight hundredths of its
+   node count and it has more than two nodes (`expr_jit_rewriter.cpp`,
+   `kExprJitScoreRatio`). It is an admission model by composition - compile
+   when enough of the tree gains - where this engine admits a whole shape or
+   declines it. The place it applies here is the boundary: a project entry
+   whose only fused work is one cheap node may not repay the row conversion
+   Items 13 and 14 measured, and a benefit score over the entry's nodes
+   against a threshold is the cheap form of the "would add a pivot" rule
+   Items 24 and 25 ask for, with the score weights coming from the emitter's
+   op counts rather than a vote of one.
+2. **A sparse guard on 64-bit compress, from a down-clocking machine.**
+   `filter.cpp` compacts by scanning thirty-two selector bytes per step: an
+   all-dropped step is skipped, an all-kept step is one `memmove`, and only a
+   mixed step does work; for 4-byte lanes the mixed step is `vpcompressd`, but
+   for 8-byte lanes the code says that `vpcompressq` "is a fixed four-group
+   cost per batch and, on down-clocking Intel parts, loses to a plain scalar
+   copy once only a few lanes survive", so below six set bits in thirty-two it
+   copies the survivors one by one (`kCompressMinBits`), while the 4-byte path
+   "always takes the vectorised path". Each width is a separate function with
+   a target attribute, dispatched at run time - Item 26's gate as function
+   multiversioning - and the AVX2 form for every width is the scan without any
+   permute table. For milestone 5 this is the row to add before the 64-bit
+   compaction is written: `SelectionVectorOps` is 32-bit today, and the 64-bit
+   form needs the popcount guard measured on the Intel runners, where Item 27's
+   licence effect and this comment point the same way.
+3. **`IN` as a bitset over the literal span.** For integer types the storage
+   layer has `BitsetInPredicate`: a dense bitset over the literals' minimum to
+   maximum, tested with a range check, and a `contains_range` against a
+   segment's zone map that prunes the segment when no literal falls inside it
+   (`column_in_predicate.cpp`). Item 19 left the crossover from the sorted
+   compare chain unmeasured and Item 25 named a gather probe and fingerprint
+   buckets as its arms; this is a third arm for the case that matters most for
+   dates, literals within a short span: subtract the minimum, range-check, and
+   test one bit, which for a span of at most sixty-four values is a shift of a
+   single constant word in lanes with no gather at all, and for longer spans a
+   word gather from a small table. Its `contains_range` is also the batch
+   bounds check of Item 27 for `IN`, stated for a bitset.
+
+**Where it stops.** Semantics are MySQL's; there is no `ANSI` mode and nothing
+about it transfers. The JIT covers arithmetic, casts, `CASE`, comparisons and
+logic, not the calendar. Its one runtime contract check is worth a sentence:
+when a child declared non-nullable produces nulls, the JIT path fails the
+query with a message naming the switch to turn it off ("set jit_level = 0 to
+disable jit and retry", `jit_expr.cpp`), and a compile failure falls back to
+the interpreter with a warning. This engine declines the batch instead, and
+the message that names the switch is the form Item 24's per-expression kill
+switch should take when a kernel is disabled by hand.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
