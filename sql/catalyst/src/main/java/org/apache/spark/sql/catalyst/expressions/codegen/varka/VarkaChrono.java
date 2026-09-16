@@ -134,6 +134,19 @@ public final class VarkaChrono {
   public static final int NARROW_DECOMPOSE_MAX_DAYS = 20161385 - NARROW_BIAS;
 
   /**
+   * The largest magnitude the {@code year} field can have over a day the calendar lowering is
+   * admitted for, {@code [NARROW_MIN_DAYS, NARROW_DECOMPOSE_MAX_DAYS]}: year 42400 at the top,
+   * year -12800 at the bottom. This is the bound the compiler's range analysis gives a lowered
+   * {@code year}, which is what decides whether a checked multiply over it keeps its check. It
+   * was a typed-in 40000 until task 84, which read the narrow range's top as year 33134 and
+   * predated {@link #NARROW_DECOMPOSE_MAX_DAYS} admitting an upward shift 9,266 years further;
+   * derived from the two constants, it cannot fall behind them again.
+   */
+  public static final int YEAR_FIELD_MAGNITUDE = Math.max(
+      Math.abs(LocalDate.ofEpochDay(NARROW_MIN_DAYS).getYear()),
+      LocalDate.ofEpochDay(NARROW_DECOMPOSE_MAX_DAYS).getYear());
+
+  /**
    * The first epoch day a date column can hold under the project's column contract: 0001-01-01,
    * the smallest date Spark SQL can write. The contract is what the compile-time range analysis
    * starts from: a bare column lies in {@code [CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]},

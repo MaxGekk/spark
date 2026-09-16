@@ -877,6 +877,14 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
   `Int.MinValue`) the differential oracle is the plain int32 day wrap that
   `DateAdd.eval` and the kernels implement; Spark's end-to-end row engine adds a
   calendar-day rebase for out-of-range `DATE` results.
+* **One value-range lattice.** The compiler's two range questions - can a
+  calendar node's input leave the range the calendar lowering is exact in, and
+  can a checked int operation overflow - are queries on one analysis
+  (`VarkaRangeAnalysis` over `VarkaValueRange`), asked with the kind the
+  parent's slot gives a node and a guard policy that says whether a calendar
+  consumer above has armed the runtime guards; every operation on the lattice
+  saturates to unknown rather than wrapping, so no caller can prove a check
+  away by overflowing.
 * **No unused configuration.** Every `spark.sql.codegen.varka.*` entry must be
   consumed. Today `enabled`, `classDumpDirectory` and `cache.maxEntries`
   exist, and each is read on the execution path that documents it.
