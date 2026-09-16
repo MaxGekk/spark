@@ -52,15 +52,15 @@ class VarkaTimeArrowCacheSuite extends QueryTest with VarkaSharedSessions {
 
   /** A time of day for row `i`, spread over the day, truncated to `p` fractional digits. */
   private def timeAt(i: Int, p: Int): LocalTime = {
-    val raw = ((i.toLong * 86_400_000_000_000L) / rows + i.toLong * 1_234_567L) %
-      86_400_000_000_000L
+    val raw = ((i.toLong * 86400000000000L) / rows + i.toLong * 1234567L) %
+      86400000000000L
     val unit = math.pow(10, 9 - p).toLong
     LocalTime.ofNanoOfDay((raw / unit) * unit)
   }
 
   /** A day-time interval for row `i`, whole microseconds, both signs. */
   private def intervalAt(i: Int): Duration =
-    Duration.ofNanos((i.toLong - rows / 2) * 7_001_000L * 1000L)
+    Duration.ofNanos((i.toLong - rows / 2) * 7001000L * 1000L)
 
   private def frame(dt: DataType, value: Int => Any, isNull: Int => Boolean) = {
     val data = (0 until rows).map(i => Row(if (isNull(i)) null else value(i)))
