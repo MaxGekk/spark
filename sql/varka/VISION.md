@@ -307,6 +307,19 @@ decoding and serialisation, but its filter loops are scalar bytecode left to
 C2's auto-vectoriser, the same bet as Gandiva's, and its calendar functions run
 row by row over Joda. The evaluator that emits lanes is the step neither took.
 
+**Outside Spark: DuckDB (`src/execution/expression_executor`).** Surveyed on 16
+September 2026 (`SCOPE_MILESTONE_6.md`, item 20). An interpreter over precompiled
+templates with no explicit SIMD in its source, it makes the same structural
+choices in a different medium: validity in sixty-four-bit entries with a bare
+loop for an all-valid entry and a skip for an all-null one, comparisons that
+produce selections rather than booleans, a filter whose output is a slice rather
+than a copy, and conjunct order learned at run time by trial swaps, disabled the
+moment a term can throw. Where it is ahead is the optimizer: a monotone function
+of a column compared with a constant is rewritten into a range on the column by
+bisection, and statistics that rule out overflow swap the checked kernel for the
+unchecked one. This engine has the second of those in scope and should take the
+first.
+
 What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole

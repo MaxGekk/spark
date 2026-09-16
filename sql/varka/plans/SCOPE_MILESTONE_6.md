@@ -1361,6 +1361,98 @@ between five and ten for scalar code; this engine's `compileInList` sorts the
 literals and compares, and the point where that chain loses to another
 membership test in lanes is a measurement not yet made.
 
+
+### Item 20. DuckDB's expression executor, compared
+
+Recorded on 16 September 2026, from a survey of `src/execution/expression_executor`,
+`src/execution/adaptive_filter.cpp`, `src/include/duckdb/common/vector_operations`,
+`src/optimizer/rule`, `src/common/types/date.cpp` and
+`extension/core_functions/scalar/date/date_part.cpp` at commit `d397c964cc`, made
+at the owner's request. The record had one line on DuckDB before this, in
+`PLAN_MILESTONE_3.md`: that its calendar decomposition is Hinnant's. DuckDB is
+an interpreter over precompiled templates, not a compiler, and it uses no
+explicit SIMD anywhere in its source; what it has to teach is in its optimizer
+and in one policy.
+
+**Arrived at twice.** Validity lives in 64-bit entries and a missing mask means
+no nulls (`ValidityMask::CannotHaveNull` is a null pointer); every kernel loop
+walks the entries and dispatches per entry - all valid, a bare loop; none
+valid, skip; mixed, a per-bit check (`scalar_executor.hpp`). That is the
+validity-word algebra with the dense and masked bodies chosen per sixty-four
+rows rather than per batch. Comparisons are evaluated as selections into a true
+and a false vector, specialised at compile time on whether nulls are possible,
+which of the two sinks is wanted and which operand is constant, and a `!=` is
+run as `=` with the sinks swapped (`BinarySelectAdapter`,
+`ComparisonSelectComplement`). A filter's output is a slice - a dictionary over
+the input, no copy (`PhysicalFilter`, `DataChunk::Slice`) - and every kernel
+accepts flat, constant and dictionary input through one view
+(`UnifiedVectorFormat`), which is Item 16's selection narrowing and Item 11's
+several-representations stance together. `CASE` evaluates each `WHEN` only on
+the rows still unresolved and each `THEN` only on the rows that matched
+(`execute_case.cpp`). Its `IN` becomes a chain of `=` below six constants and a
+hash join at or above (`IN_CLAUSE_REWRITE_THRESHOLD`), the scalar tipping point
+Item 19 notes for Trino at eight.
+
+**A third policy for conjunct order.** Velox (Item 18) and Trino (Item 19)
+measure a metric per term. DuckDB's `AdaptiveFilter` measures nothing per term:
+after a five-batch warm-up it runs twenty batches under the current order,
+swaps one random adjacent pair - each pair with its own likelihood, starting at
+one hundred - observes ten batches, keeps the swap if the mean time fell and
+otherwise reverts it and halves that pair's likelihood, never below one. The
+initial order is a static cost table (`ExpressionHeuristics`: arithmetic five,
+`year` twenty, `LIKE` two hundred, an unknown function a thousand). A trial of
+the whole order measures the order that actually ran, so it is not misled by
+correlated terms the way a per-term metric taken under one order can be; it
+pays for that with permanent exploration. And it has Trino's guard in the same
+words: a term that `CanThrow()` disables permutation altogether. If selection
+narrowing is ever built here, the choice between a metric and a trial is a
+measurement on the surface benchmark, not an argument.
+
+**Two things worth taking.**
+
+1. **The monotone preimage.** `MonotonePreimageRule` (July 2026, commit
+   `5e892bb9c0`) rewrites `f(col) OP c` into a range on `col` whenever `f` is a
+   deterministic unary function declared monotone in its argument
+   (`arg_properties.hpp`), by bisecting the column type's finite domain and
+   probing `f` - no per-function inverse, and it bails if a probe errors or
+   returns `NULL`. So `year(d) = 2021` becomes a `BETWEEN` on `d`: two compares
+   in place of a decomposition, and a range a scan can prune on. Spark's
+   optimizer has no such rule (`sql/catalyst/.../optimizer` names neither
+   `Year` nor `DatePart` nor `TruncDate`), and this engine serves `year(d) =
+   2021` today with the full per-lane year decomposition (`PLAN_TASK_37.md`).
+   The rewrite is exact under Spark's semantics too - `year` of a non-null date
+   never fails and the range compare is null-preserving in the same way - and
+   the compiler can bisect `VarkaChrono` itself at compile time, for `year`,
+   `date_trunc`, `unix_date` and the casts, without knowing an inverse. It is a
+   candidate row: it belongs with the algebraic rewrites `PLAN_EGRAPH_PORT.md`
+   plans, or as one Catalyst rule in the fork, and the surface benchmark's
+   `year(d) = 2021` row is its measurement.
+2. **Statistics flip the kernel, and the parts propagate.** `PropagateNumericStats`
+   computes the result's bounds from the children's statistics and, when no
+   overflow is possible, replaces the function's callback with the unchecked
+   operator (`SetFunctionCallback(GetScalarIntegerFunction<BASEOP>)`,
+   `arithmetic.cpp`); the date parts propagate too - `year` at the minimum and
+   maximum date is exact (`PropagateDatePartStatistics`), and `month` is exact
+   only when both endpoints fall in one year, else the fixed `[1, 12]`
+   (`PropagatePartWithinParentStatistics`). Item 15 already holds this
+   engine's version - the batch's own minimum and maximum as the source of a
+   bound the compiler cannot prove, choosing the guard-free body - so this is
+   not new; what DuckDB adds to Item 15 is the propagation rule through the
+   calendar parts, which `VarkaRangeAnalysis` (task 84) can apply as written,
+   and the reminder that the flip is of the body, not of a check inside it.
+
+**Noted for later.** `CASE` with an expensive arm: blending every arm across
+all lanes is right while the arms are cheap, and DuckDB's narrowing to the
+unresolved rows is right when an arm carries a decomposition and few rows reach
+it; where the crossover is in lanes is a measurement. The per-entry dispatch
+inside a batch - a bare body for an all-valid word, a skip for an all-null one
+- is a finer grain than this engine's per-batch choice, one branch per
+sixty-four rows; whether it pays on a mostly-null batch is likewise a
+measurement, not a design. Its `year` extraction normalises into one
+four-hundred-year cycle and interpolates from a cumulative-days table
+(`Date::ExtractYearOffset`), a table lookup where this engine's `VarkaChrono`
+is arithmetic; `calendar-algorithms.md` already settled that question for lanes.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
