@@ -93,6 +93,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic](sql/varka/skills/working-in-this-repo.md#a-recipe-for-a-cheap-agent-ages-at-the-rate-of-the-emitter-not-of-the-arithmetic)
 * [A value that depends on repo state is queried, not chosen](sql/varka/skills/working-in-this-repo.md#a-value-that-depends-on-repo-state-is-queried-not-chosen)
 * [Run `dev/scalastyle` before pushing Scala; its parser is older than the language](sql/varka/skills/working-in-this-repo.md#run-devscalastyle-before-pushing-scala-its-parser-is-older-than-the-language)
+* [A run's job list on this fork says nothing about what the pull request changed](sql/varka/skills/working-in-this-repo.md#a-runs-job-list-on-this-fork-says-nothing-about-what-the-pull-request-changed)
 * [A red Build here may be failing on code this repository does not contain](sql/varka/skills/working-in-this-repo.md#a-red-build-here-may-be-failing-on-code-this-repository-does-not-contain)
 
 <!-- END generated contents -->
