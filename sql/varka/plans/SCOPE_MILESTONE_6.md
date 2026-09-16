@@ -1427,6 +1427,8 @@ measurement on the surface benchmark, not an argument.
    candidate row: it belongs with the algebraic rewrites `PLAN_EGRAPH_PORT.md`
    plans, or as one Catalyst rule in the fork, and the surface benchmark's
    `year(d) = 2021` row is its measurement.
+   Item 21 records DataFusion's form of the same rewrite, declared per function
+   rather than found by bisection, and the ClickHouse origin both cite.
 2. **Statistics flip the kernel, and the parts propagate.** `PropagateNumericStats`
    computes the result's bounds from the children's statistics and, when no
    overflow is possible, replaces the function's callback with the unchecked
@@ -1452,6 +1454,98 @@ measurement, not a design. Its `year` extraction normalises into one
 four-hundred-year cycle and interpolates from a cumulative-days table
 (`Date::ExtractYearOffset`), a table lookup where this engine's `VarkaChrono`
 is arithmetic; `calendar-algorithms.md` already settled that question for lanes.
+
+
+### Item 21. DataFusion's expression layer, compared
+
+Recorded on 16 September 2026, from a survey of `datafusion/expr-common`
+(`interval_arithmetic.rs`), `datafusion/physical-expr` (`intervals/cp_solver.rs`,
+`analysis.rs`, `expressions/binary.rs`, `expressions/case.rs`,
+`physical_expr.rs`), `datafusion/optimizer/src/simplify_expressions` and
+`datafusion/spark` at commit `606ae0f69`, made at the owner's request.
+DataFusion was not in the record. It is an interpreter over Arrow arrays in
+Rust, with no code generation and no explicit SIMD of its own (its kernels are
+arrow-rs's), so what it has to teach is, as with DuckDB, in the analysis it
+does before a kernel runs. It is also where Comet's Spark-compatible functions
+now live (`datafusion/spark`), which makes it the nearest published attempt at
+this engine's contract; Comet itself is not checked out and remains unread.
+
+**Arrived at twice.** A value is an array or a scalar repeated
+(`ColumnarValue`), and every kernel takes either on either side, which is the
+literal slot. `AND` and `OR` short-circuit per batch on the left side's
+bit-count - all false or all true returns without evaluating the right - and
+when the side that cannot decide the operator is rare, no more than one fifth
+of the rows, the right side is evaluated on the filtered batch and scattered
+back (`check_short_circuit`, `pre_selection_scatter`, April 2025, commit
+`4818966fa`): selection narrowing behind a measured threshold, Item 16 again.
+`evaluate_selection` is the general form - filter the batch, evaluate, scatter,
+and never evaluate a fallible expression on an empty batch - and `CASE` is
+compiled into one of five shapes at construction (`EvalMethod`), one of which
+evaluates a `THEN` over the whole batch only when it is a bare column, since
+only that is known cheap and infallible (`is_cheap_and_infallible`). The
+optimizer's `reorder_predicates` (June 2026) is Trino's and DuckDB's initial
+order reduced to two classes, cheap and expensive, with `LIKE` and regular
+expressions the only expensive operators; its `simplify_predicates` folds
+`x > 5 AND x > 6`; its `unwrap_cast` says in its own doc that it is Spark's
+`UnwrapCastInBinaryComparison`. The Spark crate picks a checked or a wrapping
+kernel per call from `enable_ansi_mode` (`math/abs.rs`), and its `date_add`
+wraps, as Spark's does.
+
+**Three things worth taking.**
+
+1. **Backward interval propagation.** `interval_arithmetic.rs` is a complete
+   interval lattice over Arrow types - endpoints that overflow become unbounded,
+   comparisons yield certainly-true, certainly-false or unknown, `and` and `or`
+   compose those - and `cp_solver.rs` (March 2023, commit `3c1e4c0fd`) runs it
+   in both directions over an expression graph: bottom-up to bound a node from
+   its children, which is what `VarkaRangeAnalysis` (task 84) does, and then
+   top-down, from a known interval on a node to tighter intervals on its
+   operands (`propagate_arithmetic`: for `x + y` in `[pL, pU]`, `x` narrows to
+   `[pL, pU] - [yL, yU]`, intersected with its own `[xL, xU]`, and `y` likewise;
+   `propagate_comparison` for the six operators), until a fixed point or an
+   empty interval, which proves the expression unsatisfiable. This engine's
+   analysis has only the first pass. The second is what lets a conjunct bound a
+   sibling: under `d >= DATE'2020-01-01' AND d < DATE'2022-01-01' AND
+   year(date_add(d, i)) = 2021`, the first two conjuncts, asserted true, narrow
+   `d`, and the guard on the third can be decided with that narrower `d` rather
+   than the column contract. It is a second traversal over the same `Range`
+   lattice with the same saturating arithmetic, and `VarkaValueRange` already
+   has the intersect it needs. It should be a task when a guard is found that
+   only a sibling can retire.
+2. **The preimage, declared.** DataFusion has the rewrite Item 20 takes from
+   DuckDB, from January 2026 (commit `c2f3d6541`, `ScalarUDFImpl::preimage`,
+   `udf_preimage.rs`), and it cites ClickHouse's VLDB 2024 paper as the origin -
+   so the idea is in three engines, and ClickHouse's `getMonotonicityForRange`
+   is the part of its evaluator the calendar read did not cover. The difference
+   from DuckDB is the mechanism: a function *declares* its preimage - `date_part`
+   returns `[year-01-01, (year+1)-01-01)` for `YEAR` and nothing else, `floor`
+   returns `[c, c+1)` - as a half-open interval so `=` becomes `>= lo AND <
+   hi` with no upper-bound adjustment, and the simplifier applies it to the six
+   comparisons, to `IS [NOT] DISTINCT FROM` with the `NULL` case written out,
+   and to `IN` lists of at most three literals as a disjunction of ranges
+   (`THRESHOLD_INLINE_INLIST`). For this engine the two mechanisms compose:
+   declare the preimage where `VarkaChrono` has a closed form (`year`,
+   `date_trunc`, the month of a year), and bisect where it does not. The
+   `IS NOT DISTINCT FROM` and `IN` cases are the ones a first version forgets.
+3. **Selectivity from the same lattice.** `analysis.rs` runs the solver with
+   the predicate asserted true over the columns' initial bounds and reads the
+   selectivity off the ratio of the final to the initial interval widths
+   (`cardinality_ratio`), which `FilterExec` uses for its statistics. It is
+   free once the second pass exists, and it is a static estimate to check
+   against, or to seed, whatever measured conjunct policy Items 18 to 20 end
+   in.
+
+**Noted for later.** The `PhysicalExpr` trait carries `evaluate_statistics` and
+`propagate_statistics` over distributions - uniform, exponential, Gaussian,
+Bernoulli, generic - in both directions like the intervals; more machinery than
+a range guard needs, recorded so it is not rediscovered. Its `IN` builds a
+static hash filter when the list is all constants and falls back to a chain of
+`=` otherwise, the same two shapes as Trino's and DuckDB's with the threshold
+left to the set size. The Spark crate's functions are a second reference
+implementation of Spark's calendar semantics, in Rust over Arrow days, that the
+differential could be run against if a case ever needs a third opinion
+(`spark/src/function/datetime`: `add_months`, `date_add`, `date_diff`,
+`date_trunc`, `last_day`, `next_day`, `trunc`, `weekday` and others).
 
 ## 5. Ordering
 

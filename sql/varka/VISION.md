@@ -320,6 +320,19 @@ bisection, and statistics that rule out overflow swap the checked kernel for the
 unchecked one. This engine has the second of those in scope and should take the
 first.
 
+**Outside Spark: DataFusion (`datafusion/physical-expr`, `datafusion/spark`).**
+Surveyed on 16 September 2026 (`SCOPE_MILESTONE_6.md`, item 21). An interpreter
+over Arrow arrays in Rust whose kernels are arrow-rs's, and the home of Comet's
+Spark-compatible functions, so the nearest published attempt at this engine's
+contract. It short-circuits `AND` and `OR` per batch and narrows to the rare
+side behind a measured threshold, compiles `CASE` into one of five shapes, and
+declares the preimage of `year` so that `year(d) = 2021` becomes a range on `d`,
+citing ClickHouse as the origin. What it has that this engine does not is an
+interval lattice run in both directions: bottom-up to bound an expression, as
+task 84's analysis does, and top-down from a known result to its operands, so a
+conjunct can bound its sibling and a guard can be retired by a predicate that
+sits beside it. That second pass is the next thing the range analysis grows.
+
 What this engine does that neither Spark attempt did: it emits the loop as bytecode with the
 Class-File API rather than as Java source through Janino, so every projection
 is its own class and its call sites stay monomorphic; it fuses the whole
