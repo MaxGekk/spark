@@ -2556,6 +2556,24 @@ two lowerings selected by `UseAVX` if it is not. Task 118 quotes the AVX2 file
 beside the full-width one, so the message does not quote a Zen 5 number for a
 path that is a different lowering on the machines most readers have.
 
+
+### 2.57 A comparison over a bare int column stays on the row engine (task 122)
+
+*Opened 16 September 2026 by task 120, when the coverage suite's predicate check
+was tightened to require every conjunct to fuse.*
+
+`year(d) = 2021 AND i > 0` was in the coverage table, and the table's check
+accepted it because *one* conjunct fused. Run end to end, the plan is a row
+`Filter (i > 0)` above `VarkaFilterColumnarToRow (year(d) = 2021)`: the
+compiler's `compare` compiles a non-literal operand through `compileNode`, whose
+value leaves are date columns and fused int fields, so a bare `IntegerType`
+column - `i > 0`, `i = 5`, `i < i2` - declines with "not a date column" while
+`month(d) > 6` fuses. The int32 lane already owns the column (task 63's arithmetic
+reads it through `intOperand`); the gap is one operand rule in `compare`, and the
+guard question is nil, since a comparison cannot overflow. The table's row became
+`year(d) = 2021 AND month(d) > 6` with a note naming this; the row engine
+correctness of the split is covered by `VarkaCoverageDifferentialSuite` either
+way, since the residual conjunct runs above the fused one.
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -2608,7 +2626,7 @@ between them; within a wave the order is free):
 
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
-| 0 | **117**, **116**, 101, 106, 120, 83, 86, 92, 95, 96, 81 | nothing - 117 and 116 are first by decision, the rest by independence; 120 starts on the int32 rows and grows |
+| 0 | **117**, **116**, 101, 106, 120, 122, 83, 86, 92, 95, 96, 81 | nothing - 117 and 116 are first by decision, the rest by independence; 120 starts on the int32 rows and grows |
 | 1 | 84 | after 117: the lattice is built on the merged tree |
 | 2 | 85, 91 | after 84: the lane parameter and the guard bound both take the lattice's interval type |
 | 3 | 28, 29, 119 | after 85 (its row: 85 blocks both); 29 also after 116; 119's evaluator arms for 85's proof subset land with 85, the rest with 29, whose nodes they check |
@@ -2690,8 +2708,9 @@ can start has.
 | 117 | Sync the fork with `apache/spark` master (section 2.52). **Done** (15 September 2026, by the owner, by hand): `origin/master` is now `2219f51c76a`, a merge of `apache:master`, 0 commits behind upstream and 212 ahead; SPARK-53368 is present; the gate's `compile` (218 s) and `wide` (220 s) steps are green on it, 297 + 183 tests, 0 failed, the 10 canceled being the opt-in sweep and JFR cases. Was: first in the milestone by the owner's instruction, infrastructure before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; [SPARK-53368](https://issues.apache.org/jira/browse/SPARK-53368) present afterwards, and the 36 traceable [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtasks still present, by a full-message grep of the log rather than a title prefix |
 | 118 | The closing task: final benchmarks, the README, and the post (section 2.53). **Scoped** (15 September 2026) on the owner's instruction - the milestone ends as milestone 4 did, with task 62's shape; **last in the milestone**, after 105 and 101 | (A) the measurement's plan - arms, benchmarks, the full-width runner; (B) the `TIME` surface and chains measured under the band on a runner the datapath probe proves, with the allocation/arithmetic split and the engine-off ratio beside stock; (C) the README's `TIME` table and reproduction guide, the docs checked; the short and long post drafts, ideas first, numbers last | Four results files per benchmark committed with provenance and band; the README quotes them and nothing else; `dev/varka_quote_check.py` at zero orphans; both drafts exist and name their sources |
 | 119 | The oracle for the long lane: reference evaluator and fuzzer at `long` (section 2.54). **Scoped** (15 September 2026); lands with 29 | `VarkaReferenceEvaluator` over long lanes including both exact-division lowerings, the range guards, `TIME`'s day-modular arithmetic and the interval checks; the fuzz grammar over long, `TIME` and day-time interval trees; the reaches-every-node assertion at the long lane | The fuzzer at ten thousand iterations clean at both vector widths over the long-lane grammar; a deliberately wrong evaluator arm is caught by the fuzzer, not only by the differential |
-| 120 | The coverage table as a differential corpus (section 2.55). **Scoped** (15 September 2026); independent, starts on today's rows | A `sql/core` suite running every `coverage.json` row through both engines over the null-pattern fixtures, projection and predicate forms, both consumers | Every row of the committed table passes; adding an arm without a row fails `VarkaCoverageSuite`, adding a row without correctness fails this suite - the two together are the guarantee |
+| 120 | The coverage table as a differential corpus (section 2.55). **Done** (`PLAN_TASK_120.md`, 16 September 2026): `VarkaCoverageDifferentialSuite` runs every `coverage.json` row on three fixtures under both consumers, 58 tests in 42 seconds. Its first run found the table carrying `year(d) = 2021 AND i > 0` while `i > 0` ran in a row filter above the Varka node - the coverage suite had accepted a predicate if any conjunct fused; it now requires all, the row is `year(d) = 2021 AND month(d) > 6`, and the gap is task 122. Originally scoped (15 September 2026); independent, started on the 57 rows | A `sql/core` suite running every `coverage.json` row through both engines over the null-pattern fixtures, projection and predicate forms, both consumers | Every row of the committed table passes; adding an arm without a row fails `VarkaCoverageSuite`, adding a row without correctness fails this suite - the two together are the guarantee |
 | 121 | The AVX2 arm: the `TIME` surface under `-XX:UseAVX=2` (section 2.56). **Scoped** (15 September 2026); after 105, quoted by 118 | Companion results files for the `TIME` surface under `UseAVX=2` on the laptop and on a Zen 3 runner via the workflow, provenance naming the lowering; the one-or-two-lowerings decision for 2.19 recorded from the numbers | Files committed with datapath and flags; the decision written in 2.19 with its numbers; 118's README table shows the AVX2 column beside the full-width one |
+| 122 | A comparison over a bare int column stays on the row engine (section 2.57). **Scoped** (16 September 2026) by task 120, which tightened the coverage suite to require every conjunct of a predicate row to fuse and found `i > 0` residual | `compare`'s non-literal operand accepts an `IntegerType` column the way `intOperand` does; `i > 0`, `i = 5` and `i < i2` fuse, alone and as conjuncts; a coverage row for each | The three shapes in the coverage table and through `VarkaCoverageDifferentialSuite`; the end-to-end plan for `year(d) = 2021 AND i > 0` has no row filter above the Varka node |
 
 ## 4. Files
 
