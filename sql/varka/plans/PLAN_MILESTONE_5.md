@@ -2556,6 +2556,253 @@ two lowerings selected by `UseAVX` if it is not. Task 118 quotes the AVX2 file
 beside the full-width one, so the message does not quote a Zen 5 number for a
 path that is a different lowering on the machines most readers have.
 
+### 2.59 The no-fallback proof: `PrintIntrinsics` in CI (task 124)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+The Vector API ends a call in one of three places - one instruction, a C2
+sequence, or a silent Java fallback - and only `-XX:+PrintIntrinsics` says
+which (item 26). The datapath probe measures ratios; this is the JVM's own
+statement that every emitted operation was lowered, and it is the only way a
+fallback on a new runner or a new lane type shows itself before a benchmark
+does. **How.** A `sql/core` test forks a JVM with the diagnostic flags over the
+emitter and kernel suites, greps the compiler log for `** not supported` and
+`** Rejected` lines, and fails on any whose method is under a Varka package;
+`dev/varka_datapath.sh` prints the `EnableVectorSupport` line from
+`-Xlog:compilation` beside `MaxVectorSize`. **Done when** the CI job carries it
+and a kernel given an operation the match rules refuse fails it. Size: small.
+Milestone 5's long lanes are the first customers (item 26 lists the operations
+that are sequences or Java on AVX2).
+
+### 2.60 A checksum per arm in the surface driver (task 125)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+The surface driver asserts fusion and counts fallen-back batches but never
+compares the arms' answers (item 18, Raasveldt's pitfall 3.8 in item 27). A
+checksum per entry per arm, computed once outside the timed loop and required
+equal, catches a fast wrong kernel the differential suites happen not to
+cover. **How.** `DateSurfaceBenchmark` folds each entry's result into a
+checksum after the timed iterations, writes it beside the timing, and the
+driver fails when two arms disagree. **Done when** a deliberately wrong kernel
+fails the run and the committed files carry the checksums. Size: small.
+
+### 2.61 The fifth arm: Arrow cache on, engine off (task 126)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+`dev/varka_bench_surface.sh` sets both `spark.sql.codegen.varka.enabled` and
+the Arrow cache serializer from the one `varka` token, while the README says the
+third and fourth arms "differ only by that flag" (item 27). The engine needs the
+Arrow cache to run at all, so the missing control is the Arrow cache with the
+engine off, which attributes the cache format's share of the published ratio.
+**How.** Two tokens, a fifth distribution, the README sentence corrected, and
+cache build time named as excluded from the hot-cache numbers. **Done when**
+the results attribute the ratio and the quote check passes. Size: small. It
+changes a number the write-up quotes, so it precedes 118.
+
+### 2.62 The 64-bit operations table on AVX2 (task 127)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Item 26 read the match rules: without AVX-512DQ long multiply is a five-
+instruction sequence, long absolute value and long minimum and maximum
+reductions are refused and fall to Java, and sub-word masked access needs
+AVX-512BW; Benson (item 25) measured the multiply emulation losing on
+Skylake. The Zen 3 runners are AVX2-only. **How.** JMH rows under
+`-XX:UseAVX=2` on the Zen 5 first, then on the Intel and Zen 3 runners through
+the workflow, for each operation above plus `Long.compress` and vector compress
+at 128 and 256 bits. **Done when** this plan has a table per runner class
+saying one instruction, sequence, or Java, agreeing with item 26. Size:
+medium. Precedes 105.
+
+### 2.63 64-bit compaction with a sparse guard (task 128)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+`SelectionVectorOps` is 32-bit today. StarRocks's compaction (item 29) copies
+survivors one by one below six set bits in thirty-two for 8-byte lanes because
+"vpcompressq ... on down-clocking Intel parts, loses to a plain scalar copy
+once only a few lanes survive", while the 4-byte path always vectorises; the
+compress gate (items 19, 22, 26) adds the AVX2 permute lowering and `PEXT`.
+**How.** The long-lane compaction, a popcount guard on the mixed group behind
+a flag, a log-scale selectivity ladder from one in ten thousand to one, on the
+Zen 5 under both AVX levels and on the Intel runners. **Done when** the guard's
+threshold is a number in a committed file or the guard is rejected by one.
+Size: medium. Precedes 105.
+
+### 2.64 Selectivity policy re-measured at 64-bit lanes (task 129)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Raducanu (item 25) found full computation paying from 30 percent selectivity
+on 32-bit lanes and never on 64-bit ones, and Data Blocks (item 27) gained at
+most 1.5x on 64-bit codes where 32-bit gained several times. **How.** The
+filter and `CASE` ladders run over `LONG` columns at both widths. **Done when**
+every long-lane selectivity decision in this plan has a 64-bit number beside
+it. Size: small once 128 exists. Precedes 105.
+
+### 2.65 Narrowing, built four ways (task 130)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+The surveys converged on the same rule from five directions (items 18 to 21,
+23, 25, 27): narrowing pays only under a heavy remainder, the threshold is all
+lanes for one vector and lower per extra vector refilled, a selection vector
+that feeds gathers loses its SIMD gain, and where to skip - per lane group or
+per batch - is the open disagreement between Polychroniou 2019 and ByteSlice.
+VOILA's Q6 (item 27) is the loss case for today's all-lanes conjunction: 2.2x on
+a selective filter. **How.** Four arms in the emitter behind one flag: blend as
+today; lane-group skip on the running conjunction word; batch-granular
+compress, evaluate, expand; in-register refill. `VarkaNarrowingBenchmark`
+extended to a log-scale ladder with a thirty-op calendar remainder, at both
+widths, with stall cycles beside time where `perf stat` runs, since Kersten
+warns IPC misleads and Ross's appendix says each skip point serialises the
+blocks around it. **Registered predictions.** Lang's threshold: the refill arm
+wins only when idle lanes times remainder ops exceed the skip's cost; Ngom's
+crossover above about fifteen ops; Raducanu's loss: forced narrowing costs on
+cheap remainders; the disagreement: the batch-granular arm beats the
+lane-group arm at random selectivity and loses on clustered data. **Done when**
+the emitter's decision rule cites the file and the predictions are scored
+here. Size: large; its own plan. After 84.
+
+### 2.66 The batch-size sweep (task 131)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Kersten's optimum is one to four thousand rows and this engine runs ten
+thousand; Shen derives the length from the working set a step touches against
+the last-level cache; Photon sizes the output pool from the plan's fixed
+allocations per batch (item 25). **How.** Arrow cache batches from one to
+sixteen thousand rows on the surface and the chains; the touched set per shape
+computed at emission; the pool sized from the plan. **Done when** item 14 has a
+chosen default with the curve committed. Size: medium.
+
+### 2.67 Kernel time split from conversion time, and a pivot budget (task 132)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Photon never starts an island mid-plan because each costs a pivot; Comet and
+Gluten count transitions per stage and revert past a threshold; StarRocks
+admits a subtree to its JIT only when a benefit vote clears a ratio (items 24,
+25, 28, 29). This engine fuses any Project or Filter over a columnar child, and
+items 13 and 14 measured the row boundary at most of the cost of a small
+entry. **How.** Per-node metrics for kernel time and conversion time; a "would
+add a pivot" decline reason; a benefit score over an entry's nodes, weighted by
+the emitter's op counts, against a threshold. **Done when** a one-cheap-node
+project over a row consumer declines with that reason and the metric shows the
+share. Size: medium. After 131, which supplies the numbers.
+
+### 2.68 The frequency-licence probes (task 133)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Gottschlag (item 27) gives the licence mechanism: three per-core frequency
+levels on Intel server parts, the middle entered by heavy 256-bit or light
+512-bit instructions, the lowest by heavy 512-bit ones, held for about two
+milliseconds after the last such instruction; the calendar kernels are
+multiply-heavy and the datapath probe uses only adds. Neither paper measures
+AMD or anything after Skylake-SP, so the census machines are outside its
+evidence, and HotSpot itself defaults to AVX2 on the Skylake steppings it
+measured (item 26). **How.** Three effect-based probes in the survey job, no
+root needed: a heavy-multiply datapath variant beside the light one; a tail
+probe timing the scalar canary in short windows after a 512-bit burst; a
+sibling probe with a scalar control pinned to the other hyperthread. **Done
+when** the census has a licence column per CPU family, with the Zen 5 as the
+negative control. Size: small.
+
+### 2.69 The partitions ladder (task 134)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Schmidt (item 25) shows a 48-core socket's DRAM saturating at about twelve
+scalar threads, with SIMD only lowering that count; Kersten's branch-free
+selection lost a fifth at twenty threads from bandwidth. This engine's
+headline numbers are one partition on one core, and a Spark executor runs one
+task per core. **How.** The surface benchmark at 1, 6, 12 and 24 partitions on
+the Zen 5, and at physical-core and hardware-thread counts on an SMT runner
+(Gottschlag's sibling channel), as committed files. **Done when** the write-up
+states per shape whether a win is compute-bound. Size: small to medium; needs
+a quiet machine window.
+
+### 2.70 The backward interval pass (task 135)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+DataFusion's constraint solver runs its interval lattice in both directions
+(item 21); this engine's `VarkaRangeAnalysis` has only the bottom-up pass.
+The top-down pass, from a known interval on a node to tighter intervals on its
+operands, lets a conjunct bound a sibling: under `d >= DATE'2020-01-01' AND d
+< DATE'2022-01-01' AND year(date_add(d, i)) = 2021`, the first two conjuncts
+narrow `d` and the guard on the third is decided from that. **How.** A second
+traversal over the same `Range` lattice with the same saturating arithmetic
+and `VarkaValueRange`'s intersect; `VarkaRangeAnalysisSuite` and the IR fuzzer
+extended with sibling-bound cases. **Done when** a guard the forward pass
+cannot remove is removed by a sibling bound in a coverage row and the
+differential agrees. Size: medium. After 84.
+
+### 2.71 The preimage rewrite (task 136)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Three engines rewrite `f(col) OP c` into a range on `col` for monotone `f`:
+ClickHouse declares the preimage per function, DataFusion declares it as a
+half-open interval, DuckDB bisects the column's domain with only a
+monotonicity flag (items 20, 21, 23). Spark's optimizer has no such rule, and
+this engine serves `year(d) = 2021` with the full per-lane decomposition.
+**How.** A rule that declares the preimage where `VarkaChrono` has a closed
+form and bisects where it does not, covering the six comparisons, `IS NOT
+DISTINCT FROM` with its null case, and short `IN` lists as disjunctions of
+ranges. **Done when** the surface's year-equality row runs as two compares and
+the differential and fuzzer agree. Size: medium. **Milestone 6** scope (items
+20 and 21); the row is here so its plan sits beside 135.
+
+### 2.72 Batch bounds at cache-write time, and a bounds check ahead of `IN` (task 137)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Data Blocks keeps a minimum and maximum per attribute per block and a
+positional table per value byte; BLU puts a cheap minimum-maximum check ahead
+of a long `IN` list; this engine's item 15 already asks for the batch's own
+bounds as a guard source (items 15, 27). **How.** `ArrowCachedBatchSerializer`
+writes a minimum and maximum per column per batch; the guard decision becomes
+an interval compare instead of `allWithin`'s pass; `compileInList` emits a
+bounds test before the chain so a batch outside the literals' span skips it.
+**Done when** a sorted date column retires its guards on every batch without a
+pass over the data and the `IN` benchmark shows the bounds test's cost and
+skip. Size: medium. The cache half is **milestone 6** scope (item 15); the
+`IN` half is this milestone's and lands first.
+
+### 2.73 Three test forms (task 138)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Photon runs one expected table through every specialisation of a kernel;
+Comet's test base has a form asserting both engines throw or both agree;
+SQLancer's ternary-logic partitioning needs no second engine at all (items
+24, 25, and the follow-up list). **How.** In `VarkaCoverageDifferentialSuite`:
+every row through the dense body, the masked body and a lane tail with
+poisoned null lanes; a "maybe throws" form in `VarkaSharedSessions` for `ANSI`
+rows; and for every filter row the three queries `p`, `NOT p` and `p IS NULL`,
+whose counts must sum to the table. **Done when** all three run on every row.
+Size: small; lands with the next coverage change.
+
+### 2.74 A per-expression switch, and the tier ladder (task 139)
+
+*Opened 16 September 2026, from the September surveys (`SCOPE_MILESTONE_6.md` items 16 to 29, #223).*
+
+Comet disables one expression alone and StarRocks's runtime check names the
+switch in its message (items 24, 29); Kohn tracks per-morsel rates and Kersten
+shows the JVM's cheap tier is a hundred times off, so time-to-C2 per shape is
+the only lever (item 27). **How.** `spark.sql.codegen.varka.expression.<Class>.enabled`
+producing a decline reason that names the flag, which is **milestone 6**
+scope (item 24) and is recorded here for the message form; and, this
+milestone's, a time-to-tier-4 ladder per shape and a batches-below-C2 counter
+through the telemetry attribute and JFR, extending `VarkaColdStartBenchmark`.
+**Done when** a disabled class declines with the reason and the cold-start
+file carries batches executed before each kernel's tier-4 compile landed.
+Size: small to medium.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -2628,6 +2875,18 @@ code), 92 lands with 29 (its default only matters once four-lane vectors
 exist), and 101 has to exist before 105 quotes anything. 81's date corpus can
 start at once; its `TIME` half waits for 102.
 
+Rows 124 to 139, opened on 16 September 2026 from the surveys recorded in
+`SCOPE_MILESTONE_6.md` items 16 to 29 (#223), join the waves as follows: 124,
+125 and 126 are wave 0 (evidence, a day each, no dependency); 127, 128 and 129
+precede 105, since no 64-bit number is published without them; 130 is its own
+node after 84 (it consumes the lattice's op counts); 131 then 132 are wave 0
+with 132 waiting on 131; 133 and 134 run in any quiet-machine window and are
+quoted by 118; 135 follows 84 and 136 and 137's cache half are milestone 6
+scope rows kept here so their measurement plans sit beside the rows that need
+them; 138 lands with the next coverage change; 139's ladder extends the
+cold-start benchmark and its switch is milestone 6. The critical path is
+unchanged; 127 to 129 add a gate in front of 105.
+
 **The first week, read off the graph:** 117 and 116 in parallel - one is a
 merge, the other a test, and they touch nothing in common - with 106 and 101
 alongside, since neither touches the engine; then 84 the moment 117's gate is
@@ -2692,6 +2951,22 @@ can start has.
 | 119 | The oracle for the long lane: reference evaluator and fuzzer at `long` (section 2.54). **Scoped** (15 September 2026); lands with 29 | `VarkaReferenceEvaluator` over long lanes including both exact-division lowerings, the range guards, `TIME`'s day-modular arithmetic and the interval checks; the fuzz grammar over long, `TIME` and day-time interval trees; the reaches-every-node assertion at the long lane | The fuzzer at ten thousand iterations clean at both vector widths over the long-lane grammar; a deliberately wrong evaluator arm is caught by the fuzzer, not only by the differential |
 | 120 | The coverage table as a differential corpus (section 2.55). **Scoped** (15 September 2026); independent, starts on today's rows | A `sql/core` suite running every `coverage.json` row through both engines over the null-pattern fixtures, projection and predicate forms, both consumers | Every row of the committed table passes; adding an arm without a row fails `VarkaCoverageSuite`, adding a row without correctness fails this suite - the two together are the guarantee |
 | 121 | The AVX2 arm: the `TIME` surface under `-XX:UseAVX=2` (section 2.56). **Scoped** (15 September 2026); after 105, quoted by 118 | Companion results files for the `TIME` surface under `UseAVX=2` on the laptop and on a Zen 3 runner via the workflow, provenance naming the lowering; the one-or-two-lowerings decision for 2.19 recorded from the numbers | Files committed with datapath and flags; the decision written in 2.19 with its numbers; 118's README table shows the AVX2 column beside the full-width one |
+| 124 | The no-fallback proof: `PrintIntrinsics` in CI (section 2.59). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | A test that runs the emitter and kernel suites in a forked JVM under `-XX:+UnlockDiagnosticVMOptions -XX:+PrintIntrinsics` and fails on any `** not supported` or `** Rejected` line whose method is a Varka class; a line in `dev/varka_datapath.sh` asserting `EnableVectorSupport=true` from `-Xlog:compilation` | The Varka engine CI job carries the test; a kernel deliberately given an operation the match rules refuse fails it |
+| 125 | A checksum per arm in the surface driver (section 2.60). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `DateSurfaceBenchmark` computes one checksum per entry per arm outside the timed loop and asserts the arms agree; the checksum is written beside the timing in the results file | A deliberately wrong kernel fails the run; the committed results files carry the checksums |
+| 126 | The fifth arm: Arrow cache on, engine off (section 2.61). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `dev/varka_bench_surface.sh` takes the engine flag and the Arrow-cache flag as separate tokens; a fifth distribution runs the Arrow cache with the engine off; the README sentence saying the arms "differ only by that flag" is corrected and cache build time is named as excluded | The surface results attribute the published ratio between cache format and kernel; `dev/varka_quote_check.py` passes on the rewritten README |
+| 127 | The 64-bit operations table on AVX2 (section 2.62). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | JMH rows under `-XX:UseAVX=2` for long multiply, long absolute value, long minimum and maximum reductions, masked sub-word loads and stores, `Long.compress`, and vector compress at 128 and 256 bits, on the Zen 5 and, through the workflow, on the Intel and Zen 3 runners | A table in this plan saying per runner class which operation is one instruction, a sequence or a Java fallback, checked against `SCOPE_MILESTONE_6.md` item 26's reading of the match rules |
+| 128 | 64-bit compaction with a sparse guard (section 2.63). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `SelectionVectorOps` extended to long lanes, measured on a log-scale selectivity ladder with and without a popcount guard on the mixed group, on the Zen 5 under both AVX levels and on the Intel runners | The guard threshold is a measured number in a committed results file, or the guard is rejected by that file |
+| 129 | Selectivity policy re-measured at 64-bit lanes (section 2.64). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | The filter and `CASE` ladders of `VarkaFilterBenchmark` and the narrowing benchmark run over `LONG` columns at both widths | No int32 selectivity threshold is inherited by a long-lane decision without a 64-bit number beside it in this plan |
+| 130 | Narrowing, built four ways (section 2.65). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Four arms in the emitter behind one flag - blend as today, lane-group skip on the running conjunction word, batch-granular compress-evaluate-expand, in-register refill - measured by `VarkaNarrowingBenchmark` on a log-scale ladder from one in ten thousand to one with a thirty-op calendar remainder, at both widths, with stall cycles where `perf stat` is available | The decision rule in the emitter cites the results file; the registered predictions (Lang's and Ross's threshold, Raducanu's forced-narrowing loss) are scored in section 2.65 |
+| 131 | The batch-size sweep (section 2.66). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Arrow cache batches from one to sixteen thousand rows; the per-shape working set computed at emission against the last-level cache; the output pool sized from the plan's fixed allocations per batch | Item 14 of `SCOPE_MILESTONE_6.md` has a chosen default with the curve committed |
+| 132 | Kernel time split from conversion time, and a pivot budget (section 2.67). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Per-node metrics for kernel and conversion; a "would add a pivot" decline reason; a benefit score over an entry's nodes, weighted by the emitter's op counts, against a threshold | A one-cheap-node project over a row consumer is declined with that reason and the metrics show the conversion share; the coverage differential is unchanged |
+| 133 | The frequency-licence probes (section 2.68). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | A heavy-multiply variant of the datapath probe beside the light one; a tail probe timing the scalar canary in short windows after a 512-bit burst; a sibling probe with a scalar control pinned to the other hyperthread; all in the survey job across the runner census | The runner census in `PLAN_TASK_62.md` section 11 has a licence column per CPU family, with the Zen 5 as the negative control |
+| 134 | The partitions ladder (section 2.69). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | The surface benchmark at 1, 6, 12 and 24 partitions on the Zen 5, and at physical-core and hardware-thread counts on an SMT runner, as committed results files | The write-up states per shape whether a win is compute-bound and survives full occupancy, citing the files |
+| 135 | The backward interval pass (section 2.70). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | A second traversal over `VarkaValueRange` from a known result interval to tighter operand intervals, so a conjunct can retire a sibling's guard; `VarkaRangeAnalysisSuite` and the IR fuzzer extended | A guard the forward pass cannot remove is removed by a sibling bound in a coverage row, and the differential agrees |
+| 136 | The preimage rewrite (section 2.71). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `year(d) = c`, `date_trunc`, `unix_date` and the casts rewritten into ranges on the column, declared where `VarkaChrono` has a closed form and bisected where it does not, covering `IS NOT DISTINCT FROM` and short `IN` lists. **Milestone 6** (`SCOPE_MILESTONE_6.md` items 20 and 21, #223) | The surface's year-equality row runs as two compares; the differential and the fuzzer agree |
+| 137 | Batch bounds at cache-write time, and a bounds check ahead of `IN` (section 2.72). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Minimum and maximum per column per batch written by `ArrowCachedBatchSerializer`; a guard decided by interval compare; `compileInList` emitting a bounds test before the chain. **Milestone 6** for the cache half (`SCOPE_MILESTONE_6.md` items 15 and 27, #223); the `IN` half is this milestone's | A sorted date column retires its guards on every batch without a pass over the data; the `IN` benchmark shows the bounds test's cost and skip |
+| 138 | Three test forms (section 2.73). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Every coverage row through the dense body, the masked body and a lane tail with poisoned null lanes; a "both engines throw or both agree" form in `VarkaSharedSessions` for `ANSI` rows; a ternary-logic-partitioning oracle running `p`, `NOT p` and `p IS NULL` for every filter row | All three run in `VarkaCoverageDifferentialSuite`; the partition oracle needs no second engine |
+| 139 | A per-expression switch, and the tier ladder (section 2.74). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `spark.sql.codegen.varka.expression.<Class>.enabled` producing a decline reason that names the flag - **Milestone 6** (`SCOPE_MILESTONE_6.md` item 24, #223); and, this milestone's, a time-to-tier-4 ladder and a batches-below-C2 counter extending `VarkaColdStartBenchmark` | A disabled class declines with the reason; the cold-start file carries batches executed before each kernel's tier-4 compile landed |
 
 ## 4. Files
 
