@@ -2854,6 +2854,21 @@ through the telemetry attribute and JFR, extending `VarkaColdStartBenchmark`.
 file carries batches executed before each kernel's tier-4 compile landed.
 Size: small to medium.
 
+
+### 2.75 The chains at occupancy (task 140)
+
+*Opened 17 September 2026 by task 134, whose ladder measured the surface only.*
+
+Task 134 found the engine's advantage narrowing from 19.0x at one core to 16.2x
+at twelve on the date surface, and explained it as a fast implementation
+reaching the shared bottleneck sooner. `Chains` is the surface's opposite - the
+same operations three and four deep until the kernel is bound by what it
+computes - and the write-up's headline comes from it, so the explanation's
+prediction was worth testing there. **How.** Two rungs, one and twelve cores,
+two arms each, measured on the laptop in one session because the committed chain
+files are the EPYC 9V45 runner's. **Done when** the write-up can state the
+occupancy behaviour of both halves of the benchmark rather than one. Size:
+small; needs a quiet machine window.
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3020,6 +3035,7 @@ can start has.
 | 137 | Batch bounds at cache-write time, and a bounds check ahead of `IN` (section 2.72). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Minimum and maximum per column per batch written by `ArrowCachedBatchSerializer`; a guard decided by interval compare; `compileInList` emitting a bounds test before the chain. **Milestone 6** for the cache half (`SCOPE_MILESTONE_6.md` items 15 and 27, #223); the `IN` half is this milestone's | A sorted date column retires its guards on every batch without a pass over the data; the `IN` benchmark shows the bounds test's cost and skip |
 | 138 | Three test forms (section 2.73). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Every coverage row through the dense body, the masked body and a lane tail with poisoned null lanes; a "both engines throw or both agree" form in `VarkaSharedSessions` for `ANSI` rows; a ternary-logic-partitioning oracle running `p`, `NOT p` and `p IS NULL` for every filter row | All three run in `VarkaCoverageDifferentialSuite`; the partition oracle needs no second engine |
 | 139 | A per-expression switch, and the tier ladder (section 2.74). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `spark.sql.codegen.varka.expression.<Class>.enabled` producing a decline reason that names the flag - **Milestone 6** (`SCOPE_MILESTONE_6.md` item 24, #223); and, this milestone's, a time-to-tier-4 ladder and a batches-below-C2 counter extending `VarkaColdStartBenchmark` | A disabled class declines with the reason; the cold-start file carries batches executed before each kernel's tier-4 compile landed |
+| 140 | The chains at occupancy (section 2.75). **Done** (`PLAN_TASK_140.md` 9, 17 September 2026) from task 134's own finding: the compute-bound half of the benchmark at 1 and 12 cores, two arms per rung, four committed files. The advantage **grows** under occupancy - 10.29x at one core, 11.42x at twelve - where the surface lost 15%, and not one of the twelve chains falls, the worst improving from 8.93x to 10.19x. The mechanism is task 134's seen from the other side: on the surface the row engine scaled better (5.62x against 5.35x), on the chains the engine does (7.09x against 6.18x), because there is arithmetic to hide latency behind. So the write-up's headline, which comes from the chains, is conservative for a loaded executor rather than flattering | The `chains` benchmark through the same driver at `--cores` 1 and 12, measured in one session on the laptop, since the committed chain files are the EPYC 9V45 runner's | Four files with `cores` in their provenance, every row fused, and the per-shape split stated beside task 134's |
 
 ## 4. Files
 
