@@ -2882,6 +2882,25 @@ the bench drivers under `dev/` for `varka-bench`; leave the developer-only
 scripts alone, since no CI job runs them. **Done when** a bench-only change runs
 the bench job alone and a catalyst change stops requiring `yarn` and
 `kubernetes`. Size: small.
+
+### 2.79 The width-8 compaction arm (task 144)
+
+*Opened 17 September 2026 by the review of task 29's plan (`PLAN_TASK_29.md`
+2.1).*
+
+When a Varka filter passes a batch on, every column is compacted to the selected
+rows, and the vectorised `compress` path serves four-byte vectors only
+(`VarkaKernelEvaluator.scala:1304`, a width check by design); an eight-byte
+column takes `compactFixed`'s per-row `copyFromSafe`. That is the case today for
+every `bigint` and timestamp column that merely sits in a filtered table,
+whatever the filter is on, so it is a cost the current engine already pays and
+not one the long lane introduces. **How.** A `compactInt64` beside
+`compactInt32` behind the same width switch, priced on a filter over a table
+carrying two eight-byte columns it does not read - or a measured decision that
+the per-row copy is close enough at width eight, which the four-byte
+measurement in milestone 4 item 11 cannot answer. **Done when** the number is
+committed for both vector widths with the per-row path kept as the reference
+arm. Size: small; needs a quiet machine window.
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3050,6 +3069,7 @@ can start has.
 | 139 | A per-expression switch, and the tier ladder (section 2.74). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `spark.sql.codegen.varka.expression.<Class>.enabled` producing a decline reason that names the flag - **Milestone 6** (`SCOPE_MILESTONE_6.md` item 24, #223); and, this milestone's, a time-to-tier-4 ladder and a batches-below-C2 counter extending `VarkaColdStartBenchmark` | A disabled class declines with the reason; the cold-start file carries batches executed before each kernel's tier-4 compile landed |
 | 140 | The chains at occupancy (section 2.75). **Done** (`PLAN_TASK_140.md` 9, 17 September 2026) from task 134's own finding: the compute-bound half of the benchmark at 1 and 12 cores, two arms per rung, four committed files. The advantage **grows** under occupancy - 10.29x at one core, 11.42x at twelve - where the surface lost 15%, and not one of the twelve chains falls, the worst improving from 8.93x to 10.19x. The mechanism is task 134's seen from the other side: on the surface the row engine scaled better (5.62x against 5.35x), on the chains the engine does (7.09x against 6.18x), because there is arithmetic to hide latency behind. So the write-up's headline, which comes from the chains, is conservative for a loaded executor rather than flattering | The `chains` benchmark through the same driver at `--cores` 1 and 12, measured in one session on the laptop, since the committed chain files are the EPYC 9V45 runner's | Four files with `cores` in their provenance, every row fused, and the per-shape split stated beside task 134's |
 | 141 | The module map claims Varka's own files (section 2.76). **Done** (`PLAN_TASK_141.md`, 17 September 2026) from task 123's first demonstration: the base was right - #234 printed `changed files vs base: 9` - and every gate still answered true, because `sql/varka/coverage.json` and `sql/varka/emitted_bytes.json` sit under a path no module claimed and so selected `root`, which means test everything. They belong to catalyst, whose suites generate and compare them, and the bench drivers under `dev/` belong to `varka-bench`. #234's files now answer false for `yarn`, `kubernetes` and `varka-bench`, and **a bench-only change runs the bench job alone**, which is task 94's open half | Four regexes on two modules, each naming the suite that reads the file | The next pull request's job list, with `yarn` and `kubernetes` absent for the first time |
+| 144 | The width-8 compaction arm (section 2.79). **Scoped** (17 September 2026) from the review of task 29's plan: every eight-byte column forwarded through a Varka filter takes the per-row `copyFromSafe` path today, because the `compress` compaction serves four-byte vectors only - a cost the engine already pays, not one the long lane introduces | A `compactInt64` beside `compactInt32`, or a measured decision not to, priced on a filter over a table with `bigint` and timestamp columns it does not read | The compaction number committed for both vector widths, the per-row path kept as the reference arm |
 
 ## 4. Files
 

@@ -49,8 +49,12 @@ fused entry fixes the lane and an entry of the other lane is demoted to residual
 What it does not do is say so. The decline it records is "exceeds the emitter's
 fused budget", because that is the branch `fitsBudgets` returning false lands in,
 and a user reading EXPLAIN would go looking for a chain-depth problem that is not
-there. One reason string is the whole fix, and it is the only compiler behaviour
-this task changes rather than adds.
+there. The fix is small but it is not one string: `fitsBudgets` answers a
+boolean, so the compiler cannot tell a lane mismatch from a budget breach, and
+four assertions in `VarkaExpressionCompilerSuite` pin the budget reason for
+cases that really are budget breaches. The compiler checks the lane itself,
+before `fitsBudgets`, and records its own reason. That is the only compiler
+behaviour this task changes rather than adds.
 
 **The Arrow path is width-agnostic already.** `extractMorsel` takes a
 `BaseFixedWidthVector` and maps its data and validity buffers by address, so an
@@ -78,12 +82,33 @@ this task would have started in Arrow rather than in the compiler and would have
 been three times the size. Task 116 exists precisely so that this paragraph is a
 fact rather than a hope.
 
-**One thing the check found that the milestone row does not mention.** The
-compaction path (`compactFixed`, used by the filter evaluator to write only
-selected rows) is a width check, not a type check, and it serves four-byte
-vectors only; its own comment says "Width 8 would arrive with a new lane type".
-A long filter output therefore falls back to the per-row typed copy, which is
-correct and slower. That is left to its own decision, section 3.2.
+**One thing the check found that the milestone row does not mention, and it is
+not about this task.** When a Varka filter passes a batch on, every column of
+the batch is compacted to the selected rows, and the vectorised `compress` path
+(`VarkaKernelEvaluator.scala:1304`) is a width check that serves four-byte
+vectors only; an eight-byte column takes `compactFixed`'s per-row
+`copyFromSafe`. That is the case *today*, for every `bigint` or timestamp column
+that merely sits in a filtered table, whatever the filter is on - task 29 does
+not create it and does not widen it. It is a finding for its own row (section
+3.2), not a clause of this one.
+
+### 2.1 What review of this plan corrected, 17 September 2026
+
+Reviewed against the tree before any code, and two claims in the first draft
+were wrong in the direction that matters - each would have admitted an
+expression that computes a wrong answer on some rows and the right one on the
+rest. The draft said differences on zoned `TIMESTAMP` were safe because
+instants subtract identically in any zone; Spark's `SubtractTimestamps`
+subtracts local date-times in the session zone, which differs across a DST
+transition. The draft admitted `ts + INTERVAL` without restricting the type;
+`timestampAddDayTime` adds calendar days in the zone. Both are now `TIMESTAMP_NTZ`
+only, and the zoned forms join the refusal list with a test that straddles the
+transitions. Three claims were overstated rather than wrong: boolean projection
+outputs, which no lane supports; the lane-mismatch decline as "one string", when
+`fitsBudgets` returns a boolean; and the compaction finding, which is every
+forwarded eight-byte column today rather than a long filter's output, and which
+belongs to a new row rather than task 92. `bigint + literal` moved to task 104,
+where the decision about its overflow mode lives.
 
 ## 3. The design
 
@@ -124,20 +149,39 @@ carries the lane rather than the evaluator deriving it per batch.
 
 **The SQL this admits, and why it is this set.** With no new emitter node, the
 twelve lane-generic types cover: comparisons on all five types (`=`, `<`, `<=`,
-`>`, `>=`), both as a filter's selection bitmap and as a fused boolean; `IS NULL`
-and `IS NOT NULL`; `AND`, `OR`, `NOT` over those; `greatest` and `least`;
-`CASE WHEN` over them; and the wrapping and checked add, subtract and negate that
-`TIMESTAMP_NTZ - TIMESTAMP_NTZ` (a day-time interval), `ts + INTERVAL` and
-`bigint +/- literal` need. That is the row's "comparisons, differences, literal
-arithmetic" exactly, and no more.
+`>`, `>=`) as a filter's conjuncts and inside a `CASE WHEN` - not as a boolean
+projection output, which the compiler declines at every lane today (comparisons
+are compiled by `compileCond` only, and `allocateVector` has no `BooleanType`
+arm); `IS NULL` and `IS NOT NULL`; `AND`, `OR`, `NOT` over those; `greatest` and
+`least`; `CASE WHEN` over them; and, for `TIMESTAMP_NTZ` only, the two pieces of
+arithmetic whose overflow mode the *type* decides rather than a config:
+`ntz - ntz` (a day-time interval) and `ntz + INTERVAL DAY TO SECOND`. Spark
+evaluates both in UTC for the NTZ family (`zoneIdForType`) through
+`LocalDateTime.until` and `instantToMicros`, whose exact arithmetic raises on
+overflow whatever the ANSI setting, so the checked mode is the only correct
+lowering and there is no mode to choose. `bigint + literal` is deliberately not
+here: its mode *is* a config, and deciding it under the 2.15 lattice is task
+104's whole subject. That is the row's "comparisons, differences, literal
+arithmetic", read narrowly enough to be right.
 
 **Zoned operations decline, and are shown to.** `TimestampType` is micros in the
 same lane as `TimestampNTZType`, so nothing physical stops a leaf being built for
-it - which is the danger. A zoned operation whose answer depends on a time zone
-(`date_trunc` on a `TIMESTAMP`, any field extraction, zoned day or month
-arithmetic) must be refused at the compiler with its own reason, not computed as
-if it were local time. Comparisons and differences are safe because two instants
-compare and subtract identically in any zone.
+it - which is the danger, and it is wider than the first draft of this plan
+said. On a zoned `TIMESTAMP`, Spark's own semantics make *both* differences and
+interval addition zone-dependent: `SubtractTimestamps` evaluates
+`ChronoUnit.MICROS.between(localStart, localEnd)` on the two instants' local
+date-times in the session zone (`DateTimeUtils.subtractTimestamps`), and
+`TimestampAddInterval` evaluates `.atZone(zoneId).plusDays(days).plus(micros)`
+(`DateTimeUtils.timestampAddDayTime`), calendar days in that zone. Across a DST
+transition neither equals the instant arithmetic a long kernel would do, so a
+kernel that computed them would be wrong by an hour on the rows that cross it and
+right everywhere else - the worst kind of wrong. So for zoned `TIMESTAMP` this
+task admits comparisons and nothing else: two instants compare identically in
+every zone, and that is the only operation of which that is true. `-`,
+`+ INTERVAL`, `date_trunc`, every field extraction and all day or month
+arithmetic on `TimestampType` are refused at the compiler with their own reason.
+The `TIMESTAMP_NTZ` family is evaluated in UTC (`zoneIdForType`), which is what
+makes its two arithmetic forms plain long arithmetic and admissible above.
 
 ### 3.2 What is deliberately unchanged
 
@@ -150,12 +194,18 @@ compare and subtract identically in any zone.
 * **`TIME` and interval expressions** beyond comparisons and the differences
   named above - `hour(t)`, `time_trunc`, `make_time`, interval scaling - are
   tasks 102 and 103, and the divisions they need are task 88.
-* **The ANSI arithmetic matrix over `bigint`** - `try_*`, the error-identity
-  differential, `div`, `%`, `pmod` - is task 104.
-* **The width-8 compaction arm** (section 2's finding): a filter over a long
-  column produces its output through the per-row typed copy. Whether the
-  four-byte `compress` path is worth widening is a measurement, and it belongs
-  with task 92's validity write rather than here.
+* **All `LongType` arithmetic** - `bi + 1` included - together with `try_*`, the
+  error-identity differential, `div`, `%` and `pmod`, is task 104: the overflow
+  mode of `bigint` arithmetic is a configuration decision under the 2.15
+  lattice, and admitting even the literal form here would make that decision by
+  accident.
+* **Boolean projection outputs** (`SELECT bi > 5`) are declined at every lane
+  today and stay so; they are a destination-vector question, not a lane one.
+* **The width-8 compaction arm** (section 2's finding) is a new milestone row,
+  opened by this plan's review rather than folded in: it affects every
+  eight-byte column forwarded through any Varka filter today, so it is neither
+  this task's to fix nor task 92's, whose subject is the validity write at four
+  lanes.
 * **The calendar family**, which stays `INT` and keeps `Lane.requireInt`.
 
 ### 3.3 Registered op counts
@@ -188,9 +238,14 @@ without regeneration, which is this task's equivalent of an op count.
    because a differential passes trivially when everything falls back.
 3. **A mixed-lane projection.** `SELECT d + 1, bi + 1` fuses one lane, leaves the
    other residual, and the decline reason names the lane rather than the budget.
-4. **A zoned operation on `TIMESTAMP`** declines with its own reason, and its
-   answer matches the row engine's - the "demonstrably declined, not wrong" half
-   of the row's admission rule.
+4. **Zoned operations on `TIMESTAMP`** - `ts - ts`, `ts + INTERVAL '1' DAY`,
+   `date_trunc`, `hour(ts)` - each declines with its own reason and answers
+   what the row engine answers, under a session zone that observes DST
+   (`America/Los_Angeles`) and over instants that straddle both transitions of
+   one year. The straddling rows are the point: on any other rows a wrongly
+   admitted kernel agrees with Spark, so a fixture without them would pass a
+   kernel that is wrong. The "demonstrably declined, not wrong" half of the row's
+   admission rule.
 5. **A long filter**, where the output goes through the selection path, over a
    batch with nulls: proves the compaction fallback of section 2 is correct even
    though it is not fast.
@@ -217,8 +272,12 @@ gate rather than a measurement.
    expression section 3.1 admits.
 2. **A `bigint` comparison filter over an Arrow-cached table fuses and declines
    no batch**, and its end-to-end throughput is between 0.45x and 0.60x the same
-   filter over an `int` column of the same row count - the range task 142 measured
-   per shape, carried through unchanged, because the lane is all that differs.
+   filter over an `int` column of the same row count. Task 142's per-shape
+   kernel ratio is 2.11x to 2.20x out of cache, and end to end the cached
+   column's bytes double as well, while the per-batch fixed costs - the plan
+   walk, the batch handling - do not; the band is wide enough to hold both
+   effects and narrow enough to catch a lane that costs three times, which is
+   what the single-rung measurement first said.
 3. **The first failure will be in the literal table**, not in the lane: two
    tables under one index space is the one place in this design where a wrong
    answer is silent rather than loud. Test 1 is what catches it.
@@ -235,21 +294,36 @@ gate rather than a measurement.
 3. **Admitting at the gate what the compiler will not fuse.** Widening
    `isArrowBacked` before the compiler builds long leaves would decline batches
    one layer later and slower (task 116's warning). Both move in the same commit.
-4. **Overflow in a timestamp difference.** `TIMESTAMP_NTZ - TIMESTAMP_NTZ` in
-   micros can overflow a long for extreme instants; the difference must use the
-   checked mode - which the emitter has at this lane - so the batch declines and
-   the row engine raises, rather than wrapping into a plausible interval.
+4. **Overflow in NTZ arithmetic.** `ntz - ntz` and `ntz + interval` can overflow
+   a long for extreme instants, and the row engine raises there whatever the ANSI
+   setting, because `LocalDateTime.until` and `instantToMicros` use exact
+   arithmetic. The lowering must be the checked mode - which the emitter has at
+   this lane - so the batch declines and the row engine raises, rather than
+   wrapping into a plausible interval. Test 1's fixtures carry the extreme
+   instants so that the decline is exercised, not assumed.
 5. **The epilogue's method size.** A long lane halves the lanes per group, so a
    batch takes twice the groups and the epilogue grows; the 64KB method limit is
    a known open case (milestone 5's register, at the owner's request). A wide
    long projection is the first shape likely to reach it, and the failure is loud.
-6. **A `TIME(p)` literal's unit.** All precisions are stored as nanoseconds, so a
-   literal must be widened to nanos by the compiler, not by the kernel; test 1
-   across `p` in {0, 3, 6, 9} is what holds it.
+6. **`TIME(p)` and precision.** Every precision is nanoseconds in the lane and in
+   the literal - `TimeType`'s physical value is already nanos, so there is no
+   widening to get wrong - but Catalyst inserts casts between precisions, and a
+   comparison of a `TIME(3)` column with a `TIME(6)` literal reaches the compiler
+   through one; the compiler must see through it or decline it, never drop it.
+   Test 1 across `p` in {0, 3, 6, 9} with literals of a different `p` is what
+   holds it.
+7. **The coverage fixture's ordinals.** Adding the five long columns to the
+   shared `childOutput` renumbers every ordinal after them, which task 122's
+   review found breaks tests that assert an ordinal; the new columns go at the
+   end, and any test that needs its own layout builds its own list.
+8. **This plan assumes #236.** The single-lane demotion in section 2 rests on
+   `fitsBudgets` refusing a lane mix, which task 85's step 4 added; nothing in
+   section 8 starts before it merges.
 
 ## 8. Sequencing
 
-Each commit green on its own, and each one alone is a working decline:
+After #236 (task 85, step 4) merges, and not before - risk 8. Each commit green
+on its own, and each one alone is a working decline:
 
 1. `laneOf` and the long leaves in the compiler, with every long expression still
    declining for want of a gate - the compiler suite's admissions only.
