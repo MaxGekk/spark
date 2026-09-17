@@ -325,6 +325,76 @@ on its own, and each one alone is a working decline:
 
 ## 9. Outcome
 
-*To be written when the work lands, section by section as the plan's own rule
-asks. Nothing above is to be rewritten to look prescient; a correction is added
-and says what it corrects.*
+Landed 17 September 2026, in the three steps section 8 asked for plus this
+section: the compiler (`d021820890a`), the evaluator with the end-to-end suite
+(`7b209b8d012`), the coverage table (`c9ae233cbf9`). A `bigint`, `TIME(p)` or
+day-time interval column read from the Arrow cache now reaches a kernel, and
+the comparisons, hull ops and `CASE WHEN` over it answer what the row engine
+answers - 34 end-to-end shapes over three null patterns under both consumers,
+16 new coverage rows through the differential corpus (78 tests, from 58), and
+104 compiler tests, from 95.
+
+**The four lists were the whole task, as section 2 said.** `laneOf` in the
+compiler, three vector classes in `isArrowBacked`, three destinations in
+`allocateVector` built from Spark's own Arrow field for the type, and the
+eight-argument `run` behind a branch on the plan's lane. The long literal
+table lives in the sink beside the bounds and follows their rollback, and the
+compiled plan carries it with a `require` that at most one of its two tables
+is populated.
+
+### 9.1 The predictions, scored
+
+1. **Right.** The emitter diff is zero lines: `git diff origin/master --stat
+   -- sql/catalyst/src/main/java` is empty. Every shape this task admits is the
+   twelve node types task 85 shipped.
+2. **Not scored here.** No end-to-end throughput was measured, as section 6
+   said it would not be; the 0.45x to 0.60x band waits for the first filter
+   number task 105 or its like commits, and stays registered so it can be
+   scored then rather than adjusted now.
+3. **Wrong, and in an instructive direction.** The literal table never
+   failed. The first failure was in the suite's own SQL (a literal prefix), and
+   the second was a shape the plan did not list at all: `dt < INTERVAL '0'
+   SECOND` fused end to end and declined in the coverage suite, because the
+   coverage suite compiles the *analyzed* form, in which the SECOND-typed
+   literal sits behind a `Cast` to the column's DAY TO SECOND that the
+   optimizer folds before a query runs. The place a wrong answer could hide
+   silently was guarded well enough that nothing hid there; the place a
+   *decline* hid was one the plan had not thought to look.
+
+### 9.2 What moved that the plan did not list
+
+* **The day-time interval unit relabel.** `Cast.castToDayTimeInterval` keeps
+  the microseconds whole for a SECOND end field
+  (`SparkIntervalUtils.durationToMicros`: `case DT.SECOND => micros`) and
+  truncates to the unit for a coarser one. The compiler sees through the first
+  as the twin of the year-month MONTH relabel and declines the second with its
+  reason. Found by the coverage suite, pinned by a compiler test both ways.
+* **The lane guard inside one expression.** Section 3.1 planned the
+  entry-versus-kernel check; the IR's constructors also refuse a mix *inside*
+  an expression, and `CASE WHEN l > 0 THEN d ELSE d2` type-checks with its
+  condition on one lane and its branches on the other. `sameLane` asks before
+  `IfElse`, `And` and `Or` are built and records its own reason, so a
+  well-typed query declines instead of throwing in the planner.
+* **`columnRef` takes the lane** rather than the plan's separate
+  `longColumnRef`; and the coverage fixtures gained `l2` and `dt2` beside the
+  `t`, `t2`, `l`, `dt` the milestone named, because a column-to-column
+  comparison needs two of each type.
+* **The int arms kept their own type tests.** Section 3.1 (a) said every
+  leaf-building arm would ask `laneOf`; the date, int and year-month arms
+  carry distinctions `laneOf` flattens (a date is not an int operand), so they
+  were left as they are and `laneOf` names the lane for the long arms, the
+  timestamp refusal and the mismatch messages. Recorded rather than done
+  silently.
+* **`coalesce` over long columns fuses**, though section 3.1's list did not
+  name it: it is `IfElse(IsNotNull(a), a, b)` over the same leaves, and
+  refusing it would have taken an arm whose only purpose was to refuse
+  correct code. Not added to the coverage table, since the table lists what
+  the task set out to cover.
+
+### 9.3 What this leaves for later
+
+The end-to-end number (task 105); `IN` over a long column and every `TIME`
+operation beyond a comparison (task 102); interval arithmetic (103); `bigint`
+arithmetic, `l + 1` included (104); the width-8 compaction path a long filter's
+survivors take (128); and the two timestamp types (`SCOPE_MILESTONE_6.md` item
+31). The lesson about the two forms the suites compile is in `SKILLS.md`.
