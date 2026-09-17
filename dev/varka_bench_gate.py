@@ -173,6 +173,52 @@ THROUGHPUT_UNGATED = {
 THROUGHPUT_UNGATED["dayofweek" + THRU] = "not an invariant: 1 loss in 27 revisions, at an early one"
 
 
+# The long lane's end-to-end file (task 144). Every table pairs one shape at two widths, so
+# each width's Varka arm is gated against its own baseline: the file's subject is the ratio
+# BETWEEN the widths, and gating that would pin a number rather than an invariant - 0.31x on one
+# shape and 0.97x on another is the finding, not a rule. What must be true is the same thing the
+# throughput file asserts, twice per table: the kernels beat the row engine. One revision so far,
+# and the margins are 1.4x to 8.3x, so the direction is not in doubt on thin history.
+LONG_LANE_PAIRED = [
+    ("filter, column against column", 2000000),
+    ("filter, column against literal", 2000000),
+    ("filter, two conjuncts and a null check", 2000000),
+    ("projection, greatest", 2000000),
+    ("projection, CASE WHEN over a comparison", 2000000),
+    ("filter, column against column, 20000000 rows", 20000000),
+    ("filter, column against literal, 20000000 rows", 20000000),
+]
+
+LONG_LANE_SINGLE = [
+    ("filter, TIME comparison", 2000000),
+    ("projection, greatest over TIME", 2000000),
+    ("filter, day-time interval comparison", 2000000),
+    ("projection, least over day-time intervals", 2000000),
+]
+
+LONG_LANE_PAIRS = [
+    (
+        f"{t} over {rows} Arrow-cached rows",
+        f"{w} lane, varka (SIMD)",
+        f"{w} lane, baseline (Janino)",
+    )
+    for t, rows in LONG_LANE_PAIRED
+    for w in ("int32", "int64")
+] + [
+    (f"{t} over {rows} Arrow-cached rows", "varka (SIMD)", "baseline (Janino)")
+    for t, rows in LONG_LANE_SINGLE
+]
+
+_CROSSED = "compare and output crossed over 20000000 Arrow-cached rows"
+
+LONG_LANE_UNGATED = {
+    _CROSSED: (
+        "no baseline arm: six Varka-only cases whose subject is which of them is "
+        "fastest (task 144 section 9.1, and task 145 out of it)"
+    ),
+}
+
+
 # Tables that a committed revision holds and the current file does not. They are
 # listed so that --history reads clean: a walk back through the record should
 # report broken invariants, not the ordinary fact that sections get renamed.
@@ -201,6 +247,9 @@ def parse(text):
 def rules_for(path):
     if "ParityBenchmark" in path:
         return PARITY_PAIRS, PARITY_UNGATED
+    # Before the ThroughputBenchmark arm, whose name this one contains.
+    if "LongLaneThroughputBenchmark" in path:
+        return LONG_LANE_PAIRS, LONG_LANE_UNGATED
     if "ThroughputBenchmark" in path:
         return THROUGHPUT_PAIRS, THROUGHPUT_UNGATED
     return None, None

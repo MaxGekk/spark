@@ -394,3 +394,28 @@ cheaper than its width wherever there is issue slack to absorb it.
 
 The same discipline one level up is `PLAN_TASK_134.md`'s partitions ladder,
 which exists because one core and twelve cores are also not the same place.
+
+## A kernel ratio is not an end-to-end ratio, in either direction
+
+Task 142 measured what a 64-bit lane costs against a 32-bit one over memory
+segments with no Spark above them: 1.5x to 2.0x while both arms are in cache, a
+flat 2.11x to 2.20x once they are not. Task 29's plan then predicted what that
+would be worth in a query - 0.45x to 0.60x of the int lane for a comparison
+filter - by carrying the kernel ratio up a layer.
+
+Measured (task 144), no case meets that band, and the misses go both ways. At two
+million Arrow-cached rows the long lane costs 0.73x to 0.96x of the int lane,
+because the cache read, the batch machinery and the filter's plumbing are most of
+the work and none of them doubles with the lane. At twenty million rows one
+filter stays at 0.97x while another falls to 0.31x - below the predicted band and
+below the kernel ratio - because at that scale the fast shape is fast enough for
+the surviving column's compaction to dominate, and the eight-byte compaction path
+is a per-row copy where the four-byte one vectorises.
+
+Two habits follow. When predicting an end-to-end number from a kernel number,
+predict the *direction* and name what else is in the query, because the fixed
+costs decide the magnitude and they do not scale with the change under test. And
+when an end-to-end ratio surprises you, read the executed plans of the two arms
+before explaining it: here the fast and slow cases differed by one clause -
+`VarkaFilterColumnarToRow (pred)` against the same with `List(<column>)` - and
+that clause, not the lane, was worth a factor of ten.

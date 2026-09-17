@@ -28,6 +28,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A number superseded inside its own PR loses its provenance when the PR squash-merges](sql/varka/skills/benchmarking.md#a-number-superseded-inside-its-own-pr-loses-its-provenance-when-the-pr-squash-merges)
 * [A band says which moves to read; an invariant says which to stop the line for](sql/varka/skills/benchmarking.md#a-band-says-which-moves-to-read-an-invariant-says-which-to-stop-the-line-for)
 * [A benchmark that changes bytes per row must be a ladder, not a row count](sql/varka/skills/benchmarking.md#a-benchmark-that-changes-bytes-per-row-must-be-a-ladder-not-a-row-count)
+* [A kernel ratio is not an end-to-end ratio, in either direction](sql/varka/skills/benchmarking.md#a-kernel-ratio-is-not-an-end-to-end-ratio-in-either-direction)
 
 #### [Build and environment](sql/varka/skills/build-and-environment.md)
 * [Classpath Shadowing (the stub trap)](sql/varka/skills/build-and-environment.md#classpath-shadowing-the-stub-trap)

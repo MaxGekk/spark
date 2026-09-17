@@ -2953,6 +2953,38 @@ which Spark's configuration does not even select. **Done when** the hook's own
 self-test pins both directions of each rule and runs whenever the hook is
 committed. Size: small.
 
+### 2.80 What the long lane costs end to end (task 144)
+
+*Opened 17 September 2026 by task 29's registered prediction, which nothing had
+scored.*
+
+Task 142 priced the lane at the kernel and task 29 predicted what that would be
+worth in a query - 0.45x to 0.60x of the int lane for a comparison filter - and
+then could not measure it, because the number it needed is an end-to-end one.
+Four tasks are about to be built on this lane and judged by ratios. **How.** One
+shape at two widths over identical values, Varka on and off, at two row counts,
+with every case asserting it fused. **Done when** the per-shape ratio is
+committed with the scale it was measured at. Size: small; needs a quiet machine.
+
+### 2.81 A Varka filter that forwards a column costs ten times one that does not (task 145)
+
+*Opened 18 September 2026 by task 144's crossed experiment, which found it while
+looking for something else.*
+
+At twenty million rows, `SELECT i FROM t WHERE i > 50000` runs at 1101.9 M
+rows/s; `SELECT i FROM t WHERE l > <literal>` - the same filter shape with one
+*forwarded* column - runs at 103.0, and `SELECT l ... WHERE i > 50000` at 99.0.
+Both widths, so it is not the lane. The plans differ by one clause:
+`VarkaFilterColumnarToRow (pred)` against
+`VarkaFilterColumnarToRow (pred), List(<column>)`, which is the compaction of a
+column the filter did not read. A second column's scan cannot explain ten times.
+**How.** Instrument the forwarded-column path against the one-column path at the
+same selectivity, then decide whether the cost is the compaction, the batch
+assembly or the extra scan - `dev/varka_emit.sh --asm` and the evaluator's own
+metrics before any redesign. **Done when** the tenfold gap is explained by a
+measurement and either closed or recorded as a bound with its reason. Size:
+medium. Precedes 105, which quotes surface entries that forward columns.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3123,6 +3155,8 @@ can start has.
 | 141 | The module map claims Varka's own files (section 2.76). **Done** (`PLAN_TASK_141.md`, 17 September 2026) from task 123's first demonstration: the base was right - #234 printed `changed files vs base: 9` - and every gate still answered true, because `sql/varka/coverage.json` and `sql/varka/emitted_bytes.json` sit under a path no module claimed and so selected `root`, which means test everything. They belong to catalyst, whose suites generate and compare them, and the bench drivers under `dev/` belong to `varka-bench`. #234's files now answer false for `yarn`, `kubernetes` and `varka-bench`, and **a bench-only change runs the bench job alone**, which is task 94's open half | Four regexes on two modules, each naming the suite that reads the file | The next pull request's job list, with `yarn` and `kubernetes` absent for the first time |
 | 142 | What a 64-bit lane costs (section 2.77). **Done** (`PLAN_TASK_142.md` 9, 17 September 2026) from task 85's own finding: the long lane is priced against the int one for eight shapes over a four-rung row ladder, so the halved headroom is a committed number before task 104 is judged against it | A committed `VarkaLongLaneBenchmark` results file whose rungs put both arms in the same cache level, and a per-shape ratio the milestone's later long-lane tasks can be read against |
 | 143 | The pre-commit hook judges the commit, not the file (section 2.78). **Done** (`PLAN_TASK_143.md`, 17 September 2026) from a finding in task 142's own merge commit: line-anchored findings are scoped to the commit's diff, and the Python column scan takes ruff's own single-chunk exemption | A hook self-test that fails in both directions for each rule and runs whenever the hook is among the committed files; the merge commit that started it reports nothing |
+| 144 | What the long lane costs end to end (section 2.80). **Done** (`PLAN_TASK_144.md` 9, 18 September 2026) from task 29's unscored prediction: the lane costs 0.73x to 0.96x of the int lane at two million rows and 0.31x to 0.97x at twenty million - never the kernel's 2.1x, and never one band, so task 29's predicted 0.45x-0.60x is wrong in both directions depending on the shape | `VarkaLongLaneThroughputBenchmark` in `sql/core`, one shape at two widths over identical values, Varka on and off, at two row counts, every case asserting it fused | The committed results file, task 29's 6.1.2 scored, and the per-shape ratios the long-lane tasks are read against |
+| 145 | A Varka filter that forwards a column costs ten times one that does not (section 2.81). **Scoped** (18 September 2026) from task 144's crossed experiment: 1101.9 M rows/s for a one-column filter against 103.0 when one column is forwarded, at both widths, where the plans differ only by the forwarded column's compaction | Instrument the forwarded path against the one-column path at equal selectivity and attribute the gap - compaction, batch assembly or the extra scan - before any redesign | The gap explained by a measurement and either closed or recorded as a bound with its reason |
 
 ## 4. Files
 
