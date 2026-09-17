@@ -571,3 +571,51 @@ put it in step 4, with steps 2 and 3 on `INT` alone. But a refusal that cannot
 be built cannot be tested: with one member in the enum, every constructor check
 above is unreachable code. The member is added here, the emitter refuses it, and
 the refusals have tests; nothing else about step 4 moved.
+
+### 9.3 Step 3, landed: the emitter reads a lane
+
+`Lane` exists with its `INT` member, the emission carries one, and the int32
+bytes did not move - 17 September 2026.
+
+**The descriptor.** A nested enum in the emitter whose every field is derived
+from two facts, the vector class and the scalar type: the load, store,
+broadcast, lanewise, compare and blend shapes, the byte shift from a lane index
+to an offset, the scalar's array type, and the species constant for a baked lane
+count. Deriving rather than listing is what stops a second member disagreeing
+with the first about the shape of `lanewise` or `compare`. One value is
+deliberately not derived: `broadcast` takes `CD_int` at the int lane and must
+keep it, because `IntVector` also declares `broadcast(VectorSpecies, long)` and
+a widened descriptor would silently select it - the risk section 7 named.
+
+**Where the lane lives.** `Analysis` carries it, one per emitted class rather
+than one per node, because a kernel's loop, its epilogue and its stores are one
+species. `analyze` used to refuse any node that was not `INT`; it now refuses
+any node whose lane differs from the emission's, which is the same refusal today
+and the right one when a second member exists.
+
+**The twenty-eight sites converted**, in four batches with the oracle run after
+each: the species prologue and the hoisted literal broadcasts; the column load
+and the store, masked and dense, and the unhoisted broadcast; `IfElse`'s blend,
+`IntArith`'s lanewise op and the four lanewise calls plus the compare of its
+overflow test, and `IntNeg`'s compare and multiply; then the shared
+`emitAndValidatedOp` receiver, `emitRangeGuard`'s two bound compares, and
+`emitPick`'s op and blend, which are `greatest` and `least`. That is fewer sites
+than section 2's estimate of about forty because several of them are one shared
+helper reached from many arms - the estimate counted call sites, and the
+conversion counts emitting ones.
+
+**The calendar family keeps the int descriptors and says so.** `Lane.requireInt`
+is called at the three entry points that carry the analysis - `emitChrono`,
+`emitMakeDate`, `emitAddMonths` - and every one of the hundred and forty sites
+below them is reached through those. Adding the check to each would have meant
+plumbing an `Analysis` through helpers that take nothing but a `CodeBuilder` and
+int slots, which is cost without cover: the tree cannot be wider by then,
+because the IR's constructors refuse a calendar node over a wider child and
+`analyze` refuses a node whose lane differs from the emission's. The check is
+the third line of that defence and the one that speaks for the kernels.
+
+**Checked.** `VarkaEmittedBytesSuite` green after every batch with no
+regeneration, which is this step's whole admission rule: not one int32 method
+body moved through a refactor of a 5 924-line file. The gate's compile, wide and
+narrow steps are green at 327 and 256 tests.
+

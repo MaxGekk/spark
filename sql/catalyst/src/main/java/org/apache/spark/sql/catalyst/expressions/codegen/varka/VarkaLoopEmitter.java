@@ -631,6 +631,136 @@ public final class VarkaLoopEmitter {
   private static final int WORD_DEAD = -2;
 
   /**
+   * Everything about an emission that names its lane's width, in one place, so that adding a
+   * lane extends this enum instead of reworking the emitter.
+   *
+   * <p>The emitter reads a lane in about forty places - the loads and stores, the broadcast, the
+   * arithmetic and comparison shapes, the blend, the species constant, the byte stride, the
+   * array a scalar argument comes from - and supplied int32 at every one of them by assumption
+   * while every node was int32. Those places now ask a {@code Lane}; the roughly one hundred and
+   * forty calendar sites do not, because a calendar lowering decomposes a 32-bit epoch day and
+   * has no meaning at another width, so they require {@link #INT} instead.
+   *
+   * <p>Every descriptor here is derived from two facts - the vector class and the scalar type -
+   * rather than written out per member, so a second member cannot disagree with the first about
+   * the shape of {@code lanewise} or {@code compare}. {@code VarkaLoopEmitterSuite} pins the
+   * derivation against the descriptors the emitter used before it existed.
+   *
+   * <p>One derived value is deliberately not: {@code broadcast} takes {@code CD_int} at the int
+   * lane and must keep it, because {@code IntVector} also declares
+   * {@code broadcast(VectorSpecies, long)} and a widened descriptor would silently select it.
+   */
+  enum Lane {
+    /** 32-bit lanes: dates, ints, year-month intervals - every shape the compiler admits today. */
+    INT(VarkaVectorIR.LaneType.INT, "jdk.incubator.vector.IntVector", Integer.SIZE,
+        ConstantDescs.CD_int);
+
+    private final VarkaVectorIR.LaneType laneType;
+    /** The lane's vector class: the receiver of every load, store and lanewise call. */
+    final ClassDesc vector;
+    /** The lane's width in bits, which names its species constants. */
+    final int bits;
+    /** The scalar type a lane holds, as a literal argument and as an array element. */
+    final ClassDesc scalar;
+    /** The array a runtime scalar argument arrives in - {@code int[]} at the int lane. */
+    final ClassDesc scalarArray;
+    /** log2 of the lane's width in bytes: the shift from a lane index to a byte offset. */
+    final int byteShift;
+    /** {@code V.broadcast(VectorSpecies, scalar)} (static). */
+    final MethodTypeDesc broadcast;
+    /** {@code V.fromMemorySegment(VectorSpecies, MemorySegment, long, ByteOrder)} (static). */
+    final MethodTypeDesc fromMemorySegmentDense;
+    /** The same load with a mask, which is the epilogue's only reason to differ. */
+    final MethodTypeDesc fromMemorySegmentMasked;
+    /** {@code void V.intoMemorySegment(MemorySegment, long, ByteOrder)}. */
+    final MethodTypeDesc intoMemorySegmentDense;
+    /** {@code void V.intoMemorySegment(MemorySegment, long, ByteOrder, VectorMask)}. */
+    final MethodTypeDesc intoMemorySegmentMasked;
+    /** {@code V V.add/sub/max/min(Vector)} - the parameter is the erased {@code Vector}. */
+    final MethodTypeDesc lanewiseVV;
+    /** The deliberately wrong shape behind {@link VarkaEmitOptions#misdescribeAdd()}. */
+    final MethodTypeDesc lanewiseVVWrong;
+    /** {@code V V.add/sub/and/mul/div(scalar)} - the broadcast-scalar convenience. */
+    final MethodTypeDesc lanewiseVI;
+    /** {@code V V.add/sub(scalar, VectorMask)}. */
+    final MethodTypeDesc lanewiseVIMasked;
+    /** {@code V V.lanewise(VectorOperators.Binary, Vector)} - XOR and AND. */
+    final MethodTypeDesc lanewiseBinaryV;
+    /** {@code V V.lanewise(VectorOperators.Binary, scalar)} - the shifts. */
+    final MethodTypeDesc lanewiseBinaryI;
+    /** {@code VectorMask V.compare(VectorOperators.Comparison, Vector)} - erased. */
+    final MethodTypeDesc compareVV;
+    /** {@code VectorMask V.compare(VectorOperators.Comparison, scalar)}. */
+    final MethodTypeDesc compareVI;
+    /** {@code V V.blend(Vector, VectorMask)} - erased {@code Vector}. */
+    final MethodTypeDesc blend;
+
+    Lane(VarkaVectorIR.LaneType laneType, String vectorClass, int bits, ClassDesc scalar) {
+      this.laneType = laneType;
+      this.vector = ClassDesc.of(vectorClass);
+      this.bits = bits;
+      this.scalar = scalar;
+      this.scalarArray = scalar.arrayType();
+      this.byteShift = Integer.numberOfTrailingZeros(bits / Byte.SIZE);
+      this.broadcast = MethodTypeDesc.of(vector, VECTOR_SPECIES, scalar);
+      this.fromMemorySegmentDense = MethodTypeDesc.of(vector, VECTOR_SPECIES, MEMORY_SEGMENT,
+          ConstantDescs.CD_long, BYTE_ORDER);
+      this.fromMemorySegmentMasked = MethodTypeDesc.of(vector, VECTOR_SPECIES, MEMORY_SEGMENT,
+          ConstantDescs.CD_long, BYTE_ORDER, VECTOR_MASK);
+      this.intoMemorySegmentDense = MethodTypeDesc.of(ConstantDescs.CD_void, MEMORY_SEGMENT,
+          ConstantDescs.CD_long, BYTE_ORDER);
+      this.intoMemorySegmentMasked = MethodTypeDesc.of(ConstantDescs.CD_void, MEMORY_SEGMENT,
+          ConstantDescs.CD_long, BYTE_ORDER, VECTOR_MASK);
+      this.lanewiseVV = MethodTypeDesc.of(vector, VECTOR);
+      this.lanewiseVVWrong = MethodTypeDesc.of(vector, vector);
+      this.lanewiseVI = MethodTypeDesc.of(vector, scalar);
+      this.lanewiseVIMasked = MethodTypeDesc.of(vector, scalar, VECTOR_MASK);
+      this.lanewiseBinaryV = MethodTypeDesc.of(vector, VO_BINARY, VECTOR);
+      this.lanewiseBinaryI = MethodTypeDesc.of(vector, VO_BINARY, scalar);
+      this.compareVV = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
+      this.compareVI = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, scalar);
+      this.blend = MethodTypeDesc.of(vector, VECTOR, VECTOR_MASK);
+    }
+
+    /** The lane an IR node is on. */
+    static Lane of(VarkaVectorIR.LaneType laneType) {
+      for (Lane lane : values()) {
+        if (lane.laneType == laneType) {
+          return lane;
+        }
+      }
+      throw new IllegalArgumentException("unsupported lane type " + laneType);
+    }
+
+    /**
+     * Refuses an emission on any lane but the int one. The calendar kernels - about a hundred
+     * and forty of the emitter's per-lane sites - decompose a 32-bit epoch day with constants
+     * and shifts chosen for that width, so they have no meaning at another. They keep the int
+     * descriptors below and call this on entry rather than reading the lane, which is what
+     * makes their assumption a statement instead of a silence.
+     *
+     * <p>Two things already make a wider tree unreachable here - the IR's constructors refuse a
+     * calendar node over a wider child, and {@link Analysis#analyze} refuses a node whose lane
+     * differs from the emission's - so this is the third line of the same defence, and the one
+     * that speaks for the kernels themselves.
+     */
+    void requireInt(VarkaVectorIR node) {
+      if (this != INT) {
+        throw new IllegalArgumentException("the calendar lowering needs int lanes, not "
+            + laneType + ", for a " + node.getClass().getSimpleName());
+      }
+    }
+
+    /**
+     * The species constant for a baked lane count, or {@code SPECIES_PREFERRED} for 0: sixteen
+     * int lanes is {@code SPECIES_512}, and eight long lanes is the same 512 bits.
+     */
+    String speciesField(int lanes) {
+      return lanes == 0 ? "SPECIES_PREFERRED" : "SPECIES_" + lanes * bits;
+    }
+  }
+
+  /**
    * The lane count this JVM's kernels run at, read once. An emitted class is defined by the shape
    * cache in the JVM that will run it and lives only in memory, so what
    * {@code IntVector.SPECIES_PREFERRED} answers here is what the class will see - and the class
@@ -1461,6 +1591,12 @@ public final class VarkaLoopEmitter {
      * time and call the general validity helpers; see {@link VarkaLoopEmitter#emitLanes}.
      */
     final int lanes;
+    /**
+     * The lane this emission is on, and so every descriptor that names a width. It is one per
+     * emitted class rather than one per node: a kernel's loop, its epilogue and its stores are
+     * one species, which is what {@link #analyze}'s refusal below keeps true.
+     */
+    Lane lane = Lane.INT;
     /** Distinct nodes in first-visit order, with how often each is used. */
     final Map<VarkaVectorIR, Integer> useCount = new LinkedHashMap<>();
     /** Per distinct node, the bitset of input ordinals its subtree references. */
@@ -1852,7 +1988,12 @@ public final class VarkaLoopEmitter {
     }
 
     private void analyze(VarkaVectorIR node) {
-      if (node.laneType() != VarkaVectorIR.LaneType.INT) {
+      // One species per emitted class: the lane is read from the first node analysed and every
+      // later node must agree with it. The emitter serves the int lane only, so the second
+      // arm of this refusal is what a `LONG` tree meets until the descriptor has a second
+      // member; the first is what a mixed-lane *emission* would meet, which the IR's own
+      // constructors already make unbuildable inside one tree.
+      if (node.laneType() != lane.laneType) {
         throw new IllegalArgumentException("unsupported lane type " + node.laneType());
       }
       Integer seen = useCount.get(node);
@@ -3089,7 +3230,8 @@ public final class VarkaLoopEmitter {
     // validity helpers are in use, so the class cannot disagree with the helper names beside it,
     // and the lane count is a bytecode constant rather than a call. Otherwise SPECIES_PREFERRED and
     // its length(), which is what a width with no specialised helpers does.
-    cb.getstatic(INT_VECTOR, speciesField(analysis.lanes), VECTOR_SPECIES);
+    cb.getstatic(analysis.lane.vector, analysis.lane.speciesField(analysis.lanes),
+        VECTOR_SPECIES);
     cb.astore(s.species);
     if (analysis.lanes != 0) {
       cb.loadConstant(analysis.lanes);
@@ -3110,7 +3252,7 @@ public final class VarkaLoopEmitter {
       if (s.broadcastSlot != null) {
         cb.aload(s.species);
         cb.iload(s.scalarArg[j]);
-        cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+        cb.invokestatic(analysis.lane.vector, "broadcast", analysis.lane.broadcast);
         cb.astore(s.broadcastSlot[j]);
       }
     }
@@ -3419,9 +3561,11 @@ public final class VarkaLoopEmitter {
       cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
       if (s.epilogueMask != null) {
         cb.aload(s.epilogueMask);
-        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", INTO_MEMORY_SEGMENT_MASKED);
+        cb.invokevirtual(analysis.lane.vector, "intoMemorySegment",
+            analysis.lane.intoMemorySegmentMasked);
       } else {
-        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", INTO_MEMORY_SEGMENT_DENSE);
+        cb.invokevirtual(analysis.lane.vector, "intoMemorySegment",
+            analysis.lane.intoMemorySegmentDense);
       }
       if (!validityWritten && !wordKnownEarly) {
         emitRootValidityOr(cb, dense, analysis, s, o, root);
@@ -3765,9 +3909,11 @@ public final class VarkaLoopEmitter {
         cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
         if (s.epilogueMask != null) {
           cb.aload(s.epilogueMask);
-          cb.invokestatic(INT_VECTOR, "fromMemorySegment", FROM_MEMORY_SEGMENT_MASKED);
+          cb.invokestatic(analysis.lane.vector, "fromMemorySegment",
+              analysis.lane.fromMemorySegmentMasked);
         } else {
-          cb.invokestatic(INT_VECTOR, "fromMemorySegment", FROM_MEMORY_SEGMENT_DENSE);
+          cb.invokestatic(analysis.lane.vector, "fromMemorySegment",
+              analysis.lane.fromMemorySegmentDense);
         }
       }
       case LiteralSlot l -> {
@@ -3777,7 +3923,7 @@ public final class VarkaLoopEmitter {
         } else {
           cb.aload(s.species);
           cb.iload(s.scalarArg[l.index()]);
-          cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
+          cb.invokestatic(analysis.lane.vector, "broadcast", analysis.lane.broadcast);
         }
       }
       case AddDays n -> {
@@ -3907,7 +4053,7 @@ public final class VarkaLoopEmitter {
           cb.lload(s.kt.get(n.cond()));
           cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
         }
-        cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+        cb.invokevirtual(analysis.lane.vector, "blend", analysis.lane.blend);
         if (!dense && s.ownWord.contains(node)) {
           // valid = (kT & validThen) | (~kT & validElse), the chosen branch's validity.
           cb.lload(s.kt.get(n.cond()));
@@ -3986,8 +4132,8 @@ public final class VarkaLoopEmitter {
     if (tmp == null) {
       // WRAP, or the check switched off for the A/B: the plain lanewise op, whose word is the
       // operands' AND like every other null-intolerant binary node.
-      emitAndValidatedOp(cb, n, n.left(), n.right(), op, LANEWISE_VV, dense, analysis, s,
-          computed);
+      emitAndValidatedOp(cb, n, n.left(), n.right(), op, analysis.lane.lanewiseVV, dense,
+          analysis, s, computed);
       return;
     }
     int a = tmp[0];
@@ -3997,7 +4143,7 @@ public final class VarkaLoopEmitter {
     emitValue(cb, n.right(), dense, analysis, s, computed);
     line(cb, analysis, n);
     cb.dup2();
-    cb.invokevirtual(INT_VECTOR, op, LANEWISE_VV);
+    cb.invokevirtual(analysis.lane.vector, op, analysis.lane.lanewiseVV);
     cb.astore(r);
     cb.astore(b);
     cb.astore(a);
@@ -4008,16 +4154,16 @@ public final class VarkaLoopEmitter {
     cb.aload(a);
     cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? r : b);
-    cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
+    cb.invokevirtual(analysis.lane.vector, "lanewise", analysis.lane.lanewiseBinaryV);
     cb.getstatic(VECTOR_OPERATORS, "AND", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? b : a);
     cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(r);
-    cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
-    cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_V);
+    cb.invokevirtual(analysis.lane.vector, "lanewise", analysis.lane.lanewiseBinaryV);
+    cb.invokevirtual(analysis.lane.vector, "lanewise", analysis.lane.lanewiseBinaryV);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
     cb.loadConstant(0);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     cb.aload(r);
   }
@@ -4038,11 +4184,11 @@ public final class VarkaLoopEmitter {
       cb.dup();
       cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
       cb.loadConstant(Integer.MIN_VALUE);
-      cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+      cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
       emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     }
     cb.loadConstant(-1);
-    cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+    cb.invokevirtual(analysis.lane.vector, "mul", analysis.lane.lanewiseVI);
   }
 
   /**
@@ -4124,7 +4270,7 @@ public final class VarkaLoopEmitter {
     emitValue(cb, left, dense, analysis, s, computed);
     emitValue(cb, right, dense, analysis, s, computed);
     line(cb, analysis, node);
-    cb.invokevirtual(INT_VECTOR, op, desc);
+    cb.invokevirtual(analysis.lane.vector, op, desc);
     if (!dense && s.ownWord.contains(node)) {
       emitAndWord(cb, s, s.wordRef.get(node), s.wordRef.get(left), s.wordRef.get(right));
     }
@@ -4179,11 +4325,11 @@ public final class VarkaLoopEmitter {
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
     cb.loadConstant(lo);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
     cb.loadConstant(hi);
-    cb.invokevirtual(INT_VECTOR, "compare", COMPARE_VI);
+    cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     emitGuardCollect(cb, node, word, dense, analysis, s);
   }
@@ -4285,6 +4431,7 @@ public final class VarkaLoopEmitter {
    */
   private static void emitMakeDate(CodeBuilder cb, MakeDate n, boolean dense, Analysis analysis,
       Slots s, Set<VarkaVectorIR> computed) {
+    analysis.lane.requireInt(n);
     int[] t = s.makeDateTmp.get(n);
     int year = t[0];
     int month = t[1];
@@ -4410,7 +4557,7 @@ public final class VarkaLoopEmitter {
       emitValue(cb, left, dense, analysis, s, computed);
       emitValue(cb, right, dense, analysis, s, computed);
       line(cb, analysis, node);
-      cb.invokevirtual(INT_VECTOR, op, LANEWISE_VV);
+      cb.invokevirtual(analysis.lane.vector, op, analysis.lane.lanewiseVV);
       return;
     }
     int[] tmp = s.pairTmp.get(node);
@@ -4426,7 +4573,7 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(-1L);
     cb.lxor();
     cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
-    cb.invokevirtual(INT_VECTOR, "blend", BLEND);
+    cb.invokevirtual(analysis.lane.vector, "blend", analysis.lane.blend);
     cb.aload(tmp[1]);
     cb.aload(tmp[0]);
     cb.aload(s.species);
@@ -4588,6 +4735,7 @@ public final class VarkaLoopEmitter {
    */
   private static void emitChrono(CodeBuilder cb, VarkaVectorIR node, boolean dense,
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
+    analysis.lane.requireInt(node);
     int[] t = s.chronoTmp.get(node);
     int era = t[1];
     int rem = t[2];
@@ -4987,6 +5135,7 @@ public final class VarkaLoopEmitter {
    */
   private static void emitAddMonths(CodeBuilder cb, AddMonths node, boolean dense,
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
+    analysis.lane.requireInt(node);
     int[] t = s.chronoTmp.get(node);
     int era = t[1];
     int rem = t[2];
