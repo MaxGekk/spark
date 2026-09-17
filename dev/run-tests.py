@@ -512,7 +512,13 @@ def main():
         # If we're running the tests in GitHub Actions, attempt to detect and test
         # only the affected modules.
         if test_env == "github_actions" and (is_apache_spark_ref or is_github_prev_sha):
-            if is_apache_spark_ref:
+            if os.environ.get("VARKA_DIFF_BASE") and os.environ.get("VARKA_DIFF_HEAD"):
+                # The pull request's own change; see dev/is-changed.py for why HEAD is the
+                # wrong thing to diff on this fork.
+                changed_files = identify_changed_files_from_git_commits(
+                    os.environ["VARKA_DIFF_HEAD"], target_ref=os.environ["VARKA_DIFF_BASE"]
+                )
+            elif is_apache_spark_ref:
                 changed_files = identify_changed_files_from_git_commits(
                     "HEAD", target_ref=os.environ["APACHE_SPARK_REF"]
                 )

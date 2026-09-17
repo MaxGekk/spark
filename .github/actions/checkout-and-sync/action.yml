@@ -58,10 +58,41 @@ runs:
       run: |
         echo "APACHE_SPARK_REF=$(git rev-parse HEAD)" >> $GITHUB_ENV
         git fetch https://github.com/$GITHUB_REPOSITORY.git ${GITHUB_REF#refs/heads/}
+        branch_head="$(git rev-parse FETCH_HEAD)"
+        # The pair a change detector needs, from real history rather than from the squashed
+        # tree below. HEAD after this step is apache/spark's master with one squash commit on
+        # top, so diffing against it measures this fork's whole divergence from upstream
+        # rather than the branch's own change - which is why every module gate answers true
+        # and every pull request runs the full matrix (PLAN_TASK_106.md 9). The branch and the
+        # branch it was cut from do share real history, so their merge base is the base the
+        # diff wants. It is computed here, before `merge --squash` discards the ancestry that
+        # makes it computable: a squash commit records no merge parent, which is what defeated
+        # the first attempt at this (reverted in "two squash merges cannot work").
+        #
+        # The upstream is named rather than derived: this branch lives in a personal fork of
+        # apache/spark whose own master tracks apache/spark, so the base branch is in a third
+        # repository and no event payload on a push carries it. A fetch that fails - another
+        # fork, a network error - leaves both variables unset and the detector falls back to
+        # the behaviour it had before, which is wasteful rather than wrong.
+        varka_upstream="${VARKA_UPSTREAM_URL:-https://github.com/vecbricks/varka.git}"
+        if git fetch --quiet "$varka_upstream" master 2>/dev/null; then
+          varka_base="$(git merge-base FETCH_HEAD "$branch_head" 2>/dev/null || true)"
+          if [ -n "$varka_base" ]; then
+            echo "VARKA_DIFF_BASE=$varka_base" >> $GITHUB_ENV
+            echo "VARKA_DIFF_HEAD=$branch_head" >> $GITHUB_ENV
+            echo "change detection base: $varka_base (merge base with $varka_upstream master)"
+          else
+            echo "no merge base with $varka_upstream master; change detection stays on the" \
+              "apache/spark reference"
+          fi
+        else
+          echo "could not fetch $varka_upstream; change detection stays on the" \
+            "apache/spark reference"
+        fi
         git \
           -c user.name='Apache Spark Test Account' \
           -c user.email='sparktestacc@gmail.com' \
-          merge --no-commit --progress --squash FETCH_HEAD
+          merge --no-commit --progress --squash "$branch_head"
         git \
           -c user.name='Apache Spark Test Account' \
           -c user.email='sparktestacc@gmail.com' \

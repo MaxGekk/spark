@@ -58,7 +58,17 @@ def main():
 
     test_modules = opts.modules.split(",")
     changed_files = []
-    if os.environ.get("APACHE_SPARK_REF"):
+    if os.environ.get("VARKA_DIFF_BASE") and os.environ.get("VARKA_DIFF_HEAD"):
+        # The pull request's own change, from real history: the branch head as it was fetched,
+        # against its merge base with the branch it was cut from. Both are set by
+        # .github/actions/checkout-and-sync before it squash-merges, because the squash commit
+        # it produces records no merge parent and HEAD afterwards is apache/spark's master with
+        # this fork's whole divergence on top - diffing against that selects every module on
+        # every pull request.
+        changed_files = identify_changed_files_from_git_commits(
+            os.environ["VARKA_DIFF_HEAD"], target_ref=os.environ["VARKA_DIFF_BASE"]
+        )
+    elif os.environ.get("APACHE_SPARK_REF"):
         changed_files = identify_changed_files_from_git_commits(
             "HEAD", target_ref=os.environ["APACHE_SPARK_REF"]
         )
