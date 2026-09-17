@@ -91,6 +91,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A local nothing reads is not free, and its cost is width-dependent](sql/varka/skills/vector-api-and-width.md#a-local-nothing-reads-is-not-free-and-its-cost-is-width-dependent)
 * [This machine's AVX-512 is 256 bits wide, and every "512-bit" number in this repo is really a 256-bit one](sql/varka/skills/vector-api-and-width.md#this-machines-avx-512-is-256-bits-wide-and-every-512-bit-number-in-this-repo-is-really-a-256-bit-one)
 * [A default that is wrong at one width may be wrong for a reason the width creates](sql/varka/skills/vector-api-and-width.md#a-default-that-is-wrong-at-one-width-may-be-wrong-for-a-reason-the-width-creates)
+* [A reciprocal multiply is not a division, even when the error bound says it is](sql/varka/skills/vector-api-and-width.md#a-reciprocal-multiply-is-not-a-division-even-when-the-error-bound-says-it-is)
 
 #### [Working in this repository](sql/varka/skills/working-in-this-repo.md)
 * [Repo Workflow (vecbricks/varka)](sql/varka/skills/working-in-this-repo.md#repo-workflow-vecbricksvarka)

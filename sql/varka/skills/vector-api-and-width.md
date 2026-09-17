@@ -685,3 +685,43 @@ that was not `"true"` as `false`, so `--options validityByWidth=on` silently
 selected the arm it was meant to exclude, and two runs measured the same arm
 before identical byte counts gave it away. An option parser that coerces rather
 than refuses turns a typo into a measurement of the wrong thing.
+
+## A reciprocal multiply is not a division, even when the error bound says it is
+
+Task 88 asked whether `v / d` can be lowered through double lanes, which the
+Vector API can do where it has no integer divide at all. The error bound is
+encouraging and it is not the whole answer.
+
+For a dividend that is **not** a multiple of the divisor the bound settles it:
+the true quotient lies at least `1/d` from every integer, the computed value is
+within `|v| * 2^-52` of it for `trunc(v * fl(1/d))` and `2^-53` for
+`trunc(v / d)`, so truncation cannot cross an integer while `|v| < 2^52` or
+`2^53` respectively. Note which quantity is bounded: the **dividend**, not the
+divisor. An earlier draft of this project's own plan wrote the rule as "any
+divisor below about 2^21", which is not what the arithmetic says.
+
+For a dividend that **is** an exact multiple the bound says nothing, and the two
+forms part company. The divide returns `k` exactly, because the quotient is
+representable and IEEE division is correctly rounded. The reciprocal multiply
+computes `fl(k * fl(1/d))`, and if `fl(1/d)` rounded *down* the product can land
+on the double just below `k`, so truncation gives `k - 1`. The textbook case is
+`49 * fl(1/49) = 0.9999999999999999`. Varka's own `/146097` is another, and it
+fails at the very first multiple.
+
+The rule is closed-form, so nothing here needs sampling:
+
+    fl(1/d) >= 1/d  ->  exact at every multiple below 2^53
+    fl(1/d) <  1/d  ->  exact at every multiple iff trunc(d * fl(1/d)) == 1
+
+**And it is keyed on the dividend range, not on the divisor.** The same `/146097`
+is inexact over the era step's `w`, where `146097` is a reachable dividend, and
+exact over the Julian century's `quadDays = 4*doe + 3`, whose dividends are only
+the values congruent to 3 mod 4 - and `146097` is congruent to 1. A table of
+"divisors the reciprocal form may serve" cannot express that; a table of
+(divisor, range) pairs can. `sql/varka/plans/verify_double_division.py` is the
+check, with every row's verdict pinned so a change fails the run rather than
+drifting.
+
+The practical rule when reaching for this lowering: use the divide unless the
+closed form admits the reciprocal over the exact range the lowering sees, and
+write the range into the table beside the divisor.
