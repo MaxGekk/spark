@@ -128,12 +128,18 @@ jobs:
             # Also we only run the very slow transpile changes when that logic changes
             transpile=false
             static_only=false
-            changed_files=$(git diff --name-only "$APACHE_SPARK_REF" HEAD 2>/dev/null)
-            # Printed because its size is the tell. This is measured against apache/spark's
-            # HEAD, so on this fork it counts the whole divergence from upstream rather than
-            # the pull request's own diff - which is why almost every run selects the `root`
-            # module and tests everything. PR #91 tried to narrow it and had to be reverted;
-            # see that revert's message for why the two-squash approach cannot work.
+            if [ -n "$VARKA_DIFF_BASE" ] && [ -n "$VARKA_DIFF_HEAD" ]; then
+              changed_files=$(git diff --name-only "$VARKA_DIFF_BASE" "$VARKA_DIFF_HEAD" 2>/dev/null)
+            else
+              changed_files=$(git diff --name-only "$APACHE_SPARK_REF" HEAD 2>/dev/null)
+            fi
+            # Printed because its size is the tell. The first form is the pull request's own
+            # change - the fetched branch head against its merge base with the branch it was
+            # cut from, both computed in checkout-and-sync before the squash discards the
+            # ancestry (PR #91 squash-merged the base as well and had to be reverted; see "two
+            # squash merges cannot work"). The second is the old behaviour, kept for a fork
+            # whose upstream could not be fetched: it measures this fork's whole divergence
+            # from apache/spark, so almost every run selects `root` and tests everything.
             echo "changed files vs base: $(echo "$changed_files" | grep -c . || true)"
             if [ -n "$changed_files" ]; then
               static_only=true
