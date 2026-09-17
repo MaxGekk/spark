@@ -618,6 +618,19 @@ private[sql] object VarkaExpressionCompiler {
     case c @ Cast(child, _: TimeType, _, _) if child.dataType.isInstanceOf[TimeType] =>
       sink.note("TIME narrowed to a lower precision, which truncates", c)
       None
+    // The day-time interval's unit relabel, the twin of the year-month MONTH arm above: type
+    // coercion casts `INTERVAL '0' SECOND` to the column's DAY TO SECOND before comparing, and
+    // `castToDayTimeInterval` keeps the microseconds whole for a SECOND end field
+    // (`SparkIntervalUtils.durationToMicros`), so the cast is the child. A coarser end field
+    // truncates to that unit - `micros - micros % unit`, a division - and declines with its
+    // reason rather than falling through as unsupported.
+    case Cast(child, DayTimeIntervalType(_, DayTimeIntervalType.SECOND), _, _)
+        if child.dataType.isInstanceOf[DayTimeIntervalType] =>
+      compileNode(child, inputs, literals, sink)
+    case c @ Cast(child, _: DayTimeIntervalType, _, _)
+        if child.dataType.isInstanceOf[DayTimeIntervalType] =>
+      sink.note("day-time interval narrowed to a coarser end field, which truncates", c)
+      None
     // The interval literal, beside the date literal and for the same reason: the value is
     // already the int the lane holds, so `ym > INTERVAL '6' MONTH` and
     // `coalesce(ym, INTERVAL '0' MONTH)` become a slot rather than a decline.

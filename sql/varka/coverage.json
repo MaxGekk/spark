@@ -7,7 +7,13 @@
     "i" : "int",
     "ymm" : "interval month",
     "ymy" : "interval year",
-    "ym" : "interval year to month"
+    "ym" : "interval year to month",
+    "l" : "bigint",
+    "l2" : "bigint",
+    "t" : "time(6)",
+    "t2" : "time(6)",
+    "dt" : "interval day to second",
+    "dt2" : "interval day to second"
   },
   "expressions" : [ {
     "sql" : "date_add(d, 3)",
@@ -436,6 +442,118 @@
     "form" : "predicate",
     "catalyst" : [ "InSet" ],
     "note" : "an IN list this long arrives from the optimizer as an InSet and fuses the same way"
+  }, {
+    "sql" : "l > l2",
+    "executable" : "l > l2",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "GreaterThan" ],
+    "note" : ""
+  }, {
+    "sql" : "l = l2",
+    "executable" : "l = l2",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "EqualTo" ],
+    "note" : ""
+  }, {
+    "sql" : "l >= 5000000000",
+    "executable" : "l >= 5000000000",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "GreaterThanOrEqual" ],
+    "note" : "a bigint literal takes a slot in the long lane's own table"
+  }, {
+    "sql" : "l IS NULL",
+    "executable" : "l IS NULL",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "IsNull" ],
+    "note" : ""
+  }, {
+    "sql" : "l IS NOT NULL",
+    "executable" : "l IS NOT NULL",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "IsNotNull" ],
+    "note" : ""
+  }, {
+    "sql" : "t < t2",
+    "executable" : "t < t2",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "LessThan" ],
+    "note" : ""
+  }, {
+    "sql" : "t = TIME'12:34:56.789'",
+    "executable" : "t = TIME'12:34:56.789'",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "EqualTo" ],
+    "note" : "a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds"
+  }, {
+    "sql" : "dt > dt2",
+    "executable" : "dt > dt2",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "GreaterThan" ],
+    "note" : ""
+  }, {
+    "sql" : "dt < INTERVAL '0' SECOND",
+    "executable" : "dt < INTERVAL '0' SECOND",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "Cast", "LessThan" ],
+    "note" : ""
+  }, {
+    "sql" : "dt IS NOT NULL",
+    "executable" : "dt IS NOT NULL",
+    "family" : "Long-lane predicates",
+    "form" : "predicate",
+    "catalyst" : [ "IsNotNull" ],
+    "note" : ""
+  }, {
+    "sql" : "greatest(l, l2)",
+    "executable" : "greatest(l, l2)",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "Greatest" ],
+    "note" : ""
+  }, {
+    "sql" : "least(l, 5000000000)",
+    "executable" : "least(l, 5000000000)",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "Least" ],
+    "note" : ""
+  }, {
+    "sql" : "CASE WHEN l < l2 THEN l ELSE l2 END",
+    "executable" : "CASE WHEN l < l2 THEN l ELSE l2 END",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "CaseWhen", "LessThan" ],
+    "note" : ""
+  }, {
+    "sql" : "if(l IS NULL, l2, l)",
+    "executable" : "if(l IS NULL, l2, l)",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "If", "IsNull" ],
+    "note" : ""
+  }, {
+    "sql" : "greatest(t, t2)",
+    "executable" : "greatest(t, t2)",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "Greatest" ],
+    "note" : ""
+  }, {
+    "sql" : "CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END",
+    "executable" : "CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "CaseWhen", "Cast", "GreaterThan" ],
+    "note" : ""
   } ],
   "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "CaseWhen", "Cast", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "EqualTo", "ExtractANSIIntervalDays", "GreaterThan", "GreaterThanOrEqual", "Greatest", "If", "In", "InSet", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Month", "Multiply", "MultiplyYMInterval", "NextDay", "Not", "Or", "Quarter", "Subtract", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
 }

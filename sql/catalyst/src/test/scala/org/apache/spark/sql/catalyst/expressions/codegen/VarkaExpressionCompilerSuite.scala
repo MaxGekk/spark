@@ -1879,6 +1879,26 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(mixed.declines(1).reason === "TIME narrowed to a lower precision, which truncates")
   }
 
+  test("a day-time interval literal of a narrower unit reaches the column through the cast " +
+      "type coercion inserts; a coarser end field declines") {
+    // What the analyzer builds for `dt < INTERVAL '0' SECOND` before the optimizer folds it:
+    // the SECOND-typed literal cast up to the column's DAY TO SECOND, which keeps the
+    // microseconds whole. The coverage suite compiles the analyzed form, so this is the shape
+    // that decides whether the row counts as covered.
+    val second = DayTimeIntervalType(DayTimeIntervalType.SECOND, DayTimeIntervalType.SECOND)
+    val widened = VarkaExpressionCompiler.compilePredicate(
+      LessThan(dt, Cast(Literal(0L, second), DayTimeIntervalType())), withLong).get.fused
+    assert(widened.outputs === Seq(new Compare(CompareOp.LT, longCol, longSlot(0))))
+    assert(widened.longLiterals === Seq(0L))
+    val coarser = DayTimeIntervalType(DayTimeIntervalType.DAY, DayTimeIntervalType.MINUTE)
+    val narrowed = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(Cast(dt, coarser), Cast(dt, coarser))))),
+      withLong).get
+    assert(narrowed.specs === Seq(FusedOutput(0), ResidualOutput))
+    assert(narrowed.declines(1).reason ===
+      "day-time interval narrowed to a coarser end field, which truncates")
+  }
+
   test("a timestamp column declines with the milestone's reason, in both forms") {
     for (col <- Seq(ts, ntz)) {
       val predicate = VarkaExpressionCompiler.compilePredicate(
