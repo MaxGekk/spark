@@ -118,4 +118,28 @@ prediction that it prints a base line and a small count.
 
 ## 9. Outcome
 
-*To be written when this branch's own run has been read.*
+Landed 17 September 2026, with its own run read and one limit of that reading
+recorded rather than glossed.
+
+**What the run proves.** The `Check changes` job on this branch printed `change
+detection base: 18adf0dec19 (merge base with
+https://github.com/vecbricks/varka.git master)` and `changed files vs base: 6` -
+this pull request's own six files, against the 2133 the old reference gives for
+the same branch. The fetch, the merge base and the diff all work in the runner,
+which is what PR #91 never got to and what its revert asked for.
+
+**What it cannot prove, and why.** The module verdicts in that run are still
+mostly true, and correctly so: two of the six files are `dev/is-changed.py` and
+`dev/run-tests.py`, which map to the `root` module - a pull request that changes
+the test selector is exactly the one that should run the whole matrix. A
+documents-only branch cannot demonstrate the narrowing either, because the
+workflow loads the action from the branch under test, so the branch must carry
+the fix, and carrying it means carrying those two files. **The end-to-end
+demonstration therefore arrives with the first documents-only pull request
+opened after this merges**, and section 6's local table is the evidence until
+then: the same computation over four real branches, where a catalyst-only branch
+stops requiring `yarn` and `kubernetes`.
+
+**A probe was tried and thrown away.** A branch stacked on this one with a
+single added comment line reported the same six files, for the reason above; it
+was deleted and its run cancelled rather than left to look like a result.
