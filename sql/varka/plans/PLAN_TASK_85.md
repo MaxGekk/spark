@@ -319,6 +319,39 @@ results files, and the long lane is one. Its baseline is 104's first commit, in 
 class of its own, before 104 adds anything - which is the baseline-as-its-own-PR
 rule applied to the task that owns the number.
 
+### 6.2 The emission baseline, measured before step 3
+
+Section 2 says emission costs "about 80 us per shape" and amortises behind the
+shape cache. That figure had no committed file behind it, and step 3 is the step
+that could move it: a descriptor consulted at forty sites, with a
+`MethodTypeDesc` built per lane member, is work done while emitting.
+`VarkaEmissionBenchmark` is that baseline, measured on master before the
+refactor, in a class and a results file of its own because it is a new question
+rather than another section of a throughput benchmark.
+
+**What it measures.** Two sections over the same seven shapes, smallest first:
+emission alone, which is the emitter's own work - the IR walk, the analysis
+pass, the bodies, the constant pool - and emission with the class defined, which
+is what a cold query actually pays. Each case emits two hundred fresh classes
+per iteration, so the shape cache is not involved; its hit path is task 18's
+subject and costs a map lookup.
+
+**The numbers, 17 September 2026 on `aqua`.** Emission alone runs 17.4 us for a
+bare column copy, 20.5 us for `d + 3`, 29.7 us for a checked int add, 31.1 us
+for `year(d)`, 33.0 us for a two-input predicate, 66.0 us for
+`make_date(year(d), month(d), 1)` and 78.1 us for four calendar outputs over one
+date. Defining the class adds 12 to 20 us on top, near-constant across shapes.
+
+**What that corrects.** The plan's "about 80 us" is the *ceiling* - the heaviest
+shape in the set - and an ordinary one-output projection costs 17 to 33 us. The
+refactor's budget is therefore against a 17 us floor rather than an 80 us one,
+which is the tighter constraint. The split also says how much of a cold query's
+compile cost is Varka's to improve: roughly two thirds emission, one third the
+JVM defining the class. The second section's standard deviation is tens of
+milliseconds against best times of the same order, which is class definition and
+its garbage, not the emitter; the first section is stable to under a
+millisecond.
+
 ### 6.1 Predictions, registered before the run
 
 1. **Zero int32 bytes move**, across 64 inventory entries and ten thousand fuzz
