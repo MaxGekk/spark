@@ -1,0 +1,37 @@
+Band for 24 cases: how far apart repeated runs of an unchanged file land.
+Written by dev/varka_bench_band.py. Read by dev/varka_bench_diff.py --band, which
+uses a case's tier to decide whether its move in a regeneration means anything.
+
+tier 0 <= 3%   1 <= 10%   2 <= 25%   3 not readable from a diff at all
+
+runs:    12
+commit:  99ee4c9592f (tree identical to master 1a916ad3d7d, task 29 as merged)
+date:    2026-09-17T21:36:27+00:00
+jdk:     openjdk version "25.0.4" 2026-07-21
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+
+tier   spread occ  table | case
+0     0.85   1  datediff(add_months(last_day(date_add(d, i)), i) + ymy, d) over 200000000 rows | projection, columnar consumer
+0     0.65   1  datediff(add_months(last_day(date_add(d, i)), i) + ymy, d) over 200000000 rows, executor time | projection, columnar consumer
+0     1.09   1  datediff(add_months(last_day(date_add(d, i)), i) + ymy, last_day(d + ym)) over 200000000 rows | projection, columnar consumer
+0     0.87   1  datediff(add_months(last_day(date_add(d, i)), i) + ymy, last_day(d + ym)) over 200000000 rows, executor time | projection, columnar consumer
+0     1.01   1  dayofweek(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows | projection, columnar consumer
+0     0.74   1  dayofweek(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time | projection, columnar consumer
+0     0.71   1  dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy) over 200000000 rows | projection, columnar consumer
+0     0.31   1  dayofyear(add_months(last_day(date_add(d, i)), 1) + ymy) over 200000000 rows, executor time | projection, columnar consumer
+0     0.52   1  dayofyear(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows | projection, columnar consumer
+0     0.45   1  dayofyear(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time | projection, columnar consumer
+0     1.53   1  make_ym_interval(year(add_months(last_day(date_add(d, i)), i) + ymy), month(d + ymm) + i) over 200000000 rows | projection, columnar consumer
+0     1.17   1  make_ym_interval(year(add_months(last_day(date_add(d, i)), i) + ymy), month(d + ymm) + i) over 200000000 rows, executor time | projection, columnar consumer
+0     0.82   1  month(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows | projection, columnar consumer
+0     0.74   1  month(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time | projection, columnar consumer
+0     2.38   1  quarter(add_months(last_day(date_add(d, i) + ym), i) + ymm) over 200000000 rows | projection, columnar consumer
+0     2.55   1  quarter(add_months(last_day(date_add(d, i) + ym), i) + ymm) over 200000000 rows, executor time | projection, columnar consumer
+0     0.46   1  quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY')) over 200000000 rows | projection, columnar consumer
+0     0.32   1  quarter(next_day(add_months(last_day(date_add(d, i)), i) + ymy, 'MONDAY')) over 200000000 rows, executor time | projection, columnar consumer
+0     1.10   1  weekofyear(add_months(last_day(d + ymm), i) + ymy) over 200000000 rows | projection, columnar consumer
+0     0.72   1  weekofyear(add_months(last_day(d + ymm), i) + ymy) over 200000000 rows, executor time | projection, columnar consumer
+0     1.02   1  year(add_months(last_day(date_add(d, i) + ym), i)) over 200000000 rows | projection, columnar consumer
+0     0.81   1  year(add_months(last_day(date_add(d, i) + ym), i)) over 200000000 rows, executor time | projection, columnar consumer
+0     0.70   1  year(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows | projection, columnar consumer
+0     0.69   1  year(add_months(last_day(date_add(d, i)), i) + ymy) over 200000000 rows, executor time | projection, columnar consumer
