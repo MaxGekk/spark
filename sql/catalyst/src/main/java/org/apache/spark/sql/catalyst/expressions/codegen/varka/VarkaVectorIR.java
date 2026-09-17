@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.util.Locale;
+import java.util.Objects;
 import java.util.function.ToIntFunction;
 
 /**
@@ -29,9 +31,10 @@ import java.util.function.ToIntFunction;
  * serves every literal a query might use, and a chain's identity is its shape, not its
  * constants. That identity is what a future cross-task cache will key on (milestone 3).
  *
- * <p>Every node reports a {@link LaneType}; only {@code INT} exists in this milestone, and the
- * emitter rejects anything else. The field is carried from day one so that wider lanes extend
- * the IR instead of reworking it.
+ * <p>Every node reports a {@link LaneType}: the two leaves carry one, every other node derives
+ * it from its children, and the constructors refuse a tree whose lanes do not fit - a calendar
+ * node over a 64-bit child, or a binary node whose operands disagree. {@link VarkaLoopEmitter}
+ * emits the int lane only, so a well-formed {@code LONG} tree is built here and refused there.
  *
  * <p>The IR is a DAG in effect if not in shape: the records carry structural
  * {@code equals}/{@code hashCode}, and the emitter memoizes on them, so a subtree appearing in
@@ -55,14 +58,106 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.Cond,
             VarkaVectorIR.GuardedDay {
 
-  /** The lane type a node evaluates to. Only 32-bit int lanes exist in milestone 2. */
-  enum LaneType { INT }
+  /**
+   * The physical lane a node's value occupies: {@code INT} is a 32-bit lane, {@code LONG} a
+   * 64-bit one. It is a property of the representation and not of the Spark type - {@code DATE}
+   * is epoch days, {@code INT} is an int and a year-month interval is a month count, and all
+   * three are the same 32-bit lane - which is why the lane rides the IR rather than being
+   * inferred from the type above it.
+   */
+  enum LaneType { INT, LONG }
 
+  /**
+   * The lane this node's value occupies, carried by the leaves and derived everywhere else. A
+   * value node answers its operands' lane, a condition answers the lane it compares in, and
+   * every calendar node answers {@code INT}, because it consumes epoch days and those are
+   * 32 bits by definition. The switch is exhaustive over the sealed interface, so a new node
+   * type refuses to compile until it says which lane it is on.
+   */
   default LaneType laneType() {
-    return LaneType.INT;
+    return switch (this) {
+      case ColumnRef n -> n.lane();
+      case LiteralSlot n -> n.lane();
+      case IntArith n -> n.left().laneType();
+      case IntNeg n -> n.child().laneType();
+      case Greatest n -> n.left().laneType();
+      case Least n -> n.left().laneType();
+      case IfElse n -> n.thenNode().laneType();
+      case Compare n -> n.left().laneType();
+      case And n -> n.left().laneType();
+      case Or n -> n.left().laneType();
+      case Not n -> n.child().laneType();
+      case IsNotNull n -> n.child().laneType();
+      case AddDays n -> LaneType.INT;
+      case SubDays n -> LaneType.INT;
+      case DateDiff n -> LaneType.INT;
+      case GuardedDay n -> LaneType.INT;
+      case DayOfWeek n -> LaneType.INT;
+      case WeekDay n -> LaneType.INT;
+      case DayOfWeekIso n -> LaneType.INT;
+      case NextDay n -> LaneType.INT;
+      case ThursdayOf n -> LaneType.INT;
+      case AddMonths n -> LaneType.INT;
+      case MakeDate n -> LaneType.INT;
+      // The nine calendar extractions are named one by one rather than caught by a `Chrono`
+      // arm: an umbrella would let a member added later inherit the int lane silently, which is
+      // the opposite of what an exhaustive switch is here for. `canonical` and
+      // `canonicalShallow` enumerate them for the same reason.
+      case Year n -> LaneType.INT;
+      case Month n -> LaneType.INT;
+      case DayOfMonth n -> LaneType.INT;
+      case Quarter n -> LaneType.INT;
+      case DayOfYear n -> LaneType.INT;
+      case LastDay n -> LaneType.INT;
+      case TruncDate n -> LaneType.INT;
+      case TruncDateDynamic n -> LaneType.INT;
+      case WeekOfYear n -> LaneType.INT;
+    };
   }
 
-  /** The comparison a {@link Compare} node performs; lane math is signed int ordering. */
+  /**
+   * Refuses a child on any lane but the int one. The calendar lowerings decompose a 32-bit
+   * epoch day: a wider value reaching them would be reinterpreted rather than converted, so it
+   * has to be narrowed by a node above them instead.
+   */
+  private static void requireInt(String what, VarkaVectorIR... children) {
+    for (VarkaVectorIR child : children) {
+      if (child.laneType() != LaneType.INT) {
+        // The child's type name, not `canonical(child)`: that rendering recurses without a memo
+        // over what is a DAG in effect, so a shared subtree is re-rendered once per edge and a
+        // deep tree would cost exponential time to build a message nobody needs it in.
+        throw new IllegalArgumentException(what + " takes int lanes, not " + child.laneType()
+            + ", from a " + child.getClass().getSimpleName());
+      }
+    }
+  }
+
+  /**
+   * Refuses operands that disagree on their lane. A node is emitted as vector instructions over
+   * one species - a blend and a comparison need their mask and their values to agree as much as
+   * an add needs its two operands to - so two lanes inside one node have no lowering. Mixing
+   * them is a conversion, which is a node in its own right rather than a silent widening here.
+   */
+  private static void requireSameLane(String what, VarkaVectorIR first, VarkaVectorIR... rest) {
+    LaneType lane = first.laneType();
+    for (VarkaVectorIR other : rest) {
+      if (other.laneType() != lane) {
+        throw new IllegalArgumentException(
+            what + " mixes lanes: " + lane + " and " + other.laneType());
+      }
+    }
+  }
+
+  /**
+   * How a leaf's lane renders in {@link #canonical}. The int lane renders as nothing, so every
+   * shape hash committed before the lane existed still holds - the same elision, and for the
+   * same reason, as {@link VarkaEmitOptions#canonical()} rendering empty for the defaults.
+   */
+  private static String laneTag(LaneType lane) {
+    return lane == LaneType.INT ? "" : ":" + lane.name().toLowerCase(Locale.ROOT);
+  }
+
+  /** The comparison a {@link Compare} node performs; lane math is signed integer ordering. */
   enum CompareOp { LT, LE, GT, GE, EQ }
 
   /**
@@ -107,14 +202,45 @@ public sealed interface VarkaVectorIR
   sealed interface Cond extends VarkaVectorIR
       permits Compare, And, Or, Not, IsNotNull {}
 
-  /** The input column at {@code ordinal}, loaded once per lane group however often it is used. */
-  record ColumnRef(int ordinal) implements VarkaVectorIR {}
+  /**
+   * The input column at {@code ordinal}, loaded once per lane group however often it is used,
+   * into a lane of {@code lane}'s width.
+   *
+   * <p>The one-argument form is the int lane, which every column the compiler admits today is
+   * on; it keeps the several hundred int-lane trees in the suites reading as they did.
+   */
+  record ColumnRef(int ordinal, LaneType lane) implements VarkaVectorIR {
+    public ColumnRef {
+      Objects.requireNonNull(lane, "lane");
+    }
+
+    public ColumnRef(int ordinal) {
+      this(ordinal, LaneType.INT);
+    }
+  }
 
   /**
    * The runtime scalar argument at {@code index}, broadcast into every lane once per call,
-   * outside the loop.
+   * outside the loop, into a lane of {@code lane}'s width.
+   *
+   * <p><b>One index space, for now.</b> {@link VarkaFusedKernel#run} takes a single
+   * {@code int[] scalarArgs} and {@link VarkaShapeKey} carries a single literal count, so
+   * {@code index} addresses one table whatever the lane says - a slot that names a 64-bit lane
+   * would read the int argument at that index. Nothing builds one yet: the compiler folds only
+   * int constants. The second table, and the {@code run} overload that carries it, arrive with
+   * the emitter's lane descriptor.
+   *
+   * <p>The one-argument form is the int lane, as {@link ColumnRef}'s is.
    */
-  record LiteralSlot(int index) implements VarkaVectorIR {}
+  record LiteralSlot(int index, LaneType lane) implements VarkaVectorIR {
+    public LiteralSlot {
+      Objects.requireNonNull(lane, "lane");
+    }
+
+    public LiteralSlot(int index) {
+      this(index, LaneType.INT);
+    }
+  }
 
   /**
    * {@code days}, checked at runtime to lie in the range the calendar lowering decomposes
@@ -143,7 +269,11 @@ public sealed interface VarkaVectorIR
    * strength of this check, so a flag that removed it would leave the compile-time bound
    * standing over a value nothing bounds - a wrong answer rather than a slower one.
    */
-  record GuardedDay(VarkaVectorIR days) implements VarkaVectorIR {}
+  record GuardedDay(VarkaVectorIR days) implements VarkaVectorIR {
+    public GuardedDay {
+      requireInt("guardedDay", days);
+    }
+  }
 
   /**
    * {@code days + offset}, lane-wise, wrapping on overflow exactly as Spark's {@code DateAdd}
@@ -152,10 +282,18 @@ public sealed interface VarkaVectorIR
    * validity the AND of both children's, not just {@code days}' (see
    * {@code VarkaLoopEmitter.planWordRef}).
    */
-  record AddDays(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
+  record AddDays(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {
+    public AddDays {
+      requireInt("addDays", days, offset);
+    }
+  }
 
   /** {@code days - offset}, lane-wise; the {@code DateSub} counterpart of {@link AddDays}. */
-  record SubDays(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
+  record SubDays(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {
+    public SubDays {
+      requireInt("subDays", days, offset);
+    }
+  }
 
   /**
    * {@code end - start}, lane-wise, over two date operands - Spark's {@code DateDiff}.
@@ -163,11 +301,17 @@ public sealed interface VarkaVectorIR
    * Spark level, where the result is an {@code IntegerType} day count rather than a date, which
    * the compiler tracks per output so the evaluator allocates the right vector.
    */
-  record DateDiff(VarkaVectorIR end, VarkaVectorIR start) implements VarkaVectorIR {}
+  record DateDiff(VarkaVectorIR end, VarkaVectorIR start) implements VarkaVectorIR {
+    public DateDiff {
+      requireInt("dateDiff", end, start);
+    }
+  }
 
   /**
-   * {@code left OP right} over two int32 lanes: Spark's {@code Add}, {@code Subtract}
-   * and {@code Multiply} where both operands and the result are {@code IntegerType}. The
+   * {@code left OP right} over two lanes of one width - Spark's {@code Add}, {@code Subtract}
+   * and {@code Multiply}. The node's lane is its operands', which the constructor requires to
+   * agree; the emitter serves the int lane, where both operands and the result are
+   * {@code IntegerType}. The
    * operands are int-valued nodes - a fused field such as {@link Year} or {@link DateDiff}, an
    * {@code IntegerType} column, an int literal, or nested arithmetic - never a date, which is
    * what separates this from {@link AddDays}, whose left operand is a date and whose result is
@@ -181,32 +325,53 @@ public sealed interface VarkaVectorIR
    * {@link MakeDate} that can null a lane both of whose inputs are valid.
    */
   record IntArith(IntOp op, Overflow mode, VarkaVectorIR left, VarkaVectorIR right)
-      implements VarkaVectorIR {}
+      implements VarkaVectorIR {
+    public IntArith {
+      requireSameLane("int arithmetic", left, right);
+    }
+  }
 
   /**
-   * {@code -child} over an int32 lane, Spark's {@code UnaryMinus}. Only
+   * {@code -child} over one lane, Spark's {@code UnaryMinus}. Only
    * {@link Overflow#WRAP} and {@link Overflow#FAIL} occur: Spark has no {@code try_negative},
    * so a negation never nulls a valid lane, and the emitter rejects {@link Overflow#NULL}
    * here rather than emitting a form nothing can produce.
    *
-   * <p>The one overflowing input is {@link Integer#MIN_VALUE}, whose negation is itself.
+   * <p>The one overflowing input is the lane's most negative value, whose negation is itself:
+   * {@link Integer#MIN_VALUE} at the int lane, {@link Long#MIN_VALUE} at a wider one. A guard
+   * written against a constant rather than against the lane is wrong on both sides - it misses
+   * the overflow it exists for, and condemns a value the wider lane represents exactly.
    */
   record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
 
   /**
-   * {@code left OP right} over two date-valued operands. Null-intolerant: the result
-   * is known (true or false) exactly where both operands are valid, unknown elsewhere.
+   * {@code left OP right} over two operands on one lane, which the constructor requires to
+   * agree - dates at the int lane, and the mask this produces is of that lane's species.
+   * Null-intolerant: the result is known (true or false) exactly where both operands are valid,
+   * unknown elsewhere.
    */
-  record Compare(CompareOp op, VarkaVectorIR left, VarkaVectorIR right) implements Cond {}
+  record Compare(CompareOp op, VarkaVectorIR left, VarkaVectorIR right) implements Cond {
+    public Compare {
+      requireSameLane("a comparison", left, right);
+    }
+  }
 
   /**
    * Three-valued AND: known-true where both sides are known true, known-false where either
    * side is known false.
    */
-  record And(Cond left, Cond right) implements Cond {}
+  record And(Cond left, Cond right) implements Cond {
+    public And {
+      requireSameLane("and", left, right);
+    }
+  }
 
   /** Three-valued OR, the dual of {@link And}. */
-  record Or(Cond left, Cond right) implements Cond {}
+  record Or(Cond left, Cond right) implements Cond {
+    public Or {
+      requireSameLane("or", left, right);
+    }
+  }
 
   /** Three-valued NOT: swaps the known-true and known-false masks - why known-false exists. */
   record Not(Cond child) implements Cond {}
@@ -232,27 +397,47 @@ public sealed interface VarkaVectorIR
    * unknown included. Validity follows the chosen branch lane-wise; nothing is ANDed globally.
    */
   record IfElse(Cond cond, VarkaVectorIR thenNode, VarkaVectorIR elseNode)
-      implements VarkaVectorIR {}
+      implements VarkaVectorIR {
+    public IfElse {
+      requireSameLane("if", thenNode, elseNode, cond);
+    }
+  }
 
   /**
    * Spark's null-skipping {@code greatest} over two operands: null only where both
    * inputs are null; where one side is null the other's value is taken, so the lane math is a
    * substitute-then-max.
    */
-  record Greatest(VarkaVectorIR left, VarkaVectorIR right) implements VarkaVectorIR {}
+  record Greatest(VarkaVectorIR left, VarkaVectorIR right) implements VarkaVectorIR {
+    public Greatest {
+      requireSameLane("greatest", left, right);
+    }
+  }
 
   /** The {@code least} counterpart of {@link Greatest}. */
-  record Least(VarkaVectorIR left, VarkaVectorIR right) implements VarkaVectorIR {}
+  record Least(VarkaVectorIR left, VarkaVectorIR right) implements VarkaVectorIR {
+    public Least {
+      requireSameLane("least", left, right);
+    }
+  }
 
   /**
    * Spark's {@code dayofweek}: {@code floorMod(days + 4, 7) + 1}, Sunday = 1 -
    * computed as {@code (floorMod(days, 7) + 4) mod 7 + 1} so the offset can never overflow the
    * int days. An {@code IntegerType} output at the Spark level.
    */
-  record DayOfWeek(VarkaVectorIR days) implements VarkaVectorIR {}
+  record DayOfWeek(VarkaVectorIR days) implements VarkaVectorIR {
+    public DayOfWeek {
+      requireInt("dayOfWeek", days);
+    }
+  }
 
   /** Spark's {@code weekday}: {@code floorMod(days + 3, 7)}, Monday = 0. */
-  record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {}
+  record WeekDay(VarkaVectorIR days) implements VarkaVectorIR {
+    public WeekDay {
+      requireInt("weekDay", days);
+    }
+  }
 
   /**
    * {@code extract(DAYOFWEEK_ISO FROM d)} / {@code date_part('DOW_ISO', d)}: Monday 1
@@ -261,7 +446,11 @@ public sealed interface VarkaVectorIR
    * and integer arithmetic over an output is not supported. The tail is {@link WeekDay}'s
    * plus one lanewise add, the same op that separates {@link DayOfWeek} from {@link WeekDay}.
    */
-  record DayOfWeekIso(VarkaVectorIR days) implements VarkaVectorIR {}
+  record DayOfWeekIso(VarkaVectorIR days) implements VarkaVectorIR {
+    public DayOfWeekIso {
+      requireInt("dayOfWeekIso", days);
+    }
+  }
 
   /**
    * Spark's {@code next_day(date, day_of_week)}: the first date strictly later than
@@ -275,7 +464,11 @@ public sealed interface VarkaVectorIR
    * {@code WeekdayLeaf} ), and the lowering is the same either way, exact for every int
    * {@code offset} since it reproduces Spark's wrapping arithmetic.
    */
-  record NextDay(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {}
+  record NextDay(VarkaVectorIR days, VarkaVectorIR offset) implements VarkaVectorIR {
+    public NextDay {
+      requireInt("nextDay", days, offset);
+    }
+  }
 
   /**
    * The Thursday of the ISO week {@code days} falls in: {@code d + 3 - weekday0(d)}
@@ -286,7 +479,11 @@ public sealed interface VarkaVectorIR
    * {@code Year} over the same node is {@code extract(YEAROFWEEK)}, sharing the
    * prefix. Costs {@code NextDay}'s mod-7 plus four ops.
    */
-  record ThursdayOf(VarkaVectorIR days) implements VarkaVectorIR {}
+  record ThursdayOf(VarkaVectorIR days) implements VarkaVectorIR {
+    public ThursdayOf {
+      requireInt("thursdayOf", days);
+    }
+  }
 
   /**
    * The civil-from-days extractions, as a sealed family rather than a set the emitter has to
@@ -314,7 +511,11 @@ public sealed interface VarkaVectorIR
    * treats it identically for weighing and guarding, since both concerns are about "does this
    * node run a civil-from-days decomposition", which this one does.
    */
-  record AddMonths(VarkaVectorIR days, VarkaVectorIR months) implements VarkaVectorIR {}
+  record AddMonths(VarkaVectorIR days, VarkaVectorIR months) implements VarkaVectorIR {
+    public AddMonths {
+      requireInt("addMonths", days, months);
+    }
+  }
 
   /**
    * Spark's {@code make_date(year, month, day)}: a date built from three int lanes,
@@ -328,7 +529,11 @@ public sealed interface VarkaVectorIR
    * {@link AddMonths}, but decomposes nothing.
    */
   record MakeDate(VarkaVectorIR year, VarkaVectorIR month, VarkaVectorIR day,
-      boolean failOnError) implements VarkaVectorIR {}
+      boolean failOnError) implements VarkaVectorIR {
+    public MakeDate {
+      requireInt("makeDate", year, month, day);
+    }
+  }
 
   /**
    * Spark's {@code year}: the proleptic Gregorian year of a date, as
@@ -346,30 +551,54 @@ public sealed interface VarkaVectorIR
    * and the emitter shares the thirty-odd ops in the middle of both their emissions as a
    * fragment keyed on the date, without the IR naming a multi-value node for it.
    */
-  record Year(VarkaVectorIR days) implements Chrono {}
+  record Year(VarkaVectorIR days) implements Chrono {
+    public Year {
+      requireInt("year", days);
+    }
+  }
 
   /** Spark's {@code month}, 1-12; see {@link Year} for what the node costs and why. */
-  record Month(VarkaVectorIR days) implements Chrono {}
+  record Month(VarkaVectorIR days) implements Chrono {
+    public Month {
+      requireInt("month", days);
+    }
+  }
 
   /** Spark's {@code dayofmonth}, 1-31; see {@link Year}. */
-  record DayOfMonth(VarkaVectorIR days) implements Chrono {}
+  record DayOfMonth(VarkaVectorIR days) implements Chrono {
+    public DayOfMonth {
+      requireInt("dayOfMonth", days);
+    }
+  }
 
   /** Spark's {@code quarter}, 1-4 - the month's own division by three; see {@link Year}. */
-  record Quarter(VarkaVectorIR days) implements Chrono {}
+  record Quarter(VarkaVectorIR days) implements Chrono {
+    public Quarter {
+      requireInt("quarter", days);
+    }
+  }
 
   /**
    * Spark's {@code dayofyear}, 1-365 or 1-366: the January-based day of year, one comparison
    * away from the March-based {@code doy} {@link VarkaChrono} already computes; see
    * {@link Year} for what the node costs and why.
    */
-  record DayOfYear(VarkaVectorIR days) implements Chrono {}
+  record DayOfYear(VarkaVectorIR days) implements Chrono {
+    public DayOfYear {
+      requireInt("dayOfYear", days);
+    }
+  }
 
   /**
    * Spark's {@code last_day}: the last date of the month {@code days} falls in - a
    * {@link org.apache.spark.sql.types.DateType} output, unlike {@link Year}'s three siblings,
    * which all return an int. See {@link Year} for what a chrono node costs and why.
    */
-  record LastDay(VarkaVectorIR days) implements Chrono {}
+  record LastDay(VarkaVectorIR days) implements Chrono {
+    public LastDay {
+      requireInt("lastDay", days);
+    }
+  }
 
   /**
    * Spark's {@code trunc(date, fmt)} at its three date levels: the first day of the
@@ -379,7 +608,11 @@ public sealed interface VarkaVectorIR
    * shapes, and the shape hash must tell them apart. {@link Compare}'s {@link CompareOp} is the
    * precedent. See {@link Year} for what a chrono node costs and why.
    */
-  record TruncDate(VarkaVectorIR days, TruncLevel level) implements Chrono {}
+  record TruncDate(VarkaVectorIR days, TruncLevel level) implements Chrono {
+    public TruncDate {
+      requireInt("truncDate", days);
+    }
+  }
 
   /**
    * {@code trunc(date, fmt)} with a format <i>column</i>: {@code level} is a
@@ -394,7 +627,11 @@ public sealed interface VarkaVectorIR
    * row engine's NULL does. A {@link Chrono} member like {@link TruncDate}; its decomposed
    * child is {@code days}.
    */
-  record TruncDateDynamic(VarkaVectorIR days, VarkaVectorIR level) implements Chrono {}
+  record TruncDateDynamic(VarkaVectorIR days, VarkaVectorIR level) implements Chrono {
+    public TruncDateDynamic {
+      requireInt("truncDateDynamic", days, level);
+    }
+  }
 
   /**
    * Spark's {@code weekofyear}: the ISO-8601 week of {@code days}, 1 to 53. The
@@ -405,7 +642,11 @@ public sealed interface VarkaVectorIR
    * lowering: the reference oracle is {@code IsoFields.WEEK_OF_WEEK_BASED_YEAR} of the child's
    * value. See {@link Year} for what a chrono node costs and why.
    */
-  record WeekOfYear(VarkaVectorIR days) implements Chrono {}
+  record WeekOfYear(VarkaVectorIR days) implements Chrono {
+    public WeekOfYear {
+      requireInt("weekOfYear", days);
+    }
+  }
 
   /**
    * A canonical rendering of a node, pinned by hand because the shape hash is
@@ -424,8 +665,8 @@ public sealed interface VarkaVectorIR
    */
   static String canonical(VarkaVectorIR node) {
     return switch (node) {
-      case ColumnRef n -> "col:" + n.ordinal();
-      case LiteralSlot n -> "lit:" + n.index();
+      case ColumnRef n -> "col:" + n.ordinal() + laneTag(n.lane());
+      case LiteralSlot n -> "lit:" + n.index() + laneTag(n.lane());
       case AddDays n -> "(addDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
       case SubDays n -> "(subDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
       case GuardedDay n -> "(guardedDay " + canonical(n.days()) + ")";
@@ -489,8 +730,8 @@ public sealed interface VarkaVectorIR
    */
   static String canonicalShallow(VarkaVectorIR node, ToIntFunction<VarkaVectorIR> lineOf) {
     return switch (node) {
-      case ColumnRef n -> "col:" + n.ordinal();
-      case LiteralSlot n -> "lit:" + n.index();
+      case ColumnRef n -> "col:" + n.ordinal() + laneTag(n.lane());
+      case LiteralSlot n -> "lit:" + n.index() + laneTag(n.lane());
       case AddDays n -> "(addDays " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.offset()) + ")";
       case SubDays n -> "(subDays " + lineOf.applyAsInt(n.days()) + " "

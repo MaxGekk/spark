@@ -64,7 +64,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * per-lane check. For a checked int operation ({@code ANSI} or {@code try_} arithmetic) whether
  * the result can leave int32; if it cannot, the check comes off.
  *
- * <p><b>Kind.</b> The IR is untyped: a {@link ColumnRef} is an ordinal and nothing more, and
+ * <p><b>Kind.</b> The IR says which lane a node is on and nothing else about its type: a
+ * {@link ColumnRef} is an ordinal and a lane width, and
  * {@link Greatest}, {@link Least} and {@link IfElse} are the same node whether they hold epoch
  * days or ints. So the query says what it is asking about. Under {@link Kind#DAY} a column is
  * the project's column contract, {@code [CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS]}, and a hull node
@@ -72,7 +73,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * parent decides the child's kind: both {@link DateDiff} operands and every {@code days()} child
  * are days, both {@link IntArith} operands and {@link IntNeg}'s child are ints, and a hull node
  * passes its own kind down. A node asked for the kind it does not produce answers
- * {@link VarkaValueRange#UNKNOWN}.
+ * {@link VarkaValueRange#UNKNOWN}, as does any node on a lane wider than int32, whose values
+ * this analysis has neither a contract nor a literal table for.
  *
  * <p><b>Policy.</b> A column-driven day offset ({@code date_add(d, i)} with a column {@code i})
  * is bounded only by the runtime guard a calendar consumer above it arms, which declines a batch
@@ -124,6 +126,14 @@ public final class VarkaRangeAnalysis {
    */
   public static Range range(VarkaVectorIR node, Kind kind, GuardPolicy policy,
       IntUnaryOperator literals) {
+    // A leaf on a wider lane has neither of the two things this analysis reads: the epoch-day
+    // contract is an int32 statement, and `literals` hands back an int, which cannot carry a
+    // 64-bit constant. Answering UNKNOWN is the safe direction - it keeps every guard the
+    // caller would otherwise elide - and it is what a wider lane gets until the analysis has a
+    // contract and a literal table of its own.
+    if (node.laneType() != VarkaVectorIR.LaneType.INT) {
+      return VarkaValueRange.UNKNOWN;
+    }
     return switch (node) {
       case ColumnRef c -> kind == Kind.DAY ? CONTRACT : VarkaValueRange.UNKNOWN;
       case LiteralSlot s -> {
