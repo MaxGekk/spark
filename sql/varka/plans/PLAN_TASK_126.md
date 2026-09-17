@@ -37,12 +37,12 @@ One session, three arms at twelve cores, 1e9 rows, a 56g driver:
       fifth-cache=$PWD:$J25:arrow-cache \
       fifth-off=$PWD:$J25
 
-**Why twelve cores and not one.** The row-engine arm costs ninety minutes at one
-core and thirteen at twelve, and this task needs two such arms. The question is a
-decomposition of one ratio into two factors, and all three arms share a rung, so
-the factors are measured against each other rather than against the committed
-one-core files. Task 134's ladder has the same three parameters at the same rung,
-which is the cross-check.
+**Why twelve cores and not one.** The row-engine arm costs ninety minutes at
+one core and thirteen at twelve, and this task needs two such arms. The question
+is a decomposition of one ratio into two factors, and all three arms share a
+rung, so the factors are measured against each other rather than against the
+committed one-core files. Task 134's ladder has the same three parameters at the
+same rung, which is the cross-check.
 
 ### 3.2 What is deliberately unchanged
 
@@ -69,18 +69,19 @@ Three files, and the decomposition they give.
 ### 6.1 Predictions, registered before the run
 
 1. **The cache alone is worth little on this surface.** The row engine reads a
-   cached batch through `ColumnarToRow` either way, so the format should move the
-   light shapes by a few per cent and nothing else - call it under 1.2x median.
+   cached batch through `ColumnarToRow` either way, so the format should move
+   the light shapes by a few per cent and nothing else - call it under 1.2x
+   median.
 2. **Almost all of the published ratio is the kernels.** If the cache were worth
-   much, the engine-off arm would already show it, and the ladder's 16.2x at this
-   rung would be mostly cache rather than kernel.
+   much, the engine-off arm would already show it, and the ladder's 16.2x at
+   this rung would be mostly cache rather than kernel.
 3. The `arrow-cache` arm fuses nothing, so its plans carry no Varka node.
 
 ## 7. Risks
 
-* **The cache format may lose.** An Arrow batch read row-wise costs a conversion
-  the on-heap cache does not pay; a ratio under 1.0 is a real answer and is
-  reported as one.
+* **The cache format may lose.** An Arrow batch read row-wise costs a
+  conversion the on-heap cache does not pay; a ratio under 1.0 is a real answer
+  and is reported as one. It did, and section 9 reports it.
 * **Two hours, two tasks.** This one runs first because it is the long pole.
 
 ## 8. Sequencing
@@ -89,4 +90,54 @@ Three files, and the decomposition they give.
 
 ## 9. Outcome
 
-*To be written when the three arms land.*
+Done, 17 September 2026, on `aqua`: three arms in one session, twelve cores,
+1e9 rows, 52 shapes each.
+
+**The decomposition.** Median over the 52 shapes, with the two factors either
+side of the published ratio:
+
+| factor | median | min | max |
+| :--- | ---: | ---: | ---: |
+| the Arrow cache alone, `off / cache` | 0.78x | 0.52 | 1.03 |
+| the kernels on top of it, `cache / varka` | 21.8x | 1.67 | 38.0 |
+| the published ratio, `off / varka` | 16.9x | 1.09 | 35.0 |
+
+**The cache format is a tax on the row engine, not a bonus to the engine's
+number.** Read row-wise, an Arrow batch costs the row engine 22 per cent at the
+median against the on-heap cache it would otherwise use, because every batch
+pays a columnar-to-row conversion. Predicates lose most - `d IN (...)` 0.52x, `d
+IS NULL` 0.53x, `d = d2` 0.59x - and only the heaviest calendar shapes break
+even, `weekofyear(d)` at 1.03x.
+
+**So the published ratio is conservative, which is the opposite of what item 27
+feared.** The worry was that the engine's number was partly the cache format's
+doing, since the one token switched on both. It is not: measured like for like,
+with both arms on the same storage format, the kernels are worth 21.8x, and the
+published 16.9x is *smaller* because the engine-off arm is allowed the format
+that suits it. Both numbers are honest and they answer different questions -
+16.9x is what the whole stack buys against Spark as it would actually run, 21.8x
+is what the kernels buy at equal footing - and the write-up now has to say which
+one it is quoting.
+
+### 9.1 The predictions, scored
+
+**1. Wrong in sign, right in magnitude.** The cache alone was predicted to be
+worth a little, under 1.2x. It is worth 0.78x: a loss, not a gain. The reasoning
+behind the prediction was that the row engine reads a cached batch through a
+conversion either way, which is false - the on-heap cache is already row-shaped
+for it, and the Arrow one is not.
+
+**2. Held, and then some.** Almost all of the published ratio is the kernels; in
+fact more than all of it, since the cache format subtracts from the number
+rather than adding to it.
+
+**3. Held.** The `arrow-cache` arm fused nothing: no `--expect-fused` was passed
+to it, and its plans carry no Varka node, which is what makes it a control
+rather than a third engine arm.
+
+### 9.2 What this changes elsewhere
+
+Task 118 quotes a ratio, and it must now say which of the two it is. The README
+sentence that started this - the third and fourth arms "differ only by that
+flag" - is corrected in the same commit as the token, and the example grows the
+fifth arm so the decomposition is reproducible from the README alone.
