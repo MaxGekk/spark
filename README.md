@@ -214,15 +214,20 @@ sed -i 's/rootLogger.level = info/rootLogger.level = warn/g' conf/log4j2.propert
 curl -sSLO https://archive.apache.org/dist/spark/spark-4.2.0/spark-4.2.0-bin-hadoop3.tgz
 tar xf spark-4.2.0-bin-hadoop3.tgz
 
-# All four distributions, one after another, into sql/varka/bench/benchmarks/.
-# Each argument is LABEL=SPARK_HOME:JAVA_HOME, with a trailing :varka switching
-# the engine on - so the third and fourth differ only by that flag.
+# All five distributions, one after another, into sql/varka/bench/benchmarks/.
+# Each argument is LABEL=SPARK_HOME:JAVA_HOME with an optional trailing token.
+# `:varka` switches on the engine *and* the Arrow columnar cache it reads through
+# - the kernels need that cache to run at all - and `:arrow-cache` switches on the
+# cache alone, under the row engine. So the fourth and fifth arms separate what
+# the cache format is worth from what the kernels are worth, and the third is the
+# fork with neither.
 J17=/usr/lib/jvm/java-17-openjdk-amd64
 J25=/usr/lib/jvm/java-25-openjdk-amd64
 dev/varka_bench_surface.sh --benchmark chains --rows 200000000 \
   spark-4.2.0-jdk17=$PWD/spark-4.2.0-bin-hadoop3:$J17 \
   spark-4.2.0-jdk25=$PWD/spark-4.2.0-bin-hadoop3:$J25 \
   varka-off-jdk25=$PWD:$J25 \
+  varka-cache-jdk25=$PWD:$J25:arrow-cache \
   varka-jdk25=$PWD:$J25:varka
 ```
 

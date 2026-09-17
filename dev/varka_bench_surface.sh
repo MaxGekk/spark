@@ -72,7 +72,16 @@
 # `build/sbt package` (its bin/spark-submit runs the assembled jars). The third
 # field is a comma-separated list of extra `--conf` settings; the word `varka`
 # stands for what the fork needs: Varka on, the Arrow cache serializer, the
-# engine jar on the driver's class path, and `--expect-fused --max-fixed-share
+# The conf field's two bare tokens name what a distribution switches on. `varka`
+# is the engine *and* the Arrow columnar cache the engine reads through, which the
+# kernels need to run at all; `arrow-cache` is that cache alone, with the row
+# engine above it. The pair is what separates the cache format's share of a
+# published ratio from the kernels' - without the second, an arm labelled "the
+# same fork with the flag off" differs in two things rather than one. Cache build
+# time is outside every number here: the driver caches and materializes before it
+# measures, so these are hot-cache figures for all three.
+#
+# `varka` puts the engine jar on the driver's class path, and `--expect-fused --max-fixed-share
 # 5` on the driver, so a run of the kernel fails when an entry the surface
 # marks as fused is not, or when a Varka row's fixed share is over the
 # job-size rule of PLAN_MILESTONE_4.md 2.29. Put the Varka run last: the
@@ -243,6 +252,12 @@ for spec in "${dists[@]}"; do
           --conf "spark.sql.cache.serializer=$arrow_serializer"
           --driver-class-path "$(engine_jar)")
         driver+=(--expect-fused --max-fixed-share "$share") ;;
+      arrow-cache)
+        # The cache format without the engine: the control that separates what the
+        # columnar cache is worth from what the kernels are worth. No --expect-fused,
+        # since nothing fuses here, and no engine jar, since the serializer is
+        # sql/core's and does not need one.
+        submit+=(--conf "spark.sql.cache.serializer=$arrow_serializer") ;;
       *=*) submit+=(--conf "$c") ;;
       *) echo "$label: conf '$c' is not key=value" >&2; exit 1 ;;
     esac
