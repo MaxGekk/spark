@@ -198,3 +198,61 @@ away from the cause and says nothing about numerals, so the natural first guess
 is an unbalanced paren in the surrounding expression, which sends you rewriting
 correct code. `dev/varka_gate.sh --only lint` is a minute, and it is the only
 thing that reports this at all - the compiler is happy.
+
+## Python's 100-column rule is a convention here, not a check
+
+Spark's `pyproject.toml` sets `line-length = 100`, and it is natural to read that
+as a linter rule. It is not one. `[tool.ruff.lint]` only carries
+`extend-select = ["I", "G010", "RUF001", "RUF002", "RUF003", "RUF100"]`, which
+extends ruff's default `E4, E7, E9, F`; `line-too-long` is `E501`, in the `E5`
+family, and is therefore never selected. `ruff check --show-settings` lists the
+66 enabled rules and it is not among them. `line-length` still matters, because
+it is what `ruff format` wraps to - so the formatter, not the checker, is what
+holds Python lines near 100, and the formatter cannot split a string literal or a
+comment.
+
+Two consequences worth knowing before editing Python here. A long *code* line is
+caught, because `ruff format --check` would rewrite it, which is why
+`dev/lint-python` runs both halves. A long string or a long comment is caught by
+nothing, and no edit can shorten a single long token anyway.
+
+Even with `E501` forced on, ruff exempts a line of fewer than two
+whitespace-separated chunks. Measured on the pinned ruff 0.14.8 over a six-shape
+probe: a 112-character line holding one quoted token and a 110-character one-word
+comment pass; two-chunk, three-chunk and many-chunk lines are reported. That is
+why `dev/varka_precommit.sh` grants the same exemption for `.py` and no other
+language - scalastyle and checkstyle have no equivalent, so a long Scala string
+literal is a real finding.
+
+The practical upshot: when the column scan fires on a Python line you cannot wrap,
+check what ruff says before rewriting anything. It probably says nothing.
+
+## A git hook's nested git commands act on the repository being committed to
+
+`git commit` runs a hook with `GIT_DIR` and `GIT_INDEX_FILE` exported, both
+absolute. Any git command the hook runs - or that a script the hook invokes runs,
+however deep, and whatever directory it has changed to - inherits them and
+therefore operates on the repository whose commit is in progress. `cd` does not
+help, and neither does creating a repository of your own: `git init` in a fresh
+directory succeeds while `git add` and `git commit` after it write to the outer
+repository's index and refs.
+
+This was found by writing a self-test for `dev/varka_precommit.sh` that builds a
+throwaway repository to check the hook's diff scoping. Run as a hook, the fixture
+committed itself onto the task branch - the commit carried the staged changes and
+the fixture file - and the real commit then failed with `cannot lock ref 'HEAD':
+is at <fixture commit> but expected <branch tip>`. `git reset --mixed <tip>`
+restores it, and nothing is lost as long as it has not been pushed.
+
+The fix is to strip the environment for every nested command:
+
+    bare() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
+      -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      -u GIT_ALTERNATE_OBJECT_DIRECTORIES "$@"; }
+
+Two things make this worth remembering rather than rediscovering. The failure is
+silent until the outer commit fails, and it fails with a message about ref
+locking that says nothing about where the other commit came from. And it does not
+reproduce when `GIT_DIR` is set by hand to a relative path such as `.git`, which
+re-resolves against whatever directory the fixture is in - so a test of the fix
+must export the absolute path a real hook receives.
