@@ -224,7 +224,7 @@ without regeneration, which is this task's equivalent of an op count.
 | `VarkaKernelEvaluator.scala` | `isArrowBacked`, `allocateVector`, `invokeFused`, the `longArgs` array on `FusedRunner` |
 | `VarkaLongLaneSuite.scala` (new, `sql/core`) | the end-to-end suite of section 5 |
 | `VarkaExpressionCompilerSuite.scala` | the compiler-level admissions and declines |
-| `sql/varka/coverage.json` | the three new columns and their rows, regenerated |
+| `sql/varka/coverage.json` | the long columns - `t`, `t2`, `l`, `dt` as milestone section 2.37 names them, plus `l2` and `dt2` for column-to-column comparisons - and their rows, regenerated |
 | `sql/varka/plans/PLAN_MILESTONE_5.md` | row 29 |
 
 ## 5. Tests, and what each is for
@@ -239,7 +239,7 @@ without regeneration, which is this task's equivalent of an op count.
 2. **The fused-not-declined assertion.** Each of those queries asserts it
    actually fused (the decline map is empty and the plan shows the Varka node),
    because a differential passes trivially when everything falls back.
-3. **A mixed-lane projection.** `SELECT greatest(d, d2), greatest(bi, bi2)` fuses
+3. **A mixed-lane projection.** `SELECT greatest(d, d2), greatest(l, l2)` fuses
    one lane, leaves the other residual, and the decline reason names the lane
    rather than the budget.
 4. **A timestamp comparison declines with the milestone reason**, on both
@@ -295,7 +295,7 @@ gates at both widths, which is a correctness gate rather than a measurement.
    a `TIME(6)` literal reaches the compiler through one; the compiler must see
    through it or decline it, never drop it. Test 1's mixed-precision literals
    hold it.
-4. **The coverage fixture's ordinals.** Adding the three long columns to the
+4. **The coverage fixture's ordinals.** Adding the long columns to the
    shared `childOutput` renumbers every ordinal after them, which task 122's
    review found breaks tests that assert an ordinal; the new columns go at the
    end, and any test that needs its own layout builds its own list.

@@ -1027,8 +1027,9 @@ milestone will publish.
 ### Item 15. Moved from milestone 5 on 15 September 2026
 
 Milestone 5 was re-scoped that day to one lane - the long lane - and the types
-that share it (`bigint`, `TIME`, day-time intervals, the timestamps), ending in
-a public message about `TIME`. Fourteen open rows had no bearing on that and
+that share it (`bigint`, `TIME`, day-time intervals - and, until 17 September,
+the timestamps, which then moved to item 31), ending in a public message about
+`TIME`. Fourteen open rows had no bearing on that and
 moved here, on the 4 and 11 September precedents: text and task numbers
 unchanged, each design section still where it was in `PLAN_MILESTONE_5.md`
 with a note under its heading, so every citation resolves. None is ordered
