@@ -2869,6 +2869,23 @@ two arms each, measured on the laptop in one session because the committed chain
 files are the EPYC 9V45 runner's. **Done when** the write-up can state the
 occupancy behaviour of both halves of the benchmark rather than one. Size:
 small; needs a quiet machine window.
+
+### 2.77 What a 64-bit lane costs (task 142)
+
+*Opened 17 September 2026 by task 85, which built the lane and priced nothing.*
+
+Every remaining task on the long lane - 104's `bigint` arithmetic, 102's `TIME`
+expressions, 29's widened loads - will be judged by a ratio against the row
+engine, and a ratio has two factors: if the lane's own cost is not known
+separately, a disappointing `TIME` number cannot be told apart from a lane that
+is simply twice as wide. Section 2.3 already calls the halved headroom the
+lane's own property and 2.39 asks for it "committed per shape, not discovered".
+**How.** The same eight shapes emitted at both lanes and driven straight over
+memory segments, as `VarkaArithmeticBenchmark` drives the int ones, over a row
+ladder chosen so that at least one rung has both arms inside the same cache
+level - otherwise the number prices a cache boundary rather than the lane.
+**Done when** the per-shape ratio is committed with the rung it was measured at.
+Size: small; needs a quiet machine window.
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3036,6 +3053,7 @@ can start has.
 | 138 | Three test forms (section 2.73). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | Every coverage row through the dense body, the masked body and a lane tail with poisoned null lanes; a "both engines throw or both agree" form in `VarkaSharedSessions` for `ANSI` rows; a ternary-logic-partitioning oracle running `p`, `NOT p` and `p IS NULL` for every filter row | All three run in `VarkaCoverageDifferentialSuite`; the partition oracle needs no second engine |
 | 139 | A per-expression switch, and the tier ladder (section 2.74). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `spark.sql.codegen.varka.expression.<Class>.enabled` producing a decline reason that names the flag - **Milestone 6** (`SCOPE_MILESTONE_6.md` item 24, #223); and, this milestone's, a time-to-tier-4 ladder and a batches-below-C2 counter extending `VarkaColdStartBenchmark` | A disabled class declines with the reason; the cold-start file carries batches executed before each kernel's tier-4 compile landed |
 | 140 | The chains at occupancy (section 2.75). **Done** (`PLAN_TASK_140.md` 9, 17 September 2026) from task 134's own finding: the compute-bound half of the benchmark at 1 and 12 cores, two arms per rung, four committed files. The advantage **grows** under occupancy - 10.29x at one core, 11.42x at twelve - where the surface lost 15%, and not one of the twelve chains falls, the worst improving from 8.93x to 10.19x. The mechanism is task 134's seen from the other side: on the surface the row engine scaled better (5.62x against 5.35x), on the chains the engine does (7.09x against 6.18x), because there is arithmetic to hide latency behind. So the write-up's headline, which comes from the chains, is conservative for a loaded executor rather than flattering | The `chains` benchmark through the same driver at `--cores` 1 and 12, measured in one session on the laptop, since the committed chain files are the EPYC 9V45 runner's | Four files with `cores` in their provenance, every row fused, and the per-shape split stated beside task 134's |
+| 142 | What a 64-bit lane costs (section 2.77). **Done** (`PLAN_TASK_142.md` 9, 17 September 2026) from task 85's own finding: the long lane is priced against the int one for eight shapes over a four-rung row ladder, so the halved headroom is a committed number before task 104 is judged against it | A committed `VarkaLongLaneBenchmark` results file whose rungs put both arms in the same cache level, and a per-shape ratio the milestone's later long-lane tasks can be read against |
 
 ## 4. Files
 
