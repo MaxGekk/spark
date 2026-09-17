@@ -358,6 +358,32 @@ VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
 | `year(d) = 2021 OR month(d) = 3` |  |
 | `d IN (11 to 16 date literals)` | an IN list this long arrives from the optimizer as an InSet and fuses the same way |
 
+#### Long-lane predicates
+
+| Predicate | Notes |
+|---|---|
+| `l > l2` |  |
+| `l = l2` |  |
+| `l >= 5000000000` | a bigint literal takes a slot in the long lane's own table |
+| `l IS NULL` |  |
+| `l IS NOT NULL` |  |
+| `t < t2` |  |
+| `t = TIME'12:34:56.789'` | a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds |
+| `dt > dt2` |  |
+| `dt < INTERVAL '0' SECOND` |  |
+| `dt IS NOT NULL` |  |
+
+#### Long-lane choice
+
+| Expression | Notes |
+|---|---|
+| `greatest(l, l2)` |  |
+| `least(l, 5000000000)` |  |
+| `CASE WHEN l < l2 THEN l ELSE l2 END` |  |
+| `if(l IS NULL, l2, l)` |  |
+| `greatest(t, t2)` |  |
+| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` |  |
+
 <!-- END generated coverage table -->
 
 ## Glossary

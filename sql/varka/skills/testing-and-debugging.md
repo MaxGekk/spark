@@ -315,3 +315,27 @@ Two habits follow:
   same arithmetic under two Spark types must produce byte-identical buffers from
   demonstrably different vector classes - and it fails the day the premise
   breaks, which is exactly when a benchmark's noise would hide it.
+
+## The coverage suite compiles the analyzed form; the end-to-end suites run the optimized one
+
+`VarkaCoverageSuite` decides whether a row counts as covered by resolving its SQL
+against the columns and handing the *analyzed* expression to the compiler. A
+query in `VarkaLongLaneSuite` or the coverage differential goes through the
+optimizer first. The two can disagree, and when they do the symptom is precise:
+the query fuses end to end and the coverage row declines.
+
+Task 29 met it on `dt < INTERVAL '0' SECOND`. The analyzer types the literal
+SECOND TO SECOND and casts it to the column's DAY TO SECOND; the optimizer folds
+that cast into a literal of the column's type before any query runs, so the
+compiler never sees it end to end - and always sees it in the coverage suite. The
+year-month arms had met the same thing earlier (`CAST(ymy AS INTERVAL MONTH)`),
+which is why the compiler carries relabel arms for casts that return their
+operand unchanged: the MONTH end field for year-month intervals, and now the
+SECOND end field for day-time ones and a widening precision for `TIME`.
+
+Two habits follow. When a coverage row declines that the end-to-end suite fuses,
+look for a type-coercion cast before looking for a missing lowering - the reason
+string names it (`unsupported expression` over a `Cast`). And when a new type
+arrives, ask what casts type coercion inserts around its literals and columns,
+and whether each is the identity on the lane; an identity gets a relabel arm,
+anything else gets a decline with a reason.

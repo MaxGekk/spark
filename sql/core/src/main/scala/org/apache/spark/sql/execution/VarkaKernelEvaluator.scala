@@ -26,7 +26,7 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.arrow.memory.{ArrowBuf, BufferAllocator}
-import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYearVector, IntVector, ValueVector, VarCharVector}
+import org.apache.arrow.vector.{BaseFixedWidthVector, BigIntVector, DateDayVector, DurationVector, IntervalYearVector, IntVector, TimeNanoVector, ValueVector, VarCharVector}
 
 import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
@@ -36,10 +36,11 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{IntRangeOps, Sel
   TruncLevelLeaf, VarkaAllocationSampler, VarkaDerivedKind, VarkaFallbackEvent, VarkaFusedKernel,
   VarkaKernelAllocationEvent, VarkaSelectionBitmap, VarkaShapeCache, VarkaShapeKey, VarkaVectorIR,
   WeekdayLeaf}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
-import org.apache.spark.sql.types.{DateType, IntegerType, StructType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, IntegerType, LongType, StructType, TimeType, YearMonthIntervalType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
 
@@ -232,7 +233,7 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /** The cache key of the fused sub-plan: exactly the emitter inputs the bytes follow. */
   protected def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
-    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.literals.size,
+    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.numLiterals,
       VarkaColumnarToRowExec.currentEmitOptions)
 
   /**
@@ -448,7 +449,9 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /**
    * Whether the kernel can run over this batch: every referenced column must be an Arrow
-   * `DateDayVector` or `IntVector` (a day-offset column) holding exactly the batch's
+   * vector of a class the kernels read - four bytes wide (`DateDayVector`, `IntVector`,
+   * `IntervalYearVector`) or eight (`BigIntVector`, `TimeNanoVector`, `DurationVector`) -
+   * holding exactly the batch's
    * rows, no more - or, for an input the evaluator derives, an Arrow `VarCharVector`
    * of the same row count, the one string vector the Arrow cache produces and the derived
    * leaf reads; the large and view string vectors refuse the batch like any other column type.
@@ -480,6 +483,15 @@ private[sql] abstract class VarkaEvaluatorBase(
             // than by Spark type, so admitting the type is exactly this line: the serializer
             // already stores such a column and `ArrowColumnVector` already reads it back.
             case (v: IntervalYearVector, None) => v.getValueCount() == rows
+            // The long lane's three (task 29): a `bigint`, a `TIME(p)` - nanoseconds of day at
+            // every precision - and a day-time interval in microseconds. All three are
+            // `BaseFixedWidthVector`s of width eight, and task 116 proved the two datetime ones
+            // map through `extractMorsel` exactly as the int vectors do. The timestamp vectors
+            // are deliberately not here: the compiler never builds a leaf for them, so admitting
+            // them would only decline the batch one layer later.
+            case (v: BigIntVector, None) => v.getValueCount() == rows
+            case (v: TimeNanoVector, None) => v.getValueCount() == rows
+            case (v: DurationVector, None) => v.getValueCount() == rows
             case (v: VarCharVector, Some(_)) => v.getValueCount() == rows
             case _ => false
           }
@@ -772,8 +784,18 @@ private[sql] abstract class VarkaEvaluatorBase(
         throw new NoClassDefFoundError("injected Varka kernel failure")
         // scalastyle:on throwerror
       }
-      runner.kernel.run(runner.srcData, runner.srcValidity, runner.srcNullCount,
-        runner.dstData, runner.dstValidity, runner.scalarArgs, len)
+      // One emitted class is one lane, and each lane has its own `run`: the seven-argument
+      // form reads the int literal table, the eight-argument one adds the long table. The
+      // plan's lane is fixed at compile time, so this is a branch on a final field, not a
+      // per-batch discovery. The wrong overload would not run a wrong kernel - each default
+      // throws naming the lane - but that throw would be a fallback with a misleading cause.
+      if (runner.lane == LaneType.LONG) {
+        runner.kernel.run(runner.srcData, runner.srcValidity, runner.srcNullCount,
+          runner.dstData, runner.dstValidity, runner.scalarArgs, runner.longArgs, len)
+      } else {
+        runner.kernel.run(runner.srcData, runner.srcValidity, runner.srcNullCount,
+          runner.dstData, runner.dstValidity, runner.scalarArgs, len)
+      }
     } catch {
       case e if isCatchable(e) => throw new VarkaKernelFailure(e)
     }
@@ -852,6 +874,8 @@ private[sql] abstract class VarkaEvaluatorBase(
     val dstData = new Array[Long](plan.outputs.size)
     val dstValidity = new Array[Long](plan.outputs.size)
     val scalarArgs: Array[Int] = plan.literals.toArray
+    val longArgs: Array[Long] = plan.longLiterals.toArray
+    val lane: LaneType = plan.lane
   }
 }
 
@@ -1079,7 +1103,7 @@ private[sql] class VarkaKernelEvaluator(
    * buffer are undefined either way, matching the engine contract.
    */
   private def allocateVector(
-      dataType: org.apache.spark.sql.types.DataType,
+      dataType: DataType,
       ordinal: Int,
       len: Int,
       allocator: BufferAllocator): BaseFixedWidthVector = {
@@ -1090,6 +1114,15 @@ private[sql] class VarkaKernelEvaluator(
       // never on the buffer, so every year-month unit writes one vector class; the row path
       // reads it back through the accessor `ArrowColumnVector` already has.
       case _: YearMonthIntervalType => new IntervalYearVector(s"varka$ordinal", allocator)
+      // The long lane's destinations (task 29), built from the same Arrow field Spark's own
+      // writer would build for the type - `BigIntVector`, `TimeNanoVector` with the precision in
+      // its field metadata, `DurationVector` in microseconds - so the row path reads them back
+      // through the accessors `ArrowColumnVector` already has, and the cache serializer sees
+      // the field it expects. A destination is needed even though this task adds no long
+      // arithmetic: `greatest`, `least` and `CASE WHEN` produce a long column.
+      case LongType | _: TimeType | _: DayTimeIntervalType =>
+        ArrowUtils.toArrowField(s"varka$ordinal", dataType, nullable = true, timeZoneId = null)
+          .createVector(allocator)
     }
     val fixed = vector.asInstanceOf[BaseFixedWidthVector]
     try {

@@ -75,6 +75,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A closed `ArrowBuf` still answers `capacity()` and `memoryAddress()`](sql/varka/skills/testing-and-debugging.md#a-closed-arrowbuf-still-answers-capacity-and-memoryaddress)
 * [A checklist for the next node type or mode, from what three reviews found in this one](sql/varka/skills/testing-and-debugging.md#a-checklist-for-the-next-node-type-or-mode-from-what-three-reviews-found-in-this-one)
 * [Check that the place a prediction blames actually exists](sql/varka/skills/testing-and-debugging.md#check-that-the-place-a-prediction-blames-actually-exists)
+* [The coverage suite compiles the analyzed form; the end-to-end suites run the optimized one](sql/varka/skills/testing-and-debugging.md#the-coverage-suite-compiles-the-analyzed-form-the-end-to-end-suites-run-the-optimized-one)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
 * [C2 Compile Latency Is the Wide-Vector-Loop Cliff (root cause, proven)](sql/varka/skills/the-jit.md#c2-compile-latency-is-the-wide-vector-loop-cliff-root-cause-proven)

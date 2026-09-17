@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, Var
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, StringType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -46,7 +46,20 @@ private[sql] case class CompiledVarkaProjection(
     inputOrdinals: Seq[Int],
     literals: Seq[Int],
     inputBounds: Seq[VarkaInputBound] = Nil,
-    derivedInputs: Seq[VarkaDerivedInput] = Nil) {
+    derivedInputs: Seq[VarkaDerivedInput] = Nil,
+    longLiterals: Seq[Long] = Nil) {
+
+  // A kernel is single-lane - every output root agrees, which the emitter enforces - so it reads
+  // exactly one of the two literal tables. Both non-empty would mean an entry of the other lane
+  // left its literals behind when it was demoted, which the per-entry rollback rules out.
+  require(literals.isEmpty || longLiterals.isEmpty,
+    "a kernel is single-lane, so at most one of its literal tables is populated")
+
+  /** The lane every output root is on, and so the `run` overload the evaluator calls. */
+  def lane: LaneType = outputs.head.laneType()
+
+  /** The slot count of the one literal table this kernel reads - what the emitter is told. */
+  def numLiterals: Int = literals.size + longLiterals.size
 
   private lazy val derivedByInput: Map[Int, VarkaDerivedInput] =
     derivedInputs.map(d => d.inputIndex -> d).toMap
@@ -137,12 +150,19 @@ private[sql] case class VarkaDecline(reason: String, expr: String) {
 }
 
 /**
- * Collects what one entry's compilation leaves behind besides its IR: its decline, and the input
+ * Collects what one entry's compilation leaves behind besides its IR: its decline, the input
  * bounds it asks the evaluator to check (see `PLAN_TASK_56.md`; keyed by child ordinal until the
- * entry is accepted, and dropped with a declining entry the way its columns and literals are). The
+ * entry is accepted, and dropped with a declining entry the way its columns and literals are), and
+ * the long lane's literal table. The
  * recursion reports a decline at the point of failure and the first note wins, so the recorded
  * reason is the innermost cause rather than the outermost expression that inherited it; [[take]]
  * hands it over and resets for the next entry.
+ *
+ * The long literal table lives here rather than beside the int one in every signature because
+ * every compile arm already carries the sink, and because it is the second half of one table
+ * rather than a second table: a kernel is single-lane, so it reads the int slots or the long
+ * slots and never both. It follows the bounds' rollback discipline - a mark before an entry, a
+ * truncate when the entry declines.
  *
  * The recursion works on bound expressions, whose `BoundReference`s render as
  * `input[1, int, true]`; the child's attributes go back in before the text is kept, so a
@@ -159,6 +179,24 @@ private final class DeclineSink(childOutput: Seq[Attribute]) {
 
   /** Drops the bounds noted since `mark` - a declining entry's. */
   def truncateBounds(mark: Int): Unit = bounds.remove(mark, bounds.size - mark)
+
+  private val longLiterals = mutable.LinkedHashMap.empty[Long, Int]
+
+  /** Interns `value` in the long lane's per-distinct-value table and wraps it as its slot. */
+  def longSlot(value: Long): LiteralSlot =
+    new LiteralSlot(longLiterals.getOrElseUpdate(value, longLiterals.size), LaneType.LONG)
+
+  def longMark: Int = longLiterals.size
+
+  /** Drops the long literals interned since `mark` - a declining entry's. */
+  def truncateLong(mark: Int): Unit = {
+    if (longLiterals.size > mark) {
+      longLiterals.keys.drop(mark).toSeq.foreach(longLiterals.remove)
+    }
+  }
+
+  /** The long literal table in slot order, for the compiled plan. */
+  def longLiteralValues: Seq[Long] = longLiterals.keys.toSeq
 
   /** The noted bounds in kernel-input terms, given the accepted entries' input table. */
   def inputBounds(inputs: mutable.LinkedHashMap[Int, Int]): Seq[VarkaInputBound] =
@@ -323,8 +361,25 @@ private[sql] object VarkaExpressionCompiler {
           // pre-entry size restores the exact prior state.
           val inputsMark = inputs.size
           val literalsMark = literals.size
+          val longMark = sink.longMark
           val boundsMark = sink.boundsMark
           compileNode(e, inputs, literals, sink) match {
+            // One kernel holds one lane: its loop, its epilogue and its stores are one species.
+            // The first fused entry fixes the lane and an entry of the other lane is demoted to
+            // residual with a reason that says so - checked here, before the budgets, because
+            // `fitsBudgets` would refuse the mix too but only answers yes or no, and a lane
+            // mismatch reported as a budget breach sends a reader hunting a chain-depth problem
+            // that is not there. Task 28's width conversion is what will let both lanes share a
+            // tree; until then the mixed projection fuses one lane and leaves the other.
+            case Some(ir) if outputs.nonEmpty && ir.laneType() != outputs.head.laneType() =>
+              truncate(inputs, inputsMark)
+              truncate(literals, literalsMark)
+              sink.truncateLong(longMark)
+              sink.truncateBounds(boundsMark)
+              sink.take()
+              sink.note(laneMismatch(ir.laneType(), outputs.head.laneType()), e)
+              sink.take().foreach(decline => declines += position -> decline)
+              ResidualOutput
             // An accepted entry must also fit the emitter's structural budgets together with the
             // entries accepted before it. The emitter enforces the same limits, but at emission
             // time, where a breach can only become a silent per-batch fallback - no decline reason,
@@ -339,6 +394,7 @@ private[sql] object VarkaExpressionCompiler {
             case compiled =>
               truncate(inputs, inputsMark)
               truncate(literals, literalsMark)
+              sink.truncateLong(longMark)
               sink.truncateBounds(boundsMark)
               if (compiled.isDefined) {
                 sink.take() // an over-budget entry compiled clean; its reason is the budget
@@ -354,7 +410,7 @@ private[sql] object VarkaExpressionCompiler {
       val (ordinals, derived) = VarkaDerivedInput.resolve(inputs)
       Some(PartialVarkaProjection(specs, CompiledVarkaProjection(
         outputs.toSeq, outputTypes.result(), ordinals, literals.keys.toSeq,
-        sink.inputBounds(inputs), derived),
+        sink.inputBounds(inputs), derived, sink.longLiteralValues),
         declines.result()))
     } else {
       None
@@ -402,8 +458,19 @@ private[sql] object VarkaExpressionCompiler {
       val bound = BindReferences.bindReference[Expression](conjunct, childOutput)
       val inputsMark = inputs.size
       val literalsMark = literals.size
+      val longMark = sink.longMark
       val boundsMark = sink.boundsMark
       compileCond(bound, inputs, literals, sink) match {
+        // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a
+        // mix by construction, so it is asked here first and answered with the lane's reason.
+        case Some(cond) if fusedConds.nonEmpty && cond.laneType() != fusedConds.head.laneType() =>
+          truncate(inputs, inputsMark)
+          truncate(literals, literalsMark)
+          sink.truncateLong(longMark)
+          sink.truncateBounds(boundsMark)
+          sink.take()
+          sink.note(laneMismatch(cond.laneType(), fusedConds.head.laneType()), bound)
+          VarkaConjunctSpec(conjunct, fused = false, decline = sink.take())
         case Some(cond) if VarkaLoopEmitter.fitsBudgets(
             java.util.List.of(andFold(fusedConds.toSeq :+ cond)), inputs.size) =>
           sink.take()
@@ -412,6 +479,7 @@ private[sql] object VarkaExpressionCompiler {
         case compiled =>
           truncate(inputs, inputsMark)
           truncate(literals, literalsMark)
+          sink.truncateLong(longMark)
           sink.truncateBounds(boundsMark)
           if (compiled.isDefined) {
             sink.take()
@@ -425,9 +493,60 @@ private[sql] object VarkaExpressionCompiler {
       val (ordinals, derived) = VarkaDerivedInput.resolve(inputs)
       Some(CompiledVarkaPredicate(specs,
         CompiledVarkaProjection(Seq(andFold(fusedConds.toSeq)), Seq(BooleanType),
-          ordinals, literals.keys.toSeq, sink.inputBounds(inputs), derived)))
+          ordinals, literals.keys.toSeq, sink.inputBounds(inputs), derived,
+          sink.longLiteralValues)))
     } else {
       None
+    }
+  }
+
+  /**
+   * The lane a Spark type's values occupy in a kernel, or `None` for a type no kernel reads.
+   * The int side is what the leaf arms below already admit - a date, an int and a year-month
+   * interval are all one 32-bit lane - and the long side is milestone 5's: `bigint`, `TIME`
+   * (nanoseconds of day) and a day-time interval (microseconds) are one 64-bit lane
+   * (`PLAN_TASK_29.md` 3.1). The two timestamp types are that lane physically and are
+   * deliberately absent: see `isTimestamp` and the arm that names them.
+   */
+  private def laneOf(dataType: DataType): Option[LaneType] = dataType match {
+    case IntegerType | DateType | _: YearMonthIntervalType => Some(LaneType.INT)
+    case LongType | _: TimeType | _: DayTimeIntervalType => Some(LaneType.LONG)
+    case _ => None
+  }
+
+  /**
+   * Whether the type is one of the two timestamps, which milestone 5 leaves out by decision
+   * (`SCOPE_MILESTONE_6.md` item 31): a zoned `TIMESTAMP`'s differences and interval additions
+   * are computed on local date-times in the session zone and are not lane arithmetic, and the
+   * NTZ family, whose arithmetic would be plain, waits with it. The decline names the milestone
+   * so EXPLAIN shows a decision rather than a gap.
+   */
+  private def isTimestamp(dataType: DataType): Boolean = dataType match {
+    case TimestampType | TimestampNTZType => true
+    case _ => false
+  }
+
+  private val timestampOutOfMilestone = "a timestamp column is outside milestone 5"
+
+  /** The reason an entry of one lane records when the kernel is already on the other. */
+  private def laneMismatch(entry: LaneType, kernel: LaneType): String =
+    s"the $entry lane in a kernel on the $kernel lane: one kernel holds one lane"
+
+  /**
+   * Whether `nodes` share a lane, noting the mismatch against `whole` when they do not. Every
+   * IR node whose operands may disagree - the connectives, the blend - refuses a mix in its
+   * constructor, so this is asked first wherever Spark's typing does not already force the
+   * agreement: `CASE WHEN l > 0 THEN d ELSE d2` type-checks, and its condition is on the long
+   * lane while its branches are on the int one.
+   */
+  private def sameLane(whole: Expression, sink: DeclineSink, nodes: VarkaVectorIR*): Boolean = {
+    val lanes = nodes.map(_.laneType()).distinct
+    if (lanes.size <= 1) {
+      true
+    } else {
+      sink.note(s"one kernel holds one lane, and this mixes the ${lanes(0)} and ${lanes(1)} lanes",
+        whole)
+      false
     }
   }
 
@@ -471,6 +590,47 @@ private[sql] object VarkaExpressionCompiler {
     // the compiler ran, and the leaf cannot put one there.
     case br: BoundReference if br.dataType.isInstanceOf[YearMonthIntervalType] =>
       Some(columnRef(br, inputs))
+    // The long lane's column leaf: a `bigint`, a `TIME(p)` and a day-time interval are one
+    // eight-byte lane, holding the value, nanoseconds of day and microseconds respectively (task
+    // 29). As with the interval leaf above, Spark's own typing decides where such a value may
+    // appear - never in a date or an int position - so the leaf cannot put one there, and the
+    // IR's constructors refuse a tree that mixes it with the int lane anyway.
+    case br: BoundReference if laneOf(br.dataType).contains(LaneType.LONG) =>
+      Some(columnRef(br, inputs, LaneType.LONG))
+    // Ahead of the generic "non-date column" decline below, so the reason is the decision.
+    case br: BoundReference if isTimestamp(br.dataType) =>
+      sink.note(timestampOutOfMilestone, br)
+      None
+    // The long lane's literals, beside the int ones: the value is already the long the lane
+    // holds, so `l > 5000000000`, `t < TIME'12:00'` and `dt > INTERVAL '1' DAY` take a slot.
+    case Literal(v: Long, t) if laneOf(t).contains(LaneType.LONG) =>
+      Some(sink.longSlot(v))
+    // TIME's precision cast. A `TIME(p)` value is stored truncated to `p` digits and
+    // `Cast.castToTime` truncates again to the target precision, so a cast to an equal or wider
+    // precision - the one type coercion inserts when two precisions meet in a comparison -
+    // returns its operand unchanged and compiles to the child, as the year-month MONTH relabel
+    // does above. Narrowing drops digits, which is a floor division the lane has no exact form
+    // of yet (task 88); it declines with its reason rather than falling through as unsupported.
+    case Cast(child, TimeType(to), _, _)
+        if child.dataType.isInstanceOf[TimeType]
+          && to >= child.dataType.asInstanceOf[TimeType].precision =>
+      compileNode(child, inputs, literals, sink)
+    case c @ Cast(child, _: TimeType, _, _) if child.dataType.isInstanceOf[TimeType] =>
+      sink.note("TIME narrowed to a lower precision, which truncates", c)
+      None
+    // The day-time interval's unit relabel, the twin of the year-month MONTH arm above: type
+    // coercion casts `INTERVAL '0' SECOND` to the column's DAY TO SECOND before comparing, and
+    // `castToDayTimeInterval` keeps the microseconds whole for a SECOND end field
+    // (`SparkIntervalUtils.durationToMicros`), so the cast is the child. A coarser end field
+    // truncates to that unit - `micros - micros % unit`, a division - and declines with its
+    // reason rather than falling through as unsupported.
+    case Cast(child, DayTimeIntervalType(_, DayTimeIntervalType.SECOND), _, _)
+        if child.dataType.isInstanceOf[DayTimeIntervalType] =>
+      compileNode(child, inputs, literals, sink)
+    case c @ Cast(child, _: DayTimeIntervalType, _, _)
+        if child.dataType.isInstanceOf[DayTimeIntervalType] =>
+      sink.note("day-time interval narrowed to a coarser end field, which truncates", c)
+      None
     // The interval literal, beside the date literal and for the same reason: the value is
     // already the int the lane holds, so `ym > INTERVAL '6' MONTH` and
     // `coalesce(ym, INTERVAL '0' MONTH)` become a slot rather than a decline.
@@ -592,6 +752,7 @@ private[sql] object VarkaExpressionCompiler {
         cond <- compileCond(pred, inputs, literals, sink)
         thenNode <- compileNode(thenValue, inputs, literals, sink)
         elseNode <- compileNode(elseValue, inputs, literals, sink)
+        if sameLane(expr, sink, cond, thenNode, elseNode)
       } yield new IfElse(cond, thenNode, elseNode)
     // With no ELSE the missing branch is a null literal, which would break the dense body's
     // all-valid invariant (`PLAN_TASK_11.md` 2.1): decline.
@@ -610,7 +771,9 @@ private[sql] object VarkaExpressionCompiler {
         }
         val compiledElse = compileNode(elseExpr, inputs, literals, sink)
         if (compiledBranches.forall(b => b._1.isDefined && b._2.isDefined)
-            && compiledElse.isDefined) {
+            && compiledElse.isDefined
+            && sameLane(expr, sink,
+              (compiledBranches.flatMap(b => Seq(b._1.get, b._2.get)) :+ compiledElse.get): _*)) {
           Some(compiledBranches.foldRight(compiledElse.get) { case ((cond, value), rest) =>
             new IfElse(cond.get, value.get, rest)
           })
@@ -1094,12 +1257,14 @@ private[sql] object VarkaExpressionCompiler {
     new LiteralSlot(literals.getOrElseUpdate(value, literals.size), LaneType.INT)
 
   /**
-   * Interns `br`'s ordinal into `inputs` and wraps it as a `ColumnRef` - shared by
-   * `compileNode`'s `DateType` leaf and `compileOffset`'s `IntegerType` one, the two column
-   * kinds the compiler admits.
+   * Interns `br`'s ordinal into `inputs` and wraps it as a `ColumnRef` on `lane` - shared by
+   * `compileNode`'s date, interval and long leaves and `compileOffset`'s `IntegerType` one.
    */
-  private def columnRef(br: BoundReference, inputs: mutable.LinkedHashMap[Int, Int]): ColumnRef =
-    new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size), LaneType.INT)
+  private def columnRef(
+      br: BoundReference,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      lane: LaneType = LaneType.INT): ColumnRef =
+    new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size), lane)
 
   /**
    * `columnRef`'s twin for an input the evaluator derives from `br`: interned under
@@ -1596,11 +1761,13 @@ private[sql] object VarkaExpressionCompiler {
       for {
         left <- compileCond(l, inputs, literals, sink)
         right <- compileCond(r, inputs, literals, sink)
+        if sameLane(expr, sink, left, right)
       } yield new IRAnd(left, right)
     case Or(l, r) =>
       for {
         left <- compileCond(l, inputs, literals, sink)
         right <- compileCond(r, inputs, literals, sink)
+        if sameLane(expr, sink, left, right)
       } yield new IROr(left, right)
     case Not(child) => compileCond(child, inputs, literals, sink).map(new IRNot(_))
     // The validity predicates: IS NOT NULL is the IR's first total condition

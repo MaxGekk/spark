@@ -27,7 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression, InSet, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
-import org.apache.spark.sql.types.{DateType, IntegerType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
 /**
@@ -77,7 +77,16 @@ class VarkaCoverageSuite extends SparkFunSuite {
   private val ym = AttributeReference("ym",
     YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.MONTH))()
 
-  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym)
+  // The long lane's columns (task 29): `bigint`, `TIME(6)` and a day-time interval, two of
+  // each so a comparison can be column against column as well as against a literal.
+  private val l = AttributeReference("l", LongType)()
+  private val l2 = AttributeReference("l2", LongType)()
+  private val t = AttributeReference("t", TimeType(6))()
+  private val t2 = AttributeReference("t2", TimeType(6))()
+  private val dt = AttributeReference("dt", DayTimeIntervalType())()
+  private val dt2 = AttributeReference("dt2", DayTimeIntervalType())()
+
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
@@ -180,7 +189,31 @@ class VarkaCoverageSuite extends SparkFunSuite {
       Row("d IN (11 to 16 date literals)",
         "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
         Some(InSet(d, (1 to 11).map(v => v.asInstanceOf[Any]).toSet)),
-        Some((1 to 11).map(m => f"DATE '2021-$m%02d-01'").mkString("d IN (", ", ", ")")))))
+        Some((1 to 11).map(m => f"DATE '2021-$m%02d-01'").mkString("d IN (", ", ", ")"))))),
+
+    // The long lane (task 29): three types, comparisons only. Arithmetic over them is task
+    // 104 (`bigint`), 102 (`TIME`) and 103 (intervals), and stays out of this table until then.
+    Family("Long-lane predicates", predicates = true, Seq(
+      Row("l > l2"),
+      Row("l = l2"),
+      Row("l >= 5000000000", "a bigint literal takes a slot in the long lane's own table"),
+      Row("l IS NULL"),
+      Row("l IS NOT NULL"),
+      Row("t < t2"),
+      Row("t = TIME'12:34:56.789'",
+        "a TIME literal of another precision reaches the column through the widening cast, "
+          + "which is the identity on nanoseconds"),
+      Row("dt > dt2"),
+      Row("dt < INTERVAL '0' SECOND"),
+      Row("dt IS NOT NULL"))),
+
+    Family("Long-lane choice", predicates = false, Seq(
+      Row("greatest(l, l2)"),
+      Row("least(l, 5000000000)"),
+      Row("CASE WHEN l < l2 THEN l ELSE l2 END"),
+      Row("if(l IS NULL, l2, l)"),
+      Row("greatest(t, t2)"),
+      Row("CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END")))
   )
 
   private def out(e: Expression): NamedExpression = Alias(e, "c")()
@@ -362,7 +395,9 @@ class VarkaCoverageSuite extends SparkFunSuite {
         "expression classes each one resolves to. Anything absent runs on Spark's row engine."),
       "columns" -> ordered(
         "d" -> "date", "d2" -> "date", "i" -> "int",
-        "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month"),
+        "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month",
+        "l" -> "bigint", "l2" -> "bigint", "t" -> "time(6)", "t2" -> "time(6)",
+        "dt" -> "interval day to second", "dt2" -> "interval day to second"),
       "expressions" -> rows.asJava,
       "catalyst_classes_admitted" -> (admittedByCompiler -- infrastructure).toSeq.sorted.asJava)
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"

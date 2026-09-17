@@ -125,3 +125,4 @@ sql/varka/plans/PLAN_TASK_62.md	11.14	a section number, not a rate - the tool ca
 sql/varka/plans/PLAN_TASK_140.md	12.76	the best and worst of twelve ratios, each computed from two committed chain files rather than printed in one
 sql/varka/plans/PLAN_TASK_140.md	10.19	the best and worst of twelve ratios, each computed from two committed chain files rather than printed in one
 sql/varka/plans/PLAN_TASK_140.md	13.82	the best and worst of twelve ratios, each computed from two committed chain files rather than printed in one
+docs/sql-varka.md	56.789	a TIME literal in a coverage row, not a rate
