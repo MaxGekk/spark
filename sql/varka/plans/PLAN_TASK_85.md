@@ -616,6 +616,53 @@ the third line of that defence and the one that speaks for the kernels.
 
 **Checked.** `VarkaEmittedBytesSuite` green after every batch with no
 regeneration, which is this step's whole admission rule: not one int32 method
-body moved through a refactor of a 5 924-line file. The gate's compile, wide and
-narrow steps are green at 327 and 256 tests.
+body moved through a refactor of a 5 924-line file. `VarkaLaneTypeSuite` gained
+two cases that pin every derived descriptor and every species name against
+hand-written expectations, because a derivation checked against itself checks
+nothing and the oracle cannot reach a field no site reads yet.
+`dev/varka_gate.sh` green in all eight steps - compile, wide, narrow, sweep,
+doc, bench, lint, quotes - which matters here for `doc` and `lint` in
+particular, since the step adds a hundred and thirty lines of javadoc with new
+`{@link}` targets.
+
+**Reviewed, and the review found the step half-wired.** Eight of its fifteen
+findings were sites this step meant to convert and did not, and the reliable
+signal was a descriptor field with no reader. Fixed here: `emitCond`'s `Compare`
+arm - the sole emission site for every comparison, including every `IfElse`
+condition - was untouched; `emitPick` had four sites and two were converted, the
+pair only a nullable input reaches; and both byte-stride computations still
+emitted the literal `4L`. That last one also showed the descriptor carried the
+wrong shape of its own fact: a `byteShift` cannot be used where the emitted code
+multiplies without changing the int32 bytes, so it is a `byteStride` now and the
+two sites read it. The dead half of the descriptor table - five constants whose
+last reader had moved - is deleted, with the prose that recorded *why* the
+masked load exists moved into the field that replaced it rather than deleted
+with it, and the old `speciesField` static, which differed from the enum's
+method only in using `Integer.SIZE`, is gone.
+
+**Two claims in the step's own comments were false and are corrected.** The enum
+said `broadcast` was "deliberately not derived" while the code derived it; the
+truth is the opposite and sharper - `IntVector` declares both an int and a long
+form of `broadcast`, `compare`, `blend` and `lanewise`, `LongVector` declares
+only the long ones, so the scalar must be the lane's own type and neither a
+pinned `CD_int` nor a pinned `CD_long` works. And it claimed
+`VarkaLoopEmitterSuite` pinned the derivation, which no test did;
+`VarkaLaneTypeSuite` does now, and the sentence names it. The `requireInt` claim
+was overstated in the same way: six date arms emit int-only bytecode inline in
+`emitValue` without passing any of the three entry points, so they have the
+check now too, which is what makes "the third line of that defence" true.
+
+**What the review leaves for step 4, recorded rather than fixed.** The lane
+count is still the int lane's: `emitLanes` hardcodes 2, 4, 8 and 16 and
+`PREFERRED_LANES` reads `IntVector.SPECIES_PREFERRED.length()`, so a long
+emission at sixteen lanes would name `SPECIES_1024`, which does not exist - the
+descriptor needs the permitted counts and the preferred count that table 3.4
+lists and the enum does not yet carry. The scalar-argument path is int
+throughout - `iaload`, one JVM local per literal, `int[]` in the `run`
+descriptor - which is the `longArgs` overload section 3.1 already specifies. And
+the int constants pushed into now lane-derived descriptors are a family of their
+own: `Integer.MIN_VALUE` into `compareVI` in `IntNeg`, `0` in `IntArith`'s sign
+test, `-1` in the negate. Widening the push is not the fix - `Integer.MIN_VALUE`
+is the wrong sentinel at 64 bits - so the lane needs a way to push a lane-typed
+constant, and that is the first thing step 4 should build.
 
