@@ -699,3 +699,97 @@ test, `-1` in the negate. Widening the push is not the fix - `Integer.MIN_VALUE`
 is the wrong sentinel at 64 bits - so the lane needs a way to push a lane-typed
 constant, and that is the first thing step 4 should build.
 
+### 9.4 Step 4, landed: the second lane
+
+`LONG` exists, a long-lane kernel computes what the reference says at both its
+widths, and the int32 bytes still have not moved - 17 September 2026.
+
+**How little new emitter code it took is the result.** The arithmetic, the
+comparisons, the blend and the hull ops needed no new arms at all: they read the
+descriptor and got `LongVector`. That is what step 3 was for, and it is the
+answer to 2.16's question about a descriptor against a generated per-lane
+emitter.
+
+**What was genuinely lane-specific, and each was a finding the step-3 review had
+already named.** The lane's own permitted counts and `SPECIES_PREFERRED`, since
+`emitLanes` hardcoded the int list and eight long lanes would have named
+`SPECIES_1024`, which does not exist. The second scalar array, with `laload` and
+two-wide locals, and the parameter and local slot layout it shifts - `length`
+moves from slot 7 to 8 and the first local from 8 to 9, both now the lane's own.
+And the constants: the negate's sentinel is the lane's most negative value,
+`Long.MIN_VALUE` rather than `Integer.MIN_VALUE`, which is why widening the push
+would not have been the fix.
+
+**The kernel interface gained the eight-argument `run`.** Both forms are
+defaults that throw with the lane named, and an emitted class overrides the one
+its lane needs - so calling a long kernel through the int entry point is a named
+failure rather than an `AbstractMethodError`. The int table stays `int[]`,
+untouched, which is what keeps every 32-bit kernel's descriptor and every
+`iaload` exactly as they were.
+
+**The proof.** `checkLongMatrix` drives the emitted class through the long entry
+point over 64-bit buffers and compares against `evalLong` - task 119's first
+part, landing here as the plan said it would. Ten shape families over four batch
+lengths and every null-pattern combination, at the long lane's 2 and 8 counts,
+which are 128 and 512 bits. The values straddle the int range on purpose: `1L <<
+40` and its neighbours are numbers a 32-bit lane cannot hold, so a kernel that
+had kept int descriptors would differ on the first row rather than agree by
+accident.
+
+### 9.5 Where step 4 departed from the plan, and why
+
+**The reachability test is an enumeration, not a lane-parametric generator.**
+Section 3.1 asked for `VarkaIrFuzzSuite`'s generator to obey a compatibility
+table. What landed is a table in `VarkaLaneTypeSuite`: every concrete node type
+at every lane is either refused by its constructor or emitted and verified, and
+the long lane's set is asserted to be exactly the twelve the subset names. The
+reason is that the long subset is twelve node types, which enumeration covers
+exhaustively where a generator covers it by chance - and a lane-parametric
+`Shapes` is what task 104 needs for SQL-level shapes rather than what this task
+needs for twelve. The claim the plan wanted is the one that holds: a later lane
+arriving without an arm fails here, in milliseconds.
+
+**What step 4 still does not ship, unchanged from section 3.1.** No compiler arm
+admits a `LongType` column, so no SQL reaches the long lane and no evaluator
+change was needed; `MUL` at `FAIL` or `NULL` has no arm at either lane, and the
+long reference throws rather than inventing one. Both are task 104's.
+
+### 9.6 What the review of step 4 found
+
+The step-4 review found one live defect, and it was in the one place the step
+was supposed to be careful about.
+
+**A baked lane count needs two different things, and the code checked one.**
+`emitLanes` had been rewritten from the int lane's hardcoded list into a
+per-lane `permittedLanes` table, and `Lane.LONG`'s table admitted one lane
+because one long lane is 64 bits and `LongVector.SPECIES_64` exists. The
+validity helpers in `VarkaVectorSupport` do not follow the width, they follow
+the lane *count*: there are pairs at 2, 4, 8 and 16 and none at 1. So a
+one-long-lane emission produced a class that passed verification and threw
+`NoSuchMethodError: validityBitsAt1` on its first masked batch. It was reachable
+two ways: `lanesOverride(1)`, and - with no override at all - on any JVM whose
+widest vector is 64 bits, which `-XX:MaxVectorSize=8` reproduces exactly.
+
+The fix separates the two questions rather than re-tabulating them by hand,
+which is what let the table disagree with the helpers in the first place:
+`Lane.hasSpecies(lanes)` computes whether the width has a named species constant
+from the width itself, `hasValidityHelpers(lanes)` names the four counts
+`VarkaVectorSupport` actually carries, and a width needs both or runs on
+`SPECIES_PREFERRED` and the general helpers. The guard test asserts the
+conjunction for every lane and count the emitter can reach, and names
+`lanesOverride(1)` at the long lane as the case that used to slip through. The
+suites pass under `-XX:MaxVectorSize=8`.
+
+**The rest were narrower.** The range guard pushed its bounds with
+`loadConstant`, an int push, immediately before a `compare` descriptor the lane
+supplies - correct today because every caller is a calendar node on the int
+lane, and a `VerifyError` the moment one is not, so it now goes through
+`Lane.pushScalar` like every other scalar. `fitsBudgets` did not mirror the lane
+agreement `emit` demands, so a mixed-lane entry would have been admitted by the
+compiler and then refused by the emitter as an exception, which the evaluator
+can only turn into a silent per-batch fallback with no decline reason. And the
+long matrix drove the checked and nulling overflow modes over values far from
+either extreme, so the 64-bit sign test they exist for never fired once: the
+extremes matrix and the condemn-the-batch test are the int lane's own overflow
+tests re-run at 64 bits, including `-Long.MIN_VALUE` and a `Long.MAX_VALUE + 1`
+that an int lane's sign test would not see.

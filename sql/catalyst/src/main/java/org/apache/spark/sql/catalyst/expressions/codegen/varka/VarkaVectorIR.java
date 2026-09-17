@@ -223,12 +223,10 @@ public sealed interface VarkaVectorIR
    * The runtime scalar argument at {@code index}, broadcast into every lane once per call,
    * outside the loop, into a lane of {@code lane}'s width.
    *
-   * <p><b>One index space, for now.</b> {@link VarkaFusedKernel#run} takes a single
-   * {@code int[] scalarArgs} and {@link VarkaShapeKey} carries a single literal count, so
-   * {@code index} addresses one table whatever the lane says - a slot that names a 64-bit lane
-   * would read the int argument at that index. Nothing builds one yet: the compiler folds only
-   * int constants. The second table, and the {@code run} overload that carries it, arrive with
-   * the emitter's lane descriptor.
+   * <p><b>One index space per lane.</b> {@code index} addresses the table its own lane owns -
+   * the {@code int[]} of the seven-argument {@link VarkaFusedKernel#run} at the int lane, and
+   * the {@code long[]} of the eight-argument one at the long lane - and {@link VarkaShapeKey}
+   * carries one literal count, because a class holds one species and so reads one table.
    *
    * <p>The one-argument form is the int lane, as {@link ColumnRef}'s is.
    */

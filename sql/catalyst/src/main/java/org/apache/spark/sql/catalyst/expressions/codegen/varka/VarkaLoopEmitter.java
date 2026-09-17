@@ -494,14 +494,6 @@ public final class VarkaLoopEmitter {
   private static final ClassDesc LONG_ARRAY = ConstantDescs.CD_long.arrayType();
   private static final ClassDesc INT_ARRAY = ConstantDescs.CD_int.arrayType();
 
-  /**
-   * {@code int run(long[], long[], int[], long[], long[], int[], int)} - every body method
-   * shares it, so slots line up everywhere and the driver can forward a callee's status
-   * without repacking. The int is the batch status; see {@link VarkaFusedKernel#run}.
-   */
-  private static final MethodTypeDesc RUN = MethodTypeDesc.of(ConstantDescs.CD_int,
-      LONG_ARRAY, LONG_ARRAY, INT_ARRAY, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
-      ConstantDescs.CD_int);
   private static final MethodTypeDesc INIT = MethodTypeDesc.of(ConstantDescs.CD_void);
 
   /** {@code MemorySegment VarkaVectorSupport.ofAddress(long, long)}. */
@@ -602,7 +594,8 @@ public final class VarkaLoopEmitter {
   private static final int P_DST_DATA = 4;
   private static final int P_DST_VALIDITY = 5;
   private static final int P_SCALAR_ARGS = 6;
-  private static final int P_LENGTH = 7;
+  // `length` has no constant here: its slot depends on the lane, because a wider lane's second
+  // scalar array sits between the two. `Lane.pLength` is the one that knows.
 
   // The word-reference value meaning "constant all-true" (a literal-only subtree).
   private static final int WORD_ALL_TRUE = -1;
@@ -644,7 +637,16 @@ public final class VarkaLoopEmitter {
   enum Lane {
     /** 32-bit lanes: dates, ints, year-month intervals - every shape the compiler admits today. */
     INT(VarkaVectorIR.LaneType.INT, "jdk.incubator.vector.IntVector", Integer.SIZE,
-        ConstantDescs.CD_int);
+        ConstantDescs.CD_int),
+    /**
+     * 64-bit lanes: {@code bigint}, {@code TIME}, the timestamps and day-time intervals when
+     * their tasks arrive. The emitter serves the lane-generic subset of the IR here - the
+     * leaves, the arithmetic and its overflow test, the comparisons, the blend and the hull
+     * ops - while the calendar lowerings stay at {@link #INT}, since they decompose a 32-bit
+     * epoch day.
+     */
+    LONG(VarkaVectorIR.LaneType.LONG, "jdk.incubator.vector.LongVector", Long.SIZE,
+        ConstantDescs.CD_long);
 
     private final VarkaVectorIR.LaneType laneType;
     /** The lane's vector class: the receiver of every load, store and lanewise call. */
@@ -691,6 +693,9 @@ public final class VarkaLoopEmitter {
     /** {@code V V.blend(Vector, VectorMask)} - erased {@code Vector}. */
     final MethodTypeDesc blend;
 
+    /** What {@code SPECIES_PREFERRED} answers for this lane on this JVM, read once. */
+    final int preferredLanes;
+
     Lane(VarkaVectorIR.LaneType laneType, String vectorClass, int bits, ClassDesc scalar) {
       this.laneType = laneType;
       this.vector = ClassDesc.of(vectorClass);
@@ -716,6 +721,118 @@ public final class VarkaLoopEmitter {
       this.compareVV = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
       this.compareVI = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, scalar);
       this.blend = MethodTypeDesc.of(vector, VECTOR, VECTOR_MASK);
+      if (scalar.equals(ConstantDescs.CD_int)) {
+        this.runDesc = MethodTypeDesc.of(ConstantDescs.CD_int, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
+            LONG_ARRAY, LONG_ARRAY, INT_ARRAY, ConstantDescs.CD_int);
+        this.pLongArgs = -1;
+        this.pLength = P_SCALAR_ARGS + 1;
+      } else {
+        this.runDesc = MethodTypeDesc.of(ConstantDescs.CD_int, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
+            LONG_ARRAY, LONG_ARRAY, INT_ARRAY, scalarArray, ConstantDescs.CD_int);
+        this.pLongArgs = P_SCALAR_ARGS + 1;
+        this.pLength = P_SCALAR_ARGS + 2;
+      }
+      this.firstLocal = this.pLength + 1;
+      this.localWidth = scalar.equals(ConstantDescs.CD_long) ? 2 : 1;
+      this.preferredLanes = bits == Integer.SIZE
+          ? jdk.incubator.vector.IntVector.SPECIES_PREFERRED.length()
+          : jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length();
+    }
+
+    /** The lane a node's type names. */
+    static Lane of(VarkaVectorIR.LaneType laneType) {
+      for (Lane lane : values()) {
+        if (lane.laneType == laneType) {
+          return lane;
+        }
+      }
+      throw new IllegalArgumentException("unsupported lane type " + laneType);
+    }
+
+    /**
+     * The descriptor every body method of an emission on this lane shares, so slots line up
+     * everywhere and a driver can forward a callee's status without repacking. The int lane
+     * takes the seven-parameter form {@link VarkaFusedKernel#run} declares; a wider lane takes
+     * the same parameters plus its own scalar array, because a 64-bit literal does not fit in
+     * the {@code int[]} the int lane reads. Two arrays rather than one widened array: widening
+     * would change every int32 `run` descriptor and every {@code iaload}, which is the one
+     * thing this task may not do.
+     */
+    final MethodTypeDesc runDesc;
+    /** The {@code length} parameter's slot, which the wider lane's extra array moves along. */
+    final int pLength;
+    /** The wider lane's scalar array parameter, or -1 where the lane has none. */
+    final int pLongArgs;
+    /** The first local slot after the parameters. */
+    final int firstLocal;
+    /** JVM local slots one value of this lane's scalar type occupies: two for a long, one else. */
+    final int localWidth;
+
+    /** The parameter holding this lane's scalar arguments. */
+    int scalarArgsSlot() {
+      return pLongArgs >= 0 ? pLongArgs : P_SCALAR_ARGS;
+    }
+
+    /**
+     * Reads one element of this lane's scalar array, with the array reference and the index
+     * already on the stack.
+     */
+    void arrayLoad(CodeBuilder cb) {
+      if (localWidth == 2) {
+        cb.laload();
+      } else {
+        cb.iaload();
+      }
+    }
+
+    /** Stores the scalar on the stack into a local, and reads one back. */
+    void storeScalar(CodeBuilder cb, int slot) {
+      if (localWidth == 2) {
+        cb.lstore(slot);
+      } else {
+        cb.istore(slot);
+      }
+    }
+
+    void loadScalar(CodeBuilder cb, int slot) {
+      if (localWidth == 2) {
+        cb.lload(slot);
+      } else {
+        cb.iload(slot);
+      }
+    }
+
+    /**
+     * Pushes a constant of this lane's scalar type. The value is given as a {@code long} because
+     * every constant the emitter pushes fits one; what differs is the type it must have on the
+     * stack, and a sentinel like the most negative value differs in *magnitude* between lanes,
+     * so callers pass the lane's own rather than a fixed one.
+     */
+    void pushScalar(CodeBuilder cb, long value) {
+      if (localWidth == 2) {
+        cb.loadConstant(value);
+      } else {
+        cb.loadConstant((int) value);
+      }
+    }
+
+    /** The most negative value of this lane: the one input a negate cannot represent. */
+    long mostNegative() {
+      return localWidth == 2 ? Long.MIN_VALUE : Integer.MIN_VALUE;
+    }
+
+    /**
+     * Whether the Vector API names a species constant for this many of this lane's elements.
+     * It declares {@code SPECIES_64} through {@code SPECIES_512} and nothing else, so the
+     * question is whether the product is one of those four widths - which is 2 to 16 lanes at
+     * 32 bits and 1 to 8 at 64. Derived from the width rather than tabulated per member, so
+     * that {@link #speciesField} and this cannot disagree about which names exist: a third
+     * lane given a copied list would pass here and then emit a {@code getstatic} for a field
+     * no vector class has.
+     */
+    boolean hasSpecies(int lanes) {
+      int width = lanes * bits;
+      return width >= 64 && width <= 512 && Integer.bitCount(width) == 1;
     }
 
     /**
@@ -747,31 +864,63 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * The lane count this JVM's kernels run at, read once. An emitted class is defined by the shape
-   * cache in the JVM that will run it and lives only in memory, so what
-   * {@code IntVector.SPECIES_PREFERRED} answers here is what the class will see - and the class
-   * does not ask: it carries the matching species constant instead.
+   * The lane every output root agrees on. The roots are the emission's outputs, and a class
+   * holds one species: its loop, its epilogue and its stores are all that species, so two roots
+   * on different lanes are two kernels rather than one. `analyze` re-checks every node below
+   * them against this, which is where a mixed *tree* is caught.
    */
-  private static final int PREFERRED_LANES = jdk.incubator.vector.IntVector.SPECIES_PREFERRED
-      .length();
+  private static Lane laneOf(List<VarkaVectorIR> outputs) {
+    if (outputs.isEmpty()) {
+      throw new IllegalArgumentException("no output chains to emit");
+    }
+    Lane lane = Lane.of(outputs.get(0).laneType());
+    for (VarkaVectorIR output : outputs) {
+      if (output.laneType() != lane.laneType) {
+        throw new IllegalArgumentException("outputs mix lanes: " + lane.laneType + " and "
+            + output.laneType());
+      }
+    }
+    return lane;
+  }
+
+  /** {@link #emitLanes}, for the suite that checks a baked width against what the JVM has. */
+  static int emitLanesForTest(VarkaEmitOptions options, Lane lane) {
+    return emitLanes(options, lane);
+  }
 
   /**
-   * The lane count to emit for, or 0 for "do not bake one" - which is what
-   * {@link VarkaEmitOptions#validityByWidth} off means, and what any width without a
-   * specialised pair of validity helpers means.
+   * The lane count to bake into the emitted class, or 0 for "do not bake one" - which is what
+   * {@link VarkaEmitOptions#validityByWidth} off means, and what a width the class cannot both
+   * name and serve means.
    *
-   * <p>{@link VarkaVectorSupport} has a pair per int lane count the Vector API produces on
-   * hardware that exists: 2, 4, 8 and 16, whose species are {@code SPECIES_64} through
-   * {@code SPECIES_512}. A wider shape - SVE reaches 32 and 64 int lanes and has no named
-   * species constant for either - takes the run-time {@code SPECIES_PREFERRED} and the general
-   * helpers, which is correct and no slower than before this task.
+   * <p>A baked width needs two things that a lane count alone does not guarantee. It needs a
+   * named species constant, which is a question about the width in bits: {@code SPECIES_64}
+   * through {@code SPECIES_512} exist, and the shapes SVE reaches above 512 bits have no name.
+   * And it needs the width-specialised validity helpers in {@link VarkaVectorSupport}, which
+   * exist per lane *count*: 2, 4, 8 and 16. At the int lane the two sets coincide; at the long
+   * lane they do not, because a single 64-bit lane is a species that exists and a helper that
+   * does not. Anything the pair of checks rejects runs on {@code SPECIES_PREFERRED} and the
+   * general helpers, which is correct at every width and no slower than before task 92.
    */
-  private static int emitLanes(VarkaEmitOptions options) {
+  private static int emitLanes(VarkaEmitOptions options, Lane lane) {
     if (!options.validityByWidth()) {
       return 0;
     }
-    int lanes = options.lanesOverride() != 0 ? options.lanesOverride() : PREFERRED_LANES;
-    return lanes == 2 || lanes == 4 || lanes == 8 || lanes == 16 ? lanes : 0;
+    int lanes = options.lanesOverride() != 0 ? options.lanesOverride() : lane.preferredLanes;
+    // Both checks, not either: a width the class can name but not serve emits a call to a
+    // validity helper that does not exist, which verifies and throws NoSuchMethodError on the
+    // first masked batch. One long lane is that width, reachable with no override at all on a
+    // JVM whose widest vector is 64 bits.
+    return lane.hasSpecies(lanes) && hasValidityHelpers(lanes) ? lanes : 0;
+  }
+
+  /**
+   * Whether {@link VarkaVectorSupport} carries a width-specialised validity pair for this many
+   * lanes. A width without one is emitted against {@code SPECIES_PREFERRED} and the general
+   * helpers, which is correct at any width and no slower than before task 92 existed.
+   */
+  private static boolean hasValidityHelpers(int lanes) {
+    return lanes == 2 || lanes == 4 || lanes == 8 || lanes == 16;
   }
 
 
@@ -832,7 +981,7 @@ public final class VarkaLoopEmitter {
       // VarkaShapeKey rejects a null the same way, so this closes the other door in.
       throw new IllegalArgumentException("emit options must not be null");
     }
-    Analysis analysis = new Analysis(numInputs, numLiterals, options);
+    Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs));
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
@@ -868,35 +1017,35 @@ public final class VarkaLoopEmitter {
             cb.invokespecial(ConstantDescs.CD_Object, "<init>", INIT);
             cb.return_();
           })
-          .withMethodBody("run", RUN, AccessFlag.PUBLIC.mask(),
+          .withMethodBody("run", analysis.lane.runDesc, AccessFlag.PUBLIC.mask(),
               (CodeBuilder cb) -> emitDispatch(cb, classDesc, analysis));
       // A kernel that nulls a valid input (non-ANSI make_date) has no dense methods: the dense body
       // writes no per-lane validity, so the dispatch takes the masked methods for every batch, and
       // the masked body treats a null-free input as a constant word.
       if (!analysis.nullsFromValidInputs) {
-        b.withMethodBody("runDense", RUN, AccessFlag.PRIVATE.mask(),
+        b.withMethodBody("runDense", analysis.lane.runDesc, AccessFlag.PRIVATE.mask(),
             (CodeBuilder cb) -> emitBody(cb, true, BodyMode.DRIVER, -1, classDesc, outputs,
                 analysis, numLiterals, groups))
-            .withMethodBody("epilogueDense", RUN, AccessFlag.PRIVATE.mask(),
+            .withMethodBody("epilogueDense", analysis.lane.runDesc, AccessFlag.PRIVATE.mask(),
                 (CodeBuilder cb) -> emitBody(cb, true, BodyMode.EPILOGUE, -1, classDesc,
                     outputs, analysis, numLiterals, groups));
         for (int g = 0; g < groups.size(); g++) {
           final int group = g;
-          b.withMethodBody("loopDense" + g, RUN, AccessFlag.PRIVATE.mask(),
+          b.withMethodBody("loopDense" + g, analysis.lane.runDesc, AccessFlag.PRIVATE.mask(),
               (CodeBuilder cb) -> emitBody(cb, true, BodyMode.LOOP, group, classDesc, outputs,
                   analysis, numLiterals, groups));
         }
       }
       if (anyColumns || analysis.nullsFromValidInputs) {
-        b.withMethodBody("runMasked", RUN, AccessFlag.PRIVATE.mask(),
+        b.withMethodBody("runMasked", analysis.lane.runDesc, AccessFlag.PRIVATE.mask(),
             (CodeBuilder cb) -> emitBody(cb, false, BodyMode.DRIVER, -1, classDesc, outputs,
                 analysis, numLiterals, groups))
-            .withMethodBody("epilogueMasked", RUN, AccessFlag.PRIVATE.mask(),
+            .withMethodBody("epilogueMasked", analysis.lane.runDesc, AccessFlag.PRIVATE.mask(),
                 (CodeBuilder cb) -> emitBody(cb, false, BodyMode.EPILOGUE, -1, classDesc,
                     outputs, analysis, numLiterals, groups));
         for (int g = 0; g < groups.size(); g++) {
           final int group = g;
-          b.withMethodBody("loopMasked" + g, RUN, AccessFlag.PRIVATE.mask(),
+          b.withMethodBody("loopMasked" + g, analysis.lane.runDesc, AccessFlag.PRIVATE.mask(),
               (CodeBuilder cb) -> emitBody(cb, false, BodyMode.LOOP, group, classDesc, outputs,
                   analysis, numLiterals, groups));
         }
@@ -1341,10 +1490,20 @@ public final class VarkaLoopEmitter {
    * only turn into a silent per-batch fallback - no task-16 decline reason, and EXPLAIN
    * still claims fusion. Checked here instead, the offending entry is demoted to residual
    * with a recorded reason.
+   *
+   * <p>The lane agreement {@link #laneOf} demands is checked on the same terms and for the
+   * same reason: one class holds one species, so outputs on different lanes are two kernels,
+   * and a caller that learned that from an exception at {@code emit} would have learned it too
+   * late to record why.
    */
   public static boolean fitsBudgets(java.util.List<VarkaVectorIR> outputs, int numInputs) {
-    if (numInputs > MAX_INPUTS) {
+    if (numInputs > MAX_INPUTS || outputs.isEmpty()) {
       return false;
+    }
+    for (VarkaVectorIR output : outputs) {
+      if (output.laneType() != outputs.get(0).laneType()) {
+        return false;
+      }
     }
     java.util.HashMap<VarkaVectorIR, Integer> heights = new java.util.HashMap<>();
     int[] opNodes = {0};
@@ -1376,7 +1535,7 @@ public final class VarkaLoopEmitter {
    */
   public static int[] bitmapPassCounts(List<VarkaVectorIR> outputs, int numInputs,
       int numLiterals, VarkaEmitOptions options) {
-    Analysis analysis = new Analysis(numInputs, numLiterals, options);
+    Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs));
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
@@ -1422,7 +1581,7 @@ public final class VarkaLoopEmitter {
   private static void emitDispatch(CodeBuilder cb, ClassDesc classDesc, Analysis analysis) {
     if (analysis.nullsFromValidInputs) {
       // No dense path for this kernel (see emit): every batch is served by the masked methods.
-      invokeBody(cb, classDesc, "runMasked");
+      invokeBody(cb, classDesc, "runMasked", analysis.lane);
       return;
     }
     Label masked = cb.newLabel();
@@ -1435,17 +1594,17 @@ public final class VarkaLoopEmitter {
         cb.ifne(masked);
       }
     }
-    invokeBody(cb, classDesc, "runDense");
+    invokeBody(cb, classDesc, "runDense", analysis.lane);
     if (anyColumns) {
       cb.labelBinding(masked);
-      invokeBody(cb, classDesc, "runMasked");
+      invokeBody(cb, classDesc, "runMasked", analysis.lane);
     }
     // With no referenced columns the masked label is never targeted and must not be bound:
     // unreachable code has no stack frame to compute.
   }
 
   /** {@code this.<name>(srcData, ..., length)} - all seven parameters forwarded. */
-  private static void invokeCall(CodeBuilder cb, ClassDesc classDesc, String name) {
+  private static void invokeCall(CodeBuilder cb, ClassDesc classDesc, String name, Lane lane) {
     cb.aload(0);
     cb.aload(P_SRC_DATA);
     cb.aload(P_SRC_VALIDITY);
@@ -1453,13 +1612,16 @@ public final class VarkaLoopEmitter {
     cb.aload(P_DST_DATA);
     cb.aload(P_DST_VALIDITY);
     cb.aload(P_SCALAR_ARGS);
-    cb.iload(P_LENGTH);
-    cb.invokespecial(classDesc, name, RUN);
+    if (lane.pLongArgs >= 0) {
+      cb.aload(lane.pLongArgs);
+    }
+    cb.iload(lane.pLength);
+    cb.invokespecial(classDesc, name, lane.runDesc);
   }
 
   /** {@link #invokeCall} whose status becomes this method's own - a tail call in effect. */
-  private static void invokeBody(CodeBuilder cb, ClassDesc classDesc, String name) {
-    invokeCall(cb, classDesc, name);
+  private static void invokeBody(CodeBuilder cb, ClassDesc classDesc, String name, Lane lane) {
+    invokeCall(cb, classDesc, name, lane);
     cb.ireturn();
   }
 
@@ -1578,12 +1740,11 @@ public final class VarkaLoopEmitter {
      * class rather than one per node: a kernel's loop, its epilogue and its stores are one
      * species, which is what {@link #analyze}'s refusal below keeps true.
      *
-     * <p>It is pinned to {@link Lane#INT} because that is the only member, and the refusal
-     * below is what keeps the pin honest - a tree on another lane is rejected rather than
-     * emitted with int descriptors. The step that adds a second member assigns this from the
-     * root instead, and that assignment is the one line that turns the refusal into a choice.
+     * <p>It is read from the first output root, and {@link #analyze}'s refusal below is what
+     * makes that safe: every other node must answer the same lane, so a mixed emission is
+     * rejected rather than emitted with one lane's descriptors over the other's data.
      */
-    final Lane lane = Lane.INT;
+    final Lane lane;
     /** Distinct nodes in first-visit order, with how often each is used. */
     final Map<VarkaVectorIR, Integer> useCount = new LinkedHashMap<>();
     /** Per distinct node, the bitset of input ordinals its subtree references. */
@@ -1681,11 +1842,12 @@ public final class VarkaLoopEmitter {
     long referencedColumns = 0L;
     private int opNodes = 0;
 
-    Analysis(int numInputs, int numLiterals, VarkaEmitOptions options) {
+    Analysis(int numInputs, int numLiterals, VarkaEmitOptions options, Lane lane) {
       this.numInputs = numInputs;
       this.numLiterals = numLiterals;
       this.options = options;
-      this.lanes = emitLanes(options);
+      this.lane = lane;
+      this.lanes = emitLanes(options, lane);
     }
 
     void analyzeRoot(VarkaVectorIR root) {
@@ -1975,12 +2137,13 @@ public final class VarkaLoopEmitter {
     }
 
     private void analyze(VarkaVectorIR node) {
-      // One species per emitted class. `Analysis.lane` is the int lane until a second member
-      // exists, so today this refuses every `LONG` tree - which is the point: the emitter would
-      // otherwise emit int descriptors over long data. When the lane becomes a choice rather
-      // than a pin, the same line refuses a node that disagrees with the emission.
+      // One species per emitted class, enforced per node. `laneOf` reads the output roots
+      // only, so this is the sole defence against a node further down disagreeing - which
+      // would emit one lane's descriptors over the other's data. The IR's own constructors
+      // make such a tree unbuildable; this is what catches one built another way.
       if (node.laneType() != lane.laneType) {
-        throw new IllegalArgumentException("unsupported lane type " + node.laneType());
+        throw new IllegalArgumentException("a " + node.laneType() + " node in a "
+            + lane.laneType + " emission: " + node.getClass().getSimpleName());
       }
       Integer seen = useCount.get(node);
       if (seen != null) {
@@ -2407,7 +2570,7 @@ public final class VarkaLoopEmitter {
       List<Integer> outputIdx, Analysis analysis, int numLiterals) {
     int numInputs = analysis.numInputs;
     Slots s = new Slots(numInputs, outputs.size());
-    int slot = 8;
+    int slot = analysis.lane.firstLocal;
     s.dataBytes = slot;
     slot += 2;
     s.validityBytes = slot;
@@ -2432,7 +2595,10 @@ public final class VarkaLoopEmitter {
     s.loopBound = slot++;
     s.scalarArg = new int[numLiterals];
     for (int j = 0; j < numLiterals; j++) {
-      s.scalarArg[j] = slot++;
+      s.scalarArg[j] = slot;
+      // A long occupies two JVM locals; an int one. Stepping by the lane's own width is what
+      // keeps two long literals from overlapping in the frame.
+      slot += analysis.lane.localWidth;
     }
     // Broadcasts are hoisted into vector locals only where they are used - the loop methods - and
     // only in the regime where the hoist measures as a win (see `PLAN_TASK_9.md`): one output, at
@@ -3021,19 +3187,19 @@ public final class VarkaLoopEmitter {
 
     // (1) if (length <= 0) return 0 - nothing ran, so there is nothing to report.
     Label nonEmpty = cb.newLabel();
-    cb.iload(P_LENGTH);
+    cb.iload(analysis.lane.pLength);
     cb.ifgt(nonEmpty);
     cb.loadConstant(0);
     cb.ireturn();
     cb.labelBinding(nonEmpty);
 
     // (2) Nominal sizes: dataBytes = (long) length * 4; validityBytes = (length + 7) / 8L.
-    cb.iload(P_LENGTH);
+    cb.iload(analysis.lane.pLength);
     cb.i2l();
     cb.loadConstant(analysis.lane.byteStride);
     cb.lmul();
     cb.lstore(s.dataBytes);
-    cb.iload(P_LENGTH);
+    cb.iload(analysis.lane.pLength);
     cb.loadConstant(7);
     cb.iadd();
     cb.i2l();
@@ -3061,7 +3227,7 @@ public final class VarkaLoopEmitter {
         cb.aload(P_DST_VALIDITY);
         cb.loadConstant(o);
         cb.laload();
-        cb.iload(P_LENGTH);
+        cb.iload(analysis.lane.pLength);
         cb.loadConstant(63);
         cb.iadd();
         cb.i2l();
@@ -3083,7 +3249,7 @@ public final class VarkaLoopEmitter {
           // on a dense batch every value output is valid on every row, so the bits are known here
           // and the loop's per-lane-group OR is writing ones over ones. Setting them once costs a
           // fill of the same bytes this zero would have touched.
-          cb.iload(P_LENGTH);
+          cb.iload(analysis.lane.pLength);
           cb.invokestatic(SUPPORT, "setValid", SET_VALID);
         } else {
           cb.invokestatic(SUPPORT, "zero", ZERO);
@@ -3121,7 +3287,7 @@ public final class VarkaLoopEmitter {
       Label notDead = cb.newLabel();
       Label stateDone = cb.newLabel();
       cb.iload(s.ncTmp);
-      cb.iload(P_LENGTH);
+      cb.iload(analysis.lane.pLength);
       cb.if_icmpne(notDead);
       cb.loadConstant(1);
       cb.istore(s.dead[i]);
@@ -3164,7 +3330,7 @@ public final class VarkaLoopEmitter {
       for (int o = 0; o < numOutputs; o++) {
         BitmapPass pass = analysis.served[o];
         if (pass != null) {
-          emitBitmapPass(cb, s, o, pass);
+          emitBitmapPass(cb, s, o, pass, analysis.lane);
         }
       }
     }
@@ -3227,17 +3393,17 @@ public final class VarkaLoopEmitter {
     }
     cb.istore(s.lanes);
     cb.aload(s.species);
-    cb.iload(P_LENGTH);
+    cb.iload(analysis.lane.pLength);
     cb.invokeinterface(VECTOR_SPECIES, "loopBound", LOOP_BOUND);
     cb.istore(s.loopBound);
     for (int j = 0; j < numLiterals; j++) {
-      cb.aload(P_SCALAR_ARGS);
+      cb.aload(analysis.lane.scalarArgsSlot());
       cb.loadConstant(j);
-      cb.iaload();
-      cb.istore(s.scalarArg[j]);
+      analysis.lane.arrayLoad(cb);
+      analysis.lane.storeScalar(cb, s.scalarArg[j]);
       if (s.broadcastSlot != null) {
         cb.aload(s.species);
-        cb.iload(s.scalarArg[j]);
+        analysis.lane.loadScalar(cb, s.scalarArg[j]);
         cb.invokestatic(analysis.lane.vector, "broadcast", analysis.lane.broadcast);
         cb.astore(s.broadcastSlot[j]);
       }
@@ -3259,13 +3425,13 @@ public final class VarkaLoopEmitter {
         cb.istore(s.status);
         for (int g = 0; g < groups.size(); g++) {
           cb.iload(s.status);
-          invokeCall(cb, classDesc, (dense ? "loopDense" : "loopMasked") + g);
+          invokeCall(cb, classDesc, (dense ? "loopDense" : "loopMasked") + g, analysis.lane);
           cb.ior();
           cb.istore(s.status);
         }
         // The rows past loopBound belong to the sibling epilogue method.
         cb.iload(s.status);
-        invokeCall(cb, classDesc, dense ? "epilogueDense" : "epilogueMasked");
+        invokeCall(cb, classDesc, dense ? "epilogueDense" : "epilogueMasked", analysis.lane);
         cb.ior();
         cb.ireturn();
       }
@@ -3370,7 +3536,7 @@ public final class VarkaLoopEmitter {
     // COLUMN_BATCH_SIZE is 4096 and every lane count this runs at divides it.
     Label remainder = cb.newLabel();
     cb.iload(s.loopBound);
-    cb.iload(P_LENGTH);
+    cb.iload(analysis.lane.pLength);
     cb.if_icmplt(remainder);
     cb.loadConstant(0);
     cb.ireturn();
@@ -3382,13 +3548,13 @@ public final class VarkaLoopEmitter {
     // group is the remainder - not a lane width, which is why the validity helpers switch to
     // their partial-group forms (see validityBits / orValidityBits). This one store is what
     // keeps the partial group's validity from reading or writing past the batch.
-    cb.iload(P_LENGTH);
+    cb.iload(analysis.lane.pLength);
     cb.iload(s.loopBound);
     cb.isub();
     cb.istore(s.lanes);
     cb.aload(s.species);
     cb.iload(s.loopBound);
-    cb.iload(P_LENGTH);
+    cb.iload(analysis.lane.pLength);
     cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
     cb.astore(s.epilogueMask);
 
@@ -3722,29 +3888,29 @@ public final class VarkaLoopEmitter {
    * left-leaning evaluation into the destination the engine's aliasing contract allows. Each
    * operand is the address and null count the kernel was called with, five bytes apiece.
    */
-  private static void emitBitmapPass(CodeBuilder cb, Slots s, int o, BitmapPass pass) {
+  private static void emitBitmapPass(CodeBuilder cb, Slots s, int o, BitmapPass pass, Lane lane) {
     int[] ords = pass.ordinals();
     cb.aload(s.dstValSeg[o]);
     if (ords.length == 0) {
-      cb.iload(P_LENGTH);
+      cb.iload(lane.pLength);
       cb.invokestatic(SUPPORT, "setValid", SET_VALID);
       return;
     }
     if (ords.length == 1) {
       emitColumnOperand(cb, ords[0]);
-      cb.iload(P_LENGTH);
+      cb.iload(lane.pLength);
       cb.invokestatic(SUPPORT, "copyColumnValidity", COPY_COLUMN_VALIDITY);
       return;
     }
     String name = pass.and() ? "andColumnValidity" : "orColumnValidity";
     emitColumnOperand(cb, ords[0]);
     emitColumnOperand(cb, ords[1]);
-    cb.iload(P_LENGTH);
+    cb.iload(lane.pLength);
     cb.invokestatic(SUPPORT, name, COLUMN_VALIDITY_PAIR);
     for (int k = 2; k < ords.length; k++) {
       cb.aload(s.dstValSeg[o]);
       emitColumnOperand(cb, ords[k]);
-      cb.iload(P_LENGTH);
+      cb.iload(lane.pLength);
       cb.invokestatic(SUPPORT, name + "Into", COLUMN_VALIDITY_INTO);
     }
   }
@@ -3908,7 +4074,7 @@ public final class VarkaLoopEmitter {
           cb.aload(s.broadcastSlot[l.index()]);
         } else {
           cb.aload(s.species);
-          cb.iload(s.scalarArg[l.index()]);
+          analysis.lane.loadScalar(cb, s.scalarArg[l.index()]);
           cb.invokestatic(analysis.lane.vector, "broadcast", analysis.lane.broadcast);
         }
       }
@@ -4162,7 +4328,7 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(analysis.lane.vector, "lanewise", analysis.lane.lanewiseBinaryV);
     cb.invokevirtual(analysis.lane.vector, "lanewise", analysis.lane.lanewiseBinaryV);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(0);
+    analysis.lane.pushScalar(cb, 0);
     cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     cb.aload(r);
@@ -4183,11 +4349,11 @@ public final class VarkaLoopEmitter {
     if (checked) {
       cb.dup();
       cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-      cb.loadConstant(Integer.MIN_VALUE);
+      analysis.lane.pushScalar(cb, analysis.lane.mostNegative());
       cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
       emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     }
-    cb.loadConstant(-1);
+    analysis.lane.pushScalar(cb, -1);
     cb.invokevirtual(analysis.lane.vector, "mul", analysis.lane.lanewiseVI);
   }
 
@@ -4324,11 +4490,11 @@ public final class VarkaLoopEmitter {
     cb.astore(guardTmp);
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(lo);
+    analysis.lane.pushScalar(cb, lo);
     cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
-    cb.loadConstant(hi);
+    analysis.lane.pushScalar(cb, hi);
     cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     emitGuardCollect(cb, node, word, dense, analysis, s);

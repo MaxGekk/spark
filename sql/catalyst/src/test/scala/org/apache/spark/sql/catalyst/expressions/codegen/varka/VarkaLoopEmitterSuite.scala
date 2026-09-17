@@ -254,6 +254,14 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       cond: Cond, row: Seq[Option[Int]], lits: Array[Int]): Option[Boolean] =
     VarkaReferenceEvaluator.evalCond(cond, row, lits)
 
+  private def evalLong(
+      node: VarkaVectorIR, row: Seq[Option[Long]], lits: Array[Long]): Option[Long] =
+    VarkaReferenceEvaluator.evalLong(node, row, lits)
+
+  private def evalCondLong(
+      cond: Cond, row: Seq[Option[Long]], lits: Array[Long]): Option[Boolean] =
+    VarkaReferenceEvaluator.evalCondLong(cond, row, lits)
+
   private def defaultData(col: Int, i: Int): Int = (i * (col + 3)) % 23 - 11
 
   /**
@@ -336,10 +344,282 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  // -------------------------------------------------------------------------------------------
+  // The long lane (task 85, step 4)
+  // -------------------------------------------------------------------------------------------
+
+  /** One 64-bit column: eight bytes a lane, and the same validity bitmap the int lane uses. */
+  private def makeLongInput(
+      arena: Arena,
+      length: Int,
+      isNull: Int => Boolean,
+      value: Int => Long,
+      poisonNulls: Boolean = true): Col = {
+    val data = alloc(arena, length * 8L)
+    val validity = alloc(arena, (length + 7) / 8L)
+    validity.fill(0.toByte)
+    var nulls = 0
+    for (i <- 0 until length) {
+      if (isNull(i)) {
+        // A poison value under a null lane, as the int harness does: a kernel that reads a
+        // null lane's value gets a number no case expects rather than a plausible one. A test
+        // whose subject is the value under a null lane passes `poisonNulls = false`, because
+        // poison would replace what it is measuring.
+        data.set(ValueLayout.JAVA_LONG, i * 8L,
+          if (poisonNulls) Long.MinValue + 7L + nulls else value(i))
+        nulls += 1
+      } else {
+        data.set(ValueLayout.JAVA_LONG, i * 8L, value(i))
+        validity.set(ValueLayout.JAVA_BYTE, i / 8L,
+          (validity.get(ValueLayout.JAVA_BYTE, i / 8L) | (1 << (i % 8))).toByte)
+      }
+    }
+    Col(data, validity, nulls)
+  }
+
+  /**
+   * `makeOutput`'s twin at 64-bit lanes, and it carries the same two assertions: the data is
+   * poisoned with a sentinel no case computes, so an unwritten valid row shows up as a wrong
+   * value rather than as a plausible zero, and the validity bytes start all-ones, so a loop
+   * that forgot to zero them publishes stale bits instead of passing.
+   */
+  private def makeLongOutput(arena: Arena, length: Int): (MemorySegment, MemorySegment) = {
+    val data = alloc(arena, length * 8L)
+    for (i <- 0 until length) data.set(ValueLayout.JAVA_LONG, i * 8L, 0xDEADBEEFCAFEBABEL)
+    val validity = alloc(arena, (length + 7) / 8L)
+    validity.fill(0xFF.toByte)
+    (data, validity)
+  }
+
+  /**
+   * The int matrix's twin at 64-bit lanes, over the subset task 85 ships there: the leaves, the
+   * arithmetic and its modes, the negate, the comparisons, the hull ops and the conditional.
+   * It drives the kernel through the eight-argument `run` - the long lane's own entry point,
+   * whose second scalar array is what a 64-bit literal needs - and compares against
+   * `evalLong`, which is task 119's first part.
+   */
+  private def checkLongMatrix(
+      roots: Seq[VarkaVectorIR],
+      numInputs: Int,
+      lits: Array[Long],
+      caseLengths: Seq[Int],
+      patternCombos: Seq[Seq[Int => Boolean]],
+      data: (Int, Int) => Long,
+      ctx: String,
+      lanes: Int): Unit = {
+    val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+    val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
+    try {
+      for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
+        val arena = Arena.ofConfined()
+        try {
+          val cols = (0 until numInputs).map { c =>
+            makeLongInput(arena, length, combo(c), i => data(c, i))
+          }
+          val outs = roots.map(_ => makeLongOutput(arena, length))
+          val dstData = roots.zip(outs).map { case (root, out) =>
+            if (root.isInstanceOf[Cond]) 0L else out._1.address()
+          }
+          val status = kernel.run(cols.map(_.data.address()).toArray,
+            cols.map(_.validityAddress(length)).toArray, cols.map(_.nullCount).toArray,
+            dstData.toArray, outs.map(_._2.address()).toArray,
+            Array.empty[Int], lits, length)
+          assert(status === 0,
+            s"$ctx at $lanes lanes: the kernel declined a batch it should have computed " +
+              s"(length $length, combo $comboId, status $status)")
+          for (i <- 0 until length) {
+            val row = (0 until numInputs).map { c =>
+              if (combo(c)(i)) None else Some(data(c, i))
+            }
+            for ((root, o) <- roots.zipWithIndex) {
+              val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+              val where = s"$ctx at $lanes lanes, len=$length combo=$comboId out=$o row=$i"
+              root match {
+                case c: Cond =>
+                  val expected = evalCondLong(c, row, lits).contains(true)
+                  assert(bit === expected, s"$where: selection differs (want $expected)")
+                case _ =>
+                  val expected = evalLong(root, row, lits)
+                  assert(bit === expected.isDefined,
+                    s"$where: validity differs (want $expected)")
+                  expected.foreach { v =>
+                    assert(outs(o)._1.get(ValueLayout.JAVA_LONG, i * 8L) === v, s"$where: value")
+                  }
+              }
+            }
+          }
+        } finally {
+          arena.close()
+        }
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
+  test("the long lane computes what the reference says, at both its widths") {
+    // Task 85 step 4's proof: the lane-generic subset of the IR emitted against LongVector and
+    // run over 64-bit buffers, at the long lane's own 2 and 8 counts - 128 and 512 bits, the
+    // same two widths the int matrix uses at 4 and 16. The values straddle the int range on
+    // purpose: `1L << 40` and its neighbours are numbers a 32-bit lane cannot hold, so a
+    // kernel that had silently kept int descriptors would differ on the first row rather than
+    // agreeing by accident.
+    val col = new ColumnRef(0, LaneType.LONG)
+    val col1 = new ColumnRef(1, LaneType.LONG)
+    val lit = new LiteralSlot(0, LaneType.LONG)
+    val lits = Array(3L << 32)
+    def values(c: Int, i: Int): Long = (1L << 40) + i.toLong * (c + 1) * (1L << 20) - (i % 5)
+    val cases: Seq[(String, Seq[VarkaVectorIR])] = Seq(
+      "a column, copied" -> Seq(col),
+      "a literal, broadcast" -> Seq(lit),
+      "wrapping add, subtract and multiply" -> Seq(
+        new IntArith(IntOp.ADD, Overflow.WRAP, col, col1),
+        new IntArith(IntOp.SUB, Overflow.WRAP, col, lit),
+        new IntArith(IntOp.MUL, Overflow.WRAP, col, col1)),
+      "checked add and subtract" -> Seq(
+        new IntArith(IntOp.ADD, Overflow.FAIL, col, lit),
+        new IntArith(IntOp.SUB, Overflow.FAIL, col1, lit)),
+      "try_add and try_subtract" -> Seq(
+        new IntArith(IntOp.ADD, Overflow.NULL, col, col1),
+        new IntArith(IntOp.SUB, Overflow.NULL, col, col1)),
+      "negate, wrapping and checked" -> Seq(
+        new IntNeg(Overflow.WRAP, col), new IntNeg(Overflow.FAIL, col1)),
+      "the hull ops" -> Seq(new Greatest(col, col1), new Least(col, lit)),
+      "a conditional over a comparison" -> Seq(
+        new IfElse(new Compare(CompareOp.LT, col, col1), col, lit)),
+      "every comparison as a selection root" -> Seq(
+        new Compare(CompareOp.LT, col, col1), new Compare(CompareOp.GE, col, lit)),
+      "three-valued logic over the comparisons" -> Seq(
+        new And(new Compare(CompareOp.GT, col, lit), new IsNotNull(col1)),
+        new Or(new Not(new Compare(CompareOp.EQ, col, col1)), new IsNotNull(col))))
+    for (lanes <- Seq(2, 8); (name, roots) <- cases) {
+      checkLongMatrix(roots, 2, lits, Seq(1, 7, 64, 129), combos(2), values, name, lanes)
+    }
+  }
+
+  /**
+   * Values that put the 64-bit sign test under load: both extremes, their neighbours, zero,
+   * and magnitudes an int lane cannot hold - so a lowering that had kept 32-bit descriptors
+   * disagrees on value as well as on overflow.
+   */
+  private def extremeLong(col: Int, i: Int): Long = {
+    val vs = Array(Long.MaxValue, Long.MinValue, Long.MaxValue - 1, Long.MinValue + 1, 0L, 1L,
+      -1L, 1L << 40, -(1L << 40), Int.MaxValue.toLong + 1L, Long.MaxValue / 2,
+      Long.MinValue / 2)
+    vs((i + col * 5) % vs.length)
+  }
+
+  /** The same spread, kept small enough that no add or subtract over two of them overflows. */
+  private def smallLong(col: Int, i: Int): Long = {
+    val vs = Array(0L, 1L, -1L, 7L, -7L, 1L << 20, -(1L << 20), 1L << 40, -(1L << 40))
+    vs((i + col * 3) % vs.length)
+  }
+
+  test("long WRAP and NULL arithmetic match the reference over the extremes, and long FAIL " +
+      "matches wherever it does not have to decline") {
+    // The int lane's overflow matrix, re-run at 64 bits. Until this existed the long matrix
+    // drove the checked and nulling modes over values far from either extreme, so the sign
+    // test they exist for never fired once: every row took the non-overflowing path, and a
+    // lowering that tested the wrong half of a 64-bit operand would have passed.
+    val a = new ColumnRef(0, LaneType.LONG)
+    val b = new ColumnRef(1, LaneType.LONG)
+    val lengths = Seq(0, 1, 7, 17, 64, 129)
+    val noLits = Array.empty[Long]
+    for (lanes <- Seq(2, 8)) {
+      // WRAP and NULL are total over any input - one wraps, the other nulls the overflowing
+      // lane - so both leave the batch computed and the extremes are fair game.
+      for (mode <- Seq(Overflow.WRAP, Overflow.NULL); op <- Seq(IntOp.ADD, IntOp.SUB)) {
+        checkLongMatrix(Seq(new IntArith(op, mode, a, b)), 2, noLits, lengths, combos(2),
+          extremeLong, s"$op $mode over the long extremes", lanes)
+      }
+      checkLongMatrix(Seq(new IntArith(IntOp.MUL, Overflow.WRAP, a, b)), 2, noLits, lengths,
+        combos(2), extremeLong, "MUL WRAP over the long extremes", lanes)
+      // Negation's own extreme: `-Long.MinValue` is `Long.MinValue`, which WRAP publishes and
+      // the checked form refuses.
+      checkLongMatrix(Seq[VarkaVectorIR](new IntNeg(Overflow.WRAP, a)), 1, noLits, lengths,
+        combos(1), extremeLong, "neg WRAP over the long extremes", lanes)
+      // FAIL condemns the batch instead of answering it, so its matrix arm runs over operands
+      // no add or subtract can push out of range; the status assertion inside the matrix is
+      // then the claim that it did not condemn one anyway.
+      for (op <- Seq(IntOp.ADD, IntOp.SUB)) {
+        checkLongMatrix(Seq(new IntArith(op, Overflow.FAIL, a, b)), 2, noLits, lengths,
+          combos(2), smallLong, s"$op FAIL inside the long range", lanes)
+      }
+      checkLongMatrix(Seq[VarkaVectorIR](new IntNeg(Overflow.FAIL, a)), 1, noLits, lengths,
+        combos(1), smallLong, "neg FAIL inside the long range", lanes)
+    }
+    // The two refusals the int lane pins, re-pinned at this one: a checked multiply has no
+    // correct emission at either lane - the 128-bit product task 104 needs is missing at both
+    // - and `try_negative` is not a Spark function, so a NULL negate is a shape nothing can
+    // produce and is refused rather than lowered into a multiply by -1.
+    for (mode <- Seq(Overflow.FAIL, Overflow.NULL)) {
+      val refused = intercept[IllegalArgumentException] {
+        emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0)
+      }
+      assert(refused.getMessage.contains("checked multiply"), s"$mode: ${refused.getMessage}")
+    }
+    val refusedNeg = intercept[IllegalArgumentException] {
+      emitMulti(Seq[VarkaVectorIR](new IntNeg(Overflow.NULL, a)), 1, 0)
+    }
+    assert(refusedNeg.getMessage.contains("IntNeg has no NULL mode"), refusedNeg.getMessage)
+  }
+
+  test("a long FAIL lane that overflows condemns the batch - in a loop lane, in an " +
+      "epilogue lane, not under a null, and not with the check off") {
+    val root = new IntArith(IntOp.ADD, Overflow.FAIL,
+      new ColumnRef(0, LaneType.LONG), new ColumnRef(1, LaneType.LONG))
+    val (kernel, loader) = load(emitMulti(Seq[VarkaVectorIR](root), 2, 0))
+    val (kernelOff, loaderOff) = load(emitMulti(Seq[VarkaVectorIR](root), 2, 0, checkOff))
+    try {
+      val arena = Arena.ofConfined()
+      try {
+        // Lane `at` overflows on the sum and every other lane is a small pair. The overflow is
+        // one an int lane would not see: `Long.MaxValue + 1` is in range for the narrower type
+        // and out of range here, so a kernel left testing 32-bit signs reports nothing.
+        def left(at: Int)(i: Int): Long = if (i == at) Long.MaxValue else i % 5
+        def right(at: Int)(i: Int): Long = if (i == at) 1L else i % 3
+        def status(k: VarkaFusedKernel, length: Int, at: Int,
+            nullL: Int => Boolean, nullR: Int => Boolean): Int = {
+          val l = makeLongInput(arena, length, nullL, left(at), poisonNulls = false)
+          val r = makeLongInput(arena, length, nullR, right(at), poisonNulls = false)
+          val out = makeLongOutput(arena, length)
+          k.run(Array(l.data.address(), r.data.address()),
+            Array(l.validityAddress(length), r.validityAddress(length)),
+            Array(l.nullCount, r.nullCount),
+            Array(out._1.address()), Array(out._2.address()),
+            Array.empty[Int], Array.empty[Long], length)
+        }
+        val none = (_: Int) => false
+        assert(status(kernel, 64, -1, none, none) === 0, "nothing overflows")
+        // A loop lane, the same lane in the masked body, then a lane only the epilogue covers
+        // whatever this host's long lane count turns out to be.
+        assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        // The overflowing lane under a null operand: the row is null, its data lane is
+        // undefined, and a batch must not be condemned for arithmetic nobody asked for.
+        assert(status(kernel, 64, 3, none, _ == 3) === 0)
+        assert(status(kernel, 64, 3, _ == 3, none) === 0)
+        assert(status(kernel, 17, 16, none, _ == 16) === 0)
+        // With the check off the same batch is computed, wrapping where ANSI says raise -
+        // which is why that flag is a benchmark arm and not a config.
+        assert(status(kernelOff, 64, 3, none, none) === 0)
+        assert(status(kernelOff, 17, 16, none, none) === 0)
+      } finally {
+        arena.close()
+      }
+    } finally {
+      loader.release()
+      loaderOff.release()
+    }
+  }
+
   /** Every pair (or triple) of the four null patterns, as per-column combinations. */
   private def combos(numInputs: Int): Seq[Seq[Int => Boolean]] = {
     val ps = nullPatterns.map(_._2)
-    if (numInputs == 2) for (a <- ps; b <- ps) yield Seq(a, b)
+    if (numInputs == 1) ps.map(Seq(_))
+    else if (numInputs == 2) for (a <- ps; b <- ps) yield Seq(a, b)
     else for (a <- ps; b <- ps; c <- ps) yield Seq(a, b, c)
   }
 
