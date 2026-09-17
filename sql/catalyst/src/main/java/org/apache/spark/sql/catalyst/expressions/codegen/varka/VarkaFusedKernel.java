@@ -70,6 +70,29 @@ public interface VarkaFusedKernel {
    * @return zero when the outputs are valid; otherwise a bitmask of the reasons they are not,
    *         and the caller must recompute this batch on the row engine.
    */
-  int run(long[] srcData, long[] srcValidity, int[] srcNullCount,
-      long[] dstData, long[] dstValidity, int[] scalarArgs, int length);
+  default int run(long[] srcData, long[] srcValidity, int[] srcNullCount,
+      long[] dstData, long[] dstValidity, int[] scalarArgs, int length) {
+    throw new UnsupportedOperationException(
+        getClass().getName() + " is a 64-bit-lane kernel; call the eight-argument run");
+  }
+
+  /**
+   * The same call for a kernel whose lanes are 64 bits wide, with a scalar array of its own:
+   * a {@code bigint} or {@code TIME} literal does not fit the {@code int[]} above, and widening
+   * that array for every kernel would change the descriptor and the loads of every 32-bit
+   * kernel already emitted - see {@code PLAN_TASK_85.md} 3.1.
+   *
+   * <p>A class implements the one its lane needs, and the other throws: one emitted class is
+   * one species, so calling a long kernel through the int entry point is a caller error rather
+   * than a conversion to perform. The two defaults here are what make that a named failure
+   * instead of an {@code AbstractMethodError}.
+   *
+   * <p>{@code scalarArgs} is still passed, and is still the int table: a long-lane shape may
+   * hold int literals in nodes the wider lane does not own.
+   */
+  default int run(long[] srcData, long[] srcValidity, int[] srcNullCount,
+      long[] dstData, long[] dstValidity, int[] scalarArgs, long[] longArgs, int length) {
+    throw new UnsupportedOperationException(
+        getClass().getName() + " is a 32-bit-lane kernel; call the seven-argument run");
+  }
 }

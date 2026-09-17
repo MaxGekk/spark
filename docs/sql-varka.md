@@ -368,6 +368,7 @@ bitmask, never a machine word or a token of text.
 | :--- | :--- |
 | **lane** | One element position in a vector register. A 512-bit register holds 16 int32 lanes, a 256-bit one 8. Nearly every loop in the engine is written per lane group rather than per row. |
 | **lane group** | The rows one vector register holds - the unit every emitted loop iterates over. Its size is the JVM's preferred species width divided by four bytes, so 16 rows at 512 bits. Not a fixed number: the same kernel runs a different group size on a narrower machine. |
+| **lane type** | The width a node's value occupies, and a property of its physical representation rather than its Spark type: `DATE`, `INT` and a year-month interval are all the same 32-bit lane. Carried by the IR's leaves, derived at every other node, and refused where a node's operands disagree. |
 | **species** | The Vector API's term for a lane type and width together, e.g. `IntVector.SPECIES_512`. What `-XX:MaxVectorSize` ultimately selects. |
 | **epilogue** | The rows left over when the row count is not a whole number of lane groups. Varka runs them as one more iteration of the *same* vector body under a partial mask, rather than as a scalar loop - so there is one body to maintain, not two. |
 | **word** | A 64-bit mask of validity bits, one bit per row, for one lane group: `0L` means every row null, `-1L` means none null, anything else is the row-by-row truth. Each node's word is computed from its children's - AND for operations that a null poisons, OR for `greatest`/`least`, a blend for `IF`. "The word" in this codebase never means anything else. |
@@ -1039,11 +1040,17 @@ files, which are the source of truth as the code moves):
 
 The real current edges, stated with their numbers where they have one:
 
-* **Int32 lanes only.** The IR carries one lane type; every supported
-  expression is `INT`-shaped (`DateType` days or integer results). No
-  `CalendarInterval`, strings, decimals, timestamps or nested types, and a
-  day offset must be a foldable integer literal or an `IntegerType` column -
-  `ShortType`/`ByteType` offset columns decline (task 38).
+* **Int32 lanes for every expression SQL can reach.** The IR carries a lane
+  type per node and the emitter serves two - 32-bit and 64-bit - but no
+  compiler arm admits a `bigint` column yet, so every expression a query can
+  fuse today is `INT`-shaped (`DateType` days or integer results). The 64-bit
+  lane exists below that line: it emits, verifies and computes against a
+  reference for the arithmetic, the comparisons and the conditional, which is
+  what makes the types built on it - `bigint`, `TIME`, day-time intervals - a
+  compiler question rather than an engine one. No `CalendarInterval`, strings,
+  decimals, timestamps or nested types, and a day offset must be a foldable
+  integer literal or an `IntegerType` column - `ShortType`/`ByteType` offset
+  columns decline (task 38).
 * **A SIMD lane cannot throw row-accurately**, which shapes how ANSI overflow
   works rather than excluding it. Task 63 fuses integer arithmetic over a
   `datediff` result and over the calendar fields; where the operands' ranges do

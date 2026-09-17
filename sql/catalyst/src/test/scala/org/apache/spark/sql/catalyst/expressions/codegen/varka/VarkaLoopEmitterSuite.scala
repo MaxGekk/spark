@@ -254,6 +254,14 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       cond: Cond, row: Seq[Option[Int]], lits: Array[Int]): Option[Boolean] =
     VarkaReferenceEvaluator.evalCond(cond, row, lits)
 
+  private def evalLong(
+      node: VarkaVectorIR, row: Seq[Option[Long]], lits: Array[Long]): Option[Long] =
+    VarkaReferenceEvaluator.evalLong(node, row, lits)
+
+  private def evalCondLong(
+      cond: Cond, row: Seq[Option[Long]], lits: Array[Long]): Option[Boolean] =
+    VarkaReferenceEvaluator.evalCondLong(cond, row, lits)
+
   private def defaultData(col: Int, i: Int): Int = (i * (col + 3)) % 23 - 11
 
   /**
@@ -333,6 +341,138 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       }
     } finally {
       loader.release()
+    }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // The long lane (task 85, step 4)
+  // -------------------------------------------------------------------------------------------
+
+  /** One 64-bit column: eight bytes a lane, and the same validity bitmap the int lane uses. */
+  private def makeLongInput(
+      arena: Arena, length: Int, isNull: Int => Boolean, value: Int => Long): Col = {
+    val data = alloc(arena, length * 8L)
+    val validity = alloc(arena, (length + 7) / 8L)
+    validity.fill(0.toByte)
+    var nulls = 0
+    for (i <- 0 until length) {
+      if (isNull(i)) {
+        // A poison value under a null lane, as the int harness does: a kernel that reads a
+        // null lane's value gets a number no case expects rather than a plausible one.
+        data.set(ValueLayout.JAVA_LONG, i * 8L, Long.MinValue + 7L + nulls)
+        nulls += 1
+      } else {
+        data.set(ValueLayout.JAVA_LONG, i * 8L, value(i))
+        validity.set(ValueLayout.JAVA_BYTE, i / 8L,
+          (validity.get(ValueLayout.JAVA_BYTE, i / 8L) | (1 << (i % 8))).toByte)
+      }
+    }
+    Col(data, validity, nulls)
+  }
+
+  /**
+   * The int matrix's twin at 64-bit lanes, over the subset task 85 ships there: the leaves, the
+   * arithmetic and its modes, the negate, the comparisons, the hull ops and the conditional.
+   * It drives the kernel through the eight-argument `run` - the long lane's own entry point,
+   * whose second scalar array is what a 64-bit literal needs - and compares against
+   * `evalLong`, which is task 119's first part.
+   */
+  private def checkLongMatrix(
+      roots: Seq[VarkaVectorIR],
+      numInputs: Int,
+      lits: Array[Long],
+      caseLengths: Seq[Int],
+      patternCombos: Seq[Seq[Int => Boolean]],
+      data: (Int, Int) => Long,
+      ctx: String,
+      lanes: Int): Unit = {
+    val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+    val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
+    try {
+      for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
+        val arena = Arena.ofConfined()
+        try {
+          val cols = (0 until numInputs).map { c =>
+            makeLongInput(arena, length, combo(c), i => data(c, i))
+          }
+          val outs = roots.map(_ => (alloc(arena, length * 8L), alloc(arena, (length + 7) / 8L)))
+          val dstData = roots.zip(outs).map { case (root, out) =>
+            if (root.isInstanceOf[Cond]) 0L else out._1.address()
+          }
+          val status = kernel.run(cols.map(_.data.address()).toArray,
+            cols.map(_.validityAddress(length)).toArray, cols.map(_.nullCount).toArray,
+            dstData.toArray, outs.map(_._2.address()).toArray,
+            Array.empty[Int], lits, length)
+          assert(status === 0,
+            s"$ctx at $lanes lanes: the kernel declined a batch it should have computed " +
+              s"(length $length, combo $comboId, status $status)")
+          for (i <- 0 until length) {
+            val row = (0 until numInputs).map { c =>
+              if (combo(c)(i)) None else Some(data(c, i))
+            }
+            for ((root, o) <- roots.zipWithIndex) {
+              val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+              val where = s"$ctx at $lanes lanes, len=$length combo=$comboId out=$o row=$i"
+              root match {
+                case c: Cond =>
+                  val expected = evalCondLong(c, row, lits).contains(true)
+                  assert(bit === expected, s"$where: selection differs (want $expected)")
+                case _ =>
+                  val expected = evalLong(root, row, lits)
+                  assert(bit === expected.isDefined,
+                    s"$where: validity differs (want $expected)")
+                  expected.foreach { v =>
+                    assert(outs(o)._1.get(ValueLayout.JAVA_LONG, i * 8L) === v, s"$where: value")
+                  }
+              }
+            }
+          }
+        } finally {
+          arena.close()
+        }
+      }
+    } finally {
+      loader.release()
+    }
+  }
+
+  test("the long lane computes what the reference says, at both its widths") {
+    // Task 85 step 4's proof: the lane-generic subset of the IR emitted against LongVector and
+    // run over 64-bit buffers, at the long lane's own 2 and 8 counts - 128 and 512 bits, the
+    // same two widths the int matrix uses at 4 and 16. The values straddle the int range on
+    // purpose: `1L << 40` and its neighbours are numbers a 32-bit lane cannot hold, so a
+    // kernel that had silently kept int descriptors would differ on the first row rather than
+    // agreeing by accident.
+    val col = new ColumnRef(0, LaneType.LONG)
+    val col1 = new ColumnRef(1, LaneType.LONG)
+    val lit = new LiteralSlot(0, LaneType.LONG)
+    val lits = Array(3L << 32)
+    def values(c: Int, i: Int): Long = (1L << 40) + i.toLong * (c + 1) * (1L << 20) - (i % 5)
+    val cases: Seq[(String, Seq[VarkaVectorIR])] = Seq(
+      "a column, copied" -> Seq(col),
+      "a literal, broadcast" -> Seq(lit),
+      "wrapping add, subtract and multiply" -> Seq(
+        new IntArith(IntOp.ADD, Overflow.WRAP, col, col1),
+        new IntArith(IntOp.SUB, Overflow.WRAP, col, lit),
+        new IntArith(IntOp.MUL, Overflow.WRAP, col, col1)),
+      "checked add and subtract" -> Seq(
+        new IntArith(IntOp.ADD, Overflow.FAIL, col, lit),
+        new IntArith(IntOp.SUB, Overflow.FAIL, col1, lit)),
+      "try_add and try_subtract" -> Seq(
+        new IntArith(IntOp.ADD, Overflow.NULL, col, col1),
+        new IntArith(IntOp.SUB, Overflow.NULL, col, col1)),
+      "negate, wrapping and checked" -> Seq(
+        new IntNeg(Overflow.WRAP, col), new IntNeg(Overflow.FAIL, col1)),
+      "the hull ops" -> Seq(new Greatest(col, col1), new Least(col, lit)),
+      "a conditional over a comparison" -> Seq(
+        new IfElse(new Compare(CompareOp.LT, col, col1), col, lit)),
+      "every comparison as a selection root" -> Seq(
+        new Compare(CompareOp.LT, col, col1), new Compare(CompareOp.GE, col, lit)),
+      "three-valued logic over the comparisons" -> Seq(
+        new And(new Compare(CompareOp.GT, col, lit), new IsNotNull(col1)),
+        new Or(new Not(new Compare(CompareOp.EQ, col, col1)), new IsNotNull(col))))
+    for (lanes <- Seq(2, 8); (name, roots) <- cases) {
+      checkLongMatrix(roots, 2, lits, Seq(1, 7, 64, 129), combos(2), values, name, lanes)
     }
   }
 

@@ -23,6 +23,7 @@ import java.util.Locale
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
 /**
@@ -267,14 +268,136 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     assert(lane.speciesField(16) === "SPECIES_512")
   }
 
-  test("the emitter refuses a lane it cannot emit, naming it") {
-    // Steps 3 and 4 of task 85 give the emitter a lane descriptor; until then the analysis
-    // pass is where a long tree stops, and this test is what tells the difference between
-    // "refused" and "emitted as int by accident".
-    val e = intercept[IllegalArgumentException] {
-      VarkaLoopEmitter.emit("VarkaLaneTypeSuiteKernel", Seq[VarkaVectorIR](longCol).asJava,
-        1, 0, null, null, VarkaEmitOptions.DEFAULTS)
+  test("every node type is emittable at exactly the lanes the table admits") {
+    // The reachability claim task 85 owes, as a table rather than as a random walk: for every
+    // concrete node type, at every lane, either the IR refuses to build it or the emitter
+    // produces a class that verifies. A lane arriving without an arm fails here in
+    // milliseconds, which is what the claim is for.
+    //
+    // It is checked by enumeration rather than by making the fuzz generator lane-parametric.
+    // The long lane's subset is twelve node types, which enumeration covers exhaustively where
+    // a generator covers it by chance; and a lane-parametric `Shapes` is what task 104 needs
+    // for SQL-level shapes, not what this task needs for twelve.
+    def instance(cls: Class[_], lane: LaneType): Option[VarkaVectorIR] = {
+      val c = new ColumnRef(0, lane)
+      val c1 = new ColumnRef(1, lane)
+      val l = new LiteralSlot(0, lane)
+      try Some(cls.getSimpleName match {
+        case "ColumnRef" => c
+        case "LiteralSlot" => l
+        case "IntArith" => new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)
+        case "IntNeg" => new IntNeg(Overflow.WRAP, c)
+        case "Greatest" => new Greatest(c, c1)
+        case "Least" => new Least(c, c1)
+        case "Compare" => new Compare(CompareOp.LT, c, c1)
+        case "And" => new And(new IsNotNull(c), new IsNotNull(c1))
+        case "Or" => new Or(new IsNotNull(c), new IsNotNull(c1))
+        case "Not" => new Not(new IsNotNull(c))
+        case "IsNotNull" => new IsNotNull(c)
+        case "IfElse" => new IfElse(new IsNotNull(c), c, c1)
+        case "GuardedDay" => new GuardedDay(c)
+        case "AddDays" => new AddDays(c, l)
+        case "SubDays" => new SubDays(c, l)
+        case "DateDiff" => new DateDiff(c, c1)
+        case "DayOfWeek" => new DayOfWeek(c)
+        case "WeekDay" => new WeekDay(c)
+        case "DayOfWeekIso" => new DayOfWeekIso(c)
+        case "NextDay" => new NextDay(c, l)
+        case "ThursdayOf" => new ThursdayOf(c)
+        case "AddMonths" => new AddMonths(c, l)
+        case "MakeDate" => new MakeDate(c, l, l, true)
+        case "Year" => new Year(c)
+        case "Month" => new Month(c)
+        case "DayOfMonth" => new DayOfMonth(c)
+        case "Quarter" => new Quarter(c)
+        case "DayOfYear" => new DayOfYear(c)
+        case "LastDay" => new LastDay(c)
+        case "TruncDate" => new TruncDate(c, TruncLevel.YEAR)
+        case "TruncDateDynamic" => new TruncDateDynamic(c, c1)
+        case "WeekOfYear" => new WeekOfYear(new ThursdayOf(c))
+        case other => fail(s"no instance recipe for $other; a node type was added")
+      }) catch {
+        // The IR's own refusal: a calendar node over a wider child cannot be built at all.
+        case _: IllegalArgumentException => None
+      }
     }
-    assert(e.getMessage === "unsupported lane type LONG", e.getMessage)
+    val types = concreteNodeTypes(classOf[VarkaVectorIR]).toSeq.sortBy(_.getSimpleName)
+    val buildable = for {
+      lane <- Seq(LaneType.INT, LaneType.LONG)
+      cls <- types
+      node <- instance(cls, lane)
+    } yield {
+      // A `WeekOfYear` needs its `ThursdayOf`; both are int-only, and the guarded day's range
+      // check means a bare column root would decline rather than emit, so it is wrapped.
+      val roots = Seq[VarkaVectorIR](node)
+      val bytes = VarkaLoopEmitter.emit(s"VarkaReach${cls.getSimpleName}$lane",
+        roots.asJava, 2, 1, null, null, VarkaEmitOptions.DEFAULTS)
+      val problems = VarkaEmitterTestSupport.verify(bytes).asScala
+      assert(problems.isEmpty, s"${cls.getSimpleName} at $lane: ${problems.mkString("; ")}")
+      (lane, cls.getSimpleName)
+    }
+    val atLong = buildable.filter(_._1 == LaneType.LONG).map(_._2).toSet
+    val atInt = buildable.filter(_._1 == LaneType.INT).map(_._2).toSet
+    assert(atInt === types.map(_.getSimpleName).toSet, "every node type is emittable at INT")
+    // The subset PLAN_TASK_85.md 3.1 names, and nothing else: a calendar node at the long lane
+    // is refused by its constructor, which is why it never reaches the emitter.
+    assert(atLong === Set("ColumnRef", "LiteralSlot", "IntArith", "IntNeg", "Greatest", "Least",
+      "Compare", "And", "Or", "Not", "IsNotNull", "IfElse"),
+      "the long lane serves the lane-generic subset")
+  }
+
+  test("a long-lane shape emits a class that verifies") {
+    // Step 3 gave the emitter a lane descriptor and left it pinned to the int lane; step 4
+    // reads the lane from the roots, so this shape is emitted against LongVector. The bytes
+    // are put through the Class-File API's own verifier rather than merely produced: a wrong
+    // descriptor - the int form of `broadcast`, a species constant the class does not have -
+    // is a class that loads and then fails, which a test that only called emit would miss.
+    for (lanes <- Seq(2, 8)) {
+      val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+      val bytes = VarkaLoopEmitter.emit("VarkaLongLaneKernel", Seq[VarkaVectorIR](longCol).asJava,
+        1, 0, null, null, options)
+      val problems = VarkaEmitterTestSupport.verify(bytes).asScala
+      assert(problems.isEmpty, s"$lanes long lanes: ${problems.mkString("; ")}")
+    }
+  }
+
+  test("a kernel called through the other lane's entry point says so") {
+    // One emitted class is one species, so the two `run` forms are not interchangeable: the
+    // wide one carries the second scalar array a 64-bit literal needs, and the narrow one does
+    // not. Both are interface defaults that throw, so a caller that picks the wrong one gets a
+    // sentence naming the lane rather than an AbstractMethodError from the verifier.
+    val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
+    try {
+      def kernel(root: VarkaVectorIR, name: String): VarkaFusedKernel = {
+        val bytes = VarkaLoopEmitter.emit(name, Seq(root).asJava, 1, 0, null, null,
+          VarkaEmitOptions.DEFAULTS)
+        loader.defineGeneratedClass(name, bytes)
+        loader.loadClass(name).getConstructor().newInstance().asInstanceOf[VarkaFusedKernel]
+      }
+      val wide = intercept[UnsupportedOperationException] {
+        kernel(longCol, "VarkaWrongOverloadLong").run(Array(0L), Array(0L), Array(0),
+          Array(0L), Array(0L), Array.empty[Int], 0)
+      }
+      assert(wide.getMessage.contains("64-bit-lane kernel"), wide.getMessage)
+      val narrow = intercept[UnsupportedOperationException] {
+        kernel(intCol, "VarkaWrongOverloadInt").run(Array(0L), Array(0L), Array(0),
+          Array(0L), Array(0L), Array.empty[Int], Array.empty[Long], 0)
+      }
+      assert(narrow.getMessage.contains("32-bit-lane kernel"), narrow.getMessage)
+    } finally {
+      loader.release()
+    }
+  }
+
+  test("an emission whose roots disagree on their lane is refused") {
+    // One emitted class is one species: its loop, its epilogue and its stores are all that
+    // width, so two roots on different lanes are two kernels rather than one. The IR's own
+    // constructors stop a mixed *tree*; this is the other door, two well-formed trees handed
+    // to one emission.
+    val e = intercept[IllegalArgumentException] {
+      VarkaLoopEmitter.emit("VarkaMixedLaneKernel",
+        Seq[VarkaVectorIR](intCol, longCol).asJava, 1, 0, null, null, VarkaEmitOptions.DEFAULTS)
+    }
+    assert(e.getMessage === "outputs mix lanes: INT and LONG", e.getMessage)
   }
 }
