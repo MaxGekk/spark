@@ -18,7 +18,8 @@
 # Run the date-surface benchmark (task 62) on several Spark distributions, one
 # after another on an idle machine, and print the table that compares them.
 #
-#   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--driver-memory 16g] \
+#   dev/varka_bench_surface.sh [--rows N] [--partitions P] [--cores C] \
+#       [--driver-memory 16g] \
 #       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--replace] [--shard I/N] \
 #       [--skip-build] \
 #       [--benchmark surface|chains] [--table-columns all|dates] \
@@ -58,12 +59,25 @@
 #       varka-off-jdk25=$PWD:/usr/lib/jvm/java-25-openjdk-amd64 \
 #       varka-jdk25=$PWD:/usr/lib/jvm/java-25-openjdk-amd64:varka
 #
-# The defaults, 500M rows in one partition under a 16g driver, are the job-size
-# rule of PLAN_MILESTONE_4.md 2.29 as PLAN_TASK_62.md 2.6 measured it: one
-# partition because every task on local[1] costs about two milliseconds of
-# scheduling and commit round trip, and 500M rows because the fastest Varka
+# The defaults, 500M rows in one partition on one core under a 16g driver, are
+# the job-size rule of PLAN_MILESTONE_4.md 2.29 as PLAN_TASK_62.md 2.6 measured
+# it: one partition because every task on local[1] costs about two milliseconds
+# of scheduling and commit round trip, and 500M rows because the fastest Varka
 # rows run near half a nanosecond per row and need 250 ms of executor time
 # for a 12 ms job to be under 5% of them.
+#
+# --cores C runs the driver as local[C] instead of local[1], which is what makes
+# an occupancy ladder possible: a headline number measured on one core says
+# nothing about a machine whose executor runs one task per core, and the
+# question the ladder answers is whether a win survives the memory system being
+# shared (PLAN_TASK_134.md). Partitions and cores are separate knobs on purpose
+# - P partitions on C cores is a queue C deep - and the sensible ladder sets
+# them equal. Two things change meaning above one core and are recorded rather
+# than papered over: the fixed-share rule, (wall - executor) / wall, goes
+# negative once executor time is a sum over parallel tasks, so it stops being a
+# guard and the executor-time column becomes the comparable one; and the cache
+# build is parallel too, so the numbers below it are not comparable to a
+# one-core run's except through their ratio.
 #
 # Each LABEL names one run and its results file,
 # sql/varka/bench/benchmarks/<STEM>-<LABEL>-results.txt, where STEM is DateSurface
@@ -112,13 +126,14 @@ cd "$(git rev-parse --show-toplevel)"
 # the only paragraph documenting the mandatory LABEL=SPARK_HOME:JAVA_HOME argument - which is
 # precisely what a usage error is about. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
-rows=500000000; partitions=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
+rows=500000000; partitions=1; cores=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
 replace=0
 shard=""; benchmark=surface; table_columns=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --rows) rows="$2"; shift 2 ;;
     --partitions) partitions="$2"; shift 2 ;;
+    --cores) cores="$2"; shift 2 ;;
     --max-fixed-share) share="$2"; shift 2 ;;
     --driver-memory) memory="$2"; shift 2 ;;
     --force) force=1; shift ;;
@@ -239,7 +254,7 @@ for spec in "${dists[@]}"; do
   [ -x "$spark_home/bin/spark-submit" ] \
     || { echo "$label: no bin/spark-submit under $spark_home" >&2; exit 1; }
   [ -x "$java_home/bin/java" ] || { echo "$label: no bin/java under $java_home" >&2; exit 1; }
-  submit=(--master 'local[1]' --driver-memory "$memory"
+  submit=(--master "local[$cores]" --driver-memory "$memory"
     --conf spark.ui.enabled=false --conf spark.sql.shuffle.partitions=1
     --conf spark.sql.adaptive.enabled=false)
   driver=()
@@ -273,7 +288,8 @@ for spec in "${dists[@]}"; do
     --label "$label" --rows "$rows" --partitions "$partitions" --out "$out" \
     ${only:+--only "$only"} ${shard:+--shard "$shard"} \
     ${table_columns:+--table-columns "$table_columns"} "${driver[@]}" \
-    --provenance "commit=$commit" --provenance "datapath=$datapath" \
+    --provenance "commit=$commit" --provenance "cores=$cores" \
+    --provenance "datapath=$datapath" \
     --provenance "canary=$canary" --provenance "host=$(hostname -s)" \
     --provenance "spark home=$spark_home"
   files+=("$label=$out")
