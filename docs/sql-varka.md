@@ -350,7 +350,11 @@ VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
 | `year(d) = 2021` |  |
 | `NOT (d = d2)` |  |
 | `d IN (DATE '2021-01-01', DATE '2021-06-01')` | up to 16 literals |
-| `year(d) = 2021 AND month(d) > 6` | every conjunct of an AND fuses or the predicate is not in this table; a comparison over a bare int column, `i > 0`, is a residual conjunct today (task 122) |
+| `year(d) = 2021 AND i > 0` | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (task 122) |
+| `i > 0` | a bare int column compares in the kernel (task 122) |
+| `i IS NOT NULL` | the same column's validity word, which the optimizer infers beside `i > 0` |
+| `i = 5` |  |
+| `month(d) > i` | an int column against a fused int field |
 | `year(d) = 2021 OR month(d) = 3` |  |
 | `d IN (11 to 16 date literals)` | an IN list this long arrives from the optimizer as an InSet and fuses the same way |
 
