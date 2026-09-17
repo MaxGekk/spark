@@ -381,4 +381,90 @@ rule applied to the task that owns the number.
 
 ## 9. Outcome
 
-*To be written from the oracle and the proof lane's numbers.*
+*Steps 2 to 6 are still to come; this section grows step by step.*
+
+### 9.1 Step 1, landed: the oracle exists
+
+`VarkaEmittedBytesSuite` and `sql/varka/emitted_bytes.json`, 16 September 2026,
+built on task 84's branch because the fuzz shapes come from the shared grammar
+that branch extracted, and rebased onto master when that branch merged.
+
+**What is pinned.** Every coverage row the compiler produces IR for - all 57
+since task 120 landed, see below - and ten thousand fuzz shapes at seed
+20260916, drawn exactly as
+`VarkaIrFuzzSuite.runOne` draws its trees, each at `lanesOverride` 4 and 16. Per
+coverage row and width, one hash per emitted method and one for the class
+around them (513 entries per width); per width, a hundred block digests over the fuzz sequence, so a
+difference names a block of a hundred shapes rather than everything or nothing.
+The file is 68 KB, 1281 lines.
+
+**How a method is hashed.** Not the `Code` attribute's bytes, which section 5
+first proposed: those embed constant-pool indices, and a refactor that builds
+descriptors per lane would reorder the pool and move every index while changing
+no instruction, which is the false alarm this oracle must not raise. Instead
+`VarkaEmitterTestSupport.methodBodies` renders each method symbolically -
+opcode, callee by owner, name and descriptor, constants by value, branches by
+labels numbered in order of first appearance, exception ranges kept, line
+number and local variable tables dropped - and the rendering is hashed. Two
+classes that do the same thing render the same whatever their pools look like;
+a difference in the rendering is a difference in what the method does. The
+Class-File API stays in Java, per the house rule Scala cannot see it.
+
+**Checked rather than assumed.** A second run without the regenerate switch
+compares byte for byte and passes, so the generation is deterministic across
+JVMs. A shape emitted at 4 and 16 lanes renders differently, so the width knob
+reaches the bytes and the second width pins something. The whole suite takes
+eight seconds, which is cheap enough that every step of section 8 runs it
+without thought; the `wide` gate step already picks it up through `*Varka*`.
+
+**Regenerated once, when task 120 merged.** The oracle was written on a master
+where the `InSet` row was a caption the compiler could not parse and the
+coverage table carried `year(d) = 2021 AND i > 0`. Task 120 gave the caption an
+`executable` spelling, which the suite reads, and replaced that conjunct row
+with `year(d) = 2021 AND month(d) > 6`. Merging master in made the suite fail
+with four lines, all of them "new row" at both widths, and the regeneration adds
+the `IN` row's eight method hashes, replaces the renamed row's six, and empties
+`coverage_rows_skipped`. No fuzz block digest moved, which is the statement that
+matters: the emitter produces what it produced, and the file grew because the
+table did.
+
+**Reviewed, 16 September 2026, and five things came back.** The failure
+diagnostic walked only the newly generated document, so a coverage row, a method
+or a fuzz block that *vanished* - the more alarming direction, since it means a
+shape the table claims stopped reaching the emitter - printed nothing at all; it
+now walks both documents and reports the skip list's changes too. A row that
+parses and then declines was recorded as skipped beside a row that does not
+parse, which would let a regeneration bless a coverage regression; a decline now
+fails the suite, since `VarkaCoverageSuite` guarantees it cannot happen. The
+diagnostic dereferenced two nodes one line before the null check meant to guard
+them. The fuzz draw was a verbatim copy of `VarkaIrFuzzSuite.runOne`'s preamble,
+so one extra call to the generator in either would have split the two corpora
+silently; it is one `VarkaIrGrammar.drawShape` now, and the oracle staying green
+is the proof the sequence did not move. And the `InSet` row was pinned through
+the compiler's `In` arm, because this suite has no optimizer - it applies that
+one rewrite itself now, and fails if a row the table records as an `InSet` does
+not become one.
+
+**Reviewed again, at the highest effort, and five more came back - four of them
+about claims the suite made and did not keep.** The two corpora were drawn from
+different seeds, so the sentence that every pinned shape had been run against
+the reference evaluator was simply false; one `fuzzSeed` and one `shapeRandom`
+in `VarkaIrGrammar` make it true, and the oracle's ten thousand shapes now
+extend the fuzzer's three hundred rather than diverging from them. The rendering
+called a constant's opcode symbolic, but `LDC` and `LDC_W` are chosen by where
+the constant lands in the pool, so adding a constant ahead of another would have
+moved hashes with no instruction changing - the three forms render as one token
+now, while `bipush`, `sipush` and `iconst` stay as they are, being chosen by the
+value. The `InSet` guard added in the previous round threw inside the parse
+`catch` that surrounds it, so it recorded a skip instead of failing; the catch
+covers the parse and the resolve only. And the oracle never looked at the class
+around the methods, so dropping the kernel interface or the telemetry attribute
+would have left every hash identical - each shape carries a `<class>` entry now,
+over the flags, the superclass, the interfaces, the attribute names and each
+method's flags. The fifth was two scaladocs orphaned by members inserted between
+them and what they describe, which is the repository's own named failure mode.
+
+**What it does not yet pin.** Random emit options: every shape is emitted at
+the defaults plus the width. Task 85's refactor touches the default path first;
+an option-matrix oracle is a widening for a later step if a site turns out to
+be reached only under a non-default option.

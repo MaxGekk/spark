@@ -46,6 +46,18 @@ object VarkaIrGrammar {
   val columnBound = 2500000L
   val literalBound = 4000
 
+  /**
+   * The seed both shape corpora are drawn from: `VarkaIrFuzzSuite` runs shape `k` against the
+   * reference evaluator, and `VarkaEmittedBytesSuite` pins the bytes shape `k` emits. One seed
+   * here rather than one in each, so that the oracle's shapes really are the fuzzer's - it pins
+   * many more of them than the fuzzer checks by default, but every shape the fuzzer checks is
+   * one the oracle pins, which is what makes "the emitter produces what it produced" a statement
+   * about code that was also checked for correctness. The fuzz suite's own system property
+   * overrides its seed for a one-off hunt; the oracle's corpus is the committed file's, so it
+   * does not follow the override.
+   */
+  val fuzzSeed = 20260903L
+
   // The generator's magnitude bounds saturate rather than wrap, in *every* arm that combines
   // two of them - `boundsOf` and the generator alike. Four nested multiplies of a column's own
   // bound pass 2^63, and a bound that came back negative would let `fitsUnderChrono` admit an
@@ -157,6 +169,49 @@ object VarkaIrGrammar {
           s"boundsOf has no rule for ${other.getClass.getSimpleName}: add one, or the " +
             "calendar arms silently stop being placed over subtrees containing it")
     }
+  }
+
+  /**
+   * One drawn shape: the kernel's roots, the input and literal counts they were drawn over, and
+   * the two special columns, which a caller drawing lane values has to honour - the values a
+   * column holds are bounded by the arms that may read it.
+   */
+  case class Drawn(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
+      smallOrdinal: Int, levelOrdinal: Int)
+
+  /**
+   * Draw one shape from `rnd`: the column and literal counts, the special columns, the depth and
+   * the roots, in that order, leaving `rnd` positioned where a caller that needs lane values and
+   * null patterns picks up.
+   *
+   * It lives here rather than in either caller because two of them must draw the *same* corpus
+   * from the same seed: [[VarkaIrFuzzSuite]] runs each shape against the reference evaluator, and
+   * `VarkaEmittedBytesSuite` pins the bytes the same shape emits. A copy of the preamble in each
+   * would let one extra `rnd.next*` call in one of them silently split the corpus in two, and the
+   * oracle would go on pinning shapes nothing checks for correctness. `fuzzSeed` and
+   * `shapeRandom` are here for the same reason.
+   */
+  /** The generator for shape `k` of the sequence, the same in both suites. */
+  def shapeRandom(seed: Long, k: Int): Random = new Random(seed * 1000003L + k)
+
+  def drawShape(rnd: Random): Drawn = {
+    val numInputs = 1 + rnd.nextInt(3)
+    val numLiterals = rnd.nextInt(3)
+    // The last input, when there is more than one, holds month-count-magnitude values so a
+    // *column* month count can be fuzzed; see Shapes' doc. With a single input there is no
+    // ordinal to spare - that one has to stay a day column for every other arm.
+    val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
+    // The second special column, and only when there are three: with two, taking one for
+    // trunc levels would leave a single day column and starve every other arm.
+    val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
+    val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
+    val depth = 1 + rnd.nextInt(4)
+    // Either a projection of value roots or one selection root: the two kinds of kernel
+    // production emits, never mixed in one class.
+    val roots: Seq[VarkaVectorIR] =
+      if (rnd.nextInt(5) == 0) Seq(shapes.cond(depth))
+      else Seq.fill(1 + rnd.nextInt(3))(shapes.value(depth).node).distinct
+    Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal)
   }
 
   /** One iteration's shape generator; keeps a node budget so trees stay well inside the

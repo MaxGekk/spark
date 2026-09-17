@@ -17,15 +17,47 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.lang.classfile.Attribute;
 import java.lang.classfile.ClassFile;
+import java.lang.classfile.ClassModel;
+import java.lang.classfile.CodeElement;
+import java.lang.classfile.Instruction;
+import java.lang.classfile.Label;
+import java.lang.classfile.MethodModel;
+import java.lang.classfile.Opcode;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+import java.lang.classfile.instruction.BranchInstruction;
+import java.lang.classfile.instruction.ConstantInstruction;
+import java.lang.classfile.instruction.ExceptionCatch;
+import java.lang.classfile.instruction.FieldInstruction;
+import java.lang.classfile.instruction.IncrementInstruction;
+import java.lang.classfile.instruction.InvokeDynamicInstruction;
+import java.lang.classfile.instruction.InvokeInstruction;
+import java.lang.classfile.instruction.LabelTarget;
+import java.lang.classfile.instruction.LoadInstruction;
+import java.lang.classfile.instruction.LookupSwitchInstruction;
+import java.lang.classfile.instruction.NewMultiArrayInstruction;
+import java.lang.classfile.instruction.NewObjectInstruction;
+import java.lang.classfile.instruction.NewPrimitiveArrayInstruction;
+import java.lang.classfile.instruction.NewReferenceArrayInstruction;
+import java.lang.classfile.instruction.StoreInstruction;
+import java.lang.classfile.instruction.SwitchCase;
+import java.lang.classfile.instruction.TableSwitchInstruction;
+import java.lang.classfile.instruction.TypeCheckInstruction;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Java shim over {@link ClassFile#verify} for the Scala test suite: Scala 2.13's typechecker
- * hits an "illegal cyclic reference" on the Class-File API's sealed hierarchy (the same bug
- * that keeps {@code VarkaLoopEmitter} itself in Java), so the suite calls the verifier through
- * this class instead of touching the API directly.
+ * Java shim over the Class-File API for the Scala test suites: everything they need to read
+ * back an emitted class - verification, a method's size and invocation count, and a symbolic
+ * rendering of every method body for the emitted-bytes oracle. Scala 2.13's typechecker hits an
+ * "illegal cyclic reference" on the Class-File API's sealed hierarchy (the same bug that keeps
+ * {@code VarkaLoopEmitter} itself in Java), so the suites go through this class rather than
+ * touching the API directly.
  */
 public final class VarkaEmitterTestSupport {
 
@@ -183,5 +215,126 @@ public final class VarkaEmitterTestSupport {
           .ifPresent(table -> table.lineNumbers().forEach(info -> lines.add(info.lineNumber())));
     }
     return new java.util.ArrayList<>(lines);
+  }
+
+  /**
+   * Every method's body as a canonical text, keyed by name and descriptor, for the emitted-bytes
+   * oracle (task 85). One line per instruction: the opcode and its operands rendered
+   * symbolically - a callee by owner, name and descriptor, a constant by its value, a branch by
+   * a label numbered in order of first appearance - never by constant-pool index. So two
+   * classes whose constant pools are laid out differently but whose methods do the same thing
+   * render the same, and a difference in the rendering is a difference in what the method does.
+   * Line-number and local-variable tables are left out: they are the emitter's IR map, not
+   * behaviour. Exception ranges are kept, with their labels.
+   */
+  /**
+   * Everything about an emitted class that is not a method body: its flags, what it extends and
+   * implements, the names of its attributes, and each method's flags beside its name. The method
+   * bodies are hashed one by one; without this, a refactor could drop the
+   * {@code VarkaFusedKernel} interface or the telemetry attribute, or widen a loop method to
+   * public, and every body would still render identically.
+   */
+  public static String classSummary(byte[] bytes) {
+    ClassModel model = ClassFile.of().parse(bytes);
+    StringBuilder sb = new StringBuilder();
+    sb.append("flags ").append(model.flags().flagsMask()).append('\n');
+    sb.append("super ").append(model.superclass().map(ClassEntry::asInternalName).orElse("-"))
+        .append('\n');
+    model.interfaces().forEach(i -> sb.append("implements ").append(i.asInternalName())
+        .append('\n'));
+    model.attributes().stream().map(Attribute::attributeName).map(Utf8Entry::stringValue)
+        .sorted().forEach(n -> sb.append("attribute ").append(n).append('\n'));
+    for (MethodModel m : model.methods()) {
+      sb.append("method ").append(m.flags().flagsMask()).append(' ')
+          .append(m.methodName().stringValue()).append(m.methodType().stringValue()).append('\n');
+    }
+    return sb.toString();
+  }
+
+  /**
+   * LDC, LDC_W and LDC2_W render alike: which of the three the Class-File API picks depends on
+   * where the constant lands in the pool, so rendering the opcode would move a method's hash
+   * when an unrelated constant was added ahead of it. bipush, sipush and the iconst family are
+   * left as they are, since those are chosen by the value rather than by the pool.
+   */
+  private static String ldcNormalized(Opcode opcode) {
+    return switch (opcode) {
+      case LDC, LDC_W, LDC2_W -> "LDC";
+      default -> opcode.toString();
+    };
+  }
+
+  public static LinkedHashMap<String, String> methodBodies(byte[] bytes) {
+    LinkedHashMap<String, String> out = new LinkedHashMap<>();
+    for (MethodModel method : ClassFile.of().parse(bytes).methods()) {
+      if (method.code().isEmpty()) {
+        continue;
+      }
+      Map<Label, Integer> labels = new IdentityHashMap<>();
+      java.util.function.Function<Label, String> name =
+          l -> "L" + labels.computeIfAbsent(l, k -> labels.size());
+      StringBuilder sb = new StringBuilder();
+      for (CodeElement element : method.code().get()) {
+        switch (element) {
+          case LabelTarget t -> sb.append(name.apply(t.label())).append(":\n");
+          case ExceptionCatch c -> sb.append("try ").append(name.apply(c.tryStart())).append(' ')
+              .append(name.apply(c.tryEnd())).append(" handler ").append(name.apply(c.handler()))
+              .append(' ').append(c.catchType().map(t -> t.asInternalName()).orElse("any"))
+              .append('\n');
+          case InvokeInstruction i -> sb.append(i.opcode()).append(' ')
+              .append(i.owner().asInternalName()).append('.').append(i.name().stringValue())
+              .append(i.type().stringValue()).append('\n');
+          case InvokeDynamicInstruction i -> sb.append(i.opcode()).append(' ')
+              .append(i.name().stringValue()).append(i.type().stringValue()).append(' ')
+              .append(i.bootstrapMethod()).append(i.bootstrapArgs()).append('\n');
+          case FieldInstruction f -> sb.append(f.opcode()).append(' ')
+              .append(f.owner().asInternalName()).append('.').append(f.name().stringValue())
+              .append(':').append(f.type().stringValue()).append('\n');
+          case ConstantInstruction c -> sb.append(ldcNormalized(c.opcode())).append(' ')
+              .append(c.constantValue()).append('\n');
+          case LoadInstruction l -> sb.append(l.opcode()).append(' ').append(l.slot()).append('\n');
+          case StoreInstruction s -> sb.append(s.opcode()).append(' ').append(s.slot())
+              .append('\n');
+          case IncrementInstruction i -> sb.append(i.opcode()).append(' ').append(i.slot())
+              .append(' ').append(i.constant()).append('\n');
+          case BranchInstruction b -> sb.append(b.opcode()).append(' ')
+              .append(name.apply(b.target())).append('\n');
+          case TableSwitchInstruction t -> {
+            sb.append(t.opcode()).append(' ').append(t.lowValue()).append(' ')
+                .append(t.highValue()).append(" default ").append(name.apply(t.defaultTarget()));
+            for (SwitchCase c : t.cases()) {
+              sb.append(' ').append(c.caseValue()).append("->").append(name.apply(c.target()));
+            }
+            sb.append('\n');
+          }
+          case LookupSwitchInstruction t -> {
+            sb.append(t.opcode()).append(" default ").append(name.apply(t.defaultTarget()));
+            for (SwitchCase c : t.cases()) {
+              sb.append(' ').append(c.caseValue()).append("->").append(name.apply(c.target()));
+            }
+            sb.append('\n');
+          }
+          case TypeCheckInstruction t -> sb.append(t.opcode()).append(' ')
+              .append(t.type().asInternalName()).append('\n');
+          case NewObjectInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.className().asInternalName()).append('\n');
+          case NewPrimitiveArrayInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.typeKind()).append('\n');
+          case NewReferenceArrayInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.componentType().asInternalName()).append('\n');
+          case NewMultiArrayInstruction n -> sb.append(n.opcode()).append(' ')
+              .append(n.arrayType().asInternalName()).append(' ').append(n.dimensions())
+              .append('\n');
+          // Operators, stack ops, conversions, array loads and stores, returns, throws, monitors,
+          // nops: the opcode says everything.
+          case Instruction i -> sb.append(i.opcode()).append('\n');
+          // Line numbers, local variable tables, character ranges: not behaviour.
+          default -> { }
+        }
+      }
+      out.put(
+          method.methodName().stringValue() + method.methodType().stringValue(), sb.toString());
+    }
+    return out;
   }
 }

@@ -63,7 +63,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  */
 class VarkaIrFuzzSuite extends SparkFunSuite {
 
-  private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(20260903L)
+  private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(fuzzSeed)
   private val iterations = sys.props.get("varka.fuzz.iterations").map(_.toInt).getOrElse(300)
   private val only = sys.props.get("varka.fuzz.only").map(_.toInt)
   private val classCounter = new AtomicInteger(0)
@@ -112,23 +112,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     arena.allocate(math.max(bytes, 1L), 8)
 
   private def runOne(iteration: Int): Unit = {
-    val rnd = new Random(seed * 1000003L + iteration)
-    val numInputs = 1 + rnd.nextInt(3)
-    val numLiterals = rnd.nextInt(3)
-    // The last input, when there is more than one, holds month-count-magnitude values so a
-    // *column* month count can be fuzzed; see Shapes' doc. With a single input there is no
-    // ordinal to spare - that one has to stay a day column for every other arm.
-    val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
-    // The second special column, and only when there are three: with two, taking one for
-    // trunc levels would leave a single day column and starve every other arm.
-    val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
-    val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
-    val depth = 1 + rnd.nextInt(4)
-    // Either a projection of value roots or one selection root: the two kinds of kernel
-    // production emits, never mixed in one class.
-    val roots: Seq[VarkaVectorIR] =
-      if (rnd.nextInt(5) == 0) Seq(shapes.cond(depth))
-      else Seq.fill(1 + rnd.nextInt(3))(shapes.value(depth).node).distinct
+    val rnd = shapeRandom(seed, iteration)
+    // The shape itself comes from the shared draw, so this suite and the emitted-bytes oracle
+    // run over one corpus; `rnd` is left where the lane values and null patterns below pick up.
+    val Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal) = drawShape(rnd)
     val lits = Array.fill(numLiterals)(rnd.nextInt(2 * literalBound + 1) - literalBound)
     val length = lengths(rnd.nextInt(lengths.length))
     val patternIds = Seq.fill(numInputs)(rnd.nextInt(patternNames.length))
