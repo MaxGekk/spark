@@ -388,12 +388,40 @@
     "catalyst" : [ "In" ],
     "note" : "up to 16 literals"
   }, {
-    "sql" : "year(d) = 2021 AND month(d) > 6",
-    "executable" : "year(d) = 2021 AND month(d) > 6",
+    "sql" : "year(d) = 2021 AND i > 0",
+    "executable" : "year(d) = 2021 AND i > 0",
     "family" : "Predicates",
     "form" : "predicate",
-    "catalyst" : [ "And", "EqualTo", "GreaterThan", "Month", "Year" ],
-    "note" : "every conjunct of an AND fuses or the predicate is not in this table; a comparison over a bare int column, `i > 0`, is a residual conjunct today (task 122)"
+    "catalyst" : [ "And", "EqualTo", "GreaterThan", "Year" ],
+    "note" : "every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (task 122)"
+  }, {
+    "sql" : "i > 0",
+    "executable" : "i > 0",
+    "family" : "Predicates",
+    "form" : "predicate",
+    "catalyst" : [ "GreaterThan" ],
+    "note" : "a bare int column compares in the kernel (task 122)"
+  }, {
+    "sql" : "i IS NOT NULL",
+    "executable" : "i IS NOT NULL",
+    "family" : "Predicates",
+    "form" : "predicate",
+    "catalyst" : [ "IsNotNull" ],
+    "note" : "the same column's validity word, which the optimizer infers beside `i > 0`"
+  }, {
+    "sql" : "i = 5",
+    "executable" : "i = 5",
+    "family" : "Predicates",
+    "form" : "predicate",
+    "catalyst" : [ "EqualTo" ],
+    "note" : ""
+  }, {
+    "sql" : "month(d) > i",
+    "executable" : "month(d) > i",
+    "family" : "Predicates",
+    "form" : "predicate",
+    "catalyst" : [ "GreaterThan", "Month" ],
+    "note" : "an int column against a fused int field"
   }, {
     "sql" : "year(d) = 2021 OR month(d) = 3",
     "executable" : "year(d) = 2021 OR month(d) = 3",
