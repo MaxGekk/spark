@@ -604,3 +604,98 @@ put it in step 4, with steps 2 and 3 on `INT` alone. But a refusal that cannot
 be built cannot be tested: with one member in the enum, every constructor check
 above is unreachable code. The member is added here, the emitter refuses it, and
 the refusals have tests; nothing else about step 4 moved.
+
+### 9.3 Step 3, landed: the emitter reads a lane
+
+`Lane` exists with its `INT` member, the emission carries one, and the int32
+bytes did not move - 17 September 2026.
+
+**The descriptor.** A nested enum in the emitter whose every field is derived
+from two facts, the vector class and the scalar type: the load, store,
+broadcast, lanewise, compare and blend shapes, the byte shift from a lane index
+to an offset, the scalar's array type, and the species constant for a baked lane
+count. Deriving rather than listing is what stops a second member disagreeing
+with the first about the shape of `lanewise` or `compare`. One value is
+deliberately not derived: `broadcast` takes `CD_int` at the int lane and must
+keep it, because `IntVector` also declares `broadcast(VectorSpecies, long)` and
+a widened descriptor would silently select it - the risk section 7 named.
+
+**Where the lane lives.** `Analysis` carries it, one per emitted class rather
+than one per node, because a kernel's loop, its epilogue and its stores are one
+species. `analyze` used to refuse any node that was not `INT`; it now refuses
+any node whose lane differs from the emission's, which is the same refusal today
+and the right one when a second member exists.
+
+**The twenty-eight sites converted**, in four batches with the oracle run after
+each: the species prologue and the hoisted literal broadcasts; the column load
+and the store, masked and dense, and the unhoisted broadcast; `IfElse`'s blend,
+`IntArith`'s lanewise op and the four lanewise calls plus the compare of its
+overflow test, and `IntNeg`'s compare and multiply; then the shared
+`emitAndValidatedOp` receiver, `emitRangeGuard`'s two bound compares, and
+`emitPick`'s op and blend, which are `greatest` and `least`. That is fewer sites
+than section 2's estimate of about forty because several of them are one shared
+helper reached from many arms - the estimate counted call sites, and the
+conversion counts emitting ones.
+
+**The calendar family keeps the int descriptors and says so.** `Lane.requireInt`
+is called at the three entry points that carry the analysis - `emitChrono`,
+`emitMakeDate`, `emitAddMonths` - and every one of the hundred and forty sites
+below them is reached through those. Adding the check to each would have meant
+plumbing an `Analysis` through helpers that take nothing but a `CodeBuilder` and
+int slots, which is cost without cover: the tree cannot be wider by then,
+because the IR's constructors refuse a calendar node over a wider child and
+`analyze` refuses a node whose lane differs from the emission's. The check is
+the third line of that defence and the one that speaks for the kernels.
+
+**Checked.** `VarkaEmittedBytesSuite` green after every batch with no
+regeneration, which is this step's whole admission rule: not one int32 method
+body moved through a refactor of a 5 924-line file. `VarkaLaneTypeSuite` gained
+two cases that pin every derived descriptor and every species name against
+hand-written expectations, because a derivation checked against itself checks
+nothing and the oracle cannot reach a field no site reads yet.
+`dev/varka_gate.sh` green in all eight steps - compile, wide, narrow, sweep,
+doc, bench, lint, quotes - which matters here for `doc` and `lint` in
+particular, since the step adds a hundred and thirty lines of javadoc with new
+`{@link}` targets.
+
+**Reviewed, and the review found the step half-wired.** Eight of its fifteen
+findings were sites this step meant to convert and did not, and the reliable
+signal was a descriptor field with no reader. Fixed here: `emitCond`'s `Compare`
+arm - the sole emission site for every comparison, including every `IfElse`
+condition - was untouched; `emitPick` had four sites and two were converted, the
+pair only a nullable input reaches; and both byte-stride computations still
+emitted the literal `4L`. That last one also showed the descriptor carried the
+wrong shape of its own fact: a `byteShift` cannot be used where the emitted code
+multiplies without changing the int32 bytes, so it is a `byteStride` now and the
+two sites read it. The dead half of the descriptor table - five constants whose
+last reader had moved - is deleted, with the prose that recorded *why* the
+masked load exists moved into the field that replaced it rather than deleted
+with it, and the old `speciesField` static, which differed from the enum's
+method only in using `Integer.SIZE`, is gone.
+
+**Two claims in the step's own comments were false and are corrected.** The enum
+said `broadcast` was "deliberately not derived" while the code derived it; the
+truth is the opposite and sharper - `IntVector` declares both an int and a long
+form of `broadcast`, `compare`, `blend` and `lanewise`, `LongVector` declares
+only the long ones, so the scalar must be the lane's own type and neither a
+pinned `CD_int` nor a pinned `CD_long` works. And it claimed
+`VarkaLoopEmitterSuite` pinned the derivation, which no test did;
+`VarkaLaneTypeSuite` does now, and the sentence names it. The `requireInt` claim
+was overstated in the same way: six date arms emit int-only bytecode inline in
+`emitValue` without passing any of the three entry points, so they have the
+check now too, which is what makes "the third line of that defence" true.
+
+**What the review leaves for step 4, recorded rather than fixed.** The lane
+count is still the int lane's: `emitLanes` hardcodes 2, 4, 8 and 16 and
+`PREFERRED_LANES` reads `IntVector.SPECIES_PREFERRED.length()`, so a long
+emission at sixteen lanes would name `SPECIES_1024`, which does not exist - the
+descriptor needs the permitted counts and the preferred count that table 3.4
+lists and the enum does not yet carry. The scalar-argument path is int
+throughout - `iaload`, one JVM local per literal, `int[]` in the `run`
+descriptor - which is the `longArgs` overload section 3.1 already specifies. And
+the int constants pushed into now lane-derived descriptors are a family of their
+own: `Integer.MIN_VALUE` into `compareVI` in `IntNeg`, `0` in `IntArith`'s sign
+test, `-1` in the negate. Widening the push is not the fix - `Integer.MIN_VALUE`
+is the wrong sentinel at 64 bits - so the lane needs a way to push a lane-typed
+constant, and that is the first thing step 4 should build.
+

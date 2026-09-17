@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import java.lang.constant.{ClassDesc, ConstantDescs, MethodTypeDesc}
 import java.util.Locale
 
 import scala.jdk.CollectionConverters._
@@ -213,6 +214,57 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     val longKey = new VarkaShapeKey(Seq[VarkaVectorIR](longCol).asJava, 1, 0)
     assert(intKey !== longKey, "the lane is part of a shape's identity")
     assert(VarkaShapeCacheImpl.shapeHash(intKey) !== VarkaShapeCacheImpl.shapeHash(longKey))
+  }
+
+  test("every descriptor the lane derives is the one the Vector API declares") {
+    // The emitter builds its descriptors from two facts - the vector class and the scalar type -
+    // instead of writing one table per lane, so nothing but this test stands between a wrong
+    // derivation and a class that fails verification at a lane the oracle cannot reach. The
+    // expectations are written out by hand from the Vector API's own signatures, which is the
+    // point: a derivation checked against itself would check nothing.
+    val v = ClassDesc.of("jdk.incubator.vector.IntVector")
+    val vector = ClassDesc.of("jdk.incubator.vector.Vector")
+    val mask = ClassDesc.of("jdk.incubator.vector.VectorMask")
+    val species = ClassDesc.of("jdk.incubator.vector.VectorSpecies")
+    val segment = ClassDesc.of("java.lang.foreign.MemorySegment")
+    val order = ClassDesc.of("java.nio.ByteOrder")
+    val binary = ClassDesc.of("jdk.incubator.vector.VectorOperators$Binary")
+    val comparison = ClassDesc.of("jdk.incubator.vector.VectorOperators$Comparison")
+    val int = ConstantDescs.CD_int
+    val lane = VarkaLoopEmitter.Lane.INT
+
+    assert(lane.vector === v)
+    assert(lane.bits === 32)
+    assert(lane.byteStride === 4L, "the int lane is four bytes wide")
+    assert(lane.broadcast === MethodTypeDesc.of(v, species, int))
+    assert(lane.fromMemorySegmentDense ===
+      MethodTypeDesc.of(v, species, segment, ConstantDescs.CD_long, order))
+    assert(lane.fromMemorySegmentMasked ===
+      MethodTypeDesc.of(v, species, segment, ConstantDescs.CD_long, order, mask))
+    assert(lane.intoMemorySegmentDense ===
+      MethodTypeDesc.of(ConstantDescs.CD_void, segment, ConstantDescs.CD_long, order))
+    assert(lane.intoMemorySegmentMasked ===
+      MethodTypeDesc.of(ConstantDescs.CD_void, segment, ConstantDescs.CD_long, order, mask))
+    assert(lane.lanewiseVV === MethodTypeDesc.of(v, vector), "the parameter is the erased Vector")
+    assert(lane.lanewiseVVWrong === MethodTypeDesc.of(v, v), "the misdescribe hook's wrong shape")
+    assert(lane.lanewiseVI === MethodTypeDesc.of(v, int))
+    assert(lane.lanewiseVIMasked === MethodTypeDesc.of(v, int, mask))
+    assert(lane.lanewiseBinaryV === MethodTypeDesc.of(v, binary, vector))
+    assert(lane.lanewiseBinaryI === MethodTypeDesc.of(v, binary, int))
+    assert(lane.compareVV === MethodTypeDesc.of(mask, comparison, vector))
+    assert(lane.compareVI === MethodTypeDesc.of(mask, comparison, int))
+    assert(lane.blend === MethodTypeDesc.of(v, vector, mask))
+  }
+
+  test("the species constant a lane names follows its own width") {
+    // Sixteen int lanes is 512 bits; the same count at a wider lane would name a wider species,
+    // which is why the name is the lane's business and not a shared helper's.
+    val lane = VarkaLoopEmitter.Lane.INT
+    assert(lane.speciesField(0) === "SPECIES_PREFERRED")
+    assert(lane.speciesField(2) === "SPECIES_64")
+    assert(lane.speciesField(4) === "SPECIES_128")
+    assert(lane.speciesField(8) === "SPECIES_256")
+    assert(lane.speciesField(16) === "SPECIES_512")
   }
 
   test("the emitter refuses a lane it cannot emit, naming it") {
