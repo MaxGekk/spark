@@ -16,7 +16,14 @@
 # limitations under the License.
 #
 # The house rules that slip most often, checked in a second over the files about
-# to be committed, so they are caught here rather than by CI or a reviewer:
+# to be committed, so they are caught here rather than by CI or a reviewer.
+#
+# A line-anchored finding is raised only for a line the commit itself writes: a
+# file carries other people's lines - an upstream merge, prose written before a
+# rule existed - and reporting those asks for an edit the committer did not come
+# to make, whose only escape is --no-verify, which switches off every other check
+# too. Naming files on the command line turns the scoping off, since that is a
+# request to see everything in them. The whole-file checks below are unscoped.
 #
 #   * no non-ASCII byte in Scala, Java, Python or Markdown outside a string
 #     literal (CLAUDE.md: typographic quotes, dashes and ellipses creep into
@@ -24,7 +31,11 @@
 #     so are the third-party transcriptions under sql/varka/papers, whose Greek
 #     letters and symbols are the papers' own text);
 #   * no source line over 100 columns in Scala, Java or Python, imports, package
-#     lines and URLs excepted (the linters enforce this; this is the cheap hint);
+#     lines and URLs excepted (the linters enforce this; this is the cheap hint).
+#     A Python line of one whitespace-separated chunk is exempt as well, because
+#     nothing can wrap it and neither Python linter asks: ruff's E501 skips such a
+#     line, and Spark's config does not select E501 at all, so `ruff format` is the
+#     only Python authority on width and it cannot split a token either;
 #   * no TODO or FIXME marker under sql/varka or in a Varka source directory
 #     (sql/varka/AGENTS.md: open work is recorded in a plan, never left as a
 #     marker);
@@ -42,6 +53,7 @@
 #   dev/varka_precommit.sh --working-tree  # staged, unstaged and untracked
 #   dev/varka_precommit.sh FILE...         # these files
 #   dev/varka_precommit.sh --install-hook  # run it from .git/hooks/pre-commit
+#   dev/varka_precommit.sh --selftest      # check the column rule's three cases
 #
 # Exit status is the number of findings.
 set -uo pipefail
@@ -52,6 +64,86 @@ usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 case "${1:-}" in -h|--help) usage 0 ;; esac
 
 root="$(git rev-parse --show-toplevel)"; cd "$root"
+
+if [ "${1:-}" = "--selftest" ]; then
+  # The column rule is the one check here whose answer depends on the file's language, so
+  # the three cases that distinguish it are pinned rather than reasoned about.
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  # Every command inside the throwaway repository runs with git's own environment stripped.
+  # A pre-commit hook is invoked by `git commit` with GIT_DIR and GIT_INDEX_FILE exported, and
+  # a nested `git init` / `git add` / `git commit` inherits them - so without this the fixture
+  # commits itself into the repository being committed to, moving its HEAD and taking the
+  # staged changes with it. `git rev-parse --show-toplevel`, which this script runs at start,
+  # answers with the outer repository for the same reason.
+  bare() {
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR \
+      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+      -u GIT_AUTHOR_DATE -u GIT_COMMITTER_DATE "$@"
+  }
+  # The outer repository must be exactly as it was when this returns - see `bare` above for
+  # what happens when it is not.
+  outer_head="$(bare git -C "$root" rev-parse HEAD 2>/dev/null || echo none)"
+  printf 'x = ["%s", "%s"]\n' "$(printf 'a%.0s' {1..60})" "$(printf 'b%.0s' {1..60})" \
+    > "$tmp/wrappable.py"
+  printf '    "%s",\n' "$(printf 'c%.0s' {1..105})" > "$tmp/single.py"
+  printf '    "%s",\n' "$(printf 'd%.0s' {1..105})" > "$tmp/Single.scala"
+  fails=0
+  check_case() { # name file expected(yes|no)
+    local got=no out
+    # Captured, not piped into grep: this script exits with its finding count and `pipefail`
+    # would hand that non-zero status to the pipeline even when grep matched, so every case
+    # would read "no finding" however the rule behaved.
+    out="$("$0" "$2" 2>&1)"
+    case "$out" in *"line over 100 columns"*) got=yes ;; esac
+    if [ "$got" != "$3" ]; then
+      echo "varka_precommit selftest: $1: expected $3, got $got"
+      fails=$((fails + 1))
+    fi
+  }
+  # A Python line with a wrap point is reported; one whitespace-separated chunk is not,
+  # because ruff's E501 exempts it and nothing could act on the report; Scala keeps no such
+  # exemption, because scalastyle grants none.
+  check_case "a wrappable Python line" "$tmp/wrappable.py" yes
+  check_case "a single-chunk Python line" "$tmp/single.py" no
+  check_case "a single-chunk Scala line" "$tmp/Single.scala" yes
+
+  # The scoping, in a repository of its own: a violation already committed is not this
+  # commit's to answer for, and one the commit adds is. Both directions, because a scope that
+  # never reports and a scope that always reports are equally wrong and equally quiet.
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  repo="$tmp/repo"
+  mkdir -p "$repo"
+  (
+    cd "$repo" || exit 1
+    bare git init -q .
+    bare git config user.email t@example.com
+    bare git config user.name t
+    printf 'val a = "%s"\n' "$(printf 'e%.0s' {1..110})" > Old.scala
+    bare git add Old.scala
+    bare git -c core.hooksPath=/dev/null commit -qm old
+  ) > /dev/null 2>&1
+  scope_case() { # name expected(yes|no)
+    local out got=no
+    out="$(cd "$repo" && bare "$self" --working-tree 2>&1)"
+    case "$out" in *"line over 100 columns"*) got=yes ;; esac
+    if [ "$got" != "$2" ]; then
+      echo "varka_precommit selftest: $1: expected $2, got $got"
+      fails=$((fails + 1))
+    fi
+  }
+  printf 'val b = 1\n' >> "$repo/Old.scala"
+  scope_case "a committed long line, under an unrelated edit" no
+  printf 'val c = "%s"\n' "$(printf 'f%.0s' {1..110})" >> "$repo/Old.scala"
+  scope_case "a long line this commit adds" yes
+
+  if [ "$outer_head" != "$(bare git -C "$root" rev-parse HEAD 2>/dev/null || echo none)" ]; then
+    echo "varka_precommit selftest: the fixture moved this repository's HEAD"
+    fails=$((fails + 1))
+  fi
+  if [ "$fails" -eq 0 ]; then echo "varka_precommit selftest: ok"; fi
+  exit "$fails"
+fi
 
 if [ "${1:-}" = "--install-hook" ]; then
   # Hooks live in the main repository's .git/hooks and are shared by every worktree, so the
@@ -66,9 +158,16 @@ if [ "${1:-}" = "--install-hook" ]; then
   exit 0
 fi
 
+# Whether a line-anchored finding is reported only when this commit wrote the line. It is on
+# for the two git-driven modes and off when files are named explicitly, since naming a file is
+# a request to see everything in it.
+scoped=1
+diff_base="--cached"
 if [ "$#" -gt 0 ] && [ "$1" != "--working-tree" ]; then
   files=("$@")
+  scoped=0
 elif [ "${1:-}" = "--working-tree" ]; then
+  diff_base="HEAD"
   mapfile -t files < <({ git diff --name-only --diff-filter=ACM HEAD; git ls-files --others --exclude-standard; } | sort -u)
 else
   mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM)
@@ -77,6 +176,32 @@ fi
 
 findings=0
 note() { findings=$((findings + 1)); echo "$1"; }
+
+# The lines this commit writes, per file, as an associative array keyed "path:line". A hook
+# that reports every offending line in a file it merely touches reports work nobody in this
+# commit did - an upstream merge, a file whose house style predates the rule - and the only
+# way past it is --no-verify, which switches every other check off too. So a line-anchored
+# finding is raised only for a line in the diff. Whole-file checks below are unaffected.
+declare -A written
+scope_file() {
+  local f="$1" range start count
+  if [ "$scoped" -eq 0 ]; then return; fi
+  if ! git ls-files --error-unmatch -- "$f" > /dev/null 2>&1; then
+    # Untracked: every line is this commit's.
+    written["$f:*"]=1
+    return
+  fi
+  while IFS= read -r range; do
+    start="${range%%,*}"; count="${range##*,}"
+    [ "$range" = "$start" ] && count=1
+    for ((i = 0; i < count; i++)); do written["$f:$((start + i))"]=1; done
+  done < <(git diff -U0 "$diff_base" -- "$f" | sed -n 's/^@@ -[^ ]* +\([0-9,]*\) @@.*/\1/p')
+}
+wrote_line() { # file line
+  [ "$scoped" -eq 0 ] && return 0
+  [ -n "${written["$1:*"]:-}" ] && return 0
+  [ -n "${written["$1:$2"]:-}" ]
+}
 is_code() { [[ "$1" =~ \.(scala|java|py)$ ]]; }
 is_text() { [[ "$1" =~ \.(scala|java|py|md|sh)$ ]] && [[ "$1" != */benchmarks/* ]] && [[ "$1" != sql/varka/papers/* ]]; }
 is_varka() { [[ "$1" == sql/varka/* || "$1" == */varka/* ]]; }
@@ -84,11 +209,12 @@ is_varka() { [[ "$1" == sql/varka/* || "$1" == */varka/* ]]; }
 docs_changed=0
 for f in "${files[@]}"; do
   [ -f "$f" ] || continue
+  scope_file "$f"
   [[ "$f" =~ \.md$ ]] && docs_changed=1
   if is_text "$f"; then
     # Non-ASCII outside string literals: drop "..." spans first, then look.
     while IFS= read -r line; do
-      note "$f:$line: non-ASCII outside a string literal"
+      wrote_line "$f" "$line" && note "$f:$line: non-ASCII outside a string literal"
     done < <(sed -E 's/"([^"\\]|\\.)*"//g' "$f" | grep -n -P '[^\x00-\x7F]' | cut -d: -f1 \
       | while read -r n; do
           # Report the original line's number; sed kept line numbering.
@@ -96,9 +222,17 @@ for f in "${files[@]}"; do
         done)
   fi
   if is_code "$f"; then
+    # `single_ok` is ruff's E501 exemption, and it applies to Python only: a line whose
+    # content is one whitespace-separated chunk - a bare `"pyspark.sql.tests.very.long.name",`
+    # in a module list, say - has no wrap point, so reporting it asks for an edit that cannot
+    # be made. Scalastyle and checkstyle grant no such exemption, so Scala and Java stay
+    # strict. Without this the scan fires on upstream files a merge merely carries along,
+    # which teaches everyone to pass --no-verify.
+    single_ok=0
+    [[ "$f" =~ \.py$ ]] && single_ok=1
     while IFS= read -r hit; do
-      note "$f:$hit: line over 100 columns"
-    done < <(awk 'length > 100 && $0 !~ /^[[:space:]]*(import|package) / && $0 !~ /https?:\/\// { print FNR ": " length " chars" }' "$f")
+      wrote_line "$f" "${hit%%:*}" && note "$f:$hit: line over 100 columns"
+    done < <(awk -v single_ok="$single_ok" 'length > 100 && $0 !~ /^[[:space:]]*(import|package) / && $0 !~ /https?:\/\// && !(single_ok && NF < 2) { print FNR ": " length " chars" }' "$f")
   fi
   if is_varka "$f" && is_text "$f"; then
     # In code any mention is a marker; in Markdown only the marker form is, since the notes
@@ -106,7 +240,8 @@ for f in "${files[@]}"; do
     if [[ "$f" =~ \.md$ ]]; then pattern='^[[:space:]]*(TODO|FIXME)\b|\b(TODO|FIXME):'
     else pattern='\b(TODO|FIXME)\b'; fi
     while IFS= read -r hit; do
-      note "$f:$hit: TODO/FIXME marker; record it in the plan instead"
+      wrote_line "$f" "$hit" \
+        && note "$f:$hit: TODO/FIXME marker; record it in the plan instead"
     done < <(grep -n -E "$pattern" "$f" | cut -d: -f1)
   fi
 done
@@ -139,6 +274,15 @@ for tool in varka_bench_diff varka_bench_gate; do
     fi
   fi
 done
+
+# This script's own check, for the same reason: the column rule answers differently per
+# language, and a change to it is invisible until a commit in some other worktree fires.
+if printf '%s\n' "${files[@]}" | grep -qx "dev/varka_precommit.sh"; then
+  if ! out="$("$0" --selftest 2>&1)"; then
+    echo "$out" | sed "s|^|self: |"
+    findings=$((findings + 1))
+  fi
+fi
 
 # A committed results file must satisfy its invariants whatever its numbers are.
 if printf '%s\n' "${files[@]}" | grep -qE '^sql/.*/benchmarks/Varka.*-results\.txt$'; then

@@ -2882,6 +2882,22 @@ the bench drivers under `dev/` for `varka-bench`; leave the developer-only
 scripts alone, since no CI job runs them. **Done when** a bench-only change runs
 the bench job alone and a catalyst change stops requiring `yarn` and
 `kubernetes`. Size: small.
+
+### 2.78 The pre-commit hook judges the commit, not the file (task 143)
+
+*Opened 17 September 2026 by a finding in task 142's own merge commit.*
+
+A merge that changed no Python drew four findings from
+`dev/varka_precommit.sh`, all of them against lines master owns and the merge
+carried; correcting a paragraph of `CLAUDE.md` drew twenty-two, against the
+file's own long-standing prose. Both could only be committed with
+`--no-verify`, which switches off every other check in the same breath, so the
+hook was training the habit it exists to prevent. **How.** Raise a line-anchored
+finding only for a line in the commit's own diff, and exempt the Python line the
+linters themselves exempt - one whitespace-separated chunk, ruff's `E501` rule,
+which Spark's configuration does not even select. **Done when** the hook's own
+self-test pins both directions of each rule and runs whenever the hook is
+committed. Size: small.
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3050,6 +3066,7 @@ can start has.
 | 139 | A per-expression switch, and the tier ladder (section 2.74). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `spark.sql.codegen.varka.expression.<Class>.enabled` producing a decline reason that names the flag - **Milestone 6** (`SCOPE_MILESTONE_6.md` item 24, #223); and, this milestone's, a time-to-tier-4 ladder and a batches-below-C2 counter extending `VarkaColdStartBenchmark` | A disabled class declines with the reason; the cold-start file carries batches executed before each kernel's tier-4 compile landed |
 | 140 | The chains at occupancy (section 2.75). **Done** (`PLAN_TASK_140.md` 9, 17 September 2026) from task 134's own finding: the compute-bound half of the benchmark at 1 and 12 cores, two arms per rung, four committed files. The advantage **grows** under occupancy - 10.29x at one core, 11.42x at twelve - where the surface lost 15%, and not one of the twelve chains falls, the worst improving from 8.93x to 10.19x. The mechanism is task 134's seen from the other side: on the surface the row engine scaled better (5.62x against 5.35x), on the chains the engine does (7.09x against 6.18x), because there is arithmetic to hide latency behind. So the write-up's headline, which comes from the chains, is conservative for a loaded executor rather than flattering | The `chains` benchmark through the same driver at `--cores` 1 and 12, measured in one session on the laptop, since the committed chain files are the EPYC 9V45 runner's | Four files with `cores` in their provenance, every row fused, and the per-shape split stated beside task 134's |
 | 141 | The module map claims Varka's own files (section 2.76). **Done** (`PLAN_TASK_141.md`, 17 September 2026) from task 123's first demonstration: the base was right - #234 printed `changed files vs base: 9` - and every gate still answered true, because `sql/varka/coverage.json` and `sql/varka/emitted_bytes.json` sit under a path no module claimed and so selected `root`, which means test everything. They belong to catalyst, whose suites generate and compare them, and the bench drivers under `dev/` belong to `varka-bench`. #234's files now answer false for `yarn`, `kubernetes` and `varka-bench`, and **a bench-only change runs the bench job alone**, which is task 94's open half | Four regexes on two modules, each naming the suite that reads the file | The next pull request's job list, with `yarn` and `kubernetes` absent for the first time |
+| 143 | The pre-commit hook judges the commit, not the file (section 2.78). **Done** (`PLAN_TASK_143.md`, 17 September 2026) from a finding in task 142's own merge commit: line-anchored findings are scoped to the commit's diff, and the Python column scan takes ruff's own single-chunk exemption | A hook self-test that fails in both directions for each rule and runs whenever the hook is among the committed files; the merge commit that started it reports nothing |
 
 ## 4. Files
 
