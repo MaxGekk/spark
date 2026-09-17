@@ -385,6 +385,12 @@ is populated.
   were left as they are and `laneOf` names the lane for the long arms, the
   timestamp refusal and the mismatch messages. Recorded rather than done
   silently.
+* **The emitted-bytes oracle lists the new rows as skipped.** `VarkaEmittedBytesSuite`
+  walks the coverage table and pins the int32 shapes; the sixteen long-lane rows
+  are not int32 shapes, and a newly skipped row counts as a change, so
+  `sql/varka/emitted_bytes.json` was regenerated. The whole diff is that one
+  list, `coverage_rows_skipped`, from empty to the sixteen: no int32 hash
+  moved, which is section 3.3's op-count equivalent holding.
 * **`coalesce` over long columns fuses**, though section 3.1's list did not
   name it: it is `IfElse(IsNotNull(a), a, b)` over the same leaves, and
   refusing it would have taken an arm whose only purpose was to refuse
