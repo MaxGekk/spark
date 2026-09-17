@@ -111,4 +111,96 @@ through them. 5. Section 9, the row, and the files committed.
 
 ## 9. Outcome
 
-*To be written when the rungs land.*
+Done, 17 September 2026, on `aqua`, between 23:58 and 03:26. Four rungs, two
+arms each, eight files, every rung green and every row fused.
+
+**The ladder.** The engine's speedup over the row engine, per rung, median over
+the 52 shapes both arms carry:
+
+| cores | median | min | max |
+| ---: | ---: | ---: | ---: |
+| 1 | 19.0x | 1.12 | 35.3 |
+| 6 | 18.1x | 1.10 | 33.1 |
+| 12 | 16.2x | 1.14 | 32.2 |
+| 24 (SMT) | 17.4x | 1.22 | 35.7 |
+
+**The question section 2.69 asked is answered: the advantage survives full
+occupancy.** It dips 15 per cent when twelve cores compete for the memory
+system, then recovers about half of that when the sibling threads fill latency
+gaps. The worst shape in the table improves with occupancy rather than degrading
+- the minimum ratio rises from 1.12 to 1.22 - so there is no shape whose win
+disappears under load.
+
+**The median hides the finding, which is a split by shape.** Two-column shapes
+with almost no arithmetic lose most and never recover: `greatest(d, d2)` runs
+20.7x, 18.1x, 13.9x, 14.2x across the rungs, `least(d, d2)` 20.2x to 14.2x,
+`CASE WHEN d < d2 THEN d ELSE d2 END` 19.2x to 13.6x. Arithmetic-heavy calendar
+shapes hold or gain: `weekofyear(d)` climbs 24.8x, 27.1x, 30.1x, 35.7x,
+`extract(YEAROFWEEK FROM d)` 18.1x to 24.5x, `last_day(d)` 14.4x to 18.7x. One
+shape falls monotonically and is named rather than smoothed away:
+`extract(DAYOFWEEK_ISO FROM d)`, 34.2x, 31.5x, 26.8x, 24.2x.
+
+**The mechanism, from the two arms' own scaling.** Median speedup over one core
+is 3.54x, 5.35x, 5.78x for the engine and 3.76x, 5.62x, 5.86x for the row engine
+- the row engine scales slightly better overall, which is why the median ratio
+dips. Per shape the two reverse: at 24 threads `weekofyear(d)` scales 7.96x for
+the engine against 5.54x for the row engine, while `greatest(d, d2)` scales
+3.70x against 5.40x. The reading that fits both is that a fast implementation
+reaches the shared bottleneck sooner. On a light shape the kernel is already
+near memory bandwidth on one core, so more cores buy little, while the row
+engine starts far enough from that ceiling to scale almost linearly into it. On
+a heavy shape the kernel has arithmetic to hide latency behind and the row
+engine has none to gain from, so the gap widens. **A one-core ratio therefore
+overstates what a loaded machine sees on bandwidth-bound shapes and understates
+it on compute-bound ones**, which is the sentence task 118 should carry.
+
+**Where the ceiling is.** Per-physical-core efficiency is 0.59 at six cores,
+0.45 at twelve and 0.48 at twenty-four threads, so the ceiling is gradual and
+already present at six - a bandwidth limit, not a scheduling cliff at some
+thread count. Schmidt's twelve-thread saturation on a 48-core socket has its
+analogue here well below twelve cores, which is what a mobile part's narrower
+memory system predicts.
+
+### 9.1 The predictions, scored
+
+**1. Held, and understated the engine.** The advantage did narrow with cores,
+and the split by shape was exactly as registered - the memory-bound rows lost
+and the calendar rows held. What the prediction did not allow for is that the
+curve is not monotonic: 24 threads beat 12, so 'narrows as cores rise' is true
+of 1 to 12 and false of 12 to 24.
+
+**2. Wrong, and the reasoning behind it was wrong too.** The prediction was that
+the second thread of a core would buy little and might cost, because siblings
+share their vector units. It buys about 8 per cent at the median, and only four
+shapes of 52 are slower with it - by 1 per cent, which is noise. Worse for the
+prediction, the gain is concentrated exactly where it said the loss would be: `d
++ CAST(month(d) AS INTERVAL YEAR)` gains 1.29x, `add_months(d, 3)` 1.26x,
+`last_day(d)` 1.26x, `weekofyear(d)` 1.25x, all arithmetic-bound. The
+explanation is one the project already had and I failed to apply:
+`PLAN_TASK_62.md` 11.13 concluded from the 1.14x datapath step that these
+kernels are latency-bound rather than issue-bound. A latency-bound kernel leaves
+its vector units idle much of the time, so a sibling thread fills gaps instead
+of competing for slots. The four shapes that do lose are the cheap two-column
+ones, which are bandwidth-bound and have nothing for a second thread to do.
+
+**3. Half right.** Scaling is sublinear on the light rows, as predicted, but it
+is sublinear everywhere and it is already sublinear at six cores (0.59 per
+core), rather than starting linear and bending later. The per-shape split the
+prediction described is real.
+
+**4. Held.** Every rung fused every row: 63 fused queries in each of the four
+engine arms, 252 in all, no decline, and `--expect-fused` would have failed the
+run otherwise.
+Occupancy changes no plan, which is what makes the ratios above comparisons of
+the same work.
+
+### 9.2 One thing to follow up, not a finding yet
+
+The one-core rung is within noise of the committed 13 September file on 44 of 45
+shared shapes - median ratio 1.005 - and 1.27x faster on one: `date_add(d, 3)`,
+563 ms against 714 ms. That is the shape a literal day shift takes, and task
+84's value-range lattice landed between the two runs, so the plausible reading
+is that the analysis now proves the shift in range and drops a runtime guard.
+One number is not evidence: this needs task 101's band tooling to say whether
+1.27x is outside the noise for that row, and until it does the claim stays here
+rather than in the write-up.
