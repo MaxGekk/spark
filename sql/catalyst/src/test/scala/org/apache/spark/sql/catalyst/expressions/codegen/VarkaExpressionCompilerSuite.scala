@@ -21,9 +21,9 @@ import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
-import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, StringType, TimestampType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -1796,4 +1796,153 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(pred.fused.inputBounds === Seq(VarkaInputBound(1, -limit, limit)))
   }
 
+
+  // ---------------------------------------------------------------------------------------------
+  // The long lane (task 29): three types, comparisons only
+  // ---------------------------------------------------------------------------------------------
+
+  private val l = AttributeReference("l", LongType)()
+  private val l2 = AttributeReference("l2", LongType)()
+  private val t3 = AttributeReference("t3", TimeType(3))()
+  private val t6 = AttributeReference("t6", TimeType(6))()
+  private val dt = AttributeReference("dt", DayTimeIntervalType())()
+  private val ts = AttributeReference("ts", TimestampType)()
+  private val ntz = AttributeReference("ntz", TimestampNTZType)()
+
+  /** `childOutput` plus the long-lane and timestamp columns, on its own list (see above). */
+  private val withLong: Seq[Attribute] = childOutput ++ Seq(l, l2, t3, t6, dt, ts, ntz)
+
+  private val longCol = new ColumnRef(0, LaneType.LONG)
+  private val longCol2 = new ColumnRef(1, LaneType.LONG)
+  private def longSlot(i: Int) = new LiteralSlot(i, LaneType.LONG)
+
+  private val laneReason = "the LONG lane in a kernel on the INT lane: one kernel holds one lane"
+
+  test("a bigint comparison compiles on the long lane, with its own literal table") {
+    // The literal is past the int range on purpose: a slot in the int table could not hold it,
+    // so a compiler that had quietly put a long literal there would fail here on the value
+    // rather than agree by accident.
+    val predicate = VarkaExpressionCompiler.compilePredicate(
+      GreaterThan(l, Literal(5000000000L)), withLong).get
+    assert(predicate.specs.forall(_.fused))
+    val fused = predicate.fused
+    assert(fused.outputs === Seq(new Compare(CompareOp.GT, longCol, longSlot(0))))
+    assert(fused.lane === LaneType.LONG)
+    assert(fused.literals === Nil, "the int table stays empty on a long kernel")
+    assert(fused.longLiterals === Seq(5000000000L))
+    assert(fused.numLiterals === 1)
+    // The same value twice is one slot, as in the int table.
+    val twice = VarkaExpressionCompiler.compilePredicate(
+      And(GreaterThan(l, Literal(7L)), LessThan(l2, Literal(7L))), withLong).get.fused
+    assert(twice.longLiterals === Seq(7L))
+    assert(twice.inputOrdinals === Seq(5, 6))
+  }
+
+  test("greatest, least, CASE WHEN and the validity predicates fuse over long columns") {
+    val compiled = VarkaExpressionCompiler.compile(Seq(
+      out(Greatest(Seq(l, l2))),
+      out(Least(Seq(l, Literal(0L)))),
+      out(CaseWhen(Seq((GreaterThan(l, l2), l)), Some(l2))),
+      out(If(IsNull(l), l2, l))), withLong).get
+    assert(compiled.outputs === Seq(
+      new IRGreatest(longCol, longCol2),
+      new IRLeast(longCol, longSlot(0)),
+      new IfElse(new Compare(CompareOp.GT, longCol, longCol2), longCol, longCol2),
+      new IfElse(new IRNot(new IRIsNotNull(longCol)), longCol2, longCol)))
+    assert(compiled.outputTypes === Seq(LongType, LongType, LongType, LongType))
+    assert(compiled.lane === LaneType.LONG)
+    val validity = VarkaExpressionCompiler.compilePredicate(
+      And(IsNotNull(l), Not(IsNull(dt))), withLong).get.fused
+    assert(validity.outputs === Seq(new IRAnd(new IRIsNotNull(longCol),
+      new IRNot(new IRNot(new IRIsNotNull(longCol2))))))
+  }
+
+  test("TIME literals take a long slot, a widening precision cast is the child, a narrowing " +
+      "one declines") {
+    // 12:34:56.789 as nanoseconds of day; type coercion casts the TIME(3) column up to the
+    // literal's TIME(6) before comparing, and that cast returns its operand unchanged.
+    val nanos = ((12L * 3600 + 34 * 60 + 56) * 1000000000L) + 789000000L
+    val widened = VarkaExpressionCompiler.compilePredicate(
+      LessThan(Cast(t3, TimeType(6)), Literal(nanos, TimeType(6))), withLong).get.fused
+    assert(widened.outputs === Seq(new Compare(CompareOp.LT, longCol, longSlot(0))))
+    assert(widened.longLiterals === Seq(nanos))
+    assert(widened.inputOrdinals === Seq(7))
+    val narrowed = VarkaExpressionCompiler.compilePredicate(
+      LessThan(Cast(t6, TimeType(3)), Literal(nanos, TimeType(3))), withLong)
+    assert(narrowed.isEmpty)
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Greatest(Seq(Cast(t6, TimeType(3)), t3)))), withLong)
+    assert(partial.isEmpty)
+    // The reason is visible through the projection path, where the decline map is kept.
+    val mixed = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(Cast(t6, TimeType(3)), t3)))), withLong).get
+    assert(mixed.declines(1).reason === "TIME narrowed to a lower precision, which truncates")
+  }
+
+  test("a timestamp column declines with the milestone's reason, in both forms") {
+    for (col <- Seq(ts, ntz)) {
+      val predicate = VarkaExpressionCompiler.compilePredicate(
+        And(GreaterThan(d, d2), GreaterThan(col, col)), withLong).get
+      assert(predicate.specs.map(_.fused) === Seq(true, false))
+      assert(predicate.specs(1).decline.get.reason === "a timestamp column is outside milestone 5")
+      val projection = VarkaExpressionCompiler.compilePartial(
+        Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(col, col)))), withLong).get
+      assert(projection.specs === Seq(FusedOutput(0), ResidualOutput))
+      assert(projection.declines(1).reason === "a timestamp column is outside milestone 5")
+    }
+  }
+
+  test("a projection that mixes lanes fuses the first lane and names the lane for the other") {
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Greatest(Seq(d, d2))), out(Greatest(Seq(l, l2))), out(DateAdd(d, Literal(1)))),
+      withLong).get
+    assert(partial.specs === Seq(FusedOutput(0), ResidualOutput, FusedOutput(1)))
+    assert(partial.declines(1).reason === laneReason)
+    // The demoted entry left nothing behind: no long literal, no long input.
+    assert(partial.fused.longLiterals === Nil)
+    assert(partial.fused.inputOrdinals === Seq(0, 1))
+    assert(partial.fused.lane === LaneType.INT)
+    // The first entry fixes the lane, whichever lane it is.
+    val longFirst = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Greatest(Seq(l, Literal(3L)))), out(Greatest(Seq(d, d2)))), withLong).get
+    assert(longFirst.specs === Seq(FusedOutput(0), ResidualOutput))
+    assert(longFirst.declines(1).reason ===
+      "the INT lane in a kernel on the LONG lane: one kernel holds one lane")
+    assert(longFirst.fused.literals === Nil)
+    assert(longFirst.fused.longLiterals === Seq(3L))
+  }
+
+  test("a predicate that mixes lanes fuses the first lane's conjuncts and names the lane") {
+    val predicate = VarkaExpressionCompiler.compilePredicate(
+      And(And(GreaterThan(d, d2), GreaterThan(l, l2)), LessThan(d, d2)), withLong).get
+    assert(predicate.specs.map(_.fused) === Seq(true, false, true))
+    assert(predicate.specs(1).decline.get.reason === laneReason)
+    assert(predicate.fused.lane === LaneType.INT)
+    assert(predicate.fused.inputOrdinals === Seq(0, 1))
+  }
+
+  test("a CASE whose condition and branches disagree on lane declines with the lane reason") {
+    // `CASE WHEN l > 0 THEN d ELSE d2` type-checks: the condition is on the long lane and the
+    // branches on the int one, and the blend's constructor would refuse the mix. The compiler
+    // asks first and records the reason instead of throwing.
+    val partial = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(d, Literal(1))), out(If(GreaterThan(l, Literal(0L)), d, d2))), withLong).get
+    assert(partial.specs === Seq(FusedOutput(0), ResidualOutput))
+    assert(partial.declines(1).reason ===
+      "one kernel holds one lane, and this mixes the LONG and INT lanes")
+    val orMix = VarkaExpressionCompiler.compilePredicate(
+      Or(GreaterThan(l, Literal(0L)), GreaterThan(d, d2)), withLong)
+    assert(orMix.isEmpty)
+  }
+
+  test("long arithmetic and IN stay declined: they are tasks 104 and 102, not this one") {
+    val add = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(d, Literal(1))), out(Add(l, Literal(1L)))), withLong).get
+    assert(add.specs === Seq(FusedOutput(0), ResidualOutput))
+    assert(add.declines(1).reason === "unsupported expression")
+    val in = VarkaExpressionCompiler.compilePredicate(
+      And(GreaterThan(d, d2), In(l, Seq(Literal(1L), Literal(2L)))), withLong).get
+    assert(in.specs.map(_.fused) === Seq(true, false))
+    assert(in.specs(1).decline.get.reason === "unsupported predicate")
+  }
 }
