@@ -166,9 +166,14 @@ class VarkaCoverageSuite extends SparkFunSuite {
       Row("year(d) = 2021"),
       Row("NOT (d = d2)"),
       Row("d IN (DATE '2021-01-01', DATE '2021-06-01')", "up to 16 literals"),
-      Row("year(d) = 2021 AND month(d) > 6",
-        "every conjunct of an AND fuses or the predicate is not in this table; a comparison "
-          + "over a bare int column, `i > 0`, is a residual conjunct today (task 122)"),
+      Row("year(d) = 2021 AND i > 0",
+        "every conjunct of an AND fuses or the predicate is not in this table; the int column "
+          + "compares in the kernel rather than leaving a residual row filter (task 122)"),
+      Row("i > 0", "a bare int column compares in the kernel (task 122)"),
+      Row("i IS NOT NULL",
+        "the same column's validity word, which the optimizer infers beside `i > 0`"),
+      Row("i = 5"),
+      Row("month(d) > i", "an int column against a fused int field"),
       Row("year(d) = 2021 OR month(d) = 3"),
       // Over `spark.sql.optimizer.inSetConversionThreshold` (10 by default) the optimizer
       // rewrites the list to an `InSet`, which fuses up to the compiler's own cap of 16.

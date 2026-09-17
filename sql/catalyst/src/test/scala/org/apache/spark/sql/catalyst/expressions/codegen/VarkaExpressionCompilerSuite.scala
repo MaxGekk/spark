@@ -19,9 +19,9 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LastDay => IRLastDay, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, StringType, TimestampType, YearMonthIntervalType}
 
@@ -52,6 +52,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     YearMonthIntervalType(YearMonthIntervalType.YEAR, YearMonthIntervalType.MONTH))()
 
   private val childOutput: Seq[Attribute] = Seq(d, d2, i, sh, by)
+
+  /** A second `IntegerType` column, for the comparisons that need two of them (task 122). */
+  private val sh2 = AttributeReference("i2", IntegerType)()
+
+  /** `childOutput` with that second int column, on its own list for the reason below. */
+  private val intPairOutput: Seq[Attribute] = childOutput :+ sh2
 
   /**
    * `childOutput` plus the interval columns, as its own list rather than three more entries in
@@ -341,6 +347,63 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // The value side is unchanged: an int literal where a date is expected declines.
     assert(VarkaExpressionCompiler.compile(Seq(out(DateAdd(Literal(5), Literal(3)))),
       childOutput).isEmpty)
+  }
+
+  test("a bare int column compares in the kernel, alone and as a conjunct") {
+    // Task 122. `compare` used to send every non-literal operand through `compileNode`, whose
+    // value leaves are date columns and fused int fields, so a bare `IntegerType` column
+    // declined with "not a date column" and left a residual row filter above the fused part -
+    // which is what task 120's coverage suite found when it began requiring every conjunct of
+    // a predicate row to fuse. The int32 lane already owned the column: arithmetic reads it
+    // through `intOperand`, and a comparison needs no overflow mode because it yields a mask.
+    for ((name, predicate) <- Seq(
+        "i > 0" -> GreaterThan(i, Literal(0)),
+        "i = 5" -> EqualTo(i, Literal(5)),
+        "i < i2" -> LessThan(i, sh2),
+        "0 < i" -> LessThan(Literal(0), i),
+        "month(d) > i" -> GreaterThan(Month(d), i),
+        "i <= month(d)" -> LessThanOrEqual(i, Month(d)))) {
+      val compiled = VarkaExpressionCompiler.compilePredicate(predicate, intPairOutput)
+      assert(compiled.isDefined, s"$name should compile")
+      assert(compiled.get.specs.forall(_.fused), s"$name should fuse")
+    }
+    // The whole conjunct fuses now, so nothing is left for a row filter above the kernel.
+    val conjunct = VarkaExpressionCompiler.compilePredicate(
+      And(EqualTo(Year(d), Literal(2021)), GreaterThan(i, Literal(0))), intPairOutput)
+    assert(conjunct.isDefined && conjunct.get.specs.forall(_.fused),
+      "year(d) = 2021 AND i > 0 should fuse whole")
+    assert(conjunct.get.specs.size === 2 && conjunct.get.fusedConjuncts.size === 2,
+      "both conjuncts belong to the kernel, not one fused and one residual")
+    assert(conjunct.get.fused.outputs.head.isInstanceOf[IRAnd],
+      "and they are one fused condition rather than two kernels")
+  }
+
+  test("an int column's validity predicate fuses, because the optimizer infers it") {
+    // Task 122's second half. Spark infers `isnotnull(i)` beside any null-intolerant predicate
+    // on `i`, so admitting the comparison without admitting this would leave a row filter over
+    // every fused int comparison - the kernel doing the compare and the row engine still
+    // visiting every row for the null. The word is the same one a date column's validity reads.
+    val alone = VarkaExpressionCompiler.compilePredicate(IsNotNull(i), childOutput)
+    assert(alone.isDefined && alone.get.specs.forall(_.fused), "i IS NOT NULL should fuse")
+    val inferred = VarkaExpressionCompiler.compilePredicate(
+      And(IsNotNull(i), GreaterThan(i, Literal(0))), childOutput)
+    assert(inferred.isDefined && inferred.get.specs.forall(_.fused),
+      "the shape the optimizer actually produces should fuse whole")
+    // Still a bare column only: a validity predicate over a computed node declines as before.
+    assert(VarkaExpressionCompiler.compilePredicate(
+      IsNotNull(Month(d)), childOutput).isEmpty)
+  }
+
+  test("a comparison over a column the lane does not hold still declines") {
+    // The rule admits `IntegerType` and nothing else: a short or a byte column is a narrower
+    // lane the kernel does not read, and admitting one here would compare whatever the
+    // evaluator happened to place in the int column beside it.
+    for ((name, predicate) <- Seq(
+        "sh > 0" -> GreaterThan(sh, Literal(0)),
+        "by > 0" -> GreaterThan(by, Literal(0)))) {
+      assert(VarkaExpressionCompiler.compilePredicate(predicate, childOutput).isEmpty,
+        s"$name should decline")
+    }
   }
 
   test("extract(YEAROFWEEK) compiles to Year over the Thursday shift and shares the " +
@@ -1346,19 +1409,22 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
   }
 
   test("a mixed predicate splits - fusible conjuncts in, the rest residual") {
-    // The corpus norm: a date predicate AND a non-date one AND a validity guard. The int
-    // comparison declines (no int lanes at a comparison), the date ones fuse, and the
-    // residual keeps its reason for the report.
+    // The corpus norm: a date predicate AND a non-date one AND a validity guard. The middle
+    // conjunct is over a `ShortType` column, which is a narrower lane the kernel does not
+    // read, so it declines while the date ones fuse and the residual keeps its reason for the
+    // report. It was `i > 5` until task 122 made a bare int column comparable in the kernel -
+    // the shape this test needs is one that is still out of the lane's reach, not one that
+    // merely was.
     val condition = org.apache.spark.sql.catalyst.expressions.And(
       org.apache.spark.sql.catalyst.expressions.And(
-        LessThan(d, d2), GreaterThan(i, Literal(5))),
+        LessThan(d, d2), GreaterThan(sh, Literal(5.toShort))),
       IsNotNull(d))
     val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput).get
     assert(predicate.specs.map(_.fused) === Seq(true, false, true))
     assert(predicate.fusedConjuncts === Seq(LessThan(d, d2), IsNotNull(d)))
-    assert(predicate.residualConjuncts === Seq(GreaterThan(i, Literal(5))))
+    assert(predicate.residualConjuncts === Seq(GreaterThan(sh, Literal(5.toShort))))
     val decline = predicate.specs(1).decline.get
-    assert(decline.reason === "non-date column of type int")
+    assert(decline.reason === "non-date column of type smallint")
     // The fused root is the balanced AND of the two fused conjuncts, in query order.
     assert(predicate.fused.outputs === Seq(new VarkaVectorIR.And(
       new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1)),
@@ -1380,9 +1446,9 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
   }
 
   test("predicates with nothing to fuse, or no columns, are not eligible") {
-    // No conjunct compiles.
+    // No conjunct compiles. A short column, not an int one: task 122 admitted `i > 5`.
     assert(VarkaExpressionCompiler.compilePredicate(
-      GreaterThan(i, Literal(5)), childOutput).isEmpty)
+      GreaterThan(sh, Literal(5.toShort)), childOutput).isEmpty)
     // A conjunct compiles but references no column: nothing to vectorize over.
     assert(VarkaExpressionCompiler.compilePredicate(
       LessThan(Literal(1, DateType), Literal(2, DateType)), childOutput).isEmpty)

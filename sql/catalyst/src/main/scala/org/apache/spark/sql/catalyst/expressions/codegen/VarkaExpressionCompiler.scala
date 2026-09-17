@@ -1685,11 +1685,17 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   /**
-   * Compiles the operand of a validity predicate, which must land on a bare date column: the
-   * emitter reads the column's per-lane-group validity word, and only a column's word is live
-   * before value emission (the recorded milestone-3 restriction). As in `compileCoalesce`
-   * above, the `ColumnRef` match is a proxy for "bare column" that depends on every relabel
-   * expression compiling to `ColumnRef` staying a null-intolerant identity.
+   * Compiles the operand of a validity predicate, which must land on a bare column: the emitter
+   * reads the column's per-lane-group validity word, and only a column's word is live before
+   * value emission (the recorded milestone-3 restriction). As in `compileCoalesce` above, the
+   * `ColumnRef` match is a proxy for "bare column" that depends on every relabel expression
+   * compiling to `ColumnRef` staying a null-intolerant identity.
+   *
+   * <p>The column may be a date or an `IntegerType` one. Both are the same int32 lane and the
+   * same validity word, and the int case is not optional: Spark's optimizer infers
+   * `isnotnull(i)` beside any null-intolerant predicate on `i`, so refusing it would leave a
+   * residual row filter above every fused int comparison (task 122) - the kernel would do the
+   * comparison and the row engine would still visit every row to check the null.
    */
   private def compileValidity(
       child: Expression,
@@ -1697,7 +1703,11 @@ private[sql] object VarkaExpressionCompiler {
       inputs: mutable.LinkedHashMap[Int, Int],
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[Cond] = {
-    compileNode(child, inputs, literals, sink) match {
+    val compiled = child match {
+      case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
+      case _ => compileNode(child, inputs, literals, sink)
+    }
+    compiled match {
       case Some(ref: ColumnRef) => Some(new IRIsNotNull(ref))
       case Some(_) =>
         sink.note("validity predicate over a non-column operand", whole)
@@ -1713,14 +1723,22 @@ private[sql] object VarkaExpressionCompiler {
       inputs: mutable.LinkedHashMap[Int, Int],
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[Cond] = {
-    // An int literal against a fused int field - `weekofyear(d) = 53`, `month(d) = 6` - is a
-    // comparison of two int lanes like any other; the literal takes a slot the way a date literal
-    // does. Only here: compileNode's value leaves stay DateType, since a bare int literal has no
-    // meaning as a date operand, and int arithmetic over an output is out of scope here, not a
-    // comparison's.
+    // What a comparison's operands may be, beyond what `compileNode` yields. An int literal
+    // against a fused int field - `weekofyear(d) = 53`, `month(d) = 6` - is a comparison of two
+    // int lanes like any other, and the literal takes a slot the way a date literal does. An
+    // `IntegerType` column is the same lane read from a different place, which `intOperand`
+    // already admits for arithmetic (task 63), so `i > 0` and `i < i2` compare in the kernel
+    // rather than leaving a residual row filter above it. Both cases are stated here rather
+    // than in `compileNode`, whose value leaves stay `DateType`: a bare int has no meaning as a
+    // *date* operand, and widening that would admit `date_add(d, i)`'s offset as a date.
+    //
+    // There is no guard question. A comparison produces a mask, not a value, so no result can
+    // leave the int range - which is why this takes one rule where task 63's arithmetic needed
+    // an overflow mode.
     def operand(e: Expression): Option[VarkaVectorIR] = e match {
       case Literal(v: Int, IntegerType) =>
         Some(intSlot(v, literals))
+      case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
       case _ => compileNode(e, inputs, literals, sink)
     }
     for {
