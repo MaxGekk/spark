@@ -2920,6 +2920,23 @@ scripts alone, since no CI job runs them. **Done when** a bench-only change runs
 the bench job alone and a catalyst change stops requiring `yarn` and
 `kubernetes`. Size: small.
 
+### 2.77 What a 64-bit lane costs (task 142)
+
+*Opened 17 September 2026 by task 85, which built the lane and priced nothing.*
+
+Every remaining task on the long lane - 104's `bigint` arithmetic, 102's `TIME`
+expressions, 29's widened loads - will be judged by a ratio against the row
+engine, and a ratio has two factors: if the lane's own cost is not known
+separately, a disappointing `TIME` number cannot be told apart from a lane that
+is simply twice as wide. Section 2.3 already calls the halved headroom the
+lane's own property and 2.39 asks for it "committed per shape, not discovered".
+**How.** The same eight shapes emitted at both lanes and driven straight over
+memory segments, as `VarkaArithmeticBenchmark` drives the int ones, over a row
+ladder chosen so that at least one rung has both arms inside the same cache
+level - otherwise the number prices a cache boundary rather than the lane.
+**Done when** the per-shape ratio is committed with the rung it was measured at.
+Size: small; needs a quiet machine window.
+
 ### 2.78 The pre-commit hook judges the commit, not the file (task 143)
 
 *Opened 17 September 2026 by a finding in task 142's own merge commit.*
@@ -3104,6 +3121,7 @@ can start has.
 | 139 | A per-expression switch, and the tier ladder (section 2.74). **Scoped** (16 September 2026) from the September surveys, `SCOPE_MILESTONE_6.md` items 16 to 29 (#223) | `spark.sql.codegen.varka.expression.<Class>.enabled` producing a decline reason that names the flag - **Milestone 6** (`SCOPE_MILESTONE_6.md` item 24, #223); and, this milestone's, a time-to-tier-4 ladder and a batches-below-C2 counter extending `VarkaColdStartBenchmark` | A disabled class declines with the reason; the cold-start file carries batches executed before each kernel's tier-4 compile landed |
 | 140 | The chains at occupancy (section 2.75). **Done** (`PLAN_TASK_140.md` 9, 17 September 2026) from task 134's own finding: the compute-bound half of the benchmark at 1 and 12 cores, two arms per rung, four committed files. The advantage **grows** under occupancy - 10.29x at one core, 11.42x at twelve - where the surface lost 15%, and not one of the twelve chains falls, the worst improving from 8.93x to 10.19x. The mechanism is task 134's seen from the other side: on the surface the row engine scaled better (5.62x against 5.35x), on the chains the engine does (7.09x against 6.18x), because there is arithmetic to hide latency behind. So the write-up's headline, which comes from the chains, is conservative for a loaded executor rather than flattering | The `chains` benchmark through the same driver at `--cores` 1 and 12, measured in one session on the laptop, since the committed chain files are the EPYC 9V45 runner's | Four files with `cores` in their provenance, every row fused, and the per-shape split stated beside task 134's |
 | 141 | The module map claims Varka's own files (section 2.76). **Done** (`PLAN_TASK_141.md`, 17 September 2026) from task 123's first demonstration: the base was right - #234 printed `changed files vs base: 9` - and every gate still answered true, because `sql/varka/coverage.json` and `sql/varka/emitted_bytes.json` sit under a path no module claimed and so selected `root`, which means test everything. They belong to catalyst, whose suites generate and compare them, and the bench drivers under `dev/` belong to `varka-bench`. #234's files now answer false for `yarn`, `kubernetes` and `varka-bench`, and **a bench-only change runs the bench job alone**, which is task 94's open half | Four regexes on two modules, each naming the suite that reads the file | The next pull request's job list, with `yarn` and `kubernetes` absent for the first time |
+| 142 | What a 64-bit lane costs (section 2.77). **Done** (`PLAN_TASK_142.md` 9, 17 September 2026) from task 85's own finding: the long lane is priced against the int one for eight shapes over a four-rung row ladder, so the halved headroom is a committed number before task 104 is judged against it | A committed `VarkaLongLaneBenchmark` results file whose rungs put both arms in the same cache level, and a per-shape ratio the milestone's later long-lane tasks can be read against |
 | 143 | The pre-commit hook judges the commit, not the file (section 2.78). **Done** (`PLAN_TASK_143.md`, 17 September 2026) from a finding in task 142's own merge commit: line-anchored findings are scoped to the commit's diff, and the Python column scan takes ruff's own single-chunk exemption | A hook self-test that fails in both directions for each rule and runs whenever the hook is among the committed files; the merge commit that started it reports nothing |
 
 ## 4. Files

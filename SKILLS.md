@@ -27,6 +27,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A default decided from a regeneration costs a second regeneration](sql/varka/skills/benchmarking.md#a-default-decided-from-a-regeneration-costs-a-second-regeneration)
 * [A number superseded inside its own PR loses its provenance when the PR squash-merges](sql/varka/skills/benchmarking.md#a-number-superseded-inside-its-own-pr-loses-its-provenance-when-the-pr-squash-merges)
 * [A band says which moves to read; an invariant says which to stop the line for](sql/varka/skills/benchmarking.md#a-band-says-which-moves-to-read-an-invariant-says-which-to-stop-the-line-for)
+* [A benchmark that changes bytes per row must be a ladder, not a row count](sql/varka/skills/benchmarking.md#a-benchmark-that-changes-bytes-per-row-must-be-a-ladder-not-a-row-count)
 
 #### [Build and environment](sql/varka/skills/build-and-environment.md)
 * [Classpath Shadowing (the stub trap)](sql/varka/skills/build-and-environment.md#classpath-shadowing-the-stub-trap)
@@ -35,6 +36,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Environment Facts (verified in this repo)](sql/varka/skills/build-and-environment.md#environment-facts-verified-in-this-repo)
 * [Extra Sessions on the Shared Context](sql/varka/skills/build-and-environment.md#extra-sessions-on-the-shared-context)
 * [Building a fastdebug JDK for HotSpot diagnostics](sql/varka/skills/build-and-environment.md#building-a-fastdebug-jdk-for-hotspot-diagnostics)
+* [`dev/scalastyle` cannot parse an underscore-separated numeral before `->`](sql/varka/skills/build-and-environment.md#devscalastyle-cannot-parse-an-underscore-separated-numeral-before--)
 * [Python's 100-column rule is a convention here, not a check](sql/varka/skills/build-and-environment.md#pythons-100-column-rule-is-a-convention-here-not-a-check)
 * [A git hook's nested git commands act on the repository being committed to](sql/varka/skills/build-and-environment.md#a-git-hooks-nested-git-commands-act-on-the-repository-being-committed-to)
 

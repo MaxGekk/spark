@@ -366,3 +366,31 @@ records shapes where Varka loses - and measuring found 32 of 42 tables where it
 wins in every revision and ten where it does not, which is a fact about the
 read-back floor rather than a judgement call. A hand-written list would have got
 that wrong in both directions.
+
+## A benchmark that changes bytes per row must be a ladder, not a row count
+
+Task 142 priced the 64-bit lane against the 32-bit one for eight shapes at a
+million rows and read 2.74x to 3.74x, against an arithmetic prediction of about
+2x. The invited conclusion - that a long lane costs three to four times an int
+one - is false, and the same benchmark says so once the row count moves.
+
+The cause is that doubling the lane doubles the working set, so the two arms are
+not necessarily measured in the same place. At a million rows a two-column shape
+holds 12 MB at the int lane and 24 MB at the long one, against a 24 MB L3: the
+int arm fits and the long arm does not, and the ratio prices that boundary on
+top of the lane. Run as a ladder - 16 384 rows (both arms in L2), 262 144 (both
+in L3), 1 000 000 (the split), 8 388 608 (both past L3) - the in-cache rungs read
+1.5x to 2.0x and the DRAM rung a flat 2.11x to 2.20x, which is the width and
+nothing else. The 1M rung is the outlier in its own file.
+
+So when a change alters bytes per row - a wider lane, a second column, a
+different encoding - pick the rungs from the machine's cache sizes and the arms'
+working sets, and make sure at least one rung has both arms on the same side of
+every boundary. One row count in the middle is the one arrangement that cannot
+be read, because it names the lane and measures the cache. The in-cache figures
+below 2 are worth keeping for a second reason: they say a long lane group does
+the work of two int groups under one set of loop overheads, so the wider lane is
+cheaper than its width wherever there is issue slack to absorb it.
+
+The same discipline one level up is `PLAN_TASK_134.md`'s partitions ladder,
+which exists because one core and twelve cores are also not the same place.

@@ -183,6 +183,22 @@ Four things that cost time and are not obvious:
 is not comparable with the product build and nothing measured on it belongs in a committed
 results file. It is for reading what C2 did, not how fast it did it.
 
+## `dev/scalastyle` cannot parse an underscore-separated numeral before `->`
+
+`16_384 -> "both arms in L2"` compiles and fails `dev/scalastyle` with
+`Expected token RPAREN but got Token(STRING_LITERAL, ...)`, pointing at the
+string rather than at the number. Scalastyle parses with scalariform, which is
+older than the compiler and mis-lexes the literal here; the same literal alone
+on the right of a `=` is accepted, which is why `1_000_000` appears in several
+committed benchmarks without trouble.
+
+The fix is to write the digits without separators in that position. The reason
+it is worth knowing is the error message: it names a token several characters
+away from the cause and says nothing about numerals, so the natural first guess
+is an unbalanced paren in the surrounding expression, which sends you rewriting
+correct code. `dev/varka_gate.sh --only lint` is a minute, and it is the only
+thing that reports this at all - the compiler is happy.
+
 ## Python's 100-column rule is a convention here, not a check
 
 Spark's `pyproject.toml` sets `line-length = 100`, and it is natural to read that
