@@ -2696,6 +2696,53 @@ stores and the conversions with the JDK's own oracle; when a Vector API
 operation behaves unexpectedly on a runner, they are the first thing to run
 there, before any Varka suite.
 
+### Item 31. The timestamp types on the long lane
+
+*Moved out of milestone 5 on 17 September 2026, on the owner's decision while
+reading `PLAN_TASK_29.md`: "I didn't plan to support TIMESTAMP_NTZ during this
+milestone." Milestone 5's row 29 had carried both timestamp types since a 15
+September widening that was the assistant's, not the owner's.*
+
+`TimestampType` and `TimestampNTZType` are `PhysicalLongType` - micros since the
+epoch in the same eight-byte lane as `bigint`, `TIME` and day-time intervals -
+so once task 29 lands, admitting either is one arm in the compiler's
+`laneOf`, one vector class in `isArrowBacked` (`TimeStampMicroTZVector`,
+`TimeStampMicroVector`) and one destination in `allocateVector`. The plumbing
+is not the argument. The semantics are, and the review of task 29's first plan
+found them, read in `datetimeExpressions.scala` and `DateTimeUtils.scala` on 17
+September 2026:
+
+* **On a zoned `TIMESTAMP`, only comparisons are zone-independent.**
+  `SubtractTimestamps` evaluates `ChronoUnit.MICROS.between(localStart,
+  localEnd)` on the two instants' local date-times in the session zone
+  (`DateTimeUtils.subtractTimestamps`), and `TimestampAddInterval` evaluates
+  `.atZone(zoneId).plusDays(days).plus(micros)` (`timestampAddDayTime`) -
+  calendar days in that zone. Across a DST transition neither equals the instant
+  arithmetic a long kernel would do, so a kernel that computed them would be
+  wrong by an hour on the rows that cross it and right on every other row. Any
+  future admission of `TIMESTAMP` beyond comparisons needs a test whose rows
+  straddle both transitions of a year under a DST zone, because on any other
+  rows a wrongly admitted kernel agrees with Spark.
+* **The `TIMESTAMP_NTZ` family is evaluated in UTC** (`zoneIdForType`), so its
+  differences and interval additions are plain long arithmetic; and both go
+  through `LocalDateTime.until` and `instantToMicros`, whose exact arithmetic
+  raises on overflow whatever the ANSI setting, so the checked mode is the only
+  correct lowering and there is no mode to choose.
+* **Decomposition** - `year(ts)` and the calendar fields through
+  `floorDiv(micros, 86 400 000 000)` into the int32 civil-from-days prefix - is
+  the argument `PLAN_MILESTONE_5.md` section 8 already kept from 15 September:
+  the first kernel where a long lane feeds the calendar machinery, over a value
+  range that forces the full-range exact division rather than `TIME`'s bounded
+  one.
+* **Not this item:** the nanosecond timestamps `TimestampNTZNanosType` and
+  `TimestampLTZNanosType`, whose physical type is a sixteen-byte
+  `TimestampNanosVal` stored by `ArrowWriter` as a `StructVector`. They are not
+  one lane of anything and would be their own item.
+
+Re-enters with: `TIMESTAMP_NTZ` comparisons, differences and interval addition
+first, since their semantics are settled; zoned `TIMESTAMP` comparisons beside
+them; zoned arithmetic only with the DST-straddling test above.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
