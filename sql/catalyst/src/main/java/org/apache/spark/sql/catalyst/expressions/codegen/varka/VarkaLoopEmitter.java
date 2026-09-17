@@ -494,14 +494,6 @@ public final class VarkaLoopEmitter {
   private static final ClassDesc LONG_ARRAY = ConstantDescs.CD_long.arrayType();
   private static final ClassDesc INT_ARRAY = ConstantDescs.CD_int.arrayType();
 
-  /**
-   * {@code int run(long[], long[], int[], long[], long[], int[], int)} - every body method
-   * shares it, so slots line up everywhere and the driver can forward a callee's status
-   * without repacking. The int is the batch status; see {@link VarkaFusedKernel#run}.
-   */
-  private static final MethodTypeDesc RUN = MethodTypeDesc.of(ConstantDescs.CD_int,
-      LONG_ARRAY, LONG_ARRAY, INT_ARRAY, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
-      ConstantDescs.CD_int);
   private static final MethodTypeDesc INIT = MethodTypeDesc.of(ConstantDescs.CD_void);
 
   /** {@code MemorySegment VarkaVectorSupport.ofAddress(long, long)}. */
@@ -602,7 +594,8 @@ public final class VarkaLoopEmitter {
   private static final int P_DST_DATA = 4;
   private static final int P_DST_VALIDITY = 5;
   private static final int P_SCALAR_ARGS = 6;
-  private static final int P_LENGTH = 7;
+  // `length` has no constant here: its slot depends on the lane, because a wider lane's second
+  // scalar array sits between the two. `Lane.pLength` is the one that knows.
 
   // The word-reference value meaning "constant all-true" (a literal-only subtree).
   private static final int WORD_ALL_TRUE = -1;
@@ -644,7 +637,7 @@ public final class VarkaLoopEmitter {
   enum Lane {
     /** 32-bit lanes: dates, ints, year-month intervals - every shape the compiler admits today. */
     INT(VarkaVectorIR.LaneType.INT, "jdk.incubator.vector.IntVector", Integer.SIZE,
-        ConstantDescs.CD_int, new int[] {2, 4, 8, 16}),
+        ConstantDescs.CD_int),
     /**
      * 64-bit lanes: {@code bigint}, {@code TIME}, the timestamps and day-time intervals when
      * their tasks arrive. The emitter serves the lane-generic subset of the IR here - the
@@ -653,7 +646,7 @@ public final class VarkaLoopEmitter {
      * epoch day.
      */
     LONG(VarkaVectorIR.LaneType.LONG, "jdk.incubator.vector.LongVector", Long.SIZE,
-        ConstantDescs.CD_long, new int[] {1, 2, 4, 8});
+        ConstantDescs.CD_long);
 
     private final VarkaVectorIR.LaneType laneType;
     /** The lane's vector class: the receiver of every load, store and lanewise call. */
@@ -700,18 +693,10 @@ public final class VarkaLoopEmitter {
     /** {@code V V.blend(Vector, VectorMask)} - erased {@code Vector}. */
     final MethodTypeDesc blend;
 
-    /**
-     * The lane counts this lane has a named species constant for, smallest first:
-     * {@code SPECIES_64} through {@code SPECIES_512} in both cases, which is 2 to 16 lanes at
-     * 32 bits and 1 to 8 at 64. A count outside the list takes {@code SPECIES_PREFERRED} and
-     * the general validity helpers - see {@link VarkaLoopEmitter#emitLanes}.
-     */
-    final int[] permittedLanes;
     /** What {@code SPECIES_PREFERRED} answers for this lane on this JVM, read once. */
     final int preferredLanes;
 
-    Lane(VarkaVectorIR.LaneType laneType, String vectorClass, int bits, ClassDesc scalar,
-        int[] permittedLanes) {
+    Lane(VarkaVectorIR.LaneType laneType, String vectorClass, int bits, ClassDesc scalar) {
       this.laneType = laneType;
       this.vector = ClassDesc.of(vectorClass);
       this.bits = bits;
@@ -749,7 +734,6 @@ public final class VarkaLoopEmitter {
       }
       this.firstLocal = this.pLength + 1;
       this.localWidth = scalar.equals(ConstantDescs.CD_long) ? 2 : 1;
-      this.permittedLanes = permittedLanes;
       this.preferredLanes = bits == Integer.SIZE
           ? jdk.incubator.vector.IntVector.SPECIES_PREFERRED.length()
           : jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length();
@@ -837,14 +821,18 @@ public final class VarkaLoopEmitter {
       return localWidth == 2 ? Long.MIN_VALUE : Integer.MIN_VALUE;
     }
 
-    /** Whether this lane has a named species constant for {@code lanes}. */
-    boolean permits(int lanes) {
-      for (int n : permittedLanes) {
-        if (n == lanes) {
-          return true;
-        }
-      }
-      return false;
+    /**
+     * Whether the Vector API names a species constant for this many of this lane's elements.
+     * It declares {@code SPECIES_64} through {@code SPECIES_512} and nothing else, so the
+     * question is whether the product is one of those four widths - which is 2 to 16 lanes at
+     * 32 bits and 1 to 8 at 64. Derived from the width rather than tabulated per member, so
+     * that {@link #speciesField} and this cannot disagree about which names exist: a third
+     * lane given a copied list would pass here and then emit a {@code getstatic} for a field
+     * no vector class has.
+     */
+    boolean hasSpecies(int lanes) {
+      int width = lanes * bits;
+      return width >= 64 && width <= 512 && Integer.bitCount(width) == 1;
     }
 
     /**
@@ -876,21 +864,15 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * The lane count this JVM's kernels run at, read once. An emitted class is defined by the shape
-   * cache in the JVM that will run it and lives only in memory, so what
-   * {@code IntVector.SPECIES_PREFERRED} answers here is what the class will see - and the class
-   * does not ask: it carries the matching species constant instead.
-   */
-  private static final int PREFERRED_LANES = jdk.incubator.vector.IntVector.SPECIES_PREFERRED
-      .length();
-
-  /**
    * The lane every output root agrees on. The roots are the emission's outputs, and a class
    * holds one species: its loop, its epilogue and its stores are all that species, so two roots
    * on different lanes are two kernels rather than one. `analyze` re-checks every node below
    * them against this, which is where a mixed *tree* is caught.
    */
   private static Lane laneOf(List<VarkaVectorIR> outputs) {
+    if (outputs.isEmpty()) {
+      throw new IllegalArgumentException("no output chains to emit");
+    }
     Lane lane = Lane.of(outputs.get(0).laneType());
     for (VarkaVectorIR output : outputs) {
       if (output.laneType() != lane.laneType) {
@@ -901,23 +883,44 @@ public final class VarkaLoopEmitter {
     return lane;
   }
 
+  /** {@link #emitLanes}, for the suite that checks a baked width against what the JVM has. */
+  static int emitLanesForTest(VarkaEmitOptions options, Lane lane) {
+    return emitLanes(options, lane);
+  }
+
   /**
-   * The lane count to emit for, or 0 for "do not bake one" - which is what
-   * {@link VarkaEmitOptions#validityByWidth} off means, and what any width without a
-   * specialised pair of validity helpers means.
+   * The lane count to bake into the emitted class, or 0 for "do not bake one" - which is what
+   * {@link VarkaEmitOptions#validityByWidth} off means, and what a width the class cannot both
+   * name and serve means.
    *
-   * <p>{@link VarkaVectorSupport} has a pair per int lane count the Vector API produces on
-   * hardware that exists: 2, 4, 8 and 16, whose species are {@code SPECIES_64} through
-   * {@code SPECIES_512}. A wider shape - SVE reaches 32 and 64 int lanes and has no named
-   * species constant for either - takes the run-time {@code SPECIES_PREFERRED} and the general
-   * helpers, which is correct and no slower than before this task.
+   * <p>A baked width needs two things that a lane count alone does not guarantee. It needs a
+   * named species constant, which is a question about the width in bits: {@code SPECIES_64}
+   * through {@code SPECIES_512} exist, and the shapes SVE reaches above 512 bits have no name.
+   * And it needs the width-specialised validity helpers in {@link VarkaVectorSupport}, which
+   * exist per lane *count*: 2, 4, 8 and 16. At the int lane the two sets coincide; at the long
+   * lane they do not, because a single 64-bit lane is a species that exists and a helper that
+   * does not. Anything the pair of checks rejects runs on {@code SPECIES_PREFERRED} and the
+   * general helpers, which is correct at every width and no slower than before task 92.
    */
   private static int emitLanes(VarkaEmitOptions options, Lane lane) {
     if (!options.validityByWidth()) {
       return 0;
     }
     int lanes = options.lanesOverride() != 0 ? options.lanesOverride() : lane.preferredLanes;
-    return lane.permits(lanes) ? lanes : 0;
+    // Both checks, not either: a width the class can name but not serve emits a call to a
+    // validity helper that does not exist, which verifies and throws NoSuchMethodError on the
+    // first masked batch. One long lane is that width, reachable with no override at all on a
+    // JVM whose widest vector is 64 bits.
+    return lane.hasSpecies(lanes) && hasValidityHelpers(lanes) ? lanes : 0;
+  }
+
+  /**
+   * Whether {@link VarkaVectorSupport} carries a width-specialised validity pair for this many
+   * lanes. A width without one is emitted against {@code SPECIES_PREFERRED} and the general
+   * helpers, which is correct at any width and no slower than before task 92 existed.
+   */
+  private static boolean hasValidityHelpers(int lanes) {
+    return lanes == 2 || lanes == 4 || lanes == 8 || lanes == 16;
   }
 
 
@@ -1487,10 +1490,20 @@ public final class VarkaLoopEmitter {
    * only turn into a silent per-batch fallback - no task-16 decline reason, and EXPLAIN
    * still claims fusion. Checked here instead, the offending entry is demoted to residual
    * with a recorded reason.
+   *
+   * <p>The lane agreement {@link #laneOf} demands is checked on the same terms and for the
+   * same reason: one class holds one species, so outputs on different lanes are two kernels,
+   * and a caller that learned that from an exception at {@code emit} would have learned it too
+   * late to record why.
    */
   public static boolean fitsBudgets(java.util.List<VarkaVectorIR> outputs, int numInputs) {
-    if (numInputs > MAX_INPUTS) {
+    if (numInputs > MAX_INPUTS || outputs.isEmpty()) {
       return false;
+    }
+    for (VarkaVectorIR output : outputs) {
+      if (output.laneType() != outputs.get(0).laneType()) {
+        return false;
+      }
     }
     java.util.HashMap<VarkaVectorIR, Integer> heights = new java.util.HashMap<>();
     int[] opNodes = {0};
@@ -2124,12 +2137,13 @@ public final class VarkaLoopEmitter {
     }
 
     private void analyze(VarkaVectorIR node) {
-      // One species per emitted class. `Analysis.lane` is the int lane until a second member
-      // exists, so today this refuses every `LONG` tree - which is the point: the emitter would
-      // otherwise emit int descriptors over long data. When the lane becomes a choice rather
-      // than a pin, the same line refuses a node that disagrees with the emission.
+      // One species per emitted class, enforced per node. `laneOf` reads the output roots
+      // only, so this is the sole defence against a node further down disagreeing - which
+      // would emit one lane's descriptors over the other's data. The IR's own constructors
+      // make such a tree unbuildable; this is what catches one built another way.
       if (node.laneType() != lane.laneType) {
-        throw new IllegalArgumentException("unsupported lane type " + node.laneType());
+        throw new IllegalArgumentException("a " + node.laneType() + " node in a "
+            + lane.laneType + " emission: " + node.getClass().getSimpleName());
       }
       Integer seen = useCount.get(node);
       if (seen != null) {
@@ -4476,11 +4490,11 @@ public final class VarkaLoopEmitter {
     cb.astore(guardTmp);
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    cb.loadConstant(lo);
+    analysis.lane.pushScalar(cb, lo);
     cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     cb.aload(guardTmp);
     cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
-    cb.loadConstant(hi);
+    analysis.lane.pushScalar(cb, hi);
     cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     emitGuardCollect(cb, node, word, dense, analysis, s);

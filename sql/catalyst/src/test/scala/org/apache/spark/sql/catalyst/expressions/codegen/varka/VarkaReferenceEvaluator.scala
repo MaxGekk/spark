@@ -173,7 +173,6 @@ object VarkaReferenceEvaluator {
       case (None, y) => y
     }
 
-  /** Kleene three-valued logic; `None` is unknown, and only known-true selects THEN. */
   /**
    * The reference at the long lane, for the subset task 85 ships there: the two leaves, the
    * arithmetic and its three overflow modes, the negate, the hull ops and the conditional.
@@ -266,6 +265,7 @@ object VarkaReferenceEvaluator {
     case n: IsNotNull => Some(evalLong(n.child(), row, lits).isDefined)
   }
 
+  /** Kleene three-valued logic; `None` is unknown, and only known-true selects THEN. */
   def evalCond(
       cond: Cond, row: Seq[Option[Int]], lits: Array[Int]): Option[Boolean] = cond match {
     case n: Compare =>

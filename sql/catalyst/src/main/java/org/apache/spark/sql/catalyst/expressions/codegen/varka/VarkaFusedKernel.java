@@ -59,10 +59,12 @@ public interface VarkaFusedKernel {
   /**
    * Runs the fused loop over one batch.
    *
-   * @param srcData address of each input column's int32 values, by ordinal.
+   * @param srcData address of each input column's values, by ordinal - int32 at this entry
+   *        point, and int64 at the eight-argument one below.
    * @param srcValidity address of each input column's bit-packed validity (or 0L, see above).
    * @param srcNullCount null count of each input column.
-   * @param dstData address of each output column's int32 values (length * 4 bytes each).
+   * @param dstData address of each output column's values (length * 4 bytes each; eight at
+   *        the eight-argument entry point below).
    * @param dstValidity address of each output column's bit-packed validity
    *        ((length + 7) / 8 bytes each); always required.
    * @param scalarArgs the runtime values of the chain's literal slots.
@@ -87,8 +89,10 @@ public interface VarkaFusedKernel {
    * than a conversion to perform. The two defaults here are what make that a named failure
    * instead of an {@code AbstractMethodError}.
    *
-   * <p>{@code scalarArgs} is still passed, and is still the int table: a long-lane shape may
-   * hold int literals in nodes the wider lane does not own.
+   * <p>Every literal slot of a long-lane shape lives in {@code longArgs}: the lane's leaves are
+   * 64 bits wide, so a literal is widened once by the caller rather than per batch by the loop.
+   * {@code scalarArgs} is still a parameter because the body methods of both lanes share one
+   * descriptor shape, and a long-lane kernel never reads it - callers may pass an empty array.
    */
   default int run(long[] srcData, long[] srcValidity, int[] srcNullCount,
       long[] dstData, long[] dstValidity, int[] scalarArgs, long[] longArgs, int length) {

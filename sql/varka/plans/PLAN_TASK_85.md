@@ -753,3 +753,43 @@ arriving without an arm fails here, in milliseconds.
 admits a `LongType` column, so no SQL reaches the long lane and no evaluator
 change was needed; `MUL` at `FAIL` or `NULL` has no arm at either lane, and the
 long reference throws rather than inventing one. Both are task 104's.
+
+### 9.6 What the review of step 4 found
+
+The step-4 review found one live defect, and it was in the one place the step
+was supposed to be careful about.
+
+**A baked lane count needs two different things, and the code checked one.**
+`emitLanes` had been rewritten from the int lane's hardcoded list into a
+per-lane `permittedLanes` table, and `Lane.LONG`'s table admitted one lane
+because one long lane is 64 bits and `LongVector.SPECIES_64` exists. The
+validity helpers in `VarkaVectorSupport` do not follow the width, they follow
+the lane *count*: there are pairs at 2, 4, 8 and 16 and none at 1. So a
+one-long-lane emission produced a class that passed verification and threw
+`NoSuchMethodError: validityBitsAt1` on its first masked batch. It was reachable
+two ways: `lanesOverride(1)`, and - with no override at all - on any JVM whose
+widest vector is 64 bits, which `-XX:MaxVectorSize=8` reproduces exactly.
+
+The fix separates the two questions rather than re-tabulating them by hand,
+which is what let the table disagree with the helpers in the first place:
+`Lane.hasSpecies(lanes)` computes whether the width has a named species constant
+from the width itself, `hasValidityHelpers(lanes)` names the four counts
+`VarkaVectorSupport` actually carries, and a width needs both or runs on
+`SPECIES_PREFERRED` and the general helpers. The guard test asserts the
+conjunction for every lane and count the emitter can reach, and names
+`lanesOverride(1)` at the long lane as the case that used to slip through. The
+suites pass under `-XX:MaxVectorSize=8`.
+
+**The rest were narrower.** The range guard pushed its bounds with
+`loadConstant`, an int push, immediately before a `compare` descriptor the lane
+supplies - correct today because every caller is a calendar node on the int
+lane, and a `VerifyError` the moment one is not, so it now goes through
+`Lane.pushScalar` like every other scalar. `fitsBudgets` did not mirror the lane
+agreement `emit` demands, so a mixed-lane entry would have been admitted by the
+compiler and then refused by the emitter as an exception, which the evaluator
+can only turn into a silent per-batch fallback with no decline reason. And the
+long matrix drove the checked and nulling overflow modes over values far from
+either extreme, so the 64-bit sign test they exist for never fired once: the
+extremes matrix and the condemn-the-batch test are the int lane's own overflow
+tests re-run at 64 bits, including `-Long.MIN_VALUE` and a `Long.MAX_VALUE + 1`
+that an int lane's sign test would not see.

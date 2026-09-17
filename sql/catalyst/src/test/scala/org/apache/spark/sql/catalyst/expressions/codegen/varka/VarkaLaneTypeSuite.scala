@@ -25,6 +25,7 @@ import scala.jdk.CollectionConverters._
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
+import org.apache.spark.sql.varka.vector.VarkaVectorSupport
 
 /**
  * The lane a node's value occupies: that the leaves carry it, that every other node derives it,
@@ -344,6 +345,37 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     assert(atLong === Set("ColumnRef", "LiteralSlot", "IntArith", "IntNeg", "Greatest", "Least",
       "Compare", "And", "Or", "Not", "IsNotNull", "IfElse"),
       "the long lane serves the lane-generic subset")
+  }
+
+  test("a baked lane count has both a species constant and a validity helper pair") {
+    // The two facts a baked width needs, checked together because they are different
+    // questions: `SPECIES_<bits>` is a field the Vector API declares, and `validityBitsAt<n>`
+    // is a method VarkaVectorSupport declares. At the int lane the two sets coincide at 2, 4,
+    // 8 and 16; at the long lane they do not - one 64-bit lane is `SPECIES_64`, which exists,
+    // while `validityBitsAt1` does not. Baking that width produced a class that verified and
+    // threw NoSuchMethodError on its first masked batch, so this test is the one that has to
+    // fail when the two are confused again.
+    val helperCounts = Set(2, 4, 8, 16)
+    val supportMethods = classOf[VarkaVectorSupport].getDeclaredMethods.map(_.getName).toSet
+    for (n <- helperCounts) {
+      assert(supportMethods.contains(s"validityBitsAt$n") &&
+        supportMethods.contains(s"orValidityBitsAt$n"),
+        s"VarkaVectorSupport is missing the pair this test assumes for $n lanes")
+    }
+    // Every width the options accept - 0, meaning no override, and the powers of two.
+    for (lane <- Seq(VarkaLoopEmitter.Lane.INT, VarkaLoopEmitter.Lane.LONG);
+         n <- Seq(0, 1, 2, 4, 8, 16, 32)) {
+      val baked = VarkaLoopEmitter.emitLanesForTest(
+        VarkaEmitOptions.DEFAULTS.withLanesOverride(n), lane)
+      assert(baked == 0 || (lane.hasSpecies(baked) && helperCounts.contains(baked)),
+        s"$lane baked $baked lanes for an override of $n, without both a species constant " +
+          "and a validity pair")
+    }
+    // The case that shipped broken, named rather than left to the loop: one 64-bit lane has a
+    // species and no helpers, so it must not be baked.
+    assert(VarkaLoopEmitter.emitLanesForTest(
+      VarkaEmitOptions.DEFAULTS.withLanesOverride(1), VarkaLoopEmitter.Lane.LONG) === 0)
+    assert(VarkaLoopEmitter.Lane.LONG.hasSpecies(1), "SPECIES_64 is one long lane")
   }
 
   test("a long-lane shape emits a class that verifies") {
