@@ -35,6 +35,8 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Environment Facts (verified in this repo)](sql/varka/skills/build-and-environment.md#environment-facts-verified-in-this-repo)
 * [Extra Sessions on the Shared Context](sql/varka/skills/build-and-environment.md#extra-sessions-on-the-shared-context)
 * [Building a fastdebug JDK for HotSpot diagnostics](sql/varka/skills/build-and-environment.md#building-a-fastdebug-jdk-for-hotspot-diagnostics)
+* [Python's 100-column rule is a convention here, not a check](sql/varka/skills/build-and-environment.md#pythons-100-column-rule-is-a-convention-here-not-a-check)
+* [A git hook's nested git commands act on the repository being committed to](sql/varka/skills/build-and-environment.md#a-git-hooks-nested-git-commands-act-on-the-repository-being-committed-to)
 
 #### [Calendar algorithms](sql/varka/skills/calendar-algorithms.md)
 * [Reading a paper into the repo](sql/varka/skills/calendar-algorithms.md#reading-a-paper-into-the-repo)

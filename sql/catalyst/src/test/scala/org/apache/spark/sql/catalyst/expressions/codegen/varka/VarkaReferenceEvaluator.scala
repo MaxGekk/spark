@@ -173,6 +173,98 @@ object VarkaReferenceEvaluator {
       case (None, y) => y
     }
 
+  /**
+   * The reference at the long lane, for the subset task 85 ships there: the two leaves, the
+   * arithmetic and its three overflow modes, the negate, the hull ops and the conditional.
+   * Task 119's first part, landing with the lane it exists to check.
+   *
+   * It is a second method rather than a widening of `evalValue` because the two answer
+   * different questions: a `DateDiff` or a `Year` has no meaning over 64-bit lanes and must
+   * not silently produce one, so every calendar node is absent here and reaching one is an
+   * error rather than a computation. Scala's `Long` arithmetic wraps exactly as the lanes do,
+   * which is what makes this exact at `Long.MinValue` as `evalValue` is at `Int.MinValue`.
+   */
+  def evalLong(
+      node: VarkaVectorIR, row: Seq[Option[Long]], lits: Array[Long]): Option[Long] = node match {
+    case c: ColumnRef => row(c.ordinal())
+    case l: LiteralSlot => Some(lits(l.index()))
+    case n: IntArith =>
+      for (l <- evalLong(n.left(), row, lits); r <- evalLong(n.right(), row, lits); v <- {
+        def exact(f: (Long, Long) => Long): Option[Long] =
+          try Some(f(l, r)) catch { case _: ArithmeticException => None }
+        val wrapped = n.op() match {
+          case IntOp.ADD => l + r
+          case IntOp.SUB => l - r
+          case IntOp.MUL => l * r
+        }
+        n.mode() match {
+          case Overflow.WRAP => Some(wrapped)
+          // As at the int lane: FAIL declines the batch rather than answering, so an
+          // overflowing row has no expected value and the suite asserts the status instead.
+          case Overflow.FAIL | Overflow.NULL => n.op() match {
+            case IntOp.ADD => exact(Math.addExact)
+            case IntOp.SUB => exact(Math.subtractExact)
+            // No checked multiply exists at either lane - the int one has no 64-bit product to
+            // test with and the long one would need 128 bits, which is task 104's.
+            case IntOp.MUL => throw new IllegalArgumentException(
+              "a checked multiply has no long-lane overflow test: " + n)
+          }
+        }
+      }) yield v
+    case n: IntNeg =>
+      for (c <- evalLong(n.child(), row, lits); v <- n.mode() match {
+        case Overflow.WRAP => Some(-c)
+        // The lane's own most negative value, whose negation is itself.
+        case _ => if (c == Long.MinValue) None else Some(-c)
+      }) yield v
+    case n: Greatest =>
+      (evalLong(n.left(), row, lits), evalLong(n.right(), row, lits)) match {
+        case (Some(a), Some(b)) => Some(math.max(a, b))
+        case (a, b) => a.orElse(b)
+      }
+    case n: Least =>
+      (evalLong(n.left(), row, lits), evalLong(n.right(), row, lits)) match {
+        case (Some(a), Some(b)) => Some(math.min(a, b))
+        case (a, b) => a.orElse(b)
+      }
+    case n: IfElse =>
+      // Unknown takes the else branch, as at the int lane and as CASE WHEN does.
+      if (evalCondLong(n.cond(), row, lits).contains(true)) evalLong(n.thenNode(), row, lits)
+      else evalLong(n.elseNode(), row, lits)
+    case other => throw new IllegalArgumentException(
+      "no long-lane reference for " + other.getClass.getSimpleName + "; task 85 ships the "
+        + "lane-generic subset only")
+  }
+
+  /** `evalCond`'s counterpart over long lanes, for the conditions the same subset ships. */
+  def evalCondLong(
+      cond: Cond, row: Seq[Option[Long]], lits: Array[Long]): Option[Boolean] = cond match {
+    case n: Compare =>
+      for (l <- evalLong(n.left(), row, lits); r <- evalLong(n.right(), row, lits)) yield {
+        n.op() match {
+          case CompareOp.LT => l < r
+          case CompareOp.LE => l <= r
+          case CompareOp.GT => l > r
+          case CompareOp.GE => l >= r
+          case CompareOp.EQ => l == r
+        }
+      }
+    case n: And =>
+      (evalCondLong(n.left(), row, lits), evalCondLong(n.right(), row, lits)) match {
+        case (Some(false), _) | (_, Some(false)) => Some(false)
+        case (Some(true), Some(true)) => Some(true)
+        case _ => None
+      }
+    case n: Or =>
+      (evalCondLong(n.left(), row, lits), evalCondLong(n.right(), row, lits)) match {
+        case (Some(true), _) | (_, Some(true)) => Some(true)
+        case (Some(false), Some(false)) => Some(false)
+        case _ => None
+      }
+    case n: Not => evalCondLong(n.child(), row, lits).map(!_)
+    case n: IsNotNull => Some(evalLong(n.child(), row, lits).isDefined)
+  }
+
   /** Kleene three-valued logic; `None` is unknown, and only known-true selects THEN. */
   def evalCond(
       cond: Cond, row: Seq[Option[Int]], lits: Array[Int]): Option[Boolean] = cond match {

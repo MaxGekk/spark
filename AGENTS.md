@@ -29,7 +29,7 @@ Keep source lines within 100 characters — the linters enforce this for Scala, 
       | xargs -r awk 'length>100 && $0 !~ /^[[:space:]]*(import|package) / && $0 !~ /https?:\/\// \
           {print FILENAME":"FNR": "length" chars"}'
 
-This is only a hint: it approximates the linters' exemptions (imports, URLs) rather than matching them exactly, so it can over- or under-report. The linters remain the source of truth.
+This is only a hint: it approximates the linters' exemptions (imports, URLs) rather than matching them exactly, so it can over- or under-report. The linters remain the source of truth, and for Python they are more forgiving than the rule reads: Spark's ruff configuration does not select `E501` at all, so `ruff format` is the only Python check on width, and it cannot split a long string or a long comment. A Python line of one whitespace-separated chunk therefore has no wrap point and no linter asking for one; `dev/varka_precommit.sh` exempts exactly that case, and Scala and Java stay strict because scalastyle and checkstyle grant no such exemption.
 
 ## Scala Test Base Classes
 
