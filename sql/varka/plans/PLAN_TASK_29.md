@@ -92,6 +92,21 @@ that merely sits in a filtered table, whatever the filter is on - task 29 does
 not create it and does not widen it. It is a finding for its own row (section
 3.2), not a clause of this one.
 
+**"Five" is the whole set, enumerated rather than counted.** `PhysicalDataType`
+answers `PhysicalLongType` for `LongType`, `TimestampType`, `TimestampNTZType`
+and `DayTimeIntervalType` in its default switch, and for `TimeType` through the
+`TypeOps` registry (`TimeTypeOps.getPhysicalType`, nanoseconds since midnight).
+Nothing else in the tree does. The two types a reader might expect here and
+will not find are the nanosecond timestamps, `TimestampNTZNanosType` and
+`TimestampLTZNanosType`: their physical type is their own
+(`PhysicalTimestampNTZNanosType`, a `TimestampNanosVal` of epoch micros plus a
+short of nanos within the micro), their `UnsafeRow` payload is sixteen bytes, and
+`ArrowWriter` stores them as a `StructVector`. They are not one lane of anything
+and are outside this task; whether they ever become two lanes or a different
+representation is a scope question for a later milestone, not a gap here. A
+`DECIMAL` of eighteen digits or fewer is likewise `PhysicalDecimalType`, not a
+long, whatever its size.
+
 ### 2.1 What review of this plan corrected, 17 September 2026
 
 Reviewed against the tree before any code, and two claims in the first draft
