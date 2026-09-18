@@ -53,6 +53,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     new DateDiff(intCol, intCol),
     new IntArith(IntOp.ADD, Overflow.WRAP, intCol, intLit),
     new IntNeg(Overflow.WRAP, intCol),
+    new ConstDivide(intCol, 12),
     new Compare(CompareOp.LT, intCol, intLit),
     new And(new IsNotNull(intCol), new IsNotNull(intCol)),
     new Or(new IsNotNull(intCol), new IsNotNull(intCol)),
@@ -166,7 +167,10 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
       ("truncDate", 0, () => new TruncDate(longCol, TruncLevel.MONTH)),
       ("truncDateDynamic", 0, () => new TruncDateDynamic(longCol, intCol)),
       ("truncDateDynamic", 1, () => new TruncDateDynamic(intCol, longCol)),
-      ("weekOfYear", 0, () => new WeekOfYear(longCol)))
+      ("weekOfYear", 0, () => new WeekOfYear(longCol)),
+      // Not a calendar node, but int-only for a related reason: the double conversion it
+      // lowers to is emitted for the int lane alone, so a long dividend has no lowering yet.
+      ("constDivide", 0, () => new ConstDivide(longCol, 12)))
     refusals.foreach { case (what, position, build) =>
       val e = intercept[IllegalArgumentException](build())
       assert(e.getMessage.contains(what), s"$what operand $position: ${e.getMessage}")
@@ -288,6 +292,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
         case "LiteralSlot" => l
         case "IntArith" => new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)
         case "IntNeg" => new IntNeg(Overflow.WRAP, c)
+        case "ConstDivide" => new ConstDivide(c, 12)
         case "Greatest" => new Greatest(c, c1)
         case "Least" => new Least(c, c1)
         case "Compare" => new Compare(CompareOp.LT, c, c1)

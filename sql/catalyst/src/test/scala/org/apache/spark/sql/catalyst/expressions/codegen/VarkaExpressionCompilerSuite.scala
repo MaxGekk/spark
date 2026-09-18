@@ -19,9 +19,9 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
 
@@ -876,6 +876,37 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       assert(declineReason(narrowing, withIntervals) ===
         "year-month interval narrowed to a YEAR-ended unit, which divides by twelve")
     }
+  }
+
+  test("`extract(YEAR FROM ym)` fuses over a stored column, which no magic could serve") {
+    // The point of the row: the operand is a stored month count with no bound at all, so the
+    // calendar's range-narrowed magic is exact over about one forty-thousandth of it and cannot
+    // be used. The double-lane division is exact over the whole type, so this fuses where every
+    // earlier Varka would have declined - and its baseline is therefore the row engine rather
+    // than another lowering.
+    for (col <- Seq(ymm, ymy, ym)) {
+      val compiled = VarkaExpressionCompiler.compile(
+        Seq(out(ExtractANSIIntervalYears(col))), withIntervals).get
+      assert(compiled.outputTypes === Seq(IntegerType))
+      // The ordinal the column lands on is the compiler's to choose, so the assertion is on the
+      // shape: one division by twelve, directly over a column.
+      compiled.outputs match {
+        case Seq(div: ConstDivide) =>
+          assert(div.divisor() === 12)
+          assert(div.child().isInstanceOf[ColumnRef])
+        case other => fail(s"expected one ConstDivide over a column, got $other")
+      }
+    }
+  }
+
+  test("`extract(MONTH FROM ym)` declines on its output type, not on its division") {
+    // `(months % 12).toByte`: the remainder is one multiply and one subtract from the quotient
+    // above, so nothing about the arithmetic blocks it. The `ByteType` result does - Varka has
+    // no byte lane and no Arrow vector to store one into - and the reason says so, because a
+    // reader who saw "declined" here would otherwise conclude the division was the problem and
+    // that task 89 had not landed.
+    assert(declineReason(ExtractANSIIntervalMonths(ymm), withIntervals) ===
+      "extract(MONTH FROM ym) returns a byte, which has no lane")
   }
 
   test("`ym * num` takes the int lane and names the types that are not one") {

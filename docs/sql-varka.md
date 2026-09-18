@@ -315,6 +315,8 @@ VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
 | `abs(ym)` |  |
 | `ym - ymm` |  |
 | `CAST(ymy AS INTERVAL MONTH)` |  |
+| `extract(YEAR FROM ym)` | a division by twelve over a month count nothing bounds, so it is the first one the calendar's range-narrowed magic cannot serve and the double lane can |
+| `extract(YEAR FROM ym) - 1` | the quotient feeding further int arithmetic |
 
 #### Integer arithmetic
 

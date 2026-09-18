@@ -156,6 +156,7 @@ object VarkaIrGrammar {
         case _ => (satAdd(v(n.left()), v(n.right())), g(n.left(), n.right()))
       }
       case n: IntNeg => (v(n.child()), g(n.child()))
+      case n: ConstDivide => (v(n.child()) / math.abs(n.divisor().toLong), g(n.child()))
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `g` picks up.
@@ -256,10 +257,13 @@ object VarkaIrGrammar {
       if (numLiterals > 0) Gen(new LiteralSlot(rnd.nextInt(numLiterals)), literalBound)
       else Gen(new ColumnRef(rnd.nextInt(numInputs)), columnBound)
 
+    /** See the `case 21` arm: non-zero, not -1, both signs, a power of two among them. */
+    private val ConstDivideDivisors = Array(2, 3, 7, 12, 100, -3, -12)
+
     def value(depth: Int): Gen = {
       if (depth == 0 || budget <= 1) return leaf()
       budget -= 1
-      rnd.nextInt(21) match {
+      rnd.nextInt(22) match {
         case 0 =>
           val a = value(depth - 1); val b = literal()
           Gen(new AddDays(a.node, b.node), satAdd(a.bound, b.bound))
@@ -358,6 +362,15 @@ object VarkaIrGrammar {
           // refuses it, so it is not drawn here.
           val checked = a.bound <= Int.MaxValue.toLong && rnd.nextBoolean()
           Gen(new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, a.node), a.bound)
+        case 21 =>
+          // Task 89's constant division. The divisors are drawn from a fixed set rather than at
+          // random: zero has no quotient and -1 overflows at Integer.MinValue, both of which the
+          // node and the emitter refuse, so drawing one would make the fuzzer assert its own
+          // refusal instead of the arithmetic. Both signs appear, because the lowering truncates
+          // toward zero and a floor would differ only on a negative dividend with a remainder.
+          val a = value(depth - 1)
+          val d = ConstDivideDivisors(rnd.nextInt(ConstDivideDivisors.length))
+          Gen(new ConstDivide(a.node, d), a.bound / math.abs(d.toLong))
         case 20 =>
           // Task 93's range check, over a subtree that stays inside the narrowed range - the
           // same condition the calendar family below draws under, and for the same reason. A

@@ -254,6 +254,20 @@
     "catalyst" : [ "Cast" ],
     "note" : ""
   }, {
+    "sql" : "extract(YEAR FROM ym)",
+    "executable" : "extract(YEAR FROM ym)",
+    "family" : "Months and year-month intervals",
+    "form" : "projection",
+    "catalyst" : [ "Extract", "ExtractANSIIntervalYears" ],
+    "note" : "a division by twelve over a month count nothing bounds, so it is the first one the calendar's range-narrowed magic cannot serve and the double lane can"
+  }, {
+    "sql" : "extract(YEAR FROM ym) - 1",
+    "executable" : "extract(YEAR FROM ym) - 1",
+    "family" : "Months and year-month intervals",
+    "form" : "projection",
+    "catalyst" : [ "Extract", "ExtractANSIIntervalYears", "Subtract" ],
+    "note" : "the quotient feeding further int arithmetic"
+  }, {
     "sql" : "i + 1",
     "executable" : "i + 1",
     "family" : "Integer arithmetic",
@@ -555,5 +569,5 @@
     "catalyst" : [ "CaseWhen", "Cast", "GreaterThan" ],
     "note" : ""
   } ],
-  "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "CaseWhen", "Cast", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "EqualTo", "ExtractANSIIntervalDays", "GreaterThan", "GreaterThanOrEqual", "Greatest", "If", "In", "InSet", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Month", "Multiply", "MultiplyYMInterval", "NextDay", "Not", "Or", "Quarter", "Subtract", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
+  "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "CaseWhen", "Cast", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "EqualTo", "ExtractANSIIntervalDays", "ExtractANSIIntervalMonths", "ExtractANSIIntervalYears", "GreaterThan", "GreaterThanOrEqual", "Greatest", "If", "In", "InSet", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Month", "Multiply", "MultiplyYMInterval", "NextDay", "Not", "Or", "Quarter", "Subtract", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
 }
