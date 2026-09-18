@@ -202,7 +202,7 @@ and disagreed, and nobody looked for it until after the second reading. The
 `VarkaFilterNarrowingBenchmark` so the next reader gets both in one file, and
 `SKILLS.md` carries the rule.
 
-### 9.4 The lane needs a wide vector, and the narrow companion is how we know
+### 9.4 The lane needs four lanes, and the cliff is between 256 and 128 bits
 
 The 128-bit companion, written the same night, says something the wide file
 cannot: **the long lane's end-to-end advantage is a function of the vector
@@ -210,24 +210,32 @@ width, and the int lane's is not.** At 128 bits a long lane is two lanes where
 the int lane still has four, and the numbers follow that arithmetic rather than
 anything about the types:
 
-| shape, Varka against the row engine | host width | 128-bit |
-|---|---:|---:|
-| projection, greatest - int32 | 7.72x | 6.63x |
-| projection, greatest - int64 | 7.31x | **2.06x** |
-| projection, CASE WHEN - int32 | 8.89x | 7.52x |
-| projection, CASE WHEN - int64 | 7.28x | **2.08x** |
-| projection, greatest over TIME | 8.12x | **1.97x** |
-| projection, least over day-time intervals | 7.84x | **1.91x** |
-| filter, column against literal - int32 | 2.48x | 2.15x |
-| filter, column against literal - int64 | 1.87x | 1.37x |
-| filter, TIME comparison | 1.83x | 1.10x |
-| filter, day-time interval comparison | 1.40x | **0.89x** |
+| shape, Varka against the row engine | 512-bit | 256-bit | 128-bit |
+|---|---:|---:|---:|
+| projection, greatest - int32 | 7.72x | 6.72x | 6.63x |
+| projection, greatest - int64 | 7.31x | 7.19x | **2.06x** |
+| projection, CASE WHEN - int32 | 8.89x | 7.96x | 7.52x |
+| projection, CASE WHEN - int64 | 7.28x | 7.31x | **2.08x** |
+| projection, greatest over TIME | 8.12x | 7.73x | **1.97x** |
+| projection, least over day-time intervals | 7.84x | 7.47x | **1.91x** |
+| filter, column against literal - int64 | 1.87x | 1.69x | 1.37x |
+| filter, TIME comparison | 1.83x | 1.50x | 1.10x |
+| filter, day-time interval comparison | 1.40x | 1.12x | **0.89x** |
+| filter, column against literal, 2e7 - int32 | 11.47x | 9.30x | 7.18x |
 
-Every int32 arm keeps most of what it had; every long-lane arm loses most of it,
-and the projections - the shapes with the most work per row - fall furthest, from
-about 7.5x to about 2x. The weakest shape of the family crosses below the row
-engine at 0.89x: on a 128-bit machine, a day-time interval comparison filter is
-slower with Varka than without it.
+**The cliff is between 256 and 128 bits, not between 512 and 256.** At 256 bits a
+long lane is four lanes and it keeps almost everything - the projections lose
+about two per cent (7.31x to 7.19x, 7.28x to 7.31x within the noise) - while at
+128 bits it is two lanes and they fall to about 2x. Four lanes is enough; two is
+not. The int32 arms, which still have four lanes at 128 bits, lose comparatively
+little across the whole range.
+
+That matters more than the raw numbers. The machines where the long lane's
+advantage largely goes away are exactly the ones task 92's row names - "four int
+lanes is `SPECIES_PREFERRED` on every NEON-only aarch64 and on x86 without AVX2"
+- and on anything with AVX2 or better the milestone's claims hold. The weakest
+shape still crosses below the row engine at 128 bits: a day-time interval
+comparison filter is slower with Varka than without it there, 0.89x.
 
 **What this costs the gate, and what caught it.** The pairs for this file were
 derived from the wide run alone, which is the mistake `dev/varka_bench_gate.py`'s
@@ -239,8 +247,14 @@ measured reason, and the rest of the file's pairs hold at both widths.
 
 **What it means for the milestone.** Milestone section 6's "half the lanes" risk
 is about the kernel; this is its end-to-end form and it is sharper. The public
-message's numbers come from a full-width runner, which is right - but 121's AVX2
-arm sits between these two points (256 bits gives the long lane four lanes), and
-118 should say which width a quoted `TIME` figure was measured at, because at
-128 bits the answer is "about 2x on projections and about even on filters".
+message's numbers come from a full-width runner, and the 256-bit column says that
+is not the only machine they hold on: task 121's AVX2 arm should expect the
+long-lane projections within a few per cent of the full-width figures rather than
+halfway to the 128-bit ones. What 118 owes the reader is therefore narrow - name
+the width, and say that below 256 bits the long lane's projections fall to about
+2x and its weakest filter below 1x.
+
+`dev/varka_bench_regen.sh` gained `--width=N` for this, since it produced only the
+128-bit companion before; 16 stays the default, so every other benchmark's files
+and names are unchanged.
 
