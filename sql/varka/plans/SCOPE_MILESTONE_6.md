@@ -2744,6 +2744,123 @@ Re-enters with: `TIMESTAMP_NTZ` comparisons, differences and interval addition
 first, since their semantics are settled; zoned `TIMESTAMP` comparisons beside
 them; zoned arithmetic only with the DST-straddling test above.
 
+### Item 32. The bitwise and shift operators
+
+*Opened 18 September 2026, from a coverage audit of what Varka does not
+vectorize and why. The audit's other findings all named a blocker - an output
+representation, a mixed width, an admission rule. These have none.*
+
+`&`, `|`, `^`, `~`, `bit_count` and `bit_get` are the whole of
+`bitwiseExpressions.scala`, and `shiftleft`, `shiftright` and
+`shiftrightunsigned` sit apart from them in `mathExpressions.scala` - a division
+of the source that cost this item a first draft, which scoped the audit to the
+one file and missed the three. Varka admits none of the nine. They are unusual in
+this catalogue for having no reason not to: the operands and the result are the
+same integral lane the engine already owns, the Vector API declares every
+operator natively - `AND`, `OR` and `XOR` as `Associative`, `NOT` and
+`BIT_COUNT` as `Unary` - and **the emitter already emits `AND`, `XOR` and `LSHR`
+today**, inside the calendar lowerings, through the same `lanewise` descriptors
+an expression arm would use. The kernel side is largely built; what is missing is
+IR nodes and compiler arms.
+
+They also arrive at both widths at once, which is new. `BitwiseNot` is
+`child.dataType` and the three binary ones inherit their operands', so an
+`int` and a `bigint` column take the same arm at the lane each already has - the
+first family since the long lane landed where covering `int` covers `bigint` for
+free.
+
+**Three groups, not six, and the split is the usual one.**
+
+* **`&`, `|`, `^`, `~` and the three shifts - nothing in the way.** Same lane in
+  and out - `BitShiftOperation` declares `dataType = left.dataType`, so a shift
+  follows its operand's width exactly as the binary bitwise ops follow theirs -
+  one lanewise op each, null-intolerant like every other binary node. This is the
+  cheapest coverage in the audit.
+
+  The shifts have one wrinkle the others do not: the emitter's `emitShift` takes
+  a **constant** shift amount, which is all the calendar lowerings ever needed. A
+  literal shift is therefore free, and a shift by a *column* needs the
+  vector-operand form of `lanewise`, which the Vector API has and the emitter has
+  never emitted. Worth splitting on that line rather than treating the three as
+  one shape.
+* **`bit_count` - clean at int32, mixed width at int64.** It returns
+  `IntegerType` whatever it is given, so `bit_count(i)` is same-lane and
+  `bit_count(l)` is int64 in, int32 out - the narrowing shape item 28's task
+  owns in milestone 5, and the same shape as the `TIME` field extracts. The int32
+  form need not wait for it.
+* **`bit_get` - blocked on a representation.** It returns `ByteType`, and Varka
+  has neither a byte lane nor an Arrow vector for one. This is the same blocker
+  as `extract(MONTH FROM ym)`, which milestone 5 records as matched only to
+  decline; the two should be lifted together, by whatever admits a narrow
+  integral output, and neither is worth lifting alone.
+
+**Two more the audit turned up beside them**, both marginal and recorded so the
+next reader need not re-derive them: `floor(i)` and `ceil(i)` over an integral
+return `LongType`, so they are the *widening* identity - correct, vectorizable
+once item 28's conversion exists, and worth almost nothing; and `factorial(i)` is
+a twenty-one entry lookup, which `selectFrom` serves natively. Neither earns work
+of its own; both are free riders on machinery built for something else.
+
+**Why it is worth a row at all**, given none of these is a headline function: the
+audit that found them was looking for mechanism failures and found that Varka's
+gaps are otherwise all representations, widths and admission rules. A family with
+no blocker at all is the cheapest breadth available, and `bit_count` over a
+`bigint` doubles as a second caller for the narrowing that the `TIME` extracts
+would otherwise be the only user of - which is worth having before that lowering
+is designed around one caller.
+
+### Item 33. The integral division shapes nothing rows
+
+*Opened 18 September 2026, from the same coverage audit as item 32, after the
+owner asked what else it had found without a row.*
+
+Three arithmetic shapes over the integral lanes are vectorizable and belong to no
+task. They are separated from item 32 because each has a reason to be thought
+about, where the bitwise family had none.
+
+**`pmod`.** Milestone 5's task 95 owns `i % 20` - "an int remainder at all" - and
+names only `%`. `pmod` is the same family with a different sign rule: Java's `%`
+takes the dividend's sign, `pmod` the divisor's, which is one masked add over the
+remainder. Whoever builds `%` should build it, and the two should not be
+discovered separately a second time.
+
+**`div` (`IntegralDivide`).** Int32 in, **int64 out**, so it is a *widening*
+kernel - the mirror of the `TIME` field extracts, which narrow. Milestone 5's
+section 2.39 covers `div` over `bigint` and says it takes 2.19's rule, exact
+under a proven bound and declined otherwise; what nothing covers is the int32
+form, whose output is wider than its input and which therefore waits on
+milestone 5's task 28 rather than on a bound. It is worth having as a second
+caller for that widening, the way item 32's `bit_count(l)` is a second caller for
+the narrowing.
+
+**A note on what this is not.** `/` over two ints returns a **double** in Spark,
+so it is item 3's business and not this one's; recording that here saves the next
+reader the same lookup.
+
+### Item 34. Null-safe equality
+
+*Opened 18 September 2026, from the coverage audit; the one gap it found that is
+a question about Varka's own design rather than about a type or a width.*
+
+`a <=> b` is `EqualNullSafe`, and Varka admits every other comparison. It is not
+admitted, and the reason is structural rather than incidental: **every binary
+node in the IR is null-intolerant**. The result is known exactly where both
+operands are valid and unknown elsewhere, and the validity word is the AND of the
+operands' - a rule the emitter, the compiler and the reference evaluator all
+share, and which `<=>` breaks by design, since it is *true* when both sides are
+null and *false* when exactly one is.
+
+The lowering itself is not the difficulty. The validity words are already in the
+kernel; `a <=> b` is the comparison's mask, narrowed to the lanes where both are
+valid, OR'd with the lanes where neither is. What needs deciding is whether that
+becomes a second kind of node - a null-*tolerant* binary, with its own rule
+everywhere the null-intolerant one is assumed - or whether the existing machinery
+can express it without a second rule for every reader to learn.
+
+That is a design question about the null model, which is why it is a scope item
+and not a task: it should be answered before it is built, and the answer is worth
+more than the expression.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
