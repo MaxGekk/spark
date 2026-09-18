@@ -12,11 +12,13 @@ This is the next task on the milestone's own spine - `88 -> 102 / 103 -> 105 ->
 and the closing task that writes the public post. The post is about `TIME`; this
 task is what it is about.
 
-The lane is task 29's, unchanged. `TimeType(p)` stores nanoseconds since midnight
-in a long whatever `p` is, so every value lies in `[0, 86 399 999 999 999]`,
-below 2^47 - which is what makes every division a `TIME` expression needs exact
-through task 88's double-lane route with no bound to prove and nothing to
-decline.
+`TimeType(p)` stores nanoseconds since midnight in a long whatever `p` is, so
+every value lies in `[0, 86 399 999 999 999]`, below 2^47 - which is what makes
+every division a `TIME` expression needs exact through task 88's double-lane
+route with no bound to prove and nothing to decline.
+
+*The lane is **not** task 29's unchanged, which is what an earlier draft of this
+section said. Section 2.4 corrects it, and the correction reorders the task.*
 
 ## 2. What the section did not know
 
@@ -76,6 +78,42 @@ must name the output type - the same distinction task 89 had to draw for
 `extract(MONTH FROM ym)`, where a reader who saw "declined" would otherwise
 conclude the division was still missing.
 
+### 2.4 The three headline extracts are mixed-width kernels
+
+Read from `timeExpressions.scala` rather than assumed:
+
+| expression | input | output | lane |
+|---|---|---|---|
+| `hour(t)`, `minute(t)`, `second(t)` | TIME, int64 | **`IntegerType`** | **mixed** |
+| `make_time(h, m, s)` | int32, int32, **`DecimalType(16, 6)`** | TIME, int64 | **mixed**, and a decimal operand |
+| `time_trunc(unit, t)` | TIME | `TimeType` | same |
+| `t1 - t2` | TIME | `DayTimeIntervalType(HOUR, SECOND)` | same |
+| `timediff(...)` | TIME | `LongType` | same |
+| `t + dt` | TIME | `TimeType` | same |
+
+So the three expressions this milestone calls its subject produce an int32 from
+an int64 lane, and **nothing in Varka emits a mixed-width kernel today**. They
+depend on task 28, which is planned and not built. An earlier draft of section 1
+asserted the opposite.
+
+### 2.5 A narrower way in than task 28, worth settling first
+
+The extracts may not need task 28's full bi-lane kernel. Their computation stays
+entirely in long lanes; only the **store** narrows. Driving the loop at the long
+species and emitting a single `L2I` at the store is a much smaller change than
+the pair representation - the loop keeps one trip count, no value is held as two
+halves, and no slot pressure doubles.
+
+It is not free, and the store path says why. Today one `s.byteOffset` is shared
+by every output and the store writes at the lane's element width, so a narrow
+output needs its own offset; and `L2I` part 0 leaves the quotient in the low half
+of a full-width `IntVector`, so a dense store would write twice the bytes wanted
+and the store must be masked to the long species' lane count.
+
+Both are contained, and neither touches the general mixed-lane machinery. **This
+is the first thing to settle**, because it decides whether the headline
+expressions wait for task 28 or ship before it.
+
 ## 3. Where task 88 step 3 lands: here
 
 Task 88's step 3 - the long-lane converts, the `useAVX` option field and the AVX2
@@ -108,17 +146,21 @@ after.
 
 ## 4. The expressions, and what each is in the lane
 
-| expression | lowering | note |
-|---|---|---|
-| `hour(t)` | `/ 3.6e12` | `StaticInvoke`, 2.1 |
-| `minute(t)` | `/ 6e10` then `floorMod 60` | `StaticInvoke` |
-| `second(t)` | `/ 1e9` then `floorMod 60` | `StaticInvoke` |
-| `make_time(h, m, s)` | two multiplies and adds under a range check | `StaticInvoke`; the fractional second is a decimal and declines unless literal |
-| `time_trunc(unit, t)` | a division and a multiply, at a foldable level | `trunc(d, fmt)`'s rule for the level |
-| `t1 - t2`, `timediff(...)` | a day-time interval, `/ 1000` | exact by range |
-| `t + dt` | `t + micros * 1000` under a range guard | 4.1 |
-| `time_to_seconds` etc. | multiplies and divisions by powers of ten | `TimeToSeconds` declines, 2.3 |
-| `second_with_fraction` | - | declines, 2.3 |
+*Every `TIME` expression Spark has, for reference. Which of them this task
+actually builds is section 6 - the last four rows are deferred or declined, and
+`make_time` and `t + dt` are deferred with reasons.*
+
+| expression | lowering | note | group |
+|---|---|---|---|
+| `hour(t)` | `/ 3.6e12` | `StaticInvoke`, 2.1 | B |
+| `minute(t)` | `/ 6e10` then `floorMod 60` | `StaticInvoke` | B |
+| `second(t)` | `/ 1e9` then `floorMod 60` | `StaticInvoke` | B |
+| `make_time(h, m, s)` | two multiplies and adds under a range check | `StaticInvoke`; the fractional second is a decimal and declines unless literal | C |
+| `time_trunc(unit, t)` | a division and a multiply, at a foldable level | `trunc(d, fmt)`'s rule for the level | A |
+| `t1 - t2`, `timediff(...)` | a day-time interval, `/ 1000` | exact by range | A |
+| `t + dt` | `t + micros * 1000` under a range guard | 4.1 | C |
+| `time_to_seconds` etc. | multiplies and divisions by powers of ten | `TimeToSeconds` declines, 2.3 | C |
+| `second_with_fraction` | - | declines, 2.3 | C |
 
 ### 4.1 `TimeAddInterval` does not wrap, and that decides its lowering
 
@@ -150,14 +192,46 @@ pre-empt it; it should make the guard easy to delete.
 6. **The oracle and fuzzer at `TIME`** - task 119's `TIME` arms land here, which
    is what its row says.
 
-## 6. Sequencing
+## 6. What is in this task, and what is not
+
+Not all nine. The expressions divide by what they cost, and two of them earn
+their place later or not at all.
+
+**Group A, and the first thing shipped: same lane, ordinary expressions.**
+`time_trunc(unit, t)`, `t1 - t2` and `timediff(...)`. They need neither task 28
+nor the `StaticInvoke` mechanism - the same-lane set and the
+non-`RuntimeReplaceable` set happen to be the same expressions - so this slice
+is independent of both blockers and is what makes the task start moving.
+`time_trunc` is the one a query actually writes often, for grouping by hour or
+by minute.
+
+**Group B, the story: `hour`, `minute`, `second`.** These are what the post is
+about, and they cost the most - the new `StaticInvoke` matching *and* the
+narrowing of 2.4. They follow 2.5's answer.
+
+**Group C, deferred or dropped, with reasons:**
+
+* **`make_time`** - a constructor, rare in a projection over a billion rows,
+  needing the widening *and* carrying a `DecimalType(16, 6)` operand that
+  declines unless it is a literal. Full mechanism cost for little benefit.
+* **`t + dt`** - its semantics are in flux.
+  [SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) may replace
+  the throwing range check with ANSI's modulo-24, so the guard built now is work
+  to delete. Cheap to add once that settles, and 4.1 stays as the recipe.
+* **`TimeFrom*` and `TimeTo*`** - conversions, and `TimeToSeconds` returns
+  `DecimalType(14, 6)` and declines regardless.
+* **`second_with_fraction`** - declines on its `Decimal` output, 2.3.
+
+## 6.1 Sequencing
 
 1. This PR: the plan.
-2. Task 88 step 3's long-lane converts, with `useAVX` in the shape key resolved
+2. **2.5's question**: can the store narrow, or does this wait for task 28?
+3. Group A, which needs neither answer.
+4. Task 88 step 3's long-lane converts, with `useAVX` in the shape key resolved
    per section 3.
-3. The four ordinary expressions, which need no new matching mechanism.
-4. The `StaticInvoke` matching and the five replaceable ones, with test 2 first.
-5. The declines, the coverage rows, and task 119's `TIME` arms.
+5. Group B: the `StaticInvoke` matching and the three extracts, with test 2
+   first.
+6. The declines, the coverage rows, and task 119's `TIME` arms.
 
 ## 7. Outcome
 
