@@ -17,6 +17,10 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.lang.management.ManagementFactory;
+
+import com.sun.management.HotSpotDiagnosticMXBean;
+
 /**
  * The byte-affecting emit inputs that are not the shape: how wide a loop method may be, whether
  * common subexpressions are shared, which of the three mod-7 lowerings to emit, and one pure
@@ -210,6 +214,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        lane, whose double half would have none - ignores anything but
  *        {@link Division#MAGIC}, so this widens what may be asked for without widening what is
  *        answered.
+ * @param useAVX the {@code -XX:UseAVX} level this emission targets, or
+ *        {@link #USE_AVX_UNKNOWN} where the JVM has no such flag. It is not a knob a caller
+ *        turns for speed but a description of the machine, and it is here because it changes
+ *        emitted bytes: the long-to-double converts the 64-bit division uses do not
+ *        intrinsify under {@code -XX:UseAVX=2}, so such a host wants a different lowering and
+ *        must not share a shape key with one that does.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
  *                       passes bytecode verification - member resolution happens at link time - so
@@ -242,6 +252,7 @@ public record VarkaEmitOptions(
     TruncDateForm truncDate,
     FloorMod7 floorMod7,
     Division division,
+    int useAVX,
     boolean misdescribeAdd,
     boolean misdescribeWordLiveness,
     boolean guardUnderArm,
@@ -279,13 +290,50 @@ public record VarkaEmitOptions(
   /** The two {@code trunc(date, ...)} lowerings; see {@link #truncDate}. */
   public enum TruncDateForm { SUBTRACT, RECOMPOSE }
 
+  /**
+   * The {@link #useAVX} value meaning "this JVM has no {@code UseAVX} flag": an aarch64 or
+   * other non-x86 HotSpot, or a JVM with no diagnostic bean to ask. It is a distinct value
+   * rather than 0 because 0 is a real level - x86 with the AVX paths switched off - and the
+   * two call for opposite assumptions: a machine that reports 0 has told us something, a
+   * machine that reports nothing has not.
+   */
+  public static final int USE_AVX_UNKNOWN = -1;
+
+  /**
+   * What {@code -XX:UseAVX} reads on the JVM running this code, asked once.
+   *
+   * <p>The flag is HotSpot's own gate for its AVX code paths, which is the closest thing the
+   * JVM exposes to the question the emitter actually has: whether a {@code LongVector} to
+   * {@code DoubleVector} conversion becomes one instruction or a Java fallback. The two are
+   * not the same question - that conversion's intrinsic wants AVX512DQ specifically, and a
+   * level is not a feature list - so this describes the host rather than promising anything
+   * about it. {@code dev/varka_canary/L2DProbe.java} is what settles a given machine.
+   */
+  public static final int HOST_USE_AVX = readUseAVX();
+
+  private static int readUseAVX() {
+    try {
+      HotSpotDiagnosticMXBean bean =
+          ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class);
+      return bean == null
+          ? USE_AVX_UNKNOWN
+          : Integer.parseInt(bean.getVMOption("UseAVX").getValue());
+    } catch (RuntimeException | LinkageError e) {
+      // No such flag (aarch64), no such bean (a JVM that is not HotSpot), or a value that is
+      // not a number. None of them is an error: the field then means "unknown" and every
+      // lowering stays the one it would have been without this field at all.
+      return USE_AVX_UNKNOWN;
+    }
+  }
+
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
           VarkaLoopEmitter.GROUP_BUDGET, VarkaLoopEmitter.FUSED_CEILING,
           true, true, true, true, true, true, true, true, true, true, true,
           0,
-          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, false, false, true, true, false);
+          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, HOST_USE_AVX,
+          false, false, true, true, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -299,6 +347,10 @@ public record VarkaEmitOptions(
     }
     if (floorMod7 == null) {
       throw new IllegalArgumentException("floorMod7 must not be null");
+    }
+    if (useAVX < USE_AVX_UNKNOWN) {
+      throw new IllegalArgumentException("useAVX must be a level or " + USE_AVX_UNKNOWN
+          + " for none, not " + useAVX);
     }
     if (division == null) {
       throw new IllegalArgumentException("division must not be null");
@@ -315,7 +367,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanesOverride,
-        truncDate, floorMod7, division, misdescribeAdd, misdescribeWordLiveness,
+        truncDate, floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness,
         guardUnderArm, enabled,
         validityByWord);
   }
@@ -324,15 +376,15 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanesOverride,
-        truncDate, floorMod7, division, misdescribeAdd, misdescribeWordLiveness, guardUnderArm,
-        shareWholeNodes, enabled);
+        truncDate, floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness,
+        guardUnderArm, shareWholeNodes, enabled);
   }
 
   public VarkaEmitOptions withGroupBudget(int budget) {
     return new VarkaEmitOptions(budget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
         validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, misdescribeAdd,
+        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
         misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -340,7 +392,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, ceiling, cse, shareChronoPrefix, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
         validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, misdescribeAdd,
+        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
         misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -348,7 +400,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, enabled, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -356,7 +408,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, enabled, denseValidityOnce,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
         validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, misdescribeAdd,
+        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
         misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -364,7 +416,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix, enabled,
         elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
         validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, misdescribeAdd,
+        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
         misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -372,7 +424,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, enabled, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -380,7 +432,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, enabled, julianMap, guardDayProducers, validityByWidth,
         validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, misdescribeAdd,
+        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
         misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -388,7 +440,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, enabled, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -396,7 +448,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, enabled,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -404,7 +456,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         enabled, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -412,7 +464,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, enabled, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -420,7 +472,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, enabled, checkIntOverflow, lanesOverride, truncDate,
-        floorMod7, division,
+        floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -435,7 +487,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanesOverride,
-        truncDate, floorMod7, division, misdescribeAdd, misdescribeWordLiveness, enabled,
+        truncDate, floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness, enabled,
         shareWholeNodes, validityByWord);
   }
 
@@ -443,7 +495,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, enabled, lanesOverride, truncDate,
-        floorMod7, division, misdescribeAdd, misdescribeWordLiveness, guardUnderArm,
+        floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness, guardUnderArm,
         shareWholeNodes,
         validityByWord);
   }
@@ -452,7 +504,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanes, truncDate,
-        floorMod7, division,
+        floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -460,7 +512,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, form, floorMod7, division,
+        lanesOverride, form, floorMod7, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -468,7 +520,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, lowering, division,
+        lanesOverride, truncDate, lowering, division, useAVX,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -476,7 +528,20 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, lowering,
+        lanesOverride, truncDate, floorMod7, lowering, useAVX,
+        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
+  }
+
+  /**
+   * The same options as if emitted on a host at this {@code UseAVX} level. It exists so a test
+   * and the committed bytes oracle can pin a level rather than inherit the machine's, which is
+   * what lets one committed file describe more than one host.
+   */
+  public VarkaEmitOptions withUseAVX(int level) {
+    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
+        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
+        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
+        lanesOverride, truncDate, floorMod7, division, level,
         misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -484,7 +549,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribe, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -492,7 +557,7 @@ public record VarkaEmitOptions(
     return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
         denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
         validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division,
+        lanesOverride, truncDate, floorMod7, division, useAVX,
         misdescribeAdd, misdescribe, guardUnderArm, shareWholeNodes, validityByWord);
   }
 
@@ -521,7 +586,7 @@ public record VarkaEmitOptions(
         + '|' + denseValidityOnce + '|' + elideChronoMonth + '|' + neriSchneiderMonth + '|'
         + julianMap + '|' + guardDayProducers + '|' + validityByWidth + '|' + validityOrFirst
         + '|' + validityByBitmap + '|' + checkIntOverflow + '|' + lanesOverride + '|'
-        + truncDate + '|' + floorMod7 + '|' + division + '|'
+        + truncDate + '|' + floorMod7 + '|' + division + '|' + useAVX + '|'
         + misdescribeAdd + '|' + misdescribeWordLiveness + '|' + guardUnderArm + '|'
         + shareWholeNodes + '|' + validityByWord + ')';
   }

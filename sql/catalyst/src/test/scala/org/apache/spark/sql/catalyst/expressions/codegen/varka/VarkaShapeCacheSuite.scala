@@ -291,6 +291,36 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
   }
 
+  test("the AVX level is read from the JVM rather than silently defaulting to unknown") {
+    // The reader catches everything, which is right - an aarch64 JVM has no such flag and that
+    // is not an error - and it is also how a broken read would look exactly like a machine with
+    // no flag. So on a host that certainly has one, the value has to be a real level: without
+    // this, a rename or a missing `jdk.management` module would leave every x86 emission
+    // describing itself as "unknown" and nothing would say so.
+    val arch = System.getProperty("os.arch", "")
+    val x86 = arch == "amd64" || arch == "x86_64"
+    if (x86) {
+      assert(VarkaEmitOptions.HOST_USE_AVX >= 0,
+        s"UseAVX read as unknown on $arch, where the flag exists")
+    } else {
+      assert(VarkaEmitOptions.HOST_USE_AVX >= VarkaEmitOptions.USE_AVX_UNKNOWN, arch)
+    }
+  }
+
+  test("the AVX level rides the shape key, so two hosts cannot share one identity") {
+    // `PLAN_TASK_88.md` risk 6: the level changes emitted bytes at the long lane, so an
+    // emission that assumed AVX-512 converts must not be handed to a kernel compiled for a
+    // host without them. Rendering it is what keeps the two apart.
+    val defaults = VarkaEmitOptions.DEFAULTS
+    val other = defaults.withUseAVX(defaults.useAVX() + 1)
+    assert(other.canonical() !== defaults.canonical())
+    assert(other.canonical().contains((defaults.useAVX() + 1).toString))
+    // And the level is a description of a machine, not a free integer: below "unknown" there
+    // is nothing to describe.
+    val bad = intercept[IllegalArgumentException](defaults.withUseAVX(-2))
+    assert(bad.getMessage.contains("useAVX"), bad.getMessage)
+  }
+
   test("every option component can change the canonical rendering") {
     // `truncDate` was left out of canonical() from task 35 until task 46, so two option values
     // differing only in the trunc lowering rendered the same string: different keys in the
