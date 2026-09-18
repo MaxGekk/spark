@@ -95,7 +95,68 @@ allowlist keyed on the op shape (`op=`, `etype=`, `atype=`), committed with the
 reason each entry is on it, and a failure when anything outside it appears. Task
 121 should also know these store lines exist before it quotes AVX2 numbers.
 
-## 3. The design
+### 2.5 The instrument is less decisive than 2.2 concluded
+
+*Measured 18 September 2026, while starting the implementation, over real emitted
+Varka kernels rather than over the hand-written probes section 2.2 used. It
+revises that section's conclusion rather than the other way round.*
+
+**A fourth message form.** `** operation not supported:` is a distinct string
+from the `** not supported:` of 2.1, with a different payload (`op=6 bt=int`
+against `arity=1 op=cast#510/3 vlen2=4`). A pattern written for one does not
+match the other.
+
+**Healthy Varka kernels emit it.** At the host's own AVX level, through
+`VarkaEmitDump --rounds 50000`:
+
+| shape | `** operation not supported` |
+|---|---|
+| `year(d)` | 0 |
+| `month(d)` | 0 |
+| `date_add(d, 3)` | 0 |
+| `i * 3` | 0 |
+| `year(d)` and `month(d)` together | 1, `op=6 bt=int` |
+| `dayofmonth(d)` | 1, `op=10 bt=int` |
+
+`VectorSupport`'s constants name those: **6 is `VECTOR_OP_MUL` and 10 is
+`VECTOR_OP_AND`**, both on int lanes. Those are not exotic operations - they are
+the two `SKILLS.md` records as compiling to `vpmulld` and to a plain vector AND,
+established from the product JDK's own disassembly, with `IntVector.mul` named
+there as "the baseline everything else is measured against". So the shipped loop
+*does* lower them, and these lines are refused **compilation attempts**, not
+final lowerings.
+
+**Deterministic, which is the one piece of good news.** Three runs of the same
+shape gave identical counts every time (1 unsupported, 8 missing constant, 0 of
+2.1's form), and the count is a function of the shape - `year(d)` alone 0, with
+`month(d)` beside it 1. So a per-shape baseline is feasible.
+
+**What this costs the design.** `PrintIntrinsics` logs every compilation
+*attempt*; the task's question is whether the **final** compilation lowered every
+operation. Counting lines answers a different question, and section 2.2's "0
+clean against 22 refused" held only because `L2DProbe` is a tiny hand-written
+loop whose attempts all succeed. On real kernels the clean baseline is not zero.
+The caveat 2.2 recorded for `** missing constant` - that separating transient
+from persistent needs the last compilation rather than every attempt - turns out
+to apply to the unsupported forms too, and it is no longer a footnote.
+
+So section 3 below is **not settled**, and the first implementation step is to
+choose the instrument rather than to build the runner:
+
+* **A per-shape baseline** is cheap and deterministic, and pins the status quo
+  rather than proving anything: it would fail on a *change*, which is worth
+  something, but it cannot say "every operation was lowered".
+* **The final compilation only**, by reading `-XX:+PrintCompilation` or the
+  inlining tree for the last compilation of each body and ignoring earlier
+  attempts. This answers the real question and costs a log parser.
+* **A different instrument entirely.** `dev/varka_emit.sh --asm` already counts
+  mnemonics in C2's standard compilation of `loopDense0`, where a Java fallback
+  shows up as a call instruction rather than a vector one. That is the final
+  code by construction, needs no attempt-filtering, and most of it is built. It
+  was passed over in 2.59 because it needs hsdis; whether CI can have hsdis is
+  the question that decides this option.
+
+## 3. The design (superseded in part by 2.5)
 
 **The workload.** A forked JVM running Varka kernels and nothing else, so that
 process-level attribution is sound. `VarkaEmitDump --rounds N` already loads an
