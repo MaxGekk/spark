@@ -424,3 +424,58 @@ arm at the committed 1e9 rows takes about 1h40m. A ten-run band is therefore hal
 an hour for one and seventeen hours for the other, which is why the surface's
 band has to be sharded, moved to a runner, or done at a scale nobody commits -
 and why "run it N times" is a plan for one benchmark and a project for another.
+
+## A kernel ratio is not an end-to-end ratio, in either direction
+
+Task 142 measured what a 64-bit lane costs against a 32-bit one over memory
+segments with no Spark above them: 1.5x to 2.0x while both arms are in cache, a
+flat 2.11x to 2.20x once they are not. Task 29's plan then predicted what that
+would be worth in a query - 0.45x to 0.60x of the int lane for a comparison
+filter - by carrying the kernel ratio up a layer.
+
+Measured (task 144), no case meets that band, and the misses go both ways. At two
+million Arrow-cached rows the long lane costs 0.73x to 0.96x of the int lane,
+because the cache read, the batch machinery and the filter's plumbing are most of
+the work and none of them doubles with the lane. At twenty million rows one
+filter stays at 0.97x while another falls to 0.31x - below the predicted band and
+below the kernel ratio - because at that scale the fast shape is fast enough for
+the surviving column's compaction to dominate, and the eight-byte compaction path
+is a per-row copy where the four-byte one vectorises.
+
+Two habits follow. When predicting an end-to-end number from a kernel number,
+predict the *direction* and name what else is in the query, because the fixed
+costs decide the magnitude and they do not scale with the change under test. And
+when an end-to-end ratio surprises you, read the executed plans of the two arms
+before explaining it: here the fast and slow cases differed by one clause -
+`VarkaFilterColumnarToRow (pred)` against the same with `List(<column>)` - and
+that clause, not the lane, was worth a factor of ten.
+
+## Before pricing a shape, look for the benchmark that already priced it
+
+In one night this project measured the same shape three times and read it three
+ways. A crossed experiment said "forwarding a column costs ten times"; a
+five-case separation said "no - narrowing the output costs eight times"; and a
+control that forced the row read-back said neither, because with `toRdd` the
+narrowed and un-narrowed forms are within 1% of each other. What is actually
+there is that the un-narrowed shapes stay columnar under a columnar sink and the
+narrowed one does not, which is the read-back floor arriving through a plan
+difference.
+
+The first two readings were each produced by an experiment that varied one thing
+and stopped. The thing that would have caught both immediately was not a better
+experiment: `VarkaNarrowingBenchmark` already existed, had measured this exact
+shape at three selectivities and both widths for task 78, and its committed
+numbers order the *opposite* way - the narrowed form slightly faster than the
+two-column control. Nobody looked until after the second reading was written
+down.
+
+So: before building a benchmark for a shape, grep `sql/*/benchmarks/` and the
+plans for that shape, and read the committed numbers first. If yours disagree
+with a committed file, that disagreement is the finding and must be resolved
+before either number is quoted - one of them is measuring something else, and
+finding out which is cheaper than publishing both.
+
+The second half of the rule is what to do once you have an anomaly: add the
+control that distinguishes the candidate causes *before* writing the cause down.
+Here it was one line - the same queries through `toRdd` - and it changed the
+conclusion completely.

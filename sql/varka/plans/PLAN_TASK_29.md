@@ -347,10 +347,17 @@ is populated.
 1. **Right.** The emitter diff is zero lines: `git diff origin/master --stat
    -- sql/catalyst/src/main/java` is empty. Every shape this task admits is the
    twelve node types task 85 shipped.
-2. **Not scored here.** No end-to-end throughput was measured, as section 6
-   said it would not be; the 0.45x to 0.60x band waits for the first filter
-   number task 105 or its like commits, and stays registered so it can be
-   scored then rather than adjusted now.
+2. **Scored on 18 September 2026, and wrong** (`PLAN_TASK_144.md` 9). The band
+   was 0.45x to 0.60x for a `bigint` comparison filter against its int twin. No
+   case meets it. At two million rows the lane costs 0.73x to 0.96x, because the
+   Arrow cache read, the batch machinery and the filter's plumbing are most of
+   the work and none of them doubles with the lane; at twenty million rows one
+   filter stays at 0.97x while another falls to 0.31x, below the band and below
+   the kernel ratio. The prediction's error was its model, not its arithmetic: it
+   carried task 142's kernel ratio up a layer as though the rest of the query
+   scaled with it, and the end-to-end cost turns out to depend on the shape by a
+   factor of three. What the shapes differ in is a forwarded column, which is
+   task 145.
 3. **Wrong, and in an instructive direction.** The literal table never
    failed. The first failure was in the suite's own SQL (a literal prefix), and
    the second was a shape the plan did not list at all: `dt < INTERVAL '0'

@@ -1,0 +1,162 @@
+================================================================================================
+filter, column against column
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter, column against column over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------
+int32 lane, baseline (Janino)                                            52             57           5         38.8          25.8       1.0X
+int32 lane, varka (SIMD)                                                 32             36           3         62.9          15.9       1.6X
+int64 lane, baseline (Janino)                                            50             54           5         39.8          25.1       1.0X
+int64 lane, varka (SIMD)                                                 33             37           4         60.4          16.6       1.6X
+
+
+================================================================================================
+filter, column against literal
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter, column against literal over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------
+int32 lane, baseline (Janino)                                             27             30           2         72.7          13.7       1.0X
+int32 lane, varka (SIMD)                                                  11             14           2        180.4           5.5       2.5X
+int64 lane, baseline (Janino)                                             28             31           4         70.6          14.2       1.0X
+int64 lane, varka (SIMD)                                                  15             18           3        132.0           7.6       1.8X
+
+
+================================================================================================
+filter, two conjuncts and a null check
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter, two conjuncts and a null check over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+int32 lane, baseline (Janino)                                                     45             47           2         44.6          22.4       1.0X
+int32 lane, varka (SIMD)                                                          29             31           2         69.6          14.4       1.6X
+int64 lane, baseline (Janino)                                                     47             50           3         42.3          23.7       0.9X
+int64 lane, varka (SIMD)                                                          34             36           2         58.8          17.0       1.3X
+
+
+================================================================================================
+projection, greatest
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+projection, greatest over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------
+int32 lane, baseline (Janino)                                   68             71           3         29.4          34.0       1.0X
+int32 lane, varka (SIMD)                                         9             11           2        227.1           4.4       7.7X
+int64 lane, baseline (Janino)                                   70             73           5         28.4          35.2       1.0X
+int64 lane, varka (SIMD)                                        10             12           2        207.7           4.8       7.1X
+
+
+================================================================================================
+projection, CASE WHEN over a comparison
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+projection, CASE WHEN over a comparison over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------
+int32 lane, baseline (Janino)                                                      74             76           2         27.0          37.1       1.0X
+int32 lane, varka (SIMD)                                                            8             11           2        240.1           4.2       8.9X
+int64 lane, baseline (Janino)                                                      69             72           5         29.0          34.4       1.1X
+int64 lane, varka (SIMD)                                                            9             12           3        211.2           4.7       7.8X
+
+
+================================================================================================
+filter, TIME comparison
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter, TIME comparison over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                  54             56           4         37.3          26.8       1.0X
+varka (SIMD)                                                       29             32           2         68.1          14.7       1.8X
+
+
+================================================================================================
+projection, greatest over TIME
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+projection, greatest over TIME over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                         68             70           2         29.4          34.1       1.0X
+varka (SIMD)                                                               8             11           2        238.8           4.2       8.1X
+
+
+================================================================================================
+filter, day-time interval comparison
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter, day-time interval comparison over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                               60             63           5         33.2          30.1       1.0X
+varka (SIMD)                                                                    43             46           4         46.6          21.4       1.4X
+
+
+================================================================================================
+projection, least over day-time intervals
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+projection, least over day-time intervals over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+baseline (Janino)                                                                    64             67           5         31.2          32.1       1.0X
+varka (SIMD)                                                                          8             10           2        244.6           4.1       7.9X
+
+
+================================================================================================
+filter, column against column, 20000000 rows
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter, column against column, 20000000 rows over 20000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+int32 lane, baseline (Janino)                                                           485            494          15         41.2          24.2       1.0X
+int32 lane, varka (SIMD)                                                                207            209           2         96.4          10.4       2.3X
+int64 lane, baseline (Janino)                                                           548            567          24         36.5          27.4       0.9X
+int64 lane, varka (SIMD)                                                                213            214           1         93.9          10.6       2.3X
+
+
+================================================================================================
+filter, column against literal, 20000000 rows
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+filter, column against literal, 20000000 rows over 20000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+int32 lane, baseline (Janino)                                                            222            227           5         90.2          11.1       1.0X
+int32 lane, varka (SIMD)                                                                  19             21           2       1034.9           1.0      11.5X
+int64 lane, baseline (Janino)                                                            211            215           5         94.7          10.6       1.0X
+int64 lane, varka (SIMD)                                                                  62             65           7        324.0           3.1       3.6X
+
+
+================================================================================================
+filter: where the lane's cost is, 20000000 rows
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+compare and output crossed over 20000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------
+compare int32, output int32, varka (SIMD)                              18             20           3       1101.9           0.9       1.0X
+compare int64, output int64, varka (SIMD)                              61             62           1        327.8           3.1       0.3X
+compare int64, output int32, varka (SIMD)                             194            195           1        103.0           9.7       0.1X
+compare int32, output int64, varka (SIMD)                             202            204           1         99.0          10.1       0.1X
+compare int64, output none (count), varka (SIMD)                      156            160           8        128.0           7.8       0.1X
+compare int32, output none (count), varka (SIMD)                      151            156          11        132.6           7.5       0.1X
+
+
