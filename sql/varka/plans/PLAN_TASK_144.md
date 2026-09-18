@@ -165,4 +165,32 @@ and it is much larger than the lane's. It is recorded as row 145.
   when they speak about queries.
 * **Task 128 has its motivating number**: 0.30x on the shape where the compaction
   is the only difference.
-* **Row 145** is new and larger than the lane question that found it.
+* **Row 145** is new and larger than the lane question that found it - and its
+  first reading was wrong, which section 9.3 records.
+
+### 9.3 The forwarded column, separated the same night
+
+9.1 read the four slow crossed cases as "forwarding a column costs ten times".
+A five-case separation at twenty million rows says it is not the forwarding:
+
+| query | node | M rows/s |
+| :--- | :--- | ---: |
+| `SELECT i FROM t WHERE i > 50000` | no narrowing | 913.7 |
+| `SELECT i2 FROM t WHERE i > 50000` | `List(i2)` | 115.2 |
+| `SELECT i, i2 FROM t WHERE i > 50000` | no narrowing | 918.1 |
+| `SELECT i FROM t WHERE i > 50000 AND i2 >= 0` | `List(i)` | 116.8 |
+| `SELECT count(*) FROM t WHERE i > 50000` | aggregate above | 123.2 |
+
+The third row decides it: two columns out, two read, and it runs at the
+one-column speed. What the fast and slow plans differ by is
+`VarkaFilterColumnarToRowExec.narrowing` - the absorbed projection, `Some`
+exactly when the node's output differs from the columns it was given - and the
+gap scales with surviving rows, not input rows: at about 1% selectivity the same
+pair reads 1726.1 against 1317.4, or 1.3x rather than 8x.
+
+Two cautions this leaves for task 145. The absorption exists because it beats
+the `Project` above the node that it replaced, so an eightfold gap against a
+query that needs no projection at all is not evidence against absorption - the
+third arm, un-absorbed, is unmeasured because the rule always absorbs today. And
+`count(*)`'s 123.2 is a different path again, an aggregate above the filter, not
+a narrowing.

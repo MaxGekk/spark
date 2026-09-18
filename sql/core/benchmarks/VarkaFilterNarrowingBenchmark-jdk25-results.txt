@@ -1,0 +1,17 @@
+================================================================================================
+a filter that narrows its output
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+over 20000000 Arrow-cached rows:                  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------
+A one column, filtered and output (no narrowing)             22             27           6        913.7           1.1       1.0X
+B two columns, the other output (narrowing)                 174            176           2        115.2           8.7       0.1X
+C two columns, both output (no narrowing)                    22             25           2        918.1           1.1       1.0X
+D two columns, both in the predicate (narrowing)            171            178           7        116.8           8.6       0.1X
+E one column, no output (count)                             162            164           1        123.2           8.1       0.1X
+F A at about 1% selectivity                                  12             14           2       1726.1           0.6       1.9X
+G B at about 1% selectivity                                  15             17           2       1317.4           0.8       1.4X
+
+

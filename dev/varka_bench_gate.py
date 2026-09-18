@@ -244,12 +244,24 @@ def parse(text):
     return rows
 
 
+# Task 145's baseline: seven Varka-only cases whose subject is which of them is fastest, so
+# there is no arm to beat another. Ungated for the same reason as task 144's crossed table.
+NARROWING_UNGATED = {
+    "over 20000000 Arrow-cached rows": (
+        "no baseline arm: seven Varka-only cases separating what a narrowed filter costs "
+        "(task 145, and PLAN_TASK_144.md 9.3 which opened it)"
+    ),
+}
+
+
 def rules_for(path):
     if "ParityBenchmark" in path:
         return PARITY_PAIRS, PARITY_UNGATED
     # Before the ThroughputBenchmark arm, whose name this one contains.
     if "LongLaneThroughputBenchmark" in path:
         return LONG_LANE_PAIRS, LONG_LANE_UNGATED
+    if "FilterNarrowingBenchmark" in path:
+        return [], NARROWING_UNGATED
     if "ThroughputBenchmark" in path:
         return THROUGHPUT_PAIRS, THROUGHPUT_UNGATED
     return None, None
