@@ -156,7 +156,45 @@ choose the instrument rather than to build the runner:
   was passed over in 2.59 because it needs hsdis; whether CI can have hsdis is
   the question that decides this option.
 
-## 3. The design (superseded in part by 2.5)
+### 2.6 The instrument chosen, and why it was already built
+
+*18 September 2026, on the owner's decision: the asm mnemonic scan.*
+
+It turned out not to need building. **`VarkaAssemblySuite` already is it** - task 31
+forks a JVM under `-XX:CompileCommand=print,<class>::<method>` and asserts the
+*standard*, non-OSR C2 nmethod holds the expected instruction family on a vector
+register of the reported width, with negative assertions for the shapes that must
+not box and an allocation-rate pair for the boxing question. It reads the final
+code by construction, so none of 2.5's attempt-versus-final problem arises.
+
+What kept it out of CI is stated in its own class doc: it **cancels** without a
+disassembler, "the expected state of a CI runner", because "a gate that goes red
+for missing tooling is a gate people delete". Right everywhere except in a job
+whose whole purpose is to run it.
+
+Both costs were measured rather than estimated:
+
+| step | cost |
+|---|---|
+| `dev/varka_hsdis_build.sh` (sparse clone of one C file, gcc) | **6 seconds** |
+| `VarkaAssemblySuite`, 14 cases, hsdis present | **36 seconds** |
+
+So the task is a CI job, not a checker: install `libcapstone-dev`, build hsdis,
+run the suite. Two findings shaped how:
+
+* **The suite must be able to fail on a missing disassembler**, or the job is
+  worthless: a failed hsdis build would leave all 14 cases cancelling and the job
+  green, asserting nothing and looking identical to a job that checked
+  everything. `VARKA_HSDIS_REQUIRED` turns the cancel into a failure, and only
+  the job sets it. This is 2.4's lesson from the other side - there the danger
+  was failing on correct code, here it is passing on no code.
+* **The catalyst tests do not fork.** `set Test/javaOptions` and
+  `set Test/envVars` are silently ignored; the suite reads the environment of
+  sbt's own JVM, so the job exports the variables to `build/sbt` itself. Three
+  runs were lost to this before it was noticed, and the symptom is indistinguishable
+  from the flag not working: every case simply cancels.
+
+## 3. The design (superseded by 2.5 and 2.6)
 
 **The workload.** A forked JVM running Varka kernels and nothing else, so that
 process-level attribution is sound. `VarkaEmitDump --rounds N` already loads an

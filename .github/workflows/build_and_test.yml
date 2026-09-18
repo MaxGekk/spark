@@ -208,6 +208,9 @@ jobs:
           varka_engine=`./dev/is-changed.py -m varka-engine`
           varka_bench=`./dev/is-changed.py -m varka-bench`
           varka_docs=`./dev/is-changed.py -m varka-docs`
+          # The assembly gate reads the instructions of both the emitted loops and the
+          # hand-written kernels, so it runs when either side moves (task 124).
+          varka_asm=`./dev/is-changed.py -m "catalyst,varka-engine"`
           # Disabled on this fork since 7 September 2026: the Kubernetes integration job
           # cannot build its Docker image, because booting buildx's own builder fails with
           # "failed to inspect pulled image moby/buildkit:buildx-stable-1: Error response
@@ -224,6 +227,7 @@ jobs:
               \"varka-engine\": \"$varka_engine\",
               \"varka-bench\": \"$varka_bench\",
               \"varka-docs\": \"$varka_docs\",
+              \"varka-asm\": \"$varka_asm\",
               \"pyspark\": \"$pyspark\",
               \"pyspark-pandas\": \"$pandas\",
               \"pyspark-install\": \"$pyspark_install\",
@@ -1210,6 +1214,53 @@ jobs:
           varka-bench-m2-${{ runner.os }}-
     - name: Run the bench module's tests
       run: ./build/mvn -f sql/varka/bench/pom.xml test
+
+  # The assembly gate (task 124): the JVM's own instructions, not a throughput ratio.
+  #
+  # `VarkaAssemblySuite` has asserted since task 31 that the emitted loops and the hand-written
+  # kernels compile to packed instructions on vector registers, and that the shapes which must
+  # not box do not. It has never run anywhere but on a developer's machine, because it needs
+  # hsdis and cancels without one - which is right everywhere else and exactly wrong here.
+  #
+  # Two things make it affordable: `dev/varka_hsdis_build.sh` builds the disassembler from one
+  # C file in about six seconds, and the suite itself takes under a minute.
+  #
+  # VARKA_HSDIS_REQUIRED is what makes the job mean anything. Without it a failed hsdis build
+  # would leave every case cancelling and the job green, asserting nothing and looking exactly
+  # like a job that checked everything. With it, a missing disassembler fails here and skips
+  # everywhere else.
+  #
+  # The variables are exported to `build/sbt` itself rather than passed through
+  # `Test/javaOptions` or `Test/envVars`, because the catalyst tests do not fork: the suite
+  # reads the environment of sbt's own JVM, and a `set Test/...` line is silently ignored.
+  varka-asm:
+    needs: [precondition]
+    if: fromJson(needs.precondition.outputs.required).varka-asm == 'true'
+    name: Varka assembly gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - name: Bootstrap composite actions
+      uses: actions/checkout@v6
+    - name: Checkout and sync Spark repository
+      uses: ./.github/actions/checkout-and-sync
+      with:
+        ref: ${{ needs.precondition.outputs.head_sha }}
+    - name: Install Java ${{ inputs.java }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: ${{ inputs.java }}
+    - name: Install the disassembler's build dependency
+      run: sudo apt-get update && sudo apt-get install -y libcapstone-dev
+    - name: Build hsdis
+      run: ./dev/varka_hsdis_build.sh --out "$HOME/hsdis"
+    - name: Assert the instructions
+      env:
+        VARKA_HSDIS_REQUIRED: "true"
+      run: |
+        export VARKA_HSDIS_DIR="$HOME/hsdis"
+        ./build/sbt "catalyst/testOnly *VarkaAssemblySuite"
 
   # The Varka documents' checks (task 106). Every performance number a Varka document quotes
   # must trace to a committed results file (dev/varka_quote_check.py), and SKILLS.md's index
