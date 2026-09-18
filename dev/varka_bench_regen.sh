@@ -21,13 +21,15 @@
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark
 #   dev/varka_bench_regen.sh core VarkaFilterBenchmark --no-narrow
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --narrow-only
+#   dev/varka_bench_regen.sh core VarkaLongLaneThroughputBenchmark --width=32
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --no-pin
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --pin=0-3
 #
 # Writes three files beside each other under sql/<module>/benchmarks/:
 #   <Class>-jdk25-results.txt          the wide run, exactly as Spark's harness
 #                                      writes it (SPARK_GENERATE_BENCHMARK_FILES)
-#   <Class>-jdk25-128bit-results.txt   the same run under -XX:MaxVectorSize=16,
+#   <Class>-jdk25-128bit-results.txt   the same run under -XX:MaxVectorSize=16, or
+#                                      <bits>bit for another --width,
 #                                      with a provenance header; before this
 #                                      script the narrow numbers lived only in
 #                                      scratch logs, which breaks the rule that
@@ -52,11 +54,15 @@ usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 case "${1:-}" in -h|--help) usage 0 ;; esac
 [ "$#" -ge 2 ] || usage
 module="$1"; klass="$2"; shift 2
-narrow=1; wide_run=1; force=0; pin=auto
+# --width=N takes the MaxVectorSize in BYTES, as the JVM does, and the companion is named
+# after the bits it produces: 16 is the 128-bit file every benchmark commits, 32 the
+# 256-bit one a result earns when it depends on the width (PLAN_TASK_144.md 9.4).
+narrow=1; wide_run=1; force=0; pin=auto; width=16
 for a in "$@"; do
   case "$a" in
     --no-narrow) narrow=0 ;;
     --narrow-only) wide_run=0 ;;
+    --width=*) width="${a#--width=}" ;;
     --force) force=1 ;;
     --no-pin) pin=none ;;
     --pin=*) pin="${a#--pin=}" ;;
@@ -116,7 +122,11 @@ case "$module" in
   *) echo "unknown module '$module' (catalyst or core)"; exit 2 ;;
 esac
 wide="$dir/$klass-jdk25-results.txt"
-narrow_file="$dir/$klass-jdk25-128bit-results.txt"
+case "$width" in
+  '' | *[!0-9]*) echo "--width wants a byte count, got '$width'" >&2; exit 2 ;;
+esac
+bits=$((width * 8))
+narrow_file="$dir/$klass-jdk25-${bits}bit-results.txt"
 prov="$dir/$klass-jdk25-provenance.txt"
 
 load="$(cut -d' ' -f1 /proc/loadavg)"
@@ -164,7 +174,7 @@ cpu="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
     "$module/Test/runMain $fqcn"
   if [ "$narrow" -eq 1 ]; then
     echo "narrow run:  ${runner[*]} build/sbt \"project $module\"" \
-      "'set Test/javaOptions += \"-XX:MaxVectorSize=16\"' \"Test/runMain $fqcn\""
+      "'set Test/javaOptions += \"-XX:MaxVectorSize=$width\"' \"Test/runMain $fqcn\""
   fi
 } > "$prov"
 cat "$prov"
@@ -177,14 +187,14 @@ if [ "$wide_run" -eq 1 ]; then
 fi
 
 if [ "$narrow" -eq 1 ]; then
-  echo "== narrow run (-XX:MaxVectorSize=16) =="
+  echo "== narrow run (-XX:MaxVectorSize=$width, ${bits}-bit lanes) =="
   raw="$(mktemp)"
   "${runner[@]}" build/sbt -batch "project $module" \
-    'set Test/javaOptions += "-XX:MaxVectorSize=16"' \
+    "set Test/javaOptions += \"-XX:MaxVectorSize=$width\"" \
     "Test/runMain $fqcn" > "$raw"
   {
     echo "Narrow-width companion of $klass-jdk25-results.txt: the same benchmark under"
-    echo "-XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh."
+    echo "-XX:MaxVectorSize=$width (${bits}-bit lanes), written by dev/varka_bench_regen.sh."
     sed 's/^  *//' "$prov" | sed 's/^/  /'
     echo
     # Only the harness's own output. Without SPARK_GENERATE_BENCHMARK_FILES the harness

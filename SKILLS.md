@@ -29,6 +29,8 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A band says which moves to read; an invariant says which to stop the line for](sql/varka/skills/benchmarking.md#a-band-says-which-moves-to-read-an-invariant-says-which-to-stop-the-line-for)
 * [A benchmark that changes bytes per row must be a ladder, not a row count](sql/varka/skills/benchmarking.md#a-benchmark-that-changes-bytes-per-row-must-be-a-ladder-not-a-row-count)
 * [Two benchmarks of one project can need different kinds of band, not different thresholds](sql/varka/skills/benchmarking.md#two-benchmarks-of-one-project-can-need-different-kinds-of-band-not-different-thresholds)
+* [A kernel ratio is not an end-to-end ratio, in either direction](sql/varka/skills/benchmarking.md#a-kernel-ratio-is-not-an-end-to-end-ratio-in-either-direction)
+* [Before pricing a shape, look for the benchmark that already priced it](sql/varka/skills/benchmarking.md#before-pricing-a-shape-look-for-the-benchmark-that-already-priced-it)
 
 #### [Build and environment](sql/varka/skills/build-and-environment.md)
 * [Classpath Shadowing (the stub trap)](sql/varka/skills/build-and-environment.md#classpath-shadowing-the-stub-trap)

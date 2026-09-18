@@ -1,0 +1,50 @@
+Narrow-width companion of VarkaFilterNarrowingBenchmark-jdk25-results.txt: the same benchmark under
+-XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
+  benchmark:   org.apache.spark.sql.execution.benchmark.VarkaFilterNarrowingBenchmark
+  commit:      517c5639896
+  date:        2026-09-18T01:25:40Z
+  jdk:         OpenJDK Runtime Environment (build 25.0.4+7-1-26.04-Ubuntu)
+  kernel:      7.0.0-31-generic
+  cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+  power:       governor=performance epp=performance profile=performance
+  pinned to:   taskset -c 0,12,13,14,15,1,2,3
+  load at start: 0.68
+  canary:      ok (compute +0.1% cache -0.1% memory -2.3% )
+  wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt sql/Test/runMain org.apache.spark.sql.execution.benchmark.VarkaFilterNarrowingBenchmark
+  narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project sql" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.execution.benchmark.VarkaFilterNarrowingBenchmark"
+
+Running benchmark: over 20000000 Arrow-cached rows
+  Running case: A one column, filtered and output (no narrowing)
+  Stopped after 71 iterations, 2000 ms
+  Running case: B two columns, the other output (narrowing)
+  Stopped after 12 iterations, 2152 ms
+  Running case: C two columns, both output (no narrowing)
+  Stopped after 72 iterations, 2017 ms
+  Running case: D two columns, both in the predicate (narrowing)
+  Stopped after 12 iterations, 2112 ms
+  Running case: E one column, no output (count)
+  Stopped after 13 iterations, 2145 ms
+  Running case: F A at about 1% selectivity
+  Stopped after 128 iterations, 2011 ms
+  Running case: G B at about 1% selectivity
+  Stopped after 112 iterations, 2006 ms
+  Running case: A through toRdd (row path forced)
+  Stopped after 14 iterations, 2014 ms
+  Running case: B through toRdd (row path forced)
+  Stopped after 14 iterations, 2029 ms
+  Running case: C through toRdd (row path forced)
+  Stopped after 11 iterations, 2064 ms
+OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+over 20000000 Arrow-cached rows:                  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------
+A one column, filtered and output (no narrowing)             25             28           3        815.6           1.2       1.0X
+B two columns, the other output (narrowing)                 174            179           5        114.8           8.7       0.1X
+C two columns, both output (no narrowing)                    26             28           3        776.3           1.3       1.0X
+D two columns, both in the predicate (narrowing)            175            176           1        114.5           8.7       0.1X
+E one column, no output (count)                             164            165           1        122.2           8.2       0.1X
+F A at about 1% selectivity                                  14             16           2       1400.7           0.7       1.7X
+G B at about 1% selectivity                                  16             18           2       1274.2           0.8       1.6X
+A through toRdd (row path forced)                           143            144           1        139.9           7.1       0.2X
+B through toRdd (row path forced)                           144            145           0        138.5           7.2       0.2X
+C through toRdd (row path forced)                           186            188           1        107.6           9.3       0.1X
