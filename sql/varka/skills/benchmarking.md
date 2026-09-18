@@ -394,3 +394,33 @@ cheaper than its width wherever there is issue slack to absorb it.
 
 The same discipline one level up is `PLAN_TASK_134.md`'s partitions ladder,
 which exists because one core and twelve cores are also not the same place.
+
+## Two benchmarks of one project can need different kinds of band, not different thresholds
+
+`dev/varka_bench_band.py` reports a per-case tier because that is what the parity
+benchmark needed: over ten runs of an unchanged file, 73 of its 211 cases moved
+more than 3% and 22 moved more than 10%, with a worst near 26%, so a flat
+threshold would either miss real moves or cry wolf on the noisy cases, and
+*which* cases are noisy reproduces well enough to act on.
+
+The chains benchmark, measured the same way in September 2026, behaves nothing
+like that: twelve runs, 24 cases, median spread 0.77%, p90 1.53%, worst 2.55%,
+and not one case above 3%. The whole benchmark is one tier. Its split-half
+correlation is 0.366, weaker than the parity benchmark's - and that number means
+nothing here, because when every case sits inside 2.55% the ranking within the
+band is noise about noise. A split-half check discriminates only where there is a
+spread to discriminate.
+
+The mechanism is the shape of the measurement, not the code under it. A chains
+case is a whole Spark job over 2e8 rows, seconds long, where the per-fork JIT and
+code-layout lottery averages out. A parity case is a short in-JVM loop where that
+lottery is most of the variance. So before reading one benchmark's band practice
+into another, measure what the other one does when nothing changes: the answer
+decides whether you need tiers at all.
+
+The second half of the same lesson is cost. Read off the committed files' own
+timestamps, a chains arm takes about three minutes on this machine and a surface
+arm at the committed 1e9 rows takes about 1h40m. A ten-run band is therefore half
+an hour for one and seventeen hours for the other, which is why the surface's
+band has to be sharded, moved to a runner, or done at a scale nobody commits -
+and why "run it N times" is a plan for one benchmark and a project for another.
