@@ -206,9 +206,10 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *        the default stays a live reference variant, on {@link FloorMod7}'s precedent.
  * @param floorMod7 which lowering {@code dayofweek}/{@code weekday} use for their mod-7.
  * @param division which lowering the calendar prefix's constant divisions use. See
- *        {@link Division}. A lane that has no double conversion emitted for it ignores
- *        anything but {@link Division#MAGIC}, so this widens what may be asked for without
- *        widening what is answered.
+ *        {@link Division}. A width with no double species to convert through - a single int
+ *        lane, whose double half would have none - ignores anything but
+ *        {@link Division#MAGIC}, so this widens what may be asked for without widening what is
+ *        answered.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
  *                       passes bytecode verification - member resolution happens at link time - so

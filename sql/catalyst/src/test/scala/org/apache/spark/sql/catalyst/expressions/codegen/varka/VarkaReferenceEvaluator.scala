@@ -150,7 +150,10 @@ object VarkaReferenceEvaluator {
     // rather than reproducing the emitter's conversion, so the two agree only if the lowering
     // is right.
     case n: ConstDivide =>
-      evalValue(n.child(), row, lits).map(_ / n.divisor())
+      // The divisor is declared at the wider lane and narrowed here, which the node's own
+      // constructor makes safe: an int-lane division whose divisor does not fit in an int is
+      // refused where it is built.
+      evalValue(n.child(), row, lits).map(_ / n.divisor().toInt)
     case n: MakeDate =>
       // The definition: LocalDate.of, null (None) where the calendar rejects the triple - never
       // the length rule the emitter computes. The year limit is the kernel's business, not the

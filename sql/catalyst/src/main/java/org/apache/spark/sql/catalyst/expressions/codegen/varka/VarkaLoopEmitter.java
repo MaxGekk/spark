@@ -2295,8 +2295,8 @@ public final class VarkaLoopEmitter {
           // IntNeg above is. The one input the int lane cannot divide is Integer.MIN_VALUE by
           // -1, which the compiler refuses rather than emitting; see its own arm there.
           if (n.divisor() == -1) {
-            throw new IllegalArgumentException(
-                "a constant division by -1 overflows at Integer.MIN_VALUE: " + node);
+            throw new IllegalArgumentException("a constant division by -1 overflows at "
+                + (lane == Lane.LONG ? "Long.MIN_VALUE" : "Integer.MIN_VALUE") + ": " + node);
           }
           // This node has no magic form to fall back on, so a width with no double species to
           // convert through cannot emit it at all. Refused here rather than in the emitter,
@@ -6140,16 +6140,16 @@ public final class VarkaLoopEmitter {
     static final Divider MAGIC = new Divider(VarkaEmitOptions.Division.MAGIC, "");
 
     /**
-     * What this emission divides with. A double form is answered only on the int lane and only
-     * where the width has a named double species to convert through; everywhere else the option
-     * is accepted and ignored, so asking for one can change how fast a kernel is but never what
-     * it computes. The long lane has no conversions emitted for it yet, so it lands here too.
+     * What this emission divides with. A double form is answered only where the width has a
+     * named double species to convert through; everywhere else the option is accepted and
+     * ignored, so asking for one can change how fast a kernel is but never what it computes.
      */
     static Divider of(Analysis analysis) {
       VarkaEmitOptions.Division form = analysis.options.division();
-      // Two int lanes is the narrowest width whose double half has a lane at all, and the long
-      // lane has no conversions emitted for it yet.
-      if (analysis.lane != Lane.INT || (analysis.lanes != 0 && analysis.lanes < 2)) {
+      // Two int lanes is the narrowest width whose double half has a lane at all. The long
+      // lane converts same-width - one 64-bit lane pairs with one double lane - so every width
+      // that names a species serves it.
+      if (analysis.lane == Lane.INT && analysis.lanes != 0 && analysis.lanes < 2) {
         return MAGIC;
       }
       return new Divider(form, analysis.lane.speciesField(analysis.lanes));
@@ -6199,7 +6199,9 @@ public final class VarkaLoopEmitter {
       emitMagic(cb, div.m, div.k);
       return;
     }
-    emitDoubleDivide(cb, divider, div.divisor);
+    // The calendar prefix is int-lane by construction, which `requireIntLane` states on entry
+    // to every one of its helpers; the lane is passed rather than read for that reason.
+    emitDoubleDivide(cb, Lane.INT, divider, div.divisor);
   }
 
   /**
@@ -6222,41 +6224,58 @@ public final class VarkaLoopEmitter {
       // The identity, which the compiler does not have to have folded for this to be correct.
       return;
     }
-    emitDoubleDivide(cb, new Divider(VarkaEmitOptions.Division.DOUBLE_DIV, analysis.divider
-        .species()), n.divisor());
+    emitDoubleDivide(cb, analysis.lane,
+        new Divider(VarkaEmitOptions.Division.DOUBLE_DIV, analysis.divider.species()),
+        n.divisor());
   }
 
   /**
-   * {@code [v] -> [v / d]} through the double lane: the int vector converts into two double
-   * vectors of half the lanes each, divides there, and converts back.
+   * {@code [v] -> [v / d]} through the double lane, in whichever shape the lane calls for.
    *
-   * <p>The two contracted halves are lane-disjoint - each fills the lanes the other left at zero,
-   * which is what the {@code 0} and {@code -1} parts mean - so a plain {@code or} rejoins them and
-   * no blend or mask is needed. Seven operations in all, against the magic form's two.
+   * <p>At the <b>int lane</b> the vector converts into two double vectors of half the lanes
+   * each, divides there, and converts back. The two contracted halves are lane-disjoint - each
+   * fills the lanes the other left at zero, which is what the {@code 0} and {@code -1} parts
+   * mean - so a plain {@code or} rejoins them and no blend or mask is needed. Seven operations
+   * in all, against the magic form's two.
+   *
+   * <p>At the <b>long lane</b> a 64-bit lane and a double lane are the same width, so there is
+   * one conversion in, one divide and one conversion back: three operations, no halves and no
+   * join. There is no magic alternative at this lane - no 64-bit multiply-high exists - so this
+   * is the lowering rather than a variant of one.
    *
    * <p>The quotient this leaves is exact over the range the site's dividend stays in, so the
    * round-down carry that follows a magic division is dead here rather than merely redundant;
    * {@link Divider#carries()} is what each site asks before emitting it.
    */
-  private static void emitDoubleDivide(CodeBuilder cb, Divider divider, int divisor) {
-    cb.dup();                                            // [v, v]
-    emitDoubleHalf(cb, divider, divisor, 0, 0);          // [v, lo]
-    cb.swap();                                           // [lo, v]
-    emitDoubleHalf(cb, divider, divisor, 1, -1);         // [lo, hi]
-    cb.invokevirtual(INT_VECTOR, "or", LANEWISE_VV);     // [lo | hi]
+  private static void emitDoubleDivide(CodeBuilder cb, Lane lane, Divider divider,
+      long divisor) {
+    if (lane == Lane.LONG) {
+      // Same width in and out: one 64-bit lane pairs with one double lane, so `part` is 0 both
+      // ways, there is no second half and nothing to rejoin. Three operations against the int
+      // lane's seven, which is why the long lane has no magic alternative to want.
+      emitDoubleConvert(cb, lane, divider, divisor, 0, 0);
+      return;
+    }
+    cb.dup();                                               // [v, v]
+    emitDoubleConvert(cb, lane, divider, divisor, 0, 0);    // [v, lo]
+    cb.swap();                                              // [lo, v]
+    emitDoubleConvert(cb, lane, divider, divisor, 1, -1);   // [lo, hi]
+    cb.invokevirtual(lane.vector, "or", lane.lanewiseVV);   // [lo | hi]
   }
 
   /**
-   * One half of {@link #emitDoubleDivide}: {@code [v] -> [that half of v / d, zero elsewhere]}.
+   * One conversion round trip of {@link #emitDoubleDivide}:
+   * {@code [v] -> [that part of v / d, zero elsewhere]}.
    *
-   * <p>{@code in} selects which half of the int lanes widens - expanding conversions take parts
+   * <p>{@code in} selects which part of the source widens - expanding conversions take parts
    * {@code 0..M-1} - and {@code out} where the narrowed result lands, contracting conversions
-   * taking parts {@code -M+1..0}. Pairing {@code 0} with {@code 0} and {@code 1} with {@code -1}
-   * is what makes the two results disjoint.
+   * taking parts {@code -M+1..0}. At the int lane, pairing {@code 0} with {@code 0} and
+   * {@code 1} with {@code -1} is what makes the two results disjoint; at the long lane the
+   * conversion is same-width and both parts are {@code 0}, so one call covers the vector.
    */
-  private static void emitDoubleHalf(CodeBuilder cb, Divider divider, int divisor,
-      int in, int out) {
-    cb.getstatic(VECTOR_OPERATORS, "I2D", VO_CONVERSION);
+  private static void emitDoubleConvert(CodeBuilder cb, Lane lane, Divider divider,
+      long divisor, int in, int out) {
+    cb.getstatic(VECTOR_OPERATORS, lane == Lane.LONG ? "L2D" : "I2D", VO_CONVERSION);
     cb.getstatic(DOUBLE_VECTOR, divider.species(), VECTOR_SPECIES);
     cb.loadConstant(in);
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
@@ -6268,11 +6287,11 @@ public final class VarkaLoopEmitter {
       cb.loadConstant((double) divisor);
       cb.invokevirtual(DOUBLE_VECTOR, "div", LANEWISE_VD);
     }
-    cb.getstatic(VECTOR_OPERATORS, "D2I", VO_CONVERSION);
-    cb.getstatic(INT_VECTOR, divider.species(), VECTOR_SPECIES);
+    cb.getstatic(VECTOR_OPERATORS, lane == Lane.LONG ? "D2L" : "D2I", VO_CONVERSION);
+    cb.getstatic(lane.vector, divider.species(), VECTOR_SPECIES);
     cb.loadConstant(out);
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
-    cb.checkcast(INT_VECTOR);
+    cb.checkcast(lane.vector);
   }
 
   /** {@code [v] -> [(v * m) >>> k]}, the shape every division in {@link #emitChrono} takes. */

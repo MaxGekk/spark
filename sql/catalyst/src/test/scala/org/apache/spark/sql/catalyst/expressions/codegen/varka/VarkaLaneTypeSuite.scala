@@ -82,7 +82,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
   /** The node types whose lane is their operands' rather than INT by construction. */
   private val derivesItsLane: Set[Class[_]] = Set(
     classOf[IntArith], classOf[IntNeg], classOf[Greatest], classOf[Least], classOf[IfElse],
-    classOf[Compare], classOf[And], classOf[Or], classOf[Not], classOf[IsNotNull])
+    classOf[Compare], classOf[And], classOf[Or], classOf[Not], classOf[IsNotNull],
+    classOf[ConstDivide])
 
   /** Every concrete node type the sealed hierarchy permits, nested interfaces expanded. */
   private def concreteNodeTypes(root: Class[_]): Set[Class[_]] =
@@ -167,10 +168,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
       ("truncDate", 0, () => new TruncDate(longCol, TruncLevel.MONTH)),
       ("truncDateDynamic", 0, () => new TruncDateDynamic(longCol, intCol)),
       ("truncDateDynamic", 1, () => new TruncDateDynamic(intCol, longCol)),
-      ("weekOfYear", 0, () => new WeekOfYear(longCol)),
-      // Not a calendar node, but int-only for a related reason: the double conversion it
-      // lowers to is emitted for the int lane alone, so a long dividend has no lowering yet.
-      ("constDivide", 0, () => new ConstDivide(longCol, 12)))
+      ("weekOfYear", 0, () => new WeekOfYear(longCol)))
     refusals.foreach { case (what, position, build) =>
       val e = intercept[IllegalArgumentException](build())
       assert(e.getMessage.contains(what), s"$what operand $position: ${e.getMessage}")
@@ -348,8 +346,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     // The subset PLAN_TASK_85.md 3.1 names, and nothing else: a calendar node at the long lane
     // is refused by its constructor, which is why it never reaches the emitter.
     assert(atLong === Set("ColumnRef", "LiteralSlot", "IntArith", "IntNeg", "Greatest", "Least",
-      "Compare", "And", "Or", "Not", "IsNotNull", "IfElse"),
-      "the long lane serves the lane-generic subset")
+      "Compare", "And", "Or", "Not", "IsNotNull", "IfElse", "ConstDivide"),
+      "the long lane serves the lane-generic subset plus task 88 step 3's division")
   }
 
   test("a baked lane count has both a species constant and a validity helper pair") {

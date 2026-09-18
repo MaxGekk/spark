@@ -4635,6 +4635,89 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ctx = "divc/1")
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Task 88 step 3: the same division at 64-bit lanes, where the conversion is same-width.
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * `doubleDivisions`' twin at the long lane. A 64-bit lane and a double lane are the same
+   * width, so one division is one divide and one conversion each way - there is no second half
+   * to count and nothing to rejoin.
+   */
+  private def longDoubleDivisions(bytes: Array[Byte]): Int = {
+    val divides = opsOn(bytes, "DoubleVector")
+    assert(opsOn(bytes, "Vector") === divides * 2,
+      s"expected ${divides * 2} conversions for $divides divisions")
+    divides
+  }
+
+  /**
+   * The dividends worth driving a division by `d` over: zero, both signs of the divisor's own
+   * neighbourhood - where truncation and floor differ and where a reciprocal would fail at an
+   * exact multiple - and both ends of the range the lowering is exact over. Derived from the
+   * divisor rather than written out, so a divisor added to the list below cannot end up
+   * exercised only far from its own multiples.
+   */
+  private def dividendsAround(d: Long): Array[Long] = {
+    val bound = ConstDivide.EXACT_DIVIDEND_BOUND - 1
+    Array(0L, 1L, -1L, d, d - 1, d + 1, -d, -(d - 1), -(d + 1), 2 * d, 2 * d - 1, -(2 * d) + 1,
+      bound, -bound, bound - 1, -(bound - 1)).map(v => math.max(-bound, math.min(bound, v)))
+  }
+
+  test("a long-lane constant division matches Java's `/` over the range it is exact on") {
+    // The divisors task 102 and 103 need, each over its own neighbourhood and both ends of the
+    // exact range. Two things fail differently here: precision, which breaks at the ends of the
+    // range first, and truncation toward zero, which a floor-producing lowering gets wrong only
+    // on negative dividends with a remainder - hence both signs of every value.
+    val col = new ConstDivide(new ColumnRef(0, LaneType.LONG), 1)
+    val divisors = Seq(
+      3_600_000_000_000L,   // hour(t), nanos per hour
+      60_000_000_000L,      // minute(t) step 1
+      1_000_000_000L,       // second(t) step 1
+      1_000_000L,           // time_trunc to milliseconds
+      1_000L,               // t1 - t2, nanos per micro
+      86_400_000_000L,      // extract(DAY FROM dt), micros per day
+      60L)                  // minute(t) and second(t) step 2
+    for (d <- divisors; lanes <- Seq(2, 8)) {
+      val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), d))
+      val vs = dividendsAround(d)
+      checkLongMatrix(root, 1, Array.empty[Long], Seq(1, 7, 17, 64, 129), combos(1),
+        (_, i) => vs(i % vs.length), s"long divc/$d", lanes)
+    }
+    assert(col.divisor() === 1)
+  }
+
+  test("a long-lane constant division converts once each way, where the int lane converts twice") {
+    // The op counts of `PLAN_TASK_88.md` 3.3: three operations at the long lane against seven at
+    // the int one. The saving is structural rather than incidental - an int vector has twice the
+    // lanes of the double vector it converts into, so it needs two halves and a join, while a
+    // 64-bit lane pairs one to one.
+    val long64 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000))
+    val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
+    assert(longDoubleDivisions(emitMulti(long64, 1, 0)._2) === 1)
+    assert(doubleDivisions(emitMulti(int32, 1, 0)._2) === 1)
+    // The counter above is what makes the difference explicit: the int lane spends two divides
+    // and four conversions on one division, the long lane one and two.
+    assert(opsOn(emitMulti(long64, 1, 0)._2, "DoubleVector") === 1)
+    assert(opsOn(emitMulti(int32, 1, 0)._2, "DoubleVector") === 2)
+  }
+
+  test("a long-lane constant division refuses the divisors that have no quotient") {
+    // The int lane's refusals, restated at the width they now apply to. The -1 message names
+    // the lane's own most negative value, because that is the input it is about.
+    val col = new ColumnRef(0, LaneType.LONG)
+    val zero = intercept[IllegalArgumentException](new ConstDivide(col, 0))
+    assert(zero.getMessage.contains("division by zero"), zero.getMessage)
+    val minusOne =
+      intercept[IllegalArgumentException](emitMulti(Seq(new ConstDivide(col, -1)), 1, 0))
+    assert(minusOne.getMessage.contains("overflows at Long.MIN_VALUE"), minusOne.getMessage)
+    // And a divisor the int lane cannot hold is a mistake in the tree rather than a division
+    // whose every quotient is zero.
+    val tooWide = intercept[IllegalArgumentException](
+      new ConstDivide(new ColumnRef(0, LaneType.INT), 1L << 40))
+    assert(tooWide.getMessage.contains("needs an int divisor"), tooWide.getMessage)
+  }
+
   test("a comparison root emits the selection bitmap with null-as-false") {
     // The simplest filter kernel: one Compare root, its bitmap checked against the Kleene
     // reference with unknown collapsed to false at the root - across lengths (partial lane

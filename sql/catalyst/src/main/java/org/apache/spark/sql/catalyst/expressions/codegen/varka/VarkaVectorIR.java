@@ -34,7 +34,9 @@ import java.util.function.ToIntFunction;
  * <p>Every node reports a {@link LaneType}: the two leaves carry one, every other node derives
  * it from its children, and the constructors refuse a tree whose lanes do not fit - a calendar
  * node over a 64-bit child, or a binary node whose operands disagree. {@link VarkaLoopEmitter}
- * emits the int lane only, so a well-formed {@code LONG} tree is built here and refused there.
+ * emits both lanes, the calendar lowerings excepted: those decompose a 32-bit epoch day and
+ * have no meaning at another width, which is why their constructors refuse a wider child here
+ * rather than the emitter refusing the tree later.
  *
  * <p>The IR is a DAG in effect if not in shape: the records carry structural
  * {@code equals}/{@code hashCode}, and the emitter memoizes on them, so a subtree appearing in
@@ -351,7 +353,8 @@ public sealed interface VarkaVectorIR
    * <p>The lane has neither an integer divide nor a multiply-high, so a constant division has
    * only two lowerings: a range-narrowed magic multiply, which the calendar prefix uses over
    * dividends it can prove bounded, and a conversion through double lanes, which is exact for
-   * every dividend the int lane can hold. This node is the second one. It exists for the
+   * every dividend the int lane can hold, and for a 64-bit one under the bound below. This
+   * node is the second one. It exists for the
    * divisions Varka cannot bound - {@code extract(YEAR FROM ym)} over a stored month count
    * above all, where the magic's exact range covers about one forty-thousandth of the type -
    * and it is therefore emitted through the double route whatever
@@ -366,12 +369,37 @@ public sealed interface VarkaVectorIR
    *
    * <p>A zero divisor has no lowering and is refused here: a division by zero raises rather
    * than producing a value, which is the row engine's job through the ghost fallback.
+   *
+   * <p><b>At the 64-bit lane the route is exact only under a bound, and the caller owns it.</b>
+   * Every int32 dividend converts to a double exactly, so the int lane needs no precondition at
+   * all. A 64-bit dividend does not: the true divide's relative error is at most 2^-53 and a
+   * non-multiple's quotient lies at least {@code 1/divisor} from an integer, so truncation
+   * cannot cross one while the dividend stays under {@link #EXACT_DIVIDEND_BOUND} - and is
+   * silently off by one above it. This node cannot check a bound it is not handed, so whoever
+   * builds it over a {@code LONG} child must have proven one: structurally, the way nanoseconds
+   * of day are, or through a per-batch input bound that declines the rest to the row engine.
    */
-  record ConstDivide(VarkaVectorIR child, int divisor) implements VarkaVectorIR {
+  record ConstDivide(VarkaVectorIR child, long divisor) implements VarkaVectorIR {
+
+    /**
+     * The exclusive bound on a 64-bit dividend's magnitude for the double route to be exact.
+     * It is a bound on the <i>dividend</i> and does not depend on the divisor, which is what
+     * makes it one number rather than a table.
+     *
+     * <p>{@code sql/varka/plans/verify_double_division.py} derives it and checks every divisor
+     * Varka divides by against the range that divisor's lowering actually sees.
+     */
+    public static final long EXACT_DIVIDEND_BOUND = 1L << 53;
+
     public ConstDivide {
-      requireInt("constDivide", child);
       if (divisor == 0) {
         throw new IllegalArgumentException("a constant division by zero has no lowering");
+      }
+      // A divisor wider than the dividend's lane quotients every input to zero, which is a
+      // mistake in the tree rather than a shape worth emitting.
+      if (child.laneType() == LaneType.INT && (int) divisor != divisor) {
+        throw new IllegalArgumentException(
+            "a constant division at the int lane needs an int divisor, not " + divisor);
       }
     }
   }
