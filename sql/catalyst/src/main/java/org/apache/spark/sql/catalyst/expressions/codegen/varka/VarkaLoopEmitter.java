@@ -487,6 +487,15 @@ public final class VarkaLoopEmitter {
       ClassDesc.of("jdk.incubator.vector.VectorOperators$Associative");
   private static final ClassDesc VO_BINARY =
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Binary;");
+  private static final ClassDesc DOUBLE_VECTOR =
+      ClassDesc.of("jdk.incubator.vector.DoubleVector");
+  /**
+   * {@code VectorOperators.Conversion}, which is what {@code I2D} and {@code D2I} are declared
+   * as - read as anything else a {@code getstatic} links and then throws {@code NoSuchFieldError}
+   * on first execution, the way {@link #VO_ASSOCIATIVE} above records.
+   */
+  private static final ClassDesc VO_CONVERSION =
+      ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Conversion;");
   private static final ClassDesc SUPPORT =
       ClassDesc.of("org.apache.spark.sql.varka.vector.VarkaVectorSupport");
   private static final ClassDesc FUSED_KERNEL = ClassDesc.of(VarkaFusedKernel.class.getName());
@@ -573,6 +582,16 @@ public final class VarkaLoopEmitter {
   /** {@code IntVector IntVector.lanewise(VectorOperators.Binary, int)} - the shifts. */
   private static final MethodTypeDesc LANEWISE_BINARY_I =
       MethodTypeDesc.of(INT_VECTOR, VO_BINARY, ConstantDescs.CD_int);
+  /**
+   * {@code Vector Vector.convertShape(VectorOperators.Conversion, VectorSpecies, int)} - declared
+   * on {@code Vector} and erased in both directions, so one descriptor serves the widening and
+   * the narrowing halves of a double-lane division alike.
+   */
+  private static final MethodTypeDesc CONVERT_SHAPE =
+      MethodTypeDesc.of(VECTOR, VO_CONVERSION, VECTOR_SPECIES, ConstantDescs.CD_int);
+  /** {@code DoubleVector DoubleVector.mul/div(double)} - broadcast-scalar convenience. */
+  private static final MethodTypeDesc LANEWISE_VD =
+      MethodTypeDesc.of(DOUBLE_VECTOR, ConstantDescs.CD_double);
   /** {@code VectorMask IntVector.compare(VectorOperators.Comparison, Vector)} - erased. */
   private static final MethodTypeDesc COMPARE_VV =
       MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
@@ -1745,6 +1764,12 @@ public final class VarkaLoopEmitter {
      * rejected rather than emitted with one lane's descriptors over the other's data.
      */
     final Lane lane;
+    /**
+     * How this emission divides by the calendar prefix's constants; see {@link Divider}. Derived
+     * once here rather than at each of the fifteen division sites, and passed down to the prefix
+     * helpers that do not otherwise need an {@code Analysis}.
+     */
+    final Divider divider;
     /** Distinct nodes in first-visit order, with how often each is used. */
     final Map<VarkaVectorIR, Integer> useCount = new LinkedHashMap<>();
     /** Per distinct node, the bitset of input ordinals its subtree references. */
@@ -1848,6 +1873,7 @@ public final class VarkaLoopEmitter {
       this.options = options;
       this.lane = lane;
       this.lanes = emitLanes(options, lane);
+      this.divider = Divider.of(this);
     }
 
     void analyzeRoot(VarkaVectorIR root) {
@@ -4697,7 +4723,7 @@ public final class VarkaLoopEmitter {
     emitGuardCollect(cb, n, own, dense, analysis, s);
     // The value, over the clamped month; garbage where a mask said so.
     emitDaysFromCivil(cb, year, clamped, day, t[7], t[8], t[9], t[10], t[11], t[12], t[13],
-        t[14], t[15], t[16], t[17]);
+        t[14], t[15], t[16], t[17], analysis.divider);
     // Under the NULL form an invalid date is a null output: the validity joins the word. This
     // is the second of the emitter's two places that narrow a word after storing it; the other
     // is the NULL arm of {@link #emitOverflowMask}, whose javadoc says why they are not shared.
@@ -4925,12 +4951,13 @@ public final class VarkaLoopEmitter {
     switch (node) {
       case Year n -> emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
       case Month n -> emitChronoMonth(cb, marchMonth, neri);
-      case DayOfMonth n -> emitChronoDayOfMonth(cb, rem, marchMonth, neri);
+      case DayOfMonth n ->
+          emitChronoDayOfMonth(cb, rem, marchMonth, neri, analysis.divider);
       case Quarter n -> {
         emitChronoMonth(cb, marchMonth, neri);
         cb.loadConstant(2);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+        emitDivide(cb, analysis.divider, ChronoDivide.QUARTER);
       }
       case DayOfYear n -> {
         // t[6..8] are DayOfYear's own - a plain extraction's chronoTmp is only 8 long, so
@@ -4949,11 +4976,12 @@ public final class VarkaLoopEmitter {
         cb.astore(leap);
         emitJanuaryDayOfYear(cb, rem, leap, mask);
       }
-      case LastDay n -> emitChronoLastDay(cb, s, t, neri, julian);
+      case LastDay n -> emitChronoLastDay(cb, s, t, neri, julian, analysis.divider);
       case TruncDate n -> emitChronoTrunc(cb, n, s, t, neri, julian,
-          analysis.options.truncDate());
+          analysis.options.truncDate(), analysis.divider);
       case TruncDateDynamic n -> emitChronoTruncDynamic(cb, n, analysis, s, t, neri, julian);
-      case WeekOfYear n -> emitChronoWeekOfYear(cb, t, era, century, yearOfCentury, rem, julian);
+      case WeekOfYear n ->
+          emitChronoWeekOfYear(cb, t, era, century, yearOfCentury, rem, julian, analysis.divider);
       default -> throw new IllegalStateException("not a calendar node: " + node);
     }
   }
@@ -5029,17 +5057,17 @@ public final class VarkaLoopEmitter {
 
     cb.astore(days);
 
-    emitEra(cb, days, era, rem, mask);
+    emitEra(cb, days, era, rem, mask, analysis.divider);
 
     if (analysis.options.julianMap()) {
       // the year of era and the day of year through the Julian map - one division stage fewer than
       // the split below, and no leap correction in the prefix at all.
-      emitJulianYearOfEra(cb, rem, century, yearOfCentury, mask, leap);
+      emitJulianYearOfEra(cb, rem, century, yearOfCentury, mask, leap, analysis.divider);
     } else {
       // rem is now the day of era, in [0, 146096]. Everything below works on that.
       // century = (doe * M) >>> K, then doc = doe - century * 36524, with one carry.
       cb.aload(rem);
-      emitMagic(cb, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K);
+      emitDivide(cb, analysis.divider, ChronoDivide.CENTURY);
       cb.astore(century);
       cb.aload(rem);
       cb.aload(century);
@@ -5047,7 +5075,9 @@ public final class VarkaLoopEmitter {
       cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
       cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
       cb.astore(rem);
-      emitCarry(cb, century, rem, VarkaChrono.CENTURY_DAYS, mask);
+      if (analysis.divider.carries(ChronoDivide.CENTURY)) {
+        emitCarry(cb, century, rem, VarkaChrono.CENTURY_DAYS, mask);
+      }
 
       // An era's fourth century holds one extra day - its leap day - so the quotient can land on
       // 4 for exactly one day of each era. Fold that back into century 3.
@@ -5070,7 +5100,7 @@ public final class VarkaLoopEmitter {
       // yoc = doc / 365 - exact here, because the split into centuries left a dividend under
       // 44859. It ignores leap days, so it can name the following year; the fix is below.
       cb.aload(rem);
-      emitMagic(cb, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K);
+      emitDivide(cb, analysis.divider, ChronoDivide.YEAR_OF_CENTURY);
       cb.astore(yearOfCentury);
 
       // doy = doc - (365 * yoc + yoc / 4). Negative exactly where yoc overshot.
@@ -5140,7 +5170,7 @@ public final class VarkaLoopEmitter {
         cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
         cb.loadConstant(2);
         cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-        emitMagic(cb, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K);
+        emitDivide(cb, analysis.divider, ChronoDivide.MONTH);
         cb.astore(marchMonth);
       }
     }
@@ -5165,7 +5195,7 @@ public final class VarkaLoopEmitter {
    * carries' scratch, the same two the other form uses.
    */
   private static void emitJulianYearOfEra(CodeBuilder cb, int rem, int century, int yearOfEra,
-      int mask, int scratch) {
+      int mask, int scratch, Divider divider) {
     // quad = 4 * doe + 3
     cb.aload(rem);
     emitShift(cb, "LSHL", 2);
@@ -5174,7 +5204,7 @@ public final class VarkaLoopEmitter {
     cb.astore(rem);
     // century = quad / 146097, round-down plus one carry; the remainder is only scratch.
     cb.aload(rem);
-    emitMagic(cb, VarkaChrono.JULIAN_CENTURY_M, VarkaChrono.JULIAN_CENTURY_K);
+    emitDivide(cb, divider, ChronoDivide.JULIAN_CENTURY);
     cb.astore(century);
     cb.aload(rem);
     cb.aload(century);
@@ -5182,7 +5212,9 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
     cb.astore(scratch);
-    emitCarry(cb, century, scratch, VarkaChrono.ERA_DAYS, mask);
+    if (divider.carries(ChronoDivide.JULIAN_CENTURY)) {
+      emitCarry(cb, century, scratch, VarkaChrono.ERA_DAYS, mask);
+    }
     // jul = quad + 4 * century: the Julian map itself.
     cb.aload(rem);
     cb.aload(century);
@@ -5191,7 +5223,7 @@ public final class VarkaLoopEmitter {
     cb.astore(rem);
     // yearOfEra = jul / 1461, round-down plus one carry; the remainder stays in rem.
     cb.aload(rem);
-    emitMagic(cb, VarkaChrono.JULIAN_YEAR_M, VarkaChrono.JULIAN_YEAR_K);
+    emitDivide(cb, divider, ChronoDivide.JULIAN_YEAR);
     cb.astore(yearOfEra);
     cb.aload(rem);
     cb.aload(yearOfEra);
@@ -5199,7 +5231,9 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
     cb.astore(rem);
-    emitCarry(cb, yearOfEra, rem, VarkaChrono.JULIAN_CYCLE_DAYS, mask);
+    if (divider.carries(ChronoDivide.JULIAN_YEAR)) {
+      emitCarry(cb, yearOfEra, rem, VarkaChrono.JULIAN_CYCLE_DAYS, mask);
+    }
     // doy = rem / 4
     cb.aload(rem);
     emitShift(cb, "LSHR", 2);
@@ -5237,8 +5271,8 @@ public final class VarkaLoopEmitter {
    * linear form. The {@link DayOfMonth} tail, factored out so {@link #emitAddMonths} can call
    * it too. */
   private static void emitChronoDayOfMonth(CodeBuilder cb, int rem, int monthSlot,
-      boolean neri) {
-    emitZeroBasedDayOfMonth(cb, rem, monthSlot, neri);
+      boolean neri, Divider divider) {
+    emitZeroBasedDayOfMonth(cb, rem, monthSlot, neri, divider);
     cb.loadConstant(1);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
   }
@@ -5246,17 +5280,17 @@ public final class VarkaLoopEmitter {
   /** The zero-based day of month, {@link #emitChronoDayOfMonth} one step before its increment
    * - which is exactly what {@code trunc(d, 'MONTH')} subtracts. */
   private static void emitZeroBasedDayOfMonth(CodeBuilder cb, int rem, int monthSlot,
-      boolean neri) {
+      boolean neri, Divider divider) {
     if (neri) {
       // The numerator's low half divided by 2141 is the zero-based day of month, so this tail
       // never runs the month start forwards and never touches the day of year at all.
       cb.aload(monthSlot);
       cb.loadConstant(0xFFFF);
       cb.invokevirtual(INT_VECTOR, "and", LANEWISE_VI);
-      emitMagic(cb, VarkaChrono.DOM_M, VarkaChrono.DOM_K);
+      emitDivide(cb, divider, ChronoDivide.DAY_OF_MONTH);
     } else {
       cb.aload(rem);
-      emitMonthStart(cb, monthSlot);
+      emitMonthStart(cb, monthSlot, divider);
       cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
     }
   }
@@ -5269,13 +5303,13 @@ public final class VarkaLoopEmitter {
    * unnecessary: every month but the year's last (February, here) is one subtraction between two
    * calls to this.
    */
-  private static void emitMonthStart(CodeBuilder cb, int marchMonth) {
+  private static void emitMonthStart(CodeBuilder cb, int marchMonth, Divider divider) {
     cb.aload(marchMonth);
     cb.loadConstant(153);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.loadConstant(2);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    emitMagic(cb, VarkaChrono.DAY_M, VarkaChrono.DAY_K);
+    emitDivide(cb, divider, ChronoDivide.MONTH_START);
   }
 
   /**
@@ -5338,7 +5372,8 @@ public final class VarkaLoopEmitter {
     cb.astore(year);
     emitChronoMonth(cb, marchMonth, analysis.options.neriSchneiderMonth());
     cb.astore(month);
-    emitChronoDayOfMonth(cb, rem, marchMonth, analysis.options.neriSchneiderMonth());
+    emitChronoDayOfMonth(cb, rem, marchMonth, analysis.options.neriSchneiderMonth(),
+        analysis.divider);
     cb.astore(dayOfMonth);
 
     // k = (month - 1) + monthsOffset + MONTH_ARITH_BIAS: small and non-negative because the
@@ -5374,7 +5409,7 @@ public final class VarkaLoopEmitter {
 
     // q = k / 12, exact; nm = k - q * 12, the new month, 0-11; ny = year + q - the bias's years.
     cb.aload(k);
-    emitMagic(cb, VarkaChrono.MONTH_ARITH_M, VarkaChrono.MONTH_ARITH_K);
+    emitDivide(cb, analysis.divider, ChronoDivide.MONTH_ARITH);
     cb.astore(q);
     cb.aload(k);
     cb.aload(q);
@@ -5408,7 +5443,7 @@ public final class VarkaLoopEmitter {
 
     // The new month's length: monthStartNext - monthStart, except February (the March-based
     // year's last month), which needs the year's own total length instead.
-    emitMonthStart(cb, mp2);
+    emitMonthStart(cb, mp2, analysis.divider);
     cb.astore(monthStart);
     cb.aload(mp2);
     cb.loadConstant(1);
@@ -5416,7 +5451,7 @@ public final class VarkaLoopEmitter {
     cb.loadConstant(VarkaChrono.MARCH_YEAR_JANUARY + 1);
     cb.invokevirtual(INT_VECTOR, "min", LANEWISE_VI);
     cb.astore(mpNextClamped);
-    emitMonthStart(cb, mpNextClamped);
+    emitMonthStart(cb, mpNextClamped, analysis.divider);
     cb.astore(monthStartNext);
 
     cb.aload(monthStartNext);
@@ -5449,7 +5484,7 @@ public final class VarkaLoopEmitter {
     // era2, yoe, mp2, doy2, doe2 and mask are dead past this point (the length computation
     // above was their only use), so emitDaysFromCivil reuses their slots for its own values.
     emitDaysFromCivil(cb, ny, nm1, clampedDay, yy2, b2, era2, yoe, mp2, doy2, doe2,
-        civilScratch1, civilScratch2, mask, civilMaskB);
+        civilScratch1, civilScratch2, mask, civilMaskB, analysis.divider);
   }
 
   /**
@@ -5473,7 +5508,7 @@ public final class VarkaLoopEmitter {
    */
   private static void emitDaysFromCivil(CodeBuilder cb, int year, int month, int day, int yy,
       int b, int era, int yoe, int mp, int doy, int doe, int century, int centuryRem,
-      int mask, int carryMask) {
+      int mask, int carryMask, Divider divider) {
     // yy = year - (month <= 2 ? 1: 0), the March-based year.
     cb.aload(month);
     cb.getstatic(VECTOR_OPERATORS, "LE", VO_COMPARISON);
@@ -5493,7 +5528,7 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     cb.astore(b);
     cb.aload(b);
-    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_QUATERCENTENNIAL_K);
+    emitDivide(cb, divider, ChronoDivide.YEAR_OF_ERA_400);
     cb.astore(era);
     cb.aload(b);
     cb.aload(era);
@@ -5501,7 +5536,9 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
     cb.astore(yoe);
-    emitCarry(cb, era, yoe, 400, carryMask);
+    if (divider.carries(ChronoDivide.YEAR_OF_ERA_400)) {
+      emitCarry(cb, era, yoe, 400, carryMask);
+    }
 
     // mp = month + (month <= 2 ? 9: -3), the March-based month; doy = monthStart(mp)+day-1.
     cb.aload(month);
@@ -5511,7 +5548,7 @@ public final class VarkaLoopEmitter {
     cb.aload(mask);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI_MASKED);
     cb.astore(mp);
-    emitMonthStart(cb, mp);
+    emitMonthStart(cb, mp, divider);
     cb.aload(day);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VV);
     cb.loadConstant(1);
@@ -5521,7 +5558,7 @@ public final class VarkaLoopEmitter {
     // century = yoe / 100, round-down plus one correction (yoe is 0..399, but the same
     // round-down magic is used here for one shared constant rather than a second one).
     cb.aload(yoe);
-    emitMagic(cb, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_CENTURY_K);
+    emitDivide(cb, divider, ChronoDivide.YEAR_OF_ERA_100);
     cb.astore(century);
     cb.aload(yoe);
     cb.aload(century);
@@ -5529,7 +5566,9 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
     cb.astore(centuryRem);
-    emitCarry(cb, century, centuryRem, 100, carryMask);
+    if (divider.carries(ChronoDivide.YEAR_OF_ERA_100)) {
+      emitCarry(cb, century, centuryRem, 100, carryMask);
+    }
 
     // doe = yoe * 365 + yoe / 4 - century + doy.
     cb.aload(yoe);
@@ -5651,7 +5690,7 @@ public final class VarkaLoopEmitter {
    * Leaves the week, 1 to 53, on the stack.
    */
   private static void emitChronoWeekOfYear(CodeBuilder cb, int[] t, int era, int century,
-      int yearOfCentury, int rem, boolean julian) {
+      int yearOfCentury, int rem, boolean julian, Divider divider) {
     int mask = t[6];
     int leap = t[7];
     int year = t[8];
@@ -5662,13 +5701,13 @@ public final class VarkaLoopEmitter {
     emitJanuaryDayOfYear(cb, rem, leap, mask);                 // [doy]
     cb.loadConstant(1);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);          // [doy - 1]
-    emitMagic(cb, VarkaChrono.WEEK_M, VarkaChrono.WEEK_K);     // [(doy - 1) / 7]
+    emitDivide(cb, divider, ChronoDivide.WEEK);     // [(doy - 1) / 7]
     cb.loadConstant(1);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);          // [week]
   }
 
   private static void emitChronoTrunc(CodeBuilder cb, TruncDate node, Slots s, int[] t,
-      boolean neri, boolean julian, VarkaEmitOptions.TruncDateForm form) {
+      boolean neri, boolean julian, VarkaEmitOptions.TruncDateForm form, Divider divider) {
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -5688,7 +5727,7 @@ public final class VarkaLoopEmitter {
         // each; the literal node's own bytes did not move (its register and the byte hashes in
         // PLAN_TASK_61.md 9).
         switch (node.level()) {
-          case MONTH -> emitTruncMonth(cb, days, rem, marchMonth, neri);
+          case MONTH -> emitTruncMonth(cb, days, rem, marchMonth, neri, divider);
           case YEAR -> {
             emitTruncYearParts(cb, era, rem, century, yearOfCentury, mask, leap, year,
                 dayOfYear, julian);
@@ -5697,7 +5736,7 @@ public final class VarkaLoopEmitter {
           case QUARTER -> {
             emitTruncYearParts(cb, era, rem, century, yearOfCentury, mask, leap, year,
                 dayOfYear, julian);
-            emitTruncQuarter(cb, s, days, marchMonth, leap, dayOfYear, quarter, neri);
+            emitTruncQuarter(cb, s, days, marchMonth, leap, dayOfYear, quarter, neri, divider);
           }
         }
       }
@@ -5716,7 +5755,7 @@ public final class VarkaLoopEmitter {
             emitChronoMonth(cb, marchMonth, neri);
             cb.loadConstant(2);
             cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-            emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+            emitDivide(cb, divider, ChronoDivide.QUARTER);
             cb.loadConstant(3);
             cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
             cb.loadConstant(2);
@@ -5729,16 +5768,16 @@ public final class VarkaLoopEmitter {
         cb.invokestatic(INT_VECTOR, "broadcast", BROADCAST);
         cb.astore(day);
         emitDaysFromCivil(cb, year, month, day, t[13], t[14], t[15], t[16], t[17], t[18], t[19],
-            t[20], t[21], t[22], t[23]);
+            t[20], t[21], t[22], t[23], divider);
       }
     }
   }
 
   /** {@code SUBTRACT}'s {@code MONTH}: {@code [] -> [d - dom0]}, two ops over the prefix. */
   private static void emitTruncMonth(CodeBuilder cb, int days, int rem, int marchMonth,
-      boolean neri) {
+      boolean neri, Divider divider) {
     cb.aload(days);
-    emitZeroBasedDayOfMonth(cb, rem, marchMonth, neri);
+    emitZeroBasedDayOfMonth(cb, rem, marchMonth, neri, divider);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
   }
 
@@ -5771,11 +5810,11 @@ public final class VarkaLoopEmitter {
    * describes; leaves the quarter in its slot.
    */
   private static void emitTruncQuarter(CodeBuilder cb, Slots s, int days, int marchMonth,
-      int leap, int dayOfYear, int quarter, boolean neri) {
+      int leap, int dayOfYear, int quarter, boolean neri, Divider divider) {
     emitChronoMonth(cb, marchMonth, neri);
     cb.loadConstant(2);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
-    emitMagic(cb, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K);
+    emitDivide(cb, divider, ChronoDivide.QUARTER);
     cb.astore(quarter);
     // start = 1 (+90 if q >= 2) (+91 if q >= 3) (+92 if q >= 4) (+L if q >= 2)
     cb.aload(s.species);
@@ -5828,9 +5867,10 @@ public final class VarkaLoopEmitter {
     emitTruncYearParts(cb, era, rem, century, yearOfCentury, mask, leap, year, dayOfYear,
         julian);
     emitTruncYear(cb, days, dayOfYear);
-    emitTruncQuarter(cb, s, days, marchMonth, leap, dayOfYear, quarter, neri);
+    emitTruncQuarter(cb, s, days, marchMonth, leap, dayOfYear, quarter, neri,
+        analysis.divider);
     emitBlendWhereLevel(cb, level, TruncLevelLeaf.QUARTER);
-    emitTruncMonth(cb, days, rem, marchMonth, neri);
+    emitTruncMonth(cb, days, rem, marchMonth, neri, analysis.divider);
     emitBlendWhereLevel(cb, level, TruncLevelLeaf.MONTH);
     cb.aload(days);
     cb.aload(days);
@@ -5869,7 +5909,7 @@ public final class VarkaLoopEmitter {
    * February case, and the same reason this reuses it rather than a second copy of the leap test.
    */
   private static void emitChronoLastDay(CodeBuilder cb, Slots s, int[] t, boolean neri,
-      boolean julian) {
+      boolean julian, Divider divider) {
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -5889,7 +5929,7 @@ public final class VarkaLoopEmitter {
     // node - the month-length arithmetic below is what needs it.
     emitChronoYear(cb, era, century, yearOfCentury, rem, julian);
     cb.astore(year);
-    emitChronoDayOfMonth(cb, rem, marchMonth, neri);
+    emitChronoDayOfMonth(cb, rem, marchMonth, neri, divider);
     cb.astore(dayOfMonth);
 
     // The current month's length: monthStart(mp + 1) - monthStart(mp), except February (the
@@ -5906,7 +5946,7 @@ public final class VarkaLoopEmitter {
       emitMonthIndex3(cb, marchMonth);
       emitMonthStart3FromStack(cb);
     } else {
-      emitMonthStart(cb, marchMonth);
+      emitMonthStart(cb, marchMonth, divider);
     }
     cb.astore(monthStart);
     if (neri) {
@@ -5923,7 +5963,7 @@ public final class VarkaLoopEmitter {
       cb.aload(mpNextClamped);
       emitMonthStart3FromStack(cb);
     } else {
-      emitMonthStart(cb, mpNextClamped);
+      emitMonthStart(cb, mpNextClamped, divider);
     }
     cb.astore(monthStartNext);
 
@@ -5980,7 +6020,8 @@ public final class VarkaLoopEmitter {
    * time - it is inside the range only because {@code dayRange} bounded the count's shift at
    * compile time, which it can do only because the count guard fires.)
    */
-  private static void emitEra(CodeBuilder cb, int days, int era, int rem, int mask) {
+  private static void emitEra(CodeBuilder cb, int days, int era, int rem, int mask,
+      Divider divider) {
     // w = days + BIAS, non-negative throughout the range, so one round-down magic and one
     // carry give the era - and the bias's whole eras come back off in the year assembly.
     cb.aload(days);
@@ -5988,7 +6029,7 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     cb.astore(rem);
     cb.aload(rem);
-    emitMagic(cb, VarkaChrono.NARROW_ERA_M, VarkaChrono.NARROW_ERA_K);
+    emitDivide(cb, divider, ChronoDivide.ERA_NARROW);
     cb.astore(era);
     cb.aload(rem);
     cb.aload(era);
@@ -5996,11 +6037,183 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
     cb.astore(rem);
-    emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
+    if (divider.carries(ChronoDivide.ERA_NARROW)) {
+      emitCarry(cb, era, rem, VarkaChrono.ERA_DAYS, mask);
+    }
     cb.aload(era);
     cb.loadConstant(VarkaChrono.NARROW_ERA_BIAS);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VI);
     cb.astore(era);
+  }
+
+  /**
+   * Every constant division the calendar prefix performs, one constant per site: the divisor, the
+   * Granlund-Montgomery pair that stands in for it, and whether the double lane's reciprocal form
+   * is exact over the dividends that site can produce.
+   *
+   * <p>The table exists so that a division site names a division rather than a pair of magic
+   * numbers. Two sites can share a multiplier and differ only in the shift -
+   * {@link #YEAR_OF_ERA_400} and {@link #YEAR_OF_ERA_100} both use {@code YEAR_CENTURY_M} - so the
+   * divisor is not recoverable from the constants at the call site, and neither is the range the
+   * dividend stays in.
+   *
+   * <p>{@code recipExact} is transcribed from {@code sql/varka/plans/verify_double_division.py},
+   * which decides it per (divisor, range) by exhaustive probe rather than by the size of the
+   * divisor: {@link #ERA_NARROW} and {@link #JULIAN_CENTURY} divide by the same 146097 and answer
+   * differently, because the Julian site's dividends are the values congruent to 3 mod 4 and the
+   * multiple where the reciprocal form fails is not one of them. A site marked false falls back to
+   * {@link VarkaEmitOptions.Division#MAGIC} under {@code DOUBLE_RECIP}, which is what a shipping
+   * default would do; it is never emitted with a form that would compute a wrong quotient.
+   */
+  private enum ChronoDivide {
+    QUARTER(3, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K, true),
+    CENTURY(36524, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K, true),
+    YEAR_OF_CENTURY(365, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K, true),
+    MONTH(153, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K, true),
+    JULIAN_CENTURY(VarkaChrono.ERA_DAYS,
+        VarkaChrono.JULIAN_CENTURY_M, VarkaChrono.JULIAN_CENTURY_K, true),
+    JULIAN_YEAR(1461, VarkaChrono.JULIAN_YEAR_M, VarkaChrono.JULIAN_YEAR_K, true),
+    DAY_OF_MONTH(2141, VarkaChrono.DOM_M, VarkaChrono.DOM_K, true),
+    MONTH_START(5, VarkaChrono.DAY_M, VarkaChrono.DAY_K, true),
+    MONTH_ARITH(12, VarkaChrono.MONTH_ARITH_M, VarkaChrono.MONTH_ARITH_K, true),
+    YEAR_OF_ERA_400(400, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_QUATERCENTENNIAL_K, true),
+    YEAR_OF_ERA_100(100, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_CENTURY_K, true),
+    WEEK(7, VarkaChrono.WEEK_M, VarkaChrono.WEEK_K, true),
+    ERA_NARROW(VarkaChrono.ERA_DAYS, VarkaChrono.NARROW_ERA_M, VarkaChrono.NARROW_ERA_K, false);
+
+    final int divisor;
+    final int m;
+    final int k;
+    final boolean recipExact;
+
+    ChronoDivide(int divisor, int m, int k, boolean recipExact) {
+      this.divisor = divisor;
+      this.m = m;
+      this.k = k;
+      this.recipExact = recipExact;
+    }
+  }
+
+  /**
+   * Which lowering the calendar prefix's constant divisions take, plus the one thing the double
+   * forms need to emit one: the name of the species constant to convert through.
+   *
+   * <p>It is threaded to the prefix's helpers the way {@code emitChronoTrunc} takes its
+   * {@code TruncDateForm} - the resolved option rather than the whole {@link Analysis}, because
+   * most of those helpers need nothing else from it.
+   *
+   * <p>One name serves both vector types because the species constants are named by the vector's
+   * total width rather than by its lane count: {@code IntVector.SPECIES_256} is eight int lanes
+   * and {@code DoubleVector.SPECIES_256} is the four double lanes occupying the same register,
+   * which is exactly the pairing a conversion between them needs.
+   */
+  private record Divider(VarkaEmitOptions.Division form, String species) {
+
+    /** The only value that emits no conversions, and so the only one any lane can take. */
+    static final Divider MAGIC = new Divider(VarkaEmitOptions.Division.MAGIC, "");
+
+    /**
+     * What this emission divides with. A double form is answered only on the int lane and only
+     * where the width has a named double species to convert through; everywhere else the option
+     * is accepted and ignored, so asking for one can change how fast a kernel is but never what
+     * it computes. The long lane has no conversions emitted for it yet, so it lands here too.
+     */
+    static Divider of(Analysis analysis) {
+      VarkaEmitOptions.Division form = analysis.options.division();
+      if (form == VarkaEmitOptions.Division.MAGIC || analysis.lane != Lane.INT) {
+        return MAGIC;
+      }
+      // Two int lanes is the narrowest width whose double half has a lane at all.
+      if (analysis.lanes != 0 && analysis.lanes < 2) {
+        return MAGIC;
+      }
+      return new Divider(form, analysis.lane.speciesField(analysis.lanes));
+    }
+
+    /**
+     * What this site is actually divided with: the requested form, except that a site the
+     * reciprocal is not exact over falls back to {@code MAGIC} rather than computing a wrong
+     * quotient. {@link #emitDivide} and {@link #carries} both ask this, so the carry correction
+     * can never disagree with the division it corrects.
+     */
+    VarkaEmitOptions.Division formFor(ChronoDivide div) {
+      if (form == VarkaEmitOptions.Division.DOUBLE_RECIP && !div.recipExact) {
+        return VarkaEmitOptions.Division.MAGIC;
+      }
+      return form;
+    }
+
+    /**
+     * Whether the round-down carry that follows this division is still live. A magic quotient can
+     * be one short and needs it; a double one is exact over the site's range, so the correction
+     * is dead code rather than a redundant safety net, and emitting it would price the double
+     * forms with an operation they do not need.
+     */
+    boolean carries(ChronoDivide div) {
+      return formFor(div) == VarkaEmitOptions.Division.MAGIC;
+    }
+  }
+
+  /**
+   * {@code [v] -> [v / d]} for one of the prefix's constant divisors, under whichever lowering
+   * {@link VarkaEmitOptions#division()} selected. Every division in {@link #emitChrono} goes
+   * through here, which is what makes the A/B a single switch rather than fifteen edits.
+   */
+  private static void emitDivide(CodeBuilder cb, Divider divider, ChronoDivide div) {
+    if (divider.formFor(div) == VarkaEmitOptions.Division.MAGIC) {
+      emitMagic(cb, div.m, div.k);
+      return;
+    }
+    emitDoubleDivide(cb, divider, div.divisor);
+  }
+
+  /**
+   * {@code [v] -> [v / d]} through the double lane: the int vector converts into two double
+   * vectors of half the lanes each, divides there, and converts back.
+   *
+   * <p>The two contracted halves are lane-disjoint - each fills the lanes the other left at zero,
+   * which is what the {@code 0} and {@code -1} parts mean - so a plain {@code or} rejoins them and
+   * no blend or mask is needed. Seven operations in all, against the magic form's two.
+   *
+   * <p>The quotient this leaves is exact over the range the site's dividend stays in, so the
+   * round-down carry that follows a magic division is dead here rather than merely redundant;
+   * {@link Divider#carries()} is what each site asks before emitting it.
+   */
+  private static void emitDoubleDivide(CodeBuilder cb, Divider divider, int divisor) {
+    cb.dup();                                            // [v, v]
+    emitDoubleHalf(cb, divider, divisor, 0, 0);          // [v, lo]
+    cb.swap();                                           // [lo, v]
+    emitDoubleHalf(cb, divider, divisor, 1, -1);         // [lo, hi]
+    cb.invokevirtual(INT_VECTOR, "or", LANEWISE_VV);     // [lo | hi]
+  }
+
+  /**
+   * One half of {@link #emitDoubleDivide}: {@code [v] -> [that half of v / d, zero elsewhere]}.
+   *
+   * <p>{@code in} selects which half of the int lanes widens - expanding conversions take parts
+   * {@code 0..M-1} - and {@code out} where the narrowed result lands, contracting conversions
+   * taking parts {@code -M+1..0}. Pairing {@code 0} with {@code 0} and {@code 1} with {@code -1}
+   * is what makes the two results disjoint.
+   */
+  private static void emitDoubleHalf(CodeBuilder cb, Divider divider, int divisor,
+      int in, int out) {
+    cb.getstatic(VECTOR_OPERATORS, "I2D", VO_CONVERSION);
+    cb.getstatic(DOUBLE_VECTOR, divider.species(), VECTOR_SPECIES);
+    cb.loadConstant(in);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(DOUBLE_VECTOR);
+    if (divider.form() == VarkaEmitOptions.Division.DOUBLE_RECIP) {
+      cb.loadConstant(1.0 / divisor);
+      cb.invokevirtual(DOUBLE_VECTOR, "mul", LANEWISE_VD);
+    } else {
+      cb.loadConstant((double) divisor);
+      cb.invokevirtual(DOUBLE_VECTOR, "div", LANEWISE_VD);
+    }
+    cb.getstatic(VECTOR_OPERATORS, "D2I", VO_CONVERSION);
+    cb.getstatic(INT_VECTOR, divider.species(), VECTOR_SPECIES);
+    cb.loadConstant(out);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(INT_VECTOR);
   }
 
   /** {@code [v] -> [(v * m) >>> k]}, the shape every division in {@link #emitChrono} takes. */
