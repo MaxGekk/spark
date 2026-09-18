@@ -461,11 +461,35 @@ class VarkaAssemblySuite extends SparkFunSuite {
    * defect as a detector that matches nothing: the suite still goes green and still tells the
    * reader something false.
    */
+  /**
+   * Whether a missing disassembler is a failure rather than a skip (task 124).
+   *
+   * <p>Skipping is right on a developer's machine and on a general CI runner, and the class doc
+   * above says why: a gate that goes red for missing tooling is a gate people delete. It is
+   * exactly wrong in the one job that exists to run these assertions. That job builds hsdis
+   * first - `dev/varka_hsdis_build.sh`, six seconds - so if the disassembler is missing there,
+   * the build step failed silently and every case below would cancel while the job went green,
+   * asserting nothing and looking identical to a job that checked everything.
+   *
+   * <p>So the job sets this, and nothing else does.
+   */
+  private lazy val hsdisRequired: Boolean =
+    Option(System.getenv("VARKA_HSDIS_REQUIRED")).exists(_.equalsIgnoreCase("true")) ||
+      System.getProperty("varka.hsdis.required", "").equalsIgnoreCase("true")
+
+  /** Cancel, or fail where the caller declared a disassembler must be present. */
+  private def cancelOrFail(why: String): Nothing =
+    if (hsdisRequired) {
+      fail(s"VARKA_HSDIS_REQUIRED is set, so this suite must not skip: $why")
+    } else {
+      cancel(why)
+    }
+
   private def requireDisassembler(run: ProbeRun): Unit = {
     if (parseNmethods(run.output).exists(_.insns.nonEmpty)) { return }
     hsdis match {
       case NoHsdis =>
-        cancel("no disassembler found: none of -Dvarka.hsdis.dir, VARKA_HSDIS_DIR, " +
+        cancelOrFail("no disassembler found: none of -Dvarka.hsdis.dir, VARKA_HSDIS_DIR, " +
           s"LD_LIBRARY_PATH holds hsdis-$arch.so, and <java.home>/lib/server holds no " +
           "libhsdis.so. This is the expected state of a CI runner; see SKILLS.md on " +
           "building hsdis.")
@@ -476,7 +500,7 @@ class VarkaAssemblySuite extends SparkFunSuite {
           } else {
             ""
           }
-        cancel(s"a disassembler was found ($found) but no disassembly came back$refused; " +
+        cancelOrFail(s"a disassembler was found ($found) but no disassembly came back$refused; " +
           "see SKILLS.md on building hsdis")
     }
   }
