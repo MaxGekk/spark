@@ -232,6 +232,37 @@ The first draft costed the magic at four ops by counting only the multiply,
 shift, compare and blend, and omitted the bias add and the multiply-subtract
 that form the remainder the correction compares.
 
+*Measured 18 September 2026, step 2, from `dev/varka_emit.sh --table` - which had
+to be corrected first: it reported only `IntVector` invocations, so a body that
+moved a division onto the double lane read as **cheaper** than the magic. It now
+sums every vector type, and the numbers below are lane ops per `loopDense0`, not
+int ops.*
+
+| expression | `MAGIC` | `DOUBLE_DIV` | `DOUBLE_RECIP` |
+|---|---|---|---|
+| `year(d)` | 34 | 40 | 38 |
+| `month(d)` | 35 | 41 | 39 |
+| `dayofmonth(d)` | 36 | 47 | 45 |
+| `quarter(d)` | 38 | 49 | 47 |
+| `dayofyear(d)` | 43 | 49 | 47 |
+| `weekofyear(d)` | 64 | 75 | 73 |
+| `last_day(d)` | 63 | 74 | 72 |
+| `trunc(d, 'MM')` | 36 | 47 | 45 |
+| `add_months(d, 1)` | 112 | 147 | 145 |
+
+Every `DOUBLE_RECIP` column is exactly two below its `DOUBLE_DIV` neighbour, and
+that gap is the deny-list: the era step's `/146097` falls back to the magic, so
+one division's seven ops become two.
+
+The table above also corrects this section's accounting of what the double form
+displaces. The seven ops do not replace two - they replace the magic's multiply
+and shift **and**, at a site that rounds down, the three-op carry that corrects
+it, because an exact quotient leaves a remainder below the divisor and the
+correction can never fire. The emitter elides it rather than emitting dead code,
+so the trade at a correcting site is seven against five, and at a site that was
+already exact it is seven against two. `year(d)` divides three times and corrects
+all three: `3 * (7 - 2) - 3 * 3 = +6`, which is what the table reads.
+
 ## 4. Files
 
 | file | what |
@@ -334,3 +365,56 @@ is still first because its A/B is what decides the default.
 *To be written when the work lands, section by section as the plan's own rule
 asks. Nothing above is to be rewritten to look prescient; a correction is added
 and says what it corrects - 2.2 is the first of them.*
+
+### 9.1 Step 2: the int32 converts behind the switch, 18 September 2026
+
+**The switch.** `VarkaEmitOptions.division` is a three-valued enum defaulting to
+`MAGIC`, so no production kernel converts anything and the oracle needed no
+regeneration. Every calendar division already funnelled through one two-line
+helper, `emitMagic`, at fifteen call sites, which is why the whole lowering is a
+single branch rather than fifteen edits.
+
+**The table the sites now name.** The call sites passed magic constants, not
+divisors, and two of them - the year of era's `/400` and `/100` - share a
+multiplier and differ only in the shift, so neither the divisor nor the range was
+recoverable from the call site. A `ChronoDivide` enum now carries the divisor,
+the pair, and the reciprocal verdict transcribed from `verify_double_division.py`,
+one constant per site, and a site names a division instead of two integers.
+
+**Threading.** Only three of the eleven helpers that divide carry an `Analysis`.
+Rather than thread one through the other eight, the resolved choice is passed
+down as a `Divider`, the way `emitChronoTrunc` already takes a `TruncDateForm` -
+and it is computed once, as a field on `Analysis`, so the fifteen sites cannot
+disagree about it.
+
+**Risk 1 did not materialise.** `dev/varka_canary/DoubleDivProbe.java` settled the
+conversion before any bytecode was written: expanding parts `0, 1` in, contracting
+parts `0, -1` out, and the two contracted halves are lane-disjoint - each fills
+the lanes the other left at zero - so a plain `or` rejoins them. No `rearrange`,
+no blend, no mask. The seven-op count of 3.3 holds, and the probe is committed so
+the next reader does not have to re-derive it.
+
+One detail made the emission simpler than the plan expected: the species
+constants are named by the vector's **total width**, not by its lane count, so
+`IntVector.SPECIES_256` and `DoubleVector.SPECIES_256` name the eight int lanes
+and the four double lanes of the same register. One field name therefore serves
+both sides of the conversion.
+
+**The deny-list is observable, not just enforced.** Under `DOUBLE_RECIP` the
+narrowed prefix lowers two of its three divisions and the Julian prefix lowers two
+of its three - in both cases the one held back is the era step, and in the Julian
+case the division that *is* lowered divides by the same 146097. That is the
+(divisor, range) key proved from the emitted bytes, and it is asserted as such.
+
+**What was checked.** The parity matrix under all three settings, on both prefix
+forms, at every vector width from two to sixteen int lanes; `add_months`,
+`make_date`, the recomposing `trunc` and `weekofyear`, which reach the four
+division sites no extraction does; and - the check that matters at the resolution
+the deny-list was decided at - the opt-in sweep of every day the prefix covers
+under both double forms and both prefix forms, against `LocalDate` and
+`DateTimeUtils`. All green, `VarkaEmittedBytesSuite` unmoved, and
+`verify_double_division.py` re-run here with every verdict matching.
+
+**Still owed by step 3:** the long-lane converts, `useAVX`, the AVX2 form, and
+test 4's signed dividends - none of which the int lane reaches, because the
+calendar prefix is int-lane only by construction.
