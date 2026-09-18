@@ -419,3 +419,34 @@ when an end-to-end ratio surprises you, read the executed plans of the two arms
 before explaining it: here the fast and slow cases differed by one clause -
 `VarkaFilterColumnarToRow (pred)` against the same with `List(<column>)` - and
 that clause, not the lane, was worth a factor of ten.
+
+## Before pricing a shape, look for the benchmark that already priced it
+
+In one night this project measured the same shape three times and read it three
+ways. A crossed experiment said "forwarding a column costs ten times"; a
+five-case separation said "no - narrowing the output costs eight times"; and a
+control that forced the row read-back said neither, because with `toRdd` the
+narrowed and un-narrowed forms are within 1% of each other. What is actually
+there is that the un-narrowed shapes stay columnar under a columnar sink and the
+narrowed one does not, which is the read-back floor arriving through a plan
+difference.
+
+The first two readings were each produced by an experiment that varied one thing
+and stopped. The thing that would have caught both immediately was not a better
+experiment: `VarkaNarrowingBenchmark` already existed, had measured this exact
+shape at three selectivities and both widths for task 78, and its committed
+numbers order the *opposite* way - the narrowed form slightly faster than the
+two-column control. Nobody looked until after the second reading was written
+down.
+
+So: before building a benchmark for a shape, grep `sql/*/benchmarks/` and the
+plans for that shape, and read the committed numbers first. If yours disagree
+with a committed file, that disagreement is the finding and must be resolved
+before either number is quoted - one of them is measuring something else, and
+finding out which is cheaper than publishing both.
+
+The second half of the rule is what to do once you have an anomaly: add the
+control that distinguishes the candidate causes *before* writing the cause down.
+Here it was one line - the same queries through `toRdd` - and it changed the
+conclusion completely.
+

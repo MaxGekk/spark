@@ -168,29 +168,36 @@ and it is much larger than the lane's. It is recorded as row 145.
 * **Row 145** is new and larger than the lane question that found it - and its
   first reading was wrong, which section 9.3 records.
 
-### 9.3 The forwarded column, separated the same night
+### 9.3 The forwarded column, separated and then refuted the same night
 
 9.1 read the four slow crossed cases as "forwarding a column costs ten times".
-A five-case separation at twenty million rows says it is not the forwarding:
+Two corrections followed within the hour, and both belong in the record.
 
-| query | node | M rows/s |
-| :--- | :--- | ---: |
-| `SELECT i FROM t WHERE i > 50000` | no narrowing | 913.7 |
-| `SELECT i2 FROM t WHERE i > 50000` | `List(i2)` | 115.2 |
-| `SELECT i, i2 FROM t WHERE i > 50000` | no narrowing | 918.1 |
-| `SELECT i FROM t WHERE i > 50000 AND i2 >= 0` | `List(i)` | 116.8 |
-| `SELECT count(*) FROM t WHERE i > 50000` | aggregate above | 123.2 |
+**First**, a five-case separation said it is not the forwarding: `SELECT i, i2
+FROM t WHERE i > 50000` returns two columns at 901.3 M rows/s while `SELECT i2
+FROM t WHERE i > 50000` returns one at 120.3, and the plans differ only by
+`VarkaFilterColumnarToRowExec.narrowing`. So the reading became "narrowing costs
+eight times".
 
-The third row decides it: two columns out, two read, and it runs at the
-one-column speed. What the fast and slow plans differ by is
-`VarkaFilterColumnarToRowExec.narrowing` - the absorbed projection, `Some`
-exactly when the node's output differs from the columns it was given - and the
-gap scales with surviving rows, not input rows: at about 1% selectivity the same
-pair reads 1726.1 against 1317.4, or 1.3x rather than 8x.
+**Second**, that reading is wrong too, and two things refute it. Task 78 had
+already measured this exact shape - `VarkaNarrowingBenchmark`, three
+selectivities, both widths - and found the narrowed form slightly *faster* than
+the two-column control, the opposite ordering. And forcing the row read-back with
+`toRdd` puts the two within 1% of each other: 144.4 against 142.8.
 
-Two cautions this leaves for task 145. The absorption exists because it beats
-the `Project` above the node that it replaced, so an eightfold gap against a
-query that needs no projection at all is not evidence against absorption - the
-third arm, un-absorbed, is unmeasured because the rule always absorbs today. And
-`count(*)`'s 123.2 is a different path again, an aggregate above the filter, not
-a narrowing.
+What is actually there: under a columnar sink the un-narrowed shapes stay
+columnar end to end and run seven times faster than they do through the row path,
+while the narrowed one runs at its row-path rate either way. The gap is a cost
+the un-narrowed shapes *avoid*, not one the narrowing pays - task 19's read-back
+floor, reached through a plan difference. Row 145 is rescoped to that question:
+why the narrowed node does not take the columnar path when `columnarSibling`
+already builds one for it.
+
+**What this cost, and the lesson.** Three readings in ninety minutes, two of them
+written down before the third arrived, because each experiment separated one
+variable and stopped there. The check that would have caught it first is one this
+project already has a rule for - task 78's benchmark existed, measured this shape
+and disagreed, and nobody looked for it until after the second reading. The
+`toRdd` control is committed beside the `noop` arms in
+`VarkaFilterNarrowingBenchmark` so the next reader gets both in one file, and
+`SKILLS.md` carries the rule.

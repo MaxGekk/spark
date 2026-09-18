@@ -2966,45 +2966,40 @@ shape at two widths over identical values, Varka on and off, at two row counts,
 with every case asserting it fused. **Done when** the per-shape ratio is
 committed with the scale it was measured at. Size: small; needs a quiet machine.
 
-### 2.81 A filter that narrows its output costs eight times one that does not (task 145)
+### 2.81 A narrowed filter loses the columnar path (task 145)
 
-*Opened 18 September 2026 by task 144's crossed experiment, and narrowed the same
-night by a five-case separation that refuted the first reading of it.*
+*Opened 18 September 2026 by task 144's crossed experiment, then twice corrected
+the same night - first by a five-case separation, then by the control that
+refuted the separation's own reading. `PLAN_TASK_144.md` 9.3 carries the record.*
 
-The first reading was "forwarding a column costs ten times". It is not the
-forwarding, and the separation says so - twenty million rows, one partition, the
-same predicate at about half selectivity:
+The first reading was "forwarding a column costs ten times", the second "a filter
+that narrows its output costs eight times". Both are wrong, and the control that
+says so is forcing the row read-back with `toRdd`: there the narrowed and
+un-narrowed shapes are within 1% of each other (144.4 against 142.8 M rows/s),
+and task 78 had already measured that shape at three selectivities and both
+widths, finding the narrowed form slightly *faster* than the two-column control.
 
-| query | node | M rows/s |
-| :--- | :--- | ---: |
-| `SELECT i FROM t WHERE i > 50000` | no narrowing | 913.7 |
-| `SELECT i2 FROM t WHERE i > 50000` | `List(i2)` | 115.2 |
-| `SELECT i, i2 FROM t WHERE i > 50000` | no narrowing | 918.1 |
-| `SELECT i FROM t WHERE i > 50000 AND i2 >= 0` | `List(i)` | 116.8 |
+What is left, measured under a `noop` sink over twenty million rows:
 
-The third row is the one that decides it: two columns out, two columns read, and
-it runs at the one-column speed. So the cost is neither the column count, nor the
-second column's scan, nor the lane width - it is
-`VarkaFilterColumnarToRowExec.narrowing`, the absorbed projection, which is
-`Some` exactly when the node's output differs from the columns it was given and
-`None` when they match. And it scales with surviving rows rather than with input
-rows: at about 1% selectivity the same pair is 1726.1 against 1317.4, a gap of
-1.3x rather than 8x.
+| query | node | columnar sink | row path forced |
+| :--- | :--- | ---: | ---: |
+| `SELECT i FROM t WHERE i > 50000` | no narrowing | 862.3 | 144.4 |
+| `SELECT i2 FROM t WHERE i > 50000` | narrowing | 120.3 | 142.8 |
+| `SELECT i, i2 FROM t WHERE i > 50000` | no narrowing | 901.3 | 109.5 |
 
-**What this is not.** The absorption exists because it is *faster* than the
-alternative it replaced - a `Project` above the node, which pays an operator
-boundary and converts the discarded column too (2.81's own docstring). So these
-numbers do not say absorption is bad; they say a query that needs one runs at an
-eighth of a query that does not, and nobody has measured the third arm.
+The un-narrowed shapes are seven times faster than themselves under a forced row
+path; the narrowed one is not faster at all. So the gap is not a cost the
+narrowing pays - it is a cost the others *avoid*, by staying columnar end to end
+where the narrowed node does not. That is task 19's read-back floor, reached
+through a plan difference.
 
-**How.** Three arms at equal selectivity: no narrowing, absorbed narrowing, and
-the un-absorbed `Project` above the node that absorption replaced - the last
-needs a switch, since the rule always absorbs today. Then attribute the gap
-between the first two, which is a per-selected-row `UnsafeProjection` against an
-identity one, with `dev/varka_emit.sh --asm` and the node's own metrics before any
-redesign. **Done when** the eightfold gap is explained by a measurement and
-either closed or recorded as a bound with its reason. Size: medium. Precedes 105,
-whose surface entries narrow.
+**How.** Find out why the narrowed node does not take the columnar path under a
+columnar consumer, given that `VarkaFilterColumnarToRowExec.columnarSibling`
+already builds `VarkaProjectExec(narrowing, filter)` for exactly this case; then
+either route it there or record why it cannot be. **Done when** a columnar
+consumer over a narrowed filter is measured beside an un-narrowed one and the
+difference is explained. Size: small to medium. Relevant to 105, whose surface
+entries narrow, and to the Arrow cache builder, which is a columnar consumer.
 
 ## 3. Task breakdown
 
@@ -3177,7 +3172,7 @@ can start has.
 | 142 | What a 64-bit lane costs (section 2.77). **Done** (`PLAN_TASK_142.md` 9, 17 September 2026) from task 85's own finding: the long lane is priced against the int one for eight shapes over a four-rung row ladder, so the halved headroom is a committed number before task 104 is judged against it | A committed `VarkaLongLaneBenchmark` results file whose rungs put both arms in the same cache level, and a per-shape ratio the milestone's later long-lane tasks can be read against |
 | 143 | The pre-commit hook judges the commit, not the file (section 2.78). **Done** (`PLAN_TASK_143.md`, 17 September 2026) from a finding in task 142's own merge commit: line-anchored findings are scoped to the commit's diff, and the Python column scan takes ruff's own single-chunk exemption | A hook self-test that fails in both directions for each rule and runs whenever the hook is among the committed files; the merge commit that started it reports nothing |
 | 144 | What the long lane costs end to end (section 2.80). **Done** (`PLAN_TASK_144.md` 9, 18 September 2026) from task 29's unscored prediction: the lane costs 0.73x to 0.96x of the int lane at two million rows and 0.31x to 0.97x at twenty million - never the kernel's 2.1x, and never one band, so task 29's predicted 0.45x-0.60x is wrong in both directions depending on the shape | `VarkaLongLaneThroughputBenchmark` in `sql/core`, one shape at two widths over identical values, Varka on and off, at two row counts, every case asserting it fused | The committed results file, task 29's 6.1.2 scored, and the per-shape ratios the long-lane tasks are read against |
-| 145 | A filter that narrows its output costs eight times one that does not (section 2.81). **Scoped** (18 September 2026) from task 144's crossed experiment and a five-case separation the same night, which refuted its first reading: not the forwarding, not the column count, not the lane - `SELECT i, i2 ... WHERE i > 50000` outputs two columns at 918.1 M rows/s while `SELECT i2 ... WHERE i > 50000` outputs one at 115.2, and the plans differ only by `VarkaFilterColumnarToRowExec.narrowing`. The gap scales with surviving rows: 8x at half selectivity, 1.3x at one per cent | Three arms at equal selectivity - no narrowing, absorbed narrowing, and the un-absorbed `Project` above the node that absorption replaced, which needs a switch - then attribute the gap between the first two | The eightfold gap explained by a measurement and either closed or recorded as a bound with its reason |
+| 145 | A narrowed filter loses the columnar path (section 2.81). **Scoped** (18 September 2026) from task 144's crossed experiment, and twice corrected the same night: not the forwarding, not the narrowing's own cost - with the row read-back forced the narrowed and un-narrowed shapes are within 1% (144.4 against 142.8 M rows/s) and task 78 had already measured that shape at both widths. Under a columnar sink the un-narrowed shapes run at 862.3 and 901.3 while the narrowed one runs at 120.3, so what differs is that they stay columnar and it does not | Find why the narrowed node does not take the columnar path under a columnar consumer, when `columnarSibling` already builds `VarkaProjectExec(narrowing, filter)` for the case; route it there or record why not | A columnar consumer over a narrowed filter measured beside an un-narrowed one, with the difference explained |
 
 ## 4. Files
 

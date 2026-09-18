@@ -27,34 +27,33 @@ import org.apache.spark.sql.execution.columnar.ArrowCachedBatchSerializer
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 
 /**
- * What it costs a Varka filter to narrow its output (milestone 5, task 145's baseline).
+ * Whether a Varka filter keeps the columnar path when it narrows its output (task 145).
  *
  * `VarkaFilterColumnarToRowExec` carries `narrowing`: the projection above it, absorbed, and
  * `Some` exactly when the node's output differs from the columns it was given. Task 144's
- * crossed experiment found queries that differ only in that clause running eight to ten times
- * apart, and read it as the cost of *forwarding* a column. This file is the separation that
- * says otherwise, and it is committed rather than run once because every number a plan quotes
- * has to trace to a results file.
+ * crossed experiment found queries differing only in that clause running eight times apart
+ * under a `noop` sink, and this file was written to price the narrowing. It prices something
+ * else, which is why it is committed: with the row read-back forced, narrowing costs nothing -
+ * `toRdd` puts the narrowed and un-narrowed shapes within 1% of each other - and task 78's
+ * `VarkaNarrowingBenchmark` had already measured that shape at three selectivities and both
+ * widths, finding the narrowed form slightly *faster* than the two-column control.
  *
- * The cases vary one thing at a time over one cached table, at a fixed predicate and two
- * selectivities:
+ * What the gap actually is: under a columnar sink the un-narrowed shapes stay columnar end to
+ * end while the narrowed one does not, so it pays a read-back the others avoid - task 19's
+ * floor, arriving through a plan difference rather than through the lane or the column count.
+ * The `toRdd` arms are the control that says so, and they are the reason this file exists
+ * beside task 78's rather than repeating it.
+ *
+ * The cases vary one thing at a time over one cached table:
  *
  *   A  one column, filtered and output       - no narrowing
  *   B  two columns, the other one output     - narrowing
- *   C  two columns, both output              - no narrowing, and the case that decides it
+ *   C  two columns, both output              - no narrowing, two columns out
  *   D  two columns, both in the predicate    - narrowing
  *   E  one column, no output at all          - an aggregate above the filter, a third path
  *   F  A at about one per cent selectivity
  *   G  B at about one per cent selectivity
- *
- * C is the control the first reading lacked: it reads and returns two columns and should cost
- * what A costs if the column count is not the driver. F and G are what separate a per-input-row
- * cost from a per-surviving-row one.
- *
- * What this cannot say, and task 145 must: the absorbed projection replaced a `Project` above
- * the node, which pays an operator boundary and converts the discarded column too, so a gap
- * against a query that needs no projection at all is not evidence against absorption. The
- * un-absorbed arm needs a switch the rule does not have, and is that task's first commit.
+ *   and A, B, C again through `toRdd`, which forces the row path for all three
  *
  * To run this benchmark:
  * {{{
@@ -109,6 +108,15 @@ object VarkaFilterNarrowingBenchmark extends SqlBasedBenchmark {
         "G B at about 1% selectivity" ->
           "SELECT i2 FROM varka_narrowing WHERE i > 99000")
 
+      // The control that decides what the gap above is: `toRdd` forces the row read-back for
+      // every shape, so a difference that survives it is the narrowing's and one that does not
+      // is the columnar path's.
+      val rowCases = Seq(
+        "A through toRdd (row path forced)" -> "SELECT i FROM varka_narrowing WHERE i > 50000",
+        "B through toRdd (row path forced)" -> "SELECT i2 FROM varka_narrowing WHERE i > 50000",
+        "C through toRdd (row path forced)" ->
+          "SELECT i, i2 FROM varka_narrowing WHERE i > 50000")
+
       cases.foreach { case (name, query) =>
         val fused = varka.sql(query).queryExecution.executedPlan.find {
           case _: org.apache.spark.sql.execution.VarkaColumnarToRowExec
@@ -127,6 +135,9 @@ object VarkaFilterNarrowingBenchmark extends SqlBasedBenchmark {
           minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
         cases.foreach { case (name, query) =>
           benchmark.addCase(name) { _ => varka.sql(query).noop() }
+        }
+        rowCases.foreach { case (name, query) =>
+          benchmark.addCase(name) { _ => varka.sql(query).queryExecution.toRdd.count() }
         }
         benchmark.run()
       }
