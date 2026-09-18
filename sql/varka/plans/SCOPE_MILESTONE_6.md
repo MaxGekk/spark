@@ -2744,6 +2744,52 @@ Re-enters with: `TIMESTAMP_NTZ` comparisons, differences and interval addition
 first, since their semantics are settled; zoned `TIMESTAMP` comparisons beside
 them; zoned arithmetic only with the DST-straddling test above.
 
+### Item 32. The bitwise operators
+
+*Opened 18 September 2026, from a coverage audit of what Varka does not
+vectorize and why. The audit's other findings all named a blocker - an output
+representation, a mixed width, an admission rule. These have none.*
+
+`&`, `|`, `^`, `~`, `bit_count` and `bit_get` are the whole of
+`bitwiseExpressions.scala`, and Varka admits none of them. They are unusual in
+this catalogue for having no reason not to: the operands and the result are the
+same integral lane the engine already owns, the Vector API declares every
+operator natively - `AND`, `OR` and `XOR` as `Associative`, `NOT` and
+`BIT_COUNT` as `Unary` - and **the emitter already emits `AND`, `XOR` and `LSHR`
+today**, inside the calendar lowerings, through the same `lanewise` descriptors
+an expression arm would use. The kernel side is largely built; what is missing is
+IR nodes and compiler arms.
+
+They also arrive at both widths at once, which is new. `BitwiseNot` is
+`child.dataType` and the three binary ones inherit their operands', so an
+`int` and a `bigint` column take the same arm at the lane each already has - the
+first family since the long lane landed where covering `int` covers `bigint` for
+free.
+
+**Three groups, not six, and the split is the usual one.**
+
+* **`&`, `|`, `^`, `~` - nothing in the way.** Same lane in and out, one lanewise
+  op each, null-intolerant like every other binary node. This is the cheapest
+  coverage in the audit.
+* **`bit_count` - clean at int32, mixed width at int64.** It returns
+  `IntegerType` whatever it is given, so `bit_count(i)` is same-lane and
+  `bit_count(l)` is int64 in, int32 out - the narrowing shape item 28's task
+  owns in milestone 5, and the same shape as the `TIME` field extracts. The int32
+  form need not wait for it.
+* **`bit_get` - blocked on a representation.** It returns `ByteType`, and Varka
+  has neither a byte lane nor an Arrow vector for one. This is the same blocker
+  as `extract(MONTH FROM ym)`, which milestone 5 records as matched only to
+  decline; the two should be lifted together, by whatever admits a narrow
+  integral output, and neither is worth lifting alone.
+
+**Why it is worth a row at all**, given none of these is a headline function: the
+audit that found them was looking for mechanism failures and found that Varka's
+gaps are otherwise all representations, widths and admission rules. A family with
+no blocker at all is the cheapest breadth available, and `bit_count` over a
+`bigint` doubles as a second caller for the narrowing that the `TIME` extracts
+would otherwise be the only user of - which is worth having before that lowering
+is designed around one caller.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
