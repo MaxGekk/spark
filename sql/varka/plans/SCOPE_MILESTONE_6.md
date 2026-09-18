@@ -2744,14 +2744,17 @@ Re-enters with: `TIMESTAMP_NTZ` comparisons, differences and interval addition
 first, since their semantics are settled; zoned `TIMESTAMP` comparisons beside
 them; zoned arithmetic only with the DST-straddling test above.
 
-### Item 32. The bitwise operators
+### Item 32. The bitwise and shift operators
 
 *Opened 18 September 2026, from a coverage audit of what Varka does not
 vectorize and why. The audit's other findings all named a blocker - an output
 representation, a mixed width, an admission rule. These have none.*
 
 `&`, `|`, `^`, `~`, `bit_count` and `bit_get` are the whole of
-`bitwiseExpressions.scala`, and Varka admits none of them. They are unusual in
+`bitwiseExpressions.scala`, and `shiftleft`, `shiftright` and
+`shiftrightunsigned` sit apart from them in `mathExpressions.scala` - a division
+of the source that cost this item a first draft, which scoped the audit to the
+one file and missed the three. Varka admits none of the nine. They are unusual in
 this catalogue for having no reason not to: the operands and the result are the
 same integral lane the engine already owns, the Vector API declares every
 operator natively - `AND`, `OR` and `XOR` as `Associative`, `NOT` and
@@ -2768,9 +2771,18 @@ free.
 
 **Three groups, not six, and the split is the usual one.**
 
-* **`&`, `|`, `^`, `~` - nothing in the way.** Same lane in and out, one lanewise
-  op each, null-intolerant like every other binary node. This is the cheapest
-  coverage in the audit.
+* **`&`, `|`, `^`, `~` and the three shifts - nothing in the way.** Same lane in
+  and out - `BitShiftOperation` declares `dataType = left.dataType`, so a shift
+  follows its operand's width exactly as the binary bitwise ops follow theirs -
+  one lanewise op each, null-intolerant like every other binary node. This is the
+  cheapest coverage in the audit.
+
+  The shifts have one wrinkle the others do not: the emitter's `emitShift` takes
+  a **constant** shift amount, which is all the calendar lowerings ever needed. A
+  literal shift is therefore free, and a shift by a *column* needs the
+  vector-operand form of `lanewise`, which the Vector API has and the emitter has
+  never emitted. Worth splitting on that line rather than treating the three as
+  one shape.
 * **`bit_count` - clean at int32, mixed width at int64.** It returns
   `IntegerType` whatever it is given, so `bit_count(i)` is same-lane and
   `bit_count(l)` is int64 in, int32 out - the narrowing shape item 28's task
@@ -2781,6 +2793,13 @@ free.
   as `extract(MONTH FROM ym)`, which milestone 5 records as matched only to
   decline; the two should be lifted together, by whatever admits a narrow
   integral output, and neither is worth lifting alone.
+
+**Two more the audit turned up beside them**, both marginal and recorded so the
+next reader need not re-derive them: `floor(i)` and `ceil(i)` over an integral
+return `LongType`, so they are the *widening* identity - correct, vectorizable
+once item 28's conversion exists, and worth almost nothing; and `factorial(i)` is
+a twenty-one entry lookup, which `selectFrom` serves natively. Neither earns work
+of its own; both are free riders on machinery built for something else.
 
 **Why it is worth a row at all**, given none of these is a headline function: the
 audit that found them was looking for mechanism failures and found that Varka's
