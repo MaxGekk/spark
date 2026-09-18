@@ -24,10 +24,10 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaValueRange, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -858,6 +858,21 @@ private[sql] object VarkaExpressionCompiler {
       } yield total
       if (built.isEmpty) truncate(literals, mark)
       built
+    case e @ ExtractANSIIntervalYears(iv) =>
+      // `IntervalUtils.getYears(months)` is `months / 12` - Java's `/`, truncating toward zero -
+      // over a stored month count that nothing bounds. The int-lane magic multiply the calendar
+      // uses is exact over 0..49,151, about one forty-thousandth of the type, so this is the
+      // first division Varka emits through the double lane instead: exact for every int32, and
+      // truncating already, so it needs neither a range guard nor a correction step.
+      // `sql/varka/plans/verify_ym_division.py` checks both claims over all 2^32 month counts.
+      intervalOperand(iv, "the interval", inputs, literals, sink).map(new ConstDivide(_, 12))
+    case e @ ExtractANSIIntervalMonths(iv) =>
+      // `(months % 12).toByte`. The remainder is one multiply and one subtract away from the
+      // quotient above, so the division is not what blocks this: the result is a `ByteType`, and
+      // Varka has neither a byte lane nor an Arrow vector to store one into. It declines until
+      // a narrowing store exists, which is its own question (PLAN_MILESTONE_5.md 2.20).
+      sink.note("extract(MONTH FROM ym) returns a byte, which has no lane", e)
+      None
     case m @ MultiplyYMInterval(iv, num) =>
       // `Math.multiplyExact(months, num)` for the int-family arms. Both operands have to be
       // bounded before the check comes off, and a stored interval column never is, so a

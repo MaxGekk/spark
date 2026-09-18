@@ -380,6 +380,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
         case x: WeekDay => value(x.days(), Kind.DAY)
         case x: IntArith => value(x.left(), Kind.INT); value(x.right(), Kind.INT)
         case x: IntNeg => value(x.child(), Kind.INT)
+        case x: ConstDivide => value(x.child(), Kind.INT)
         case c: Cond => cond(c)
       }
     }
@@ -393,7 +394,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
     val rootKind = root match {
       case _: DateDiff | _: Year | _: Month | _: DayOfMonth | _: Quarter | _: DayOfYear |
           _: WeekOfYear | _: DayOfWeek | _: DayOfWeekIso | _: WeekDay | _: IntArith |
-          _: IntNeg => Kind.INT
+          _: IntNeg | _: ConstDivide => Kind.INT
       case _ => Kind.DAY
     }
     value(root, rootKind)
@@ -461,6 +462,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
       case x: WeekDay => go(x.days(), armed)
       case x: IntArith => go(x.left(), armed) && go(x.right(), armed)
       case x: IntNeg => go(x.child(), armed)
+      case x: ConstDivide => go(x.child(), armed)
       case _: ColumnRef | _: LiteralSlot => true
       case c: Cond => goCond(c, armed)
     }

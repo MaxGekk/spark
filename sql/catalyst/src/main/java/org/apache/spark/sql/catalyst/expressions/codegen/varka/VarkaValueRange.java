@@ -62,6 +62,16 @@ public final class VarkaValueRange {
     /** The interval of negations. */
     Range neg();
 
+    /**
+     * {@code this / divisor} with the divisor a non-zero constant, truncating toward zero the
+     * way Java's {@code /} does - the range of {@link VarkaVectorIR.ConstDivide}.
+     *
+     * <p>Truncation is monotone in the dividend, so the interval's own endpoints bound the
+     * quotient; a negative divisor reverses their order, which is why they are sorted rather
+     * than taken in place.
+     */
+    Range divideBy(long divisor);
+
     /** The interval of absolute values. */
     Range abs();
 
@@ -88,6 +98,7 @@ public final class VarkaValueRange {
     @Override public Range sub(Range other) { return this; }
     @Override public Range mul(Range other) { return this; }
     @Override public Range neg() { return this; }
+    @Override public Range divideBy(long divisor) { return this; }
     @Override public Range abs() { return this; }
     @Override public OptionalLong magnitude() { return OptionalLong.empty(); }
     @Override public boolean fitsInt() { return false; }
@@ -166,6 +177,21 @@ public final class VarkaValueRange {
       } catch (ArithmeticException overflow) {
         return UNKNOWN;
       }
+    }
+
+    @Override
+    public Range divideBy(long divisor) {
+      if (divisor == 0) {
+        return UNKNOWN;
+      }
+      // The one quotient that does not fit: Long.MIN_VALUE / -1. Nothing else can overflow,
+      // because |v / d| <= |v| for every |d| >= 1.
+      if (divisor == -1 && (lo == Long.MIN_VALUE || hi == Long.MIN_VALUE)) {
+        return UNKNOWN;
+      }
+      long a = lo / divisor;
+      long b = hi / divisor;
+      return of(Math.min(a, b), Math.max(a, b));
     }
 
     @Override

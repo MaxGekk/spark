@@ -25,7 +25,7 @@ import scala.util.Try
 import com.fasterxml.jackson.databind.ObjectMapper
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression, InSet, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression, ExtractANSIIntervalMonths, InSet, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.types.{DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
@@ -146,7 +146,11 @@ class VarkaCoverageSuite extends SparkFunSuite {
           + "column declines"),
       Row("abs(ym)"),
       Row("ym - ymm"),
-      Row("CAST(ymy AS INTERVAL MONTH)"))),
+      Row("CAST(ymy AS INTERVAL MONTH)"),
+      Row("extract(YEAR FROM ym)",
+        "a division by twelve over a month count nothing bounds, so it is the first one the "
+          + "calendar's range-narrowed magic cannot serve and the double lane can"),
+      Row("extract(YEAR FROM ym) - 1", "the quotient feeding further int arithmetic"))),
 
     Family("Integer arithmetic", predicates = false, Seq(
       Row("i + 1"),
@@ -254,11 +258,29 @@ class VarkaCoverageSuite extends SparkFunSuite {
       "documented as covered, but the compiler declines:\n  " + failures.mkString("\n  "))
   }
 
+  test("an expression matched only to decline really does decline") {
+    // The exemption above is the only way a class the compiler matches can stay out of the
+    // table, so it has to be self-policing: an entry that starts fusing is coverage and belongs
+    // in the table, and leaving it here would hide it from every reader of the generated docs.
+    val stillDeclining = matchedOnlyToDecline.keys.toSeq.sorted.filter { name =>
+      val expr = name match {
+        case "ExtractANSIIntervalMonths" => ExtractANSIIntervalMonths(ym)
+        case other => fail(s"no expression built for $other")
+      }
+      VarkaExpressionCompiler.compile(Seq(out(expr)), columns).isDefined
+    }
+    assert(stillDeclining.isEmpty,
+      "listed as matched-only-to-decline, but it fuses now - move it into the table:\n  " +
+        stillDeclining.mkString(", "))
+  }
+
   test("the table documents every expression the compiler admits") {
     val documented = families.flatMap(_.rows).flatMap { row =>
       expressionOf(row).collect { case e: Expression => e.getClass.getSimpleName }
     }.toSet
-    val missing = (admittedByCompiler -- infrastructure -- documented).toSeq.sorted
+    val missing =
+      (admittedByCompiler -- infrastructure -- matchedOnlyToDecline.keySet -- documented)
+        .toSeq.sorted
     assert(missing.isEmpty,
       "VarkaExpressionCompiler matches on these, and no row in the coverage table exercises\n" +
         "them - add a row to VarkaCoverageSuite and regenerate the table:\n  " +
@@ -340,6 +362,19 @@ class VarkaCoverageSuite extends SparkFunSuite {
    */
   private val infrastructure =
     Set("Alias", "BoundReference", "Literal", "RuntimeReplaceable")
+
+  /**
+   * Expressions the compiler matches only in order to decline them with a specific reason.
+   *
+   * <p>They are not coverage - nothing fuses, so a row in the table would be a false claim -
+   * but a {@code case} exists for each so that the decline names the real blocker rather than
+   * reading as "unsupported expression", which would send a reader looking in the wrong place.
+   * The value is what blocks it. The test below keeps the list honest: anything here that
+   * starts fusing fails, so this cannot become a place to park work that has since landed.
+   */
+  private val matchedOnlyToDecline = Map(
+    "ExtractANSIIntervalMonths" ->
+      "the result is a ByteType, and Varka has neither a byte lane nor an Arrow vector for one")
 
   // --- rendering --------------------------------------------------------------------------
 

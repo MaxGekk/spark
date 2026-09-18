@@ -35,6 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Gre
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LastDay;
@@ -184,6 +185,11 @@ public final class VarkaRangeAnalysis {
       case IntArith n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN : arith(n, policy, literals);
       case IntNeg n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN
           : range(n.child(), Kind.INT, policy, literals).neg();
+      // A constant division only ever shrinks a range, so a bounded child stays bounded and an
+      // unbounded one is no worse off - which is the point of the node: it needs no bound to be
+      // correct, and it hands one on where it had one.
+      case ConstDivide n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN
+          : range(n.child(), Kind.INT, policy, literals).divideBy(n.divisor());
       // A condition has no value of its own.
       case Cond c -> VarkaValueRange.UNKNOWN;
     };
