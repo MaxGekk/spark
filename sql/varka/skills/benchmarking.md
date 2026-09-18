@@ -479,3 +479,37 @@ The second half of the rule is what to do once you have an anomaly: add the
 control that distinguishes the candidate causes *before* writing the cause down.
 Here it was one line - the same queries through `toRdd` - and it changed the
 conclusion completely.
+
+## A harness that checks how a row was produced, and never what it produced
+
+The date-surface driver asserted a great deal per measured shape: that the plan
+carried a Varka node, that no row-engine operator sat above it, that no batch
+fell back, that some executor work ran, that the fixed share was under its
+ceiling. It compared nothing the arms computed. A kernel that was fast and wrong
+would therefore publish a rate like any other, and the run publishing it looked
+exactly like a run that had not.
+
+The differential suites do not close that gap. They cover correctness over a
+thousand rows in a local session; the surface measures a different distribution,
+row count, partitioning, cache format and Spark version, and it is the surface's
+numbers that reach the README.
+
+Two things worth carrying to the next harness:
+
+- **The quantity you need is often already there and thrown away.** The driver
+  had written `# selectivity:` per filter entry for months, and the table builder
+  read it from every arm into one dict with `update()`, keeping the last. It was
+  reading the same number from every arm and discarding all but one. Comparing
+  them cost one line and was live immediately, with no regeneration.
+- **Fold with a sum, not an xor, and reduce before summing.** An xor cancels, and
+  benchmark data is repetitive by design - `year(d)` over a year of dates is one
+  value - so equal hashes vanish in pairs and the checksum agrees for the wrong
+  reason. A sum does not cancel, and reducing each hash modulo a value near 2^30
+  first keeps the total inside an int64 without a check: a fold that silently
+  overflows still compares equal between two arms that overflowed identically,
+  so it keeps passing while meaning less than it claims.
+
+And a rule about the check's own silence: when it has nothing to compare - an
+old results file predating the line, say - it must say so. A check that silently
+compares nothing is worse than no check, because the run looks the same either
+way.
