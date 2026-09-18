@@ -406,8 +406,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       patternCombos: Seq[Seq[Int => Boolean]],
       data: (Int, Int) => Long,
       ctx: String,
-      lanes: Int): Unit = {
-    val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+      lanes: Int,
+      base: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): Unit = {
+    val options = base.withLanesOverride(lanes)
     val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
     try {
       for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
@@ -4480,6 +4481,16 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0", s"jdk.incubator.vector.$owner")
 
   /**
+   * How many `convertShape` calls a body makes - the lane-width conversions, and only those.
+   * The reinterprets the AVX2 division uses are declared on `Vector` too and are not
+   * conversions: they reread the same bits at another type, which is the whole point of that
+   * form, so a count that included them would report the form it exists to distinguish.
+   */
+  private def convertShapes(bytes: Array[Byte]): Int =
+    VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0", "jdk.incubator.vector.Vector",
+      java.util.List.of("reinterpretAsDoubles", "reinterpretAsLongs"))
+
+  /**
    * How many of a body's divisions took a double form: each emits exactly one `mul` or `div` per
    * half, so the `DoubleVector` count is twice the number of divisions that were lowered.
    */
@@ -4487,7 +4498,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val halves = opsOn(bytes, "DoubleVector")
     assert(halves % 2 === 0, s"a double division emits two halves, saw $halves")
     // Each division also converts twice in and twice out, all four on `Vector` itself.
-    assert(opsOn(bytes, "Vector") === halves * 2,
+    assert(convertShapes(bytes) === halves * 2,
       s"expected ${halves * 2} conversions for $halves halves")
     halves / 2
   }
@@ -4646,7 +4657,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
    */
   private def longDoubleDivisions(bytes: Array[Byte]): Int = {
     val divides = opsOn(bytes, "DoubleVector")
-    assert(opsOn(bytes, "Vector") === divides * 2,
+    assert(convertShapes(bytes) === divides * 2,
       s"expected ${divides * 2} conversions for $divides divisions")
     divides
   }
@@ -4685,6 +4696,50 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
         (_, i) => vs(i % vs.length), s"long divc/$d", lanes)
     }
     assert(col.divisor() === 1)
+  }
+
+  test("the AVX2 form computes the same quotients as the conversions, at both signs") {
+    // A host whose L2D and D2L do not intrinsify takes a magic-number form instead: no
+    // conversion instruction at all, a floor built by hand out of a compare and a masked
+    // subtract, and the sign applied afterwards because the identity needs a non-negative
+    // operand and produces a floor where Java truncates. Every one of those is a place the two
+    // forms could disagree, so they are driven over the same dividends and required to agree
+    // with the same reference. The option is set explicitly rather than inherited: the
+    // arithmetic is correct on any machine, and it is the lowering that is under test.
+    val avx2 = VarkaEmitOptions.DEFAULTS.withUseAVX(2)
+    val divisors = Seq(3_600_000_000_000L, 1_000_000_000L, 1_000L, 86_400_000_000L, 60L, -60L)
+    for (d <- divisors; lanes <- Seq(2, 8)) {
+      val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), d))
+      val vs = dividendsAround(d)
+      checkLongMatrix(root, 1, Array.empty[Long], Seq(1, 7, 17, 64, 129), combos(1),
+        (_, i) => vs(i % vs.length), s"avx2 divc/$d", lanes, avx2)
+    }
+  }
+
+  test("the AVX2 form is chosen by the level, and only at the long lane") {
+    // What selects it, stated as bytes rather than as intent. `convertShape` is the conversion
+    // form's signature call and the magic form has none; the int lane has no magic form at all,
+    // since its dividend is exactly representable and the conversion is what it is built on.
+    val long64 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000))
+    val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
+    def converts(roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Int =
+      convertShapes(emitMulti(roots, 1, 0, options)._2)
+    val defaults = VarkaEmitOptions.DEFAULTS
+    assert(converts(long64, defaults.withUseAVX(2)) === 0, "AVX2 emits no conversion")
+    assert(converts(long64, defaults.withUseAVX(3)) === 2, "AVX-512 converts in and out")
+    // A machine that reports no level has told us nothing against its converts, so it keeps
+    // them rather than paying for a form it may not need.
+    assert(converts(long64, defaults.withUseAVX(VarkaEmitOptions.USE_AVX_UNKNOWN)) === 2)
+    assert(converts(int32, defaults.withUseAVX(2)) === 4, "the int lane is not affected")
+
+    // And what the form costs, counted from the bytes rather than from the plan that sketched
+    // it: seven double ops (the two halves of the identity, the divide, the round and its
+    // correction), two reinterprets, and six long ops of which four are the sign correction -
+    // fifteen against the conversion form's three. `PLAN_TASK_88.md` 3.3 registered nine,
+    // before the signed case was decided; section 9.2 records the correction.
+    val bytes = emitMulti(long64, 1, 0, defaults.withUseAVX(2))._2
+    assert(opsOn(bytes, "DoubleVector") === 7, "the double half of the magic form")
+    assert(opsOn(bytes, "Vector") === 2, "two reinterprets and no conversion")
   }
 
   test("a long-lane constant division converts once each way, where the int lane converts twice") {

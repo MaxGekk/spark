@@ -591,6 +591,20 @@ public final class VarkaLoopEmitter {
   private static final MethodTypeDesc CONVERT_SHAPE =
       MethodTypeDesc.of(VECTOR, VO_CONVERSION, VECTOR_SPECIES, ConstantDescs.CD_int);
   /** {@code DoubleVector DoubleVector.mul/div(double)} - broadcast-scalar convenience. */
+  /** {@code DoubleVector Vector.reinterpretAsDoubles()} and its inverse, both on Vector. */
+  private static final MethodTypeDesc REINTERPRET_D = MethodTypeDesc.of(DOUBLE_VECTOR);
+  private static final MethodTypeDesc REINTERPRET_L =
+      MethodTypeDesc.of(ClassDesc.of("jdk.incubator.vector.LongVector"));
+  /** {@code VectorMask DoubleVector.compare(VectorOperators.Comparison, Vector)}. */
+  private static final MethodTypeDesc COMPARE_DD =
+      MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
+  /** {@code DoubleVector DoubleVector.lanewise(VectorOperators.Binary, double, VectorMask)}. */
+  private static final MethodTypeDesc LANEWISE_VD_MASKED =
+      MethodTypeDesc.of(DOUBLE_VECTOR, VO_BINARY, ConstantDescs.CD_double, VECTOR_MASK);
+  /** {@code LongVector LongVector.abs()} / {@code neg()}. */
+  private static final MethodTypeDesc UNARY_L =
+      MethodTypeDesc.of(ClassDesc.of("jdk.incubator.vector.LongVector"));
+
   private static final MethodTypeDesc LANEWISE_VD =
       MethodTypeDesc.of(DOUBLE_VECTOR, ConstantDescs.CD_double);
   /** {@code VectorMask IntVector.compare(VectorOperators.Comparison, Vector)} - erased. */
@@ -2498,6 +2512,8 @@ public final class VarkaLoopEmitter {
     /** the left operand, the right operand and the result of a checked
      *  {@link IntArith}, parked so the overflow mask can read all three. */
     final Map<VarkaVectorIR, int[]> intArithTmp = new HashMap<>();
+    /** The three vector locals {@link #emitMagicDivide} needs; empty where it is not emitted. */
+    final Map<VarkaVectorIR, int[]> constDivideTmp = new HashMap<>();
     /** Per DayOfWeek/WeekDay/NextDay: {@code emitFloorMod7}'s own original-value and fold
      * temporaries. NextDay needs no third slot for the date it reuses after the mod - its
      * emitValue arm keeps that copy on the operand stack instead (dup/swap). */
@@ -2770,6 +2786,13 @@ public final class VarkaLoopEmitter {
           if (analysis.options.checkIntOverflow() && node instanceof IntArith n
               && n.mode() != Overflow.WRAP) {
             s.intArithTmp.put(node, new int[] {slot++, slot++, slot++});
+          }
+          // The magic-number division builds its floor by hand, which needs the quotient, its
+          // rounding and the mask saying where the rounding went up held at once. The
+          // conversion form needs none, so the slots follow the form rather than the node, and
+          // the predicate is shared with the emission so the two cannot disagree about it.
+          if (node instanceof ConstDivide n && takesMagicDivide(analysis, n)) {
+            s.constDivideTmp.put(node, new int[] {slot++, slot++, slot++});
           }
           if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay
               || node instanceof TruncDateDynamic || node instanceof ThursdayOf
@@ -6224,6 +6247,10 @@ public final class VarkaLoopEmitter {
       // The identity, which the compiler does not have to have folded for this to be correct.
       return;
     }
+    if (takesMagicDivide(analysis, n)) {
+      emitMagicDivide(cb, analysis, n, s);
+      return;
+    }
     emitDoubleDivide(cb, analysis.lane,
         new Divider(VarkaEmitOptions.Division.DOUBLE_DIV, analysis.divider.species()),
         n.divisor());
@@ -6247,6 +6274,113 @@ public final class VarkaLoopEmitter {
    * round-down carry that follows a magic division is dead here rather than merely redundant;
    * {@link Divider#carries()} is what each site asks before emitting it.
    */
+  /**
+   * Whether this division takes the magic-number form instead of the conversion one.
+   *
+   * <p>Only at the long lane, and only where the JVM says its converts will not become
+   * instructions. {@code L2D} and {@code D2L} do not intrinsify under {@code -XX:UseAVX=2} -
+   * {@code dev/varka_canary/L2DProbe.java} reads 22 refused conversions there against none at
+   * the default level - and a conversion that falls back to Java is scalar code in the middle
+   * of a vector loop, which is worse than the fifteen lane operations the magic form spends.
+   *
+   * <p>A level the JVM did not report ({@link VarkaEmitOptions#USE_AVX_UNKNOWN}) keeps the
+   * conversions: an aarch64 machine has no {@code UseAVX} flag and no evidence against its
+   * converts, so assuming the worst there would slow it down on a guess.
+   */
+  private static boolean takesMagicDivide(Analysis analysis, ConstDivide n) {
+    int level = analysis.options.useAVX();
+    return analysis.lane == Lane.LONG && n.divisor() != 1
+        && level != VarkaEmitOptions.USE_AVX_UNKNOWN && level < 3;
+  }
+
+  /** {@code 2^52} as a double, and its bit pattern: the constants the magic form is built on. */
+  private static final double TWO_52 = 4503599627370496.0;
+  private static final long TWO_52_BITS = 0x4330000000000000L;
+  private static final long MANTISSA_52 = 0x000FFFFFFFFFFFFFL;
+
+  /**
+   * {@code [v] -> [v / d]} at the long lane with no conversion instruction at all, the form
+   * {@code dev/varka_canary/MagicProbe.java} measures and this transcribes.
+   *
+   * <p><b>The identity.</b> For {@code 0 <= u < 2^52}, {@code u | 0x4330000000000000} read as a
+   * double is exactly {@code 2^52 + u}, so a subtraction recovers {@code u} as a double; and an
+   * integer-valued double below {@code 2^52} plus {@code 2^52} carries that integer in its low
+   * mantissa bits, so a mask recovers it. Neither direction is a conversion.
+   *
+   * <p><b>Why a floor has to be built.</b> The Vector API has no lanewise floor, so the
+   * quotient is rounded to nearest by the same {@code 2^52} trick and stepped down in the lanes
+   * where rounding went up - a compare and a masked subtract. The rounding is exact because the
+   * quotient is below {@code 2^51}: the dividend is below {@code 2^52} by contract and the
+   * divisor is at least 2 in magnitude, a division by one having returned already and by minus
+   * one being refused.
+   *
+   * <p><b>Signs, which the probe's domain does not cover.</b> The identity needs a non-negative
+   * operand - the OR corrupts the sign and exponent of a negative long outright - and it
+   * produces a floor, which differs from Java's truncation on every negative non-multiple. So
+   * the magnitude is divided and the sign applied afterwards: {@code trunc} is odd, so
+   * {@code trunc(v/d) = sign(v)*sign(d)*floor(|v|/|d|)}. The divisor's sign is known at
+   * emission and folds into which comparison selects the lanes to negate, so it costs nothing.
+   * This is what lets the form serve a signed dividend rather than only {@code TIME}, and it is
+   * the choice {@code PLAN_TASK_88.md} 3.1 left open between sign correction and declining.
+   */
+  private static void emitMagicDivide(CodeBuilder cb, Analysis analysis, ConstDivide n, Slots s) {
+    int[] t = s.constDivideTmp.get(n);
+    int quotient = t[0];
+    int rounded = t[1];
+    int mask = t[2];
+    long magnitude = Math.abs(n.divisor());
+    ClassDesc vec = Lane.LONG.vector;
+
+    cb.dup();                                                   // [v, v]
+    cb.invokevirtual(vec, "abs", UNARY_L);                      // [v, |v|]
+    cb.loadConstant(TWO_52_BITS);
+    cb.invokevirtual(vec, "or", Lane.LONG.lanewiseVI);          // [v, |v| | 2^52 bits]
+    cb.invokevirtual(VECTOR, "reinterpretAsDoubles", REINTERPRET_D);
+    cb.loadConstant(TWO_52);
+    cb.invokevirtual(DOUBLE_VECTOR, "sub", LANEWISE_VD);        // [v, (double) |v|]
+    cb.loadConstant((double) magnitude);
+    cb.invokevirtual(DOUBLE_VECTOR, "div", LANEWISE_VD);        // [v, q]
+
+    // The three locals exist because a floor needs the quotient, its rounding and the mask
+    // between them alive at once, which the operand stack cannot hold in the order the calls
+    // want their receiver and arguments in.
+    cb.astore(quotient);                                        // [v]
+    cb.aload(quotient);
+    cb.loadConstant(TWO_52);
+    cb.invokevirtual(DOUBLE_VECTOR, "add", LANEWISE_VD);
+    cb.loadConstant(TWO_52);
+    cb.invokevirtual(DOUBLE_VECTOR, "sub", LANEWISE_VD);        // [v, round(q)]
+    cb.astore(rounded);                                         // [v]
+    cb.aload(rounded);
+    cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
+    cb.aload(quotient);
+    cb.invokevirtual(DOUBLE_VECTOR, "compare", COMPARE_DD);     // [v, rounded > q]
+    cb.astore(mask);                                            // [v]
+    cb.aload(rounded);
+    cb.getstatic(VECTOR_OPERATORS, "SUB", VO_BINARY);
+    cb.loadConstant(1.0);
+    cb.aload(mask);
+    cb.invokevirtual(DOUBLE_VECTOR, "lanewise", LANEWISE_VD_MASKED);   // [v, floor(q)]
+
+    cb.loadConstant(TWO_52);
+    cb.invokevirtual(DOUBLE_VECTOR, "add", LANEWISE_VD);
+    cb.invokevirtual(VECTOR, "reinterpretAsLongs", REINTERPRET_L);
+    cb.loadConstant(MANTISSA_52);
+    cb.invokevirtual(vec, "and", Lane.LONG.lanewiseVI);         // [v, floor(|v| / |d|)]
+
+    // The sign, folded with the divisor's: negate where the dividend is negative, or where it
+    // is not, when the divisor itself is.
+    cb.swap();                                                  // [|q|, v]
+    cb.getstatic(VECTOR_OPERATORS, n.divisor() < 0 ? "GE" : "LT", VO_COMPARISON);
+    cb.loadConstant(0L);
+    cb.invokevirtual(vec, "compare", Lane.LONG.compareVI);      // [|q|, negate here]
+    cb.astore(mask);                                            // [|q|]
+    cb.dup();
+    cb.invokevirtual(vec, "neg", UNARY_L);                      // [|q|, -|q|]
+    cb.aload(mask);
+    cb.invokevirtual(vec, "blend", Lane.LONG.blend);            // [q]
+  }
+
   private static void emitDoubleDivide(CodeBuilder cb, Lane lane, Divider divider,
       long divisor) {
     if (lane == Lane.LONG) {

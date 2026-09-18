@@ -375,21 +375,30 @@ public sealed interface VarkaVectorIR
    * all. A 64-bit dividend does not: the true divide's relative error is at most 2^-53 and a
    * non-multiple's quotient lies at least {@code 1/divisor} from an integer, so truncation
    * cannot cross one while the dividend stays under {@link #EXACT_DIVIDEND_BOUND} - and is
-   * silently off by one above it. This node cannot check a bound it is not handed, so whoever
+   * silently off by one above it, as is the magic-number form that a host without the
+   * conversion instructions takes. This node cannot check a bound it is not handed, so whoever
    * builds it over a {@code LONG} child must have proven one: structurally, the way nanoseconds
    * of day are, or through a per-batch input bound that declines the rest to the row engine.
    */
   record ConstDivide(VarkaVectorIR child, long divisor) implements VarkaVectorIR {
 
     /**
-     * The exclusive bound on a 64-bit dividend's magnitude for the double route to be exact.
-     * It is a bound on the <i>dividend</i> and does not depend on the divisor, which is what
-     * makes it one number rather than a table.
+     * The exclusive bound on a 64-bit dividend's magnitude that a caller must prove. It is a
+     * bound on the <i>dividend</i> and does not depend on the divisor, which is what makes it
+     * one number rather than a table.
      *
-     * <p>{@code sql/varka/plans/verify_double_division.py} derives it and checks every divisor
-     * Varka divides by against the range that divisor's lowering actually sees.
+     * <p>It is the tighter of the two lowerings' own bounds, because which one emits is a
+     * property of the machine and not of the tree. The conversion form is exact to
+     * {@code 2^53}, where a true divide's relative error of {@code 2^-53} cannot carry
+     * truncation across an integer. The magic-number form that a host without the conversion
+     * instructions takes is exact to {@code 2^52}, which is where its
+     * {@code v | 0x4330000000000000} identity stops holding. A tree is built before either is
+     * chosen, so the contract is the bound that holds under both.
+     *
+     * <p>{@code sql/varka/plans/verify_double_division.py} derives the wider bound and checks
+     * every divisor Varka divides by against the range that divisor's lowering actually sees.
      */
-    public static final long EXACT_DIVIDEND_BOUND = 1L << 53;
+    public static final long EXACT_DIVIDEND_BOUND = 1L << 52;
 
     public ConstDivide {
       if (divisor == 0) {
