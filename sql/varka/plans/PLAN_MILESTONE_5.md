@@ -3064,6 +3064,47 @@ consumer over a narrowed filter is measured beside an un-narrowed one and the
 difference is explained. Size: small to medium. Relevant to 105, whose surface
 entries narrow, and to the Arrow cache builder, which is a columnar consumer.
 
+### 2.82 The upstream ticket `TIME + INTERVAL` waits on (task 146)
+
+*Opened 18 September 2026 on the owner's instruction, from task 102's section
+4.1 and `SCOPE_STANDARD_MODE.md` section 3.3.*
+
+Vanilla's `timeAddInterval` is `addExact` plus a check that the result lies in
+`[0, 24h)`, throwing `timeAddIntervalOverflowError` otherwise. A lane cannot
+throw, so `PLAN_TASK_102.md` 4.1 lowers `t + dt` as `make_date`'s pattern: a
+guard that fails the whole batch into the ghost fallback, where the row engine
+raises the identical error on the identical row.
+[SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) asks whether
+ANSI's modulo-24 replaces the throw. If it does, the lowering becomes a
+`floorMod` by `NANOS_PER_DAY` with no guard, no decline channel and no batch
+ever falling back - and a declined batch costs the whole batch on the row
+engine, which is far more than the guard's own compare.
+
+This is one deliberate exception to the rule rows 107 to 115 were withdrawn
+under (section 8), that upstream's `TIME` gaps are upstream's work. Those rows
+were expressions vanilla does not have, whose absence costs Varka nothing until
+they land. This one is a semantics decision on an expression task 102 is
+lowering now, and it decides whether that lowering carries a fallback channel at
+all. It is also the only one of the surveyed tickets that is open, unassigned
+and without a patch, so reviewing or writing that patch is the way to learn the
+answer rather than wait for it.
+
+**How.** Read the ticket and its umbrella
+([SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550)) for a patch
+to review; if there is none, take the position the standard supports - ANSI's
+HOUR arithmetic on `TIME` is modulo-24 - and open the pull request against
+`apache/spark` master, covering `DateTimeUtils.timeAddInterval`,
+`TimeAddInterval`, `sequence` over `TIME` and TRY eval mode, with
+`TimeExpressionsSuite` and the `TIME` golden files, which are the ticket's own
+acceptance criteria. Whichever way it goes, the answer is recorded in section
+7's open question 4 and in `PLAN_TASK_102.md` 4.1.
+
+**Done when** the ticket has a resolution Varka can lower against - a merged
+patch, or a recorded decision to keep the throw - and `PLAN_TASK_102.md` 4.1
+says which, with its guard deleted or kept accordingly. Size: small in Varka and
+unbounded upstream, which is why the milestone does not block on it: 102's guard
+is built to be easy to delete.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3236,6 +3277,7 @@ can start has.
 | 143 | The pre-commit hook judges the commit, not the file (section 2.78). **Done** (`PLAN_TASK_143.md`, 17 September 2026) from a finding in task 142's own merge commit: line-anchored findings are scoped to the commit's diff, and the Python column scan takes ruff's own single-chunk exemption | A hook self-test that fails in both directions for each rule and runs whenever the hook is among the committed files; the merge commit that started it reports nothing |
 | 144 | What the long lane costs end to end (section 2.80). **Done** (`PLAN_TASK_144.md` 9, 18 September 2026) from task 29's unscored prediction: the lane costs 0.73x to 0.96x of the int lane at two million rows and 0.31x to 0.97x at twenty million - never the kernel's 2.1x, and never one band, so task 29's predicted 0.45x-0.60x is wrong in both directions depending on the shape | `VarkaLongLaneThroughputBenchmark` in `sql/core`, one shape at two widths over identical values, Varka on and off, at two row counts, every case asserting it fused | The committed results file, task 29's 6.1.2 scored, and the per-shape ratios the long-lane tasks are read against |
 | 145 | A narrowed filter loses the columnar path (section 2.81). **Scoped** (18 September 2026) from task 144's crossed experiment, and twice corrected the same night: not the forwarding, not the narrowing's own cost - with the row read-back forced the narrowed and un-narrowed shapes are within 1% (144.4 against 142.8 M rows/s) and task 78 had already measured that shape at both widths. Under a columnar sink the un-narrowed shapes run at 862.3 and 901.3 while the narrowed one runs at 120.3, so what differs is that they stay columnar and it does not | Find why the narrowed node does not take the columnar path under a columnar consumer, when `columnarSibling` already builds `VarkaProjectExec(narrowing, filter)` for the case; route it there or record why not | A columnar consumer over a narrowed filter measured beside an un-narrowed one, with the difference explained |
+| 146 | The upstream ticket `TIME + INTERVAL` waits on (section 2.82). **Scoped** (18 September 2026) on the owner's instruction: [SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) is open, unassigned and carries no patch, and its answer decides whether task 102's `t + dt` keeps a range guard and a decline channel or becomes a plain `floorMod` by `NANOS_PER_DAY`. It is the one deliberate exception to section 8's rule that upstream's `TIME` gaps are upstream's work, because it is a semantics decision on an expression 102 lowers now rather than an expression vanilla lacks | Review the upstream patch if one exists; otherwise open one against `apache/spark` master for ANSI's modulo-24, covering `DateTimeUtils.timeAddInterval`, `TimeAddInterval`, `sequence` over `TIME` and TRY eval mode, with `TimeExpressionsSuite` and the `TIME` golden files | The ticket has a resolution Varka can lower against, and `PLAN_TASK_102.md` 4.1 says which, with its guard deleted or kept |
 
 ## 4. Files
 

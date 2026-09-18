@@ -243,6 +243,10 @@ whether that becomes ANSI's modulo-24. If it lands, the lowering becomes a
 `floorMod` by `NANOS_PER_DAY` and the guard goes away. The plan should not
 pre-empt it; it should make the guard easy to delete.
 
+The ticket is unassigned and has no patch, so milestone 5's task 146 takes
+reviewing or writing one upstream. This section is where its answer is recorded:
+the guard is deleted here, or kept here with the reason.
+
 ## 5. Tests
 
 1. **The differential against `LocalTime`**, over all 86 400 seconds of a day
