@@ -3238,6 +3238,14 @@ under its own band file, built with task 101's tooling.
   int32 sibling. Task 142 committed that number on 17 September 2026, ahead of
   29 - 1.5x to 2.0x in cache and 2.11x to 2.20x out of it, `PLAN_TASK_142.md` 9
   - so it is a floor the long-lane rows are judged against, not a discovery.
+  **And the halving compounds with a narrow vector** (`PLAN_TASK_144.md` 9.4,
+  18 September 2026): at 128 bits a long lane is two lanes where the int lane
+  still has four, and end to end every long-lane advantage collapses while the
+  int lane keeps most of its own - projections from about 7.5x to about 2x, and
+  the weakest shape, a day-time interval comparison filter, from 1.40x to 0.89x,
+  which is slower than the row engine. The message's numbers come from a
+  full-width runner, so this is a statement about which machines the milestone's
+  claims hold on rather than about the claims, and 118 should say the width.
 * **`TIME` through the cache is assumed, not proven.** Every piece exists - the
   serializer's stats arm, `isSupportedByArrow`, upstream's converter and
   precision work - and no test composes them along Varka's path. Task 116 is

@@ -201,3 +201,46 @@ and disagreed, and nobody looked for it until after the second reading. The
 `toRdd` control is committed beside the `noop` arms in
 `VarkaFilterNarrowingBenchmark` so the next reader gets both in one file, and
 `SKILLS.md` carries the rule.
+
+### 9.4 The lane needs a wide vector, and the narrow companion is how we know
+
+The 128-bit companion, written the same night, says something the wide file
+cannot: **the long lane's end-to-end advantage is a function of the vector
+width, and the int lane's is not.** At 128 bits a long lane is two lanes where
+the int lane still has four, and the numbers follow that arithmetic rather than
+anything about the types:
+
+| shape, Varka against the row engine | host width | 128-bit |
+|---|---:|---:|
+| projection, greatest - int32 | 7.72x | 6.63x |
+| projection, greatest - int64 | 7.31x | **2.06x** |
+| projection, CASE WHEN - int32 | 8.89x | 7.52x |
+| projection, CASE WHEN - int64 | 7.28x | **2.08x** |
+| projection, greatest over TIME | 8.12x | **1.97x** |
+| projection, least over day-time intervals | 7.84x | **1.91x** |
+| filter, column against literal - int32 | 2.48x | 2.15x |
+| filter, column against literal - int64 | 1.87x | 1.37x |
+| filter, TIME comparison | 1.83x | 1.10x |
+| filter, day-time interval comparison | 1.40x | **0.89x** |
+
+Every int32 arm keeps most of what it had; every long-lane arm loses most of it,
+and the projections - the shapes with the most work per row - fall furthest, from
+about 7.5x to about 2x. The weakest shape of the family crosses below the row
+engine at 0.89x: on a 128-bit machine, a day-time interval comparison filter is
+slower with Varka than without it.
+
+**What this costs the gate, and what caught it.** The pairs for this file were
+derived from the wide run alone, which is the mistake `dev/varka_bench_gate.py`'s
+own header warns against - a pair must hold in every committed revision of *both*
+widths. The narrow companion failed the gate on the interval filter and the
+regeneration refused to let the file be committed, which is the guard working
+exactly as task 77 designed it. That pair is now listed as ungated with its
+measured reason, and the rest of the file's pairs hold at both widths.
+
+**What it means for the milestone.** Milestone section 6's "half the lanes" risk
+is about the kernel; this is its end-to-end form and it is sharper. The public
+message's numbers come from a full-width runner, which is right - but 121's AVX2
+arm sits between these two points (256 bits gives the long lane four lanes), and
+118 should say which width a quoted `TIME` figure was measured at, because at
+128 bits the answer is "about 2x on projections and about even on filters".
+

@@ -192,7 +192,6 @@ LONG_LANE_PAIRED = [
 LONG_LANE_SINGLE = [
     ("filter, TIME comparison", 2000000),
     ("projection, greatest over TIME", 2000000),
-    ("filter, day-time interval comparison", 2000000),
     ("projection, least over day-time intervals", 2000000),
 ]
 
@@ -212,6 +211,16 @@ LONG_LANE_PAIRS = [
 _CROSSED = "compare and output crossed over 20000000 Arrow-cached rows"
 
 LONG_LANE_UNGATED = {
+    # Not an invariant, and the narrow file is how we know. At 128 bits a long lane is two
+    # lanes where the int lane still has four, so every long-lane advantage falls - and this
+    # shape, the weakest of the family at the host width (1.40x), crosses below the row engine
+    # at 0.89x. The pair was derived from the wide file alone, which is exactly the mistake
+    # this file's header warns against, and the narrow companion caught it before it was
+    # committed. PLAN_TASK_144.md 9.4 has the table.
+    "filter, day-time interval comparison over 2000000 Arrow-cached rows": (
+        "not an invariant: 1.40x at the host width and 0.89x at 128 bits, where a long lane "
+        "is two lanes (task 144 section 9.4)"
+    ),
     _CROSSED: (
         "no baseline arm: six Varka-only cases whose subject is which of them is "
         "fastest (task 144 section 9.1, and task 145 out of it)"
