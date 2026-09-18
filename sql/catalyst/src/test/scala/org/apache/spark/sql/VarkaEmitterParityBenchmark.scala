@@ -2059,6 +2059,109 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         runCases(benchmark)
       }
+
+      runBenchmark("task 88 step 4: the constant division, magic against the double lane") {
+        // The A/B `PLAN_TASK_88.md` 6 exists for. Every calendar division is a range-narrowed
+        // magic multiply today, exact only because the emitter proves the dividend bounded; the
+        // two double forms convert into double lanes instead, divide there and convert back,
+        // which is exact over the whole lane and needs neither the bound nor the round-down
+        // carry that follows a magic quotient. Seven operations against two, and the seven move
+        // off the 32-bit multiplier - so whether the trade wins is a property of the machine's
+        // vector divider, which is what this measures rather than argues.
+        //
+        // Three shapes, chosen to bracket what a division is worth rather than to enumerate:
+        // `year` pays the prefix and nothing else, so its three divisions are the largest share
+        // of a body any extraction has; the four-field shared shape pays the prefix once and
+        // three tails after it, so the same three divisions are the smallest share; and
+        // `add_months` reaches the four division sites no extraction does, inside a
+        // recomposition. Adjacent cases, one form after another on the same shape, the same
+        // interleaving discipline as tasks 45, 48 and 53.
+        //
+        // Null-free only, deliberately. The division sits in the arithmetic and the masked body
+        // divides identically, so a mixed-null arm would price task 45's validity machinery a
+        // second time under a name that says "division"; the shipped `year` rows above already
+        // carry both patterns for the shape.
+        //
+        // DOUBLE_RECIP is not uniformly reachable: `verify_double_division.py` proves the
+        // reciprocal inexact for /146097 over the era step's dividend, so that one site falls
+        // back to the magic under this setting while the other two divisions convert. The row
+        // is named for what it is rather than for what it asks for.
+        val benchmark = new Benchmark(s"constant division over $numRows rows, null-free",
+          numRows, minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        val magic = VarkaEmitOptions.DEFAULTS
+        val trueDiv = VarkaEmitOptions.DEFAULTS.withDivision(VarkaEmitOptions.Division.DOUBLE_DIV)
+        val recip = VarkaEmitOptions.DEFAULTS.withDivision(VarkaEmitOptions.Division.DOUBLE_RECIP)
+        val divisionShapes = Seq[(String, Seq[VarkaVectorIR], Int)](
+          ("year (three divisions, the whole body)", Seq(new Year(new ColumnRef(0))), 0),
+          ("four fields shared (three divisions, one prefix, three tails)",
+            Seq[VarkaVectorIR](new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+              new DayOfMonth(new ColumnRef(0)), new DayOfYear(new ColumnRef(0))), 0),
+          ("add_months (the recomposing shape, four division sites)",
+            Seq(new AddMonths(new ColumnRef(0), new LiteralSlot(0))), 1))
+        for (((label, roots, lits), shape) <- divisionShapes.zipWithIndex) {
+          val forms = Seq(("magic multiply (shipped)", magic), ("double lane, true divide",
+            trueDiv), ("double lane, reciprocal where admitted", recip))
+          for (((form, options), variant) <- forms.zipWithIndex) {
+            val kernel = emit(roots, 1, lits, loader, 974 + shape * 3 + variant, options)
+            val offsets = if (lits == 0) Array.emptyIntArray else Array(13)
+            // One destination per root, taken from the shape rather than assumed: the
+            // four-field shape writes four columns, and a single-destination call reaches the
+            // kernel as an index out of bounds rather than as a wrong answer.
+            val dstAddrs = wideDst.take(roots.size).map(_.address())
+            val dstValAddrs = wideDstValidity.take(roots.size).map(_.address())
+            benchmark.addCase(s"$label: $form") { _ =>
+              val status = kernel.run(Array(nfData.address()), Array(0L), Array(0),
+                dstAddrs, dstValAddrs, offsets, numRows)
+              require(status == 0, s"the kernel declined a batch: status $status")
+            }
+          }
+        }
+        runCases(benchmark)
+      }
+
+      runBenchmark("task 88 step 4: extract(YEAR FROM ym), the division with no magic form") {
+        // The one shape the double route does not merely lower differently but lowers at all.
+        // `extract(YEAR FROM ym)` is a month count divided by twelve over a column nothing
+        // bounds, and the calendar's magic is exact over about one forty-thousandth of int32,
+        // so there is no vector lowering to compare against - the comparand is the scalar
+        // division the row engine performs, and the number is the lane against Spark rather
+        // than one lowering against another (prediction 3 of `PLAN_TASK_88.md` 6.1).
+        //
+        // The column spans signed int32 rather than the epoch days the other blocks use,
+        // because that is the range the shape actually sees and the reason the magic declines
+        // it.
+        //
+        // The scalar case is a floor on the row engine's cost, not the row engine: it is the
+        // arithmetic alone, with none of the per-row dispatch around it, and this file's
+        // sibling case is named "cannot auto-vectorize" precisely because a tight loop like
+        // this one may be vectorised by C2 - which is not established here, and would be the
+        // JVM's own output to establish rather than a ratio's to imply. So the row bounds the
+        // advantage from below and `PLAN_TASK_88.md` 6.1's prediction 3, which is stated
+        // against the row engine, needs a row-engine comparand to be scored.
+        val months = arena.allocate(numRows * 4L, 8)
+        val step = ((1L << 32) / numRows).toInt
+        for (i <- 0 until numRows) {
+          months.set(ValueLayout.JAVA_INT, i * 4L, (Int.MinValue.toLong + i.toLong * step).toInt)
+        }
+        val benchmark = new Benchmark(s"extract(YEAR FROM ym) over $numRows rows, null-free",
+          numRows, minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
+        val years = emit(Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0), 12)), 1, 0,
+          loader, 983)
+        benchmark.addCase("double lane, true divide: the only lowering this division has") { _ =>
+          val status = years.run(Array(months.address()), Array(0L), Array(0),
+            Array(dst.address()), Array(dstValidity.address()), Array.emptyIntArray, numRows)
+          require(status == 0, s"the kernel declined a batch: status $status")
+        }
+        benchmark.addCase("scalar loop, one division per row: a floor on the row engine") { _ =>
+          var i = 0
+          while (i < numRows) {
+            dst.set(ValueLayout.JAVA_INT, i * 4L,
+              months.get(ValueLayout.JAVA_INT, i * 4L) / 12)
+            i += 1
+          }
+        }
+        runCases(benchmark)
+      }
     } finally {
       loader.release()
       arena.close()
