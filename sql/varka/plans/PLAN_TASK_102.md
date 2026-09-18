@@ -35,21 +35,35 @@ is the `StaticInvoke` that arrives.
 
 **The compiler has never matched a `StaticInvoke`** - the count is zero today.
 Every arm it has keys on a Catalyst expression class. So this task's first design
-decision is how to recognise these five, and it is not a detail:
+decision is how to recognise these five.
 
-* **By target** - `StaticInvoke`'s `staticObject`, `functionName` and argument
-  types. Precise, and it binds Varka to a helper *method name* in
-  `DateTimeUtils`, which upstream may rename without ceremony. A rename would
-  turn fusion off silently, which is the failure mode this project keeps finding
-  in its own tooling.
-* **By matching before replacement**, which is not available: the physical plan
-  is what the compiler is handed.
-* **A guard test that fails when the target disappears.** Whatever the match, a
-  test must assert that the expression Spark actually produces for
-  `hour(t)` is the one the compiler matches - built by running the analyzer and
-  optimizer over the SQL, not by constructing the node by hand. Without it the
-  arm silently stops matching on the next upstream rename and the only symptom is
-  a benchmark that got slower.
+**Not by a hardcoded method name.** `StaticInvoke` carries `staticObject: Class[_]`
+and `functionName: String`, so `(classOf[DateTimeUtils.type], "getHoursOfTime")`
+identifies the target exactly - and writing that pair as a literal binds Varka to
+a helper name upstream may rename without ceremony, after which fusion stops
+silently and the only symptom is a benchmark that got slower. That is the failure
+mode this project keeps finding in its own tooling, most recently in
+`dev/is-changed.py`, which answers `false` for a module that does not exist
+exactly as it does for one that did not change.
+
+**Derive the table from the Catalyst classes instead.** The replacement is
+produced by the expression itself, so the compiler can ask it rather than
+guessing:
+
+    HoursOfTime(dummy).replacement  ->  StaticInvoke(DateTimeUtils, "getHoursOfTime", ...)
+
+Building the lookup as `{ (si.staticObject, si.functionName) -> field }` by
+constructing each `RuntimeReplaceable` once and reading its own `.replacement`
+means the key is generated from the same source that produces the query's
+expression. **An upstream rename is then followed automatically**, because both
+sides move together, and no string is written down twice.
+
+Two ways it can still break, and both become loud rather than silent: if a
+replacement stops being a `StaticInvoke` at all, the table construction has
+nowhere to put it and fails at class-initialisation; and if two entries collide on
+one key, the map catches it. A test still asserts end to end that the expression
+Spark produces for `hour(t)` - built by running the analyzer and optimizer over
+SQL, not by constructing the node by hand - is one the compiler matches.
 
 The four that *are* ordinary expressions, matchable the usual way:
 `TimeTrunc`, `SubtractTimes`, `TimeAddInterval`, `TimeDiff`.
@@ -70,11 +84,25 @@ nanosecond values, far too many, but the *fields* change only at second
 boundaries, so sweeping all 86 400 seconds of a day plus the sub-second edges
 covers every distinct answer.
 
-### 2.3 Two expressions decline on their output type, not their arithmetic
+### 2.3 Two expressions are blocked on a representation, not on a lane
 
-`SecondsOfTimeWithFraction` returns a `Decimal`, and `TimeToSeconds` returns
-`DecimalType(14, 6)`. Varka has no decimal lane. They decline, and the decline
-must name the output type - the same distinction task 89 had to draw for
+`SecondsOfTimeWithFraction` returns a `Decimal` and `TimeToSeconds` returns
+`DecimalType(14, 6)`, and it is worth being exact about what stops them, because
+"Varka has no decimal lane" is the wrong reason and points nowhere.
+
+Spark's own `Decimal` holds a precision of 18 or less as an unscaled **long**, so
+the *value* would sit in the lane this task already uses. What does not fit is the
+**column**: `ArrowUtils` maps every `DecimalType` to
+`new ArrowType.Decimal(precision, scale, 8 * 16)` - a 128-bit Arrow vector,
+sixteen bytes per row, whatever the precision. A Varka output column is read and
+written through that Arrow buffer, so the blocker is the representation and not
+the arithmetic or the lane width.
+
+That makes these two a **roadmap item rather than a dead end**, and it lines up
+with the project's stated aim of several representations per logical type: a
+Decimal128 representation, or a narrow-decimal one that keeps a long buffer and a
+scale, would admit them unchanged. Until then they decline, and the decline names
+the Arrow representation - the same care task 89 took over
 `extract(MONTH FROM ym)`, where a reader who saw "declined" would otherwise
 conclude the division was still missing.
 
@@ -146,21 +174,22 @@ after.
 
 ## 4. The expressions, and what each is in the lane
 
-*Every `TIME` expression Spark has, for reference. Which of them this task
-actually builds is section 6 - the last four rows are deferred or declined, and
-`make_time` and `t + dt` are deferred with reasons.*
+*Every `TIME` expression Spark has. Section 6 gives the order: group A ships
+first, B carries the width change and the `StaticInvoke` table, C waits - `t + dt`
+on an upstream question and the two decimal-returning ones on an Arrow
+representation.*
 
 | expression | lowering | note | group |
 |---|---|---|---|
 | `hour(t)` | `/ 3.6e12` | `StaticInvoke`, 2.1 | B |
 | `minute(t)` | `/ 6e10` then `floorMod 60` | `StaticInvoke` | B |
 | `second(t)` | `/ 1e9` then `floorMod 60` | `StaticInvoke` | B |
-| `make_time(h, m, s)` | two multiplies and adds under a range check | `StaticInvoke`; the fractional second is a decimal and declines unless literal | C |
+| `make_time(h, m, s)` | two multiplies and adds under a range check | `StaticInvoke`; a foldable seconds argument is a constant, a decimal column declines | B |
 | `time_trunc(unit, t)` | a division and a multiply, at a foldable level | `trunc(d, fmt)`'s rule for the level | A |
 | `t1 - t2`, `timediff(...)` | a day-time interval, `/ 1000` | exact by range | A |
 | `t + dt` | `t + micros * 1000` under a range guard | 4.1 | C |
-| `time_to_seconds` etc. | multiplies and divisions by powers of ten | `TimeToSeconds` declines, 2.3 | C |
-| `second_with_fraction` | - | declines, 2.3 | C |
+| `time_to_seconds` etc. | multiplies and divisions by powers of ten | cheap after A; `TimeToSeconds` waits on 2.3 | C |
+| `second_with_fraction` | a division and a remainder into a decimal | waits on an Arrow decimal representation, 2.3 | C |
 
 ### 4.1 `TimeAddInterval` does not wrap, and that decides its lowering
 
@@ -194,8 +223,9 @@ pre-empt it; it should make the guard easy to delete.
 
 ## 6. What is in this task, and what is not
 
-Not all nine. The expressions divide by what they cost, and two of them earn
-their place later or not at all.
+Everything Spark has, in the end - but not in one step, and two of them wait on a
+representation rather than on this task. The groups are an order, not a
+shortlist.
 
 **Group A, and the first thing shipped: same lane, ordinary expressions.**
 `time_trunc(unit, t)`, `t1 - t2` and `timediff(...)`. They need neither task 28
@@ -205,22 +235,40 @@ is independent of both blockers and is what makes the task start moving.
 `time_trunc` is the one a query actually writes often, for grouping by hour or
 by minute.
 
-**Group B, the story: `hour`, `minute`, `second`.** These are what the post is
-about, and they cost the most - the new `StaticInvoke` matching *and* the
-narrowing of 2.4. They follow 2.5's answer.
+**Group B, the story: `hour`, `minute`, `second`, and `make_time` beside them.**
+These are what the post is about, and they cost the most - the `StaticInvoke`
+table of 2.1 and the width change of 2.4. The three extracts narrow (int64 in,
+int32 out) and `make_time` widens (int32 in, int64 out), so 2.5's question
+decides the first three and task 28's widening decides the fourth; all four share
+one matching mechanism, which is why they belong together.
+
+**Nothing here is declined for want of a mechanism.** Every `TIME` expression
+Spark has is vectorizable except the two of 2.3, and those two are waiting on an
+Arrow representation rather than on anything about the lane.
 
 **Group C, deferred or dropped, with reasons:**
 
-* **`make_time`** - a constructor, rare in a projection over a billion rows,
-  needing the widening *and* carrying a `DecimalType(16, 6)` operand that
-  declines unless it is a literal. Full mechanism cost for little benefit.
+* **`make_time`** - moved up from here on 18 September 2026: it is vectorizable
+  and should be vectorized. Its replacement is
+  `StaticInvoke(DateTimeUtils, "makeTime", ...)`, so it costs nothing beyond the
+  table 2.1 already builds, and with a foldable seconds argument - which is what
+  `make_time(h, m, 30)` gives - the `DecimalType(16, 6)` operand is a constant
+  and the whole expression is two multiplies and two adds into a long. What it
+  still needs is the widening, since its inputs are int32 and its output int64,
+  so it belongs beside group B rather than ahead of it. A seconds argument that
+  is a decimal *column* declines, and that decline is about the operand, not the
+  expression.
 * **`t + dt`** - its semantics are in flux.
   [SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) may replace
   the throwing range check with ANSI's modulo-24, so the guard built now is work
   to delete. Cheap to add once that settles, and 4.1 stays as the recipe.
-* **`TimeFrom*` and `TimeTo*`** - conversions, and `TimeToSeconds` returns
-  `DecimalType(14, 6)` and declines regardless.
-* **`second_with_fraction`** - declines on its `Decimal` output, 2.3.
+* **`TimeFrom*` and `TimeTo*`** - multiplies and divisions by powers of ten,
+  ordinary long-lane work and cheap to add once group A's arms exist.
+  `TimeToSeconds` alone is held back by its `DecimalType(14, 6)` output.
+* **`second_with_fraction` and `TimeToSeconds`** - not declined on principle:
+  blocked on the Arrow decimal representation, 2.3, and admitted unchanged the
+  day one exists. This is the milestone's clearest pull towards a second
+  representation for a logical type.
 
 ## 6.1 Sequencing
 
