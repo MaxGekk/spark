@@ -4386,6 +4386,198 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       options = VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM))
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Task 88: the calendar prefix's constant divisions through the double lane.
+  // -------------------------------------------------------------------------------------------
+
+  private val divisionForms = VarkaEmitOptions.Division.values().toSeq
+
+  /**
+   * Roots reaching every division site the prefix and its tails contain: the era step and the
+   * century/year split (or the Julian map in their place), the month and day-of-month steps, the
+   * quarter, and the ISO week. `add_months` and `make_date` carry the two that are not in the
+   * prefix - the month arithmetic's `/12` and the recomposition's `/400` and `/100` - and have
+   * their own tests below, because their inputs are not a date column.
+   */
+  private val divisionRoots = Seq[VarkaVectorIR](
+    new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+    new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+    new DayOfYear(new ColumnRef(0)), new LastDay(new ColumnRef(0)),
+    new TruncDate(new ColumnRef(0), TruncLevel.YEAR),
+    new TruncDate(new ColumnRef(0), TruncLevel.MONTH),
+    new TruncDate(new ColumnRef(0), TruncLevel.QUARTER))
+
+  test("the calendar extractions agree with LocalDate under all three division lowerings, " +
+      "on both prefix forms") {
+    // The double forms convert each int vector into two double vectors, divide there and convert
+    // back. They are exact over the range each site's dividend stays in - which is what
+    // sql/varka/plans/verify_double_division.py establishes - so agreeing with LocalDate here is
+    // the check that the conversion parts, the join and the deny-list are all right at once. A
+    // part index off by one would put a quotient in the wrong lane and show up as a wrong date,
+    // not as a crash.
+    for (form <- divisionForms; julian <- Seq(true, false)) {
+      checkMatrix(divisionRoots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
+        ctx = s"division=$form julianMap=$julian",
+        options = VarkaEmitOptions.DEFAULTS.withDivision(form).withJulianMap(julian))
+    }
+  }
+
+  test("the double-lane divisions compute the same dates at every vector width") {
+    // The double half of a 512-bit register holds four lanes and of a 128-bit one holds two, so
+    // the lane count the conversion splits into is not the lane count the loop runs at. Each
+    // width is emitted and run in turn, on the same boundary dates, so a width whose halves do
+    // not tile the vector would answer differently rather than silently.
+    for (form <- divisionForms; lanes <- Seq(2, 4, 8, 16)) {
+      checkMatrix(divisionRoots, 1, Array.empty[Int], Seq(17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
+        ctx = s"division=$form lanes=$lanes",
+        options = VarkaEmitOptions.DEFAULTS.withDivision(form).withLanesOverride(lanes))
+    }
+  }
+
+  test("weekofyear agrees with IsoFields under all three division lowerings") {
+    // The ISO week is the one site whose divisor is 7, and it sits behind the Thursday shift
+    // rather than in the prefix proper.
+    val thursday = new ThursdayOf(new ColumnRef(0))
+    for (form <- divisionForms) {
+      checkMatrix(Seq[VarkaVectorIR](new WeekOfYear(thursday)), 1, Array.empty[Int],
+        Seq(1, 13, 17, 64, 1000), nullPatterns.map(p => Seq(p._2)), data = isoWeekDay,
+        ctx = s"weekofyear division=$form",
+        options = VarkaEmitOptions.DEFAULTS.withDivision(form))
+    }
+  }
+
+  test("add_months agrees under all three division lowerings") {
+    // The month arithmetic's own `/12`, which no extraction reaches, over a count range the
+    // magic multiply's bound admits.
+    val root = new AddMonths(new ColumnRef(0), new ColumnRef(1))
+    def data(c: Int, i: Int): Int = if (c == 0) calendarBoundaryDay(0, i) else i % 61 - 30
+    for (form <- divisionForms) {
+      checkMatrix(Seq[VarkaVectorIR](root), 2, Array.emptyIntArray, Seq(1, 13, 17, 64, 1000),
+        combos(2), data = data, ctx = s"add_months division=$form",
+        options = VarkaEmitOptions.DEFAULTS.withDivision(form))
+    }
+  }
+
+  test("make_date and the recomposing trunc agree under all three division lowerings") {
+    // Both reach `emitDaysFromCivil`, whose `/400` and `/100` share one multiplier and differ
+    // only in the shift - the pair the division table exists to keep apart.
+    for (form <- divisionForms) {
+      val options = VarkaEmitOptions.DEFAULTS.withDivision(form)
+      checkMatrix(Seq(makeDateNull), 3, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+        combos(3), data = tripleData(makeDateValid), ctx = s"make_date division=$form",
+        options = options)
+      checkMatrix(truncRoots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
+        ctx = s"trunc recompose division=$form",
+        options = options.withTruncDate(VarkaEmitOptions.TruncDateForm.RECOMPOSE))
+    }
+  }
+
+  /** The ops one emitted body runs against a given vector class, counted off the class file. */
+  private def opsOn(bytes: Array[Byte], owner: String): Int =
+    VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0", s"jdk.incubator.vector.$owner")
+
+  /**
+   * How many of a body's divisions took a double form: each emits exactly one `mul` or `div` per
+   * half, so the `DoubleVector` count is twice the number of divisions that were lowered.
+   */
+  private def doubleDivisions(bytes: Array[Byte]): Int = {
+    val halves = opsOn(bytes, "DoubleVector")
+    assert(halves % 2 === 0, s"a double division emits two halves, saw $halves")
+    // Each division also converts twice in and twice out, all four on `Vector` itself.
+    assert(opsOn(bytes, "Vector") === halves * 2,
+      s"expected ${halves * 2} conversions for $halves halves")
+    halves / 2
+  }
+
+  test("a double-lane division costs seven ops where the magic costs two, and kills the carry") {
+    // `year` over the shipped prefix divides three times - the era step, the Julian century and
+    // the Julian year - and each of the three rounds down and is corrected by a carry. The magic
+    // form spends two `IntVector` ops on the division and three more on the carry; the double
+    // form spends four conversions, two divides and one `or` to rejoin the halves, and no carry
+    // at all, because its quotient is exact.
+    //
+    // So the trade is not "seven against two" per division in isolation: against the magic form
+    // plus its carry it is seven against five, and the seven move off the 32-bit multiplier.
+    // Whether that wins is the A/B this option exists to run; that it is what gets emitted is
+    // what these counts pin.
+    val year = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
+    def bytes(form: VarkaEmitOptions.Division): Array[Byte] =
+      emitMulti(year, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
+
+    val magic = bytes(VarkaEmitOptions.Division.MAGIC)
+    assert(opsOn(magic, "IntVector") === 34)
+    assert(doubleDivisions(magic) === 0)
+
+    val div = bytes(VarkaEmitOptions.Division.DOUBLE_DIV)
+    assert(doubleDivisions(div) === 3)
+    // Each division loses its magic multiply and shift and gains one `or` (-1 each), and each of
+    // the three carries the exact quotient makes dead goes away (-3 each).
+    assert(opsOn(div, "IntVector") === 34 - 3 * 1 - 3 * 3)
+  }
+
+  test("the era step's /146097 falls back to the magic form under the reciprocal, and the " +
+      "Julian century's does not") {
+    // Both divide by 146097 and they answer differently, which is the whole reason the deny-list
+    // is keyed on the site rather than on the divisor: the era step's dividend is any biased
+    // day, and 146097 itself is one of them, where multiplying by fl(1/146097) rounds below the
+    // integer; the Julian century's dividends are the values congruent to 3 mod 4, and that
+    // multiple is not among them. `sql/varka/plans/verify_double_division.py` is what decides
+    // this, and this test is the emitter obeying it.
+    //
+    // The narrowed prefix divides three times and the Julian one also three times - the era step
+    // in both, then either the century and year of century, or the Julian century and year. If
+    // the reciprocal were refused by divisor, the Julian shape would lose two divisions rather
+    // than one.
+    val year = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
+    for (julian <- Seq(false, true)) {
+      def bytes(form: VarkaEmitOptions.Division): Array[Byte] =
+        emitMulti(year, 1, 0,
+          VarkaEmitOptions.DEFAULTS.withDivision(form).withJulianMap(julian))._2
+      assert(doubleDivisions(bytes(VarkaEmitOptions.Division.DOUBLE_DIV)) === 3,
+        s"julianMap=$julian")
+      assert(doubleDivisions(bytes(VarkaEmitOptions.Division.DOUBLE_RECIP)) === 2,
+        s"julianMap=$julian: exactly the era step should fall back")
+    }
+  }
+
+  test("the shipped default emits no double-lane ops at all") {
+    // The option is off by default, so no production kernel converts anything: the emitted bytes
+    // for every calendar shape are what they were before this existed, which is also what keeps
+    // VarkaEmittedBytesSuite's registered hashes valid without regenerating them.
+    val bytes = emitMulti(divisionRoots, 1, 0)._2
+    assert(doubleDivisions(bytes) === 0)
+    assert(VarkaEmitOptions.DEFAULTS.division() === VarkaEmitOptions.Division.MAGIC)
+  }
+
+  test("the emitted calendar kernels agree over the whole covered range under both double " +
+      "division forms (opt-in: -Dvarka.sweep=true; task 88)") {
+    // The bounded tests above run the double forms over a boundary list; this runs them over
+    // every day the prefix covers, which is the only check at the resolution the deny-list was
+    // decided at. `verify_double_division.py` proves the arithmetic exact over each site's
+    // range; this proves the emitter divides the range it was proved over - a dividend that
+    // escaped its bound, or a reciprocal admitted where the script refused it, is wrong on a
+    // handful of days out of sixteen million and invisible to anything narrower.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to sweep the emitted kernels")
+    val fields = Seq[VarkaVectorIR](
+      new Year(new ColumnRef(0)), new Month(new ColumnRef(0)),
+      new DayOfMonth(new ColumnRef(0)), new Quarter(new ColumnRef(0)),
+      new DayOfYear(new ColumnRef(0)))
+    val doubleForms =
+      Seq(VarkaEmitOptions.Division.DOUBLE_RECIP, VarkaEmitOptions.Division.DOUBLE_DIV)
+    // Both prefix forms, because they divide by 146097 at different sites and the reciprocal is
+    // admitted at one and refused at the other - the single most load-bearing row of the table.
+    for (form <- doubleForms; julian <- Seq(true, false)) {
+      val options = VarkaEmitOptions.DEFAULTS.withDivision(form).withJulianMap(julian)
+      sweepCalendar(fields, options)
+      sweepTrunc(options)
+      sweepLastDay(options)
+    }
+  }
+
   test("a comparison root emits the selection bitmap with null-as-false") {
     // The simplest filter kernel: one Compare root, its bitmap checked against the Kleene
     // reference with unknown collapsed to false at the root - across lengths (partial lane

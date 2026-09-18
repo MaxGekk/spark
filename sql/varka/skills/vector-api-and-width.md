@@ -725,3 +725,50 @@ drifting.
 The practical rule when reaching for this lowering: use the divide unless the
 closed form admits the reciprocal over the exact range the lowering sees, and
 write the range into the table beside the divisor.
+
+## Converting to a wider element type splits a vector into disjoint halves that rejoin with an OR
+
+Lowering an int division through double lanes needs the int vector in double
+lanes and the quotient back in int lanes, and `convertShape` is the call for
+both. Three things about it are worth knowing before emitting any of it, because
+each one is cheap to check and expensive to get wrong in bytecode.
+
+**The parts.** An expanding conversion - one whose element type gets wider, so
+the lane count halves - takes parts `0 .. M-1`; a contracting one takes
+`-M+1 .. 0`. For the int-to-double round trip `M` is 2, so the halves go out as
+parts `0` and `1` and come back as parts `0` and `-1`. Pairing `0` with `0` and
+`1` with `-1` is what makes the two results cover different lanes.
+
+**The join.** Each contracted half holds its own lanes and **zero** in the
+others, so the two halves rejoin with a plain `or`. No `rearrange`, no blend, no
+mask - which is the difference between a seven-op lowering and one that is not
+worth emitting. `dev/varka_canary/DoubleDivProbe.java` prints all of this in
+about twenty lines and is the thing to run before writing the emitter, not after.
+
+**The species names.** `SPECIES_256` names the vector's **total width**, not its
+lane count, so `IntVector.SPECIES_256` is eight int lanes and
+`DoubleVector.SPECIES_256` is the four double lanes occupying the same register.
+A conversion between them therefore uses the *same* constant name on both sides,
+and `SPECIES_PREFERRED` pairs with `SPECIES_PREFERRED` because a JVM's preferred
+shape is one shape for every element type.
+
+## An exact quotient makes the round-down carry dead code, and the op counter has to see it
+
+A Granlund-Montgomery magic rounds down, so every site that uses one may need a
+correction: compare the remainder against the divisor, add one to the quotient
+and subtract the divisor from the remainder under that mask. Three lane ops. A
+division that is exact over the site's range leaves a remainder strictly below
+the divisor, so the comparison is never true and those three ops are dead rather
+than merely redundant. An exact lowering that keeps them is not wrong, but it
+prices itself with work it does not need - and an A/B run that way measures the
+wrong thing.
+
+The related trap is in the measurement rather than the emission.
+`dev/varka_emit.sh --table` reported each body's `IntVector` invocation count,
+which was the whole answer while every lowering stayed on the int lane. A
+lowering that moves work onto double lanes shrinks exactly that number while
+adding conversions and divides on two other types, so the table read the move as
+a **saving** of twelve ops when it was a cost of six. The tool now sums every
+vector type. The general form of the lesson: an op counter scoped to one type
+stops being a cost model the moment a second type appears, and it fails
+silently and in the flattering direction.

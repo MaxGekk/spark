@@ -44,9 +44,10 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, Sh
  * `ym` declare year-month interval columns by field) and the built-in
  * function registry, then handed to [[VarkaExpressionCompiler]] exactly as a projection would
  * be. The output is the IR each entry lowered to, the shape hash production would name the
- * class by, and for every emitted method its bytecode size, its `IntVector` and `VectorMask`
- * invocation counts (the metric `VarkaLoopEmitterSuite`'s op-count tests use, so a prediction
- * registered from here is on the suite's own scale) and its line-map entries. With
+ * class by, and for every emitted method its bytecode size, its `IntVector`, `DoubleVector`,
+ * `convertShape` and `VectorMask` invocation counts (the metric `VarkaLoopEmitterSuite`'s
+ * op-count tests use, so a prediction registered from here is on the suite's own scale) and its
+ * line-map entries. With
  * `--rounds N` the kernel is also loaded and run N times over synthetic data, which is what
  * lets the wrapper's `--asm` get C2's standard compilation of the loop method printed.
  *
@@ -55,8 +56,10 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, Sh
  *
  * `--table` prints instead the markdown a plan's registered-op-counts section wants: one row
  * per expression, one column per option variant given with `--variant k=v,...` (the defaults
- * first), each cell the `IntVector` invocation count of `loopDense0`, and a delta column per
- * variant against the defaults. That is the table tasks 53 and 54 built by hand.
+ * first), each cell every lane op `loopDense0` runs - on whichever vector type - and a delta
+ * column per variant against the defaults. That is the table tasks 53 and 54 built by hand;
+ * summing the types rather than reading `IntVector` alone is what keeps a variant that moves
+ * work onto the double lane from reporting the move as a saving.
  */
 object VarkaEmitDump {
 
@@ -127,13 +130,21 @@ object VarkaEmitDump {
     val bytes = VarkaLoopEmitter.emit(className, fused.outputs.asJava, fused.inputOrdinals.size,
       fused.literals.size, null, null, options)
     report("")
-    report(f"${"method"}%-18s ${"bytes"}%6s ${"IntVector"}%9s ${"VectorMask"}%10s " +
-      f"${"validity"}%8s ${"lines"}%5s")
+    report(f"${"method"}%-18s ${"bytes"}%6s ${"IntVector"}%9s ${"DoubleVector"}%12s " +
+      f"${"convert"}%7s ${"VectorMask"}%10s ${"validity"}%8s ${"lines"}%5s")
     val methods = VarkaEmitterTestSupport.methodNames(bytes).asScala.filter(_ != "<init>").sorted
     methods.foreach { m =>
       val size = VarkaEmitterTestSupport.codeSize(bytes, m)
       val vectorOps =
         VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.IntVector")
+      // The double lane, which a `division` setting other than MAGIC moves work onto: without
+      // these two columns the IntVector count alone reports such a body as cheaper than it is,
+      // which is the one reading this table must never give.
+      val doubleOps =
+        VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.DoubleVector")
+      // `convertShape` is declared on `Vector` itself, so it is the only thing counted here.
+      val convertOps =
+        VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.Vector")
       val maskOps =
         VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.VectorMask")
       // Validity work, which is the metric task 70 moves: everything the method invokes on
@@ -142,7 +153,8 @@ object VarkaEmitDump {
       val validityOps = VarkaEmitterTestSupport.invocationCount(
         bytes, m, "org.apache.spark.sql.varka.vector.VarkaVectorSupport", Seq("ofAddress").asJava)
       val lines = VarkaEmitterTestSupport.lineNumbers(bytes, m).size
-      report(f"$m%-18s $size%6d $vectorOps%9d $maskOps%10d $validityOps%8d $lines%5d")
+      report(f"$m%-18s $size%6d $vectorOps%9d $doubleOps%12d $convertOps%7d " +
+        f"$maskOps%10d $validityOps%8d $lines%5d")
     }
     VarkaDebugInfo.read(bytes).ifPresent { info =>
       report("")
@@ -156,7 +168,19 @@ object VarkaEmitDump {
     }
   }
 
-  /** `--table`: `loopDense0`'s `IntVector` count per expression, under the defaults and under
+  /**
+   * Every lane op `loopDense0` runs, whichever vector type it runs it on. `IntVector` alone was
+   * the whole answer while every lowering stayed on the int lane; a `division` setting that
+   * routes a division through the double lane trades two int ops for seven spread over three
+   * types, and counting only the first would report that as a saving.
+   */
+  private def laneOps(bytes: Array[Byte]): Int =
+    Seq("IntVector", "DoubleVector", "Vector", "LongVector").map { owner =>
+      VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0",
+        s"jdk.incubator.vector.$owner")
+    }.sum
+
+  /** `--table`: `loopDense0`'s lane-op count per expression, under the defaults and under
    *  each `--variant`, with the delta - each expression emitted alone, as a one-output kernel. */
   private def printTable(exprs: Seq[String], named: Seq[org.apache.spark.sql.catalyst.expressions
       .NamedExpression], childOutput: Seq[Attribute], base: VarkaEmitOptions,
@@ -174,8 +198,7 @@ object VarkaEmitDump {
           val counts = columns.map { case (_, opts) =>
             val bytes = VarkaLoopEmitter.emit(className, f.outputs.asJava,
               f.inputOrdinals.size, f.literals.size, null, null, opts)
-            VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0",
-              "jdk.incubator.vector.IntVector")
+            laneOps(bytes)
           }
           val deltas = counts.tail.map(c => f"${c - counts.head}%+d")
           report(s"| `$text` | " + counts.mkString(" | ") +
