@@ -2809,6 +2809,58 @@ no blocker at all is the cheapest breadth available, and `bit_count` over a
 would otherwise be the only user of - which is worth having before that lowering
 is designed around one caller.
 
+### Item 33. The integral division shapes nothing rows
+
+*Opened 18 September 2026, from the same coverage audit as item 32, after the
+owner asked what else it had found without a row.*
+
+Three arithmetic shapes over the integral lanes are vectorizable and belong to no
+task. They are separated from item 32 because each has a reason to be thought
+about, where the bitwise family had none.
+
+**`pmod`.** Milestone 5's task 95 owns `i % 20` - "an int remainder at all" - and
+names only `%`. `pmod` is the same family with a different sign rule: Java's `%`
+takes the dividend's sign, `pmod` the divisor's, which is one masked add over the
+remainder. Whoever builds `%` should build it, and the two should not be
+discovered separately a second time.
+
+**`div` (`IntegralDivide`).** Int32 in, **int64 out**, so it is a *widening*
+kernel - the mirror of the `TIME` field extracts, which narrow. Milestone 5's
+section 2.39 covers `div` over `bigint` and says it takes 2.19's rule, exact
+under a proven bound and declined otherwise; what nothing covers is the int32
+form, whose output is wider than its input and which therefore waits on
+milestone 5's task 28 rather than on a bound. It is worth having as a second
+caller for that widening, the way item 32's `bit_count(l)` is a second caller for
+the narrowing.
+
+**A note on what this is not.** `/` over two ints returns a **double** in Spark,
+so it is item 3's business and not this one's; recording that here saves the next
+reader the same lookup.
+
+### Item 34. Null-safe equality
+
+*Opened 18 September 2026, from the coverage audit; the one gap it found that is
+a question about Varka's own design rather than about a type or a width.*
+
+`a <=> b` is `EqualNullSafe`, and Varka admits every other comparison. It is not
+admitted, and the reason is structural rather than incidental: **every binary
+node in the IR is null-intolerant**. The result is known exactly where both
+operands are valid and unknown elsewhere, and the validity word is the AND of the
+operands' - a rule the emitter, the compiler and the reference evaluator all
+share, and which `<=>` breaks by design, since it is *true* when both sides are
+null and *false* when exactly one is.
+
+The lowering itself is not the difficulty. The validity words are already in the
+kernel; `a <=> b` is the comparison's mask, narrowed to the lanes where both are
+valid, OR'd with the lanes where neither is. What needs deciding is whether that
+becomes a second kind of node - a null-*tolerant* binary, with its own rule
+everywhere the null-intolerant one is assumed - or whether the existing machinery
+can express it without a second rule for every reader to learn.
+
+That is a design question about the null model, which is why it is a scope item
+and not a task: it should be answered before it is built, and the answer is worth
+more than the expression.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
