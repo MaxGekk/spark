@@ -22,10 +22,11 @@ section said. Section 2.4 corrects it, and the correction reorders the task.*
 
 ## 2. What the section did not know
 
-### 2.1 Five of the nine expressions never reach the compiler under their own name
+### 2.1 No TIME expression reaches the compiler under its own name
 
 `HoursOfTime`, `MinutesOfTime`, `SecondsOfTime`, `SecondsOfTimeWithFraction` and
-`MakeTime` are **`RuntimeReplaceable`**. Each rewrites itself into a
+`MakeTime` are **`RuntimeReplaceable`** - and so, the correction at the end of this
+section records, are the other four. Each rewrites itself into a
 `StaticInvoke` on `DateTimeUtils` - `getHoursOfTime`, `getMinutesOfTime` and so
 on - and the optimizer's `ReplaceExpressions` runs long before physical planning.
 So a compiler arm matching `case HoursOfTime(child)` would never fire in a real
@@ -65,8 +66,15 @@ one key, the map catches it. A test still asserts end to end that the expression
 Spark produces for `hour(t)` - built by running the analyzer and optimizer over
 SQL, not by constructing the node by hand - is one the compiler matches.
 
-The four that *are* ordinary expressions, matchable the usual way:
-`TimeTrunc`, `SubtractTimes`, `TimeAddInterval`, `TimeDiff`.
+*Corrected 18 September 2026, starting the implementation: there are no such
+four. **All nine are `RuntimeReplaceable`** - `TimeTrunc`, `SubtractTimes`,
+`TimeAddInterval` and `TimeDiff` too. The first draft's check read only the first
+`extends` on each declaration, found `BinaryExpression` and `TernaryExpression`,
+and never saw the second trait. So the `StaticInvoke` table above is not group
+B's cost: it is the **prerequisite for every expression in this task**, which
+makes the task simpler than planned - one mechanism, applied uniformly - and
+moves the whole of it behind that one piece of work. Section 6 is re-grouped
+accordingly.*
 
 ### 2.2 The reference is `LocalTime`, not Spark's own code
 
@@ -141,6 +149,37 @@ and the store must be masked to the long species' lane count.
 Both are contained, and neither touches the general mixed-lane machinery. **This
 is the first thing to settle**, because it decides whether the headline
 expressions wait for task 28 or ship before it.
+
+### 2.6 What each expression needs, read from the helpers
+
+*Also 18 September 2026. The first draft grouped by lane and by matching; neither
+was the operative constraint for four of the nine.*
+
+`DateTimeUtils` says what the lowering has to do, and division is the divider:
+
+    subtractTimes(end, start) = (end - start) / NANOS_PER_MICROS
+    timeDiff(unit, start, end) = (end - start) / getNanosPerTimeUnit(unit)
+    timeTrunc(level, nanos)    = truncatedTo(level), i.e. (n / u) * u
+    timeAddInterval(t, iv)     = addExact(t, multiplyExact(iv, 1000)), then a range check
+
+So three of the four the first draft called "ordinary" need a **long-lane
+division** - task 88's step 3, which section 3 already brings into this task -
+and the one that needs no division at all is `t + dt`, which the first draft
+deferred to group C.
+
+The real dependency map, which is what section 6 now groups by:
+
+| needs | expressions |
+|---|---|
+| the `StaticInvoke` table | **all nine** |
+| long-lane division (88 step 3) | `time_trunc`, `t1 - t2`, `timediff`, `hour`, `minute`, `second` |
+| narrowing (2.5's question, or task 28) | `hour`, `minute`, `second` |
+| widening (task 28) | `make_time` |
+| an Arrow decimal representation | `second_with_fraction`, `time_to_seconds` |
+| **nothing beyond the table** | **`t + dt`** |
+
+`make_time` needs no division either - it is two multiplies and two adds - so
+what holds it is the widening alone.
 
 ## 3. Where task 88 step 3 lands: here
 
@@ -227,59 +266,54 @@ Everything Spark has, in the end - but not in one step, and two of them wait on 
 representation rather than on this task. The groups are an order, not a
 shortlist.
 
-**Group A, and the first thing shipped: same lane, ordinary expressions.**
-`time_trunc(unit, t)`, `t1 - t2` and `timediff(...)`. They need neither task 28
-nor the `StaticInvoke` mechanism - the same-lane set and the
-non-`RuntimeReplaceable` set happen to be the same expressions - so this slice
-is independent of both blockers and is what makes the task start moving.
-`time_trunc` is the one a query actually writes often, for grouping by hour or
-by minute.
+*Re-grouped 18 September 2026 by 2.6's map, which is the dependency that
+matters. The first draft grouped by lane and by matching; three of the four it
+called free of blockers in fact need the long-lane division, and the one that
+needs nothing was in its deferred list.*
 
-**Group B, the story: `hour`, `minute`, `second`, and `make_time` beside them.**
-These are what the post is about, and they cost the most - the `StaticInvoke`
-table of 2.1 and the width change of 2.4. The three extracts narrow (int64 in,
-int32 out) and `make_time` widens (int32 in, int64 out), so 2.5's question
-decides the first three and task 28's widening decides the fourth; all four share
-one matching mechanism, which is why they belong together.
+**The prerequisite, before any expression: the `StaticInvoke` table** of 2.1.
+All nine go through it, so it is not a group's cost but the task's entry fee. It
+is also self-contained and testable on its own - the table is built from the
+Catalyst classes' own `.replacement`, and the test is that what Spark produces
+for a SQL query is what the table holds.
+
+**Group A: `t + dt`.** The only expression needing nothing beyond the table - a
+multiply by 1000, an add, and the range guard of 4.1. Its semantics may change
+under [SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853), which is
+an argument for building the guard so it is easy to delete, not for waiting: a
+milestone whose subject is `TIME` should not have its first `TIME` kernel blocked
+on an upstream ticket that may sit for a release.
+
+**Group B: the three same-lane divisions** - `time_trunc`, `t1 - t2`,
+`timediff`. They need task 88's step 3 and nothing else, so they follow it
+directly and are what proves it on real expressions rather than on a probe.
+
+**Group C: the width changes** - `hour`, `minute`, `second` narrowing, and
+`make_time` widening. The extracts are the post's subject and depend on 2.5's
+answer; `make_time` needs no division at all, only the widening, so it can land
+whenever task 28 does.
+
+**Group D: blocked on a representation** - `second_with_fraction` and
+`time_to_seconds`, 2.3, admitted unchanged the day an Arrow decimal
+representation exists. `TimeFrom*` and the remaining `TimeTo*` are ordinary
+long-lane multiplies and divisions and follow group B cheaply.
 
 **Nothing here is declined for want of a mechanism.** Every `TIME` expression
-Spark has is vectorizable except the two of 2.3, and those two are waiting on an
-Arrow representation rather than on anything about the lane.
-
-**Group C, deferred or dropped, with reasons:**
-
-* **`make_time`** - moved up from here on 18 September 2026: it is vectorizable
-  and should be vectorized. Its replacement is
-  `StaticInvoke(DateTimeUtils, "makeTime", ...)`, so it costs nothing beyond the
-  table 2.1 already builds, and with a foldable seconds argument - which is what
-  `make_time(h, m, 30)` gives - the `DecimalType(16, 6)` operand is a constant
-  and the whole expression is two multiplies and two adds into a long. What it
-  still needs is the widening, since its inputs are int32 and its output int64,
-  so it belongs beside group B rather than ahead of it. A seconds argument that
-  is a decimal *column* declines, and that decline is about the operand, not the
-  expression.
-* **`t + dt`** - its semantics are in flux.
-  [SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) may replace
-  the throwing range check with ANSI's modulo-24, so the guard built now is work
-  to delete. Cheap to add once that settles, and 4.1 stays as the recipe.
-* **`TimeFrom*` and `TimeTo*`** - multiplies and divisions by powers of ten,
-  ordinary long-lane work and cheap to add once group A's arms exist.
-  `TimeToSeconds` alone is held back by its `DecimalType(14, 6)` output.
-* **`second_with_fraction` and `TimeToSeconds`** - not declined on principle:
-  blocked on the Arrow decimal representation, 2.3, and admitted unchanged the
-  day one exists. This is the milestone's clearest pull towards a second
-  representation for a logical type.
+Spark has is vectorizable except group D's two, and those wait on a
+representation rather than on anything about the lane.
 
 ## 6.1 Sequencing
 
-1. This PR: the plan.
-2. **2.5's question**: can the store narrow, or does this wait for task 28?
-3. Group A, which needs neither answer.
-4. Task 88 step 3's long-lane converts, with `useAVX` in the shape key resolved
-   per section 3.
-5. Group B: the `StaticInvoke` matching and the three extracts, with test 2
-   first.
-6. The declines, the coverage rows, and task 119's `TIME` arms.
+1. The plan, and this correction.
+2. **The `StaticInvoke` table**, with its guard test. Everything waits on it and
+   nothing else does, so it goes first and alone.
+3. **Group A**, `t + dt` - the first `TIME` kernel, needing nothing further.
+4. **Task 88 step 3**'s long-lane converts, with `useAVX` in the shape key
+   resolved per section 3.
+5. **Group B**, the three same-lane divisions, which prove step 3 on real
+   expressions.
+6. **2.5's question**, then group C's extracts; `make_time` with task 28.
+7. The declines, the coverage rows, and task 119's `TIME` arms.
 
 ## 7. Outcome
 
