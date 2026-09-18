@@ -275,6 +275,7 @@ def within(text, label_a, label_b, threshold):
 
 SURFACE_NAME = re.compile(r"^(.*) over (\d+) rows(, executor time)?$")
 SELECTIVITY = re.compile(r"^# selectivity: \d+ of \d+ rows, ([\d.]+%)")
+CHECKSUM = re.compile(r"^# checksum: (.*)$")
 
 
 def selectivities(text):
@@ -293,12 +294,73 @@ def selectivities(text):
     return out
 
 
+def per_entry(text, pattern):
+    """{entry: captured text} for a `# ...` line keyed by the table it follows.
+
+    The same walk `selectivities` does, for any of the driver's per-entry comment lines."""
+    out, entry = {}, None
+    for line in text.splitlines():
+        h = HEADER.match(line)
+        if h:
+            m = SURFACE_NAME.match(h.group(1).strip())
+            entry = m.group(1) if m else None
+            continue
+        m = pattern.match(line)
+        if m and entry:
+            out[entry] = m.group(1)
+    return out
+
+
+def compare_answers(labels, per_label, what):
+    """Every arm must agree about `what` on every entry both of them ran.
+
+    This is the check the surface driver did not have (task 125). It asserted that a row fused
+    and that no batch fell back, and it compared nothing the arms computed, so a kernel that was
+    fast and wrong published a rate like any other. Entries missing from an arm are skipped
+    rather than reported: a `--only` or `--shard` run is a legitimate subset, and the arms are
+    compared on what they have in common.
+
+    A disagreement is the run's answer, not a warning, so it raises.
+    """
+    disagreed = []
+    common = set(per_label[0])
+    for d in per_label[1:]:
+        common &= set(d)
+    if not common:
+        # Said out loud rather than passed over. A results file written before this check
+        # existed carries no checksum line, so an old arm beside a new one compares nothing -
+        # and a check that silently compares nothing is worse than no check, because the run
+        # looks the same either way.
+        print(f"note: no arm pair shares an entry carrying {what}; nothing was compared.")
+        print("      Regenerate the older arm's file to get the comparison.")
+        print()
+        return 0
+    for entry in sorted(common):
+        values = [d[entry] for d in per_label]
+        if len(set(values)) > 1:
+            disagreed.append((entry, values))
+    if not disagreed:
+        return len(common)
+    lines = [f"the arms disagree about {what} - one of them computed a different answer:"]
+    for entry, values in disagreed:
+        lines.append(f"  {entry}")
+        for label, value in zip(labels, values):
+            lines.append(f"    {label:<24} {value}")
+    lines.append("")
+    lines.append("A kernel that is fast and wrong looks exactly like a kernel that is fast, so")
+    lines.append("this fails the run rather than printing a table. If the arms are different")
+    lines.append("Spark versions and only the fold differs, check that `xxhash64` still hashes")
+    lines.append("the same way in both before looking at the kernel.")
+    raise SystemExit("\n".join(lines))
+
+
 def surface_table(specs):
     """The README's table from the date-surface files: one row per entry and shape, the wall
     rate of every distribution in M rows/s, and the last distribution's ratio against each of
     the others; then the same for the executor-time tables. `specs` are LABEL=FILE, the Varka
     file last."""
     labels, files, selected = [], [], {}
+    sums, sels = [], []
     for spec in specs:
         label, _, path = spec.partition("=")
         if not path:
@@ -306,7 +368,14 @@ def surface_table(specs):
         labels.append(label)
         text = read(path)
         files.append(parse(text))
+        sums.append(per_entry(text, CHECKSUM))
+        sels.append(per_entry(text, SELECTIVITY))
         selected.update(selectivities(text))
+    # Before the table, not after: a table printed above a disagreement reads as the run's
+    # result, and the numbers in it are the ones that must not be quoted.
+    if len(labels) > 1:
+        compare_answers(labels, sums, "what an entry computed")
+        compare_answers(labels, sels, "how many rows a filter selected")
     last_rates, order = files[-1]
     for executor in (False, True):
         title = "executor time" if executor else "wall time"
@@ -345,6 +414,18 @@ weekofyear (task 37), null-free  14 14 0 1430.3 0.7 1.0X
 
 SELFTEST_NEW = SELFTEST_OLD.replace("1430.3", "1000.0")
 
+# One entry's tables and its checksum line, as the surface driver writes them: the comment is
+# keyed by the table header above it, so the parser has to have read that header first.
+SELFTEST_SUMS_A = """\
+date_add(d, 3) over 1000 rows:  Best Time(ms)   Avg Time(ms)
+------------------------------------------------------------------
+projection, columnar consumer   14 14 0 1430.0 0.7 1.0X
+# plan: projection, columnar consumer Varka (kernel 2 batches, fallback 0)
+# checksum: projection rows=1000 nonnull=967 fold=42
+"""
+
+SELFTEST_SUMS_B = SELFTEST_SUMS_A.replace("fold=42", "fold=43")
+
 
 def selftest():
     """The keying, on a file holding the collision the parity file really has.
@@ -371,6 +452,24 @@ def selftest():
     assert label_of("t", "c", 1, False) == "c"
     assert label_of("t", "c", 2, False) == "c #2"
     assert label_of("t", "c", 1, True) == "[t] c"
+
+    # Task 125: the per-entry comment lines are keyed by the table above them, and two arms
+    # that disagree about one stop the run.
+    one = per_entry(SELFTEST_SUMS_A, CHECKSUM)
+    assert one == {"date_add(d, 3)": "projection rows=1000 nonnull=967 fold=42"}, one
+    compare_answers(["a", "b"], [one, per_entry(SELFTEST_SUMS_A, CHECKSUM)], "x")
+    try:
+        compare_answers(["a", "b"], [one, per_entry(SELFTEST_SUMS_B, CHECKSUM)], "x")
+    except SystemExit as e:
+        assert "date_add(d, 3)" in str(e) and "fold=43" in str(e), str(e)
+    else:
+        raise AssertionError("a differing checksum did not stop the run")
+
+    # An arm that ran a subset is compared on what it shares, not reported as a disagreement:
+    # `--only` and `--shard` are legitimate, and failing on them would make the check a nuisance
+    # that gets switched off.
+    assert compare_answers(["a", "b"], [one, {}], "x") == 0
+    assert compare_answers(["a", "b"], [one, one], "x") == 1
     print("varka_bench_diff selftest: ok")
 
 
