@@ -55,7 +55,8 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.DayOfWeekIso,
             VarkaVectorIR.NextDay, VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono,
             VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate,
-            VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.Cond,
+            VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.ConstDivide,
+            VarkaVectorIR.Cond,
             VarkaVectorIR.GuardedDay {
 
   /**
@@ -80,6 +81,7 @@ public sealed interface VarkaVectorIR
       case LiteralSlot n -> n.lane();
       case IntArith n -> n.left().laneType();
       case IntNeg n -> n.child().laneType();
+      case ConstDivide n -> n.child().laneType();
       case Greatest n -> n.left().laneType();
       case Least n -> n.left().laneType();
       case IfElse n -> n.thenNode().laneType();
@@ -341,6 +343,38 @@ public sealed interface VarkaVectorIR
    * the overflow it exists for, and condemns a value the wider lane represents exactly.
    */
   record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
+
+  /**
+   * {@code child / divisor} by a compile-time constant, truncating toward zero the way Java's
+   * {@code /} does.
+   *
+   * <p>The lane has neither an integer divide nor a multiply-high, so a constant division has
+   * only two lowerings: a range-narrowed magic multiply, which the calendar prefix uses over
+   * dividends it can prove bounded, and a conversion through double lanes, which is exact for
+   * every dividend the int lane can hold. This node is the second one. It exists for the
+   * divisions Varka cannot bound - {@code extract(YEAR FROM ym)} over a stored month count
+   * above all, where the magic's exact range covers about one forty-thousandth of the type -
+   * and it is therefore emitted through the double route whatever
+   * {@code VarkaEmitOptions.division} says, since that option chooses among lowerings the
+   * calendar has and this node has only one.
+   *
+   * <p>Truncation rather than floor is the contract, and it is free: {@code D2I} is the
+   * {@code (int)} cast, which truncates toward zero, so a negative dividend needs no correction
+   * step. A floor-producing magic would need one, which is why the sibling divisions carry a
+   * carry and this does not. {@code sql/varka/plans/verify_ym_division.py} checks the
+   * equivalence against {@code IntervalUtils.getYears} over all 2^32 month counts.
+   *
+   * <p>A zero divisor has no lowering and is refused here: a division by zero raises rather
+   * than producing a value, which is the row engine's job through the ghost fallback.
+   */
+  record ConstDivide(VarkaVectorIR child, int divisor) implements VarkaVectorIR {
+    public ConstDivide {
+      requireInt("constDivide", child);
+      if (divisor == 0) {
+        throw new IllegalArgumentException("a constant division by zero has no lowering");
+      }
+    }
+  }
 
   /**
    * {@code left OP right} over two operands on one lane, which the constructor requires to
@@ -701,6 +735,7 @@ public sealed interface VarkaVectorIR
       case IntArith n -> "(int:" + n.op().name() + ":" + n.mode().name() + " "
           + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case IntNeg n -> "(neg:" + n.mode().name() + " " + canonical(n.child()) + ")";
+      case ConstDivide n -> "(divc:" + n.divisor() + " " + canonical(n.child()) + ")";
     };
   }
 
@@ -776,6 +811,7 @@ public sealed interface VarkaVectorIR
       case IntArith n -> "(int:" + n.op().name() + ":" + n.mode().name() + " "
           + lineOf.applyAsInt(n.left()) + " " + lineOf.applyAsInt(n.right()) + ")";
       case IntNeg n -> "(neg:" + n.mode().name() + " " + lineOf.applyAsInt(n.child()) + ")";
+      case ConstDivide n -> "(divc:" + n.divisor() + " " + lineOf.applyAsInt(n.child()) + ")";
     };
   }
 }

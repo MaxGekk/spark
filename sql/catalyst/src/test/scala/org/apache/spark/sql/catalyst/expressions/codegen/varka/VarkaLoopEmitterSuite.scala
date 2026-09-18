@@ -4578,6 +4578,63 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     }
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Task 89: a constant division with no magic form, over the whole int32 range.
+  // -------------------------------------------------------------------------------------------
+
+  test("a constant division matches Java's `/` over the whole int32 range, at every width") {
+    // `extract(YEAR FROM ym)` is `months / 12` over a month count nothing bounds, so the
+    // calendar's range-narrowed magic cannot serve it and this node converts through double
+    // lanes instead. Two things are being checked at once and they fail differently: that the
+    // quotient is exact - which `sql/varka/plans/verify_ym_division.py` proves over all 2^32
+    // counts, and which would break here at the extremes first - and that it *truncates toward
+    // zero* rather than flooring, which is what a magic would have done and what would show up
+    // only on negative dividends with a remainder.
+    val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
+    val extremes = Array(Int.MinValue, Int.MinValue + 1, Int.MaxValue, Int.MaxValue - 1,
+      -1, 0, 1, -11, 11, -12, 12, -13, 13, -49151, 49151, -49152, 49152)
+    def months(c: Int, i: Int): Int =
+      if (i < extremes.length) extremes(i) else i * 7919 - 1000000
+    for (lanes <- Seq(0, 2, 4, 8, 16)) {
+      checkMatrix(root, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+        nullPatterns.map(p => Seq(p._2)), data = months, ctx = s"divc/12 lanes=$lanes",
+        options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+    }
+  }
+
+  test("a constant division is emitted through the double lane whatever the division option " +
+      "says, because it has no other lowering") {
+    // The `division` option chooses among the lowerings the *calendar* has. This node has one,
+    // so the option cannot turn it off - and if it ever did, the kernel would compute nothing
+    // rather than compute something slower.
+    val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
+    for (form <- VarkaEmitOptions.Division.values()) {
+      val bytes = emitMulti(root, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
+      assert(doubleDivisions(bytes) === 1, s"division=$form")
+    }
+  }
+
+  test("a constant division by zero or by -1 is refused rather than emitted") {
+    // Zero has no quotient at all, and -1 overflows at Integer.MinValue - the one input where
+    // Java's `/` throws rather than answering. Both are the row engine's to raise, so the
+    // shapes are refused where they are built rather than emitted as something plausible.
+    val col = new ColumnRef(0, LaneType.INT)
+    val zero = intercept[IllegalArgumentException](new ConstDivide(col, 0))
+    assert(zero.getMessage.contains("division by zero"), zero.getMessage)
+    val minusOne =
+      intercept[IllegalArgumentException](emitMulti(Seq(new ConstDivide(col, -1)), 1, 0))
+    assert(minusOne.getMessage.contains("overflows at Integer.MIN_VALUE"), minusOne.getMessage)
+  }
+
+  test("a constant division by one emits no conversion at all") {
+    // The identity. Nothing requires the compiler to have folded it, and emitting a conversion
+    // round trip for it would be a silent cost on a shape that does nothing.
+    val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 1))
+    assert(doubleDivisions(emitMulti(root, 1, 0)._2) === 0)
+    checkMatrix(root, 1, Array.empty[Int], Seq(17, 1000), nullPatterns.map(p => Seq(p._2)),
+      ctx = "divc/1")
+  }
+
   test("a comparison root emits the selection bitmap with null-as-false") {
     // The simplest filter kernel: one Compare root, its bitmap checked against the Kleene
     // reference with unknown collapsed to false at the root - across lengths (partial lane

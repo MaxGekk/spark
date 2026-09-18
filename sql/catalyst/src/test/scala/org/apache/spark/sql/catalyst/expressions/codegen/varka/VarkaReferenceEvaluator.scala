@@ -146,6 +146,11 @@ object VarkaReferenceEvaluator {
         case Overflow.WRAP => Some(-c)
         case _ => if (c == Int.MinValue) None else Some(-c)
       }) yield v
+    // Java's own `/`, which is the definition the node claims to compute: the oracle divides
+    // rather than reproducing the emitter's conversion, so the two agree only if the lowering
+    // is right.
+    case n: ConstDivide =>
+      evalValue(n.child(), row, lits).map(_ / n.divisor())
     case n: MakeDate =>
       // The definition: LocalDate.of, null (None) where the calendar rejects the triple - never
       // the length rule the emitter computes. The year limit is the kernel's business, not the
@@ -217,6 +222,8 @@ object VarkaReferenceEvaluator {
         // The lane's own most negative value, whose negation is itself.
         case _ => if (c == Long.MinValue) None else Some(-c)
       }) yield v
+    case n: ConstDivide =>
+      evalLong(n.child(), row, lits).map(_ / n.divisor())
     case n: Greatest =>
       (evalLong(n.left(), row, lits), evalLong(n.right(), row, lits)) match {
         case (Some(a), Some(b)) => Some(math.max(a, b))

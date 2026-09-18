@@ -223,6 +223,13 @@ public final class DateSurfaceBenchmark {
       if (a.out == null) {
         throw new IllegalArgumentException("--out FILE is required");
       }
+      if (a.rows > CHECKSUM_MAX_ROWS) {
+        // Refused rather than left to wrap: a silently overflowed fold still compares equal
+        // between two arms that overflowed the same way, so the check would keep passing while
+        // meaning less than it says.
+        throw new IllegalArgumentException("--rows " + a.rows + " is over " + CHECKSUM_MAX_ROWS
+            + ", above which the checksum's sum no longer fits an int64");
+      }
       if (a.shardCount < 1 || a.shardIndex < 0 || a.shardIndex >= a.shardCount) {
         throw new IllegalArgumentException(
             "--shard wants 0 <= I < N with N >= 1, got " + a.shardIndex + "/" + a.shardCount);
@@ -482,6 +489,57 @@ public final class DateSurfaceBenchmark {
     return "SELECT " + e.projection() + " AS a FROM varka_dates";
   }
 
+  /**
+   * The modulus each row's hash is reduced by before the sum. It keeps the running total inside
+   * an int64 without the sum itself having to be checked: every term is under 2^30, so a run of
+   * {@link #CHECKSUM_MAX_ROWS} rows cannot reach {@code Long.MAX_VALUE}. A plain
+   * {@code sum(xxhash64(...))} would overflow at a few hundred million rows and either throw
+   * under ANSI or wrap - and a wrapping checksum is still a checksum, but one whose agreement
+   * across arms would then depend on the row count matching too, which is a second thing to get
+   * wrong.
+   */
+  private static final long CHECKSUM_MODULUS = 1_000_000_007L;
+
+  /** The row count above which {@link #CHECKSUM_MODULUS} could no longer keep the sum exact. */
+  static final long CHECKSUM_MAX_ROWS = Long.MAX_VALUE / CHECKSUM_MODULUS;
+
+  /**
+   * What every arm must agree on for an entry: how many rows the shape produced, how many of
+   * them were non-null, and an order-independent fold of their values.
+   *
+   * <p>The fold is a sum rather than an xor because an xor cancels: a date surface produces long
+   * runs of repeated values - {@code year(d)} over a year of dates is one number - and a pair of
+   * equal hashes would vanish from an xor, leaving a checksum that agrees for the wrong reason.
+   * A sum of reduced hashes is commutative, so partition order does not reach it, and no pair
+   * annihilates.
+   */
+  record Checksum(long rows, long nonNull, long fold) {
+    @Override
+    public String toString() {
+      return String.format(Locale.ROOT, "rows=%d nonnull=%d fold=%d", rows, nonNull, fold);
+    }
+  }
+
+  /**
+   * The checksum of a shape's output, computed once and outside the timed loop.
+   *
+   * <p>`inner` is the query whose rows are being checked and `column` the one column of it that
+   * carries the answer: the projection's computed value, or the date a filter let through. The
+   * filter's own row count is already reported as its selectivity, and this adds what that count
+   * cannot see - a filter that selects the right *number* of rows and the wrong ones.
+   */
+  static String checksumQuery(String inner, String column) {
+    return "SELECT count(1), count(" + column + "), "
+        + "sum(pmod(xxhash64(" + column + "), " + CHECKSUM_MODULUS + ")) FROM (" + inner + ")";
+  }
+
+  static Checksum checksum(SparkSession spark, String inner, String column) {
+    Row r = spark.sql(checksumQuery(inner, column)).first();
+    // An empty result makes the sum null rather than zero, which is a real answer for a filter
+    // that selects nothing and must not be read as a missing checksum.
+    return new Checksum(r.getLong(0), r.getLong(1), r.isNullAt(2) ? 0L : r.getLong(2));
+  }
+
   /** The filter with a columnar consumer: the selected dates written to the noop sink. */
   static String filterColumnarQuery(Surface.Entry e) {
     return "SELECT d FROM varka_dates WHERE " + e.filter() + "";
@@ -553,9 +611,14 @@ public final class DateSurfaceBenchmark {
       measureShape(spark, executor, batches, drain, "projection, columnar consumer", q, body,
           args, warmup, min, wall, exec, plans, shares, log, entry, violations);
     }
+    List<String> sums = new ArrayList<>();
+    if (entry.projection() != null) {
+      sums.add("projection " + checksum(spark, projectionQuery(entry), "a"));
+    }
     Long selected = null;
     if (entry.filter() != null) {
       selected = spark.sql(filterQuery(entry)).collectAsList().get(0).getLong(0);
+      sums.add("filter " + checksum(spark, filterColumnarQuery(entry), "d"));
       String qc = filterColumnarQuery(entry);
       Runnable bodyc = () -> spark.sql(qc).write().format("noop").mode("overwrite").save();
       measureShape(spark, executor, batches, drain, "filter, columnar consumer", qc, bodyc,
@@ -574,6 +637,7 @@ public final class DateSurfaceBenchmark {
       sb.append(String.format(Locale.ROOT, "# selectivity: %d of %d rows, %.1f%%%n", selected,
           args.rows, 100.0 * selected / args.rows));
     }
+    sb.append("# checksum: ").append(String.join(", ", sums)).append(System.lineSeparator());
     sb.append("# fixed share (wall - executor) / wall: ").append(String.join(", ", shares))
         .append(System.lineSeparator()).append(System.lineSeparator());
     return sb.toString();

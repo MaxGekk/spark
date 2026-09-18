@@ -2832,3 +2832,16 @@ measured against a floor the project has already looked at.
    into decode, allocation, sink and kernel. Until those two splits are
    committed, every relative in the throughput file is a statement about
    the pipeline around the kernels, and should be read as one.
+7. **Where would the SQL standard buy a faster kernel than Spark's semantics?**
+   Opened 18 September 2026 and kept in `SCOPE_STANDARD_MODE.md` rather than
+   here, because the register accumulates across milestones as tasks meet the
+   cases. Varka's row answers follow vanilla Spark and that does not change;
+   what the standard offers is narrower *ranges*, which is what Varka's
+   lowerings want - the int-lane magic is exact only over a bounded dividend,
+   and a bound the standard would declare turns a seven-op double-lane division
+   into a two-op magic, and turns task 103's recorded interval declines into
+   kernels. The register also records why this need not change any answer: the
+   per-batch `VarkaInputBound` check already exists, so the cheaper lowering can
+   be guarded and a non-conforming batch declines to the row engine. Item 64's
+   statistics-directed bounds are the principled source for such a bound, which
+   is why the two belong together.

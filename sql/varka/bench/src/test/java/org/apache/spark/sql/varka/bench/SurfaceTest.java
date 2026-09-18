@@ -27,6 +27,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -152,6 +153,58 @@ public class SurfaceTest {
     assertTrue(thrown.getMessage().contains(interval.label()), thrown.getMessage());
     // and the same entry is accepted by the shape that does build the column
     DateSurfaceBenchmark.requireColumns(interval, DateSurfaceBenchmark.TableShape.ALL);
+  }
+
+  /**
+   * The checksum sees a wrong answer, which is the whole of task 125.
+   *
+   * <p>The surface asserts that a row fused and that no batch fell back; it never compared what
+   * the arms computed. A kernel that is fast and wrong would therefore publish a rate. Here the
+   * "wrong kernel" is simulated the only way a test at this level can - the same shape over a
+   * deliberately different expression - and the checksums must differ.
+   */
+  @Test
+  public void theChecksumSeparatesTwoAnswersThatCountTheSame() {
+    var right = DateSurfaceBenchmark.checksum(spark, "SELECT date_add(d, 3) AS a "
+        + "FROM varka_dates", "a");
+    var wrong = DateSurfaceBenchmark.checksum(spark, "SELECT date_add(d, 4) AS a "
+        + "FROM varka_dates", "a");
+    // The failure this guards against does not change the row count or the null count: an
+    // off-by-one kernel produces exactly as many rows, exactly as many of them non-null, and
+    // different values. Only the fold can tell them apart, so the test asserts that the other
+    // two fields are equal and the fold is not.
+    assertEquals(right.rows(), wrong.rows());
+    assertEquals(right.nonNull(), wrong.nonNull());
+    assertNotEquals(right.fold(), wrong.fold());
+  }
+
+  /**
+   * And it sees a filter that selects the right number of rows and the wrong ones, which the
+   * selectivity line beside it cannot.
+   */
+  @Test
+  public void theChecksumSeparatesTwoFiltersOfEqualSelectivity() {
+    var lo = DateSurfaceBenchmark.checksum(spark,
+        "SELECT d FROM varka_dates WHERE i < 500", "d");
+    var hi = DateSurfaceBenchmark.checksum(spark,
+        "SELECT d FROM varka_dates WHERE i >= 500", "d");
+    assertEquals(lo.rows(), hi.rows(), "the fixture should split evenly, or this proves nothing");
+    assertNotEquals(lo.fold(), hi.fold());
+  }
+
+  /**
+   * The fold is order-independent, because partitions finish in whatever order they finish in.
+   * Two partitionings of one table must therefore agree, and a fold that depended on order -
+   * a running hash, say - would not.
+   */
+  @Test
+  public void theFoldDoesNotDependOnPartitionOrder() {
+    String q = "SELECT date_add(d, 3) AS a FROM varka_dates";
+    var two = DateSurfaceBenchmark.checksum(spark, q, "a");
+    var seven = DateSurfaceBenchmark.checksum(spark,
+        "SELECT date_add(d, 3) AS a FROM (SELECT /*+ REPARTITION(7) */ d FROM varka_dates)", "a");
+    assertEquals(two.rows(), seven.rows());
+    assertEquals(two.fold(), seven.fold());
   }
 
   /** Every entry runs under the full shape - so the refusal above cannot fire on a normal run. */

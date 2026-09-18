@@ -55,6 +55,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Gre
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
@@ -1496,6 +1497,7 @@ public final class VarkaLoopEmitter {
       case IsNotNull n -> new VarkaVectorIR[] {n.child()};
       case IntArith n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IntNeg n -> new VarkaVectorIR[] {n.child()};
+      case ConstDivide n -> new VarkaVectorIR[] {n.child()};
     };
   }
 
@@ -2065,6 +2067,7 @@ public final class VarkaLoopEmitter {
             ? new WordOwner.Own(node)
             : andOwner(node, n.left(), n.right());
         case IntNeg n -> wordOwner.get(n.child());
+        case ConstDivide n -> wordOwner.get(n.child());
         case DayOfWeek n -> wordOwner.get(n.days());
         case WeekDay n -> wordOwner.get(n.days());
         case DayOfWeekIso n -> wordOwner.get(n.days());
@@ -2114,6 +2117,7 @@ public final class VarkaLoopEmitter {
             ? null
             : andExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case IntNeg n -> pureWord.get(n.child());
+        case ConstDivide n -> pureWord.get(n.child());
         case Greatest n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case Least n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case DayOfWeek n -> pureWord.get(n.days());
@@ -2282,6 +2286,25 @@ public final class VarkaLoopEmitter {
           }
           if (n.mode() == Overflow.FAIL) {
             checkedArith.add(node);
+          }
+          analyzeOp(node, false, n.child());
+        }
+        case ConstDivide n -> {
+          // A division by a non-zero constant cannot overflow or null a lane, so it carries no
+          // overflow mode and joins no validity: it is its child's word exactly, the way
+          // IntNeg above is. The one input the int lane cannot divide is Integer.MIN_VALUE by
+          // -1, which the compiler refuses rather than emitting; see its own arm there.
+          if (n.divisor() == -1) {
+            throw new IllegalArgumentException(
+                "a constant division by -1 overflows at Integer.MIN_VALUE: " + node);
+          }
+          // This node has no magic form to fall back on, so a width with no double species to
+          // convert through cannot emit it at all. Refused here rather than in the emitter,
+          // where the absence would surface as a class that computes nothing.
+          if (!divider.canConvert()) {
+            throw new IllegalArgumentException(
+                "a constant division needs a double species to convert through, which "
+                + lane.laneType + " at " + lanes + " lanes has not: " + node);
           }
           analyzeOp(node, false, n.child());
         }
@@ -2859,6 +2882,7 @@ public final class VarkaLoopEmitter {
           ? Integer.MIN_VALUE
           : andRef(s.wordRef.get(n.left()), s.wordRef.get(n.right()));
       case IntNeg n -> s.wordRef.get(n.child());
+      case ConstDivide n -> s.wordRef.get(n.child());
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
     };
@@ -3106,6 +3130,7 @@ public final class VarkaLoopEmitter {
           }
         }
         case IntNeg x -> { }
+        case ConstDivide x -> { }
         case IfElse x -> { }
         case And x -> { }
         case Or x -> { }
@@ -3167,6 +3192,7 @@ public final class VarkaLoopEmitter {
         // IntNeg aliases its child's word (ownerOf), so it never reaches this queue - the
         // child does. Written out rather than defaulted, per this switch's own rule.
         case IntNeg x -> { }
+        case ConstDivide x -> { }
         case Compare x -> { }
         case And x -> { }
         case Or x -> { }
@@ -4120,6 +4146,7 @@ public final class VarkaLoopEmitter {
       }
       case IntArith n -> emitIntArith(cb, n, dense, analysis, s, computed);
       case IntNeg n -> emitIntNeg(cb, n, dense, analysis, s, computed);
+      case ConstDivide n -> emitConstDivide(cb, n, dense, analysis, s, computed);
       case DateDiff n -> {
         analysis.lane.requireInt(n);
         emitAndValidatedOp(cb, node, n.end(), n.start(), "sub", LANEWISE_VV,
@@ -6109,7 +6136,7 @@ public final class VarkaLoopEmitter {
    */
   private record Divider(VarkaEmitOptions.Division form, String species) {
 
-    /** The only value that emits no conversions, and so the only one any lane can take. */
+    /** No conversion is possible here at all: the magic form, and nothing else. */
     static final Divider MAGIC = new Divider(VarkaEmitOptions.Division.MAGIC, "");
 
     /**
@@ -6120,14 +6147,22 @@ public final class VarkaLoopEmitter {
      */
     static Divider of(Analysis analysis) {
       VarkaEmitOptions.Division form = analysis.options.division();
-      if (form == VarkaEmitOptions.Division.MAGIC || analysis.lane != Lane.INT) {
-        return MAGIC;
-      }
-      // Two int lanes is the narrowest width whose double half has a lane at all.
-      if (analysis.lanes != 0 && analysis.lanes < 2) {
+      // Two int lanes is the narrowest width whose double half has a lane at all, and the long
+      // lane has no conversions emitted for it yet.
+      if (analysis.lane != Lane.INT || (analysis.lanes != 0 && analysis.lanes < 2)) {
         return MAGIC;
       }
       return new Divider(form, analysis.lane.speciesField(analysis.lanes));
+    }
+
+    /**
+     * Whether a division that has no magic form at all can be emitted here. The calendar's
+     * divisions always have one to fall back on; {@link VarkaVectorIR.ConstDivide} does not, so
+     * it asks this and the analysis refuses the shape rather than the emitter producing
+     * nothing.
+     */
+    boolean canConvert() {
+      return !species.isEmpty();
     }
 
     /**
@@ -6165,6 +6200,30 @@ public final class VarkaLoopEmitter {
       return;
     }
     emitDoubleDivide(cb, divider, div.divisor);
+  }
+
+  /**
+   * {@code child / divisor}, the one division with no magic form to fall back on.
+   *
+   * <p>{@link VarkaVectorIR.ConstDivide} exists for dividends the emitter cannot bound, so the
+   * range-narrowed magic is not an option however {@link VarkaEmitOptions#division()} is set,
+   * and the double route is not a variant here but the lowering. It is always the true divide:
+   * the reciprocal is exact only for divisors a closed form admits, and choosing between them
+   * per divisor is a performance question this node does not need to answer to be correct.
+   *
+   * <p>No carry, no guard and no overflow mask: the quotient is exact over the whole lane, and
+   * dividing by a non-zero constant other than -1 cannot overflow.
+   */
+  private static void emitConstDivide(CodeBuilder cb, ConstDivide n, boolean dense,
+      Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
+    emitValue(cb, n.child(), dense, analysis, s, computed);
+    line(cb, analysis, n);
+    if (n.divisor() == 1) {
+      // The identity, which the compiler does not have to have folded for this to be correct.
+      return;
+    }
+    emitDoubleDivide(cb, new Divider(VarkaEmitOptions.Division.DOUBLE_DIV, analysis.divider
+        .species()), n.divisor());
   }
 
   /**
