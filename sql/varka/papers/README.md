@@ -86,6 +86,7 @@ different set of losses and silently invalidate the header.
 | `ngom-2021-filter-representation.md` | Ngom, Menon, Butrovich, Ma, Lim, Mowry and Pavlo, "Filter Representation in Vectorized Query Execution", DaMoN 2021 | `plans/SCOPE_MILESTONE_6.md` Items 3, 16 and 25 (bitmap against selection vector, and the crossover model) |
 | `benson-2023-simd-compiler-intrinsics.md` | Benson, Ebeling and Rabl, "Evaluating SIMD Compiler-Intrinsics for Database Systems", ADMS 2023 | `plans/SCOPE_MILESTONE_6.md` Items 19, 22 and 25 (the compress and PEXT gate), `plans/PLAN_TASK_62.md` section 11 |
 | `schmidt-2025-mimd-simd-interplay.md` | Schmidt, Pietrzyk, Hildebrandt and co-authors, "Rethinking MIMD-SIMD Interplay for Analytical Query Processing in In-Memory Database Engines", CIDR 2025 | `plans/SCOPE_MILESTONE_6.md` Item 25 (the concurrency regime the public write-up must state) |
+| `slesarenko-2014-isomorphic-specialization.md` | Slesarenko, Filippov and Romanov, "First-class Isomorphic Specialization by Staged Evaluation", WGP '14 | `plans/SCOPE_MILESTONE_6.md` Item 11 (physical representation as a compiler decision: isos as first-class conversion nodes) |
 
 Eleven further papers were read for `plans/SCOPE_MILESTONE_6.md` Item 25 on 16
 September 2026 (Willhalm 2009, Raducanu 2013, Polychroniou 2015 and 2019, Feng
@@ -93,3 +94,9 @@ September 2026 (Willhalm 2009, Raducanu 2013, Polychroniou 2015 and 2019, Feng
 Their printed terms - ACM copyright with a permission notice, Creative Commons
 BY-NC-ND, or an arXiv posting - do not permit a copy here, so Item 25 keeps the
 reading notes and the citations instead, as the licensing section above says.
+
+Slesarenko, Filippov and Romanov, "First-class Isomorphic Specialization by
+Staged Evaluation" (WGP '14), read on 19 September 2026 for Item 11, is in the
+same position - ACM copyright with a permission notice - and is transcribed
+here anyway, on the repository owner's explicit decision; its header says so.
+The default above stands for the next paper.
