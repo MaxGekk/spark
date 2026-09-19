@@ -772,3 +772,104 @@ a **saving** of twelve ops when it was a cost of six. The tool now sums every
 vector type. The general form of the lesson: an op counter scoped to one type
 stops being a cost model the moment a second type appears, and it fails
 silently and in the flattering direction.
+
+## The Vector API's math operators are `java.lang.Math` bit for bit on x86, and Spark calls `StrictMath` for six of them
+
+`DoubleVector.lanewise(VectorOperators.SIN)` and its siblings are not Java: C2
+lowers them to a vector math library - Intel's SVML on x86 (`libjsvml.so`, the
+symbols `__jsvml_sin8_ha_z0` and so on), a SLEEF derivative on aarch64, which is
+why the JDK ships `legal/jdk.incubator.vector/sleef.md`. Whether those lanes
+agree with the scalar call Spark's row engine makes is therefore a property of
+two libraries on one host, and it was measured: `dev/varka_canary/MathLaneProbe.java`,
+262144 inputs per operator after C2, 19 September 2026, JDK 25, Zen 5, with
+`-Xlog:library=info` confirming the SVML symbol for every operator and
+`PrintIntrinsics` refusing none.
+
+**Against `java.lang.Math`: zero lanes differ, on all eleven operators.**
+HotSpot's scalar `Math.sin` intrinsic and `libjsvml` are both Intel's and they
+agree bit for bit. **Against `StrictMath`** - fdlibm - eight of the eleven
+differ by one or two ULP on two to ten percent of inputs.
+
+The consequence is not symmetric, because Spark uses both libraries. It computes
+`sin cos tan asin acos atan sinh cosh tanh cbrt sqrt atan2 hypot rint signum`
+with `java.lang.Math`, so a lane reproduces the row engine exactly and Varka's
+contract holds for free. It computes `exp expm1 log log10 log1p pow` (and `log2`
+through `StrictMath.log`) with `StrictMath`, and for `exp`, `log`, `log10` and
+`pow` a lane cannot match the row engine through the Vector API on this host.
+`expm1` and `log1p` happened to agree on every input tried.
+
+Three things to carry from this. **Measure, do not reason**: the obvious
+expectation was that SVML would differ from *both* scalar libraries, and it
+differs from neither in the case that matters most. **The answer is per host**:
+on aarch64 the lanes are SLEEF and `Math.sin` may be a call into fdlibm rather
+than an intrinsic, so the table has to be re-read there before it is relied on.
+And **the six `StrictMath` functions need a decision, not a lowering** - a ULP
+contract, a Varka-emitted fdlibm, or a decline - which
+`SCOPE_MILESTONE_6.md` item 36 holds and `SCOPE_FUNCTIONS.md` section 3 explains.
+
+## SLEEF and OpenVML, read for Varka: no integer division anywhere, and what does transfer
+
+Read 19 September 2026, before anyone proposes them again. **SLEEF** (v3.9,
+Boost 1.0) is a vectorised libm - forty-odd transcendentals in 1-ULP and 3.5-ULP
+tiers, a DFT, quad precision - over per-ISA helper headers for SSE2, AVX2,
+AVX-512F, AdvSIMD, SVE, RVV, POWER and s390x. **OpenVML** (2014-2015, BSD-3) is
+an OpenBLAS-style clone of Intel's VML: thirty whole-array element-wise
+functions over Cephes-era Horner polynomials, per-CPU kernels chosen at build
+time, unmaintained since Haswell.
+
+**Neither has integer division, a multiply-high, or a remainder.** SLEEF's
+integer vocabulary is add, sub, neg, the bitwise ops, shifts, eq/gt and select;
+its `xfmod` is floating-point and iterates up to 21 rounds in double-double.
+OpenVML's only integer operations are the `epi32` add, sub, compare and shift
+inside its sine's range reduction. Varka's magic multiply and double-lane route
+stand on compiler literature (Granlund and Montgomery), not on the vector-math
+libraries. **SLEEF never converts a 64-bit integer either**: it pairs each
+double lane with a 32-bit int and so never meets the long lane's problem.
+
+What SLEEF does contribute, by task:
+
+* **A third lowering for the 64-bit divide on AVX2.** `commonfuncs.h`'s
+  `vtruncate2_vd_vd` and `vfloor2_vd_vd` build a 52-bit truncation from 32-bit
+  converts, because SSE2 has no `roundpd`: scale by 2^-31, `cvttpd2dq`, scale
+  back with an FMA, truncate the remainder, subtract. The same idea splits a
+  64-bit value into 32-bit halves and converts each with `cvtdq2pd`, which AVX2
+  has - exact to 2^53, wider than the `0x4330` identity's 2^52, and no exponent
+  bit to reason about. `SCOPE_MILESTONE_6.md` item 37. `vrint2_vd_vd` is the
+  2^52 add-and-subtract round-to-nearest the magic form already uses, so that
+  part is confirmed prior art.
+* **Task 28's widen and narrow sequences, per ISA** (`helperavx2.h`,
+  `helperadvsimd.h`). SLEEF keeps one int species per FP species and converts
+  at the boundary, which is the shape task 28 settled on. On AVX2 widening is
+  `cvtepi32_epi64`; **narrowing int64 to int32 has no instruction** and is a
+  `shuffle_ps 0x08 / 0x80` pair and an `or`; mask narrowing is
+  `permutevar8x32` over the even lanes. On AdvSIMD: `vmovl_s32` / `vmovn_s64`,
+  and `vuzpq` / `vzipq` for masks. Recorded in `PLAN_TASK_28.md` 3.1.
+* **Expectations keyed per ISA.** `autovec.c` asserts the compiler took the
+  vector path with FileCheck lines per ISA - `// CHECK-AVX2: _ZGVdN4v_...` - not
+  one universal assertion. That is the shape the assembly gate wants on a
+  runner pool spanning five CPU families, and task 124's baseline per AVX level
+  already says so. Recorded in `PLAN_TASK_124.md`.
+* **Named accuracy tiers.** `_u05`, `_u10`, `_u15`, `_u35`: every function
+  ships under an explicit ULP bound and the caller picks by name. The
+  precedent for a standard mode that is a named tier with a stated contract,
+  and for a kernel's exactness range being part of its identity.
+* **An output digest per function.** `hash_finz.txt` commits a SHA-256 of each
+  function's outputs over a fixed input set, one line per (function, tier).
+  Varka's fuzz digests are per grammar and lane; per expression, a drift would
+  name its expression.
+* **Edge sampling.** `tester2` spends a fixed share of draws on
+  `nexttoward0(+-0, k)` and `nexttoward0(+-inf, k)` for small random `k` -
+  dense at the boundaries of the representable range, uniform elsewhere.
+  `VarkaIrGrammar` does this by hand; the long lane's 2^52 and 2^53 edges are
+  where the systematic form would earn its keep.
+* **Two rules SLEEF's code branches on and Varka's proofs assume away.**
+  `ENABLE_FMA_DP`: an exactness argument written for one rounding per operation
+  is wrong once the multiply and add fuse, and the split-32 conversion above
+  uses an FMA. And the dispatcher substitutes kernels on `cpuSupportsAVX2() &&
+  cpuSupportsFMA()` - feature predicates, never a level - which is the review's
+  objection to `UseAVX` made structural.
+
+Not worth borrowing: `xfmod`, Payne-Hanek reduction, the DFT, the coefficient
+generator (until Varka writes an approximation of its own), and OpenVML entire.
+For Spark's FP functions the Vector API's operators are SLEEF or SVML already;
+see the section above.

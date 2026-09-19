@@ -99,6 +99,17 @@ round trip is exact:
 So the arithmetic and the API questions are settled before any emitter work, the
 way task 88's were. What is left is structural.
 
+*Prior art, added 19 September 2026.* SLEEF makes the same choice - one int
+species per FP species, converted at the boundary - and its per-ISA helpers hold
+the sequences this task will emit. On AVX2 widening is `cvtepi32_epi64`;
+**narrowing int64 to int32 has no instruction**, and `helperavx2.h`'s
+`vcast_vi_vm` is a `shuffle_ps 0x08 / 0x80` pair over the two 128-bit halves
+and an `or`; mask narrowing is `permutevar8x32` over the even lanes and mask
+widening the inverse index. On AdvSIMD the pair is `vmovl_s32` / `vmovn_s64`
+and masks go through `vuzpq_u32` / `vzipq_u32`. The Vector API's
+`convertShape` is what emits these, so the value here is knowing what to expect
+in the assembly, not what to write.
+
 ### 3.2 What drives the loop, and what a long value is in a mixed kernel
 
 The loop trip stays the **int species' lane count** - sixteen rows per iteration
