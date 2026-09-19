@@ -81,6 +81,53 @@ public class MathLaneProbe {
     };
   }
 
+  /** The binary operators Spark reaches: pow through StrictMath, atan2 and hypot through Math. */
+  static double math2(String name, double x, double y) {
+    return switch (name) {
+      case "POW" -> Math.pow(x, y); case "ATAN2" -> Math.atan2(x, y); default -> Math.hypot(x, y);
+    };
+  }
+
+  static double strict2(String name, double x, double y) {
+    return switch (name) {
+      case "POW" -> StrictMath.pow(x, y); case "ATAN2" -> StrictMath.atan2(x, y);
+      default -> StrictMath.hypot(x, y);
+    };
+  }
+
+  static void run2(VectorOperators.Binary op, double[] x, double[] y, double[] v) {
+    for (int i = 0; i < x.length; i += S.length()) {
+      DoubleVector.fromArray(S, x, i).lanewise(op, DoubleVector.fromArray(S, y, i))
+          .intoArray(v, i);
+    }
+  }
+
+  /**
+   * What machine this ran on, printed first so a result can be attributed: the JVM's own view
+   * of the architecture and vector width, and the AVX level where the flag exists. A row of
+   * results without this line is the thing task 150 exists to prevent.
+   */
+  static String machine() {
+    String avx;
+    try {
+      avx = java.lang.management.ManagementFactory
+          .getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class)
+          .getVMOption("UseAVX").getValue();
+    } catch (RuntimeException e) {
+      avx = "n/a";
+    }
+    String mvs;
+    try {
+      mvs = java.lang.management.ManagementFactory
+          .getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class)
+          .getVMOption("MaxVectorSize").getValue();
+    } catch (RuntimeException e) {
+      mvs = "n/a";
+    }
+    return "arch=" + System.getProperty("os.arch") + " jvm=" + System.getProperty("java.vm.version")
+        + " UseAVX=" + avx + " MaxVectorSize=" + mvs + " species double=" + S.length();
+  }
+
   public static void main(String[] a) {
     int n = 1 << 18;
     int rounds = a.length > 0 ? Integer.parseInt(a[0]) : 200;
@@ -96,8 +143,7 @@ public class MathLaneProbe {
         VectorOperators.TAN, VectorOperators.EXP, VectorOperators.LOG, VectorOperators.LOG10,
         VectorOperators.EXPM1, VectorOperators.LOG1P, VectorOperators.ATAN,
         VectorOperators.TANH, VectorOperators.CBRT};
-    System.out.println("species double=" + S.length() + "; inputs=" + n
-        + "; rounds before measuring=" + rounds);
+    System.out.println(machine() + "; inputs=" + n + "; rounds before measuring=" + rounds);
     for (int k = 0; k < ops.length; k++) {
       for (int w = 0; w < rounds; w++) {
         run(ops[k], x, v);
@@ -112,6 +158,29 @@ public class MathLaneProbe {
       }
       System.out.printf("%-6s vs Math: %6d lanes differ (max %d ulp)   vs StrictMath: %6d"
           + " lanes differ (max %d ulp)%n", names[k], diffMath, ulpMath, diffStrict, ulpStrict);
+    }
+    // The binary operators, over a second positive operand in a moderate range.
+    double[] y = new double[n];
+    for (int i = 0; i < n; i++) {
+      y[i] = 0.5 + r.nextDouble() * 4;
+    }
+    String[] names2 = {"POW", "ATAN2", "HYPOT"};
+    VectorOperators.Binary[] ops2 = {VectorOperators.POW, VectorOperators.ATAN2,
+        VectorOperators.HYPOT};
+    for (int k = 0; k < ops2.length; k++) {
+      for (int w = 0; w < rounds; w++) {
+        run2(ops2[k], x, y, v);
+      }
+      long diffMath = 0, diffStrict = 0, ulpMath = 0, ulpStrict = 0;
+      for (int i = 0; i < n; i++) {
+        long b = Double.doubleToLongBits(v[i]);
+        long em = Math.abs(b - Double.doubleToLongBits(math2(names2[k], x[i], y[i])));
+        long es = Math.abs(b - Double.doubleToLongBits(strict2(names2[k], x[i], y[i])));
+        if (em != 0) { diffMath++; ulpMath = Math.max(ulpMath, em); }
+        if (es != 0) { diffStrict++; ulpStrict = Math.max(ulpStrict, es); }
+      }
+      System.out.printf("%-6s vs Math: %6d lanes differ (max %d ulp)   vs StrictMath: %6d"
+          + " lanes differ (max %d ulp)%n", names2[k], diffMath, ulpMath, diffStrict, ulpStrict);
     }
   }
 }
