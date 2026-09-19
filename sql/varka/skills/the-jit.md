@@ -430,3 +430,33 @@ path is only a fair bound if it takes every fast path the emitted dispatcher can
 the data it is fed - a masked-only comparison kernel run on null-free data is not measuring
 the same thing the emitted kernel is, and the gap does not announce itself; nothing crashes
 or looks wrong, the "ceiling" just quietly is not one.
+
+## A kernel clean at 512 bits can be a per-lane loop at 128, and only the narrow companion shows it
+
+Task 152's `VarkaTimeBenchmark` (20 September 2026): the 64-bit magic divide -
+fourteen operations, reviewed, tested against the reference at both long
+widths, green - measured 0.84x of the conversion form at the wide width and
+0.02x at 128 bits, 48.8 against 2377.2 M rows/s. `-XX:+PrintIntrinsics` under
+`-XX:MaxVectorSize=16` said why in five lines: `** not supported: ... vlen=2
+etype=long is_masked_op=1`, the same for a masked double op, and
+`op=comp ... vlen=2 ... ismask=usestore` for the compares. At two 64-bit lanes
+this JVM has no lowering for a masked long or double lanewise operation or for
+a compare that produces a mask, and the Vector API runs each as a Java loop
+over the lanes. Nothing throws, nothing is wrong, and the suites pass.
+
+Three things to carry.
+
+- **Correctness tests at both widths say nothing about vectorisation at
+  either.** The differential ran the magic form at 2 and 8 lanes and was green
+  both times, because a per-lane Java loop computes the right answer. Only a
+  rate, or the JIT's own log, tells a vector op from its fallback - which is
+  task 124's whole argument for the assembly gate, now with a second example.
+- **Read the narrow companion for collapses, not for ratios.** The wide file
+  cannot show this class of failure at all; the 128-bit file is where a masked
+  or width-specific lowering falls off a cliff, and a row in it at one fiftieth
+  of its neighbour is a diagnosis to run, not a slow machine.
+- **Masks are the width-fragile part of a 64-bit kernel.** The unmasked steps
+  of the same sequence vectorised at two lanes; every masked one did not. A
+  long-lane construction that needs a mask - a guard, an overflow test, a
+  blend - should be assumed scalar at 128 bits until `PrintIntrinsics` at
+  `MaxVectorSize=16` says otherwise (`PLAN_MILESTONE_5.md` 2.89 is that audit).

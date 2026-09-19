@@ -3225,6 +3225,63 @@ hand-written assertions with that reason, not fail them. **Done when** a gate
 failure names the CPU it ran on, and the gate is green on one run from each
 family in the census, including the ones it fails on today. Size: small.
 
+### 2.88 The `TIME` split form priced before any engine exists (task 152)
+
+*Opened and closed 20 September 2026, from the owner's choice of "whether
+representation as a compiler decision pays" as the next investigation after
+task 151.*
+
+`SCOPE_MILESTONE_6.md` item 11 is a long argument with no number under it, and
+its `TIME` row - seconds of day and nanoseconds within the second in two 32-bit
+lanes, instead of nanoseconds of day in one 64-bit lane - is the first case that
+needs no engine to price: the extracts are constant divisions either way, and
+the only question is what each form's division costs, at each width, against
+the price of the split. `PLAN_TASK_102.md` 2.5 asks the same question from the
+store side, where the extracts wait on a narrowing store or on task 28.
+
+`VarkaTimeBenchmark` answers it as a baseline committed before any lowering
+changes: four arms per shape on the same instants, the split itself as an
+upper bound, the copy floors, four rungs. `PLAN_TASK_152.md` carries the
+predictions, registered and committed before the first regeneration, and the
+scoring. What follows from the numbers is item 11's to decide and task 102
+group C's to build, not this task's.
+
+### 2.89 Masked 64-bit operations have no 128-bit lowering, and every long-lane guard is one (task 153)
+
+*Opened 20 September 2026, from `VarkaTimeBenchmark`'s 128-bit companion
+(task 152).*
+
+The wide run of that file says the 64-bit magic divide costs at most nothing
+against the conversion form; the narrow run says it runs at one fiftieth of
+it, 48.8 against 2377.2 M rows/s on `hour`, and `PrintIntrinsics` names the
+cause: at `vlen=2` C2 refuses the masked `NEG`, the masked `SUB`, both
+compares that feed them and the mask broadcast, and the Vector API runs each
+as a Java loop over the lanes (`PLAN_TASK_152.md` 6.5). The unmasked steps
+vectorise; the masked ones do not; and the form is nearly all masked steps.
+
+The magic form is opt-in and this closes the question of whether it should
+ever be selected by width. The open question is everything else built the same
+way at the long lane. The range guard is a compare and a mask; the checked
+add's overflow test is a compare and a mask; `CASE WHEN` over a 64-bit
+comparison is a compare and a blend by mask. Every one of them has shipped
+with 512-bit numbers and no 128-bit number of its own, and every NEON-only
+aarch64 host in the fleet runs at exactly the species that refuses them.
+Task 149 found one int-lane shape slower than a scalar loop at 128 bits; this
+is the long-lane counterpart and it is structural rather than one shape.
+
+**How.** The audit first: each long-lane coverage row emitted at
+`MaxVectorSize=16` under `PrintIntrinsics`, its `** not supported` lines
+tabulated by node type, so the answer is per construction rather than per
+benchmark. Then the assembly gate: task 150's per-width expectations gain a
+long-lane row at 128 bits, so a masked long operation that scalarises fails
+the gate on the machine class that exposes it. Then, per refused
+construction, either a form without the mask - a blend by arithmetic, a
+compare folded into an unmasked select - or a compile-time decline of the shape
+below 256 bits, which task 149's width floor already argues for. **Done when**
+the coverage table says, per long-lane row, whether it vectorises at 128-bit
+lanes, and no committed 128-bit number of a long-lane shape is a per-lane rate.
+Size: medium; the audit itself is a day.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3402,6 +3459,8 @@ can start has.
 | 148 | The group budget under-counts an int-lane division sevenfold (section 2.84). **Scoped** (19 September 2026) from the same review: `weightOf` prices `ConstDivide` at the default 1 while its conversion form emits seven lane operations, so sixteen of them pack into one loop method carrying about a hundred and twelve. Task 88 step 3 corrected the long lane, where the magic form is fourteen, and left this one alone deliberately - it predates the lane and correcting it moves committed bytes, which belongs in a change whose subject that is | A weight of 7 for an int-lane `ConstDivide`, with `emitted_bytes.json` regenerated and the diff reviewed | `VarkaEmittedBytesSuite` green on a regenerated file, and the byte movement explained shape by shape |
 | 149 | `extract(YEAR FROM ym)` loses to a scalar loop at 128-bit lanes (section 2.85). **Scoped** (19 September 2026) from task 88 step 4's own numbers: the kernel reads 2102.7 M rows/s against a scalar loop's 2857.7 at 128-bit, where at 512-bit it reads 3897.6 against 3003.5. `ConstDivide` is the only lowering this expression has, so on a NEON-only aarch64 or a pre-AVX2 x86 - the machines 128-bit lanes describe - admitting it is a pessimisation rather than an acceleration, and nothing in the admission looks at the width | Find where the seven-operation conversion form stops paying at four lanes, and either decline the shape below a width or find the lowering that does pay there; a scalar-loop comparand at both widths is the measurement, and the row engine is the comparand that decides admission | A committed 128-bit row where the kernel is not slower than a plain loop, or a recorded decline with the width in its reason |
 | 150 | The assembly gate fails on part of the runner pool, and cannot say which part (section 2.86). **Scoped** (19 September 2026) on the gate's second failure in two days: the same four tests on #255's first run and on #258, a pass in between on a re-run of the same commit, identical bytes under it each time, and on the second run the suite's own gather self-test not packing at 128-bit lanes - a statement about the runner, whose CPU the gate's log does not record | The machine printed at the top of the gate job - CPU model, `UseAVX`, `MaxVectorSize`, the datapath readings - and expectations per machine class on task 124's baseline, with the self-tests as the precondition that cancels rather than fails the 128-bit and hand-written assertions | A gate failure names its CPU, and the gate is green on one run from each family in `PLAN_TASK_62.md` 11's census |
+| 152 | The `TIME` split form priced before any engine exists (section 2.88). **DONE** (20 September 2026, `PLAN_TASK_152.md`): `VarkaTimeBenchmark`, a file of its own on the long-lane ladder, prices `hour`, `minute`, `second` and the three together in four arms - nanoseconds of day in 64-bit lanes under the conversion form and under the AVX2 magic form, seconds of day in 32-bit lanes under the emitter's double route and under a hand-written magic multiply whose constants are proven exact by exhaustion - beside the cost of the split itself and each lane's copy floor. The predictions are registered in the plan's section 3 and scored in its section 6 | A benchmark and its three committed files, no engine: the numbers decide whether a conversion node, a bounded int-lane magic divide or a second cache encoding is worth building | `SCOPE_MILESTONE_6.md` item 11's `TIME` row cites a committed number, and `PLAN_TASK_102.md` 2.5's three options are priced side by side |
+| 153 | Masked 64-bit operations have no 128-bit lowering in this JVM, and every long-lane guard is built from one (section 2.89). **Scoped** (20 September 2026) from task 152's narrow companion: the 64-bit magic divide runs at 48.8 M rows/s at two lanes against the conversion form's 2377.2, and `PrintIntrinsics` says why - C2 refuses every masked long or double operation and every compare-to-mask at `vlen=2` (`PLAN_TASK_152.md` 6.5). The range guard, the checked add's overflow test and a blend over a 64-bit comparison are the same construction, and a NEON-only aarch64 runs at two 64-bit lanes with no override | One `PrintIntrinsics` run per long-lane shape at `-XX:MaxVectorSize=16`, the refusals tabulated per node, a 128-bit long-lane row in the assembly gate (task 150's per-width expectations), and for each refused construction either a mask-free form or a decline of the shape below 256 bits | Every long-lane coverage row names, in the coverage table, whether it vectorises at 128-bit lanes, and no committed 128-bit number of a long-lane shape is a per-lane rate |
 
 ## 4. Files
 
