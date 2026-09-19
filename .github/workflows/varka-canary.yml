@@ -68,8 +68,10 @@ jobs:
         distribution: zulu
         java-version: '25'
     - name: Describe the machine
+      env:
+        CANARY: ${{ inputs.canary || 'MathLaneProbe' }}
       run: |
-        echo "## ${{ inputs.canary || 'MathLaneProbe' }} on ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+        echo "## $CANARY on ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
         {
           echo '```'
           grep -m1 -E 'model name|^CPU part|^Model' /proc/cpuinfo || true

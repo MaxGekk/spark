@@ -188,6 +188,20 @@ public class MathLaneProbe {
     }
     String[] names = {"SIN", "COS", "TAN", "EXP", "LOG", "LOG10", "EXPM1", "LOG1P", "ATAN",
         "TANH", "CBRT"};
+    String[] names2 = {"POW", "ATAN2", "HYPOT"};
+    // Touch every operator once, in the interpreter, before anything is hot. The JDK binds an
+    // operator to its library symbol on first use and C2 folds that binding into compiled
+    // code only if it exists at compile time; a method compiled while an operator it names
+    // is still unbound keeps a memory load and the scalar fallback for good. Warming the
+    // operators one at a time had exactly that effect on some hosts.
+    double[] one = new double[L];
+    java.util.Arrays.fill(one, 1.5);
+    for (int k = 0; k < names.length; k++) {
+      run(k, one, one.clone());
+    }
+    for (int k = 0; k < names2.length; k++) {
+      run2(k, one, one, one.clone());
+    }
     System.out.println(machine() + "; inputs=" + n + "; rounds before measuring=" + rounds);
     for (int k = 0; k < names.length; k++) {
       for (int w = 0; w < rounds; w++) {
@@ -204,7 +218,6 @@ public class MathLaneProbe {
     for (int i = 0; i < n; i++) {
       y[i] = 0.5 + r.nextDouble() * 4;
     }
-    String[] names2 = {"POW", "ATAN2", "HYPOT"};
     for (int k = 0; k < names2.length; k++) {
       for (int w = 0; w < rounds; w++) {
         run2(k, x, y, v);
