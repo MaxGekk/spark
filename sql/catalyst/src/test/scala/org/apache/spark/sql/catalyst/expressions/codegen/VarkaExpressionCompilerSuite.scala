@@ -19,11 +19,15 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, Subtract, TimestampAddInterval, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimestampAddInterval, TimeTrunc, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
+import org.apache.spark.sql.catalyst.optimizer.ReplaceExpressions
+import org.apache.spark.sql.catalyst.plans.logical.{OneRowRelation, Project}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
-import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, Decimal, DecimalType, IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
+import org.apache.spark.unsafe.types.UTF8String
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -695,6 +699,76 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val compiled = VarkaExpressionCompiler.compile(Seq(out(e)), output)
     assert(compiled.isDefined, s"$e declined; expected it to fuse")
     VarkaVectorIR.canonical(compiled.get.outputs.head)
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Task 102: the StaticInvoke table, which is how any TIME expression is recognised at all.
+  // -------------------------------------------------------------------------------------------
+
+  /** The nine and the SQL that produces each, so the table's coverage is checked against a list. */
+  private val everyTimeExpression: Seq[(Expression, String)] = {
+    val t = Literal.create(0L, TimeType(TimeType.MICROS_PRECISION))
+    val i = Literal.create(0, IntegerType)
+    val dec = Literal.create(Decimal(0), DecimalType(16, 6))
+    val dti = Literal.create(0L, DayTimeIntervalType())
+    val unit = Literal.create(UTF8String.fromString("HOUR"), StringType)
+    Seq(
+      HoursOfTime(t) -> "hour(t)",
+      MinutesOfTime(t) -> "minute(t)",
+      SecondsOfTime(t) -> "second(t)",
+      SecondsOfTimeWithFraction(t) -> "second(t) with its fraction",
+      MakeTime(i, i, dec) -> "make_time",
+      TimeTrunc(unit, t) -> "time_trunc",
+      SubtractTimes(t, t) -> "t1 - t2",
+      TimeDiff(unit, t, t) -> "timediff",
+      TimeAddInterval(t, dti) -> "t + interval")
+  }
+
+  /**
+   * The guard the whole mechanism rests on: the table must describe what the *optimizer*
+   * produces, not what this suite constructs.
+   *
+   * <p>Every `TIME` expression is `RuntimeReplaceable`, so `ReplaceExpressions` rewrites it into
+   * a `StaticInvoke` long before physical planning and the compiler never sees the original
+   * class. If upstream renames a `DateTimeUtils` helper, or replaces one of these with something
+   * that is not a `StaticInvoke`, the table stops matching - and the only symptom in production
+   * would be a kernel that quietly stopped fusing. This runs the real rewrite rule and requires
+   * the result to be a key the table holds.
+   */
+  test("the table matches what ReplaceExpressions actually produces, for every TIME expression") {
+    everyTimeExpression.foreach { case (expr, label) =>
+      val rewritten = ReplaceExpressions(Project(Seq(out(expr)), OneRowRelation()))
+        .asInstanceOf[Project].projectList.head.asInstanceOf[Alias].child
+      rewritten match {
+        case si: StaticInvoke =>
+          // The pair is not bound to a val: `Class[_]` in a tuple infers an existential the
+          // compiler refuses without the language import, and the table's own key type is the
+          // one that matters.
+          assert(
+            VarkaExpressionCompiler.timeTargets.contains((si.staticObject, si.functionName)),
+            s"$label rewrote to ${si.staticObject.getName}.${si.functionName}, which the table " +
+              "does not hold - a rename upstream, or a new expression")
+        case other =>
+          fail(s"$label no longer rewrites to a StaticInvoke but to " +
+            other.getClass.getSimpleName)
+      }
+    }
+  }
+
+  test("the table holds every TIME expression and keys them distinctly") {
+    // Coverage in both directions: nothing in the list is missing from the table, and no two
+    // expressions share a key - a collision would silently make one of them report as the other.
+    assert(VarkaExpressionCompiler.timeTargets.size === everyTimeExpression.size,
+      "the table and the list of TIME expressions disagree in size, so one has a duplicate key")
+  }
+
+  test("a TIME expression declines by name, not as `unsupported expression`") {
+    // Task 102 lowers these one group at a time, and the difference between "not lowered yet"
+    // and "unsupported" is what tells a reader where the work stands. The same distinction task
+    // 89 drew for `extract(MONTH FROM ym)`.
+    val reason = declineReason(HoursOfTime(t6), withLong)
+    assert(reason.contains("hour(t)"), reason)
+    assert(reason.contains("task 102"), reason)
   }
 
   private def declineReason(e: Expression, output: Seq[Attribute] = childOutput): String = {

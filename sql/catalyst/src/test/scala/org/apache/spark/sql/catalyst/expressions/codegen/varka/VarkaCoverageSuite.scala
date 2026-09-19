@@ -274,6 +274,19 @@ class VarkaCoverageSuite extends SparkFunSuite {
         stillDeclining.mkString(", "))
   }
 
+  test("a class named only in a comment is not read as an arm") {
+    // The scan reads source text, so prose quoting a pattern would otherwise count as one.
+    // `VarkaExpressionCompiler` carries exactly such a comment, explaining why the TIME
+    // expressions are matched through the `StaticInvoke` their replacement is.
+    val stripped = withoutComments(
+      "// case Year(child) =>\n/* case Month(child) => */\ncase DayOfYear(child) =>\n")
+    assert(!stripped.contains("case Year("), stripped)
+    assert(!stripped.contains("case Month("), stripped)
+    assert(stripped.contains("case DayOfYear(child) =>"), stripped)
+    assert(!admittedByCompiler.contains("HoursOfTime"),
+      "the compiler has no HoursOfTime arm - it matches the StaticInvoke its replacement is")
+  }
+
   test("the table documents every expression the compiler admits") {
     val documented = families.flatMap(_.rows).flatMap { row =>
       expressionOf(row).collect { case e: Expression => e.getClass.getSimpleName }
@@ -336,11 +349,17 @@ class VarkaCoverageSuite extends SparkFunSuite {
    * Every `case` pattern naming a capitalised type is collected, then kept only if it names a
    * real class in `org.apache.spark.sql.catalyst.expressions`. That filter is what removes the
    * IR nodes, the data types and the local extractors without a hand-maintained exclusion list.
+   *
+   * Comments are stripped first. A comment that quotes a pattern - "an arm matching
+   * `case HoursOfTime(child)` would never fire" - is prose about an arm the compiler does not
+   * have, and counting it would both fail this check and publish the class in `coverage.json`
+   * as one Varka admits.
    */
   private lazy val admittedByCompiler: Set[String] = {
-    val source = Files.readString(getWorkspaceFilePath("sql", "catalyst", "src", "main", "scala",
-      "org", "apache", "spark", "sql", "catalyst", "expressions", "codegen",
-      "VarkaExpressionCompiler.scala"))
+    val source = withoutComments(Files.readString(
+      getWorkspaceFilePath("sql", "catalyst", "src", "main", "scala",
+        "org", "apache", "spark", "sql", "catalyst", "expressions", "codegen",
+        "VarkaExpressionCompiler.scala")))
     val patterns = Seq(
       """case\s+([A-Z]\w*)\s*\(""".r,
       """case\s+\w+\s*@\s*([A-Z]\w*)\s*\(""".r,
@@ -354,6 +373,16 @@ class VarkaCoverageSuite extends SparkFunSuite {
         .map(classOf[Expression].isAssignableFrom).getOrElse(false)
     }
   }
+
+  /**
+   * Scala source with its block and line comments removed, so that a pattern scan reads code
+   * and not prose about code. Newlines are kept, so nothing on a later line joins an earlier
+   * one and forms a pattern neither of them wrote.
+   */
+  private def withoutComments(source: String): String =
+    source
+      .replaceAll("""(?s)/\*.*?\*/""", "")
+      .replaceAll("""(?m)//.*$""", "")
 
   /**
    * Matched by the compiler but not expressions a reader writes: `Alias` wraps every
