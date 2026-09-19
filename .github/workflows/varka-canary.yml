@@ -79,11 +79,28 @@ jobs:
           echo '```'
         } | tee -a "$GITHUB_STEP_SUMMARY"
     - name: Run the canary
+      env:
+        CANARY: ${{ inputs.canary || 'MathLaneProbe' }}
+        ARGS: ${{ inputs.args || '' }}
+      # The vector debug property makes the JDK name the math library it bound each operator
+      # to (SVML, SLEEF or the Java fallback) and the symbol, which is the evidence that a
+      # lane result came from the library rather than from a per-lane scalar call. For the
+      # math probe a second pass forces the fallback: it is the control the library pass is
+      # read against, in time per element and in which lanes differ.
       run: |
+        probe() {
+          echo "### $1"
+          echo '```'
+          java --add-modules jdk.incubator.vector -Djdk.incubator.vector.DEBUG=true $2 \
+            "dev/varka_canary/${CANARY}.java" ${ARGS} 2>&1 \
+            | grep -vE 'WARNING: Using incubator|DEBUG: (CPUFeatures|X64|AArch64)' \
+            | sed -E 's/ \(cpu features:.*//'
+          echo '```'
+        }
         {
-          echo '```'
-          java --add-modules jdk.incubator.vector \
-            "dev/varka_canary/${{ inputs.canary || 'MathLaneProbe' }}.java" ${{ inputs.args || '' }} 2>&1 \
-            | grep -vE 'WARNING: Using incubator'
-          echo '```'
+          probe "vector math library"
+          if [ "$CANARY" = MathLaneProbe ]; then
+            probe "control: per-lane scalar fallback forced" \
+              -Djdk.incubator.vector.VectorMathLibrary=java
+          fi
         } | tee -a "$GITHUB_STEP_SUMMARY"
