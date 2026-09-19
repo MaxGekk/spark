@@ -762,6 +762,57 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       "the table and the list of TIME expressions disagree in size, so one has a duplicate key")
   }
 
+  test("t1 - t2 and time_diff lower to a subtraction and a constant division on the long lane") {
+    // DateTimeUtils.subtractTimes is `(end - start) / NANOS_PER_MICROS` and timeDiff is the
+    // same over the unit's nanoseconds. Both operands are nanoseconds of day, below 2^47, so
+    // the subtraction cannot overflow and wraps, and the dividend is far inside the double
+    // route's exact range - the bound is the type's, not the data's, and no per-batch check
+    // is registered. The end operand is compiled first, which is why it takes input 0.
+    val sub = VarkaExpressionCompiler.compile(Seq(out(SubtractTimes(t6, t3))), withLong).get
+    assert(sub.outputs === Seq(new ConstDivide(
+      new IntArith(IntOp.SUB, Overflow.WRAP, longCol, longCol2), 1000L)))
+    assert(sub.inputOrdinals === Seq(8, 7))
+    assert(sub.outputTypes === Seq(DayTimeIntervalType(DayTimeIntervalType.HOUR,
+      DayTimeIntervalType.SECOND)))
+    assert(sub.lane === LaneType.LONG)
+    val diff = VarkaExpressionCompiler.compile(
+      Seq(out(TimeDiff(Literal("hour"), t3, t6))), withLong).get
+    assert(diff.outputs === Seq(new ConstDivide(
+      new IntArith(IntOp.SUB, Overflow.WRAP, longCol, longCol2), 3600000000000L)))
+    assert(diff.inputOrdinals === Seq(8, 7))
+    assert(diff.outputTypes === Seq(LongType))
+    // The unit is read the way DateTimeUtils reads it: case-insensitively.
+    val upper = VarkaExpressionCompiler.compile(
+      Seq(out(TimeDiff(Literal("MILLISECOND"), t3, t6))), withLong).get
+    assert(upper.outputs.head.asInstanceOf[ConstDivide].divisor() === 1000000L)
+  }
+
+  test("time_trunc lowers to a division and a multiply by the level's nanoseconds") {
+    // `truncatedTo(unit)` on a non-negative nanosecond count is `(n / u) * u`; the multiply's
+    // product is at most the dividend, so it wraps without ever needing to. The level becomes
+    // both the division's shape constant and a literal slot for the multiply.
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(TimeTrunc(Literal("MINUTE"), t6))), withLong).get
+    assert(compiled.outputs === Seq(new IntArith(IntOp.MUL, Overflow.WRAP,
+      new ConstDivide(longCol, 60000000000L), longSlot(0))))
+    assert(compiled.longLiterals === Seq(60000000000L))
+    assert(compiled.inputOrdinals === Seq(8))
+    assert(compiled.outputTypes === Seq(TimeType(6)))
+  }
+
+  test("a TIME unit or level that is not a literal, or not a unit, declines with the reason") {
+    // The divisor is part of the kernel's shape, so a unit that is not known at compile time
+    // would need a kernel per distinct value - the same rule trunc(d, fmt) applies. An unknown
+    // unit is the row engine's error to raise, not a kernel's to approximate.
+    val notLiteral = declineReason(TimeDiff(Upper(Literal("hour")), t3, t6), withLong)
+    assert(notLiteral.contains("is not a literal"), notLiteral)
+    val unknown = declineReason(TimeTrunc(Literal("FORTNIGHT"), t6), withLong)
+    assert(unknown.contains("unknown level 'FORTNIGHT'"), unknown)
+    // And a day is not a TIME unit: DateTimeUtils stops at HOUR, so this table does too.
+    val day = declineReason(TimeDiff(Literal("DAY"), t3, t6), withLong)
+    assert(day.contains("unknown unit 'DAY'"), day)
+  }
+
   test("a TIME expression declines by name, not as `unsupported expression`") {
     // Task 102 lowers these one group at a time, and the difference between "not lowered yet"
     // and "unsupported" is what tells a reader where the work stands. The same distinction task
