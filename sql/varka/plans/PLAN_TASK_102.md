@@ -150,6 +150,17 @@ Both are contained, and neither touches the general mixed-lane machinery. **This
 is the first thing to settle**, because it decides whether the headline
 expressions wait for task 28 or ship before it.
 
+*Added 19 September 2026.* There is a third answer, and it may be the cheapest:
+change the representation rather than the store. `SCOPE_MILESTONE_6.md` item 11
+now names a `TIME` held as `(seconds of day: int32, nanoseconds within the
+second: int32)`, under which `hour`, `minute` and `second` are int-lane magic
+divides by 3600 and 60 - the family task 88's A/B measured at 3.7x the double
+route - and no kernel is mixed-width at all, because the fields are already in
+32-bit lanes. The conversion is one long-lane `ConstDivide` by 10^9 and a
+multiply-subtract, an isomorphism on nanoseconds of day, and it is the first
+measurement item 11 asks for that needs no engine. 2.5's two options and this
+one should be priced together.
+
 ### 2.6 What each expression needs, read from the helpers
 
 *Also 18 September 2026. The first draft grouped by lane and by matching; neither

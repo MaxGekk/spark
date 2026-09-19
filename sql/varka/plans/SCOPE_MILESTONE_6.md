@@ -777,6 +777,7 @@ across outputs, and when.
 | `(isoYear, isoWeek, isoWeekday)` | the week family in one decomposition | task 37's shift is halfway there |
 | day of era plus era | every civil field by one load from item 10's 146097-entry table | a conversion whose cost is a gather rather than arithmetic |
 | packed bit fields, `year:16 / month:4 / day:5` | every field a shift and mask; compare order preserved | a better `yyyymmdd`: fields free, no decimal divisions; `date_add` impossible without unpacking |
+| a `TIME` as `(seconds of day: int32, nanoseconds within the second: int32)` | `hour`, `minute`, `second` as int-lane magic divides by 3600 and 60 - the family task 88's A/B measured at 3.7x the double route - over dividends the type bounds; `second_with_fraction`'s two halves already apart | *added 19 September 2026.* A `TIME` has no calendar, so its one expensive step is the long-lane division: three operations natively, fourteen under AVX2 (`PLAN_TASK_88.md` 9.2). The split moves it to the cheap lane once, and the extracts stop being mixed-width kernels, which is `PLAN_TASK_102.md` 2.5's question answered by changing the representation rather than by narrowing at the store or waiting for task 28. The conversion is one `ConstDivide` by 10^9 and a multiply-subtract, and it is a true isomorphism on nanoseconds of day, so no guard rides it. The Arrow cache can hold the split as a second encoding of the column (task 116 proved it carries `TIME`), which is the first row of this catalogue made concrete. Not yet measured: the first experiment for this item that needs no engine at all |
 
 *Forms defined by the batch rather than the value.*
 
@@ -812,6 +813,52 @@ corpus audit below.
   already e-nodes; hashconsing is literal-slot interning generalised.
 * Turn the register into a cost table keyed by operation, representation and
   width, fed from measurement. It is the extractor's input either way.
+
+**A second source, read 19 September 2026: isomorphic specialization.**
+Slesarenko, Filippov and Romanov, "First-class Isomorphic Specialization by
+Staged Evaluation", WGP '14 (Gothenburg, 31 August 2014), ACM
+978-1-4503-3042-8/14/08, pages 35-46; Shannon Laboratory, Huawei, Moscow.
+Transcribed in `sql/varka/papers/slesarenko-2014-isomorphic-specialization.md`
+on the owner's decision - the page carries ACM's copyright and permission
+notice, under which the README's default is notes only - with the losses the
+file's header lists.
+
+What it proposes: in a staged, LMS-style Scala framework, the programmer
+*declares* isomorphisms `Iso[From, To]` between an abstract type and a
+core-language representation - `DenseVec[T]` as `Array[T]`, `SparseVec[T]` as
+`(Array[Int], (Array[T], Int))`, their Figure 5 - and staged evaluation builds
+a hash-consed DAG of the program. *Isomorphic specialization* is a rewrite
+system over that DAG (Figures 17 and 18) that pushes the `to`/`from` views
+along the edges, composing isos through pairs, sums, arrays and functions,
+until only core-language nodes remain: abstraction overhead is gone, and the
+representation was chosen at staging time, possibly from a data property such
+as sparsity. Their evaluation is matrix-vector product at 10^4 x 10^4 over
+four dense/sparse pairings and nine sparsity settings: the original versions run
+in 167 to 53348 ms and the specialized, LMS-fused ones in 8 to 1134 ms (their
+Tables 1 and 2), most of the gain being LMS's loop fusion, with the iso
+machinery being what let every representation be tried "for free". Correctness is Conjecture 1, unproven; DAGs are acyclic only;
+pairs and sums only.
+
+What it means here. Nearly all of the mechanism is what this project already
+is: the IR is immutable records with structural equality, the compiler is the
+staging step, CSE and the shared prefix are their collapsing injection, the
+emitter is the code generator. What the paper adds is a vocabulary and a
+discipline for the design input above - representation as a first-class
+object, one declared iso per (logical type, physical form), and
+conversion-pushing rewrites that move a representation boundary toward the
+leaves or the root so a query computes in one form and converts once - stated
+as a formal system with worked rules. Three limits keep it a source and not a
+design. It eliminates *abstraction* overhead, of which the kernels have none;
+Varka's overhead is arithmetic, so the win is representation *choice*, and the
+paper chooses by a hand-written predicate where this item's rule is measured
+cost. Its rewriting runs to a fixed point with no notion of optimality, so it
+decides how to eliminate views once a form is chosen, not which form to
+choose - which is extraction's job, and egg's above. And an iso must be a true
+isomorphism; the paper's own footnote concedes "a subset T of tau", and
+`yyyymmdd` to days is an injection with invalid encodings, so every such
+conversion needs this project's guard-and-decline machinery, which the paper
+hands off. The `TIME` split above is the one form in the catalogue that is an
+isomorphism outright.
 
 **What must hold whatever is built.** Costs stay measured, never modelled -
 the project's evidence (task 52's guard costs its `fromLong`, task 37's fold
