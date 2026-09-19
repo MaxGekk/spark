@@ -82,11 +82,19 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
           val constants = param.getEnumConstants.asInstanceOf[Array[AnyRef]]
           Some(constants(rnd.nextInt(constants.length)))
         } else if (param == classOf[Int] && rnd.nextInt(5) == 0) {
-          // Task 46's lanesOverride is an emitted vector width, so it takes powers of two and
-          // nothing else; the other int is groupBudget, which takes any positive number. The
-          // widths above 16 have no specialised validity helpers and exercise the fallback.
+          // The int setters do not share a domain, so each one that has its own is named. Task
+          // 46's lanesOverride is an emitted vector width: powers of two and nothing else, the
+          // ones above 16 having no specialised validity helpers and so exercising the
+          // fallback. Task 88's useAVX is a machine's reported AVX level, whose interesting
+          // boundary is 3 - below it a 64-bit division takes the magic-number form and at or
+          // above it the conversions - so a range of large numbers would draw one of the two
+          // lowerings every time and never the other. The rest is groupBudget or
+          // fusedCeiling, which take any positive number.
           if (m.getName == "withLanesOverride") {
             Some(Integer.valueOf(Seq(2, 4, 8, 16, 32)(rnd.nextInt(5))))
+          } else if (m.getName == "withUseAVX") {
+            Some(Integer.valueOf(
+              Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 2, 3)(rnd.nextInt(4))))
           } else {
             Some(Integer.valueOf(Seq(8, 24, 32)(rnd.nextInt(3))))
           }
