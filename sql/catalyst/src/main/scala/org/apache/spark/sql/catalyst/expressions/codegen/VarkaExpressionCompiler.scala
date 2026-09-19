@@ -28,10 +28,10 @@ import org.apache.spark.SparkIllegalArgumentException
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, GreaterThanOrEqual, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimeTrunc, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaValueRange, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.util.{DateTimeConstants, DateTimeUtils}
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, Decimal, DecimalType, IntegerType, LongType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, Decimal, DecimalType, IntegerType, LongType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -651,10 +651,63 @@ private[sql] object VarkaExpressionCompiler {
           t <- long(time)
         } yield new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(t, unit),
           sink.longSlot(unit))
+      // timeAddInterval(t, p, dt, endField, target): addExact(t, multiplyExact(dt, 1000)),
+      // thrown out of if the sum leaves [0, NANOS_PER_DAY), then truncated to `target` digits.
+      // Two guards make the lane's wrapping arithmetic exact and the throw a decline. The
+      // interval is held to one day either way first: any |dt| beyond that puts every t's sum
+      // outside the day, so Spark throws on every such row and the row engine may as well
+      // raise it; inside it, dt * 1000 and the sum both stay under 2^48 and cannot overflow.
+      // The sum is then held to the day, which is the throw itself. The precision truncation
+      // is the identity and is not emitted - see `timeAddIntervalTruncates`, which proves it.
+      case ("timeAddInterval",
+          Seq(time, Literal(_, IntegerType), interval, Literal(_, ByteType),
+            Literal(target: Int, IntegerType))) =>
+        if (timeAddIntervalTruncates(time.dataType, interval.dataType, target)) {
+          // Not reachable for any type Spark admits today; a decline rather than a wrong
+          // answer if that ever changes.
+          sink.note(s"$label: the precision truncation is not the identity for these types",
+            si)
+          return None
+        }
+        for (t <- long(time); dt <- long(interval)) yield {
+          val micros = new GuardedRange(dt, -DateTimeConstants.MICROS_PER_DAY,
+            DateTimeConstants.MICROS_PER_DAY)
+          val nanos = new IntArith(IntOp.MUL, Overflow.WRAP, micros,
+            sink.longSlot(DateTimeConstants.NANOS_PER_MICROS))
+          new GuardedRange(new IntArith(IntOp.ADD, Overflow.WRAP, t, nanos), 0L,
+            DateTimeConstants.NANOS_PER_DAY - 1)
+        }
       case _ =>
         sink.note(timeNotLoweredYet(label), si)
         None
     }
+  }
+
+  /**
+   * Whether `truncateTimeToPrecision(sum, target)` inside `timeAddInterval` can change the sum,
+   * which decides whether the lowering must emit it. It cannot, for every input type Spark
+   * admits, and this is the argument the kernel rests on rather than a re-derivation per call:
+   * the time is a multiple of 10^(9 - p) by its type, and the interval in nanoseconds is a
+   * multiple of 10^3 - or of a whole minute when its end field is coarser than SECOND. The
+   * target is max(p, 6) in the first case and p in the second, and in both the sum is a
+   * multiple of 10^(9 - target), which is exactly what the truncation removes nothing from.
+   * Kept as a function so the claim is checked against the types at compile time and a
+   * future TimeType or interval that breaks the argument refuses to lower rather than lowering
+   * wrongly.
+   */
+  private[codegen] def timeAddIntervalTruncates(
+      time: DataType, interval: DataType, target: Int): Boolean = {
+    val p = time.asInstanceOf[TimeType].precision
+    val endField = interval.asInstanceOf[DayTimeIntervalType].endField
+    val sumGranularity = if (endField < DayTimeIntervalType.SECOND) {
+      // Whole minutes at least: 6e10 nanoseconds, which every 10^(9 - p) divides.
+      math.min(9 - p, 10)
+    } else {
+      // Microseconds: 10^3 nanoseconds.
+      math.min(9 - p, 3)
+    }
+    // The truncation is the identity iff the sum's granularity is at least the target's.
+    sumGranularity < 9 - target
   }
 
   /**

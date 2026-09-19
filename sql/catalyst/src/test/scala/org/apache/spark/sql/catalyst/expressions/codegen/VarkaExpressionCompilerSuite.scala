@@ -21,7 +21,7 @@ import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimestampAddInterval, TimeTrunc, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.optimizer.ReplaceExpressions
 import org.apache.spark.sql.catalyst.plans.logical.{OneRowRelation, Project}
@@ -811,6 +811,44 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // And a day is not a TIME unit: DateTimeUtils stops at HOUR, so this table does too.
     val day = declineReason(TimeDiff(Literal("DAY"), t3, t6), withLong)
     assert(day.contains("unknown unit 'DAY'"), day)
+  }
+
+  test("t + dt lowers to a wrapping add under two range guards, and no precision step") {
+    // DateTimeUtils.timeAddInterval is addExact(t, multiplyExact(dt, 1000)), a throw if the
+    // sum leaves [0, NANOS_PER_DAY), then a truncation to the target precision. The interval
+    // is held to a day first - beyond that every sum is out of the day and Spark throws on
+    // every such row - which is also what keeps the multiply and the add under 2^48, so they
+    // wrap without ever needing to. The sum is then held to the day, which is the throw as a
+    // decline. Both guards carry their bounds, since two shapes with different bounds must
+    // not share a kernel.
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(TimeAddInterval(t6, dt))), withLong).get
+    val micros = new GuardedRange(longCol2, -86400000000L, 86400000000L)
+    val nanos = new IntArith(IntOp.MUL, Overflow.WRAP, micros, longSlot(0))
+    assert(compiled.outputs === Seq(new GuardedRange(
+      new IntArith(IntOp.ADD, Overflow.WRAP, longCol, nanos), 0L, 86399999999999L)))
+    assert(compiled.longLiterals === Seq(1000L))
+    assert(compiled.inputOrdinals === Seq(8, 9))
+    assert(compiled.outputTypes === Seq(TimeType(6)))
+  }
+
+  test("timeAddInterval's precision truncation is the identity for every admitted type") {
+    // The argument the lowering rests on, checked against the types rather than assumed: the
+    // time is a multiple of 10^(9 - p), the interval's nanoseconds a multiple of 10^3 - or of
+    // a whole minute for an end field coarser than SECOND - and the target is what
+    // TimeAddInterval.replacement computes, so the sum already has nothing below the target.
+    for (p <- Seq(0, 1, 3, 6, 9)) {
+      val fine = DayTimeIntervalType(DayTimeIntervalType.DAY, DayTimeIntervalType.SECOND)
+      val coarse = DayTimeIntervalType(DayTimeIntervalType.DAY, DayTimeIntervalType.MINUTE)
+      assert(!VarkaExpressionCompiler.timeAddIntervalTruncates(TimeType(p), fine, math.max(p, 6)),
+        s"TIME($p) + a second-ended interval")
+      assert(!VarkaExpressionCompiler.timeAddIntervalTruncates(TimeType(p), coarse, p),
+        s"TIME($p) + a minute-ended interval")
+    }
+    // And the check is not vacuous: a target coarser than the sum's granularity truncates -
+    // a nanosecond time plus a microsecond interval, asked for at six digits.
+    assert(VarkaExpressionCompiler.timeAddIntervalTruncates(TimeType(9),
+      DayTimeIntervalType(DayTimeIntervalType.DAY, DayTimeIntervalType.SECOND), 6))
   }
 
   test("a TIME expression declines by name, not as `unsupported expression`") {
