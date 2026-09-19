@@ -3183,6 +3183,48 @@ is what a decline routes to. **Done when** a committed 128-bit row shows the
 kernel is not slower than a plain loop, or the shape declines with the width in
 its reason. Size: small to medium.
 
+### 2.86 The assembly gate fails on part of the runner pool, and cannot say which part (task 150)
+
+*Opened 19 September 2026, on the gate's second failure in its first two days.*
+
+`Varka assembly gate` (task 124's first half, #250) has now failed twice with the
+same four tests and passed in between on a re-run of the same commit: on #255's
+first run (job 105848128855) and on #258 (job 105904839194). Each time the
+tests that fail are the 128-bit self-test, `ChronoVectorOps.vectorFourFields`,
+the 128-bit sweep and the hand-written kernel under forced inlining; each time
+every emitted loop at the default width passes; and each time
+`VarkaEmittedBytesSuite` is green on the same commit, so the bytes under the
+gate are identical to the bytes that passed elsewhere.
+
+The second run's message is the one that settles what kind of failure this is:
+`VarkaAssemblyProbe::gatherLookup: expected at least one packed gather on a %xmm
+register and found none`. That is the suite's **own probe** - a fixture with no
+Varka code in it - not producing a gather at 128-bit lanes on that runner. A
+self-test failing is a statement about the machine, or about the JVM's choices
+on it, not about the code under test. The pool is the one `PLAN_TASK_62.md`
+section 11 censused: Zen 3, Zen 4, two Intel generations and Zen 5, and the
+gate's assertions are written for a machine that packs these shapes at every
+width.
+
+**And the gate cannot say which machine it was on.** Its log carries no CPU
+model, no `UseAVX`, no `MaxVectorSize`, nothing from the datapath probe - the
+one machine fact in it is the `hsdis-amd64.so` it built - and GitHub's runner
+names are ephemeral ids. So a failure today is diagnosed by re-running and
+hoping for a different machine, which is what happened both times and is not a
+method.
+
+**How.** Two changes, the first of which makes the second possible. Print the
+machine at the top of the gate job - CPU model, `UseAVX`, `MaxVectorSize`, the
+datapath probe's three readings - the way the surface workflow already does, so
+a failure names its runner class. Then give the gate expectations per machine
+class rather than one universal assertion: task 124's baseline per AVX level is
+the shape, `PLAN_TASK_124.md` records SLEEF's per-ISA `CHECK-` lines as the
+precedent, and the self-tests are the natural precondition - a machine whose
+own gather probe does not pack at 128 bits should *cancel* the 128-bit and
+hand-written assertions with that reason, not fail them. **Done when** a gate
+failure names the CPU it ran on, and the gate is green on one run from each
+family in the census, including the ones it fails on today. Size: small.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3359,6 +3401,7 @@ can start has.
 | 147 | The 64-bit dividend bound is stated and not enforced (section 2.83). **Scoped** (19 September 2026) from task 88 step 3's review: `ConstDivide.EXACT_DIVIDEND_BOUND` is 2^52 and nothing checks it - no constructor check, no analysis check, no emitted guard - while `VarkaRangeAnalysis.range` answers UNKNOWN for every non-INT lane, so nothing could discharge it either. Above the bound the conversion form is off by one and the magic form returns the dividend modulo 2^52, and task 103's `extract(DAY FROM dt)` runs over signed microseconds across the whole int64, so out-of-range dividends are expected rather than hypothetical | A per-batch guard at the long lane declining an out-of-range dividend to the row engine, on `emitRangeGuard`'s two-compare pattern and a new status bit beside `STATUS_CHRONO_RANGE`; the bound read from the node rather than restated | A dividend past 2^52 declines the batch and the row engine answers it, under both lowerings, with the decline rate visible in the metrics |
 | 148 | The group budget under-counts an int-lane division sevenfold (section 2.84). **Scoped** (19 September 2026) from the same review: `weightOf` prices `ConstDivide` at the default 1 while its conversion form emits seven lane operations, so sixteen of them pack into one loop method carrying about a hundred and twelve. Task 88 step 3 corrected the long lane, where the magic form is fourteen, and left this one alone deliberately - it predates the lane and correcting it moves committed bytes, which belongs in a change whose subject that is | A weight of 7 for an int-lane `ConstDivide`, with `emitted_bytes.json` regenerated and the diff reviewed | `VarkaEmittedBytesSuite` green on a regenerated file, and the byte movement explained shape by shape |
 | 149 | `extract(YEAR FROM ym)` loses to a scalar loop at 128-bit lanes (section 2.85). **Scoped** (19 September 2026) from task 88 step 4's own numbers: the kernel reads 2102.7 M rows/s against a scalar loop's 2857.7 at 128-bit, where at 512-bit it reads 3897.6 against 3003.5. `ConstDivide` is the only lowering this expression has, so on a NEON-only aarch64 or a pre-AVX2 x86 - the machines 128-bit lanes describe - admitting it is a pessimisation rather than an acceleration, and nothing in the admission looks at the width | Find where the seven-operation conversion form stops paying at four lanes, and either decline the shape below a width or find the lowering that does pay there; a scalar-loop comparand at both widths is the measurement, and the row engine is the comparand that decides admission | A committed 128-bit row where the kernel is not slower than a plain loop, or a recorded decline with the width in its reason |
+| 150 | The assembly gate fails on part of the runner pool, and cannot say which part (section 2.86). **Scoped** (19 September 2026) on the gate's second failure in two days: the same four tests on #255's first run and on #258, a pass in between on a re-run of the same commit, identical bytes under it each time, and on the second run the suite's own gather self-test not packing at 128-bit lanes - a statement about the runner, whose CPU the gate's log does not record | The machine printed at the top of the gate job - CPU model, `UseAVX`, `MaxVectorSize`, the datapath readings - and expectations per machine class on task 124's baseline, with the self-tests as the precondition that cancels rather than fails the 128-bit and hand-written assertions | A gate failure names its CPU, and the gate is green on one run from each family in `PLAN_TASK_62.md` 11's census |
 
 ## 4. Files
 
