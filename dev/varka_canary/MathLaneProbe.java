@@ -48,9 +48,16 @@ import jdk.incubator.vector.*;
  * bound to, and -XX:+UnlockDiagnosticVMOptions -XX:+PrintIntrinsics shows whether C2 then
  * inlined the call ("late inline succeeded") or refused it ("missing constant").
  *
- * The readings on both runner architectures, and what they mean for Spark's function set,
- * are tabulated in SCOPE_FUNCTIONS.md section 3; the CI workflow varka-canary.yml re-takes
- * them on every push that touches this directory.
+ * The readings, 19 September 2026, JDK 25.0.4, with the library reached on every operator
+ * that has a symbol (the control pass several times slower per element, PrintIntrinsics
+ * reporting "late inline succeeded"): on Zen 5 at AVX-512, on EPYC 7763 at AVX2 and on
+ * Neoverse N2 with NEON, no operator agrees with either scalar library on every input.
+ * Against the library Spark calls, the lanes differ by one ULP on up to thirteen percent of
+ * inputs, by two for log10 and, on x86, tanh; and the three library builds differ from one
+ * another. The outputs are committed beside this file as mathlane-*.txt, the tables and
+ * their consequence for Spark's function set are in SCOPE_FUNCTIONS.md section 3, and
+ * varka-canary.yml re-takes the two runner readings on every push that touches this
+ * directory.
  */
 public class MathLaneProbe {
   static final VectorSpecies<Double> S = DoubleVector.SPECIES_PREFERRED;

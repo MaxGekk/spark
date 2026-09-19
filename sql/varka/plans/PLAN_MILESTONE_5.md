@@ -3225,6 +3225,44 @@ hand-written assertions with that reason, not fail them. **Done when** a gate
 failure names the CPU it ran on, and the gate is green on one run from each
 family in the census, including the ones it fails on today. Size: small.
 
+### 2.87 The math lanes, re-read with the library reached (task 151)
+
+*Opened and closed 19 September 2026, from the owner's choice of "decide the FP
+contract on all hosts" as the next investigation.*
+
+`SCOPE_FUNCTIONS.md` section 3 (#257) said the Vector API's math lanes were
+`java.lang.Math` bit for bit on x86. Extending its probe to `pow` and running it
+on the aarch64 runner produced an all-zero table there too, which was one zero
+too many: SLEEF's `exp` agreeing with fdlibm's on every one of 262144 inputs is
+not a thing that happens. C2's log said why - `** missing constant: opr=LoadL`
+for `libraryUnaryOp`. The probe passed the operator as a method parameter, C2
+compiled the per-lane scalar fallback, and the probe had compared `Math` with
+itself on every host, the laptop included. Rewritten with one loop per operator
+constant, the first CI reading then showed a second way to the same fallback:
+operators warmed one after another through one method left some of them
+compiled before the JDK had bound their symbol, with the load and the fallback
+baked in - which operators depended on compile timing, and so on the host.
+Binding every operator once before any is warm closed that, and a forced
+fallback control pass, a nanoseconds-per-element column and the JDK's own
+binding log now sit in every run so the same mistake cannot pass unnoticed.
+
+**What the true reading is.** On Zen 5 at AVX-512, EPYC 7763 at AVX2 and
+Neoverse N2 with NEON, no operator reproduces the row engine's bits: against
+the library Spark calls, one ULP on up to thirteen percent of inputs, two for
+`log10` everywhere and `tanh` on x86; the three library builds disagree with
+each other; on aarch64 `Math` is fdlibm for all but `sin` and `cos`; and the
+speed-up is width-bound, 5x to 14x at eight lanes down to 1.1x to 3.9x at two.
+Section 3 carries the tables, item 36 the decision they force - for the whole
+family now, not for six functions. The outputs are committed beside the probe
+as `dev/varka_canary/mathlane-*.txt`.
+
+**What was built to get it.** `varka-canary.yml`: a workflow that runs any
+`dev/varka_canary/*.java` on `ubuntu-latest` and `ubuntu-24.04-arm` with the CPU
+model, the JDK and the vector-library binding printed beside the output, on
+dispatch or on a push touching the directory. It is the cheap way to ask a
+per-host question - no Spark build, seconds per runner - and task 150's
+per-machine gate can start from the same "print the machine first" step.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3402,6 +3440,7 @@ can start has.
 | 148 | The group budget under-counts an int-lane division sevenfold (section 2.84). **Scoped** (19 September 2026) from the same review: `weightOf` prices `ConstDivide` at the default 1 while its conversion form emits seven lane operations, so sixteen of them pack into one loop method carrying about a hundred and twelve. Task 88 step 3 corrected the long lane, where the magic form is fourteen, and left this one alone deliberately - it predates the lane and correcting it moves committed bytes, which belongs in a change whose subject that is | A weight of 7 for an int-lane `ConstDivide`, with `emitted_bytes.json` regenerated and the diff reviewed | `VarkaEmittedBytesSuite` green on a regenerated file, and the byte movement explained shape by shape |
 | 149 | `extract(YEAR FROM ym)` loses to a scalar loop at 128-bit lanes (section 2.85). **Scoped** (19 September 2026) from task 88 step 4's own numbers: the kernel reads 2102.7 M rows/s against a scalar loop's 2857.7 at 128-bit, where at 512-bit it reads 3897.6 against 3003.5. `ConstDivide` is the only lowering this expression has, so on a NEON-only aarch64 or a pre-AVX2 x86 - the machines 128-bit lanes describe - admitting it is a pessimisation rather than an acceleration, and nothing in the admission looks at the width | Find where the seven-operation conversion form stops paying at four lanes, and either decline the shape below a width or find the lowering that does pay there; a scalar-loop comparand at both widths is the measurement, and the row engine is the comparand that decides admission | A committed 128-bit row where the kernel is not slower than a plain loop, or a recorded decline with the width in its reason |
 | 150 | The assembly gate fails on part of the runner pool, and cannot say which part (section 2.86). **Scoped** (19 September 2026) on the gate's second failure in two days: the same four tests on #255's first run and on #258, a pass in between on a re-run of the same commit, identical bytes under it each time, and on the second run the suite's own gather self-test not packing at 128-bit lanes - a statement about the runner, whose CPU the gate's log does not record | The machine printed at the top of the gate job - CPU model, `UseAVX`, `MaxVectorSize`, the datapath readings - and expectations per machine class on task 124's baseline, with the self-tests as the precondition that cancels rather than fails the 128-bit and hand-written assertions | A gate failure names its CPU, and the gate is green on one run from each family in `PLAN_TASK_62.md` 11's census |
+| 151 | The math lanes re-read with the library reached, on both runner architectures (section 2.87). **Done** (19 September 2026): `MathLaneProbe` had been measuring the scalar fallback against itself - the operator arrived as a method parameter, which C2 refuses with "missing constant", and then the lazy library binding was compiled in before it existed - so `SCOPE_FUNCTIONS.md` section 3's "bit for bit" reading was wrong. Re-taken on Zen 5 (AVX-512), EPYC 7763 (AVX2) and Neoverse N2 (NEON) through a new `varka-canary.yml` workflow: no operator matches the row engine's bits on any host, one ULP against `Math`, two against `StrictMath` for `log10` and x86 `tanh`, and the three library builds differ among themselves | One loop per operator constant, a pre-binding pass, a forced-fallback control pass and a nanoseconds-per-element column in the probe; a workflow that runs any canary on `ubuntu-latest` and `ubuntu-24.04-arm` on dispatch or on a push touching `dev/varka_canary`; the three outputs committed as `dev/varka_canary/mathlane-*.txt`; section 3, item 36 and the skills entry rewritten | The tables in `SCOPE_FUNCTIONS.md` section 3 carry three hosts, and the FP-contract decision in `SCOPE_MILESTONE_6.md` item 36 is stated for the whole family |
 
 ## 4. Files
 
@@ -3679,9 +3718,10 @@ item and re-enters with that target. Design input kept in full:
   inside `jdk.incubator.vector`, and `VectorMathLibrary` looks its symbols up
   through a `SymbolLookup` at first use - so `lanewise(EXP, ..)` on x64
   reaches Intel's SVML port rather than a per-lane `Math.exp` loop. What
-  aarch64 does instead must be checked before any doc claims the same.
+  aarch64 does instead must be checked before any doc claims the same
+  (checked, task 151: SLEEF, at two lanes, 1.1x to 3.9x over the scalar call).
 * *So the oracle has to change.* SVML is not bit-identical to `Math` and
-  `StrictMath`, so a double differential must be ULP-bounded, and Spark's own
+  `StrictMath` (confirmed on three hosts by task 151, SLEEF included), so a double differential must be ULP-bounded, and Spark's own
   accuracy guarantee has to be read before a bound is picked. That reading is
   this milestone's open question 1 (section 7).
 * *Comparison is not IEEE.* Spark's `SQLOrderingUtil.compareDoubles` makes

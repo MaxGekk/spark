@@ -100,7 +100,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A reciprocal multiply is not a division, even when the error bound says it is](sql/varka/skills/vector-api-and-width.md#a-reciprocal-multiply-is-not-a-division-even-when-the-error-bound-says-it-is)
 * [Converting to a wider element type splits a vector into disjoint halves that rejoin with an OR](sql/varka/skills/vector-api-and-width.md#converting-to-a-wider-element-type-splits-a-vector-into-disjoint-halves-that-rejoin-with-an-or)
 * [An exact quotient makes the round-down carry dead code, and the op counter has to see it](sql/varka/skills/vector-api-and-width.md#an-exact-quotient-makes-the-round-down-carry-dead-code-and-the-op-counter-has-to-see-it)
-* [The Vector API's math operators are `java.lang.Math` bit for bit on x86, and Spark calls `StrictMath` for six of them](sql/varka/skills/vector-api-and-width.md#the-vector-apis-math-operators-are-javalangmath-bit-for-bit-on-x86-and-spark-calls-strictmath-for-six-of-them)
+* [The Vector API's math lanes match no scalar library's bits on any host, and a probe that lets C2 fall back measures `Math` against itself](sql/varka/skills/vector-api-and-width.md#the-vector-apis-math-lanes-match-no-scalar-librarys-bits-on-any-host-and-a-probe-that-lets-c2-fall-back-measures-math-against-itself)
 * [SLEEF and OpenVML, read for Varka: no integer division anywhere, and what does transfer](sql/varka/skills/vector-api-and-width.md#sleef-and-openvml-read-for-varka-no-integer-division-anywhere-and-what-does-transfer)
 
 #### [Working in this repository](sql/varka/skills/working-in-this-repo.md)
