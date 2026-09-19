@@ -287,15 +287,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     // DEFAULTS must contribute nothing to the hash - that is what keeps the two committed
     // hashes below a valid oracle for the task-23 migration.
     assert(keyOf(shape) === explicit)
-    // Empty on a host whose conversions intrinsify, which is what keeps the production hash
-    // compact; on one whose conversions fall back the level leads it, because that host's
-    // 64-bit divisions are different bytes. See the AVX test below for why.
-    assert(VarkaEmitOptions.DEFAULTS.canonical() ===
-      (if (VarkaEmitOptions.DEFAULTS.convertsFallBack()) {
-        s"avx${VarkaEmitOptions.DEFAULTS.useAVX()}|"
-      } else {
-        ""
-      }))
+    assert(VarkaEmitOptions.DEFAULTS.canonical() === "")
     assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
   }
 
@@ -327,17 +319,18 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     val converting = defaults.withUseAVX(3)
     val fallingBack = defaults.withUseAVX(2)
     assert(converting.canonical() !== fallingBack.canonical())
-    assert(fallingBack.canonical().startsWith("avx2|"),
-      s"the level that changes a lowering must lead the rendering: ${fallingBack.canonical()}")
-    assert(!converting.canonical().startsWith("avx"),
-      s"a level that changes nothing must not: ${converting.canonical()}")
+    assert(fallingBack.canonical().contains("|2|"),
+      s"the level has to be in the rendering: ${fallingBack.canonical()}")
+    assert(converting.canonical().contains("|3|"),
+      s"the level has to be in the rendering: ${converting.canonical()}")
 
-    // The case production actually uses, which is the one risk 6 is about: DEFAULTS carries the
-    // host's own level, so on a machine whose conversions fall back the defaults must still
-    // render - otherwise two executors emit different 64-bit divisions under one shape hash,
-    // one class name and one JFR identity.
-    assert(defaults.canonical() === (if (defaults.convertsFallBack()) s"avx${defaults.useAVX()}|"
-      else ""))
+    // The case risk 6 is about, settled by the default rather than by the rendering: production
+    // emits with DEFAULTS, and DEFAULTS names no level, so every executor emits the same bytes
+    // under the same hash whatever machine it is on. A level is an explicit request, and asking
+    // for one moves the key, which is what makes the two lowerings distinguishable at all.
+    assert(defaults.useAVX() === VarkaEmitOptions.USE_AVX_UNKNOWN)
+    assert(!defaults.convertsFallBack(),
+      "the default must not select a lowering from the machine")
 
     // And the level is a description of a machine, not a free integer: below "unknown" there
     // is nothing to describe.

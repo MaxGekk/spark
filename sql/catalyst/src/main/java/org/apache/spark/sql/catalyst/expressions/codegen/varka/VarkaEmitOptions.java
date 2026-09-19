@@ -215,11 +215,23 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        {@link Division#MAGIC}, so this widens what may be asked for without widening what is
  *        answered.
  * @param useAVX the {@code -XX:UseAVX} level this emission targets, or
- *        {@link #USE_AVX_UNKNOWN} where the JVM has no such flag. It is not a knob a caller
- *        turns for speed but a description of the machine, and it is here because it changes
- *        emitted bytes: the long-to-double converts the 64-bit division uses do not
- *        intrinsify under {@code -XX:UseAVX=2}, so such a host wants a different lowering and
- *        must not share a shape key with one that does.
+ *        {@link #USE_AVX_UNKNOWN} for no level at all, which is what it defaults to. It
+ *        changes emitted bytes - the long-to-double converts the 64-bit division uses do not
+ *        intrinsify under {@code -XX:UseAVX=2}, so a host at that level has a second lowering
+ *        available - and it is therefore part of the shape key like every other component
+ *        here.
+ *
+ *        <p><b>The default is deliberately not the host's own level</b>, although
+ *        {@link #HOST_USE_AVX} reads it. Two reasons, and the second is the one that decides
+ *        it. Nothing has yet measured that the alternative lowering is faster on such a host;
+ *        task 88 step 4's A/B is what would, and until it has run, selecting a lowering from
+ *        the machine changes production behaviour on a reading rather than on a number. And a
+ *        default that varies by host makes everything built on it vary too: `canonical()`
+ *        renders the empty string for the defaults, so the committed shape hashes and the
+ *        committed emitted bytes would each describe one machine and fail on another. A fixed
+ *        default keeps one shape one class name across executors, which is what the hash
+ *        promises, and leaves the level an explicit request - which is what a test, a
+ *        benchmark, and one day a session option, make.
  * @param misdescribeAdd emits {@code AddDays} against a deliberately wrong descriptor (an unerased
  *                       {@code IntVector} parameter instead of {@code Vector}). The class still
  *                       passes bytecode verification - member resolution happens at link time - so
@@ -360,7 +372,7 @@ public record VarkaEmitOptions(
           VarkaLoopEmitter.GROUP_BUDGET, VarkaLoopEmitter.FUSED_CEILING,
           true, true, true, true, true, true, true, true, true, true, true,
           0,
-          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, HOST_USE_AVX,
+          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, USE_AVX_UNKNOWN,
           false, false, true, true, false);
 
   public VarkaEmitOptions {
@@ -607,18 +619,10 @@ public record VarkaEmitOptions(
    * be forgotten the same way.
    */
   public String canonical() {
-    // The AVX level is rendered ahead of the defaults shortcut, and it is the only component
-    // that is. DEFAULTS carries the host's own level, so two machines each at their defaults
-    // would otherwise render the same empty string while emitting different 64-bit divisions -
-    // and a shape hash promises one shape one class name across executors, restarts and class
-    // dumps. Only a level that changes a lowering is rendered, so a host with the conversions
-    // keeps the empty rendering; the level also appears in the list below, where it
-    // distinguishes two non-default levels that agree on the lowering.
-    String host = convertsFallBack() ? "avx" + useAVX + "|" : "";
     if (isDefault()) {
-      return host;
+      return "";
     }
-    return host + "opts(" + groupBudget + '|' + fusedCeiling + '|' + cse + '|' + shareChronoPrefix
+    return "opts(" + groupBudget + '|' + fusedCeiling + '|' + cse + '|' + shareChronoPrefix
         + '|' + denseValidityOnce + '|' + elideChronoMonth + '|' + neriSchneiderMonth + '|'
         + julianMap + '|' + guardDayProducers + '|' + validityByWidth + '|' + validityOrFirst
         + '|' + validityByBitmap + '|' + checkIntOverflow + '|' + lanesOverride + '|'

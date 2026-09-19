@@ -511,14 +511,29 @@ committed census behind this lowering never executed the operation. The javadoc
 now says the census is evidence that the conversion-free identity vectorises and
 not a measurement of this sequence.
 
-**Risk 6 was not closed by putting the level in `canonical()`.** The rendering
-short-circuits to the empty string for the defaults, and production emits with
-the defaults, so two executors at different levels both rendered "" and shared a
-shape hash, a class name and a JFR identity while emitting different 64-bit
-divisions. The level is now rendered *ahead* of that shortcut and only when it
-changes a lowering, so a host with the conversions keeps the empty rendering the
-compact production hash is built on. One predicate, `convertsFallBack()`,
-answers the question for both the emitter and the key.
+**Risk 6 was not closed by putting the level in `canonical()`, and the first fix
+for that was wrong too.** The rendering short-circuits to the empty string for
+the defaults, and production emits with the defaults, so two executors at
+different levels both rendered "" and shared a shape hash, a class name and a
+JFR identity while emitting different 64-bit divisions. The first repair
+rendered the level *ahead* of that shortcut, which made the string honest and
+the committed files wrong: CI on a runner reporting `UseAVX=2` failed
+`the canonical rendering pins the hash`, reading `0f2a0ae8960dac78` against the
+committed `586434f9b9739c40`. A default that reads the machine makes everything
+built on it read the machine, committed oracles included.
+
+The right answer is the other direction, and it is better on the merits.
+`DEFAULTS` names **no** level - `USE_AVX_UNKNOWN` - so production emits the same
+bytes under the same hash on every machine, and `canonical()` keeps its plain
+form with the level riding the list like every other component. The alternative
+lowering becomes an explicit request, which is what a test, a benchmark and one
+day a session option make, and asking for one moves the key.
+
+What that gives up is automatic selection on an AVX2 host, and it should be given
+up: nothing has measured that the magic form is faster there. Step 4's A/B is
+what would, and until it has, choosing a lowering from the machine changes
+production behaviour on a reading rather than on a number - which is the same
+rule the review applied to the javadoc that selects it.
 
 **Two tests and one mutator inherited the host's level.** The op-count test
 asserted the conversion form's shape while emitting with the machine's default,
