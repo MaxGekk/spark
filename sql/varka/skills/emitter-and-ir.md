@@ -582,4 +582,8 @@ working tree. The expected answer is exactly two changed keys,
 `lanes/4/fuzz/blocks` and `lanes/16/fuzz/blocks`, no coverage key changed, none
 added or removed. Any coverage key in that diff is a real emission change and
 needs its own explanation. The coverage half is the oracle for emission; the
-fuzz half is the oracle for the grammar.
+fuzz half is the oracle for the grammar. Since task 119 the file carries a
+second sequence, `fuzz_long`, drawn by the long-lane grammar from its own seed:
+a lane-generic node moves both sequences' blocks, a calendar node only the
+first, and the two long block lists moving on an int-only change is the signal
+that the long grammar was touched when it should not have been.

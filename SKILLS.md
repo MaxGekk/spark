@@ -75,6 +75,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Columnar Transition Wiring (plan level)](sql/varka/skills/testing-and-debugging.md#columnar-transition-wiring-plan-level)
 * [Metrics as the "did it really run" proof](sql/varka/skills/testing-and-debugging.md#metrics-as-the-did-it-really-run-proof)
 * [Independent Reference Evaluators as Test Oracles](sql/varka/skills/testing-and-debugging.md#independent-reference-evaluators-as-test-oracles)
+* [A second lane gets a second fuzz corpus, and its reach set comes from the constructors](sql/varka/skills/testing-and-debugging.md#a-second-lane-gets-a-second-fuzz-corpus-and-its-reach-set-comes-from-the-constructors)
 * [A fixture that fills undefined memory decides what its whole matrix can catch](sql/varka/skills/testing-and-debugging.md#a-fixture-that-fills-undefined-memory-decides-what-its-whole-matrix-can-catch)
 * [Testing Under AQE](sql/varka/skills/testing-and-debugging.md#testing-under-aqe)
 * [A closed `ArrowBuf` still answers `capacity()` and `memoryAddress()`](sql/varka/skills/testing-and-debugging.md#a-closed-arrowbuf-still-answers-capacity-and-memoryaddress)

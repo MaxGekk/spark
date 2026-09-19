@@ -104,6 +104,38 @@ Each step either pins the fault or narrows it.
   Where side effects assign identities (ordinals, slots), compile in source order
   explicitly, then fold the already-compiled pieces.
 
+## A second lane gets a second fuzz corpus, and its reach set comes from the constructors
+
+From task 119 (19 September 2026), which gave `VarkaIrFuzzSuite` the long lane.
+
+- **Do not draw the new lane's shapes into the existing sequence.** `VarkaIrGrammar.fuzzSeed`'s
+  shapes are also `VarkaEmittedBytesSuite`'s committed corpus; one more arm in the int draw
+  reshuffles every pinned block, and the oracle can no longer say whether the int32 emitter
+  changed. A second seed (`longFuzzSeed`), a second draw (`drawLongShape`) and a second
+  generator (`LongShapes`) leave the first corpus byte-identical - the regeneration that added
+  the long lane changed no committed hash - and the oracle pins the new sequence beside the old
+  one (`fuzz_long`).
+- **Derive the "reaches every node type" set from the IR, not from a list.** At the long lane the
+  target is the lane-generic subset, and a hand-written list of it is a table that drifts. The
+  suite asks each record type's canonical constructor whether it accepts long leaves
+  (`admitsLongLanes`): the calendar nodes refuse through `requireInt`, the rest construct. A
+  lane-generic node added to the IR is demanded of the long generator from the day it lands,
+  with nobody editing the test - and the probe asserts two facts it must get right (`Year`
+  refuses, `ConstDivide` admits) so a change to the constructors cannot silently empty the set.
+- **A grammar's bounds are a contract the moment a node takes them as a range.** The int
+  grammar's `TruncDate` bound was the child's, with the note that trunc "moves a date down by
+  at most a year, so the child's bound holds" - true for the calendar placement, which checks
+  with slack, and false for task 102's range-guard arm, which wraps a subtree in a guard of
+  exactly its bound. A year-start 365 days below the child's bound is a live lane the guard
+  condemns, correctly, and the suite asserts a zero status. The default 300 iterations never
+  drew it; iteration 847 of the committed seed did, found by this task's ten-thousand-iteration
+  run. Every arm that shifts a value now adds the shift to its bound, and the lesson is the
+  general one: a bound written for a check with slack is not a bound.
+- **Draw a signed range with `Math.floorMod`.** `rnd.nextLong() % (2 * bound + 1) - bound` lands
+  in `[-3 * bound, bound]` for a negative draw, and the first long shape of the corpus declined
+  its batch on a value three bounds below zero. The int harness clamps; the long one floors. A
+  decline in a null-free batch is the harness's problem before it is the emitter's.
+
 ## A fixture that fills undefined memory decides what its whole matrix can catch
 
 - Arrow leaves the data under a null slot undefined, and the emitted loop loads every

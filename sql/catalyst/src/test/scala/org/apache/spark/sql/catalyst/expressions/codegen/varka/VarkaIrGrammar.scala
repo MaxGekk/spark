@@ -28,12 +28,13 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * the property the range suite checks is only worth what the shapes it is checked over are.
  *
  * `Shapes` draws value and condition trees over `numInputs` int32 columns and `numLiterals`
- * literal slots, obeying the emitter's structural rules (a day offset is a literal slot or a
- * column, `IsNotNull` is over a column, a calendar node sits only over a subtree whose magnitude
- * bound fits the narrowed day range with slack). `boundsOf` recomputes two magnitude bounds from
- * a built tree - the node's own value and the largest value any guarded day producer under it
- * reaches - which is what decides whether a calendar node may be placed over it. The bounds
- * saturate rather than wrap in every arm that combines two.
+ * literal slots (`LongShapes`, at the end of the file, is its twin at the long lane), obeying
+ * the emitter's structural rules (a day offset is a literal slot or a column, `IsNotNull` is
+ * over a column, a calendar node sits only over a subtree whose magnitude bound fits the
+ * narrowed day range with slack). `boundsOf` recomputes two magnitude bounds from a built tree
+ * - the node's own value and the largest value any guarded day producer under it reaches -
+ * which is what decides whether a calendar node may be placed over it. The bounds saturate
+ * rather than wrap in every arm that combines two.
  *
  * Columns hold days within plus or minus `columnBound` (about six thousand years either side of
  * 1970) and literals within plus or minus `literalBound`; `chronoBound` is the magnitude a
@@ -149,7 +150,12 @@ object VarkaIrGrammar {
       case n: Quarter => (4L, g(n.days()))
       case n: DayOfYear => (366L, g(n.days()))
       case n: AddMonths => (satAdd(v(n.days()), satMul(v(n.months()), 31)), g(n.days(), n.months()))
-      case n: TruncDate => (v(n.days()), g(n.days()))
+      // trunc moves a date down by up to a year, so the truncated value's magnitude can exceed
+      // the child's by that much: the bound is the child's plus 366, not the child's. The
+      // difference is invisible to the calendar placement, which checks with slack, and
+      // decisive for the range guard's arm, which takes the bound as a guard the value must
+      // not leave.
+      case n: TruncDate => (satAdd(v(n.days()), 366), g(n.days()))
       // Task 63: wrapping arithmetic can leave the day range entirely, which is what the
       // bound is for - a calendar node over such a subtree is refused by fitsUnderChrono.
       case n: IntArith => n.op() match {
@@ -161,7 +167,7 @@ object VarkaIrGrammar {
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `g` picks up.
-      case n: TruncDateDynamic => (v(n.days()), g(n.days(), n.level()))
+      case n: TruncDateDynamic => (satAdd(v(n.days()), 366), g(n.days(), n.level()))
       case n: LastDay => (satAdd(v(n.days()), 31), g(n.days()))
       // make_date guards its own year, so its output is a date inside the column contract.
       case n: MakeDate =>
@@ -417,17 +423,20 @@ object VarkaIrGrammar {
                 }
                 Gen(new AddMonths(a.node, m.node), satAdd(a.bound, satMul(m.bound, 31)))
               case 3 =>
-                // trunc (task 35) moves a date down by at most a year, so the child's bound
-                // holds; the level is drawn at random so all three tails are fuzzed. The
-                // column-level form (task 61, TruncDateDynamic) stays out: its level column
-                // holds the leaf's codes 6..9, and the fuzzer's columns hold day-magnitude
-                // values, so every lane would be one the leaf never produces.
+                // trunc (task 35) moves a date down by at most a year, which the bound has
+                // to carry (see `boundsOf`): a range guard drawn over this node takes the
+                // bound as the range the value must stay in, and a year-start below the
+                // child's own bound is a live lane the guard would condemn. The level is drawn
+                // at random so all three tails are fuzzed; the column-level form (task 61,
+                // TruncDateDynamic) is drawn only when this iteration has a level column,
+                // whose lanes hold the leaf's codes 6..9.
                 if (levelOrdinal >= 0 && rnd.nextBoolean()) {
-                  // Task 61's column form, over the ordinal whose lanes hold the leaf's codes.
-                  Gen(new TruncDateDynamic(a.node, new ColumnRef(levelOrdinal)), a.bound)
+                  Gen(new TruncDateDynamic(a.node, new ColumnRef(levelOrdinal)),
+                    satAdd(a.bound, 366))
                 } else {
                   val levels = TruncLevel.values()
-                  Gen(new TruncDate(a.node, levels(rnd.nextInt(levels.length))), a.bound)
+                  Gen(new TruncDate(a.node, levels(rnd.nextInt(levels.length))),
+                    satAdd(a.bound, 366))
                 }
               case _ => Gen(new LastDay(a.node), satAdd(a.bound, 31))
             }
@@ -447,6 +456,158 @@ object VarkaIrGrammar {
           case 2 => new Not(cond(depth - 1))
           // IsNotNull reads a column's validity word directly, so its child must be a column.
           case _ => new IsNotNull(new ColumnRef(rnd.nextInt(numInputs)))
+        }
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // The long lane
+  // -----------------------------------------------------------------------------------------
+
+  /**
+   * The seed of the long-lane corpus. It is a second sequence rather than long shapes drawn
+   * into `fuzzSeed`'s, because that sequence is also the emitted-bytes oracle's committed
+   * corpus: a long shape drawn into it would move every block digest in `emitted_bytes.json`,
+   * and the oracle would stop being able to say whether the int32 emitter changed.
+   */
+  val longFuzzSeed = 20260919L
+
+  /**
+   * Columns at the long lane hold values within plus or minus `longColumnBound`, the magnitude
+   * of a nanosecond of day (2^46 is a little over 8.6e13), and literals within plus or minus
+   * `longLiteralBound`. The bounds exist for one node: `ConstDivide` is exact only while its
+   * dividend stays under `ConstDivide.EXACT_DIVIDEND_BOUND`, a precondition the caller owns
+   * and nothing enforces, so the generator places a division only over a subtree whose bound
+   * fits under it - the long lane's `fitsUnderChrono`. A sum of two columns fits; a product of
+   * two does not, and stays undivided.
+   */
+  val longColumnBound = 1L << 46
+  val longLiteralBound = 1L << 20
+
+  /** One drawn long-lane shape: the roots and the column and literal counts they read. */
+  case class DrawnLong(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int)
+
+  /** `drawShape`'s twin at the long lane, shared by the fuzzer and the emitted-bytes oracle. */
+  def drawLongShape(rnd: Random): DrawnLong = {
+    val numInputs = 1 + rnd.nextInt(3)
+    val numLiterals = rnd.nextInt(3)
+    val shapes = new LongShapes(rnd, numInputs, numLiterals)
+    val depth = 1 + rnd.nextInt(4)
+    val roots: Seq[VarkaVectorIR] =
+      if (rnd.nextInt(5) == 0) Seq(shapes.cond(depth))
+      else Seq.fill(1 + rnd.nextInt(3))(shapes.value(depth).node).distinct
+    DrawnLong(roots, numInputs, numLiterals)
+  }
+
+  /**
+   * The generator at the long lane, over the lane-generic subset of the IR: the leaves, the
+   * arithmetic in its three modes, the negate, the constant division in both its lowerings
+   * (which one emits is `useAVX`'s choice, which the suite draws), the range guard, the hull
+   * ops, the conditional and the conditions. No calendar node, since those refuse a 64-bit
+   * child where they are built. The `TIME` and interval expressions the compiler lowers are
+   * trees of exactly these nodes - a subtraction under a division, a guarded add over a
+   * guarded multiply - so a grammar over the node set covers them without knowing their names,
+   * and the fuzzer's reach test holds it to the whole set.
+   *
+   * Every subtree carries a magnitude bound, saturating as `Shapes`' do. It decides three
+   * things: whether a division may be placed (the dividend bound), whether a checked mode may
+   * be drawn (an overflow the bounds rule out is one the kernel need not decline on, so the
+   * suite can assert a zero status), and what range a guard is given (one that contains the
+   * child's bound, because a guard that fires declines the batch and the reference evaluator
+   * has no spelling for that; the guards' firing is asserted in the emitter suite).
+   */
+  class LongShapes(rnd: Random, numInputs: Int, numLiterals: Int) {
+    private var budget = 20
+
+    private def saturated(bound: Long): Boolean = bound == Long.MaxValue
+
+    private def column(): Gen =
+      Gen(new ColumnRef(rnd.nextInt(numInputs), LaneType.LONG), longColumnBound)
+
+    private def leaf(): Gen =
+      if (numLiterals > 0 && rnd.nextInt(4) == 0) {
+        Gen(new LiteralSlot(rnd.nextInt(numLiterals), LaneType.LONG), longLiteralBound)
+      } else {
+        column()
+      }
+
+    /**
+     * The divisors the `TIME` and interval lowerings divide by - nanoseconds per unit, micros
+     * per day - and small ones on both signs, where truncation and floor part on every second
+     * or third dividend rather than once in a billion.
+     */
+    private val LongDivisors = Array(2L, 3L, 7L, 60L, -60L, 1000L, 1000000L, 1000000000L,
+      60000000000L, 3600000000000L, 86400000000L, -12L)
+
+    def value(depth: Int): Gen = {
+      if (depth == 0 || budget <= 1) return leaf()
+      budget -= 1
+      rnd.nextInt(9) match {
+        case 0 | 1 =>
+          // Add and subtract, over two subtrees or a subtree and a leaf. A checked mode only
+          // where the bounds rule overflow out, as at the int lane: the kernel has to answer,
+          // not decline, for the value comparison to check anything.
+          val a = value(depth - 1)
+          val b = if (rnd.nextBoolean()) leaf() else value(depth - 1)
+          val sumBound = satAdd(a.bound, b.bound)
+          val mode =
+            if (saturated(sumBound)) Overflow.WRAP
+            else rnd.nextInt(3) match {
+              case 0 => Overflow.WRAP
+              case 1 => Overflow.FAIL
+              case _ => Overflow.NULL
+            }
+          val op = if (rnd.nextBoolean()) IntOp.ADD else IntOp.SUB
+          Gen(new IntArith(op, mode, a.node, b.node), sumBound)
+        case 2 =>
+          // A checked multiply has no 64-bit overflow test, so WRAP is the only mode.
+          val a = value(depth - 1)
+          val b = value(depth - 1)
+          Gen(new IntArith(IntOp.MUL, Overflow.WRAP, a.node, b.node), satMul(a.bound, b.bound))
+        case 3 =>
+          // Negation overflows on Long.MinValue alone, which any unsaturated bound rules out.
+          val a = value(depth - 1)
+          val checked = !saturated(a.bound) && rnd.nextBoolean()
+          Gen(new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, a.node), a.bound)
+        case 4 =>
+          // The constant division, over a dividend the lowering is exact for. Above the bound
+          // the conversion form is off by one and the magic form reads the dividend modulo
+          // 2^52, and neither is a bug this suite is asking about.
+          val a = value(depth - 1)
+          if (a.bound >= ConstDivide.EXACT_DIVIDEND_BOUND) return a
+          val d = LongDivisors(rnd.nextInt(LongDivisors.length))
+          Gen(new ConstDivide(a.node, d), a.bound / math.abs(d))
+        case 5 =>
+          val a = value(depth - 1)
+          if (saturated(a.bound)) {
+            Gen(new GuardedRange(a.node, Long.MinValue, Long.MaxValue), a.bound)
+          } else {
+            Gen(new GuardedRange(a.node, -a.bound, a.bound), a.bound)
+          }
+        case 6 =>
+          val a = value(depth - 1); val b = value(depth - 1)
+          Gen(new Greatest(a.node, b.node), math.max(a.bound, b.bound))
+        case 7 =>
+          val a = value(depth - 1); val b = value(depth - 1)
+          Gen(new Least(a.node, b.node), math.max(a.bound, b.bound))
+        case _ =>
+          val c = cond(depth - 1); val a = value(depth - 1); val b = value(depth - 1)
+          Gen(new IfElse(c, a.node, b.node), math.max(a.bound, b.bound))
+      }
+    }
+
+    def cond(depth: Int): Cond = {
+      budget -= 1
+      if (depth == 0 || budget <= 1 || rnd.nextInt(3) == 0) {
+        val ops = CompareOp.values()
+        new Compare(ops(rnd.nextInt(ops.length)), value(depth).node, value(depth).node)
+      } else {
+        rnd.nextInt(4) match {
+          case 0 => new And(cond(depth - 1), cond(depth - 1))
+          case 1 => new Or(cond(depth - 1), cond(depth - 1))
+          case 2 => new Not(cond(depth - 1))
+          case _ => new IsNotNull(new ColumnRef(rnd.nextInt(numInputs), LaneType.LONG))
         }
       }
     }
