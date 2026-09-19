@@ -131,6 +131,10 @@ the difference is in the *result* and not in the range. It belongs here as a
 standard-conformance question to follow upstream rather than to route around -
 which is the honest place for it, and section 2's test is what says so.
 
+Following it is now a task rather than a wait: `PLAN_MILESTONE_5.md` 2.82 (task
+146) takes reviewing the upstream patch, or writing one for ANSI's modulo-24 if
+none exists. That is the only route open here, exactly because a flag is not.
+
 ## 4. What would have to be built, when a task claims one of these
 
 Nothing here is designed yet. The shape is sketched so an entry can be costed:

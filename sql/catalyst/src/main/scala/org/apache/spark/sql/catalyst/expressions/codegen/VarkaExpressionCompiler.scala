@@ -24,12 +24,13 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, GreaterThanOrEqual, Greatest, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeYMInterval, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, Subtract, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, GreaterThanOrEqual, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimeTrunc, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaValueRange, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, Decimal, DecimalType, IntegerType, LongType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -527,6 +528,64 @@ private[sql] object VarkaExpressionCompiler {
   }
 
   private val timestampOutOfMilestone = "a timestamp column is outside milestone 5"
+
+  /**
+   * Every `TIME` expression Spark has, keyed by the `StaticInvoke` it actually arrives as.
+   *
+   * <p>None of them reaches this compiler under its own class name. All nine are
+   * `RuntimeReplaceable` and rewrite themselves into a `StaticInvoke` on `DateTimeUtils` before
+   * physical planning, so an arm matching `case HoursOfTime(child)` would never fire in a real
+   * query - the optimizer's `ReplaceExpressions` has long since run.
+   *
+   * <p>The key is not written down. Each expression is constructed once here and asked for its
+   * own `replacement`, and the `(staticObject, functionName)` pair is read off that. Both sides
+   * therefore move together: if upstream renames `getHoursOfTime`, this table renames with it,
+   * where a hardcoded string would have stopped matching silently and left nothing behind but a
+   * benchmark that got slower. `PLAN_TASK_102.md` 2.1 is the argument; `VarkaTimeTargetsSuite`
+   * is the check that the table still describes what Spark produces for real SQL.
+   *
+   * <p>A replacement that stops being a `StaticInvoke` fails here, at class initialisation,
+   * rather than disappearing from the table unnoticed.
+   */
+  private[codegen] val timeTargets: Map[(Class[_], String), String] = {
+    val t = Literal.create(0L, TimeType(TimeType.MICROS_PRECISION))
+    val i = Literal.create(0, IntegerType)
+    val d = Literal.create(Decimal(0), DecimalType(16, 6))
+    val dt = Literal.create(0L, DayTimeIntervalType())
+    val u = Literal.create(UTF8String.fromString("HOUR"), StringType)
+    Seq[(Expression, String)](
+      HoursOfTime(t) -> "hour(t)",
+      MinutesOfTime(t) -> "minute(t)",
+      SecondsOfTime(t) -> "second(t)",
+      SecondsOfTimeWithFraction(t) -> "second(t) with its fraction",
+      MakeTime(i, i, d) -> "make_time",
+      TimeTrunc(u, t) -> "time_trunc",
+      SubtractTimes(t, t) -> "t1 - t2",
+      TimeDiff(u, t, t) -> "timediff",
+      TimeAddInterval(t, dt) -> "t + interval").map {
+      case (e, label) =>
+        e.asInstanceOf[RuntimeReplaceable].replacement match {
+          case si: StaticInvoke => (si.staticObject, si.functionName) -> label
+          case other =>
+            throw new IllegalStateException(
+              s"$label no longer replaces into a StaticInvoke but into " +
+                s"${other.getClass.getSimpleName}; VarkaExpressionCompiler.timeTargets must be " +
+                "rewritten rather than quietly stop matching")
+        }
+    }.toMap
+  }
+
+  /**
+   * The reason a `TIME` expression declines, naming the expression rather than reporting it as
+   * unsupported.
+   *
+   * <p>Task 102 lowers these one group at a time, and the difference between "not lowered yet"
+   * and "unsupported" is what tells a reader which. The same distinction task 89 drew for
+   * `extract(MONTH FROM ym)`, where a bare decline would have suggested the division was still
+   * missing when the output type was the blocker.
+   */
+  private def timeNotLoweredYet(label: String): String =
+    s"$label is a TIME expression Varka does not lower yet (task 102)"
 
   /** The reason an entry of one lane records when the kernel is already on the other. */
   private def laneMismatch(entry: LaneType, kernel: LaneType): String =
@@ -1032,6 +1091,11 @@ private[sql] object VarkaExpressionCompiler {
     // expressions in tests and the plan-side fusion report can - compile what would run.
     case r: RuntimeReplaceable =>
       compileNode(r.replacement, inputs, literals, sink)
+    // A TIME expression, which arrives as the StaticInvoke its RuntimeReplaceable rewrote itself
+    // into. None is lowered yet; the table exists so the decline names which one it was.
+    case si: StaticInvoke if timeTargets.contains((si.staticObject, si.functionName)) =>
+      sink.note(timeNotLoweredYet(timeTargets((si.staticObject, si.functionName))), si)
+      None
     case other =>
       sink.note("unsupported expression", other)
       None
