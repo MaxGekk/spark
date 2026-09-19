@@ -2861,6 +2861,70 @@ That is a design question about the null model, which is why it is a scope item
 and not a task: it should be answered before it is built, and the answer is worth
 more than the expression.
 
+### Item 35. The double lane, and the math family it unlocks
+
+*Opened 19 September 2026, from `SCOPE_FUNCTIONS.md`.*
+
+Sixty-one of Spark's 511 registered functions are the math family, and every
+one of them waits on the same thing: a `LaneType.DOUBLE`. Today a double lane
+exists only as a conversion target inside one node's lowering (task 88). With
+the lane, 23 functions are one Vector API operator each - `sin cos tan asin
+acos atan sinh cosh tanh exp expm1 log log10 log1p cbrt sqrt pow atan2 hypot`
+and the sign and absolute-value pair - and a dozen more are composites of those
+(`log2`, the reciprocal trig, `degrees`, `radians`, the inverse hyperbolics
+Spark writes as log-and-sqrt).
+
+Two things the lane does not give. **Rounding**: `VectorOperators` has no
+`FLOOR`, `CEIL`, `RINT` or `ROUND`, so `floor`, `ceil`, `rint`, `round` and
+`bround` are built from the 2^52 trick or a `D2L` round trip, and Spark's
+`floor`/`ceil` return `LONG`, so the conversion is the result. **Division by a
+column**: `mod`, `pmod`, `div` with a non-constant divisor have no magic and take
+the double route as `a - trunc(a / b) * b`, a new lowering.
+
+Sequencing follows task 28's lane-as-a-property-of-the-node work, since a
+double lane is the third lane and the first whose values are not integers.
+
+### Item 36. Six functions the row engine computes with `StrictMath`
+
+*Opened 19 September 2026, from `SCOPE_FUNCTIONS.md` section 3.*
+
+`dev/varka_canary/MathLaneProbe.java` found the Vector API's math lanes equal to
+`java.lang.Math` bit for bit on x86 - and Spark computes `exp`, `expm1`, `log`,
+`log10`, `log1p` and `pow` with `StrictMath` instead, fdlibm, from which the
+lanes differ by one or two ULP on five to ten percent of ordinary inputs
+(`expm1` and `log1p` happened to agree). So four of the six, and `log2` with
+them, cannot meet Varka's bit-identity contract through the Vector API on this
+host.
+
+The options, none free: a **ULP contract** for these functions - SLEEF's named
+tier, the standard-mode register's place - with a stated answer for what the
+ghost fallback means when one query is served half by each library; a
+**Varka-emitted fdlibm**, since `exp` and `log` are a table and a short
+polynomial and a lane that reproduces fdlibm's arithmetic reproduces its bits,
+at a cost against SVML to be measured; or a **decline** until Spark leaves
+`StrictMath`. This is a decision about the contract before it is a task, which
+is why it is a scope item. The probe must run on aarch64 first: there the lanes
+are SLEEF and `Math.sin` may itself be fdlibm, which moves the whole table.
+
+### Item 37. A third AVX2 lowering for the 64-bit divide, from 32-bit converts
+
+*Opened 19 September 2026, from reading SLEEF for
+`sql/varka/skills/vector-api-and-width.md`.*
+
+Task 88 step 3 gave the long-lane division two forms: the native `L2D`/`D2L`
+conversions where they intrinsify, and the `0x4330000000000000` identity where
+they do not (AVX2). SLEEF's `vtruncate2_vd_vd` shows a third: build the 64-bit
+conversion from **32-bit** converts, which AVX2 has - split the value into
+halves, `cvtdq2pd` each, combine with one FMA, and back the same way. Exact to
+2^53 rather than the identity's 2^52, and no exponent bit in the argument.
+
+**How.** A third arm behind `useAVX` at the long lane, its own admission row in
+`verify_double_division.py` (the FMA changes the rounding count, which the
+script's bound assumes is one per operation), and the A/B on task 121's AVX2
+runner beside the identity form. **Done when** the AVX2 default is chosen from
+a committed file rather than from the identity being the one that was written
+first.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

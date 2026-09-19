@@ -216,6 +216,16 @@ actionable and the process gives us the expression for free.
 `EnableVectorSupport` line from `-Xlog:compilation` beside `MaxVectorSize`, is
 independent and small, and lands with the same change.
 
+*Added 19 September 2026.* The per-level baseline this section arrives at has a
+precedent worth the pointer: SLEEF's `src/libm-tester/autovec.c` asserts that
+the compiler took the vector path with FileCheck lines **keyed per ISA** -
+`// CHECK-SSE2: _ZGVbN2v_Sleef_sind1_u10`, `// CHECK-AVX2: _ZGVdN4v_...` - never
+one assertion for every machine. The `Varka assembly gate` failed once on 19
+September 2026 on a runner that did not pack a hand-written kernel at 128-bit
+lanes while the same bytes passed elsewhere; a gate over a pool that spans five
+CPU families needs expectations of that shape, and this task's baseline is
+where they belong.
+
 ## 4. Tests, and the positive control that already exists
 
 The control 2.59 asks for - "a kernel given an operation the match rules refuse
