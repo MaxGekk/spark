@@ -34,7 +34,9 @@ import java.util.function.ToIntFunction;
  * <p>Every node reports a {@link LaneType}: the two leaves carry one, every other node derives
  * it from its children, and the constructors refuse a tree whose lanes do not fit - a calendar
  * node over a 64-bit child, or a binary node whose operands disagree. {@link VarkaLoopEmitter}
- * emits the int lane only, so a well-formed {@code LONG} tree is built here and refused there.
+ * emits both lanes, the calendar lowerings excepted: those decompose a 32-bit epoch day and
+ * have no meaning at another width, which is why their constructors refuse a wider child here
+ * rather than the emitter refusing the tree later.
  *
  * <p>The IR is a DAG in effect if not in shape: the records carry structural
  * {@code equals}/{@code hashCode}, and the emitter memoizes on them, so a subtree appearing in
@@ -351,27 +353,80 @@ public sealed interface VarkaVectorIR
    * <p>The lane has neither an integer divide nor a multiply-high, so a constant division has
    * only two lowerings: a range-narrowed magic multiply, which the calendar prefix uses over
    * dividends it can prove bounded, and a conversion through double lanes, which is exact for
-   * every dividend the int lane can hold. This node is the second one. It exists for the
+   * every dividend the int lane can hold, and for a 64-bit one under the bound below. This
+   * node is the second one. It exists for the
    * divisions Varka cannot bound - {@code extract(YEAR FROM ym)} over a stored month count
    * above all, where the magic's exact range covers about one forty-thousandth of the type -
    * and it is therefore emitted through the double route whatever
    * {@code VarkaEmitOptions.division} says, since that option chooses among lowerings the
    * calendar has and this node has only one.
    *
-   * <p>Truncation rather than floor is the contract, and it is free: {@code D2I} is the
-   * {@code (int)} cast, which truncates toward zero, so a negative dividend needs no correction
-   * step. A floor-producing magic would need one, which is why the sibling divisions carry a
-   * carry and this does not. {@code sql/varka/plans/verify_ym_division.py} checks the
-   * equivalence against {@code IntervalUtils.getYears} over all 2^32 month counts.
+   * <p>Truncation rather than floor is the contract. Through the conversion route it is free:
+   * {@code D2I} and {@code D2L} are the {@code (int)} and {@code (long)} casts, which truncate
+   * toward zero, so a negative dividend needs no correction step and the round-down carry the
+   * sibling calendar divisions run has nothing to correct here. The magic-number route a host
+   * without those conversions takes is not free: it produces a floor, so it divides the
+   * magnitude and restores the sign afterwards. Removing that tail would be correct for a
+   * non-negative dividend and wrong for every negative non-multiple.
+   * {@code sql/varka/plans/verify_ym_division.py} checks the equivalence against
+   * {@code IntervalUtils.getYears} over all 2^32 month counts.
    *
    * <p>A zero divisor has no lowering and is refused here: a division by zero raises rather
    * than producing a value, which is the row engine's job through the ghost fallback.
+   *
+   * <p><b>At the 64-bit lane the route is exact only under a bound, and the caller owns it.</b>
+   * Every int32 dividend converts to a double exactly, so the int lane needs no precondition at
+   * all. A 64-bit dividend does not: the true divide's relative error is at most 2^-53 and a
+   * non-multiple's quotient lies at least {@code 1/divisor} from an integer, so truncation
+   * cannot cross one while the dividend stays under {@link #EXACT_DIVIDEND_BOUND}, and is
+   * silently off by one above it. The magic-number form a host without the conversion
+   * instructions takes fails far harder there and not by one: bit 52 of the dividend is the low
+   * bit of the exponent field its {@code 0x4330000000000000} identity relies on, so past the
+   * bound the OR drops the bit and the value read back is the dividend modulo {@code 2^52}.
+   *
+   * <p>Nothing checks the bound. The obligation is stated and not enforced, which is a gap
+   * rather than a design: a per-batch guard declining out-of-range dividends to the row engine
+   * is what the kernel's status bitmask already exists for, and `PLAN_MILESTONE_5.md` 2.83
+   * carries it. This node cannot check a bound it is not handed, so whoever
+   * builds it over a {@code LONG} child must have proven one: structurally, the way nanoseconds
+   * of day are, or through a per-batch input bound that declines the rest to the row engine.
    */
-  record ConstDivide(VarkaVectorIR child, int divisor) implements VarkaVectorIR {
+  record ConstDivide(VarkaVectorIR child, long divisor) implements VarkaVectorIR {
+
+    /**
+     * The exclusive bound on a 64-bit dividend's magnitude that a caller must prove. It is a
+     * bound on the <i>dividend</i> and does not depend on the divisor, which is what makes it
+     * one number rather than a table.
+     *
+     * <p>It is the tighter of the two lowerings' own bounds, because which one emits is a
+     * property of the machine and not of the tree. The conversion form is exact to
+     * {@code 2^53}, where a true divide's relative error of {@code 2^-53} cannot carry
+     * truncation across an integer. The magic-number form that a host without the conversion
+     * instructions takes is exact to {@code 2^52}, which is where its
+     * {@code v | 0x4330000000000000} identity stops holding. A tree is built before either is
+     * chosen, so the contract is the bound that holds under both.
+     *
+     * <p>{@code sql/varka/plans/verify_double_division.py} derives the wider bound and checks
+     * every divisor Varka divides by against the range that divisor's lowering actually sees.
+     */
+    public static final long EXACT_DIVIDEND_BOUND = 1L << 52;
+
     public ConstDivide {
-      requireInt("constDivide", child);
       if (divisor == 0) {
         throw new IllegalArgumentException("a constant division by zero has no lowering");
+      }
+      // The lowering that divides by the magnitude cannot form this one: negating
+      // Long.MIN_VALUE yields Long.MIN_VALUE, so the division would be by a negative
+      // magnitude and the quotient would be neither Java's nor anything else's.
+      if (divisor == Long.MIN_VALUE) {
+        throw new IllegalArgumentException(
+            "a constant division by Long.MIN_VALUE has no representable magnitude");
+      }
+      // A divisor wider than the dividend's lane quotients every input to zero, which is a
+      // mistake in the tree rather than a shape worth emitting.
+      if (child.laneType() == LaneType.INT && (int) divisor != divisor) {
+        throw new IllegalArgumentException(
+            "a constant division at the int lane needs an int divisor, not " + divisor);
       }
     }
   }

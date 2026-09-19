@@ -291,6 +291,53 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
   }
 
+  test("the AVX level is read from the JVM rather than silently defaulting to unknown") {
+    // The reader catches everything, which is right - an aarch64 JVM has no such flag and that
+    // is not an error - and it is also how a broken read would look exactly like a machine with
+    // no flag. So on a host that certainly has one, the value has to be a real level: without
+    // this, a rename or a missing `jdk.management` module would leave every x86 emission
+    // describing itself as "unknown" and nothing would say so.
+    val arch = System.getProperty("os.arch", "")
+    val x86 = arch == "amd64" || arch == "x86_64"
+    if (x86) {
+      assert(VarkaEmitOptions.HOST_USE_AVX >= 0,
+        s"UseAVX read as unknown on $arch, where the flag exists")
+    } else {
+      assert(VarkaEmitOptions.HOST_USE_AVX >= VarkaEmitOptions.USE_AVX_UNKNOWN, arch)
+    }
+  }
+
+  test("the AVX level rides the shape key, so two hosts cannot share one identity") {
+    // `PLAN_TASK_88.md` risk 6: the level changes emitted bytes at the long lane, so an
+    // emission that assumed AVX-512 converts must not be handed to a kernel compiled for a
+    // host without them. Rendering it is what keeps the two apart.
+    // Two levels that choose different lowerings must render differently, and the rendering
+    // has to carry the level rather than merely differ - an earlier form of this test asserted
+    // `contains("4")` against a string that always holds `fusedCeiling`, which is 400, so it
+    // would have passed with the component deleted from canonical() entirely.
+    val defaults = VarkaEmitOptions.DEFAULTS
+    val converting = defaults.withUseAVX(3)
+    val fallingBack = defaults.withUseAVX(2)
+    assert(converting.canonical() !== fallingBack.canonical())
+    assert(fallingBack.canonical().contains("|2|"),
+      s"the level has to be in the rendering: ${fallingBack.canonical()}")
+    assert(converting.canonical().contains("|3|"),
+      s"the level has to be in the rendering: ${converting.canonical()}")
+
+    // The case risk 6 is about, settled by the default rather than by the rendering: production
+    // emits with DEFAULTS, and DEFAULTS names no level, so every executor emits the same bytes
+    // under the same hash whatever machine it is on. A level is an explicit request, and asking
+    // for one moves the key, which is what makes the two lowerings distinguishable at all.
+    assert(defaults.useAVX() === VarkaEmitOptions.USE_AVX_UNKNOWN)
+    assert(!defaults.convertsFallBack(),
+      "the default must not select a lowering from the machine")
+
+    // And the level is a description of a machine, not a free integer: below "unknown" there
+    // is nothing to describe.
+    val bad = intercept[IllegalArgumentException](defaults.withUseAVX(-2))
+    assert(bad.getMessage.contains("useAVX"), bad.getMessage)
+  }
+
   test("every option component can change the canonical rendering") {
     // `truncDate` was left out of canonical() from task 35 until task 46, so two option values
     // differing only in the trunc lowering rendered the same string: different keys in the
@@ -310,8 +357,12 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
           java.lang.Boolean.valueOf(!current.asInstanceOf[java.lang.Boolean])
         case t if t == classOf[Int] || t == java.lang.Integer.TYPE =>
           // lanesOverride must stay a power of two, and groupBudget positive; doubling is both.
+          // useAVX is the exception: it is a level, its floor is USE_AVX_UNKNOWN, and on a host
+          // that reports no level at all doubling -1 lands at -2, which the record refuses. The
+          // step up from the floor is the level below every AVX one, which is 0.
           val cur = current.asInstanceOf[java.lang.Integer]
-          java.lang.Integer.valueOf(if (cur == 0) 4 else cur * 2)
+          java.lang.Integer.valueOf(
+            if (cur < 0) 0 else if (cur == 0) 4 else cur * 2)
         case t if t.isEnum =>
           t.getEnumConstants.find(_ != current)
             .getOrElse(fail(s"${component.getName} has one enum constant"))
