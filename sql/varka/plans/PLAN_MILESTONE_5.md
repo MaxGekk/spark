@@ -3064,6 +3064,55 @@ consumer over a narrowed filter is measured beside an un-narrowed one and the
 difference is explained. Size: small to medium. Relevant to 105, whose surface
 entries narrow, and to the Arrow cache builder, which is a columnar consumer.
 
+### 2.83 The 64-bit dividend bound is stated and not enforced (task 147)
+
+*Opened 19 September 2026 by the review of task 88 step 3.*
+
+`VarkaVectorIR.ConstDivide` documents a precondition - the dividend's magnitude
+below 2^52 - and names the constant, and nothing anywhere checks it. There is no
+constructor check, no analysis check and no emitted guard, and
+`VarkaRangeAnalysis.range` answers UNKNOWN for every non-INT lane, so the
+lattice could not discharge the obligation even if it were asked.
+
+Past the bound the two lowerings fail differently and neither fails safely. The
+conversion form is off by one, which is the ordinary rounding story. The
+magic-number form is not: bit 52 is the low bit of the exponent field its
+`0x4330000000000000` identity depends on, so the OR drops it and the value read
+back is the dividend modulo 2^52 - wrong by about 4.5e12 for a nanosecond
+divisor rather than by one.
+
+This is not hypothetical. `TIME` is structurally safe, nanoseconds of day being
+under 2^47, but section 2.38 records that a day-time interval is signed
+microseconds across the whole int64, and task 103's `extract(DAY FROM dt)` is a
+division over exactly that.
+
+**How.** The kernel already declines batches: `STATUS_CHRONO_RANGE` is one bit of
+a status bitmask and `emitRangeGuard` is a general two-compare helper already
+used at two different bounds. A division at the long lane takes the same
+treatment, with the bound read from the node rather than restated beside it.
+**Done when** a dividend past the bound declines the batch under both lowerings
+and the row engine answers it. Size: small.
+
+### 2.84 The group budget under-counts an int-lane division sevenfold (task 148)
+
+*Opened 19 September 2026 by the same review.*
+
+`weightOf` approximates lane operations - a checked `IntArith` is 5, "one
+lanewise op plus the four the sign test costs" - and `ConstDivide` falls through
+to the default 1 while its int-lane conversion form emits seven. Sixteen of them
+therefore fit one loop method under `GROUP_BUDGET`, carrying about a hundred and
+twelve operations into it and the same again into the epilogue, which is the one
+method no byte budget bounds.
+
+Task 88 step 3 corrected the long lane, where the magic form is fourteen, and
+deliberately left this alone: the under-count predates the 64-bit lane, and
+correcting it moves `emitted_bytes.json`. A byte movement wants a change whose
+subject it is, not a side effect of one about a different lane.
+
+**How.** Weigh an int-lane `ConstDivide` at 7, regenerate the oracle and read the
+diff. **Done when** the regenerated file is green and the movement is explained
+shape by shape. Size: small.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3236,6 +3285,8 @@ can start has.
 | 143 | The pre-commit hook judges the commit, not the file (section 2.78). **Done** (`PLAN_TASK_143.md`, 17 September 2026) from a finding in task 142's own merge commit: line-anchored findings are scoped to the commit's diff, and the Python column scan takes ruff's own single-chunk exemption | A hook self-test that fails in both directions for each rule and runs whenever the hook is among the committed files; the merge commit that started it reports nothing |
 | 144 | What the long lane costs end to end (section 2.80). **Done** (`PLAN_TASK_144.md` 9, 18 September 2026) from task 29's unscored prediction: the lane costs 0.73x to 0.96x of the int lane at two million rows and 0.31x to 0.97x at twenty million - never the kernel's 2.1x, and never one band, so task 29's predicted 0.45x-0.60x is wrong in both directions depending on the shape | `VarkaLongLaneThroughputBenchmark` in `sql/core`, one shape at two widths over identical values, Varka on and off, at two row counts, every case asserting it fused | The committed results file, task 29's 6.1.2 scored, and the per-shape ratios the long-lane tasks are read against |
 | 145 | A narrowed filter loses the columnar path (section 2.81). **Scoped** (18 September 2026) from task 144's crossed experiment, and twice corrected the same night: not the forwarding, not the narrowing's own cost - with the row read-back forced the narrowed and un-narrowed shapes are within 1% (144.4 against 142.8 M rows/s) and task 78 had already measured that shape at both widths. Under a columnar sink the un-narrowed shapes run at 862.3 and 901.3 while the narrowed one runs at 120.3, so what differs is that they stay columnar and it does not | Find why the narrowed node does not take the columnar path under a columnar consumer, when `columnarSibling` already builds `VarkaProjectExec(narrowing, filter)` for the case; route it there or record why not | A columnar consumer over a narrowed filter measured beside an un-narrowed one, with the difference explained |
+| 147 | The 64-bit dividend bound is stated and not enforced (section 2.83). **Scoped** (19 September 2026) from task 88 step 3's review: `ConstDivide.EXACT_DIVIDEND_BOUND` is 2^52 and nothing checks it - no constructor check, no analysis check, no emitted guard - while `VarkaRangeAnalysis.range` answers UNKNOWN for every non-INT lane, so nothing could discharge it either. Above the bound the conversion form is off by one and the magic form returns the dividend modulo 2^52, and task 103's `extract(DAY FROM dt)` runs over signed microseconds across the whole int64, so out-of-range dividends are expected rather than hypothetical | A per-batch guard at the long lane declining an out-of-range dividend to the row engine, on `emitRangeGuard`'s two-compare pattern and a new status bit beside `STATUS_CHRONO_RANGE`; the bound read from the node rather than restated | A dividend past 2^52 declines the batch and the row engine answers it, under both lowerings, with the decline rate visible in the metrics |
+| 148 | The group budget under-counts an int-lane division sevenfold (section 2.84). **Scoped** (19 September 2026) from the same review: `weightOf` prices `ConstDivide` at the default 1 while its conversion form emits seven lane operations, so sixteen of them pack into one loop method carrying about a hundred and twelve. Task 88 step 3 corrected the long lane, where the magic form is fourteen, and left this one alone deliberately - it predates the lane and correcting it moves committed bytes, which belongs in a change whose subject that is | A weight of 7 for an int-lane `ConstDivide`, with `emitted_bytes.json` regenerated and the diff reviewed | `VarkaEmittedBytesSuite` green on a regenerated file, and the byte movement explained shape by shape |
 
 ## 4. Files
 

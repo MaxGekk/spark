@@ -457,6 +457,14 @@ public final class VarkaLoopEmitter {
    */
   private static final int NEXT_DAY_WEIGHT = 15;
 
+  /**
+   * {@link VarkaVectorIR.ConstDivide}'s weight: the fourteen lane operations
+   * {@link #emitMagicDivide} spends, which is the larger of its two lowerings - the conversion
+   * form spends three. Which one a body will take is not known while the groups are formed, so
+   * the budget is held to the worse case; see the note at the call site in {@link #weightOf}.
+   */
+  private static final int CONST_DIVIDE_WEIGHT = 14;
+
   private VarkaLoopEmitter() {
   }
 
@@ -470,6 +478,7 @@ public final class VarkaLoopEmitter {
       ClassDesc.of("java.lang.foreign.MemorySegment");
   private static final ClassDesc BYTE_ORDER = ClassDesc.of("java.nio.ByteOrder");
   private static final ClassDesc INT_VECTOR = ClassDesc.of("jdk.incubator.vector.IntVector");
+  private static final ClassDesc LONG_VECTOR = ClassDesc.of("jdk.incubator.vector.LongVector");
   private static final ClassDesc VECTOR = ClassDesc.of("jdk.incubator.vector.Vector");
   private static final ClassDesc VECTOR_MASK = ClassDesc.of("jdk.incubator.vector.VectorMask");
   private static final ClassDesc VECTOR_SPECIES =
@@ -591,22 +600,33 @@ public final class VarkaLoopEmitter {
   private static final MethodTypeDesc CONVERT_SHAPE =
       MethodTypeDesc.of(VECTOR, VO_CONVERSION, VECTOR_SPECIES, ConstantDescs.CD_int);
   /** {@code DoubleVector DoubleVector.mul/div(double)} - broadcast-scalar convenience. */
-  /** {@code DoubleVector Vector.reinterpretAsDoubles()} and its inverse, both on Vector. */
+  private static final MethodTypeDesc LANEWISE_VD =
+      MethodTypeDesc.of(DOUBLE_VECTOR, ConstantDescs.CD_double);
+
+  /** {@code VectorOperators.Unary}, the operator family {@code NEG} belongs to. */
+  private static final ClassDesc VO_UNARY =
+      ClassDesc.of("jdk.incubator.vector.VectorOperators$Unary");
+
+  /** {@code DoubleVector Vector.reinterpretAsDoubles()}. */
   private static final MethodTypeDesc REINTERPRET_D = MethodTypeDesc.of(DOUBLE_VECTOR);
-  private static final MethodTypeDesc REINTERPRET_L =
-      MethodTypeDesc.of(ClassDesc.of("jdk.incubator.vector.LongVector"));
+
+  /** {@code LongVector Vector.reinterpretAsLongs()}. */
+  private static final MethodTypeDesc REINTERPRET_L = MethodTypeDesc.of(LONG_VECTOR);
+
   /** {@code VectorMask DoubleVector.compare(VectorOperators.Comparison, Vector)}. */
   private static final MethodTypeDesc COMPARE_DD =
       MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
+
   /** {@code DoubleVector DoubleVector.lanewise(VectorOperators.Binary, double, VectorMask)}. */
   private static final MethodTypeDesc LANEWISE_VD_MASKED =
       MethodTypeDesc.of(DOUBLE_VECTOR, VO_BINARY, ConstantDescs.CD_double, VECTOR_MASK);
-  /** {@code LongVector LongVector.abs()} / {@code neg()}. */
-  private static final MethodTypeDesc UNARY_L =
-      MethodTypeDesc.of(ClassDesc.of("jdk.incubator.vector.LongVector"));
 
-  private static final MethodTypeDesc LANEWISE_VD =
-      MethodTypeDesc.of(DOUBLE_VECTOR, ConstantDescs.CD_double);
+  /** {@code LongVector LongVector.lanewise(VectorOperators.Unary, VectorMask)}. */
+  private static final MethodTypeDesc LANEWISE_UNARY_L_MASKED =
+      MethodTypeDesc.of(LONG_VECTOR, VO_UNARY, VECTOR_MASK);
+
+  /** {@code VectorMask VectorMask.not()}. */
+  private static final MethodTypeDesc MASK_NOT = MethodTypeDesc.of(VECTOR_MASK);
   /** {@code VectorMask IntVector.compare(VectorOperators.Comparison, Vector)} - erased. */
   private static final MethodTypeDesc COMPARE_VV =
       MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
@@ -1331,6 +1351,19 @@ public final class VarkaLoopEmitter {
     }
     if (node instanceof DayOfWeekIso) {
       return DAY_OF_WEEK_ISO_WEIGHT;
+    }
+    if (node instanceof ConstDivide n && n.laneType() == VarkaVectorIR.LaneType.LONG) {
+      // Weight approximates lane ops, as every entry above does. At the long lane the two forms
+      // are three operations and fourteen, and which one emits cannot be asked here - `weightOf`
+      // runs while the groups are formed, before an `Analysis` exists - so the larger is used.
+      // Over-weighing costs an extra loop method on a host that did not need one; under-weighing
+      // would let sixteen divisions into one body and two hundred operations with them, and the
+      // epilogue is the method no byte budget bounds.
+      //
+      // The int lane keeps the default weight of 1 although its conversion form is seven
+      // operations. That under-count predates this lane and correcting it moves committed
+      // bytes, so it is a task of its own rather than a side effect of this one.
+      return CONST_DIVIDE_WEIGHT;
     }
     return node instanceof NextDay ? NEXT_DAY_WEIGHT : 1;
   }
@@ -2312,9 +2345,10 @@ public final class VarkaLoopEmitter {
             throw new IllegalArgumentException("a constant division by -1 overflows at "
                 + (lane == Lane.LONG ? "Long.MIN_VALUE" : "Integer.MIN_VALUE") + ": " + node);
           }
-          // This node has no magic form to fall back on, so a width with no double species to
-          // convert through cannot emit it at all. Refused here rather than in the emitter,
-          // where the absence would surface as a class that computes nothing.
+          // Where this node takes the conversion form it has no magic range-narrowed form to
+          // fall back on, so a width with no double species to convert through cannot emit
+          // it. Refused here rather than in the emitter, where the absence would surface as
+          // a class that computes nothing.
           if (!divider.canConvert()) {
             throw new IllegalArgumentException(
                 "a constant division needs a double species to convert through, which "
@@ -2512,7 +2546,7 @@ public final class VarkaLoopEmitter {
     /** the left operand, the right operand and the result of a checked
      *  {@link IntArith}, parked so the overflow mask can read all three. */
     final Map<VarkaVectorIR, int[]> intArithTmp = new HashMap<>();
-    /** The three vector locals {@link #emitMagicDivide} needs; empty where it is not emitted. */
+    /** The four vector locals {@link #emitMagicDivide} needs; empty where it is not emitted. */
     final Map<VarkaVectorIR, int[]> constDivideTmp = new HashMap<>();
     /** Per DayOfWeek/WeekDay/NextDay: {@code emitFloorMod7}'s own original-value and fold
      * temporaries. NextDay needs no third slot for the date it reuses after the mod - its
@@ -2792,7 +2826,7 @@ public final class VarkaLoopEmitter {
           // conversion form needs none, so the slots follow the form rather than the node, and
           // the predicate is shared with the emission so the two cannot disagree about it.
           if (node instanceof ConstDivide n && takesMagicDivide(analysis, n)) {
-            s.constDivideTmp.put(node, new int[] {slot++, slot++, slot++});
+            s.constDivideTmp.put(node, new int[] {slot++, slot++, slot++, slot++});
           }
           if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay
               || node instanceof TruncDateDynamic || node instanceof ThursdayOf
@@ -6267,8 +6301,9 @@ public final class VarkaLoopEmitter {
    *
    * <p>At the <b>long lane</b> a 64-bit lane and a double lane are the same width, so there is
    * one conversion in, one divide and one conversion back: three operations, no halves and no
-   * join. There is no magic alternative at this lane - no 64-bit multiply-high exists - so this
-   * is the lowering rather than a variant of one.
+   * join. There is no 64-bit multiply-high, so the range-narrowed magic the calendar uses has
+   * no form at this lane; the alternative here is {@link #emitMagicDivide}, which a host whose
+   * conversions do not intrinsify takes instead.
    *
    * <p>The quotient this leaves is exact over the range the site's dividend stays in, so the
    * round-down carry that follows a magic division is dead here rather than merely redundant;
@@ -6278,19 +6313,20 @@ public final class VarkaLoopEmitter {
    * Whether this division takes the magic-number form instead of the conversion one.
    *
    * <p>Only at the long lane, and only where the JVM says its converts will not become
-   * instructions. {@code L2D} and {@code D2L} do not intrinsify under {@code -XX:UseAVX=2} -
+   * instructions. {@code L2D} and {@code D2L} do not intrinsify under {@code -XX:UseAVX=2}:
    * {@code dev/varka_canary/L2DProbe.java} reads 22 refused conversions there against none at
-   * the default level - and a conversion that falls back to Java is scalar code in the middle
-   * of a vector loop, which is worse than the fifteen lane operations the magic form spends.
+   * the default level, which is a fact about lowering and not about speed. Which of the two
+   * forms is faster on such a host is task 88 step 4's A/B and is not yet measured; this
+   * predicate is written on the reading that a conversion falling back to Java puts scalar
+   * code inside a vector loop, and step 4 is what confirms or overturns it.
    *
    * <p>A level the JVM did not report ({@link VarkaEmitOptions#USE_AVX_UNKNOWN}) keeps the
    * conversions: an aarch64 machine has no {@code UseAVX} flag and no evidence against its
    * converts, so assuming the worst there would slow it down on a guess.
    */
   private static boolean takesMagicDivide(Analysis analysis, ConstDivide n) {
-    int level = analysis.options.useAVX();
     return analysis.lane == Lane.LONG && n.divisor() != 1
-        && level != VarkaEmitOptions.USE_AVX_UNKNOWN && level < 3;
+        && analysis.options.convertsFallBack();
   }
 
   /** {@code 2^52} as a double, and its bit pattern: the constants the magic form is built on. */
@@ -6299,8 +6335,15 @@ public final class VarkaLoopEmitter {
   private static final long MANTISSA_52 = 0x000FFFFFFFFFFFFFL;
 
   /**
-   * {@code [v] -> [v / d]} at the long lane with no conversion instruction at all, the form
-   * {@code dev/varka_canary/MagicProbe.java} measures and this transcribes.
+   * {@code [v] -> [v / d]} at the long lane with no conversion instruction at all.
+   *
+   * <p>The identity and the hand-built floor come from
+   * {@code dev/varka_canary/MagicProbe.java}, and what is emitted here is <b>not</b> what that
+   * probe measured: the probe multiplies by a precomputed reciprocal where this divides, and it
+   * has neither the magnitude step nor the sign tail, because its stated domain is a
+   * non-negative dividend. Its census - 6 vmulpd and no conversion, extraction or call - is
+   * therefore evidence that the conversion-free identity vectorises, and not a measurement of
+   * this sequence. Step 4's A/B is what measures this one.
    *
    * <p><b>The identity.</b> For {@code 0 <= u < 2^52}, {@code u | 0x4330000000000000} read as a
    * double is exactly {@code 2^52 + u}, so a subtraction recovers {@code u} as a double; and an
@@ -6327,58 +6370,71 @@ public final class VarkaLoopEmitter {
     int[] t = s.constDivideTmp.get(n);
     int quotient = t[0];
     int rounded = t[1];
-    int mask = t[2];
+    int roundedUp = t[2];
+    int negative = t[3];
     long magnitude = Math.abs(n.divisor());
-    ClassDesc vec = Lane.LONG.vector;
 
+    // The dividend's sign, taken once and used twice: to reach the identity's non-negative
+    // domain here, and to put the sign back at the end. A masked NEG is what takes the
+    // magnitude - `abs()` would read better and is the wrong instruction, because the 64-bit
+    // vector absolute value is AVX-512 (`vpabsq`) and has no AVX2 encoding, so on the very
+    // host this form exists for it deoptimises to a per-lane Java loop. NEG is `SubVL` against
+    // zero under a mask, which every level has, and it agrees with `abs()` on every input
+    // including `Long.MIN_VALUE`.
     cb.dup();                                                   // [v, v]
-    cb.invokevirtual(vec, "abs", UNARY_L);                      // [v, |v|]
+    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+    cb.loadConstant(0L);
+    cb.invokevirtual(LONG_VECTOR, "compare", Lane.LONG.compareVI);
+    cb.astore(negative);                                        // [v]
+    cb.getstatic(VECTOR_OPERATORS, "NEG", VO_UNARY);
+    cb.aload(negative);
+    cb.invokevirtual(LONG_VECTOR, "lanewise", LANEWISE_UNARY_L_MASKED);   // [|v|]
+
     cb.loadConstant(TWO_52_BITS);
-    cb.invokevirtual(vec, "or", Lane.LONG.lanewiseVI);          // [v, |v| | 2^52 bits]
+    cb.invokevirtual(LONG_VECTOR, "or", Lane.LONG.lanewiseVI);  // [|v| | 2^52 bits]
     cb.invokevirtual(VECTOR, "reinterpretAsDoubles", REINTERPRET_D);
     cb.loadConstant(TWO_52);
-    cb.invokevirtual(DOUBLE_VECTOR, "sub", LANEWISE_VD);        // [v, (double) |v|]
+    cb.invokevirtual(DOUBLE_VECTOR, "sub", LANEWISE_VD);        // [(double) |v|]
     cb.loadConstant((double) magnitude);
-    cb.invokevirtual(DOUBLE_VECTOR, "div", LANEWISE_VD);        // [v, q]
+    cb.invokevirtual(DOUBLE_VECTOR, "div", LANEWISE_VD);        // [q]
 
-    // The three locals exist because a floor needs the quotient, its rounding and the mask
-    // between them alive at once, which the operand stack cannot hold in the order the calls
-    // want their receiver and arguments in.
-    cb.astore(quotient);                                        // [v]
+    // The floor needs the quotient, its rounding and the mask between them alive at once, in
+    // an order the operand stack cannot hold: each call wants its receiver below its arguments
+    // and the mask is produced from the two values it then has to follow.
+    cb.astore(quotient);                                        // []
     cb.aload(quotient);
     cb.loadConstant(TWO_52);
     cb.invokevirtual(DOUBLE_VECTOR, "add", LANEWISE_VD);
     cb.loadConstant(TWO_52);
-    cb.invokevirtual(DOUBLE_VECTOR, "sub", LANEWISE_VD);        // [v, round(q)]
-    cb.astore(rounded);                                         // [v]
+    cb.invokevirtual(DOUBLE_VECTOR, "sub", LANEWISE_VD);        // [round(q)]
+    cb.astore(rounded);                                         // []
     cb.aload(rounded);
     cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
     cb.aload(quotient);
-    cb.invokevirtual(DOUBLE_VECTOR, "compare", COMPARE_DD);     // [v, rounded > q]
-    cb.astore(mask);                                            // [v]
+    cb.invokevirtual(DOUBLE_VECTOR, "compare", COMPARE_DD);     // [round(q) > q]
+    cb.astore(roundedUp);                                       // []
     cb.aload(rounded);
     cb.getstatic(VECTOR_OPERATORS, "SUB", VO_BINARY);
     cb.loadConstant(1.0);
-    cb.aload(mask);
-    cb.invokevirtual(DOUBLE_VECTOR, "lanewise", LANEWISE_VD_MASKED);   // [v, floor(q)]
+    cb.aload(roundedUp);
+    cb.invokevirtual(DOUBLE_VECTOR, "lanewise", LANEWISE_VD_MASKED);   // [floor(q)]
 
     cb.loadConstant(TWO_52);
     cb.invokevirtual(DOUBLE_VECTOR, "add", LANEWISE_VD);
     cb.invokevirtual(VECTOR, "reinterpretAsLongs", REINTERPRET_L);
     cb.loadConstant(MANTISSA_52);
-    cb.invokevirtual(vec, "and", Lane.LONG.lanewiseVI);         // [v, floor(|v| / |d|)]
+    cb.invokevirtual(LONG_VECTOR, "and", Lane.LONG.lanewiseVI); // [floor(|v| / |d|)]
 
     // The sign, folded with the divisor's: negate where the dividend is negative, or where it
-    // is not, when the divisor itself is.
-    cb.swap();                                                  // [|q|, v]
-    cb.getstatic(VECTOR_OPERATORS, n.divisor() < 0 ? "GE" : "LT", VO_COMPARISON);
-    cb.loadConstant(0L);
-    cb.invokevirtual(vec, "compare", Lane.LONG.compareVI);      // [|q|, negate here]
-    cb.astore(mask);                                            // [|q|]
-    cb.dup();
-    cb.invokevirtual(vec, "neg", UNARY_L);                      // [|q|, -|q|]
-    cb.aload(mask);
-    cb.invokevirtual(vec, "blend", Lane.LONG.blend);            // [q]
+    // is not, when the divisor itself is. The divisor's sign is a constant here, so the
+    // complement costs an emission-time branch rather than a lane operation.
+    cb.getstatic(VECTOR_OPERATORS, "NEG", VO_UNARY);
+    cb.aload(negative);
+    if (n.divisor() < 0) {
+      // VectorMask is an abstract class, not an interface, so this is invokevirtual.
+      cb.invokevirtual(VECTOR_MASK, "not", MASK_NOT);
+    }
+    cb.invokevirtual(LONG_VECTOR, "lanewise", LANEWISE_UNARY_L_MASKED);  // [v / d]
   }
 
   private static void emitDoubleDivide(CodeBuilder cb, Lane lane, Divider divider,

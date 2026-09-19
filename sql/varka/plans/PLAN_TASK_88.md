@@ -228,11 +228,13 @@ emitter commit, which is what section 5's test 5 asserts.
 | double route, long lane | `L2D`, mul or div, `D2L` = **3**, no guard |
 | double route, long lane under AVX2 | or, reinterpret, sub (3) + mul or div (1) + add, reinterpret, and (3) + the round-to-floor compare and blend (2) = **9** |
 
-*Corrected 18 September 2026, step 3 (section 9.2).* The AVX2 row is **15**, not
-9, and the six operations it is short are the sign correction and the identity's
-own second half: this table was written for a non-negative dividend, and the form
-as built serves both signs. Counted from the emitted bytes and asserted there:
-seven `DoubleVector` ops, two reinterprets, six `LongVector` ops.
+*Corrected 18 September 2026 and again on the 19th, step 3 (section 9.2).* The
+AVX2 row is **14**, not 9, and the five operations it is short are the sign
+handling and the identity's own second half: this table was written for a
+non-negative dividend, and the form as built serves both signs. Counted from the
+emitted bytes and asserted there: seven `DoubleVector` ops, two reinterprets and
+five `LongVector` ops, the loads and stores excluded as the body's rather than
+the division's.
 
 The first draft costed the magic at four ops by counting only the multiply,
 shift, compare and blend, and omitted the bias add and the multiply-subtract
@@ -484,3 +486,54 @@ emission changed.
 default per (divisor, range) decided from the numbers. The AVX2 arm of that
 measurement belongs to task 121's runner rather than this laptop, which at
 `UseAVX=3` emits the magic form only when a test asks for it.
+
+### 9.3 What the review of step 3 corrected, 19 September 2026
+
+Five of the findings changed the code rather than its description, and three of
+those were the same mistake in three places: **a default that reads the machine
+makes anything built on it host-dependent, tests included.**
+
+**`abs()` was the wrong instruction, in the form built to avoid wrong
+instructions.** The magic form opened with `LongVector.abs()` to reach the
+identity's non-negative domain. The 64-bit vector absolute value is `vpabsq`,
+which is AVX-512: on the one host class this form exists for it has no encoding
+and deoptimises to a per-lane Java loop - precisely the scalar-inside-a-vector
+failure the form's own javadoc cites as its reason to exist. A masked `NEG` is
+`SubVL` against zero, native at every level, agrees with `abs()` on every input
+including `Long.MIN_VALUE`, and reuses the sign mask the tail needed anyway. The
+form is 14 operations now rather than 15.
+
+**The probe cited as the measurement measures something else.** `MagicProbe`
+multiplies by a precomputed reciprocal where the emitter divides, and it has
+neither the magnitude step nor the sign tail, its stated domain being a
+non-negative dividend. That is *why* the `abs()` problem was invisible: the one
+committed census behind this lowering never executed the operation. The javadoc
+now says the census is evidence that the conversion-free identity vectorises and
+not a measurement of this sequence.
+
+**Risk 6 was not closed by putting the level in `canonical()`.** The rendering
+short-circuits to the empty string for the defaults, and production emits with
+the defaults, so two executors at different levels both rendered "" and shared a
+shape hash, a class name and a JFR identity while emitting different 64-bit
+divisions. The level is now rendered *ahead* of that shortcut and only when it
+changes a lowering, so a host with the conversions keeps the empty rendering the
+compact production hash is built on. One predicate, `convertsFallBack()`,
+answers the question for both the emitter and the key.
+
+**Two tests and one mutator inherited the host's level.** The op-count test
+asserted the conversion form's shape while emitting with the machine's default,
+which fails on any runner below AVX-512 - the runner census puts that at eleven
+of eighteen dispatches. The long-lane differential had the same shape, so which
+lowering it checked was the machine's choice and neither was covered on both.
+And the reflective completeness test mutates an int by doubling, which takes
+`USE_AVX_UNKNOWN` to -2 and throws on any host with no such flag. All three now
+name a level.
+
+**`Math.abs(Long.MIN_VALUE)` is a no-op**, so that divisor divided by a negative
+magnitude; it is refused where the node is built. And the review's brute force
+over both lowerings confirmed the 2^52 bound is exactly tight and that this was
+the only divergence from Java's `/` in the whole domain.
+
+Two findings became tasks rather than edits, because both move bytes or add a
+channel: the bound is stated and unenforced (2.83, task 147), and the int lane's
+own `ConstDivide` weight is 1 against seven real operations (2.84, task 148).

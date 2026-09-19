@@ -361,11 +361,15 @@ public sealed interface VarkaVectorIR
    * {@code VarkaEmitOptions.division} says, since that option chooses among lowerings the
    * calendar has and this node has only one.
    *
-   * <p>Truncation rather than floor is the contract, and it is free: {@code D2I} is the
-   * {@code (int)} cast, which truncates toward zero, so a negative dividend needs no correction
-   * step. A floor-producing magic would need one, which is why the sibling divisions carry a
-   * carry and this does not. {@code sql/varka/plans/verify_ym_division.py} checks the
-   * equivalence against {@code IntervalUtils.getYears} over all 2^32 month counts.
+   * <p>Truncation rather than floor is the contract. Through the conversion route it is free:
+   * {@code D2I} and {@code D2L} are the {@code (int)} and {@code (long)} casts, which truncate
+   * toward zero, so a negative dividend needs no correction step and the round-down carry the
+   * sibling calendar divisions run has nothing to correct here. The magic-number route a host
+   * without those conversions takes is not free: it produces a floor, so it divides the
+   * magnitude and restores the sign afterwards. Removing that tail would be correct for a
+   * non-negative dividend and wrong for every negative non-multiple.
+   * {@code sql/varka/plans/verify_ym_division.py} checks the equivalence against
+   * {@code IntervalUtils.getYears} over all 2^32 month counts.
    *
    * <p>A zero divisor has no lowering and is refused here: a division by zero raises rather
    * than producing a value, which is the row engine's job through the ghost fallback.
@@ -374,9 +378,16 @@ public sealed interface VarkaVectorIR
    * Every int32 dividend converts to a double exactly, so the int lane needs no precondition at
    * all. A 64-bit dividend does not: the true divide's relative error is at most 2^-53 and a
    * non-multiple's quotient lies at least {@code 1/divisor} from an integer, so truncation
-   * cannot cross one while the dividend stays under {@link #EXACT_DIVIDEND_BOUND} - and is
-   * silently off by one above it, as is the magic-number form that a host without the
-   * conversion instructions takes. This node cannot check a bound it is not handed, so whoever
+   * cannot cross one while the dividend stays under {@link #EXACT_DIVIDEND_BOUND}, and is
+   * silently off by one above it. The magic-number form a host without the conversion
+   * instructions takes fails far harder there and not by one: bit 52 of the dividend is the low
+   * bit of the exponent field its {@code 0x4330000000000000} identity relies on, so past the
+   * bound the OR drops the bit and the value read back is the dividend modulo {@code 2^52}.
+   *
+   * <p>Nothing checks the bound. The obligation is stated and not enforced, which is a gap
+   * rather than a design: a per-batch guard declining out-of-range dividends to the row engine
+   * is what the kernel's status bitmask already exists for, and `PLAN_MILESTONE_5.md` 2.83
+   * carries it. This node cannot check a bound it is not handed, so whoever
    * builds it over a {@code LONG} child must have proven one: structurally, the way nanoseconds
    * of day are, or through a per-batch input bound that declines the rest to the row engine.
    */
@@ -403,6 +414,13 @@ public sealed interface VarkaVectorIR
     public ConstDivide {
       if (divisor == 0) {
         throw new IllegalArgumentException("a constant division by zero has no lowering");
+      }
+      // The lowering that divides by the magnitude cannot form this one: negating
+      // Long.MIN_VALUE yields Long.MIN_VALUE, so the division would be by a negative
+      // magnitude and the quotient would be neither Java's nor anything else's.
+      if (divisor == Long.MIN_VALUE) {
+        throw new IllegalArgumentException(
+            "a constant division by Long.MIN_VALUE has no representable magnitude");
       }
       // A divisor wider than the dividend's lane quotients every input to zero, which is a
       // mistake in the tree rather than a shape worth emitting.

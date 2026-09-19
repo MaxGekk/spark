@@ -287,7 +287,15 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     // DEFAULTS must contribute nothing to the hash - that is what keeps the two committed
     // hashes below a valid oracle for the task-23 migration.
     assert(keyOf(shape) === explicit)
-    assert(VarkaEmitOptions.DEFAULTS.canonical() === "")
+    // Empty on a host whose conversions intrinsify, which is what keeps the production hash
+    // compact; on one whose conversions fall back the level leads it, because that host's
+    // 64-bit divisions are different bytes. See the AVX test below for why.
+    assert(VarkaEmitOptions.DEFAULTS.canonical() ===
+      (if (VarkaEmitOptions.DEFAULTS.convertsFallBack()) {
+        s"avx${VarkaEmitOptions.DEFAULTS.useAVX()}|"
+      } else {
+        ""
+      }))
     assert(VarkaEmitOptions.DEFAULTS.withCse(false).canonical().nonEmpty)
   }
 
@@ -311,10 +319,26 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
     // `PLAN_TASK_88.md` risk 6: the level changes emitted bytes at the long lane, so an
     // emission that assumed AVX-512 converts must not be handed to a kernel compiled for a
     // host without them. Rendering it is what keeps the two apart.
+    // Two levels that choose different lowerings must render differently, and the rendering
+    // has to carry the level rather than merely differ - an earlier form of this test asserted
+    // `contains("4")` against a string that always holds `fusedCeiling`, which is 400, so it
+    // would have passed with the component deleted from canonical() entirely.
     val defaults = VarkaEmitOptions.DEFAULTS
-    val other = defaults.withUseAVX(defaults.useAVX() + 1)
-    assert(other.canonical() !== defaults.canonical())
-    assert(other.canonical().contains((defaults.useAVX() + 1).toString))
+    val converting = defaults.withUseAVX(3)
+    val fallingBack = defaults.withUseAVX(2)
+    assert(converting.canonical() !== fallingBack.canonical())
+    assert(fallingBack.canonical().startsWith("avx2|"),
+      s"the level that changes a lowering must lead the rendering: ${fallingBack.canonical()}")
+    assert(!converting.canonical().startsWith("avx"),
+      s"a level that changes nothing must not: ${converting.canonical()}")
+
+    // The case production actually uses, which is the one risk 6 is about: DEFAULTS carries the
+    // host's own level, so on a machine whose conversions fall back the defaults must still
+    // render - otherwise two executors emit different 64-bit divisions under one shape hash,
+    // one class name and one JFR identity.
+    assert(defaults.canonical() === (if (defaults.convertsFallBack()) s"avx${defaults.useAVX()}|"
+      else ""))
+
     // And the level is a description of a machine, not a free integer: below "unknown" there
     // is nothing to describe.
     val bad = intercept[IllegalArgumentException](defaults.withUseAVX(-2))
@@ -340,8 +364,12 @@ class VarkaShapeCacheSuite extends SparkFunSuite {
           java.lang.Boolean.valueOf(!current.asInstanceOf[java.lang.Boolean])
         case t if t == classOf[Int] || t == java.lang.Integer.TYPE =>
           // lanesOverride must stay a power of two, and groupBudget positive; doubling is both.
+          // useAVX is the exception: it is a level, its floor is USE_AVX_UNKNOWN, and on a host
+          // that reports no level at all doubling -1 lands at -2, which the record refuses. The
+          // step up from the floor is the level below every AVX one, which is 0.
           val cur = current.asInstanceOf[java.lang.Integer]
-          java.lang.Integer.valueOf(if (cur == 0) 4 else cur * 2)
+          java.lang.Integer.valueOf(
+            if (cur < 0) 0 else if (cur == 0) 4 else cur * 2)
         case t if t.isEnum =>
           t.getEnumConstants.find(_ != current)
             .getOrElse(fail(s"${component.getName} has one enum constant"))

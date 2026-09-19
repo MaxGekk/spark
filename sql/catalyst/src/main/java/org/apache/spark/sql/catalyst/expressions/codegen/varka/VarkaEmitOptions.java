@@ -287,6 +287,17 @@ public record VarkaEmitOptions(
    */
   public enum Division { MAGIC, DOUBLE_RECIP, DOUBLE_DIV }
 
+  /*
+   * A note this enum cannot express, kept beside it rather than inside its javadoc, which
+   * describes the calendar prefix: the 64-bit lane has a fourth lowering, the magic-number
+   * identity of `VarkaLoopEmitter.emitMagicDivide`, and it is selected by {@link #useAVX}
+   * rather than by this enum, because it is a property of the machine and not a variant a
+   * caller chooses. The consequence is that on a host whose conversions fall back there is no
+   * value of this enum that emits the conversion form at the long lane; a test or a benchmark
+   * that wants it asks for a level instead, which is what `withUseAVX` is for. Task 88 step 4's
+   * A/B is the reason that matters, and `PLAN_TASK_88.md` 9.2 records it.
+   */
+
   /** The two {@code trunc(date, ...)} lowerings; see {@link #truncDate}. */
   public enum TruncDateForm { SUBTRACT, RECOMPOSE }
 
@@ -310,6 +321,23 @@ public record VarkaEmitOptions(
    * about it. {@code dev/varka_canary/L2DProbe.java} is what settles a given machine.
    */
   public static final int HOST_USE_AVX = readUseAVX();
+
+  /** The {@code UseAVX} level at which HotSpot enables its AVX-512 paths. */
+  private static final int AVX512_LEVEL = 3;
+
+  /**
+   * Whether this level is one where the long-to-double conversions do not become instructions,
+   * so a 64-bit constant division takes the magic-number form instead of converting.
+   *
+   * <p>It lives here rather than in the emitter because {@link #canonical()} has to ask the
+   * same question: a level that changes a lowering has to reach the shape key, and one that
+   * does not must not, or the common host loses the empty rendering the production hash is
+   * built on. An unknown level answers false - an aarch64 machine has no evidence against its
+   * conversions, and assuming the worst there would slow it down on a guess.
+   */
+  public boolean convertsFallBack() {
+    return useAVX != USE_AVX_UNKNOWN && useAVX < AVX512_LEVEL;
+  }
 
   private static int readUseAVX() {
     try {
@@ -579,10 +607,18 @@ public record VarkaEmitOptions(
    * be forgotten the same way.
    */
   public String canonical() {
+    // The AVX level is rendered ahead of the defaults shortcut, and it is the only component
+    // that is. DEFAULTS carries the host's own level, so two machines each at their defaults
+    // would otherwise render the same empty string while emitting different 64-bit divisions -
+    // and a shape hash promises one shape one class name across executors, restarts and class
+    // dumps. Only a level that changes a lowering is rendered, so a host with the conversions
+    // keeps the empty rendering; the level also appears in the list below, where it
+    // distinguishes two non-default levels that agree on the lowering.
+    String host = convertsFallBack() ? "avx" + useAVX + "|" : "";
     if (isDefault()) {
-      return "";
+      return host;
     }
-    return "opts(" + groupBudget + '|' + fusedCeiling + '|' + cse + '|' + shareChronoPrefix
+    return host + "opts(" + groupBudget + '|' + fusedCeiling + '|' + cse + '|' + shareChronoPrefix
         + '|' + denseValidityOnce + '|' + elideChronoMonth + '|' + neriSchneiderMonth + '|'
         + julianMap + '|' + guardDayProducers + '|' + validityByWidth + '|' + validityOrFirst
         + '|' + validityByBitmap + '|' + checkIntOverflow + '|' + lanesOverride + '|'

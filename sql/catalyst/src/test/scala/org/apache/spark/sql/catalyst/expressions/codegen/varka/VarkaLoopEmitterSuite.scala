@@ -4681,6 +4681,11 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // range first, and truncation toward zero, which a floor-producing lowering gets wrong only
     // on negative dividends with a remainder - hence both signs of every value.
     val col = new ConstDivide(new ColumnRef(0, LaneType.LONG), 1)
+    // The level is pinned rather than inherited. `DEFAULTS.useAVX` is the machine's, so
+    // without this the test would check the conversion form on an AVX-512 host and the magic
+    // form on every other - covering one lowering twice and the other never, on a machine
+    // nobody chose. The magic form has its own test below, at its own pinned level.
+    val converting = VarkaEmitOptions.DEFAULTS.withUseAVX(3)
     val divisors = Seq(
       3_600_000_000_000L,   // hour(t), nanos per hour
       60_000_000_000L,      // minute(t) step 1
@@ -4688,12 +4693,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       1_000_000L,           // time_trunc to milliseconds
       1_000L,               // t1 - t2, nanos per micro
       86_400_000_000L,      // extract(DAY FROM dt), micros per day
-      60L)                  // minute(t) and second(t) step 2
+      60L,                  // minute(t) and second(t) step 2
+      -60L)                 // a negative divisor, whose quotient truncates the other way
     for (d <- divisors; lanes <- Seq(2, 8)) {
       val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), d))
       val vs = dividendsAround(d)
       checkLongMatrix(root, 1, Array.empty[Long], Seq(1, 7, 17, 64, 129), combos(1),
-        (_, i) => vs(i % vs.length), s"long divc/$d", lanes)
+        (_, i) => vs(i % vs.length), s"long divc/$d", lanes, converting)
     }
     assert(col.divisor() === 1)
   }
@@ -4734,12 +4740,20 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
 
     // And what the form costs, counted from the bytes rather than from the plan that sketched
     // it: seven double ops (the two halves of the identity, the divide, the round and its
-    // correction), two reinterprets, and six long ops of which four are the sign correction -
-    // fifteen against the conversion form's three. `PLAN_TASK_88.md` 3.3 registered nine,
-    // before the signed case was decided; section 9.2 records the correction.
+    // correction), two reinterprets, and five long ops - fourteen against the conversion form's
+    // three. `PLAN_TASK_88.md` 3.3 registered nine, before the signed case was decided;
+    // section 9.2 records the correction.
+    //
+    // The long count excludes the loads and stores, which belong to the body and not to the
+    // division: what it pins is the sign handling, which is the part the correction note is
+    // about and the part a reader might think is removable.
     val bytes = emitMulti(long64, 1, 0, defaults.withUseAVX(2))._2
     assert(opsOn(bytes, "DoubleVector") === 7, "the double half of the magic form")
     assert(opsOn(bytes, "Vector") === 2, "two reinterprets and no conversion")
+    val longOps = VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0",
+      "jdk.incubator.vector.LongVector",
+      java.util.List.of("fromMemorySegment", "intoMemorySegment", "broadcast"))
+    assert(longOps === 5, "the magnitude, the identity's OR and mask, and the sign tail")
   }
 
   test("a long-lane constant division converts once each way, where the int lane converts twice") {
@@ -4747,14 +4761,17 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // the int one. The saving is structural rather than incidental - an int vector has twice the
     // lanes of the double vector it converts into, so it needs two halves and a join, while a
     // 64-bit lane pairs one to one.
+    // Both levels are named. `DEFAULTS.useAVX` is whatever the machine reports, so emitting
+    // with it would assert the conversion form's shape against whichever form the host picked.
+    val converting = VarkaEmitOptions.DEFAULTS.withUseAVX(3)
     val long64 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000))
     val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
-    assert(longDoubleDivisions(emitMulti(long64, 1, 0)._2) === 1)
-    assert(doubleDivisions(emitMulti(int32, 1, 0)._2) === 1)
+    assert(longDoubleDivisions(emitMulti(long64, 1, 0, converting)._2) === 1)
+    assert(doubleDivisions(emitMulti(int32, 1, 0, converting)._2) === 1)
     // The counter above is what makes the difference explicit: the int lane spends two divides
     // and four conversions on one division, the long lane one and two.
-    assert(opsOn(emitMulti(long64, 1, 0)._2, "DoubleVector") === 1)
-    assert(opsOn(emitMulti(int32, 1, 0)._2, "DoubleVector") === 2)
+    assert(opsOn(emitMulti(long64, 1, 0, converting)._2, "DoubleVector") === 1)
+    assert(opsOn(emitMulti(int32, 1, 0, converting)._2, "DoubleVector") === 2)
   }
 
   test("a long-lane constant division refuses the divisors that have no quotient") {
