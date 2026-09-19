@@ -99,6 +99,19 @@ PARITY_UNGATED = {
     "20000000 rows in chunks": "chunk-length variants of one shape",
     "20000000 rows, 20 calendar outputs over 5 dates": "shared against unshared epilogue",
     "one output over 1000000 rows, null-free": "the width ladder; every rung is a datum",
+    # Task 88 step 4's A/B. Gating it would freeze the answer to the question the
+    # table exists to ask: whether a machine's vector divider beats its 32-bit
+    # multiplier is a property of the machine, and a host where the double form
+    # wins is a finding rather than a regression.
+    "constant division over 1000000 rows, null-free": (
+        "the three lowerings task 88 measures; which wins is the machine's answer"
+    ),
+    # The vector lowering does beat the scalar loop here, but by 1.28x at the wide
+    # width, and this file's pairs are derived from 43 to 47 observations rather
+    # than asserted from one. Revisit once there are revisions to derive from.
+    "extract(YEAR FROM ym) over 1000000 rows, null-free": (
+        "one observation and a thin margin; not yet a derived must-beat"
+    ),
 }
 
 # The fused session against the Janino session, for every shape where Varka wins
