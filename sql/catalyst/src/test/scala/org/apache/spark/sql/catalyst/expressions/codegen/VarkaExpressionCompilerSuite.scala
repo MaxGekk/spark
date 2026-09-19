@@ -832,6 +832,34 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(compiled.outputTypes === Seq(TimeType(6)))
   }
 
+  test("t + a literal interval folds the interval to a slot and guards only the sum") {
+    // The interval's own guard is a compile-time question when the interval is a literal: one
+    // inside a day is already nanoseconds to add, and one beyond it crosses midnight for every
+    // time, which declines - the row engine raises the same error on every row.
+    val hour = Literal(3600000000L, DayTimeIntervalType(DayTimeIntervalType.HOUR))
+    val compiled = VarkaExpressionCompiler.compile(
+      Seq(out(TimeAddInterval(t6, hour))), withLong).get
+    assert(compiled.outputs === Seq(new GuardedRange(
+      new IntArith(IntOp.ADD, Overflow.WRAP, longCol, longSlot(0)), 0L, 86399999999999L)))
+    assert(compiled.longLiterals === Seq(3600000000000L))
+    assert(compiled.inputOrdinals === Seq(8))
+    val twoDays = Literal(2L * 86400000000L, DayTimeIntervalType(DayTimeIntervalType.DAY))
+    val reason = declineReason(TimeAddInterval(t6, twoDays), withLong)
+    assert(reason.contains("longer than a day"), reason)
+  }
+
+  test("a comparison over t + dt fuses whole, with the guard inside the predicate") {
+    // The comparison's operand rule falls through to `compileNode`, so a lowered TIME
+    // expression is an operand like a column is; the guard rides inside the predicate, where
+    // a condition gives it the empty arm chain and it condemns the batch for any lane outside
+    // the day. What makes this worth pinning is the end-to-end decline test in
+    // VarkaTimeArithmeticSuite, which depends on every conjunct fusing.
+    val noon = Literal(12L * 3600 * 1000000000L, TimeType(6))
+    val predicate = VarkaExpressionCompiler.compilePredicate(
+      And(GreaterThan(t6, noon), LessThan(TimeAddInterval(t6, dt), noon)), withLong).get
+    assert(predicate.specs.forall(_.fused), predicate.specs.flatMap(_.decline).map(_.reason))
+  }
+
   test("timeAddInterval's precision truncation is the identity for every admitted type") {
     // The argument the lowering rests on, checked against the types rather than assumed: the
     // time is a multiple of 10^(9 - p), the interval's nanoseconds a multiple of 10^3 - or of

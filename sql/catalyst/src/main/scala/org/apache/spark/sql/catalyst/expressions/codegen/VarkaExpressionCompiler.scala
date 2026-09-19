@@ -669,14 +669,32 @@ private[sql] object VarkaExpressionCompiler {
             si)
           return None
         }
-        for (t <- long(time); dt <- long(interval)) yield {
-          val micros = new GuardedRange(dt, -DateTimeConstants.MICROS_PER_DAY,
-            DateTimeConstants.MICROS_PER_DAY)
-          val nanos = new IntArith(IntOp.MUL, Overflow.WRAP, micros,
-            sink.longSlot(DateTimeConstants.NANOS_PER_MICROS))
-          new GuardedRange(new IntArith(IntOp.ADD, Overflow.WRAP, t, nanos), 0L,
-            DateTimeConstants.NANOS_PER_DAY - 1)
+        // A literal interval's guard is decided here rather than per lane: one outside a day
+        // crosses midnight for every time, which is the row engine's error to raise for every
+        // row, and one inside it is already nanoseconds the kernel can add. A column takes the
+        // guard and the multiply.
+        // A def, not a val: the time is compiled first, so the inputs keep the expression's
+        // argument order, as every other lowering's do.
+        def nanos: Option[VarkaVectorIR] = interval match {
+          case Literal(micros: Long, _: DayTimeIntervalType) =>
+            if (math.abs(micros) > DateTimeConstants.MICROS_PER_DAY) {
+              sink.note(s"$label: the interval is longer than a day, so every time crosses " +
+                "midnight and the row engine raises the error", si)
+              None
+            } else {
+              Some(sink.longSlot(micros * DateTimeConstants.NANOS_PER_MICROS))
+            }
+          case _ =>
+            long(interval).map { dt =>
+              val micros = new GuardedRange(dt, -DateTimeConstants.MICROS_PER_DAY,
+                DateTimeConstants.MICROS_PER_DAY)
+              new IntArith(IntOp.MUL, Overflow.WRAP, micros,
+                sink.longSlot(DateTimeConstants.NANOS_PER_MICROS))
+            }
         }
+        for (t <- long(time); n <- nanos) yield
+          new GuardedRange(new IntArith(IntOp.ADD, Overflow.WRAP, t, n), 0L,
+            DateTimeConstants.NANOS_PER_DAY - 1)
       case _ =>
         sink.note(timeNotLoweredYet(label), si)
         None

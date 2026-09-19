@@ -1,7 +1,7 @@
 {
   "generated_by" : "VarkaEmittedBytesSuite; regenerate with VARKA_BYTES_REGEN=true build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'",
   "description" : "Hashes of every emitted method body, rendered symbolically, for every coverage row and for a fixed sequence of fuzz shapes, at lanesOverride 4 and 16. A difference is a change in what an emitted method does.",
-  "coverage_rows_skipped" : [ "l > l2", "l = l2", "l >= 5000000000", "l IS NULL", "l IS NOT NULL", "t < t2", "t = TIME'12:34:56.789'", "dt > dt2", "dt < INTERVAL '0' SECOND", "dt IS NOT NULL", "greatest(l, l2)", "least(l, 5000000000)", "CASE WHEN l < l2 THEN l ELSE l2 END", "if(l IS NULL, l2, l)", "greatest(t, t2)", "CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END" ],
+  "coverage_rows_skipped" : [ "l > l2", "l = l2", "l >= 5000000000", "l IS NULL", "l IS NOT NULL", "t < t2", "t = TIME'12:34:56.789'", "dt > dt2", "dt < INTERVAL '0' SECOND", "dt IS NOT NULL", "greatest(l, l2)", "least(l, 5000000000)", "CASE WHEN l < l2 THEN l ELSE l2 END", "if(l IS NULL, l2, l)", "greatest(t, t2)", "CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END", "t - t2", "time_diff('HOUR', t, t2)", "time_diff('microsecond', t2, t)", "time_trunc('MINUTE', t)", "time_trunc('MILLISECOND', t2)", "t + INTERVAL '0 00:00:00' DAY TO SECOND" ],
   "lanes" : {
     "4" : {
       "coverage" : {
