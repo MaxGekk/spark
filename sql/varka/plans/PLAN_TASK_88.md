@@ -328,6 +328,51 @@ engine because the magic declines it. The long-lane rows arrive with 102 and
    double form, because its baseline is a decline: the number is the lane against
    Spark, not one lowering against another.
 
+### 6.2 The predictions scored, 19 September 2026
+
+Against the two committed arms of `VarkaEmitterParityBenchmark`, regenerated on
+the laptop with every control flat to within 1.0% and nothing past the band.
+
+| shape | magic | true divide | reciprocal |
+|---|---:|---:|---:|
+| `year`, 512-bit | 3517.9 | 946.7 (0.27x) | 1610.3 (0.46x) |
+| four fields shared, 512-bit | 1859.5 | 574.4 (0.31x) | 898.6 (0.48x) |
+| `add_months`, 512-bit | 748.3 | 228.9 (0.31x) | 307.3 (0.41x) |
+| `year`, 128-bit | 1364.5 | 369.3 (0.27x) | 593.0 (0.43x) |
+| four fields shared, 128-bit | 714.4 | 210.0 (0.29x) | 333.3 (0.47x) |
+| `add_months`, 128-bit | 258.9 | 79.1 (0.31x) | 106.6 (0.41x) |
+
+**Prediction 1 holds.** The divide loses to the magic on every shape, by 3.2x to
+3.7x, and the ratio barely moves with the vector width - 0.27x to 0.31x at both.
+The plan declined to predict the factor and was right to; the direction it did
+predict is confirmed six times.
+
+**Prediction 2 is wrong.** It registered the reciprocal at 0.7x to 1.0x of the
+magic where the table admits it, reasoning that the two converts and the join
+cost about what the guard and the correction cost. They cost about twice that:
+the reciprocal measures 0.41x to 0.48x, again at both widths. So the reciprocal
+is not a form that could displace a magic anywhere on this machine, and which
+(divisor, range) pairs admit it is a question about correctness alone.
+
+**Prediction 3 is not scorable as stated, and the number under it is worse than
+the prediction.** It claimed `extract(YEAR FROM ym)` fuses at more than 5x the
+row engine. The committed row's comparand is a scalar loop, which is a floor on
+the row engine rather than the row engine - the row engine adds per-row dispatch
+on top - so the true ratio against Spark is higher than what is measured. What is
+measured is 3897.6 against 3003.5 at 512-bit, **1.30x**, and 2102.7 against
+2857.7 at 128-bit, **0.74x**. Nothing here supports 5x, and the narrow arm says
+something the prediction did not consider: at 128-bit lanes the only lowering
+this expression has is slower than a plain loop over the same memory.
+`PLAN_MILESTONE_5.md` 2.85 carries that as a task.
+
+**The decision.** The magic multiply stays the default for every calendar
+division at the int lane, at both widths. The two double forms stay as reference
+variants behind `VarkaEmitOptions.division`, which is what section 3.2 said this
+task would leave unchanged unless the numbers said otherwise; they do not. The
+double route remains the lowering for the divisions that have no magic at all -
+`ConstDivide` at either lane - because there the alternative is not a slower
+kernel but no kernel.
+
 ## 7. Risks
 
 1. **The half-join.** `D2I` of an eight-lane double back into a sixteen-lane int
@@ -373,6 +418,34 @@ is still first because its A/B is what decides the default.
 *To be written when the work lands, section by section as the plan's own rule
 asks. Nothing above is to be rewritten to look prescient; a correction is added
 and says what it corrects - 2.2 is the first of them.*
+
+### 9.4 Step 4: the A/B, 19 September 2026
+
+*Numbered for where it belongs in the sequence; steps 3's own sections land with
+the pull request that builds it.*
+
+Ten cases in `VarkaEmitterParityBenchmark` - three calendar shapes against three
+lowerings, and `extract(YEAR FROM ym)` against a scalar loop - regenerated at
+both widths with every control flat. Section 6.2 has the table and the scoring.
+
+The short of it: **the magic stays the default**, the reciprocal is half its rate
+rather than the 0.7x to 1.0x the plan registered, and the ratios are
+width-independent to within two points. The question is answered against the
+simplification the task was tempted by: the double forms remove the bound, the
+carry and the deny-list, and they cost three times the rate.
+
+Two things the A/B could not settle, recorded rather than left implicit. The
+AVX2 form has no arm here, because this laptop reports `UseAVX=3` and emitting
+the magic form on it would measure an instruction mix no machine runs; that
+belongs to task 121's runner. And the `extract(YEAR FROM ym)` comparand is a
+scalar loop rather than the row engine, so it bounds the advantage from below -
+which was enough to find that the bound is *below one* at 128-bit lanes, and not
+enough to score prediction 3.
+
+Both new tables are registered in `dev/varka_bench_gate.py` as ungated, with the
+reason in each entry. The division table is the A/B itself, and gating it would
+freeze the answer to the question it exists to ask; the `ym` table has one
+observation and a 1.30x margin, where this file's pairs are derived from 43 to 47.
 
 ### 9.1 Step 2: the int32 converts behind the switch, 18 September 2026
 
