@@ -43,7 +43,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeConstants._
  * 8.3). In the split form the same extracts are divisions of a number under 86400 by 3600 and
  * 60, in 32-bit lanes, twice as many to a register and half the bytes to read.
  *
- * Five arms per shape, adjacent, on the same rows:
+ * Six arms per shape, adjacent, on the same rows:
  *
  *  - **nanoseconds of day, int64 lanes, conversion form** - the shipped lowering on this
  *    machine, `ConstDivide` through `L2D`, `vdivpd`, `D2L`, stored wide;
@@ -53,7 +53,8 @@ import org.apache.spark.sql.catalyst.util.DateTimeConstants._
  *  - **nanoseconds of day, int64 lanes, magic form** - the same tree emitted with
  *    `useAVX = 2`, the lowering every AVX2-only host in the runner census takes;
  *  - **seconds of day, int32 lanes, emitted** - the split form's extracts as the emitter
- *    lowers an int-lane `ConstDivide` today, which is the double route in both halves;
+ *    lowers an int-lane `ConstDivide`: the multiply-high through 64-bit lanes since task 149,
+ *    with the double route it replaced beside it as the reference arm;
  *  - **seconds of day, int32 lanes, hand-written magic multiply** - the split form as item 11
  *    imagines it: one multiply and one logical shift per division, exact over the bounded
  *    dividend, which is the lowering the calendar prefix uses and `ConstDivide` does not have.
@@ -144,6 +145,9 @@ object VarkaTimeBenchmark extends BenchmarkBase {
 
   /** The magic form of the 64-bit division, which an AVX2-only host takes without asking. */
   private val magicForm = VarkaEmitOptions.DEFAULTS.withUseAVX(2)
+
+  /** The int lane's conversion through double lanes, the reference arm since task 149. */
+  private val doubleRoute = VarkaEmitOptions.DEFAULTS.withMulHiDivide(false)
 
   /** The literal slots of the long form: nanoseconds per hour, per minute, per second. */
   private val NANOS_PER_HOUR = SECONDS_PER_HOUR * NANOS_PER_SECOND
@@ -292,8 +296,11 @@ object VarkaTimeBenchmark extends BenchmarkBase {
           ("nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)",
             emit(longRoots, 1, longLits.length, loader, kernelId(), magicForm),
             LaneType.LONG, false),
-          ("seconds of day, int32 lanes, emitted (the double route)",
-            emit(intRoots, 1, intLits.length, loader, kernelId()), LaneType.INT, false))
+          ("seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)",
+            emit(intRoots, 1, intLits.length, loader, kernelId()), LaneType.INT, false),
+          ("seconds of day, int32 lanes, emitted (the double route it replaced)",
+            emit(intRoots, 1, intLits.length, loader, kernelId(), doubleRoute), LaneType.INT,
+            false))
       }
       val t = new ColumnRef(0, LaneType.LONG)
       val seconds = new ConstDivide(t, NANOS_PER_SECOND)
