@@ -267,135 +267,137 @@ VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
 ```
 
 <!-- BEGIN generated coverage table -->
+The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M: `vector` means C2 refused no Vector API call in the row's kernel at a 128-bit species; `per-lane` names the constructions it had no lowering for, which then run as Java loops over the lanes (task 153).
+
 #### Day arithmetic
 
-| Expression | Notes |
-|---|---|
-| `date_add(d, 3)` |  |
-| `date_add(d, i)` | a column offset, under a per-batch bound on its range |
-| `date_sub(d, 5)` |  |
-| `d + CAST(i AS INTERVAL DAY)` | the day-interval spelling of a column offset |
-| `datediff(d2, d)` |  |
-| `unix_date(d)` |  |
-| `date_from_unix_date(unix_date(d))` |  |
+| Expression | Notes | 128-bit lanes |
+|---|---|---|
+| `date_add(d, 3)` |  | vector |
+| `date_add(d, i)` | a column offset, under a per-batch bound on its range | vector |
+| `date_sub(d, 5)` |  | vector |
+| `d + CAST(i AS INTERVAL DAY)` | the day-interval spelling of a column offset | vector |
+| `datediff(d2, d)` |  | vector |
+| `unix_date(d)` |  | vector |
+| `date_from_unix_date(unix_date(d))` |  | vector |
 
 #### Calendar fields
 
-| Expression | Notes |
-|---|---|
-| `year(d)` |  |
-| `month(d)` |  |
-| `day(d)` |  |
-| `quarter(d)` |  |
-| `dayofyear(d)` |  |
-| `dayofweek(d)` |  |
-| `weekday(d)` |  |
-| `extract(DAYOFWEEK_ISO FROM d)` |  |
-| `weekofyear(d)` |  |
-| `extract(YEAROFWEEK FROM d)` |  |
-| `last_day(d)` |  |
-| `next_day(d, 'MONDAY')` | the day name must be a literal |
-| `make_date(2021, i, 1)` |  |
-| `trunc(d, 'YEAR')` |  |
-| `trunc(d, 'MONTH')` |  |
-| `trunc(d, 'QUARTER')` |  |
-| `trunc(d, 'WEEK')` |  |
+| Expression | Notes | 128-bit lanes |
+|---|---|---|
+| `year(d)` |  | vector |
+| `month(d)` |  | vector |
+| `day(d)` |  | vector |
+| `quarter(d)` |  | vector |
+| `dayofyear(d)` |  | vector |
+| `dayofweek(d)` |  | vector |
+| `weekday(d)` |  | vector |
+| `extract(DAYOFWEEK_ISO FROM d)` |  | vector |
+| `weekofyear(d)` |  | vector |
+| `extract(YEAROFWEEK FROM d)` |  | vector |
+| `last_day(d)` |  | vector |
+| `next_day(d, 'MONDAY')` | the day name must be a literal | vector |
+| `make_date(2021, i, 1)` |  | vector |
+| `trunc(d, 'YEAR')` |  | vector |
+| `trunc(d, 'MONTH')` |  | vector |
+| `trunc(d, 'QUARTER')` |  | vector |
+| `trunc(d, 'WEEK')` |  | vector |
 
 #### Months and year-month intervals
 
-| Expression | Notes |
-|---|---|
-| `add_months(d, 3)` |  |
-| `add_months(d, i)` |  |
-| `d + INTERVAL 3 MONTH` |  |
-| `d + ym` |  |
-| `d - ym` |  |
-| `make_ym_interval(year(d), month(d))` | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines |
-| `make_ym_interval(year(d), month(d)) * 2` | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines |
-| `abs(ym)` |  |
-| `ym - ymm` |  |
-| `CAST(ymy AS INTERVAL MONTH)` |  |
-| `extract(YEAR FROM ym)` | a division by twelve over a month count nothing bounds, so it is the first one the calendar's range-narrowed magic cannot serve and the double lane can |
-| `extract(YEAR FROM ym) - 1` | the quotient feeding further int arithmetic |
+| Expression | Notes | 128-bit lanes |
+|---|---|---|
+| `add_months(d, 3)` |  | vector |
+| `add_months(d, i)` |  | vector |
+| `d + INTERVAL 3 MONTH` |  | vector |
+| `d + ym` |  | vector |
+| `d - ym` |  | vector |
+| `make_ym_interval(year(d), month(d))` | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines | vector |
+| `make_ym_interval(year(d), month(d)) * 2` | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
+| `abs(ym)` |  | vector |
+| `ym - ymm` |  | vector |
+| `CAST(ymy AS INTERVAL MONTH)` |  | vector |
+| `extract(YEAR FROM ym)` | a division by twelve over a month count nothing bounds, so it is the first one the calendar's range-narrowed magic cannot serve and the double lane can | vector |
+| `extract(YEAR FROM ym) - 1` | the quotient feeding further int arithmetic | vector |
 
 #### Integer arithmetic
 
-| Expression | Notes |
-|---|---|
-| `i + 1` |  |
-| `i - 1` |  |
-| `year(d) * 2` | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines |
-| `-i` |  |
-| `year(d) + i` |  |
+| Expression | Notes | 128-bit lanes |
+|---|---|---|
+| `i + 1` |  | vector |
+| `i - 1` |  | vector |
+| `year(d) * 2` | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
+| `-i` |  | vector |
+| `year(d) + i` |  | vector |
 
 #### Choice and nulls
 
-| Expression | Notes |
-|---|---|
-| `if(d < d2, d, d2)` |  |
-| `CASE WHEN d < d2 THEN d ELSE d2 END` |  |
-| `coalesce(d, d2)` |  |
-| `greatest(d, d2)` |  |
-| `least(d, d2)` |  |
+| Expression | Notes | 128-bit lanes |
+|---|---|---|
+| `if(d < d2, d, d2)` |  | vector |
+| `CASE WHEN d < d2 THEN d ELSE d2 END` |  | vector |
+| `coalesce(d, d2)` |  | vector |
+| `greatest(d, d2)` |  | vector |
+| `least(d, d2)` |  | vector |
 
 #### Predicates
 
-| Predicate | Notes |
-|---|---|
-| `d IS NULL` |  |
-| `d IS NOT NULL` |  |
-| `d = d2` |  |
-| `d < d2` |  |
-| `d <= d2` |  |
-| `d > d2` |  |
-| `d >= d2` |  |
-| `year(d) = 2021` |  |
-| `NOT (d = d2)` |  |
-| `d IN (DATE '2021-01-01', DATE '2021-06-01')` | up to 16 literals |
-| `year(d) = 2021 AND i > 0` | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (task 122) |
-| `i > 0` | a bare int column compares in the kernel (task 122) |
-| `i IS NOT NULL` | the same column's validity word, which the optimizer infers beside `i > 0` |
-| `i = 5` |  |
-| `month(d) > i` | an int column against a fused int field |
-| `year(d) = 2021 OR month(d) = 3` |  |
-| `d IN (11 to 16 date literals)` | an IN list this long arrives from the optimizer as an InSet and fuses the same way |
+| Predicate | Notes | 128-bit lanes |
+|---|---|---|
+| `d IS NULL` |  | vector |
+| `d IS NOT NULL` |  | vector |
+| `d = d2` |  | vector |
+| `d < d2` |  | vector |
+| `d <= d2` |  | vector |
+| `d > d2` |  | vector |
+| `d >= d2` |  | vector |
+| `year(d) = 2021` |  | vector |
+| `NOT (d = d2)` |  | vector |
+| `d IN (DATE '2021-01-01', DATE '2021-06-01')` | up to 16 literals | vector |
+| `year(d) = 2021 AND i > 0` | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (task 122) | vector |
+| `i > 0` | a bare int column compares in the kernel (task 122) | vector |
+| `i IS NOT NULL` | the same column's validity word, which the optimizer infers beside `i > 0` | vector |
+| `i = 5` |  | vector |
+| `month(d) > i` | an int column against a fused int field | vector |
+| `year(d) = 2021 OR month(d) = 3` |  | vector |
+| `d IN (11 to 16 date literals)` | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 
 #### Long-lane predicates
 
-| Predicate | Notes |
-|---|---|
-| `l > l2` |  |
-| `l = l2` |  |
-| `l >= 5000000000` | a bigint literal takes a slot in the long lane's own table |
-| `l IS NULL` |  |
-| `l IS NOT NULL` |  |
-| `t < t2` |  |
-| `t = TIME'12:34:56.789'` | a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds |
-| `dt > dt2` |  |
-| `dt < INTERVAL '0' SECOND` |  |
-| `dt IS NOT NULL` |  |
+| Predicate | Notes | 128-bit lanes |
+|---|---|---|
+| `l > l2` |  | per-lane: compare to mask, mask cast |
+| `l = l2` |  | per-lane: compare to mask, mask cast |
+| `l >= 5000000000` | a bigint literal takes a slot in the long lane's own table | per-lane: compare to mask, mask cast |
+| `l IS NULL` |  | per-lane: mask broadcast, mask logic, mask cast |
+| `l IS NOT NULL` |  | per-lane: mask cast, mask broadcast |
+| `t < t2` |  | per-lane: compare to mask, mask cast |
+| `t = TIME'12:34:56.789'` | a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds | per-lane: compare to mask, mask cast |
+| `dt > dt2` |  | per-lane: compare to mask, mask cast |
+| `dt < INTERVAL '0' SECOND` |  | per-lane: compare to mask, mask cast |
+| `dt IS NOT NULL` |  | per-lane: mask cast, mask broadcast |
 
 #### Long-lane choice
 
-| Expression | Notes |
-|---|---|
-| `greatest(l, l2)` |  |
-| `least(l, 5000000000)` |  |
-| `CASE WHEN l < l2 THEN l ELSE l2 END` |  |
-| `if(l IS NULL, l2, l)` |  |
-| `greatest(t, t2)` |  |
-| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` |  |
+| Expression | Notes | 128-bit lanes |
+|---|---|---|
+| `greatest(l, l2)` |  | per-lane: blend, mask broadcast |
+| `least(l, 5000000000)` |  | per-lane: blend, mask broadcast |
+| `CASE WHEN l < l2 THEN l ELSE l2 END` |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `if(l IS NULL, l2, l)` |  | per-lane: mask broadcast, mask logic, blend |
+| `greatest(t, t2)` |  | per-lane: blend, mask broadcast |
+| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
 
 #### Time arithmetic
 
-| Expression | Notes |
-|---|---|
-| `t - t2` | a day-time interval, the nanosecond difference divided by a thousand |
-| `time_diff('HOUR', t, t2)` | the unit is a literal; a column of units would need a kernel per distinct value |
-| `time_diff('microsecond', t2, t)` | units are read case-insensitively, as DateTimeUtils reads them |
-| `time_trunc('MINUTE', t)` |  |
-| `time_trunc('MILLISECOND', t2)` |  |
-| `t + INTERVAL '0 00:00:00' DAY TO SECOND` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's |
+| Expression | Notes | 128-bit lanes |
+|---|---|---|
+| `t - t2` | a day-time interval, the nanosecond difference divided by a thousand | vector |
+| `time_diff('HOUR', t, t2)` | the unit is a literal; a column of units would need a kernel per distinct value | vector |
+| `time_diff('microsecond', t2, t)` | units are read case-insensitively, as DateTimeUtils reads them | vector |
+| `time_trunc('MINUTE', t)` |  | vector |
+| `time_trunc('MILLISECOND', t2)` |  | vector |
+| `t + INTERVAL '0 00:00:00' DAY TO SECOND` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 
 <!-- END generated coverage table -->
 
