@@ -3380,24 +3380,25 @@ advisory block the comparison ignores. Either way two regenerations on the
 same host must agree byte for byte, which is the test that the census is a
 property of the CPU and the JDK and not of a run.
 
-### 2.91 A `TIME` benchmark through the whole engine (task 155)
+### 2.91 Route A's end-to-end prediction is scored by the `TIME` surface, not by a new benchmark (task 155)
 
-*Opened 20 September 2026, from `PLAN_TASK_102.md` 8.3's third prediction.*
+*Opened 20 September 2026, from `PLAN_TASK_102.md` 8.3's third prediction;
+narrowed the same day on re-reading task 105.*
 
 Route A's plan predicted `hour(t)` at least 15x faster than the row engine end
-to end through the columnar consumer, `LocalTime` being the comparand, and the
-outcome could not score it: `VarkaTimeBenchmark` times kernels over raw
-buffers, and no committed benchmark runs a `TIME` expression through
-`VarkaProjectExec` against the row path. The date surface has that benchmark
-in `VarkaThroughputBenchmark`; the long lane has `VarkaLongLaneThroughputBenchmark`
-for `bigint`; `TIME` has none, although it is the milestone's public message.
+to end, and its outcome could not score it: `VarkaTimeBenchmark` times kernels
+over raw buffers, and nothing committed runs a `TIME` expression through the
+engine against the row path. The first draft of this row asked for a new
+sql/core benchmark. Task 105 already is that benchmark - `TimeSurfaceBenchmark`,
+the fork with the engine on and off against stock 4.2.0, every entry
+`--expect-fused`, its own band under task 101 - and the closing task (118)
+quotes it. A second class measuring a subset of the same thing would be two
+files for one number.
 
-The deliverable is that benchmark for the `TIME` family - the extracts,
-`time_trunc`, `t1 - t2`, `time_diff` and `t + dt` - against the row engine,
-through both consumers, at the three widths, committed as its own PR before
-any change it will be asked to measure (the house rule since task 152). It
-then scores 8.3's prediction 3, and it is where the split form's end-to-end
-claim (2.88) will be measured when milestone 6 takes item 11 up.
+So this row is only the hook: when 105's files are committed, score 8.3's
+prediction 3 from the `hour(t)` row's engine-off ratio and write the result
+into `PLAN_TASK_102.md` 8.6, which today says "not scored". No benchmark is
+added here.
 
 ### 2.92 The narrowed store costs more than its share at two 64-bit lanes (task 156)
 
@@ -3602,7 +3603,7 @@ can start has.
 | 152 | The `TIME` split form priced before any engine exists (section 2.88). **DONE** (20 September 2026, `PLAN_TASK_152.md`): `VarkaTimeBenchmark`, a file of its own on the long-lane ladder, prices `hour`, `minute`, `second` and the three together in four arms - nanoseconds of day in 64-bit lanes under the conversion form and under the AVX2 magic form, seconds of day in 32-bit lanes under the emitter's double route and under a hand-written magic multiply whose constants are proven exact by exhaustion - beside the cost of the split itself and each lane's copy floor. The predictions are registered in the plan's section 3 and scored in its section 6 | A benchmark and its three committed files, no engine: the numbers decide whether a conversion node, a bounded int-lane magic divide or a second cache encoding is worth building | `SCOPE_MILESTONE_6.md` item 11's `TIME` row cites a committed number, and `PLAN_TASK_102.md` 2.5's three options are priced side by side |
 | 153 | Masked 64-bit operations have no 128-bit lowering in this JVM, and every long-lane guard is built from one (section 2.89). **DONE** (20 September 2026, `PLAN_TASK_153.md`): `VarkaWidthAuditSuite` forks a probe per vector width under a scoped `PrintIntrinsics` and reads C2's own refusals per shape - every coverage row and fifteen hand-built constructions - asserting on every host that nothing is refused at the host's preferred width, and pinning the per-width census as `sql/varka/width_audit.json` with the host named. The census: no refusal at 512 or 256 bits; at 128 bits every long-lane construction that touches a mask - compare to mask, blend, mask cast, broadcast, logic and test - is refused and no int-lane one is, so seventeen of the twenty long coverage rows are per-lane at two 64-bit lanes, which the coverage table now says per row. The audit's first CI run added the AVX2 half: on the pool's EPYC 7763 at 256 bits C2 refuses the 64-bit lane's `L2D` and `D2L` in every division shape, task 88's premise confirmed from the log, so the invariant expects that one refusal below AVX-512 and task 121 owns the answer | The three test files, the census, the coverage table's *128-bit lanes* column; the mask-free forms or the decline below 256 bits are left to the long-lane kernel design they inform (task 102 group C), and the NEON confirmation to a catalyst run on the arm runner | Every long-lane coverage row names, in the coverage table, whether it vectorises at 128-bit lanes |
 | 154 | The width-audit census pins `missing constant` and `unbox failed` lines its own description calls non-verdicts, and they flip between runs on unrelated rows, so the local check fails on a quiet tree and a regeneration blesses a timing (section 2.90). **Scoped** (20 September 2026) from the first regeneration after task 153, in task 102 group C | Pin the `not supported` lines only, with the other kinds dropped or kept in an advisory block the comparison ignores; the file's description updated; the census regenerated | Two regenerations on the same host agree byte for byte; the suite passes without regeneration on a tree that changes no shape |
-| 155 | A `TIME` benchmark through the whole engine against the row path (section 2.91). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.3's third prediction, which route A's outcome could not score because no such benchmark is committed | A sql/core benchmark for the `TIME` family - the extracts, `time_trunc`, `t1 - t2`, `time_diff`, `t + dt` - through both consumers at the three widths, committed as its own PR before any change it measures; 8.3's prediction 3 scored against it | Results files with provenance at 512, 256 and 128 bits; every number quoted from them passes the quote checker |
+| 155 | Route A's end-to-end prediction is scored by the `TIME` surface, not by a new benchmark (section 2.91). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.3's third prediction, which the outcome could not score; narrowed the same day because task 105's `TimeSurfaceBenchmark` is the end-to-end measurement and 118 quotes it | When 105's files exist, prediction 3 scored from the `hour(t)` row's engine-off ratio and written into `PLAN_TASK_102.md` 8.6; no benchmark class added | 8.6 no longer says "not scored", and the figure it quotes is in a committed results file |
 | 156 | The narrowed store costs 12% to 18% at two 64-bit lanes on `second` and the three-field shape, where `hour` and `minute` are within 5% and every shape is within 4% at 512 bits (section 2.92). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.6: the direction is explained by the per-group cost over two rows, the shape dependence is not | The cause from the JVM's own output - the 128-bit assembly of the narrowed body against the wide one, `PrintIntrinsics` for the `L2I` and the masked store at `vlen=2` - and either the cost accepted with the cause recorded or the cheaper store it points to, re-measured on `VarkaTimeBenchmark`'s 128-bit file | The 128-bit narrowed rows within 5% of the wide rows on every shape, or the cause written in the plan and the census |
 
 ## 4. Files
