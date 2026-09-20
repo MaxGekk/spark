@@ -219,6 +219,16 @@ Three things follow.
   operations are lowered, and whether the branch and the lost unrolling still
   cost there is that task's measurement to take, not this census's to assume.
 
+**The x86 runner, for the comparison.** The same run's `x86_64` job landed on an
+AMD EPYC 7763 (Zen 3, `UseAVX=2`, `MaxVectorSize=32`, so a 256-bit species). At
+a forced 128-bit species it refuses what this laptop refuses: 32 of the hundred
+shapes, every one a long-lane mask construction at two lanes - compare to mask,
+blend, the validity word's casts, mask broadcast - and no int-lane one. At its
+own 256 bits it refuses only the 64-bit lane's `L2D` and `D2L`, in the six
+division shapes, which is #264's finding reproduced from the census rather than
+from the invariant's failure. So the two-lane table is the x86 back end's on Zen
+3 as on Zen 5, and it is not aarch64's.
+
 One qualification. The runner carries SVE2 and the JDK enables it
 (`UseSVE=2`); the matcher's masked lowerings at 128 bits may be SVE's predicate
 registers rather than NEON's, and a NEON-only host - Graviton2, Apple silicon
