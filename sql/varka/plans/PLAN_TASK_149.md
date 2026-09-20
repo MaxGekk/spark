@@ -163,3 +163,107 @@ ten-thousand-iteration fuzz run, which draws the int divisors; the width audit
 at 128 and 256 bits, and its CI run on the AVX2 runner; the bytes oracle; the
 two benchmark regenerations; then section 5 scored and 2.85 closed. Size:
 medium - a day, most of it the proof and the two regenerations.
+
+## 8. What was built, 20 September 2026
+
+**The lowering.** `VarkaLoopEmitter.emitMulHiDivide`, taken by an int-lane
+`ConstDivide` whenever `VarkaEmitOptions.mulHiDivide` is on - the default -
+and the width names a species to widen into, the same condition under which the
+conversion form could convert. The dividend is parked in one scratch slot and
+read three times: each int half widens with `I2L` into the long species of the
+same width, multiplies by the unsigned magic, shifts right arithmetically by
+`32 + s`, narrows with `L2I` into its own lanes; `or` rejoins the halves, the
+dividend's sign bit (`LSHR 31`) is added, and a negative divisor multiplies the
+result by -1. Eleven lane operations at most and no divide, as section 4
+counted. `signedMagic(d)` derives `(Mu, 32 + s)` by Hacker's Delight 10-6 at
+emit time, with the book's "add the dividend where the multiplier is negative"
+folded into the unsigned multiplier, which a 64-bit product makes exact. The
+long lane is untouched.
+
+**The option.** `mulHiDivide` is the twenty-fourth component of
+`VarkaEmitOptions`, on by default and rendered into `canonical()` like every
+other, so the conversion form is one flag away as the reference arm and two
+kernels differing only in it never share a shape hash. The fuzzer toggles it
+at random with every other boolean, so both forms are fuzzed from the day it
+lands.
+
+**The proof.** The plan's exhaustive script became an opt-in test instead,
+because the arithmetic under proof is Java's: `the multiply-high form is exact
+over every int32 dividend for every divisor in use (-Dvarka.sweep=true)`
+computes the emitted form as scalar longs for all 2^32 dividends against
+Java's `/`, for `12`, the fuzz grammar's `2 3 7 100 -3 -12`, and the `TIME`
+split form's `60` and `3600`. Beside it, the constants for `2 3 7 12 100` are
+pinned to the book's values, the kernel is checked against `evalValue` over the
+extremes and each divisor's multiples at five widths under both forms, and the
+op counts of both forms are registered: the multiply-high has four long-lane
+operations, four conversions and no double-lane one; the conversion form two
+double halves and four conversions.
+
+**The benchmarks.** The parity file's `extract(YEAR FROM ym)` block gains the
+conversion form as a case beside the shipped multiply-high, both against the
+scalar loop; `VarkaTimeBenchmark`'s seconds-of-day emitted arm becomes the
+multiply-high and the double route stays beside it as a fifth arm. Both files
+are regenerated at every width they carry.
+
+## 9. Outcome, 20 September 2026
+
+Regenerated on the laptop with every control flat (the parity file's scalar
+loop 3003.5 to 3045.7, and the year rows within 1.3%), the TIME file at all
+three widths, and the parity file at both.
+
+### 9.1 The numbers
+
+`extract(YEAR FROM ym)` in the parity file, M rows/s:
+
+| width | multiply-high (shipped) | conversion form (was shipped) | scalar loop |
+|---|---:|---:|---:|
+| 512-bit | 9057.5 | 3908.7 | 3045.7 |
+| 128-bit | 3330.8 | 2102.8 | 2851.5 |
+
+`VarkaTimeBenchmark`'s seconds-of-day arms, `hour` and the three fields, at the
+L2 rung:
+
+| width | shape | long conversion form | int multiply-high (shipped) | int double route | hand-written single multiply |
+|---|---|---:|---:|---:|---:|
+| 512-bit | `hour` | 4246.8 | 9132.7 | 3922.4 | 25167.4 |
+| 512-bit | all three | 1408.6 | 2978.9 | 1789.2 | 13086.3 |
+| 128-bit | `hour` | 2383.8 | 3610.4 | 2149.0 | 29205.0 |
+| 128-bit | all three | 765.6 | 1122.4 | 743.3 | 8304.1 |
+
+### 9.2 The predictions scored
+
+1. **Holds.** 2.32x at 512 bits, from 3897.6 to 9057.5, above the 7800 the
+   prediction named.
+2. **Holds on the done-when, misses the margin.** At 128 bits the kernel reads
+   3330.8 against the scalar loop's 2851.5 - 1.17x, not the 1.2x predicted,
+   and 1.58x its own conversion form. 2.85's done-when was a committed 128-bit
+   row on which the kernel is not slower than a plain loop; it is now faster.
+3. **Holds.** The int multiply-high overtakes the long conversion form on
+   `hour` in cache by 2.15x at 512 bits and 1.51x at 128, and sits 2.8x
+   below the hand-written single multiply at 512 bits, which pays no widening.
+4. **Not yet scorable.** The width audit (task 153, #264) is not on `master`
+   as this is written, so no run of it has seen this form on the AVX2 runner.
+   The catalyst shard that carries it will, on the first run after both merge;
+   the prediction stands.
+5. **Holds, at eleven.** Two widenings, two multiplies, two shifts, two
+   narrowings, an or, a shift and an add, registered by the op-count test; the
+   conversion form's seven stay registered as the reference arm's.
+
+Two things the run said that the predictions did not ask. The long conversion
+form did not move (4204.3 to 4246.8, within 1%), which is what leaving the
+long lane untouched should produce and is the control for the TIME file. And
+the int double route did not move either (3839.7 to 3922.4), which closes
+section 2 a second way: the broadcast it was accused of costs nothing.
+
+### 9.3 What this leaves
+
+* **Task 121's AVX2 numbers, now for two forms.** The audit's first CI run
+  found the 64-bit lane's converts refused at four lanes on the EPYC 7763; the
+  multiply-high's `MulVL` at four lanes is prediction 4, and the same shard
+  answers it.
+* **The bounded single multiply**, `PLAN_TASK_102.md` 8.4's `BoundedDivide`:
+  the hand-written arm is still 2.8x above this form where the dividend is
+  known small, because it neither widens nor narrows. `signedMagic` is its
+  unbounded sibling and the two share a family.
+* **Task 148's weight** for the int-lane `ConstDivide` is now eleven
+  operations against a registered one; the group budget still counts it as one.
