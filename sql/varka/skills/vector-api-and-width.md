@@ -924,3 +924,30 @@ committed rows said it beat a scalar loop by 1.3x at 512 bits and lost to it at
   `-Dvarka.bench.only` run of the one affected arm showed it changed nothing,
   and the line turned out to be C2's retried kind. The regeneration that would
   have blessed it was stopped before it started.
+
+## A masked store through two lanes costs the loop, not the mask; a half species keeps the loop
+
+Task 102's narrowed store writes an int column from long lanes: the kernel computes at the
+long species and stores each group's results as ints through a masked store, because the int
+species is twice as long as the long one and the group fills half of it. At 512 and 256 bits
+that costs 4% or less against the wide store. At two long lanes it cost 12% on `second` and
+18% on the three-field shape, and the direction was explained but not the size.
+
+The 128-bit assembly (`dev/varka_emit.sh --asm --width=16`, task 156) shows the difference
+is the loop, not the store instruction: the masked-store loop is not unrolled where the
+wide-store loop is, it carries the masked store's own bounds branch inside the loop, and it
+shifted the byte offset every iteration. The offset is a small part and its fix moved
+little. The rest is loop shape, and it is recovered by storing through the *half species* of
+the int lane - `IntVector.SPECIES_64` at two long lanes, `SPECIES_128` at four, `SPECIES_256`
+at eight - which is exactly one group wide, so the store is a plain store and the loop is the
+wide store's loop again. Measured (`PLAN_TASK_156.md` section 6): equal to the wide store
+within 3% at 512 and 256 bits, within 3% at 128 on `hour`, `minute` and `second`, 10% under
+on the three-field shape, and past L3 at the wide widths the fastest of the three stores,
+since it writes half the bytes with the wide store's loop. The residue at 128 bits on the
+three-field shape - three half-vector stores per two-row group - is what a per-store cost
+looks like when the lanes are too few to amortise it.
+
+The general lesson: when a narrower vector is needed for one instruction, prefer a species
+that is exactly as wide as the data over a wider species with a mask. The mask is not the
+expensive part; what it does to the loop around it is.
+
