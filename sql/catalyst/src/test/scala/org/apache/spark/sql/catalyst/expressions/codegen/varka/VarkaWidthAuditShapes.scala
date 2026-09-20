@@ -49,7 +49,8 @@ object VarkaWidthAuditShapes {
       numInputs: Int,
       numLiterals: Int,
       options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS) {
-    def lane: LaneType = roots.head.laneType()
+    /** The lane the kernel runs at: a narrowing root is an int computed in the long lane. */
+    def lane: LaneType = VarkaVectorIR.emissionLane(roots.head)
   }
 
   // The coverage table's columns, as `VarkaCoverageSuite` declares them.

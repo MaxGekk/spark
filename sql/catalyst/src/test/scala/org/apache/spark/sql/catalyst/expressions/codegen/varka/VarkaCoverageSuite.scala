@@ -227,6 +227,11 @@ class VarkaCoverageSuite extends SparkFunSuite {
         "DateTimeUtils reads them"),
       Row("time_trunc('MINUTE', t)"),
       Row("time_trunc('MILLISECOND', t2)"),
+      Row("hour(t)", "an int computed in the 64-bit lane and narrowed at the kernel's store, " +
+        "the one place a lane changes width until task 28; so the extract fuses as an output " +
+        "and declines under another expression"),
+      Row("minute(t2)"),
+      Row("second(t)"),
       Row("t + INTERVAL '0 00:00:00' DAY TO SECOND",
         "a zero interval on purpose: this fixture reaches both ends of the day, so any other " +
           "constant crosses midnight on some row, where Spark raises an error rather than a " +

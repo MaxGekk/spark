@@ -416,7 +416,8 @@ generates no `LONG` node and the new guard is fuzzed only at the int lane.
 ## 6.2 Sequencing, as it happened
 
 Steps 2, 4, 5 and 3 of 6.1 in that order: the table (#254), task 88 step 3
-(#255), group B, group A. Step 6 is next.
+(#255), group B, group A. Then group C's extracts by route A (section 8.6);
+group D and the split form remain.
 
 ## 8. Group C: the extracts, the narrowing store and the split form, planned
 
@@ -587,6 +588,96 @@ case.
    serves the calendar's own divisions as a node later.
 3. The split leaf and the cache encoding under item 11, when milestone 6 takes
    the representation question up; `make_time` with task 28 and 2.3.
+
+### 8.6 Outcome of route A, 20 September 2026
+
+Built as 8.3 planned it, in one PR, and the plan's account of the cost held:
+one node, one store, three compiler arms, nothing in the evaluator.
+
+**What landed.** `NarrowLane(child)` is in the IR as an `INT` value over a
+`LONG` child, refused over an int child where it is built. The emitter admits
+it at an output root and nowhere else, checked before the lane check so the
+refusal names the position; its value is the child's, its validity word is the
+child's, and its store is `convertShape(L2I)` into the int species of the same
+width followed by `intoMemorySegment` under `indexInRange(0, lanes)` at
+`i * 4`. No second int species, and an int mask rather than a long one, for the
+two reasons 8.3 gave. `hour(t)`, `minute(t)` and `second(t)` compile to the
+trees 8.3 wrote down, under a narrowing root, and a `TIME(3)` column reaches
+them through the widening cast group B already admitted.
+
+**One thing 8.3 did not name: the lane of a kernel is no longer its root's.**
+Every place that chose a species, a `run` overload or a buffer width had read
+`roots.head.laneType()`, and a narrowing root is the first node for which that
+is the wrong answer. `VarkaVectorIR.emissionLane` is the one accessor now, and
+the emitter, the compiler, the bytes oracle and the width audit ask it. The
+last two were found by the suites rather than by the search that fixed the
+first two, which `sql/varka/skills/emitter-and-ir.md` records as the lesson.
+
+**Three doors, all closed.** The emitter refuses an interior narrowing. The
+compiler declines it first: `compileRoot` carries an `atRoot` flag into the
+one place the node is made, so `hour(t) + 1` and `hour(t) = 12` decline with
+a reason that says the narrowing is the store's and names task 28, while the
+entry beside them fuses (`VarkaTimeArithmeticSuite` runs `hour(t) + 1` next to
+`minute(t)` and checks both answers). And the fuzzer's two reach tests name the
+node as deliberately out of reach, since the grammar composes nodes under nodes.
+
+**Tests, as 8.3 listed them.** Every second of the day at three precisions
+through both consumers against `LocalTime`; the narrowed store at two and eight
+lanes over every null pattern beside a wide root in the same kernel, with the
+store counted from the bytes (one masked `IntVector` store per narrowed root
+across the dense bodies, the same in the masked epilogue, nothing else on the
+int species); the refusals; the coverage rows; the compiler's trees. The
+reference evaluator answers a narrowing root in full and the suite narrows,
+so a value that did not fit an int would show as a difference rather than be
+truncated on both sides.
+
+**The census says the store is intrinsic at every width.** `width_audit.json`
+gained the three shapes at 128, 256 and 512 bits and C2 said nothing about any
+of them: the int-masked store lowers at two long lanes, where task 153 found
+every long mask refused, which is what the int-mask choice was for. Two
+unrelated rows moved in the same regeneration, a `missing constant` line
+appearing under `add_months(d, i)` at 128 bits and disappearing under
+`greatest(l, l2)` at 256; the census's own description calls that line a
+first late-inline attempt and not a verdict, and it flips between runs on this
+host, so the local census check is unstable on lines it should not record.
+That is a finding for the milestone, not this task's.
+
+**Predictions scored.**
+
+1. *`hour(t)` within 10% of the long conversion form at both widths.* **Held.**
+   `VarkaTimeBenchmark`, L2 rung, M rows/s, narrowed store against the wide
+   store of the same tree: 4078.7 against 4247.9 at 512 bits (4% under) and
+   2255.5 against 2380.7 at 128 bits (5% under). The narrowing changes the
+   store and not the divide, and the store is a small part of a divide-bound
+   kernel. Past L3 the two widths part: at 512 bits the narrowed `hour` reads
+   3277.3 against 2616.5, a quarter faster, since it writes half the bytes into
+   a memory-bound rung; at 128 bits it reads 1961.2 against 2280.1, 14% slower.
+2. *`minute` and `second` track the file's rows; the three together its
+   three-field row.* **Held at 512 bits, missed for the heavier shapes at 128.**
+   At 512 bits, L2 rung: `minute` 2171.5 against 2126.7, `second` 1416.0
+   against 1419.6, the three 1388.2 against 1407.4 - all within 2%; past L3 the
+   three read 1109.3 against 968.3. At 128 bits `minute` tracks (1149.3 against
+   1182.5) but `second` reads 678.8 against 773.2, 12% under, and the three
+   628.8 against 765.6, 18% under, at every rung. Two long lanes amortise the
+   per-group cost of the `L2I` and the masked store over two rows rather than
+   eight, which is the direction of the effect but does not by itself say why
+   `second` pays more than `hour`; the cause is not established here and is the
+   first question for the 128-bit row of this benchmark when `BoundedDivide`
+   (8.4) changes the divide's share.
+   The 256-bit file sits between the two: `hour` 4397.2 against 4740.7 at the
+   L2 rung (7% under) and 3343.4 against 2622.0 past L3; `second` 1418.4
+   against 1471.9 and the three 1347.1 against 1485.4 at L2.
+
+4. *No committed hash moves; three rows are added.* **Held exactly**: the
+   flattened-key diff of `emitted_bytes.json` shows the three rows at both
+   widths and no other key added, removed or changed - including the fuzz
+   blocks, which a node the grammar draws would have reshuffled and this one,
+   being root-only, does not.
+
+Prediction 3 (at least 15x against the row engine end to end) is not scored
+here: no committed benchmark runs a `TIME` expression through the whole
+engine against the row path, and this repository adds a baseline benchmark as
+its own PR before the change it measures. It stays open as a follow-up row.
 
 ## 9. Group D, read: the decimal is a store, and there is a group E
 

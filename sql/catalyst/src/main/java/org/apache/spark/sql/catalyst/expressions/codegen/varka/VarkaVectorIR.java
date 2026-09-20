@@ -59,7 +59,7 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate,
             VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.ConstDivide,
             VarkaVectorIR.Cond,
-            VarkaVectorIR.GuardedDay, VarkaVectorIR.GuardedRange {
+            VarkaVectorIR.GuardedDay, VarkaVectorIR.GuardedRange, VarkaVectorIR.NarrowLane {
 
   /**
    * The physical lane a node's value occupies: {@code INT} is a 32-bit lane, {@code LONG} a
@@ -97,6 +97,7 @@ public sealed interface VarkaVectorIR
       case DateDiff n -> LaneType.INT;
       case GuardedDay n -> LaneType.INT;
       case GuardedRange n -> n.child().laneType();
+      case NarrowLane n -> LaneType.INT;
       case DayOfWeek n -> LaneType.INT;
       case WeekDay n -> LaneType.INT;
       case DayOfWeekIso n -> LaneType.INT;
@@ -118,6 +119,17 @@ public sealed interface VarkaVectorIR
       case TruncDateDynamic n -> LaneType.INT;
       case WeekOfYear n -> LaneType.INT;
     };
+  }
+
+  /**
+   * The lane an emission with this root drives its loop at. It is the root's own lane for every
+   * node but {@link NarrowLane}, whose value is a 32-bit lane computed in a 64-bit one: the
+   * loop runs at the child's species and the root narrows at its store. The emitter, its
+   * budget mirror and the compiled plan all read this rather than {@link #laneType()} when
+   * they ask which species a kernel is, so the three cannot disagree about it.
+   */
+  static LaneType emissionLane(VarkaVectorIR root) {
+    return root instanceof NarrowLane n ? n.child().laneType() : root.laneType();
   }
 
   /**
@@ -301,6 +313,33 @@ public sealed interface VarkaVectorIR
       if (lo > hi) {
         throw new IllegalArgumentException("an empty range guards nothing: [" + lo + ", " + hi
             + "]");
+      }
+    }
+  }
+
+  /**
+   * {@code (int) child}: a value computed in 64-bit lanes, delivered as a 32-bit column. The
+   * {@code TIME} extracts are the first case - {@code hour(t)} is a division of nanoseconds of
+   * day whose quotient is an {@code IntegerType} (task 102 group C, {@code PLAN_TASK_102.md}
+   * 8.3) - and the node is task 28's, admitted ahead of that task's bi-lane kernel under one
+   * restriction the emitter enforces: it may only be an <b>output root</b>. The loop then
+   * still runs at one species, the child's, and the root narrows once, at its store, into a
+   * four-byte-per-row destination under a mask of the low half of the int lanes. Task 28
+   * lifts the restriction rather than adding a node.
+   *
+   * <p>The narrowing is a truncation of the low 32 bits, with no overflow check: the compiler
+   * builds it only over values it has proven to fit - a field of a time is at most 86399 - and
+   * Spark's own {@code CAST(bigint AS int)}, which needs the ANSI decline, is task 28's to
+   * build over the same node with a guard.
+   *
+   * <p>The child must be on the long lane: a narrowing of an int lane is the identity and
+   * would only hide a missing widening somewhere below it.
+   */
+  record NarrowLane(VarkaVectorIR child) implements VarkaVectorIR {
+    public NarrowLane {
+      if (child.laneType() != LaneType.LONG) {
+        throw new IllegalArgumentException("narrowLane takes a LONG child, not "
+            + child.laneType() + ", from a " + child.getClass().getSimpleName());
       }
     }
   }
@@ -787,6 +826,7 @@ public sealed interface VarkaVectorIR
       case GuardedDay n -> "(guardedDay " + canonical(n.days()) + ")";
       case GuardedRange n -> "(guardedRange " + canonical(n.child()) + " " + n.lo() + " "
           + n.hi() + ")";
+      case NarrowLane n -> "(narrow " + canonical(n.child()) + ")";
       case DateDiff n -> "(dateDiff " + canonical(n.end()) + " " + canonical(n.start()) + ")";
       case Compare n ->
           "(cmp:" + n.op().name() + " " + canonical(n.left()) + " " + canonical(n.right()) + ")";
@@ -857,6 +897,7 @@ public sealed interface VarkaVectorIR
       case GuardedDay n -> "(guardedDay " + lineOf.applyAsInt(n.days()) + ")";
       case GuardedRange n -> "(guardedRange " + lineOf.applyAsInt(n.child()) + " " + n.lo()
           + " " + n.hi() + ")";
+      case NarrowLane n -> "(narrow " + lineOf.applyAsInt(n.child()) + ")";
       case DateDiff n -> "(dateDiff " + lineOf.applyAsInt(n.end()) + " "
           + lineOf.applyAsInt(n.start()) + ")";
       case Compare n -> "(cmp:" + n.op().name() + " " + lineOf.applyAsInt(n.left()) + " "

@@ -49,6 +49,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     intLit,
     new GuardedDay(intCol),
     new GuardedRange(intCol, -10, 10),
+    // An int by value over a long child: the one node whose own lane is not its child's.
+    new NarrowLane(longCol),
     new AddDays(intCol, intLit),
     new SubDays(intCol, intLit),
     new DateDiff(intCol, intCol),
@@ -181,6 +183,9 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     val calendarNodes = everyIntNode
       .filterNot(n => n.isInstanceOf[ColumnRef] || n.isInstanceOf[LiteralSlot])
       .filterNot(n => derivesItsLane.contains(n.getClass))
+      // The narrowing is INT by construction too, but over a long child rather than over epoch
+      // days; what it refuses is an int child, which the narrowing test below pins.
+      .filterNot(_.isInstanceOf[NarrowLane])
       .map(_.getClass.getSimpleName.toLowerCase(Locale.ROOT))
       .toSet
     assert(calendarNodes -- covered === Set.empty[String],
@@ -302,6 +307,10 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
         case "IfElse" => new IfElse(new IsNotNull(c), c, c1)
         case "GuardedDay" => new GuardedDay(c)
         case "GuardedRange" => new GuardedRange(c, -10, 10)
+        // Always over a long child, whatever `lane` says: the node is an int value computed in
+        // the long lane, so it is the one type that reaches the emitter from both rows below
+        // and is emitted at the long species either way.
+        case "NarrowLane" => new NarrowLane(new ColumnRef(0, LaneType.LONG))
         case "AddDays" => new AddDays(c, l)
         case "SubDays" => new SubDays(c, l)
         case "DateDiff" => new DateDiff(c, c1)
@@ -348,8 +357,33 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     // The subset PLAN_TASK_85.md 3.1 names, and nothing else: a calendar node at the long lane
     // is refused by its constructor, which is why it never reaches the emitter.
     assert(atLong === Set("ColumnRef", "LiteralSlot", "IntArith", "IntNeg", "Greatest", "Least",
-      "Compare", "And", "Or", "Not", "IsNotNull", "IfElse", "ConstDivide", "GuardedRange"),
-      "the long lane serves the lane-generic subset, task 88's division and task 102's guard")
+      "Compare", "And", "Or", "Not", "IsNotNull", "IfElse", "ConstDivide", "GuardedRange",
+      "NarrowLane"),
+      "the long lane serves the lane-generic subset, task 88's division, task 102's guard and " +
+        "its narrowing root")
+  }
+
+  test("a narrowing is an int over a long child, emitted at the long lane, and a root only") {
+    // `PLAN_TASK_102.md` 8.3: the TIME extracts compute a 64-bit division and deliver an int,
+    // and until task 28 gives the emitter a width conversion the only place a lane changes
+    // width is a root's store. So the node answers INT for its value and LONG for the lane it
+    // is emitted at, refuses an int child where it is built (there is nothing to narrow), and
+    // the emitter refuses it under another node - where its 32-bit value would meet a 64-bit
+    // computation - with a reason that names the position, ahead of the lane mix it implies.
+    val narrowed = new NarrowLane(longCol)
+    assert(narrowed.laneType() === LaneType.INT)
+    assert(VarkaVectorIR.emissionLane(narrowed) === LaneType.LONG)
+    assert(VarkaVectorIR.emissionLane(longCol) === LaneType.LONG)
+    assert(VarkaVectorIR.emissionLane(intCol) === LaneType.INT)
+    assert(VarkaVectorIR.canonical(narrowed) === s"(narrow ${VarkaVectorIR.canonical(longCol)})")
+    val overInt = intercept[IllegalArgumentException](new NarrowLane(intCol))
+    assert(overInt.getMessage.contains("narrowLane takes a LONG child"), overInt.getMessage)
+    val interior = new IntArith(IntOp.ADD, Overflow.WRAP, narrowed, intLit)
+    val belowRoot = intercept[IllegalArgumentException] {
+      VarkaLoopEmitter.emit("VarkaInteriorNarrowKernel", Seq[VarkaVectorIR](interior).asJava,
+        1, 1, null, null, VarkaEmitOptions.DEFAULTS)
+    }
+    assert(belowRoot.getMessage.contains("an output root only"), belowRoot.getMessage)
   }
 
   test("a baked lane count has both a species constant and a validity helper pair") {

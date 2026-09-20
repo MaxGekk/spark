@@ -366,6 +366,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
           value(x.year(), Kind.INT); value(x.month(), Kind.INT); value(x.day(), Kind.INT)
         case x: GuardedDay => value(x.days(), Kind.DAY)
         case x: GuardedRange => value(x.child(), kind)
+        case x: NarrowLane => value(x.child(), kind)
         case x: Greatest => value(x.left(), kind); value(x.right(), kind)
         case x: Least => value(x.left(), kind); value(x.right(), kind)
         case x: IfElse => cond(x.cond()); value(x.thenNode(), kind); value(x.elseNode(), kind)
@@ -431,6 +432,8 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite {
           go(x.days(), armed)
       case x: GuardedRange =>
         within(v(x.child()), x.lo(), x.hi()) && go(x.child(), armed)
+      // The narrowing changes no value and admits whatever its child admits.
+      case x: NarrowLane => go(x.child(), armed)
       case x: AddMonths =>
         within(v(x.days()), VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS) &&
           (x.months().isInstanceOf[LiteralSlot] || within(v(x.months()),

@@ -604,6 +604,27 @@
     "catalyst" : [ "TimeTrunc" ],
     "note" : ""
   }, {
+    "sql" : "hour(t)",
+    "executable" : "hour(t)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "HoursOfTime" ],
+    "note" : "an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until task 28; so the extract fuses as an output and declines under another expression"
+  }, {
+    "sql" : "minute(t2)",
+    "executable" : "minute(t2)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "MinutesOfTime" ],
+    "note" : ""
+  }, {
+    "sql" : "second(t)",
+    "executable" : "second(t)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "SecondsOfTime" ],
+    "note" : ""
+  }, {
     "sql" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
     "executable" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
     "family" : "Time arithmetic",
