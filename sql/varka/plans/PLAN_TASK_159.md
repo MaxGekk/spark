@@ -1,0 +1,168 @@
+# Task 159: refactor for readability, with the bytes oracle as the proof
+
+*Opened 20 September 2026 from the owner's review of the week's pull requests:
+some classes are long enough that a reader cannot hold them, and the project
+is about to be read by outsiders. The plan names the seams file by file, states
+one acceptance test for every step, and orders the steps by value per risk.*
+
+## 1. Why now, and what it costs today
+
+The sizes on master (lines): `VarkaLoopEmitter.java` 6860 with 86 methods,
+`VarkaExpressionCompiler.scala` 2211, `ArrowCachedBatchSerializer.scala` 1775,
+`VarkaKernelEvaluator.scala` 1527; among the tests `VarkaLoopEmitterSuite.scala`
+5297. The emitter's largest units are one record of 790 lines, `emitBody` at 284,
+`emitValue` at 248 and `planSlots` at 245; the compiler's `compileNode` is one
+match of 478 lines.
+
+The cost is not abstract. Two nodes were added this week, `NarrowLane` (#268)
+and `BoundedDivide` (#274), and each touched about twelve sites in the emitter
+- `childrenOf`, two word-owner maps, `analyze`, the word reference, two
+liveness switches, `emitValue` - plus the IR, the range lattice, the reference
+evaluator, the grammar and three suites. Two of those sites were found by a
+clean compile after the incremental build had passed, one by the emitter's own
+liveness invariant, one by the fuzzer. `PLAN_MILESTONE_5.md` 2.13 measured the
+same thing for task 63 and drew the rule that the expensive decision is the one
+farthest from an exhaustive match. `VarkaEmitOptions` shows the other pattern:
+24 components and 24 copy methods that each spell all 24 arguments, so adding a
+component is an edit to 23 calls.
+
+## 2. The acceptance test, stated once
+
+Every step is a refactor in the strict sense: no emitted byte changes. The
+repository already has the instrument, and it is the reason this task is safe
+to do at all.
+
+- `sql/varka/emitted_bytes.json` does not move: not a coverage key, not a fuzz
+  block, at either width. Checked by the flattened-key diff the emitter lesson
+  describes, not by the suite's pass alone.
+- No shape hash moves: `VarkaShapeCacheSuite`'s committed hashes and
+  `VarkaEmitOptions.canonical()` render as before.
+- No committed results file, band file or provenance changes; no benchmark is
+  rerun for a refactor, since the bytes prove the kernel is the same.
+- The full Varka suites of `catalyst` and `core` pass, `dev/scalastyle`,
+  `dev/lint-java` where it applies, the quote check and the docs check pass,
+  and `docs/sql-varka.md` does not change except where a step moves a
+  documented name.
+- Every moved member keeps its comment, and every new file opens with the
+  comment that says what it is for, per the house rule for new readers.
+
+A step whose oracle diff is not empty is not a refactor and stops until the
+difference is explained in the step's PR.
+
+## 3. The steps
+
+### 3.1 `VarkaEmitOptions` as a record with a builder (small)
+
+`toBuilder()` returning a mutable builder with one setter per component and
+`build()` calling the canonical constructor, replacing the 24 `with*` copy
+methods; the callers' `withX(v)` become `toBuilder().x(v).build()` or keep thin
+`withX` wrappers that delegate. `canonical()` renders the components by walking
+the record's components in declaration order, which is what
+`VarkaShapeCacheSuite` already asserts each component can change. The
+rendering string for every existing value is byte-identical, which the shape
+hashes prove.
+
+### 3.2 `VarkaLoopEmitter` split by its own phases (large; one PR per seam)
+
+The file's section headers are the plan. In order of least entanglement:
+
+1. **The lane and the descriptor table** (lines around 474 to 1160 on master):
+   `Lane`, the descriptor constants, `speciesField`, `emitLanes`, the
+   validity-helper naming, into `VarkaLane.java`. Package-private; the emitter
+   keeps calling them by the same names.
+2. **The weights and budgets** (around 266): the calendar op weights,
+   `GROUP_BUDGET`, `FUSED_CEILING`, `fitsBudgets`' arithmetic, into
+   `VarkaEmitBudget.java`.
+3. **The analysis** (around 1703 to 2538): `Analysis` with the validation, the
+   DAG walk, the word algebra, the bitmap pass, the fragment keys, into
+   `VarkaEmitAnalysis.java`, with the 790-line record broken into the passes
+   it already runs in sequence (`analyzeRoot`, `collectArmContexts`,
+   `collectGuardedProducers`, `planWordAlgebra`, `planBitmapPass`).
+4. **Slot planning** (around 2539 to 3314): `Slots` and `planSlots` into
+   `VarkaSlotPlan.java`.
+5. **The lowerings by family** (from around 4270): the calendar family
+   (`emitChronoPrefix`, `emitAddMonths`, `emitMakeDate`, `emitPick`, the
+   `ChronoDivide` forms) into `VarkaChronoLowering.java`; the division family
+   (`emitConstDivide`, the magic and multiply-high forms, `emitBoundedDivide`,
+   `Divider`) into `VarkaDivisionLowering.java`; the stores, wide and narrowed,
+   with the body emitters.
+6. **The body emitters** (around 3315 to 4269): `emitBody`, `emitLaneGroup`,
+   the prologue, loop and epilogue, the driver, into `VarkaBodyEmitter.java`,
+   which is what remains of the class besides the facade.
+
+`VarkaLoopEmitter` keeps `emit`, `fitsBudgets`, `bitmapPassCounts` and the
+class-level javadoc that explains the whole, and becomes the map a reader
+starts from. Each PR moves one seam and nothing else; a move that needs a
+signature change to cross the new file boundary makes it, and the oracle says
+whether anything else moved.
+
+### 3.3 `VarkaLoopEmitterSuite` into suites by family (medium)
+
+A `VarkaEmitterTestBase` trait holding `emitMulti`, `load`, `checkMatrix`,
+`checkLongMatrix`, the input and output builders and the null patterns; the
+tests move into `VarkaEmitterArithmeticSuite`, `VarkaEmitterChronoSuite`,
+`VarkaEmitterDivisionSuite`, `VarkaEmitterLongLaneSuite`,
+`VarkaEmitterValiditySuite` and `VarkaEmitterBudgetSuite`, each opening with
+what its family is. The tests do not change; a targeted run stops paying for
+the whole file.
+
+### 3.4 `VarkaExpressionCompiler` by expression family, with task 86 (medium)
+
+`compileNode`'s match and `compileTime` become one object per family - the date
+calendar, the year-month intervals, the long lane and `TIME`, the predicates -
+over the shared `DeclineSink`, `compilePartial` and the tables. Task 86's one
+operand-admission table lands here, since it is the thing the families share,
+and its first exercise (a bare int column in comparison position) comes with
+it. In Scala: the split is not the moment to port, and no PR of this task
+changes structure and language at once; a family at a time can be ported after,
+against the same oracle.
+
+### 3.5 `VarkaKernelEvaluator` by responsibility (medium)
+
+The Arrow admission (`isArrowBacked` and its vector-class table), the output
+allocation, the derived-input fills, the run loop with its metrics, and the
+compaction, each its own file behind the evaluator that composes them.
+
+### 3.6 `ArrowCachedBatchSerializer` one class per file (small)
+
+The five iterators and the shared `ArrowColumnReader` into files of their own,
+the serializer keeping the entry points.
+
+### 3.7 One place per node (large; last)
+
+Task 2.13's finding made a rule; this step makes it structure. Each IR node's
+emitter knowledge - its children, its word rule (own, child's, pure), its
+value emission, its range rule - in one class behind a sealed interface, so
+that adding a node is one class and the compiler still refuses a missing part.
+The thirteen switches over the IR become one dispatch. It goes last because
+3.2 has to make the sites visible first, and because it is the one step that
+changes how the emitter is read rather than where.
+
+## 4. What this task does not do
+
+No behaviour changes, no lowering changes, no option default changes, however
+tempting a nearby improvement looks; those are rows of their own and a refactor
+PR that carries one cannot be proved by the oracle. No member reordering beyond
+the move itself. No port to Java inside a split. No renaming of the public
+entry points the evaluator and the tests call.
+
+## 5. Sequencing and size
+
+3.1, then 3.2 seam by seam, then 3.3, 3.4 with 86, 3.5, 3.6, 3.7. The first two
+are the ones the week's work argued for; 3.1 is an afternoon and a good first
+PR, 3.2 is the bulk. Every step waits for the pull requests open at the time of
+writing (#267 to #275) to merge, since each of them touches the emitter or the
+compiler and a move under an open change is a conflict for both.
+
+## 6. Risks
+
+- **History.** A moved method loses `git blame` continuity; the plans and
+  `SKILLS.md` carry the history, and a move commit names the source file.
+- **Visibility.** `private static` becomes package-private across the new
+  files; nothing outside the package gains access, and the test support class
+  already lives in the package.
+- **The per-node step.** One class per node can hide a cross-cutting rule (the
+  word algebra reads several nodes at once); 3.7 keeps such passes as passes
+  and moves only what is genuinely per node.
+- **Open work.** Anything in flight against the emitter has to land or rebase;
+  section 5 sequences for it.

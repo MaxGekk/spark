@@ -3475,6 +3475,23 @@ rules - and five rows for the `TIME` surface at group B's price. The same change
 gives the two decimal expressions of group D the decline section 2.3 asked for,
 naming the Arrow representation rather than saying the expression is not
 lowered yet.
+### 2.95 Refactor for readability, with the bytes oracle as the proof (task 159)
+
+*Opened 20 September 2026 from the owner's review of the week's pull requests.*
+
+The classes a newcomer opens first are the longest: the emitter at 6860 lines
+and 86 methods, the compiler at 2211 with one 478-line match, the cache
+serializer at 1775, the evaluator at 1527, and the emitter's suite at 5297.
+Adding a node this week touched about twelve emitter sites each time, and two
+of them were found only by a clean compile. The task splits each file along the
+seams it already draws - the emitter by its five phases, the compiler by
+expression family (where task 86's one operand admission lands), the evaluator
+by responsibility, the suite by family, the serializer one class per file - and
+ends with one place per IR node, which is 2.13's rule made structure. What makes
+it safe is the instrument the project already has: a step is a refactor exactly
+when `emitted_bytes.json` and the shape hashes do not move, so no benchmark is
+rerun and no behaviour can change unnoticed. `PLAN_TASK_159.md` names the seams
+and the order; every step waits for the pull requests open at the time to merge.
 
 ## 3. Task breakdown
 
@@ -3661,6 +3678,7 @@ can start has.
 | 156 | The narrowed store costs 12% to 18% at two 64-bit lanes on `second` and the three-field shape, where `hour` and `minute` are within 5% and every shape is within 4% at 512 bits (section 2.92). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.6: the direction is explained by the per-group cost over two rows, the shape dependence is not | The cause from the JVM's own output - the 128-bit assembly of the narrowed body against the wide one, `PrintIntrinsics` for the `L2I` and the masked store at `vlen=2` - and either the cost accepted with the cause recorded or the cheaper store it points to, re-measured on `VarkaTimeBenchmark`'s 128-bit file | The 128-bit narrowed rows within 5% of the wide rows on every shape, or the cause written in the plan and the census |
 | 157 | The widening store: a decimal output is sixteen bytes a row (section 2.93). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` section 9: every `TIME` decimal is an unscaled long in the lane the family already uses, and the column is the only blocker | A root-only `WidenDecimal` node whose store writes the value word and its sign extension per sixteen-byte slot; a `DecimalVector` destination in the evaluator; `second(t)` with its fraction and `time_to_seconds` lowered through it; measured against the evaluator widening a long output in a scalar loop, which is the baseline; the fraction's unscaled-long form checked against the row engine's `Double` round trip over every nanosecond of a minute | Both expressions agree with the row engine over every second of the day through both consumers; the store beats the scalar widening on `VarkaTimeBenchmark`'s ladder or the plan says by how much it does not |
 | 158 | Group E: the five `time_to_*`/`time_from_*` conversions the table does not know, and the two decimal declines that do not name their reason (section 2.94). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 9.3 | The five in `timeTargets` and the compiler as group B's shapes, with the conversion's overflow and day-range rules read before choosing a guard or a checked multiply; the table's completeness guard widened to the registry's `TIME` functions; `second` with fraction and `time_to_seconds` declining by name with the Arrow representation as the reason | Five new coverage rows fusing; every `TIME` function in the registry either lowers or declines by name, which the coverage suite states |
+| 159 | Refactor for readability: the emitter split by its phases, the compiler by expression family, the evaluator by responsibility, the emitter suite by family, the serializer one class per file, the options as a builder, and last one place per IR node (section 2.95). **Scoped** (20 September 2026) from the owner's review; after the pull requests open at the time (#267 to #275) merge | One PR per seam, each a pure move, in `PLAN_TASK_159.md`'s order: options builder, the emitter's six seams, the suite, the compiler with task 86, the evaluator, the serializer, the per-node dispatch | `emitted_bytes.json` and the shape hashes unchanged at every step, checked by the flattened-key diff; no results file, band or docs table moves; every new file opens with its purpose |
 
 ## 4. Files
 
