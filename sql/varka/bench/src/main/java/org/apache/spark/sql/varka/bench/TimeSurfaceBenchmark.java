@@ -1,0 +1,38 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.spark.sql.varka.bench;
+
+import java.io.IOException;
+
+/**
+ * The {@code TIME} surface: {@link Times#ENTRIES} over {@code varka_times}, through the same
+ * driver as the date surface, so the canary, the residency guard, the fixed-share rule, the
+ * {@code EXPLAIN} check and the provenance block apply unchanged. Selected by
+ * {@code dev/varka_bench_surface.sh --benchmark time}; its files are
+ * {@code sql/varka/bench/benchmarks/TimeSurface-<label>-results.txt}
+ * (PLAN_MILESTONE_5.md 2.40, PLAN_TASK_105.md).
+ */
+public final class TimeSurfaceBenchmark {
+
+  public static void main(String[] argv) throws IOException {
+    DateSurfaceBenchmark.run(argv, Times.ENTRIES, "time", "VarkaTimeSurface",
+        DateSurfaceBenchmark.TableShape.TIMES);
+  }
+
+  private TimeSurfaceBenchmark() {}
+}

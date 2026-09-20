@@ -239,7 +239,9 @@ if *any* batch of a row expected to fuse fell back to the row engine - not merel
 all of them did, because a partial decline publishes a rate blended from kernel and
 row-engine batches, which looks like a kernel rate and is not one.
 
-`--benchmark surface` runs the coverage list instead. The script refuses a run
+`--benchmark surface` runs the coverage list instead, and `--benchmark time` the
+`TIME` surface over its own table (the type is switched on for every arm by the
+driver, so the recipe above needs no extra flag). The script refuses a run
 whose cached table did not stay in memory or whose per-row fixed cost exceeds 5%
 of wall time, so a result that survives is one worth reading; it records the
 datapath probe and the machine in every file it writes. Sizes are for a 16 GiB

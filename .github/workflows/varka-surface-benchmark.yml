@@ -83,6 +83,7 @@ on:
         options:
           - 'surface'
           - 'chains'
+          - 'time'
       shard:
         type: string
         description: 'I/N - run entries I, I+N, I+2N of the surface, so N dispatches cover it once. For the row count the fixed-share rule wants, the whole surface does not fit one job. Merge with dev/varka_bench_merge.py. See PLAN_TASK_62.md 11.11.'
@@ -396,7 +397,7 @@ jobs:
         git config --local user.name "${{ github.actor }}"
         git config --local user.email "${{ github.actor }}@users.noreply.github.com"
         git add sql/varka/bench/benchmarks
-        git commit -m "Varka date ${{ inputs.benchmark }} results (${{ inputs.rows }} rows)"
+        git commit -m "Varka ${{ inputs.benchmark }} benchmark results (${{ inputs.rows }} rows)"
         for i in {1..5}; do
           git fetch origin ${{ github.ref_name }}
           git rebase origin/${{ github.ref_name }}
