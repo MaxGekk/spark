@@ -43,6 +43,14 @@ final class BenchSession {
     return spark;
   }
 
+  /** The same session with the {@code varka_times} table built beside {@code varka_dates}. */
+  static SparkSession startWithTimes(String appName) {
+    SparkSession spark = start(appName);
+    DateSurfaceBenchmark.buildTable(spark, 1_000L, 2, StorageLevel.MEMORY_ONLY(),
+        DateSurfaceBenchmark.TableShape.TIMES);
+    return spark;
+  }
+
   static void stop(SparkSession spark) {
     if (spark != null) {
       spark.stop();
