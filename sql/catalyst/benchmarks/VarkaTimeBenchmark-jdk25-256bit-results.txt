@@ -1,311 +1,311 @@
 Narrow-width companion of VarkaTimeBenchmark-jdk25-results.txt: the same benchmark under
 -XX:MaxVectorSize=32 (256-bit lanes), written by dev/varka_bench_regen.sh.
   benchmark:   org.apache.spark.sql.VarkaTimeBenchmark
-  commit:      78810106aab (working tree dirty)
-  date:        2026-09-20T07:28:01Z
+  commit:      99ad0594811 (working tree dirty)
+  date:        2026-09-20T11:54:23Z
   jdk:         OpenJDK Runtime Environment (build 25.0.4+7-1-26.04-Ubuntu)
   kernel:      7.0.0-31-generic
   cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
   power:       governor=performance epp=performance profile=performance
   pinned to:   taskset -c 0,12,13,14,15,1,2,3
-  load at start: 0.86
-  canary:      ok (compute +0.1% cache +3.3% memory -1.5% )
+  load at start: 0.37
+  canary:      ok (compute +0.2% cache +4.5% memory -1.5% )
   wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaTimeBenchmark
   narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=32"' "Test/runMain org.apache.spark.sql.VarkaTimeBenchmark"
 
 Running benchmark: TIME extracts over 16384 rows - both forms in L2
   Running case: hour: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 562536 iterations, 2000 ms
+  Stopped after 558380 iterations, 2000 ms
+  Running case: hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 505867 iterations, 2000 ms
   Running case: hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 365683 iterations, 2000 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 939066 iterations, 2000 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 505180 iterations, 2000 ms
+  Stopped after 363485 iterations, 2000 ms
+  Running case: hour: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 505007 iterations, 2000 ms
   Running case: hour: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 3285493 iterations, 2000 ms
+  Stopped after 3246527 iterations, 2000 ms
   Running case: minute: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 279993 iterations, 2000 ms
+  Stopped after 281930 iterations, 2000 ms
+  Running case: minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 271816 iterations, 2000 ms
   Running case: minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 111917 iterations, 2000 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 319427 iterations, 2000 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 186453 iterations, 2000 ms
+  Stopped after 111835 iterations, 2000 ms
+  Running case: minute: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 182566 iterations, 2000 ms
   Running case: minute: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 2577379 iterations, 2000 ms
+  Stopped after 2576535 iterations, 2000 ms
   Running case: second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 180277 iterations, 2000 ms
+  Stopped after 177293 iterations, 2000 ms
+  Running case: second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 167971 iterations, 2000 ms
   Running case: second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 55713 iterations, 2000 ms
-  Running case: second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 291440 iterations, 2000 ms
-  Running case: second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 175713 iterations, 2000 ms
+  Stopped after 55710 iterations, 2000 ms
+  Running case: second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 175873 iterations, 2000 ms
   Running case: second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 1907909 iterations, 2000 ms
+  Stopped after 1942256 iterations, 2000 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 179404 iterations, 2000 ms
+  Stopped after 177920 iterations, 2000 ms
+  Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 159247 iterations, 2000 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 54356 iterations, 2000 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 285590 iterations, 2000 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 172231 iterations, 2000 ms
+  Stopped after 54290 iterations, 2000 ms
+  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 170595 iterations, 2000 ms
   Running case: hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 1849445 iterations, 2000 ms
+  Stopped after 1862020 iterations, 2000 ms
   Running case: the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide
-  Stopped after 524832 iterations, 2000 ms
+  Stopped after 524880 iterations, 2000 ms
   Running case: floor: nanoseconds of day copied, int64 lanes
-  Stopped after 1617867 iterations, 2000 ms
+  Stopped after 1643463 iterations, 2000 ms
   Running case: floor: seconds of day copied, int32 lanes
-  Stopped after 3081041 iterations, 2000 ms
+  Stopped after 3090446 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 TIME extracts over 16384 rows - both forms in L2:                                                     Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  0              0           0       4699.9           0.2       1.0X
-hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             0              0           0       3034.1           0.3       0.6X
-hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                     0              0           0       8475.9           0.1       1.8X
-hour: seconds of day, int32 lanes, emitted (the double route it replaced)                                         0              0           0       4246.8           0.2       0.9X
-hour: seconds of day, int32 lanes, hand-written magic multiply                                                    0              0           0      36408.9           0.0       7.7X
-minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       2336.2           0.4       0.5X
-minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           0              0           0        922.9           1.1       0.2X
-minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   0              0           0       2650.7           0.4       0.6X
-minute: seconds of day, int32 lanes, emitted (the double route it replaced)                                       0              0           0       1545.8           0.6       0.3X
-minute: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      22724.0           0.0       4.8X
-second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       1512.8           0.7       0.3X
-second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           0              0           0        459.2           2.2       0.1X
-second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   0              0           0       2415.8           0.4       0.5X
-second: seconds of day, int32 lanes, emitted (the double route it replaced)                                       0              0           0       1451.1           0.7       0.3X
-second: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      16516.1           0.1       3.5X
-hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  0              0           0       1511.4           0.7       0.3X
-hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                             0              0           0        447.9           2.2       0.1X
-hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                     0              0           0       2370.4           0.4       0.5X
-hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)                         0              0           0       1433.3           0.7       0.3X
-hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    0              0           0      16205.7           0.1       3.4X
-the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              0              0           0       4455.8           0.2       0.9X
-floor: nanoseconds of day copied, int64 lanes                                                                     0              0           0      15723.6           0.1       3.3X
-floor: seconds of day copied, int32 lanes                                                                         0              0           0      34133.3           0.0       7.3X
+hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  0              0           0       4740.7           0.2       1.0X
+hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                  0              0           0       4397.2           0.2       0.9X
+hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             0              0           0       3017.3           0.3       0.6X
+hour: seconds of day, int32 lanes, emitted (the double route)                                                     0              0           0       4225.9           0.2       0.9X
+hour: seconds of day, int32 lanes, hand-written magic multiply                                                    0              0           0      35617.4           0.0       7.5X
+minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       2329.6           0.4       0.5X
+minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                0              0           0       2306.6           0.4       0.5X
+minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           0              0           0        922.4           1.1       0.2X
+minute: seconds of day, int32 lanes, emitted (the double route)                                                   0              0           0       1518.4           0.7       0.3X
+minute: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      23043.6           0.0       4.9X
+second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       1471.9           0.7       0.3X
+second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                0              0           0       1418.4           0.7       0.3X
+second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           0              0           0        459.1           2.2       0.1X
+second: seconds of day, int32 lanes, emitted (the double route)                                                   0              0           0       1451.1           0.7       0.3X
+second: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      16684.3           0.1       3.5X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  0              0           0       1485.4           0.7       0.3X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                  0              0           0       1347.1           0.7       0.3X
+hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                             0              0           0        447.8           2.2       0.1X
+hour, minute, second: seconds of day, int32 lanes, emitted (the double route)                                     0              0           0       1420.9           0.7       0.3X
+hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    0              0           0      15891.4           0.1       3.4X
+the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              0              0           0       4443.7           0.2       0.9X
+floor: nanoseconds of day copied, int64 lanes                                                                     0              0           0      15442.0           0.1       3.3X
+floor: seconds of day copied, int32 lanes                                                                         0              0           0      32768.0           0.0       6.9X
 Running benchmark: TIME extracts over 262144 rows - both forms in L3
   Running case: hour: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 35127 iterations, 2000 ms
+  Stopped after 34272 iterations, 2000 ms
+  Running case: hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 31965 iterations, 2000 ms
   Running case: hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 22715 iterations, 2000 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 60227 iterations, 2000 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 31643 iterations, 2000 ms
+  Stopped after 22255 iterations, 2000 ms
+  Running case: hour: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 32179 iterations, 2000 ms
   Running case: hour: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 135714 iterations, 2000 ms
+  Stopped after 139435 iterations, 2000 ms
   Running case: minute: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 17696 iterations, 2000 ms
+  Stopped after 16884 iterations, 2000 ms
+  Running case: minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 17026 iterations, 2000 ms
   Running case: minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 6994 iterations, 2000 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 19826 iterations, 2000 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 11610 iterations, 2000 ms
+  Stopped after 6898 iterations, 2000 ms
+  Running case: minute: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 11540 iterations, 2000 ms
   Running case: minute: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 125411 iterations, 2000 ms
+  Stopped after 129233 iterations, 2000 ms
   Running case: second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 11265 iterations, 2000 ms
+  Stopped after 10663 iterations, 2000 ms
+  Running case: second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 10441 iterations, 2000 ms
   Running case: second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 3487 iterations, 2000 ms
-  Running case: second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 18108 iterations, 2000 ms
-  Running case: second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 10935 iterations, 2000 ms
+  Stopped after 3441 iterations, 2000 ms
+  Running case: second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 11037 iterations, 2000 ms
   Running case: second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 111787 iterations, 2000 ms
+  Stopped after 118933 iterations, 2000 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 10403 iterations, 2000 ms
+  Stopped after 10550 iterations, 2000 ms
+  Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 9947 iterations, 2000 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 3346 iterations, 2000 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 17616 iterations, 2000 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 10777 iterations, 2000 ms
+  Stopped after 3360 iterations, 2000 ms
+  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 10599 iterations, 2000 ms
   Running case: hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 58960 iterations, 2000 ms
+  Stopped after 59017 iterations, 2000 ms
   Running case: the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide
-  Stopped after 31109 iterations, 2000 ms
+  Stopped after 31086 iterations, 2000 ms
   Running case: floor: nanoseconds of day copied, int64 lanes
-  Stopped after 62632 iterations, 2000 ms
+  Stopped after 61772 iterations, 2000 ms
   Running case: floor: seconds of day copied, int32 lanes
-  Stopped after 129598 iterations, 2000 ms
+  Stopped after 133075 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 TIME extracts over 262144 rows - both forms in L3:                                                    Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  0              0           0       4682.4           0.2       1.0X
-hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             0              0           0       3046.4           0.3       0.7X
-hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                     0              0           0       8338.2           0.1       1.8X
-hour: seconds of day, int32 lanes, emitted (the double route it replaced)                                         0              0           0       4187.8           0.2       0.9X
-hour: seconds of day, int32 lanes, hand-written magic multiply                                                    0              0           0      18597.0           0.1       4.0X
-minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       2357.9           0.4       0.5X
-minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           0              0           0        923.0           1.1       0.2X
-minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   0              0           0       2622.3           0.4       0.6X
-minute: seconds of day, int32 lanes, emitted (the double route it replaced)                                       0              0           0       1534.5           0.7       0.3X
-minute: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      19113.7           0.1       4.1X
-second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       1496.7           0.7       0.3X
-second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           1              1           0        459.0           2.2       0.1X
-second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   0              0           0       2392.6           0.4       0.5X
-second: seconds of day, int32 lanes, emitted (the double route it replaced)                                       0              0           0       1440.2           0.7       0.3X
-second: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      15141.5           0.1       3.2X
-hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  0              0           0       1380.8           0.7       0.3X
-hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                             1              1           0        440.4           2.3       0.1X
-hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                     0              0           0       2328.3           0.4       0.5X
-hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)                         0              0           0       1420.9           0.7       0.3X
-hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    0              0           0       9609.0           0.1       2.1X
-the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              0              0           0       4324.9           0.2       0.9X
-floor: nanoseconds of day copied, int64 lanes                                                                     0              0           0       9785.1           0.1       2.1X
-floor: seconds of day copied, int32 lanes                                                                         0              0           0      18932.8           0.1       4.0X
+hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  0              0           0       4549.8           0.2       1.0X
+hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                  0              0           0       4350.8           0.2       1.0X
+hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             0              0           0       2947.2           0.3       0.6X
+hour: seconds of day, int32 lanes, emitted (the double route)                                                     0              0           0       4250.4           0.2       0.9X
+hour: seconds of day, int32 lanes, hand-written magic multiply                                                    0              0           0      19126.2           0.1       4.2X
+minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       2234.5           0.4       0.5X
+minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                0              0           0       2278.2           0.4       0.5X
+minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           0              0           0        908.8           1.1       0.2X
+minute: seconds of day, int32 lanes, emitted (the double route)                                                   0              0           0       1522.7           0.7       0.3X
+minute: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      17679.0           0.1       3.9X
+second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       1413.0           0.7       0.3X
+second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                0              0           0       1384.5           0.7       0.3X
+second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           1              1           0        452.8           2.2       0.1X
+second: seconds of day, int32 lanes, emitted (the double route)                                                   0              0           0       1452.7           0.7       0.3X
+second: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      16002.9           0.1       3.5X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  0              0           0       1411.2           0.7       0.3X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                  0              0           0       1337.9           0.7       0.3X
+hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                             1              1           0        442.3           2.3       0.1X
+hour, minute, second: seconds of day, int32 lanes, emitted (the double route)                                     0              0           0       1400.8           0.7       0.3X
+hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    0              0           0       9577.4           0.1       2.1X
+the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              0              0           0       4136.2           0.2       0.9X
+floor: nanoseconds of day copied, int64 lanes                                                                     0              0           0       9514.9           0.1       2.1X
+floor: seconds of day copied, int32 lanes                                                                         0              0           0      18557.6           0.1       4.1X
 Running benchmark: TIME extracts over 1000000 rows - the long form leaves L3
   Running case: hour: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 8233 iterations, 2000 ms
+  Stopped after 8302 iterations, 2000 ms
+  Running case: hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 8163 iterations, 2000 ms
   Running case: hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 5618 iterations, 2000 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 15951 iterations, 2000 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 8313 iterations, 2000 ms
+  Stopped after 5667 iterations, 2000 ms
+  Running case: hour: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 8304 iterations, 2000 ms
   Running case: hour: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 35746 iterations, 2000 ms
+  Stopped after 35233 iterations, 2000 ms
   Running case: minute: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 4421 iterations, 2000 ms
+  Stopped after 4430 iterations, 2000 ms
+  Running case: minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 4376 iterations, 2000 ms
   Running case: minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 1817 iterations, 2000 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 5249 iterations, 2000 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 3057 iterations, 2000 ms
+  Stopped after 1813 iterations, 2000 ms
+  Running case: minute: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 3049 iterations, 2000 ms
   Running case: minute: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 29417 iterations, 2000 ms
+  Stopped after 28996 iterations, 2000 ms
   Running case: second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 2916 iterations, 2000 ms
+  Stopped after 2899 iterations, 2000 ms
+  Running case: second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 2749 iterations, 2000 ms
   Running case: second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 906 iterations, 2001 ms
-  Running case: second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 4777 iterations, 2000 ms
-  Running case: second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 2875 iterations, 2000 ms
+  Stopped after 907 iterations, 2000 ms
+  Running case: second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 2876 iterations, 2000 ms
   Running case: second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 29748 iterations, 2000 ms
+  Stopped after 29128 iterations, 2000 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 2362 iterations, 2000 ms
+  Stopped after 2369 iterations, 2000 ms
+  Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 2238 iterations, 2000 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 877 iterations, 2000 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 4503 iterations, 2000 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 2784 iterations, 2000 ms
+  Stopped after 877 iterations, 2002 ms
+  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 2754 iterations, 2000 ms
   Running case: hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 9277 iterations, 2000 ms
+  Stopped after 9489 iterations, 2000 ms
   Running case: the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide
-  Stopped after 4645 iterations, 2000 ms
+  Stopped after 4593 iterations, 2000 ms
   Running case: floor: nanoseconds of day copied, int64 lanes
-  Stopped after 11052 iterations, 2000 ms
+  Stopped after 12027 iterations, 2000 ms
   Running case: floor: seconds of day copied, int32 lanes
-  Stopped after 34137 iterations, 2000 ms
+  Stopped after 32880 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 TIME extracts over 1000000 rows - the long form leaves L3:                                            Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  0              0           0       4270.8           0.2       1.0X
-hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             0              0           0       2929.5           0.3       0.7X
-hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                     0              0           0       8232.0           0.1       1.9X
-hour: seconds of day, int32 lanes, emitted (the double route it replaced)                                         0              0           0       4192.6           0.2       1.0X
-hour: seconds of day, int32 lanes, hand-written magic multiply                                                    0              0           0      19313.6           0.1       4.5X
-minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       2308.0           0.4       0.5X
-minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           1              1           0        915.0           1.1       0.2X
-minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   0              0           0       2639.7           0.4       0.6X
-minute: seconds of day, int32 lanes, emitted (the double route it replaced)                                       1              1           0       1543.8           0.6       0.4X
-minute: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      18853.7           0.1       4.4X
-second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                1              1           0       1513.6           0.7       0.4X
-second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           2              2           0        455.7           2.2       0.1X
-second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   0              0           0       2405.2           0.4       0.6X
-second: seconds of day, int32 lanes, emitted (the double route it replaced)                                       1              1           0       1443.6           0.7       0.3X
-second: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      15813.0           0.1       3.7X
-hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  1              1           0       1211.3           0.8       0.3X
-hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                             2              2           0        444.8           2.2       0.1X
-hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                     0              0           0       2321.1           0.4       0.5X
-hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)                         1              1           0       1422.2           0.7       0.3X
-hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    0              0           0       5071.8           0.2       1.2X
-the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              0              0           0       2421.5           0.4       0.6X
-floor: nanoseconds of day copied, int64 lanes                                                                     0              0           0       6226.2           0.2       1.5X
-floor: seconds of day copied, int32 lanes                                                                         0              0           0      18818.6           0.1       4.4X
+hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  0              0           0       4287.9           0.2       1.0X
+hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                  0              0           0       4185.9           0.2       1.0X
+hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             0              0           0       2958.3           0.3       0.7X
+hour: seconds of day, int32 lanes, emitted (the double route)                                                     0              0           0       4186.6           0.2       1.0X
+hour: seconds of day, int32 lanes, hand-written magic multiply                                                    0              0           0      19183.5           0.1       4.5X
+minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                0              0           0       2356.3           0.4       0.5X
+minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                0              0           0       2256.1           0.4       0.5X
+minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           1              1           0        914.1           1.1       0.2X
+minute: seconds of day, int32 lanes, emitted (the double route)                                                   1              1           0       1543.9           0.6       0.4X
+minute: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      15703.8           0.1       3.7X
+second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                1              1           0       1480.6           0.7       0.3X
+second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                1              1           0       1386.0           0.7       0.3X
+second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           2              2           0        455.4           2.2       0.1X
+second: seconds of day, int32 lanes, emitted (the double route)                                                   1              1           0       1449.1           0.7       0.3X
+second: seconds of day, int32 lanes, hand-written magic multiply                                                  0              0           0      15408.1           0.1       3.6X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  1              1           0       1210.4           0.8       0.3X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                  1              1           0       1182.5           0.8       0.3X
+hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                             2              2           0        444.0           2.3       0.1X
+hour, minute, second: seconds of day, int32 lanes, emitted (the double route)                                     1              1           0       1406.1           0.7       0.3X
+hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    0              0           0       5095.6           0.2       1.2X
+the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              0              0           0       2430.4           0.4       0.6X
+floor: nanoseconds of day copied, int64 lanes                                                                     0              0           0       6442.5           0.2       1.5X
+floor: seconds of day copied, int32 lanes                                                                         0              0           0      18615.0           0.1       4.3X
 Running benchmark: TIME extracts over 8388608 rows - both forms past L3
   Running case: hour: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 585 iterations, 2003 ms
+  Stopped after 617 iterations, 2001 ms
+  Running case: hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 789 iterations, 2002 ms
   Running case: hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 573 iterations, 2001 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 1332 iterations, 2000 ms
-  Running case: hour: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 968 iterations, 2000 ms
+  Stopped after 608 iterations, 2002 ms
+  Running case: hour: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 967 iterations, 2001 ms
   Running case: hour: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 1414 iterations, 2000 ms
+  Stopped after 1403 iterations, 2000 ms
   Running case: minute: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 514 iterations, 2002 ms
+  Stopped after 526 iterations, 2000 ms
+  Running case: minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 506 iterations, 2003 ms
   Running case: minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 217 iterations, 2002 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 615 iterations, 2000 ms
-  Running case: minute: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 359 iterations, 2003 ms
+  Stopped after 216 iterations, 2002 ms
+  Running case: minute: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 360 iterations, 2005 ms
   Running case: minute: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 1407 iterations, 2000 ms
+  Stopped after 1396 iterations, 2001 ms
   Running case: second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 341 iterations, 2004 ms
+  Stopped after 349 iterations, 2000 ms
+  Running case: second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 319 iterations, 2003 ms
   Running case: second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 108 iterations, 2004 ms
-  Running case: second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 564 iterations, 2000 ms
-  Running case: second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 338 iterations, 2003 ms
+  Stopped after 107 iterations, 2001 ms
+  Running case: second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 337 iterations, 2003 ms
   Running case: second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 1372 iterations, 2000 ms
+  Stopped after 1374 iterations, 2000 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)
-  Stopped after 226 iterations, 2002 ms
+  Stopped after 232 iterations, 2007 ms
+  Running case: hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)
+  Stopped after 248 iterations, 2002 ms
   Running case: hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)
-  Stopped after 104 iterations, 2005 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)
-  Stopped after 432 iterations, 2001 ms
-  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)
-  Stopped after 323 iterations, 2003 ms
+  Stopped after 106 iterations, 2014 ms
+  Running case: hour, minute, second: seconds of day, int32 lanes, emitted (the double route)
+  Stopped after 325 iterations, 2000 ms
   Running case: hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply
-  Stopped after 472 iterations, 2001 ms
+  Stopped after 512 iterations, 2000 ms
   Running case: the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide
-  Stopped after 330 iterations, 2005 ms
+  Stopped after 354 iterations, 2001 ms
   Running case: floor: nanoseconds of day copied, int64 lanes
-  Stopped after 612 iterations, 2002 ms
+  Stopped after 630 iterations, 2002 ms
   Running case: floor: seconds of day copied, int32 lanes
-  Stopped after 1386 iterations, 2000 ms
+  Stopped after 1349 iterations, 2001 ms
 OpenJDK 64-Bit Server VM 25.0.4+7-1-26.04-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 TIME extracts over 8388608 rows - both forms past L3:                                                 Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  3              3           0       2506.3           0.4       1.0X
-hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             3              3           0       2439.6           0.4       1.0X
-hour: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                     1              2           0       5696.7           0.2       2.3X
-hour: seconds of day, int32 lanes, emitted (the double route it replaced)                                         2              2           0       4129.4           0.2       1.6X
-hour: seconds of day, int32 lanes, hand-written magic multiply                                                    1              1           0       6046.9           0.2       2.4X
-minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                4              4           0       2174.9           0.5       0.9X
-minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           9              9           0        912.7           1.1       0.4X
-minute: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   3              3           0       2613.1           0.4       1.0X
-minute: seconds of day, int32 lanes, emitted (the double route it replaced)                                       5              6           0       1527.2           0.7       0.6X
-minute: seconds of day, int32 lanes, hand-written magic multiply                                                  1              1           0       5996.6           0.2       2.4X
-second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                6              6           0       1434.7           0.7       0.6X
-second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                          18             19           0        453.5           2.2       0.2X
-second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                                   4              4           0       2383.9           0.4       1.0X
-second: seconds of day, int32 lanes, emitted (the double route it replaced)                                       6              6           0       1437.5           0.7       0.6X
-second: seconds of day, int32 lanes, hand-written magic multiply                                                  1              1           0       5978.7           0.2       2.4X
-hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  9              9           0        952.9           1.0       0.4X
-hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                            19             19           0        436.4           2.3       0.2X
-hour, minute, second: seconds of day, int32 lanes, emitted (shipped: multiply-high, task 149)                     5              5           0       1829.0           0.5       0.7X
-hour, minute, second: seconds of day, int32 lanes, emitted (the double route it replaced)                         6              6           0       1365.1           0.7       0.5X
-hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    4              4           0       2002.3           0.5       0.8X
-the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              6              6           0       1389.6           0.7       0.6X
-floor: nanoseconds of day copied, int64 lanes                                                                     3              3           0       2597.0           0.4       1.0X
-floor: seconds of day copied, int32 lanes                                                                         1              1           0       5903.0           0.2       2.4X
+hour: nanoseconds of day, int64 lanes, conversion form (shipped)                                                  3              3           0       2622.0           0.4       1.0X
+hour: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                  3              3           0       3343.4           0.3       1.3X
+hour: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                             3              3           0       2575.3           0.4       1.0X
+hour: seconds of day, int32 lanes, emitted (the double route)                                                     2              2           0       4079.5           0.2       1.6X
+hour: seconds of day, int32 lanes, hand-written magic multiply                                                    1              1           0       5974.0           0.2       2.3X
+minute: nanoseconds of day, int64 lanes, conversion form (shipped)                                                4              4           0       2215.0           0.5       0.8X
+minute: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                4              4           0       2150.4           0.5       0.8X
+minute: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                           9              9           0        911.4           1.1       0.3X
+minute: seconds of day, int32 lanes, emitted (the double route)                                                   6              6           0       1525.1           0.7       0.6X
+minute: seconds of day, int32 lanes, hand-written magic multiply                                                  1              1           0       5928.8           0.2       2.3X
+second: nanoseconds of day, int64 lanes, conversion form (shipped)                                                6              6           0       1467.7           0.7       0.6X
+second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                                6              6           0       1350.6           0.7       0.5X
+second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                                          19             19           0        451.7           2.2       0.2X
+second: seconds of day, int32 lanes, emitted (the double route)                                                   6              6           0       1431.6           0.7       0.5X
+second: seconds of day, int32 lanes, hand-written magic multiply                                                  1              1           0       5872.0           0.2       2.2X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form (shipped)                                  9              9           0        984.3           1.0       0.4X
+hour, minute, second: nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)                  8              8           0       1046.1           1.0       0.4X
+hour, minute, second: nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)                            19             19           0        442.9           2.3       0.2X
+hour, minute, second: seconds of day, int32 lanes, emitted (the double route)                                     6              6           0       1366.0           0.7       0.5X
+hour, minute, second: seconds of day, int32 lanes, hand-written magic multiply                                    4              4           0       2164.6           0.5       0.8X
+the split itself: nanoseconds to (seconds, nanoseconds within), int64 lanes, both halves stored wide              6              6           0       1491.0           0.7       0.6X
+floor: nanoseconds of day copied, int64 lanes                                                                     3              3           0       2659.6           0.4       1.0X
+floor: seconds of day copied, int32 lanes                                                                         1              1           0       5833.4           0.2       2.2X
