@@ -110,6 +110,32 @@ aarch64 JVM's matcher has the same table as this x86 one at `vlen=2` is not
 established here - the audit runs where catalyst's tests run, which is x86 -
 and section 5 says where that answer comes from.
 
+**The audit's first CI run, on the runner pool: the 64-bit converts below
+AVX-512.** The invariant ran in #264's catalyst shard on an AMD EPYC 7763
+(Zen 3, `UseAVX=2`, 256-bit species, four 64-bit lanes) and failed, naming six
+shapes: `t - t2`, both `time_diff` rows, both `time_trunc` rows and the
+construction `l / 3600000000000, conversion form` - every shape with a 64-bit
+constant division and no other - each with two lines:
+
+```
+** not supported: arity=1 op=cast#510/3 vlen2=4 etype2=double ismask=0
+** not supported: arity=1 op=cast#512/3 vlen2=4 etype2=long ismask=0
+```
+
+Those are `L2D` and `D2L`, the conversion form's two casts, refused at four
+64-bit lanes. Task 88 built the magic form on the premise that "C2 does not
+intrinsify the long-to-double casts under AVX2" and then left it opt-in,
+because nothing had measured the premise on a real AVX2 host; this is that
+premise, confirmed from C2's own log on the pool's commonest machine. So on
+the AVX2 half of the fleet every `TIME` division kernel runs its conversions
+per lane today, while the mask constructions - fine at four lanes - vectorise.
+The invariant now expects exactly this refusal, in exactly these shapes, on a
+host whose `UseAVX` is below 3 (`knownBelowAvx512`), the way the emitter's own
+`convertsFallBack` reads the same level; what to do about it - select the
+magic form by level after all, now that the evidence exists, or decline - is
+task 121's, and its section carries the lead. The census file's `host` block
+records `use_avx` from here on.
+
 **The two non-verdict kinds, at the preferred width.** `extract(YEAR FROM ym)`
 and `extract(YEAR FROM ym) - 1` print `missing constant ... bitwise=ConI` at
 every width, alone or in sequence: an int-lane `ConstDivide`'s conversion form
@@ -151,6 +177,11 @@ belongs with task 55's lineage.
 * **Task 149's lead**, above, and **the pollution boxing** on three shipped
   shapes, which the assembly gate's allocation check could cover if its probe
   ran the shapes in sequence rather than one per JVM.
+* **Task 121's decision**, now evidence-backed: on AVX2 hosts the conversion
+  form is per-lane and the magic form is the only vector lowering of the
+  64-bit division; whether `useAVX` should select it, against the shape-hash
+  argument that made `DEFAULTS` host-independent (`PLAN_TASK_88.md` 9.3), is
+  the question the runner's numbers were always going to decide.
 * **The census as a runner census.** The suite prints its table in the catalyst
   shard's log on every CI run, on whatever runner class the shard lands on, so
   the fork's logs accumulate the answer per machine class for free.

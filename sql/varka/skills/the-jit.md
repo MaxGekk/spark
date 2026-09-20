@@ -459,6 +459,15 @@ machinery and `sql/varka/width_audit.json` the census; three things to carry.
   shape's code. The probe takes a name filter for exactly this, and
   `-XX:CompileCommand=PrintInlining,<pattern>` beside the intrinsics directive
   shows which inlined method a line came from.
+- **The first CI run of the audit answered a question two tasks had carried.**
+  On the runner pool's EPYC 7763 at 256 bits C2 refuses `L2D` and `D2L` at
+  four 64-bit lanes (`op=cast#510/512 vlen2=4`), in every shape with a 64-bit
+  constant division and nowhere else - task 88's "the converts do not
+  intrinsify under AVX2" confirmed from the log on real hardware, where the
+  laptop, whose AVX-512VL converts work at every width, could never show it.
+  An invariant that runs on every runner class is a census of the fleet for
+  free; encode the refusals a host class is known to have (`knownBelowAvx512`)
+  rather than failing the class, and let each new one be a finding.
 - **At two 64-bit lanes this JVM lowers no mask at all.** Compare to mask,
   blend, mask cast, broadcast, logic and test are all `not supported` at
   `vlen=2 etype=long`, and all fine at four lanes of either element type. Every

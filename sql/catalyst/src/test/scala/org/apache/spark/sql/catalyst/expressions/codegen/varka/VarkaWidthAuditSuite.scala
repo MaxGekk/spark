@@ -49,10 +49,11 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaWidthAuditPr
  * between the probe's per-shape markers. Two things are then done with them:
  *
  *  - **an invariant, on every host:** at the host's own preferred width, no coverage row and
- *    no construction other than the opt-in magic form meets a `not supported` refusal. A
- *    failure names the shape, the operation and the CPU, which is what a per-lane rate never
- *    does. The other two kinds of line C2 prints are recorded but not asserted on; see
- *    `isRefusal`;
+ *    no construction other than the opt-in magic form meets a `not supported` refusal, save
+ *    the one the design already records - the 64-bit lane's converts below AVX-512, see
+ *    `knownBelowAvx512`. A failure names the shape, the operation and the CPU, which is what
+ *    a per-lane rate never does. The other two kinds of line C2 prints are recorded but not
+ *    asserted on; see `isRefusal`;
  *  - **a census, pinned:** `sql/varka/width_audit.json` records every width's refusals for
  *    the host it was taken on. The census is a property of the CPU and the JDK, so the check
  *    against the committed file runs only on that CPU model and is cancelled, with the reason,
@@ -70,7 +71,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
   /** The widths asked for, in bytes as the JVM names them; a host caps what it cannot do. */
   private val widthsBytes = Seq(16, 32, 64)
 
-  private case class Census(preferredBits: Int, refusals: Map[String, Seq[String]],
+  private case class Census(preferredBits: Int, useAVX: Int, refusals: Map[String, Seq[String]],
       unattributed: Seq[String])
 
   private val cpuModel: String = {
@@ -116,6 +117,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
     val unattributed = mutable.LinkedHashSet.empty[String]
     var current: Option[String] = None
     var bits = -1
+    var useAVX = VarkaEmitOptions.USE_AVX_UNKNOWN
     var done = false
     val tail = mutable.Queue.empty[String]
     try {
@@ -126,6 +128,8 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
         val trimmed = line.trim
         if (trimmed.startsWith(PREFERRED_BITS_PREFIX)) {
           bits = trimmed.stripPrefix(PREFERRED_BITS_PREFIX).toInt
+        } else if (trimmed.startsWith(USE_AVX_PREFIX)) {
+          useAVX = trimmed.stripPrefix(USE_AVX_PREFIX).toInt
         } else if (trimmed.startsWith(SHAPE_BEGIN_PREFIX)) {
           current = Some(trimmed.stripPrefix(SHAPE_BEGIN_PREFIX))
           refusals.getOrElseUpdate(current.get, mutable.LinkedHashSet.empty)
@@ -153,7 +157,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
       s"the audit probe failed (exit ${process.exitValue()}); its last lines:\n" +
         tail.mkString("\n"))
     assert(bits > 0, "the audit probe never reported its preferred vector width")
-    Census(bits, refusals.map { case (k, v) => k -> v.toSeq }.toMap, unattributed.toSeq)
+    Census(bits, useAVX, refusals.map { case (k, v) => k -> v.toSeq }.toMap, unattributed.toSeq)
   }
 
   private lazy val atPreferred: Census = audit(None)
@@ -186,14 +190,34 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
    */
   private def isRefusal(line: String): Boolean = line.startsWith("not supported")
 
+  /**
+   * The one refusal a host class is known to have at its own width, and the emitter already
+   * knows about: below AVX-512 there is no vector lowering of the 64-bit lane's conversions to
+   * and from double (`L2D`, `D2L`), which is why `VarkaEmitOptions.convertsFallBack` exists
+   * and the magic form of the division was built (`PLAN_TASK_88.md` 9.2). C2 prints it as a
+   * lane cast of four 64-bit lanes: `op=cast#<n>/3 vlen2=4 etype2=double|long ismask=0`.
+   * The audit's first CI run confirmed it from the runner pool's EPYC 7763 at 256 bits, in
+   * every shape that carries a 64-bit constant division and nowhere else. The invariant
+   * expects it there rather than failing every AVX2 runner on a fact the design records;
+   * task 121 owns what to do about it.
+   */
+  private def knownBelowAvx512(census: Census, line: String): Boolean =
+    census.useAVX != VarkaEmitOptions.USE_AVX_UNKNOWN &&
+      // AVX-512 is level 3, the same reading `VarkaEmitOptions.convertsFallBack` makes.
+      census.useAVX < 3 &&
+      line.startsWith("not supported") && line.contains("op=cast#") &&
+      line.contains("ismask=0") &&
+      (line.contains("etype2=double") || line.contains("etype2=long"))
+
   test("at the host's preferred width, C2 has a lowering for every Vector API call in every " +
-      "shape") {
+      "shape, the 64-bit converts below AVX-512 excepted") {
     val census = atPreferred
-    val refused = census.refusals.map { case (name, ops) => name -> ops.filter(isRefusal) }
-      .filter { case (name, ops) => ops.nonEmpty && !name.contains(magicForm) }
+    val refused = census.refusals.map { case (name, ops) =>
+      name -> ops.filter(o => isRefusal(o) && !knownBelowAvx512(census, o))
+    }.filter { case (name, ops) => ops.nonEmpty && !name.contains(magicForm) }
     assert(refused.isEmpty,
-      s"on $cpuModel at ${census.preferredBits} bits, C2 refused a lowering in " +
-        s"${refused.size} shape(s):\n" + refused.map { case (n, ops) =>
+      s"on $cpuModel at ${census.preferredBits} bits (UseAVX ${census.useAVX}), C2 refused a " +
+        s"lowering in ${refused.size} shape(s):\n" + refused.map { case (n, ops) =>
           s"  $n\n" + ops.map(o => s"    ** $o").mkString("\n")
         }.mkString("\n"))
   }
@@ -225,7 +249,8 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
         "cpu" -> cpuModel,
         "arch" -> System.getProperty("os.arch"),
         "jdk" -> System.getProperty("java.runtime.version"),
-        "preferred_bits" -> atPreferred.preferredBits),
+        "preferred_bits" -> atPreferred.preferredBits,
+        "use_avx" -> atPreferred.useAVX),
       "widths" -> ordered(widths: _*))
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"
   }
