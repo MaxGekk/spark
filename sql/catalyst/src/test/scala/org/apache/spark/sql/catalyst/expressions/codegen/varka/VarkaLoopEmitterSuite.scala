@@ -4497,8 +4497,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private def doubleDivisions(bytes: Array[Byte]): Int = {
     val halves = opsOn(bytes, "DoubleVector")
     assert(halves % 2 === 0, s"a double division emits two halves, saw $halves")
-    // Each division also converts twice in and twice out, all four on `Vector` itself.
-    assert(convertShapes(bytes) === halves * 2,
+    // Each double division also converts twice in and twice out, all four on `Vector` itself.
+    // The multiply-high form converts the same four times through long lanes and divides
+    // nowhere, so the cross-check holds only where a double half exists.
+    assert(halves == 0 || convertShapes(bytes) === halves * 2,
       s"expected ${halves * 2} conversions for $halves halves")
     halves / 2
   }
@@ -4601,27 +4603,90 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // counts, and which would break here at the extremes first - and that it *truncates toward
     // zero* rather than flooring, which is what a magic would have done and what would show up
     // only on negative dividends with a remainder.
-    val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
-    val extremes = Array(Int.MinValue, Int.MinValue + 1, Int.MaxValue, Int.MaxValue - 1,
-      -1, 0, 1, -11, 11, -12, 12, -13, 13, -49151, 49151, -49152, 49152)
-    def months(c: Int, i: Int): Int =
-      if (i < extremes.length) extremes(i) else i * 7919 - 1000000
-    for (lanes <- Seq(0, 2, 4, 8, 16)) {
-      checkMatrix(root, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-        nullPatterns.map(p => Seq(p._2)), data = months, ctx = s"divc/12 lanes=$lanes",
-        options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+    // Both forms, every divisor the emitter or the fuzz grammar divides by at this lane, and
+    // the dividends around each divisor's multiples where truncation and floor part (task
+    // 149). The multiply-high is the shipped form; the conversion form is the reference arm.
+    for (d <- intDivisors; mulHi <- Seq(true, false)) {
+      val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), d))
+      val m = math.abs(d)
+      val extremes = Array(Int.MinValue, Int.MinValue + 1, Int.MaxValue, Int.MaxValue - 1,
+        -1, 0, 1, -m + 1, m - 1, -m, m, -m - 1, m + 1, -49151, 49151, -49152, 49152,
+        (Int.MaxValue / m) * m, (Int.MinValue / m) * m, (Int.MaxValue / m) * m + 1,
+        (Int.MinValue / m) * m - 1)
+      def dividends(c: Int, i: Int): Int =
+        if (i < extremes.length) extremes(i) else i * 7919 - 1000000
+      for (lanes <- Seq(0, 2, 4, 8, 16)) {
+        checkMatrix(root, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+          nullPatterns.map(p => Seq(p._2)), data = dividends,
+          ctx = s"divc/$d mulHi=$mulHi lanes=$lanes",
+          options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withMulHiDivide(mulHi))
+      }
     }
   }
 
-  test("a constant division is emitted through the double lane whatever the division option " +
-      "says, because it has no other lowering") {
-    // The `division` option chooses among the lowerings the *calendar* has. This node has one,
-    // so the option cannot turn it off - and if it ever did, the kernel would compute nothing
-    // rather than compute something slower.
+  /**
+   * The int-lane constant divisors in use: `extract(YEAR FROM ym)`'s twelve, the fuzz
+   * grammar's list (`VarkaIrGrammar.ConstDivideDivisors`), and the `TIME` split form's two.
+   * The sweep below proves the multiply-high form over all 2^32 dividends for each of them.
+   */
+  private val intDivisors = Seq(12, 2, 3, 7, 100, -3, -12, 60, 3600)
+
+  test("the multiply-high form's constants are Hacker's Delight's") {
+    // The derivation is the book's; the constants it must produce for the divisors the book
+    // works are known, and a derivation that drifted would produce a form that is merely
+    // nearly exact - which the sweep would catch, at a price this catches for free.
+    def magic(d: Int): (Long, Long) = {
+      val m = VarkaLoopEmitter.signedMagicForTest(d)
+      (m(0), m(1))
+    }
+    assert(magic(12) === (0x2AAAAAABL, 32 + 1))
+    assert(magic(7) === (0x92492493L, 32 + 2))
+    assert(magic(3) === (0x55555556L, 32 + 0))
+    assert(magic(2) === (0x80000001L, 32 + 0))
+    assert(magic(100) === (0x51EB851FL, 32 + 5))
+    intercept[IllegalArgumentException](VarkaLoopEmitter.signedMagicForTest(1))
+  }
+
+  test("the multiply-high form is exact over every int32 dividend for every divisor in use " +
+      "(opt-in: -Dvarka.sweep=true; task 149)") {
+    // The proof the emitted arithmetic rests on, run as the arithmetic: the unsigned
+    // multiplier, the one shift and the sign bit, against Java's `/`, for all 2^32 dividends
+    // and every divisor in `intDivisors`. Scalar, not the kernel - the kernel's parity over
+    // the extremes and the fuzzer's random dividends are above; this is the exhaustive half.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to sweep the multiply-high form")
+    for (d <- intDivisors) {
+      val magic = VarkaLoopEmitter.signedMagicForTest(math.abs(d))
+      val mu = magic(0)
+      val shift = magic(1).toInt
+      val sign = if (d < 0) -1 else 1
+      var n = Int.MinValue
+      var done = false
+      while (!done) {
+        val q = (((n.toLong * mu) >> shift) + (n >>> 31)).toInt * sign
+        assert(q === n / d, s"d=$d n=$n")
+        if (n == Int.MaxValue) done = true else n += 1
+      }
+    }
+  }
+
+  test("a constant division takes the multiply-high form by default and the double lane as " +
+      "the reference arm, whatever the division option says") {
+    // The `division` option chooses among the lowerings the *calendar* has and does not reach
+    // this node. What does is `mulHiDivide`: on, the body has no double-lane op at all and
+    // carries the multiply-high's four long-lane ops - two multiplies, two shifts - and four
+    // conversions; off, the conversion form's two double divides. Neither option can leave the
+    // node with no lowering.
     val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     for (form <- VarkaEmitOptions.Division.values()) {
-      val bytes = emitMulti(root, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
-      assert(doubleDivisions(bytes) === 1, s"division=$form")
+      val mulHi = emitMulti(root, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
+      assert(doubleDivisions(mulHi) === 0, s"division=$form")
+      assert(opsOn(mulHi, "LongVector") === 4, s"division=$form")
+      assert(convertShapes(mulHi) === 4, s"division=$form")
+      val converting = emitMulti(root, 1, 0,
+        VarkaEmitOptions.DEFAULTS.withDivision(form).withMulHiDivide(false))._2
+      assert(doubleDivisions(converting) === 1, s"division=$form")
+      assert(opsOn(converting, "LongVector") === 0, s"division=$form")
     }
   }
 
@@ -4767,11 +4832,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val long64 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000))
     val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     assert(longDoubleDivisions(emitMulti(long64, 1, 0, converting)._2) === 1)
-    assert(doubleDivisions(emitMulti(int32, 1, 0, converting)._2) === 1)
+    assert(doubleDivisions(emitMulti(int32, 1, 0, converting.withMulHiDivide(false))._2) === 1)
     // The counter above is what makes the difference explicit: the int lane spends two divides
     // and four conversions on one division, the long lane one and two.
     assert(opsOn(emitMulti(long64, 1, 0, converting)._2, "DoubleVector") === 1)
-    assert(opsOn(emitMulti(int32, 1, 0, converting)._2, "DoubleVector") === 2)
+    // The int lane's conversion form is the reference arm now; the shipped form multiplies.
+    assert(opsOn(emitMulti(int32, 1, 0, converting.withMulHiDivide(false))._2,
+      "DoubleVector") === 2)
   }
 
   test("a long-lane constant division refuses the divisors that have no quotient") {

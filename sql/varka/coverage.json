@@ -259,7 +259,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Extract", "ExtractANSIIntervalYears" ],
-    "note" : "a division by twelve over a month count nothing bounds, so it is the first one the calendar's range-narrowed magic cannot serve and the double lane can"
+    "note" : "a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does"
   }, {
     "sql" : "extract(YEAR FROM ym) - 1",
     "executable" : "extract(YEAR FROM ym) - 1",
