@@ -66,6 +66,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [The shape a test picked because nothing lowered it](sql/varka/skills/emitter-and-ir.md#the-shape-a-test-picked-because-nothing-lowered-it)
 * [A refusal shared by two positions carries one reason, and it can be true of only one](sql/varka/skills/emitter-and-ir.md#a-refusal-shared-by-two-positions-carries-one-reason-and-it-can-be-true-of-only-one)
 * [Adding an IR node moves the bytes oracle's fuzz digests, not its shapes - prove it by diffing keys](sql/varka/skills/emitter-and-ir.md#adding-an-ir-node-moves-the-bytes-oracles-fuzz-digests-not-its-shapes---prove-it-by-diffing-keys)
+* [A lane can change width at a root's store without the loop ever holding two widths](sql/varka/skills/emitter-and-ir.md#a-lane-can-change-width-at-a-roots-store-without-the-loop-ever-holding-two-widths)
 
 #### [Testing and debugging](sql/varka/skills/testing-and-debugging.md)
 * [Buffer-Reuse Aliasing (UnsafeProjection)](sql/varka/skills/testing-and-debugging.md#buffer-reuse-aliasing-unsafeprojection)
@@ -105,6 +106,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [An exact quotient makes the round-down carry dead code, and the op counter has to see it](sql/varka/skills/vector-api-and-width.md#an-exact-quotient-makes-the-round-down-carry-dead-code-and-the-op-counter-has-to-see-it)
 * [The Vector API's math lanes match no scalar library's bits on any host, and a probe that lets C2 fall back measures `Math` against itself](sql/varka/skills/vector-api-and-width.md#the-vector-apis-math-lanes-match-no-scalar-librarys-bits-on-any-host-and-a-probe-that-lets-c2-fall-back-measures-math-against-itself)
 * [SLEEF and OpenVML, read for Varka: no integer division anywhere, and what does transfer](sql/varka/skills/vector-api-and-width.md#sleef-and-openvml-read-for-varka-no-integer-division-anywhere-and-what-does-transfer)
+* [A vector divide is a divider, whatever the lane width; a multiply-high is not](sql/varka/skills/vector-api-and-width.md#a-vector-divide-is-a-divider-whatever-the-lane-width-a-multiply-high-is-not)
 
 #### [Working in this repository](sql/varka/skills/working-in-this-repo.md)
 * [Repo Workflow (vecbricks/varka)](sql/varka/skills/working-in-this-repo.md#repo-workflow-vecbricksvarka)

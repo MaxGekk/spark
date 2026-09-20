@@ -148,8 +148,8 @@ class VarkaCoverageSuite extends SparkFunSuite {
       Row("ym - ymm"),
       Row("CAST(ymy AS INTERVAL MONTH)"),
       Row("extract(YEAR FROM ym)",
-        "a division by twelve over a month count nothing bounds, so it is the first one the "
-          + "calendar's range-narrowed magic cannot serve and the double lane can"),
+        "a division by twelve over a month count nothing bounds, so the calendar's "
+          + "range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does"),
       Row("extract(YEAR FROM ym) - 1", "the quotient feeding further int arithmetic"))),
 
     Family("Integer arithmetic", predicates = false, Seq(
@@ -227,6 +227,11 @@ class VarkaCoverageSuite extends SparkFunSuite {
         "DateTimeUtils reads them"),
       Row("time_trunc('MINUTE', t)"),
       Row("time_trunc('MILLISECOND', t2)"),
+      Row("hour(t)", "an int computed in the 64-bit lane and narrowed at the kernel's store, " +
+        "the one place a lane changes width until task 28; so the extract fuses as an output " +
+        "and declines under another expression"),
+      Row("minute(t2)"),
+      Row("second(t)"),
       Row("t + INTERVAL '0 00:00:00' DAY TO SECOND",
         "a zero interval on purpose: this fixture reaches both ends of the day, so any other " +
           "constant crosses midnight on some row, where Spark raises an error rather than a " +

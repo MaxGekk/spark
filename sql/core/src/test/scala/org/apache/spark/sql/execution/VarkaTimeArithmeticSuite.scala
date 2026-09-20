@@ -222,4 +222,25 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions {
     val declined = node.metrics.get("numFallbackBatchesDeclined").map(_.value).getOrElse(0L)
     assert(declined > 0L, s"expected the crossing batch to decline, metrics: ${node.metrics}")
   }
+
+  test("hour, minute and second agree with the row engine over every second of the day") {
+    // Group C's extracts (`PLAN_TASK_102.md` 8.3): `LocalTime`'s field reads on the row engine
+    // against long-lane divisions narrowed to an int at the kernel's store, through both
+    // consumers. The TIME(3) column puts the widening cast in front of the division, and the
+    // sub-second columns reach the edges where a rounding division would answer the next
+    // second.
+    for (column <- Seq("t", "t2", "t3"); field <- Seq("hour", "minute", "second")) {
+      checkBoth(s"$field($column)")
+    }
+  }
+
+  test("an extract under another expression is left to the row engine, beside a fused one") {
+    // The narrowing is the store's, so `hour(t) + 1` has no fused form until task 28 narrows
+    // inside a tree: the entry declines with its reason and the row engine answers it, while
+    // the extract beside it is still served by the kernel.
+    val query = s"SELECT hour(t) + 1 AS h, minute(t) AS m FROM $day"
+    val actual = varkaSpark.sql(query)
+    assertFused(actual.queryExecution.executedPlan)
+    checkAnswer(actual, spark.sql(query))
+  }
 }

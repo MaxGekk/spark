@@ -587,3 +587,66 @@ second sequence, `fuzz_long`, drawn by the long-lane grammar from its own seed:
 a lane-generic node moves both sequences' blocks, a calendar node only the
 first, and the two long block lists moving on an int-only change is the signal
 that the long grammar was touched when it should not have been.
+
+## A lane can change width at a root's store without the loop ever holding two widths
+
+Task 102's `hour(t)`, `minute(t)` and `second(t)` are 64-bit divisions whose
+results are ints, and the plan's first reading (`PLAN_TASK_102.md` 2.5) was that
+an int output from a long-lane kernel waited on task 28's bi-lane loop. It did
+not. The computation stays in the long lane to the last instruction; only the
+store narrows, and a store is per root. So the IR gained one node,
+`NarrowLane(child)` - an `INT` value over a `LONG` child - admitted **at an
+output root only**, and the emitter gained one store: `convertShape(L2I)` into
+the int species of the same width, then a masked store of the low half of the
+lanes at `i * 4` instead of `i * 8`. Nothing else in the kernel changed, and the
+bytes oracle's coverage keys prove it: three rows added, none moved.
+
+What made it small, and what to carry to the next width change:
+
+- **Ask what the emission lane is, not what the root's lane is.** A kernel is one
+  species, and until this node every root's lane was the species. `emissionLane`
+  answers "the child's lane for a narrowing root, the root's otherwise", and the
+  three places that choose the species - `laneOf`, `fitsBudgets`, the
+  compiler's mixed-lane check - ask it. The root's own `laneType()` stays `INT`,
+  which is what the evaluator's output allocation and the tree-building
+  constructors need to see.
+- **The two costly things were both avoidable.** A second `IntVector` species in
+  the class would make the shared templates bimorphic and box every other int
+  kernel (`PLAN_TASK_28.md` 2.2); the store uses the width's own int species and
+  a mask instead. And the mask is an int mask, which C2 lowers at every width,
+  where the long lane's masks are per-lane at two lanes (task 153).
+- **A root-only node has three doors to guard, and two of them are not the
+  emitter's.** The emitter refuses it under another node, ahead of the lane check
+  so the message names the cause. The compiler must decline it first, because
+  `hour(t) + 1` type-checks and builds an int-lane tree over it - `compileRoot`
+  carries an `atRoot` flag into the one place the node is made, so the interior
+  route declines with the reason. And the fuzzer's reach tests must name it as
+  deliberately out of reach, since the grammar composes nodes under nodes and a
+  root-only node is not a shape to draw until task 28 makes it one.
+- **The word liveness walk must know a node reads no word.** The first arm
+  mirrored `GuardedRange` and demanded the child's validity word; that word is
+  consumed only by the root write, which the bitmap pass may take over, and the
+  emitter's own invariant caught it - "word slot stored but never loaded" -
+  before any test compared a value. A pass-through node that needs the word for
+  itself (a guard) and one that merely forwards it (a narrowing) look alike in
+  the IR and differ exactly here.
+- **A new permitted subtype is invisible to the incremental compiler's exhaustiveness
+  check.** Two Scala matches over the sealed IR in `VarkaRangeAnalysisSuite` had no
+  `NarrowLane` arm, and every `Test/compile` in the working tree that added the node
+  stayed green: the sealed hierarchy is a Java interface, and Zinc did not recompile
+  the Scala files that match on it. A fresh worktree's full compile failed on both as
+  fatal warnings, which is what CI would have done. After adding a node type, compile
+  the test sources from clean once, or grep for the matches over the hierarchy's
+  sibling arms and add the new one by hand before trusting the incremental build.
+- **A changed invariant has readers in the tests too, and they read regenerated
+  files.** "A root's lane is the kernel's lane" had been re-derived in five
+  places: two in the emitter, two in the compiler, and one each in the width
+  audit's shapes and the bytes oracle, both under `src/test`. A grep over
+  `src/main` fixed the first four and missed the last two, which then sent a
+  long-lane kernel through the int entry point. Enumerate readers with a
+  whole-tree `git grep` and have every harness ask the one accessor
+  (`emissionLane`, or the compiled projection's `lane`) rather than keep a copy.
+  And sequence the regenerations: the audit and the oracle read the coverage
+  rows from `sql/varka/coverage.json`, which `VarkaCoverageSuite` writes, so in
+  one combined run they audited the old rows and passed; run the coverage suite
+  first and the readers after, and rerun the readers when it changed the file.

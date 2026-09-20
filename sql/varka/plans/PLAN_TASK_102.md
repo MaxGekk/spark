@@ -416,7 +416,8 @@ generates no `LONG` node and the new guard is fuzzed only at the int lane.
 ## 6.2 Sequencing, as it happened
 
 Steps 2, 4, 5 and 3 of 6.1 in that order: the table (#254), task 88 step 3
-(#255), group B, group A. Step 6 is next.
+(#255), group B, group A. Then group C's extracts by route A (section 8.6);
+group D and the split form remain.
 
 ## 8. Group C: the extracts, the narrowing store and the split form, planned
 
@@ -587,3 +588,189 @@ case.
    serves the calendar's own divisions as a node later.
 3. The split leaf and the cache encoding under item 11, when milestone 6 takes
    the representation question up; `make_time` with task 28 and 2.3.
+
+### 8.6 Outcome of route A, 20 September 2026
+
+Built as 8.3 planned it, in one PR, and the plan's account of the cost held:
+one node, one store, three compiler arms, nothing in the evaluator.
+
+**What landed.** `NarrowLane(child)` is in the IR as an `INT` value over a
+`LONG` child, refused over an int child where it is built. The emitter admits
+it at an output root and nowhere else, checked before the lane check so the
+refusal names the position; its value is the child's, its validity word is the
+child's, and its store is `convertShape(L2I)` into the int species of the same
+width followed by `intoMemorySegment` under `indexInRange(0, lanes)` at
+`i * 4`. No second int species, and an int mask rather than a long one, for the
+two reasons 8.3 gave. `hour(t)`, `minute(t)` and `second(t)` compile to the
+trees 8.3 wrote down, under a narrowing root, and a `TIME(3)` column reaches
+them through the widening cast group B already admitted.
+
+**One thing 8.3 did not name: the lane of a kernel is no longer its root's.**
+Every place that chose a species, a `run` overload or a buffer width had read
+`roots.head.laneType()`, and a narrowing root is the first node for which that
+is the wrong answer. `VarkaVectorIR.emissionLane` is the one accessor now, and
+the emitter, the compiler, the bytes oracle and the width audit ask it. The
+last two were found by the suites rather than by the search that fixed the
+first two, which `sql/varka/skills/emitter-and-ir.md` records as the lesson.
+
+**Three doors, all closed.** The emitter refuses an interior narrowing. The
+compiler declines it first: `compileRoot` carries an `atRoot` flag into the
+one place the node is made, so `hour(t) + 1` and `hour(t) = 12` decline with
+a reason that says the narrowing is the store's and names task 28, while the
+entry beside them fuses (`VarkaTimeArithmeticSuite` runs `hour(t) + 1` next to
+`minute(t)` and checks both answers). And the fuzzer's two reach tests name the
+node as deliberately out of reach, since the grammar composes nodes under nodes.
+
+**Tests, as 8.3 listed them.** Every second of the day at three precisions
+through both consumers against `LocalTime`; the narrowed store at two and eight
+lanes over every null pattern beside a wide root in the same kernel, with the
+store counted from the bytes (one masked `IntVector` store per narrowed root
+across the dense bodies, the same in the masked epilogue, nothing else on the
+int species); the refusals; the coverage rows; the compiler's trees. The
+reference evaluator answers a narrowing root in full and the suite narrows,
+so a value that did not fit an int would show as a difference rather than be
+truncated on both sides.
+
+**The census says the store is intrinsic at every width.** `width_audit.json`
+gained the three shapes at 128, 256 and 512 bits and C2 said nothing about any
+of them: the int-masked store lowers at two long lanes, where task 153 found
+every long mask refused, which is what the int-mask choice was for. Two
+unrelated rows moved in the same regeneration, a `missing constant` line
+appearing under `add_months(d, i)` at 128 bits and disappearing under
+`greatest(l, l2)` at 256; the census's own description calls that line a
+first late-inline attempt and not a verdict, and it flips between runs on this
+host, so the local census check is unstable on lines it should not record.
+That is a finding for the milestone, not this task's.
+
+**Predictions scored.**
+
+1. *`hour(t)` within 10% of the long conversion form at both widths.* **Held.**
+   `VarkaTimeBenchmark`, L2 rung, M rows/s, narrowed store against the wide
+   store of the same tree: 4078.7 against 4247.9 at 512 bits (4% under) and
+   2255.5 against 2380.7 at 128 bits (5% under). The narrowing changes the
+   store and not the divide, and the store is a small part of a divide-bound
+   kernel. Past L3 the two widths part: at 512 bits the narrowed `hour` reads
+   3277.3 against 2616.5, a quarter faster, since it writes half the bytes into
+   a memory-bound rung; at 128 bits it reads 1961.2 against 2280.1, 14% slower.
+2. *`minute` and `second` track the file's rows; the three together its
+   three-field row.* **Held at 512 bits, missed for the heavier shapes at 128.**
+   At 512 bits, L2 rung: `minute` 2171.5 against 2126.7, `second` 1416.0
+   against 1419.6, the three 1388.2 against 1407.4 - all within 2%; past L3 the
+   three read 1109.3 against 968.3. At 128 bits `minute` tracks (1149.3 against
+   1182.5) but `second` reads 678.8 against 773.2, 12% under, and the three
+   628.8 against 765.6, 18% under, at every rung. Two long lanes amortise the
+   per-group cost of the `L2I` and the masked store over two rows rather than
+   eight, which is the direction of the effect but does not by itself say why
+   `second` pays more than `hour`; the cause is not established here and is the
+   first question for the 128-bit row of this benchmark when `BoundedDivide`
+   (8.4) changes the divide's share.
+   The 256-bit file sits between the two: `hour` 4397.2 against 4740.7 at the
+   L2 rung (7% under) and 3343.4 against 2622.0 past L3; `second` 1418.4
+   against 1471.9 and the three 1347.1 against 1485.4 at L2.
+
+4. *No committed hash moves; three rows are added.* **Held exactly**: the
+   flattened-key diff of `emitted_bytes.json` shows the three rows at both
+   widths and no other key added, removed or changed - including the fuzz
+   blocks, which a node the grammar draws would have reshuffled and this one,
+   being root-only, does not.
+
+Prediction 3 (at least 15x against the row engine end to end) is not scored
+here: no committed benchmark runs a `TIME` expression through the whole
+engine against the row path, and this repository adds a baseline benchmark as
+its own PR before the change it measures. It stays open as a follow-up row.
+
+## 9. Group D, read: the decimal is a store, and there is a group E
+
+*20 September 2026, a reading pass; no code. Section 2.3 said the two decimal
+expressions are blocked on a representation and not on a lane. This section
+reads the representation and finds it is a store's worth of work for the
+outputs, a de-interleave's worth for the one input, and that the table is
+missing a family.*
+
+### 9.1 What each expression computes
+
+Read off `DateTimeUtils`, as section 2.6 read the others:
+
+| expression | result type | the helper's arithmetic on nanoseconds of day `n` |
+|---|---|---|
+| `second(t)` with its fraction (`SecondsOfTimeWithFraction`) | `DecimalType(2 + p, p)`, `p` the `TIME(p)` precision | `seconds = n / 10^9 % 60`; `fraction = (n % 10^9) * 10^p / 10^9`; the value is `seconds + fraction / 10^p`, built through a `Double` and `Decimal.apply(Double)` |
+| `time_to_seconds(t)` | `DecimalType(14, 6)` | `Decimal(n) / Decimal(10^9)` at scale 6, i.e. the unscaled long `n / 1000` |
+| `time_to_millis(t)`, `time_to_micros(t)` | `LongType` | `floorDiv(n, 10^6)`, `floorDiv(n, 10^3)` - and `n` is non-negative, so a truncating division |
+| `time_from_seconds(l)`, `time_from_millis(l)`, `time_from_micros(l)` | `TIME(6)` | `multiplyExact(l, 10^9 / 10^6 / 10^3)` under the conversion's error handling; `time_from_seconds` also takes a decimal or a double |
+| `make_time(h, m, s)` | `TIME(6)` | `s` is `DecimalType(16, 6)`: its unscaled long split by `floorDiv`/`floorMod` at 10^6, then `LocalTime.of` |
+
+Every decimal in the table has precision 18 or less - 11 at the widest for the
+fraction, 14 and 16 for the others - so every value is an unscaled `long`,
+which is the lane group B already computes in. `SecondsOfTimeWithFraction`'s
+round trip through a `Double` is the one place the row engine's answer is not
+literally the integer form: `Decimal.apply(Double)` goes through the double's
+shortest decimal rendering, which for a value of at most eleven significant
+digits is the intended digits, so `seconds * 10^p + fraction` as the unscaled
+long should agree on every nanosecond of the minute. That is a claim to prove
+by exhaustion (sixty million values at `p = 6`) before a kernel ships it, not
+to argue.
+
+### 9.2 What the column is
+
+`ArrowUtils` maps every `DecimalType` to a 128-bit Arrow decimal: sixteen bytes a
+row at any precision. Vanilla's bridge allocates on both sides of it -
+`ArrowWriter` writes through a `java.math.BigDecimal` per row and
+`ArrowColumnVector` reads one back - which is why the fraction row of the `TIME`
+surface will measure an allocation as much as a division, as 2.40 predicted for
+the extracts. The zero-allocation reading is already in the tree: the Arrow
+cache serializer knows the low-order unscaled word of a compact decimal sits at
+a fixed offset inside the sixteen bytes (`compactDecimalUnscaledOffset`) and
+reads it straight into the row writer for precision 18 or less; the write side
+has no such path yet.
+
+Varka admits none of it today: `isArrowBacked` has no `DecimalVector` arm, the
+evaluator's output allocation has no decimal destination, and the compiler
+never sees a decimal column because the leaf refuses it. So the three decimal
+positions divide by direction:
+
+- **Outputs** (`second` with fraction, `time_to_seconds`): the kernel computes
+  an unscaled long in the lane it has, and the store writes it into sixteen
+  bytes a row - the low word the value, the high word its sign extension. That
+  is the mirror image of route A's narrowing store: a **widening store**, a
+  root-only node like `NarrowLane` whose store interleaves the value vector
+  with `value >> 63` and writes two vectors' worth of bytes per lane group. Two
+  lane operations and a second store; the loop, the validity and everything
+  below the root unchanged. The evaluator allocates a `DecimalVector` for a
+  decimal output and hands its data buffer to the kernel as it does an int
+  vector's.
+- **The input** (`make_time`'s seconds column): the kernel must read the low
+  word out of every other eight bytes, which is `SCOPE_MILESTONE_6.md` item 1's
+  de-interleave - the thing that item names as the first measurement of its
+  milestone - and belongs there. A `make_time` whose seconds are a literal is
+  group B's arithmetic and needs only task 28's widening, as 2.4 said.
+
+### 9.3 Group E: the family the table does not know
+
+`time_to_millis`, `time_to_micros` and the three `time_from_*` are not in
+`timeTargets`: the nine the table was built from predate them, so today they
+decline as `unsupported expression` rather than by name, and the completeness
+guard of section 2.1 does not see them because it checks the table against its
+own list. They are group B's shapes: a truncating `ConstDivide` by 10^6 or 10^3
+for the two `time_to_*` that return a long, and a multiply by a constant with an
+overflow check for the `time_from_*`, plus whatever range the conversion's error
+handling enforces on the day, which the implementation reads before it decides
+between a guard and a checked multiply. Five rows for the surface at group B's
+price.
+
+### 9.4 What this leaves, and where
+
+Two rows for the milestone, opened from here:
+
+- **The widening store for decimal outputs** (row 157): `second` with its
+  fraction and `time_to_seconds` through a `WidenDecimal` root, with the
+  exhaustive agreement check of 9.1 and the evaluator's decimal destination;
+  measured against the evaluator widening a long output in a scalar loop per
+  batch, which is the form that needs no emitter change and is the baseline
+  the store has to beat. After 105 and 118: neither expression is in the post's
+  headline, and the surface can carry them as declines until then.
+- **Group E** (row 158): the five conversions into the table and the compiler,
+  with the two decimal declines of group D naming the representation as 2.3
+  asked - today they say only that the expression is not lowered yet, which is
+  the reading task 89 warned a reader would take as "the division is missing".
+
+`make_time` over a decimal column stays with milestone 6's item 1.

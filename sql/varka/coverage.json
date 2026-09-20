@@ -259,7 +259,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Extract", "ExtractANSIIntervalYears" ],
-    "note" : "a division by twelve over a month count nothing bounds, so it is the first one the calendar's range-narrowed magic cannot serve and the double lane can"
+    "note" : "a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does"
   }, {
     "sql" : "extract(YEAR FROM ym) - 1",
     "executable" : "extract(YEAR FROM ym) - 1",
@@ -602,6 +602,27 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeTrunc" ],
+    "note" : ""
+  }, {
+    "sql" : "hour(t)",
+    "executable" : "hour(t)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "HoursOfTime" ],
+    "note" : "an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until task 28; so the extract fuses as an output and declines under another expression"
+  }, {
+    "sql" : "minute(t2)",
+    "executable" : "minute(t2)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "MinutesOfTime" ],
+    "note" : ""
+  }, {
+    "sql" : "second(t)",
+    "executable" : "second(t)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "SecondsOfTime" ],
     "note" : ""
   }, {
     "sql" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",

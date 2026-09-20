@@ -64,7 +64,8 @@ public interface VarkaFusedKernel {
    * @param srcValidity address of each input column's bit-packed validity (or 0L, see above).
    * @param srcNullCount null count of each input column.
    * @param dstData address of each output column's values (length * 4 bytes each; eight at
-   *        the eight-argument entry point below).
+   *        the eight-argument entry point below, except an output whose root is a
+   *        {@link VarkaVectorIR.NarrowLane}, which is four bytes a row there too).
    * @param dstValidity address of each output column's bit-packed validity
    *        ((length + 7) / 8 bytes each); always required.
    * @param scalarArgs the runtime values of the chain's literal slots.

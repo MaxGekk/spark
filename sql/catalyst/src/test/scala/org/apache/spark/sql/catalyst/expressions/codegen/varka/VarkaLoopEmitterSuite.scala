@@ -4497,8 +4497,10 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   private def doubleDivisions(bytes: Array[Byte]): Int = {
     val halves = opsOn(bytes, "DoubleVector")
     assert(halves % 2 === 0, s"a double division emits two halves, saw $halves")
-    // Each division also converts twice in and twice out, all four on `Vector` itself.
-    assert(convertShapes(bytes) === halves * 2,
+    // Each double division also converts twice in and twice out, all four on `Vector` itself.
+    // The multiply-high form converts the same four times through long lanes and divides
+    // nowhere, so the cross-check holds only where a double half exists.
+    assert(halves == 0 || convertShapes(bytes) === halves * 2,
       s"expected ${halves * 2} conversions for $halves halves")
     halves / 2
   }
@@ -4601,27 +4603,90 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // counts, and which would break here at the extremes first - and that it *truncates toward
     // zero* rather than flooring, which is what a magic would have done and what would show up
     // only on negative dividends with a remainder.
-    val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
-    val extremes = Array(Int.MinValue, Int.MinValue + 1, Int.MaxValue, Int.MaxValue - 1,
-      -1, 0, 1, -11, 11, -12, 12, -13, 13, -49151, 49151, -49152, 49152)
-    def months(c: Int, i: Int): Int =
-      if (i < extremes.length) extremes(i) else i * 7919 - 1000000
-    for (lanes <- Seq(0, 2, 4, 8, 16)) {
-      checkMatrix(root, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
-        nullPatterns.map(p => Seq(p._2)), data = months, ctx = s"divc/12 lanes=$lanes",
-        options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+    // Both forms, every divisor the emitter or the fuzz grammar divides by at this lane, and
+    // the dividends around each divisor's multiples where truncation and floor part (task
+    // 149). The multiply-high is the shipped form; the conversion form is the reference arm.
+    for (d <- intDivisors; mulHi <- Seq(true, false)) {
+      val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), d))
+      val m = math.abs(d)
+      val extremes = Array(Int.MinValue, Int.MinValue + 1, Int.MaxValue, Int.MaxValue - 1,
+        -1, 0, 1, -m + 1, m - 1, -m, m, -m - 1, m + 1, -49151, 49151, -49152, 49152,
+        (Int.MaxValue / m) * m, (Int.MinValue / m) * m, (Int.MaxValue / m) * m + 1,
+        (Int.MinValue / m) * m - 1)
+      def dividends(c: Int, i: Int): Int =
+        if (i < extremes.length) extremes(i) else i * 7919 - 1000000
+      for (lanes <- Seq(0, 2, 4, 8, 16)) {
+        checkMatrix(root, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
+          nullPatterns.map(p => Seq(p._2)), data = dividends,
+          ctx = s"divc/$d mulHi=$mulHi lanes=$lanes",
+          options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withMulHiDivide(mulHi))
+      }
     }
   }
 
-  test("a constant division is emitted through the double lane whatever the division option " +
-      "says, because it has no other lowering") {
-    // The `division` option chooses among the lowerings the *calendar* has. This node has one,
-    // so the option cannot turn it off - and if it ever did, the kernel would compute nothing
-    // rather than compute something slower.
+  /**
+   * The int-lane constant divisors in use: `extract(YEAR FROM ym)`'s twelve, the fuzz
+   * grammar's list (`VarkaIrGrammar.ConstDivideDivisors`), and the `TIME` split form's two.
+   * The sweep below proves the multiply-high form over all 2^32 dividends for each of them.
+   */
+  private val intDivisors = Seq(12, 2, 3, 7, 100, -3, -12, 60, 3600)
+
+  test("the multiply-high form's constants are Hacker's Delight's") {
+    // The derivation is the book's; the constants it must produce for the divisors the book
+    // works are known, and a derivation that drifted would produce a form that is merely
+    // nearly exact - which the sweep would catch, at a price this catches for free.
+    def magic(d: Int): (Long, Long) = {
+      val m = VarkaLoopEmitter.signedMagicForTest(d)
+      (m(0), m(1))
+    }
+    assert(magic(12) === (0x2AAAAAABL, 32 + 1))
+    assert(magic(7) === (0x92492493L, 32 + 2))
+    assert(magic(3) === (0x55555556L, 32 + 0))
+    assert(magic(2) === (0x80000001L, 32 + 0))
+    assert(magic(100) === (0x51EB851FL, 32 + 5))
+    intercept[IllegalArgumentException](VarkaLoopEmitter.signedMagicForTest(1))
+  }
+
+  test("the multiply-high form is exact over every int32 dividend for every divisor in use " +
+      "(opt-in: -Dvarka.sweep=true; task 149)") {
+    // The proof the emitted arithmetic rests on, run as the arithmetic: the unsigned
+    // multiplier, the one shift and the sign bit, against Java's `/`, for all 2^32 dividends
+    // and every divisor in `intDivisors`. Scalar, not the kernel - the kernel's parity over
+    // the extremes and the fuzzer's random dividends are above; this is the exhaustive half.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to sweep the multiply-high form")
+    for (d <- intDivisors) {
+      val magic = VarkaLoopEmitter.signedMagicForTest(math.abs(d))
+      val mu = magic(0)
+      val shift = magic(1).toInt
+      val sign = if (d < 0) -1 else 1
+      var n = Int.MinValue
+      var done = false
+      while (!done) {
+        val q = (((n.toLong * mu) >> shift) + (n >>> 31)).toInt * sign
+        assert(q === n / d, s"d=$d n=$n")
+        if (n == Int.MaxValue) done = true else n += 1
+      }
+    }
+  }
+
+  test("a constant division takes the multiply-high form by default and the double lane as " +
+      "the reference arm, whatever the division option says") {
+    // The `division` option chooses among the lowerings the *calendar* has and does not reach
+    // this node. What does is `mulHiDivide`: on, the body has no double-lane op at all and
+    // carries the multiply-high's four long-lane ops - two multiplies, two shifts - and four
+    // conversions; off, the conversion form's two double divides. Neither option can leave the
+    // node with no lowering.
     val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     for (form <- VarkaEmitOptions.Division.values()) {
-      val bytes = emitMulti(root, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
-      assert(doubleDivisions(bytes) === 1, s"division=$form")
+      val mulHi = emitMulti(root, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
+      assert(doubleDivisions(mulHi) === 0, s"division=$form")
+      assert(opsOn(mulHi, "LongVector") === 4, s"division=$form")
+      assert(convertShapes(mulHi) === 4, s"division=$form")
+      val converting = emitMulti(root, 1, 0,
+        VarkaEmitOptions.DEFAULTS.withDivision(form).withMulHiDivide(false))._2
+      assert(doubleDivisions(converting) === 1, s"division=$form")
+      assert(opsOn(converting, "LongVector") === 0, s"division=$form")
     }
   }
 
@@ -4767,11 +4832,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     val long64 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000))
     val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     assert(longDoubleDivisions(emitMulti(long64, 1, 0, converting)._2) === 1)
-    assert(doubleDivisions(emitMulti(int32, 1, 0, converting)._2) === 1)
+    assert(doubleDivisions(emitMulti(int32, 1, 0, converting.withMulHiDivide(false))._2) === 1)
     // The counter above is what makes the difference explicit: the int lane spends two divides
     // and four conversions on one division, the long lane one and two.
     assert(opsOn(emitMulti(long64, 1, 0, converting)._2, "DoubleVector") === 1)
-    assert(opsOn(emitMulti(int32, 1, 0, converting)._2, "DoubleVector") === 2)
+    // The int lane's conversion form is the reference arm now; the shipped form multiplies.
+    assert(opsOn(emitMulti(int32, 1, 0, converting.withMulHiDivide(false))._2,
+      "DoubleVector") === 2)
   }
 
   test("a long-lane constant division refuses the divisors that have no quotient") {
@@ -4794,6 +4861,80 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   // Task 102: a range guard at the long lane, which is what makes `TIME + INTERVAL` a decline
   // rather than a wrap where Spark throws.
   // -------------------------------------------------------------------------------------------
+
+  test("a narrowing root stores four bytes a row of what the long lane computed, at both widths") {
+    // Route A of `PLAN_TASK_102.md` 8.3: the extracts of a TIME are 64-bit divisions whose
+    // results are ints, and a `NarrowLane` root stores the low half of each lane at `i * 4`
+    // where a wide root stores the whole lane at `i * 8`. A narrowed root shares its kernel
+    // with a wide one here on purpose, since the offset is per root; the rows reach both ends
+    // of the day and the sub-second edges; and the values are the long reference's narrowed
+    // the way the store narrows them. Validity is the child's, which the store leaves alone,
+    // so the nulls and the tail are asserted as for any long root.
+    val t = new ColumnRef(0, LaneType.LONG)
+    val sixty = new LiteralSlot(0, LaneType.LONG)
+    def remainderOfSixty(x: VarkaVectorIR): VarkaVectorIR =
+      new IntArith(IntOp.SUB, Overflow.WRAP, x,
+        new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(x, 60L), sixty))
+    val hour = new NarrowLane(new ConstDivide(t, 3600000000000L))
+    val minute = new NarrowLane(remainderOfSixty(new ConstDivide(t, 60000000000L)))
+    val second = new NarrowLane(remainderOfSixty(new ConstDivide(t, 1000000000L)))
+    val roots = Seq[VarkaVectorIR](hour, minute, t, second)
+    val edges = Seq(0L, 999999999L, 1000000000L, 3599999999999L, 3600000000000L,
+      43200000000000L, 86399999999999L)
+    def value(i: Int): Long = if (i < edges.length) edges(i) else {
+      java.lang.Long.remainderUnsigned(i.toLong * 0x9E3779B97F4A7C15L, 86400000000000L)
+    }
+    for (lanes <- Seq(2, 8)) {
+      val (name, bytes) = emitMulti(roots, 1, 1, VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+      // The store, counted from the bytes: one masked int store per narrowed root across the
+      // dense bodies, the same in the masked epilogue, and nothing else on the int species - no
+      // second species and no int arithmetic, which is what keeps the templates monomorphic.
+      def intVectorCalls(method: String): Int =
+        VarkaEmitterTestSupport.invocationCount(bytes, method, "jdk.incubator.vector.IntVector")
+      val denseBodies = VarkaEmitterTestSupport.methodNames(bytes).asScala
+        .filter(_.startsWith("loopDense"))
+      assert(denseBodies.map(intVectorCalls).sum === 3, s"at $lanes lanes: three narrowed stores")
+      assert(intVectorCalls("epilogueMasked") === 3, s"at $lanes lanes: three in the epilogue")
+      val (kernel, loader) = load((name, bytes))
+      try {
+        for (length <- Seq(1, 7, 17, 64, 129); (patternName, isNull) <- nullPatterns) {
+          val arena = Arena.ofConfined()
+          try {
+            val in = makeLongInput(arena, length, isNull, value)
+            val outs = roots.map {
+              case _: NarrowLane => makeOutput(arena, length)
+              case _ => makeLongOutput(arena, length)
+            }
+            val status = kernel.run(Array(in.data.address()), Array(in.validityAddress(length)),
+              Array(in.nullCount), outs.map(_._1.address()).toArray,
+              outs.map(_._2.address()).toArray, Array.empty[Int], Array(60L), length)
+            assert(status === 0, s"lanes=$lanes len=$length $patternName: status $status")
+            for (i <- 0 until length; (root, o) <- roots.zipWithIndex) {
+              val row = Seq(if (isNull(i)) None else Some(value(i)))
+              val expected = evalLong(root, row, Array(60L))
+              val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+              val where = s"lanes=$lanes len=$length $patternName out=$o row=$i"
+              assert(bit === expected.isDefined, s"$where: validity (want $expected)")
+              expected.foreach { v =>
+                root match {
+                  case _: NarrowLane =>
+                    assert(outs(o)._1.get(ValueLayout.JAVA_INT, i * 4L) === v.toInt,
+                      s"$where: the narrowed value")
+                  case _ =>
+                    assert(outs(o)._1.get(ValueLayout.JAVA_LONG, i * 8L) === v,
+                      s"$where: the wide value beside it")
+                }
+              }
+            }
+          } finally {
+            arena.close()
+          }
+        }
+      } finally {
+        loader.release()
+      }
+    }
+  }
 
   test("a long-lane range guard passes the value through and declines the batch on a lane " +
       "outside its bounds, in the loop and in the epilogue") {

@@ -317,7 +317,7 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 | `abs(ym)` |  | vector |
 | `ym - ymm` |  | vector |
 | `CAST(ymy AS INTERVAL MONTH)` |  | vector |
-| `extract(YEAR FROM ym)` | a division by twelve over a month count nothing bounds, so it is the first one the calendar's range-narrowed magic cannot serve and the double lane can | vector |
+| `extract(YEAR FROM ym)` | a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does | vector |
 | `extract(YEAR FROM ym) - 1` | the quotient feeding further int arithmetic | vector |
 
 #### Integer arithmetic
@@ -397,6 +397,9 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 | `time_diff('microsecond', t2, t)` | units are read case-insensitively, as DateTimeUtils reads them | vector |
 | `time_trunc('MINUTE', t)` |  | vector |
 | `time_trunc('MILLISECOND', t2)` |  | vector |
+| `hour(t)` | an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until task 28; so the extract fuses as an output and declines under another expression | vector |
+| `minute(t2)` |  | vector |
+| `second(t)` |  | vector |
 | `t + INTERVAL '0 00:00:00' DAY TO SECOND` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 
 <!-- END generated coverage table -->
