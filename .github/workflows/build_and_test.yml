@@ -204,6 +204,34 @@ jobs:
             java25=false
           fi
           build=`./dev/is-changed.py -m "core,unsafe,kvstore,avro,utils,utils-java,network-common,network-shuffle,repl,launcher,examples,sketch,variant,api,catalyst,hive-thriftserver,mllib-local,mllib,graphx,streaming,sql-kafka-0-10,streaming-kafka-0-10,streaming-kinesis-asl,credential-aws,kubernetes,hadoop-cloud,spark-ganglia-lgpl,profiler,protobuf,yarn,connect,sql,hive,pipelines"`
+          # A change confined to Varka's own files (task 160, `modules.is_varka_scoped`) runs the
+          # Varka suites of catalyst and sql/core in one job of its own and not Spark's module
+          # matrix: Spark's tests run with the engine off and cannot see such a change, while the
+          # matrix costs about ninety minutes and thirteen hundred job-minutes for it. Any file
+          # outside that set - a shared hook, this workflow, a Spark source - keeps the matrix.
+          # Documents alone are not a scoped change either; they have their own job.
+          varka_scope=spark
+          if [ -n "${changed_files:-}" ]; then
+            varka_scope=$(echo "$changed_files" | (cd dev && python3 -c "
+          import sys
+          import sparktestsupport.modules as m
+          print(m.varka_change_scope(sys.stdin.read().split()))
+          "))
+          fi
+          echo "varka change scope: $varka_scope"
+          varka_scoped=false
+          if [ "$varka_scope" = "scoped" ]; then
+            varka_scoped=true
+            build=false
+            build_core_utils=false
+            pyspark=false
+            pandas=false
+            pyspark_install=false
+            pyspark_connect_old_client=false
+            tpcds=false
+            docker=false
+            java25=false
+          fi
           build_core_utils=`./dev/is-changed.py -m "core,unsafe,kvstore,utils,utils-java,network-common,network-shuffle,sketch,variant,launcher"`
           varka_engine=`./dev/is-changed.py -m varka-engine`
           varka_bench=`./dev/is-changed.py -m varka-bench`
@@ -228,6 +256,7 @@ jobs:
               \"varka-bench\": \"$varka_bench\",
               \"varka-docs\": \"$varka_docs\",
               \"varka-asm\": \"$varka_asm\",
+              \"varka-scoped\": \"$varka_scoped\",
               \"pyspark\": \"$pyspark\",
               \"pyspark-pandas\": \"$pandas\",
               \"pyspark-install\": \"$pyspark_install\",
@@ -1275,6 +1304,58 @@ jobs:
   # that history is a single commit, which turns most of the documents' quotes into orphans
   # (PLAN_TASK_106.md, section 2). The documents are the fork's; upstream's tree has no
   # bearing on whether they quote the fork's numbers.
+  # The Varka suites alone, for a change confined to Varka's files (task 160). Two jobs in
+  # parallel, one per module, each the sbt build of that module's tests and its `*Varka*`
+  # suites; the sql job adds the Arrow cache serializer's suite, which is Varka's without the
+  # name. What a full run of the matrix costs for the same change is the measurement the task
+  # records: this pair is meant to finish in about a third of its wall time and a fraction of
+  # its job-minutes, and the precondition's verdict is what a reader checks when it does not.
+  varka-scoped:
+    needs: [precondition]
+    if: fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
+    name: "Varka suites: ${{ matrix.module }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: catalyst
+            suites: 'catalyst/testOnly *Varka*'
+          - module: sql
+            suites: 'sql/testOnly *Varka* *ArrowCachedBatchSerializerSuite'
+    steps:
+    - name: Bootstrap composite actions
+      uses: actions/checkout@v6
+    - name: Checkout and sync Spark repository
+      uses: ./.github/actions/checkout-and-sync
+      with:
+        ref: ${{ needs.precondition.outputs.head_sha }}
+    - name: Cache SBT and Maven
+      uses: actions/cache@v4
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+        key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
+        restore-keys: |
+          build-
+    - name: Cache Coursier local repository
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/coursier
+        key: varka-scoped-coursier-${{ matrix.module }}-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
+        restore-keys: |
+          varka-scoped-coursier-${{ matrix.module }}-
+    - name: Install Java ${{ inputs.java }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: ${{ inputs.java }}
+    - name: Run the Varka suites of ${{ matrix.module }}
+      run: ./build/sbt -Phive "${{ matrix.suites }}"
+
   varka-docs:
     needs: [precondition]
     if: fromJson(needs.precondition.outputs.required).varka-docs == 'true'
