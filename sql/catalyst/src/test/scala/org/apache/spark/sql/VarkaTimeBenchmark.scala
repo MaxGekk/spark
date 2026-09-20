@@ -43,13 +43,16 @@ import org.apache.spark.sql.catalyst.util.DateTimeConstants._
  * 8.3). In the split form the same extracts are divisions of a number under 86400 by 3600 and
  * 60, in 32-bit lanes, twice as many to a register and half the bytes to read.
  *
- * Five arms per shape, adjacent, on the same rows:
+ * Six arms per shape, adjacent, on the same rows:
  *
  *  - **nanoseconds of day, int64 lanes, conversion form** - the shipped lowering on this
  *    machine, `ConstDivide` through `L2D`, `vdivpd`, `D2L`, stored wide;
  *  - **nanoseconds of day, int64 lanes, conversion form, narrowed store** - the same tree
  *    under a `NarrowLane` root, which is what `hour(t)` compiles to: the quotient narrowed with
  *    `L2I` and stored at four bytes a row under an int mask;
+ *  - **nanoseconds of day, int64 lanes, conversion form, narrowed store, half species** - the
+ *    same root stored through the int species of half the width, whole, which is the form
+ *    `PLAN_TASK_156.md` weighs against the masked one;
  *  - **nanoseconds of day, int64 lanes, magic form** - the same tree emitted with
  *    `useAVX = 2`, the lowering every AVX2-only host in the runner census takes;
  *  - **seconds of day, int32 lanes, emitted** - the split form's extracts as the emitter
@@ -144,6 +147,15 @@ object VarkaTimeBenchmark extends BenchmarkBase {
 
   /** The magic form of the 64-bit division, which an AVX2-only host takes without asking. */
   private val magicForm = VarkaEmitOptions.DEFAULTS.withUseAVX(2)
+
+  /**
+   * The narrowed store through the half-width int species (`PLAN_TASK_156.md`): honoured only
+   * at a baked lane count, so the count is the host's own, which at every width this file is
+   * regenerated at is what the shipped form emits for anyway.
+   */
+  private val halfSpecies = VarkaEmitOptions.DEFAULTS
+    .withLanesOverride(jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length())
+    .withNarrowHalfSpecies(true)
 
   /** The literal slots of the long form: nanoseconds per hour, per minute, per second. */
   private val NANOS_PER_HOUR = SECONDS_PER_HOUR * NANOS_PER_SECOND
@@ -288,6 +300,10 @@ object VarkaTimeBenchmark extends BenchmarkBase {
             emit(longRoots, 1, longLits.length, loader, kernelId()), LaneType.LONG, false),
           ("nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)",
             emit(longRoots.map(new NarrowLane(_)), 1, longLits.length, loader, kernelId()),
+            LaneType.LONG, true),
+          ("nanoseconds of day, int64 lanes, conversion form, narrowed store, half species",
+            emit(longRoots.map(new NarrowLane(_)), 1, longLits.length, loader, kernelId(),
+              halfSpecies),
             LaneType.LONG, true),
           ("nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)",
             emit(longRoots, 1, longLits.length, loader, kernelId(), magicForm),
