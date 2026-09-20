@@ -2594,6 +2594,15 @@ nodes they check. *Re-sequenced 17 September 2026: the arms for 85's subset -
 which is all 29 uses, now that it is comparisons only - landed with 85; what
 remains here lands with 102, 103 and 88.*
 
+*Closed 19 September 2026, `PLAN_TASK_119.md`.* The evaluator turned out to be
+complete: the "day-modular arithmetic" anticipated above became a range guard
+over a wrapping add under task 102's SPARK-57853 reading, and every `TIME` and
+interval expression is a tree of nodes `evalLong` already spells. What was
+missing was the corpus - no long shape had ever been drawn - and the oracle's
+long half. Both landed, as a second sequence beside the int one so the committed
+int32 digests did not move, with the reach set derived from the constructors
+rather than listed.
+
 ### 2.55 The coverage table as a differential corpus (task 120)
 
 *Opened 15 September 2026, from the review of what the published table proves.*
@@ -3284,6 +3293,62 @@ model, the JDK and the vector-library binding printed beside the output, on
 dispatch or on a push touching the directory. It is the cheap way to ask a
 per-host question - no Spark build, seconds per runner - and task 150's
 per-machine gate can start from the same "print the machine first" step.
+### 2.88 The `TIME` split form priced before any engine exists (task 152)
+
+*Opened and closed 20 September 2026, from the owner's choice of "whether
+representation as a compiler decision pays" as the next investigation after
+task 151.*
+
+`SCOPE_MILESTONE_6.md` item 11 is a long argument with no number under it, and
+its `TIME` row - seconds of day and nanoseconds within the second in two 32-bit
+lanes, instead of nanoseconds of day in one 64-bit lane - is the first case that
+needs no engine to price: the extracts are constant divisions either way, and
+the only question is what each form's division costs, at each width, against
+the price of the split. `PLAN_TASK_102.md` 2.5 asks the same question from the
+store side, where the extracts wait on a narrowing store or on task 28.
+
+`VarkaTimeBenchmark` answers it as a baseline committed before any lowering
+changes: four arms per shape on the same instants, the split itself as an
+upper bound, the copy floors, four rungs. `PLAN_TASK_152.md` carries the
+predictions, registered and committed before the first regeneration, and the
+scoring. What follows from the numbers is item 11's to decide and task 102
+group C's to build, not this task's.
+
+### 2.89 Masked 64-bit operations have no 128-bit lowering, and every long-lane guard is one (task 153)
+
+*Opened 20 September 2026, from `VarkaTimeBenchmark`'s 128-bit companion
+(task 152).*
+
+The wide run of that file says the 64-bit magic divide costs at most nothing
+against the conversion form; the narrow run says it runs at one fiftieth of
+it, 48.8 against 2377.2 M rows/s on `hour`, and `PrintIntrinsics` names the
+cause: at `vlen=2` C2 refuses the masked `NEG`, the masked `SUB`, both
+compares that feed them and the mask broadcast, and the Vector API runs each
+as a Java loop over the lanes (`PLAN_TASK_152.md` 6.5). The unmasked steps
+vectorise; the masked ones do not; and the form is nearly all masked steps.
+
+The magic form is opt-in and this closes the question of whether it should
+ever be selected by width. The open question is everything else built the same
+way at the long lane. The range guard is a compare and a mask; the checked
+add's overflow test is a compare and a mask; `CASE WHEN` over a 64-bit
+comparison is a compare and a blend by mask. Every one of them has shipped
+with 512-bit numbers and no 128-bit number of its own, and every NEON-only
+aarch64 host in the fleet runs at exactly the species that refuses them.
+Task 149 found one int-lane shape slower than a scalar loop at 128 bits; this
+is the long-lane counterpart and it is structural rather than one shape.
+
+**How.** The audit first: each long-lane coverage row emitted at
+`MaxVectorSize=16` under `PrintIntrinsics`, its `** not supported` lines
+tabulated by node type, so the answer is per construction rather than per
+benchmark. Then the assembly gate: task 150's per-width expectations gain a
+long-lane row at 128 bits, so a masked long operation that scalarises fails
+the gate on the machine class that exposes it. Then, per refused
+construction, either a form without the mask - a blend by arithmetic, a
+compare folded into an unmasked select - or a compile-time decline of the shape
+below 256 bits, which task 149's width floor already argues for. **Done when**
+the coverage table says, per long-lane row, whether it vectorises at 128-bit
+lanes, and no committed 128-bit number of a long-lane shape is a per-lane rate.
+Size: medium; the audit itself is a day.
 
 ### 2.89 Masked 64-bit operations have no 128-bit lowering, and every long-lane guard is one (task 153)
 
@@ -3461,7 +3526,7 @@ can start has.
 | 116 | A `TIME` column through Varka's Arrow cache, proven (section 2.51). **Done** (`PLAN_TASK_116.md`, 15 September 2026): `VarkaTimeArrowCacheSuite`, fifteen tests, `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval at three null patterns - the type keeps its precision, the vector is `TimeNanoVector` or `DurationVector`, the raw buffers map as eight-byte lanes with the right validity bits; no production code changed. The first run failed on the harness (a memoised `queryExecution`), not the cache | A `sql/core` Varka suite caching `TIME(p)` for p in {0, 3, 6, 9} and a day-time interval column under the Arrow serializer, reading back equal, and mapping the buffers through the morsel as eight-byte lanes | Passes at every null pattern the date fixtures use before any long-lane code is written, or fails and becomes the first fix |
 | 117 | Sync the fork with `apache/spark` master (section 2.52). **Done** (15 September 2026, by the owner, by hand): `origin/master` is now `2219f51c76a`, a merge of `apache:master`, 0 commits behind upstream and 212 ahead; SPARK-53368 is present; the gate's `compile` (218 s) and `wide` (220 s) steps are green on it, 297 + 183 tests, 0 failed, the 10 canceled being the opt-in sweep and JFR cases. Was: first in the milestone by the owner's instruction, infrastructure before 84 opens | The merge of the 375 upstream commits (dry run 15 September: no conflicting file; the merged tree compiles and passes the wide Varka suites, 480 tests, 0 failed), the gate green, a surface regeneration under the canary if any Varka number is suspected to have moved | `dev/varka_gate.sh` green on the merged tree; [SPARK-53368](https://issues.apache.org/jira/browse/SPARK-53368) present afterwards, and the 36 traceable [SPARK-57550](https://issues.apache.org/jira/browse/SPARK-57550) subtasks still present, by a full-message grep of the log rather than a title prefix |
 | 118 | The closing task: final benchmarks, the README, and the post (section 2.53). **Scoped** (15 September 2026) on the owner's instruction - the milestone ends as milestone 4 did, with task 62's shape; **last in the milestone**, after 105 and 101 | (A) the measurement's plan - arms, benchmarks, the full-width runner; (B) the `TIME` surface and chains measured under the band on a runner the datapath probe proves, with the allocation/arithmetic split and the engine-off ratio beside stock; (C) the README's `TIME` table and reproduction guide, the docs checked; the short and long post drafts, ideas first, numbers last | Four results files per benchmark committed with provenance and band; the README quotes them and nothing else; `dev/varka_quote_check.py` at zero orphans; both drafts exist and name their sources |
-| 119 | The oracle for the long lane: reference evaluator and fuzzer at `long` (section 2.54). **Scoped** (15 September 2026); lands with the nodes it checks - the comparison and arithmetic arms landed with 85 (`evalLong`, `evalCondLong`, `PLAN_TASK_85.md` 9.4), and the `TIME`, interval and division arms land with 102, 103 and 88, re-sequenced 17 September 2026 when 29 was narrowed to nodes 85 already covers | `VarkaReferenceEvaluator` over long lanes including both exact-division lowerings, the range guards, `TIME`'s day-modular arithmetic and the interval checks; the fuzz grammar over long, `TIME` and day-time interval trees; the reaches-every-node assertion at the long lane | The fuzzer at ten thousand iterations clean at both vector widths over the long-lane grammar; a deliberately wrong evaluator arm is caught by the fuzzer, not only by the differential |
+| 119 | The oracle for the long lane: reference evaluator and fuzzer at `long` (section 2.54). **DONE** (19 September 2026, `PLAN_TASK_119.md`): the evaluator arms landed with 85 and needed no addition, since every `TIME` and interval lowering is a tree of the lane-generic nodes it already spells; this task added the long-lane grammar (`LongShapes`, its own seed and corpus), the fuzzer at the long lane with a reach test that reads the lane-generic set off the constructors, and the bytes oracle's long half - the twenty long coverage rows un-skipped and a `fuzz_long` sequence. Ten thousand iterations clean at both widths; a wrong `ConstDivide` arm is caught. The run also found the int grammar's `TruncDate` bound short by a year under task 102's guard arm (iteration 847), fixed here | `VarkaReferenceEvaluator` over long lanes including both exact-division lowerings, the range guards, `TIME`'s day-modular arithmetic and the interval checks; the fuzz grammar over long, `TIME` and day-time interval trees; the reaches-every-node assertion at the long lane | The fuzzer at ten thousand iterations clean at both vector widths over the long-lane grammar; a deliberately wrong evaluator arm is caught by the fuzzer, not only by the differential |
 | 120 | The coverage table as a differential corpus (section 2.55). **Done** (`PLAN_TASK_120.md`, 16 September 2026): `VarkaCoverageDifferentialSuite` runs every `coverage.json` row on three fixtures under both consumers, 58 tests in 42 seconds. Its first run found the table carrying `year(d) = 2021 AND i > 0` while `i > 0` ran in a row filter above the Varka node - the coverage suite had accepted a predicate if any conjunct fused; it now requires all, the row is `year(d) = 2021 AND month(d) > 6`, and the gap is task 122. Originally scoped (15 September 2026); independent, started on the 57 rows | A `sql/core` suite running every `coverage.json` row through both engines over the null-pattern fixtures, projection and predicate forms, both consumers | Every row of the committed table passes; adding an arm without a row fails `VarkaCoverageSuite`, adding a row without correctness fails this suite - the two together are the guarantee |
 | 121 | The AVX2 arm: the `TIME` surface under `-XX:UseAVX=2` (section 2.56). **Scoped** (15 September 2026); after 105, quoted by 118 | Companion results files for the `TIME` surface under `UseAVX=2` on the laptop and on a Zen 3 runner via the workflow, provenance naming the lowering; the one-or-two-lowerings decision for 2.19 recorded from the numbers | Files committed with datapath and flags; the decision written in 2.19 with its numbers; 118's README table shows the AVX2 column beside the full-width one |
 | 122 | A comparison over a bare int column stays on the row engine (section 2.57). **Done** (`PLAN_TASK_122.md`, 17 September 2026): one operand rule in `compare`, and a second in `compileValidity` that the differential's first run showed was not optional - Spark infers `isnotnull(i)` beside any null-intolerant predicate on `i`, so admitting the comparison alone left the kernel doing the compare and the row engine still visiting every row for the null. Five coverage rows, 61 through the differential under both consumers, and the emitter untouched, which the unmoved fuzz digests confirm. Two older tests were re-pointed at a `ShortType` column, having used `i > 5` as their example of something that cannot fuse. Originally scoped (16 September 2026) | `compare`'s non-literal operand accepts an `IntegerType` column the way `intOperand` does; `i > 0`, `i = 5` and `i < i2` fuse, alone and as conjuncts; a coverage row for each | The three shapes in the coverage table and through `VarkaCoverageDifferentialSuite`; the end-to-end plan for `year(d) = 2021 AND i > 0` has no row filter above the Varka node |
@@ -3495,6 +3560,8 @@ can start has.
 | 150 | The assembly gate fails on part of the runner pool, and cannot say which part (section 2.86). **Scoped** (19 September 2026) on the gate's second failure in two days: the same four tests on #255's first run and on #258, a pass in between on a re-run of the same commit, identical bytes under it each time, and on the second run the suite's own gather self-test not packing at 128-bit lanes - a statement about the runner, whose CPU the gate's log does not record | The machine printed at the top of the gate job - CPU model, `UseAVX`, `MaxVectorSize`, the datapath readings - and expectations per machine class on task 124's baseline, with the self-tests as the precondition that cancels rather than fails the 128-bit and hand-written assertions | A gate failure names its CPU, and the gate is green on one run from each family in `PLAN_TASK_62.md` 11's census |
 | 153 | Masked 64-bit operations have no 128-bit lowering in this JVM, and every long-lane guard is built from one (section 2.89). **DONE** (20 September 2026, `PLAN_TASK_153.md`): `VarkaWidthAuditSuite` forks a probe per vector width under a scoped `PrintIntrinsics` and reads C2's own refusals per shape - every coverage row and fifteen hand-built constructions - asserting on every host that nothing is refused at the host's preferred width, and pinning the per-width census as `sql/varka/width_audit.json` with the host named. The census: no refusal at 512 or 256 bits; at 128 bits every long-lane construction that touches a mask - compare to mask, blend, mask cast, broadcast, logic and test - is refused and no int-lane one is, so seventeen of the twenty long coverage rows are per-lane at two 64-bit lanes, which the coverage table now says per row. The audit's first CI run added the AVX2 half: on the pool's EPYC 7763 at 256 bits C2 refuses the 64-bit lane's `L2D` and `D2L` in every division shape, task 88's premise confirmed from the log, so the invariant expects that one refusal below AVX-512 and task 121 owns the answer | The three test files, the census, the coverage table's *128-bit lanes* column; the mask-free forms or the decline below 256 bits are left to the long-lane kernel design they inform (task 102 group C), and the NEON confirmation to a catalyst run on the arm runner | Every long-lane coverage row names, in the coverage table, whether it vectorises at 128-bit lanes |
 | 151 | The math lanes re-read with the library reached, on both runner architectures (section 2.87). **Done** (19 September 2026): `MathLaneProbe` had been measuring the scalar fallback against itself - the operator arrived as a method parameter, which C2 refuses with "missing constant", and then the lazy library binding was compiled in before it existed - so `SCOPE_FUNCTIONS.md` section 3's "bit for bit" reading was wrong. Re-taken on Zen 5 (AVX-512), EPYC 7763 (AVX2) and Neoverse N2 (NEON) through a new `varka-canary.yml` workflow: no operator matches the row engine's bits on any host, one ULP against `Math`, two against `StrictMath` for `log10` and x86 `tanh`, and the three library builds differ among themselves | One loop per operator constant, a pre-binding pass, a forced-fallback control pass and a nanoseconds-per-element column in the probe; a workflow that runs any canary on `ubuntu-latest` and `ubuntu-24.04-arm` on dispatch or on a push touching `dev/varka_canary`; the three outputs committed as `dev/varka_canary/mathlane-*.txt`; section 3, item 36 and the skills entry rewritten | The tables in `SCOPE_FUNCTIONS.md` section 3 carry three hosts, and the FP-contract decision in `SCOPE_MILESTONE_6.md` item 36 is stated for the whole family |
+| 152 | The `TIME` split form priced before any engine exists (section 2.88). **DONE** (20 September 2026, `PLAN_TASK_152.md`): `VarkaTimeBenchmark`, a file of its own on the long-lane ladder, prices `hour`, `minute`, `second` and the three together in four arms - nanoseconds of day in 64-bit lanes under the conversion form and under the AVX2 magic form, seconds of day in 32-bit lanes under the emitter's double route and under a hand-written magic multiply whose constants are proven exact by exhaustion - beside the cost of the split itself and each lane's copy floor. The predictions are registered in the plan's section 3 and scored in its section 6 | A benchmark and its three committed files, no engine: the numbers decide whether a conversion node, a bounded int-lane magic divide or a second cache encoding is worth building | `SCOPE_MILESTONE_6.md` item 11's `TIME` row cites a committed number, and `PLAN_TASK_102.md` 2.5's three options are priced side by side |
+| 153 | Masked 64-bit operations have no 128-bit lowering in this JVM, and every long-lane guard is built from one (section 2.89). **Scoped** (20 September 2026) from task 152's narrow companion: the 64-bit magic divide runs at 48.8 M rows/s at two lanes against the conversion form's 2377.2, and `PrintIntrinsics` says why - C2 refuses every masked long or double operation and every compare-to-mask at `vlen=2` (`PLAN_TASK_152.md` 6.5). The range guard, the checked add's overflow test and a blend over a 64-bit comparison are the same construction, and a NEON-only aarch64 runs at two 64-bit lanes with no override | One `PrintIntrinsics` run per long-lane shape at `-XX:MaxVectorSize=16`, the refusals tabulated per node, a 128-bit long-lane row in the assembly gate (task 150's per-width expectations), and for each refused construction either a mask-free form or a decline of the shape below 256 bits | Every long-lane coverage row names, in the coverage table, whether it vectorises at 128-bit lanes, and no committed 128-bit number of a long-lane shape is a per-lane rate |
 
 ## 4. Files
 

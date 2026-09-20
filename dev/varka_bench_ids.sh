@@ -52,7 +52,7 @@ root="$(git rev-parse --show-toplevel)"; cd "$root"
 
 benches=("$@")
 if [ "${#benches[@]}" -eq 0 ]; then
-  benches=(VarkaEmitterParityBenchmark VarkaArithmeticBenchmark)
+  benches=(VarkaEmitterParityBenchmark VarkaArithmeticBenchmark VarkaTimeBenchmark)
 fi
 
 status=0

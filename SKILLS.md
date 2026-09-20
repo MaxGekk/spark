@@ -75,6 +75,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Columnar Transition Wiring (plan level)](sql/varka/skills/testing-and-debugging.md#columnar-transition-wiring-plan-level)
 * [Metrics as the "did it really run" proof](sql/varka/skills/testing-and-debugging.md#metrics-as-the-did-it-really-run-proof)
 * [Independent Reference Evaluators as Test Oracles](sql/varka/skills/testing-and-debugging.md#independent-reference-evaluators-as-test-oracles)
+* [A second lane gets a second fuzz corpus, and its reach set comes from the constructors](sql/varka/skills/testing-and-debugging.md#a-second-lane-gets-a-second-fuzz-corpus-and-its-reach-set-comes-from-the-constructors)
 * [A fixture that fills undefined memory decides what its whole matrix can catch](sql/varka/skills/testing-and-debugging.md#a-fixture-that-fills-undefined-memory-decides-what-its-whole-matrix-can-catch)
 * [Testing Under AQE](sql/varka/skills/testing-and-debugging.md#testing-under-aqe)
 * [A closed `ArrowBuf` still answers `capacity()` and `memoryAddress()`](sql/varka/skills/testing-and-debugging.md#a-closed-arrowbuf-still-answers-capacity-and-memoryaddress)
@@ -89,6 +90,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Two things share the name `uncommon_trap`, and only one of them happened](sql/varka/skills/the-jit.md#two-things-share-the-name-uncommon_trap-and-only-one-of-them-happened)
 * [Calling into an uncompilable method costs something even when it does nothing](sql/varka/skills/the-jit.md#calling-into-an-uncompilable-method-costs-something-even-when-it-does-nothing)
 * [A hand-written comparison kernel needs every fast path the real one has](sql/varka/skills/the-jit.md#a-hand-written-comparison-kernel-needs-every-fast-path-the-real-one-has)
+* [A kernel clean at 512 bits can be a per-lane loop at 128, and only the narrow companion shows it](sql/varka/skills/the-jit.md#a-kernel-clean-at-512-bits-can-be-a-per-lane-loop-at-128-and-only-the-narrow-companion-shows-it)
 * [Ask C2 which vector calls it refused, per shape, and know which of its three answers is a verdict](sql/varka/skills/the-jit.md#ask-c2-which-vector-calls-it-refused-per-shape-and-know-which-of-its-three-answers-is-a-verdict)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
