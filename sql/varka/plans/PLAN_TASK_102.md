@@ -417,3 +417,173 @@ generates no `LONG` node and the new guard is fuzzed only at the int lane.
 
 Steps 2, 4, 5 and 3 of 6.1 in that order: the table (#254), task 88 step 3
 (#255), group B, group A. Step 6 is next.
+
+## 8. Group C: the extracts, the narrowing store and the split form, planned
+
+*20 September 2026, after tasks 152 and 153 priced the split form and found
+where masks stop lowering.*
+
+### 8.1 What group C is, read again
+
+`hour(t)`, `minute(t)` and `second(t)` produce an `IntegerType` from a `TIME`
+column (2.4): `HoursOfTime`, `MinutesOfTime`, `SecondsOfTime` are
+`RuntimeReplaceable` to `StaticInvoke`s of `DateTimeUtils.getHoursOfTime` and
+its two siblings, which go through `LocalTime`, and the arithmetic is the
+divisions of 2.6. `make_time(h, m, s)` is the other direction - two int
+operands and a `DecimalType(16, 6)` seconds operand into a `TIME` - and its
+blockers are task 28's widening and 2.3's decimal representation; it stays
+with those. So this section is about the three extracts, and the question 2.5
+left open: how an int32 result leaves a long-lane kernel.
+
+### 8.2 The three routes, priced from the numbers already committed
+
+`VarkaTimeBenchmark` (task 152, `PLAN_TASK_152.md` 6) put the four arms of
+this question on one ladder, and the numbers decide more than 2.5 expected.
+Rates in M rows/s at the L2 rung, 512-bit species then 128-bit.
+
+| route | what computes the field | `hour` | all three | where the cost is |
+|---|---|---:|---:|---|
+| **A. long lanes, narrowing store** | the conversion-form division in 64-bit lanes, the int32 result narrowed at the store | 4204.3 / 2377.2 | 1391.8 / 760.3 | the divider: one `vdivpd` per eight rows per division |
+| **B. split per batch, then int lanes** | a derived int32 seconds column, then a single bounded multiply per field | up to 24417.3 / 30855.0 after the split | up to 13298.7 / 8384.9 after the split | the split: 3989.3 / 2258.9 as a long kernel, far less as a scalar loop |
+| **C. split stored, then int lanes** | the same int kernel over a seconds column the Arrow cache already holds | 24417.3 / 30855.0 | 13298.7 / 8384.9 | nothing per query |
+
+The `hour` figures under A are the file's `nanoseconds of day, int64 lanes,
+conversion form` rows; B and C's upper bounds are its hand-written single
+multiply, which the emitter does not have yet and section 8.4 gives it; B's
+split cost is the file's `the split itself` row.
+
+Three things follow, and the third is the one that reorders the work.
+
+1. **A is a fixed cost per field and is already fast.** One field at the
+   conversion form's rate is 0.24 ns a row at 512 bits, twenty times a row
+   engine that goes through `LocalTime`; three fields are 0.72. It needs one
+   contained emitter change - the store - and nothing new in the compiler
+   beyond the arms.
+2. **B pays only when the split is a vector kernel and several fields are
+   taken.** The split as a scalar Java loop in the evaluator - the derived-leaf
+   pattern of `next_day` and `trunc` - divides a long per row and would cost
+   more than A's whole kernel. As a long kernel it costs about one A field, so
+   for one field B is A plus a store, and for three fields it is 0.24 plus three
+   cheap ones against A's 0.72: better, by under 2x. And a vector split needs
+   exactly A's narrowing store to write its int32 seconds.
+3. **C is where the split's 5x to 14x lives, and C is a representation held
+   by the cache**, not by this task: two int32 columns beside or instead of the
+   `TimeNanoVector`, written by the serializer task 116 already taught `TIME`,
+   admitted by `isArrowBacked` as a pair, and chosen by the compiler when the
+   batch offers them. That is `SCOPE_MILESTONE_6.md` item 11's first concrete
+   encoding decision - the form attribute on a value, and a leaf per form - and
+   it belongs to that item, with this section as its pricing.
+
+So the order is A, then B's pieces as the thing C reuses, then C under item 11.
+2.5's second option, task 28's bi-lane kernel, is not needed by any of the
+three: the extracts never hold an int and a long live in one loop, they narrow
+once at the end.
+
+### 8.3 Route A: the narrowing store
+
+**The IR.** Task 28's `NarrowLane(child)` node, as `PLAN_TASK_28.md` 3.3
+defines it - a `LONG` child, an `INT` value - admitted in this step **as an
+output root only**: the emitter's analysis refuses it anywhere else, so no
+interior node ever sees a lane change and task 28 later lifts that refusal
+rather than adding a node. The compiler builds `NarrowLane` over the same
+trees group B built:
+
+    hour(t)   = NarrowLane(ConstDivide(t, 3600000000000))
+    minute(t) = NarrowLane(SUB(x, MUL(ConstDivide(x, 60), 60)))  with x = ConstDivide(t, 60000000000)
+    second(t) = NarrowLane(SUB(y, MUL(ConstDivide(y, 60), 60)))  with y = ConstDivide(t, 1000000000)
+
+Every dividend is nanoseconds of day or a quotient of it, under the type's
+bound and so under `ConstDivide.EXACT_DIVIDEND_BOUND` structurally, which is
+what group B's rows already rely on. No overflow arm: the values are under
+2^47 and the quotients under 86400.
+
+**The store.** A root whose node is `NarrowLane` is stored at four bytes a row
+instead of eight, at its own byte offset (`i * 4`, where the lane's is
+`i * 8`), as `convertShape(L2I, INT species of the same width, 0)` followed by a
+store under a constant mask of the low half of the int lanes - eight of
+sixteen at 512 bits, two of four at 128 - hoisted out of the loop. Two things
+this shape is chosen for. It uses **no second int species**: the int vector is
+the width's own, and `PLAN_TASK_28.md` 2.2 is the reason that matters - a
+second `IntVector` species in the JVM makes the shared templates inline
+bimorphically and boxes every other int kernel in the process. And its mask is
+an **int mask**, which task 153's census found lowered at every width, where
+the long masks the kernel's guards use are per-lane at two lanes. The epilogue
+narrows its long tail mask to an int one once per batch, which at two lanes is
+a per-lane cast on one lane group and not worth a design.
+
+**The evaluator.** Nothing: an `IntegerType` output already allocates an
+`IntVector`, and the row path reads it back through the accessor it has. The
+output's byte width follows the Spark type, as it does for every output.
+
+**What it costs in the emitter.** An output stride and offset per root
+instead of one per kernel - `s.byteOffset` becomes per output where a root
+narrows - and the store's two extra operations for those roots; the validity
+write is unchanged, since it is per row and not per byte. No change to any
+body that has no narrowed root, which the bytes oracle proves: only the three
+new coverage rows appear, and no committed hash moves.
+
+**Tests.** The three extracts against the row engine over every second of the
+day and the sub-second edges through both consumers, on
+`VarkaTimeArithmeticSuite`'s `varka_time_day` fixture; the optimized shape
+reaches the compiler as the `StaticInvoke` the table names (2.1's guard, which
+already covers the three); `NarrowLane` refused as an interior node and at the
+int lane; the narrowed store at both widths and every null pattern in the
+emitter suite, with the masked store's constant mask asserted by count; the
+coverage rows; `VarkaIrGrammar` unchanged, since a root-only node the grammar
+cannot place under another node is not a shape to fuzz until task 28 makes it
+one - the reach test names it as deliberately out of reach.
+
+**Predictions, to register before the build.**
+
+1. `hour(t)` fused runs within 10% of `VarkaTimeBenchmark`'s long conversion
+   form on `hour` at both widths: the narrowing changes the store, not the
+   divide.
+2. `minute(t)` and `second(t)` likewise track the file's `minute` and `second`
+   rows; the three together its three-field row.
+3. Against the row engine, `hour(t)` over the day fixture is at least 15x
+   faster end to end through the columnar consumer, `LocalTime` being the
+   comparand.
+4. No committed hash in `emitted_bytes.json` moves; three rows are added.
+
+### 8.4 Routes B and C: the pieces, for when the cache can hold them
+
+**`BoundedDivide(child, divisor, bound)`**, an int-lane node for a
+non-negative dividend the caller proves under `bound`: one multiply and one
+logical shift, exact by construction because the constructor derives `(M, k)`
+by the search `VarkaTimeBenchmark.magic` runs - the largest shift whose
+unsigned product stays under 2^32 and whose quotient is exact over
+`[0, bound)`, proven by exhaustion at construction - and refuses a pair that
+does not exist. It is the calendar prefix's magic multiply given a node, and
+task 149's multiply-high is its unbounded sibling; the two are the int lane's
+division family. The bound is the caller's obligation, as `ConstDivide`'s is,
+and here the caller can discharge it structurally: a seconds-of-day column is
+under 86400 by the leaf that made it, and `s - hour * 3600` is under 3600 by
+arithmetic. No guard rides it, and none should: a guard is a compare and a
+mask, and task 153 says what those cost at two lanes.
+
+**The split leaf**, `VarkaDerivedKind.TIME_SECONDS` (and `TIME_NANOS` for the
+fraction, when `second_with_fraction` needs it): a derived input on
+`next_day`'s and `trunc`'s pattern - the compiler interns it under
+`VarkaDerivedInput.key`, the evaluator fills it per batch, the kernel sees an
+int column. Filled by a long-lane Varka kernel with route A's narrowing store
+(`NarrowLane(ConstDivide(t, 1000000000))`), never by a scalar loop, for the
+reason 8.2 gives. This is route B; it is worth building only as the fill step
+of route C, and the benchmark row that decides is the three-field shape against
+route A's.
+
+**The cache encoding**, route C: the split as a second physical form of a
+`TIME` column in `ArrowCachedBatchSerializer`, `isArrowBacked` admitting the
+pair, the compiler taking the seconds leaf when the batch carries it and route
+A otherwise. `SCOPE_MILESTONE_6.md` item 11 owns it; the numbers here are its
+case.
+
+### 8.5 Sequencing
+
+1. Route A - `NarrowLane` as a root, the three arms, the store, the tests, the
+   rows - closes group C's extracts and 2.5's question. Size: small to medium,
+   one PR.
+2. `BoundedDivide` with its search and proof, priced in `VarkaTimeBenchmark`
+   as the emitted twin of the hand-written arm. Size: small, one PR, and it
+   serves the calendar's own divisions as a node later.
+3. The split leaf and the cache encoding under item 11, when milestone 6 takes
+   the representation question up; `make_time` with task 28 and 2.3.
