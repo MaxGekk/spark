@@ -58,12 +58,21 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * million (about six thousand years either side of 1970) and literals within plus or minus
  * 4000, which keeps sums of two columns and chains of offsets inside the range too.
  *
+ * The long lane has a corpus of its own, drawn from `VarkaIrGrammar.LongShapes` over 64-bit
+ * columns and literals and run through the kernel's eight-argument entry point against
+ * `evalLong`. It is a second sequence with a second seed rather than long shapes mixed into the
+ * first, because the first is also the emitted-bytes oracle's committed corpus. The same
+ * option draws apply, which is what puts `useAVX` under the constant division and so fuzzes
+ * both of its lowerings on one machine.
+ *
  * Budget: `-Dvarka.fuzz.iterations` (default 300, a few seconds); `-Dvarka.fuzz.seed` (default
- * fixed, so the committed run is reproducible and a nightly can vary it).
+ * fixed, so the committed run is reproducible and a nightly can vary it). Both apply to both
+ * lanes.
  */
 class VarkaIrFuzzSuite extends SparkFunSuite {
 
   private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(fuzzSeed)
+  private val longSeed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(longFuzzSeed)
   private val iterations = sys.props.get("varka.fuzz.iterations").map(_.toInt).getOrElse(300)
   private val only = sys.props.get("varka.fuzz.only").map(_.toInt)
   private val classCounter = new AtomicInteger(0)
@@ -234,6 +243,161 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     }
   }
 
+
+  /**
+   * `runOne` at the long lane: the same draw of length, null patterns, masking and options
+   * over a long-lane shape, 64-bit buffers, the eight-argument `run`, and `evalLong` as the
+   * oracle. Null lanes are poisoned with the lane's own extremes, for the reason `runOne`
+   * gives: every drawn value is inside the guards and the checked modes by construction, so
+   * only a poisoned null lane can reach a condemning comparison, and a kernel that reads one
+   * has to be caught reading it.
+   */
+  private def runOneLong(iteration: Int): Unit = {
+    val rnd = shapeRandom(longSeed, iteration)
+    val DrawnLong(roots, numInputs, numLiterals) = drawLongShape(rnd)
+    // A floor modulus, so a negative draw lands inside the bound too: a signed `%` would put
+    // it as far as three bounds below zero, outside every guard the grammar drew.
+    def draw(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
+    val lits = Array.fill(numLiterals)(draw(longLiteralBound))
+    val length = lengths(rnd.nextInt(lengths.length))
+    val patternIds = Seq.fill(numInputs)(rnd.nextInt(patternNames.length))
+    val patterns = patternIds.map(pattern(rnd, _, length))
+    val forceMasked = length > 1 && rnd.nextInt(4) == 0
+    val options = randomOptions(rnd)
+    val data = Array.tabulate(numInputs, length)((_, _) => draw(longColumnBound))
+
+    val context = s"lane=long seed=$longSeed iteration=$iteration " +
+      s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
+      s"options=${if (options.isDefault) "(defaults)" else options.canonical()} " +
+      s"length=$length patterns=${patternIds.map(patternNames).mkString(",")} " +
+      s"literals=${lits.mkString(",")} forceMasked=$forceMasked"
+
+    val className =
+      s"org.apache.spark.sql.varka.execution.VarkaFusedFuzzLong${classCounter.addAndGet(1)}"
+    val bytes =
+      try {
+        VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null, options)
+      } catch {
+        case e: IllegalArgumentException =>
+          fail(s"$context: the emitter rejected the shape: ${e.getMessage}", e)
+      }
+    val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
+    loader.defineGeneratedClass(className, bytes)
+    val kernel = loader.loadClass(className).getConstructor().newInstance()
+      .asInstanceOf[VarkaFusedKernel]
+    val arena = Arena.ofConfined()
+    try {
+      val srcData = new Array[Long](numInputs)
+      val srcValidity = new Array[Long](numInputs)
+      val nullCounts = new Array[Int](numInputs)
+      for (c <- 0 until numInputs) {
+        val d = alloc(arena, length * 8L)
+        val v = alloc(arena, (length + 7) / 8L)
+        v.fill(0.toByte)
+        var nulls = 0
+        for (i <- 0 until length) {
+          if (patterns(c)(i)) {
+            d.set(ValueLayout.JAVA_LONG, i * 8L,
+              if ((nulls & 1) == 0) Long.MinValue else Long.MaxValue)
+            nulls += 1
+          } else {
+            d.set(ValueLayout.JAVA_LONG, i * 8L, data(c)(i))
+            val off = i / 8L
+            v.set(ValueLayout.JAVA_BYTE, off,
+              (v.get(ValueLayout.JAVA_BYTE, off) | (1 << (i % 8))).toByte)
+          }
+        }
+        srcData(c) = d.address()
+        nullCounts(c) = if (forceMasked && nulls == 0) 1 else nulls
+        srcValidity(c) =
+          if (nullCounts(c) == 0 || nulls == length) 0L else v.address()
+      }
+      val outs = roots.map { r =>
+        val d = alloc(arena, length * 8L)
+        for (i <- 0 until length) d.set(ValueLayout.JAVA_LONG, i * 8L, 0xDEADBEEFCAFEBABEL)
+        val v = alloc(arena, (length + 7) / 8L)
+        v.fill(0xFF.toByte)
+        (if (r.isInstanceOf[Cond]) 0L else d.address(), d, v)
+      }
+      val status = kernel.run(srcData, srcValidity, nullCounts, outs.map(_._1).toArray,
+        outs.map(_._3.address()).toArray, Array.empty[Int], lits, length)
+      assert(status === 0, s"$context: the kernel declined the batch (status $status)")
+      for (i <- 0 until length) {
+        val row = (0 until numInputs).map(c => if (patterns(c)(i)) None else Some(data(c)(i)))
+        for ((root, o) <- roots.zipWithIndex) {
+          val bit = (outs(o)._3.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+          root match {
+            case c: Cond =>
+              val want = VarkaReferenceEvaluator.evalCondLong(c, row, lits).contains(true)
+              assert(bit === want, s"$context: selection row $i differs (want $want)")
+            case _ =>
+              val want = VarkaReferenceEvaluator.evalLong(root, row, lits)
+              assert(bit === want.isDefined,
+                s"$context: validity of output $o row $i differs (want $want)")
+              want.foreach { v =>
+                assert(outs(o)._2.get(ValueLayout.JAVA_LONG, i * 8L) === v,
+                  s"$context: output $o row $i differs (want $v)")
+              }
+          }
+        }
+      }
+    } finally {
+      arena.close()
+      loader.release()
+    }
+  }
+
+  /** The record node types of the sealed IR, by simple name. */
+  private def recordNodeTypes: Set[Class[_]] = {
+    def walk(c: Class[_]): Set[Class[_]] = {
+      val subs = Option(c.getPermittedSubclasses).map(_.toSet).getOrElse(Set.empty[Class[_]])
+      if (subs.isEmpty) Set(c) else subs.flatMap(walk)
+    }
+    walk(classOf[VarkaVectorIR]).filter(_.isRecord)
+  }
+
+  /** Every node type reachable from `node`, by simple name, added to `seen`. */
+  private def collectNodeTypes(node: AnyRef, seen: scala.collection.mutable.Set[String]): Unit = {
+    seen += node.getClass.getSimpleName
+    node.getClass.getRecordComponents.foreach { rc =>
+      val v = rc.getAccessor.invoke(node)
+      if (v != null && classOf[VarkaVectorIR].isInstance(v)) {
+        collectNodeTypes(v.asInstanceOf[AnyRef], seen)
+      }
+    }
+  }
+
+  /**
+   * Whether a node type admits 64-bit lanes, asked of the type itself: its canonical
+   * constructor is called once over long leaves, and a type that decomposes epoch days refuses
+   * there (`requireInt`), while a lane-generic one constructs. Read off the constructors rather
+   * than written as a list, so a node type added to the IR is classified by what it does and
+   * the long-lane reach test below sees it without anyone editing this file.
+   */
+  private def admitsLongLanes(cls: Class[_]): Boolean = {
+    val longCol = new ColumnRef(0, LaneType.LONG)
+    val longCond = new Compare(CompareOp.LT, longCol, longCol)
+    val components = cls.getRecordComponents
+    val args: Array[AnyRef] = components.map { rc =>
+      val t = rc.getType
+      if (t == classOf[Cond]) longCond
+      else if (classOf[VarkaVectorIR].isAssignableFrom(t)) longCol
+      else if (t == java.lang.Long.TYPE) java.lang.Long.valueOf(1L)
+      else if (t == java.lang.Integer.TYPE) Integer.valueOf(1)
+      else if (t == java.lang.Boolean.TYPE) java.lang.Boolean.FALSE
+      else if (t.isEnum) t.getEnumConstants.head.asInstanceOf[AnyRef]
+      else fail(s"${cls.getSimpleName}.${rc.getName} has a component type this probe cannot " +
+        s"build: ${t.getName}")
+    }
+    try {
+      cls.getDeclaredConstructor(components.map(_.getType): _*).newInstance(args: _*)
+      true
+    } catch {
+      case e: java.lang.reflect.InvocationTargetException
+          if e.getCause.isInstanceOf[IllegalArgumentException] => false
+    }
+  }
+
   test("the generator reaches every IR node type") {
     // A green fuzz run says nothing about a node type the generator cannot build: the shapes
     // that would have exercised it are simply never drawn, and the suite reports success for
@@ -245,21 +409,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     // so a node type added to the IR fails here until the generator can build it. Generation
     // only: no bytes are emitted and nothing runs, so this is cheap enough to draw far more
     // shapes than the differential test does.
-    val permitted = {
-      def walk(c: Class[_]): Set[Class[_]] = {
-        val subs = Option(c.getPermittedSubclasses).map(_.toSet).getOrElse(Set.empty[Class[_]])
-        if (subs.isEmpty) Set(c) else subs.flatMap(walk)
-      }
-      walk(classOf[VarkaVectorIR]).filter(_.isRecord).map(_.getSimpleName)
-    }
+    val permitted = recordNodeTypes.map(_.getSimpleName)
     val seen = scala.collection.mutable.Set.empty[String]
-    def collect(node: AnyRef): Unit = {
-      seen += node.getClass.getSimpleName
-      node.getClass.getRecordComponents.foreach { rc =>
-        val v = rc.getAccessor.invoke(node)
-        if (v != null && classOf[VarkaVectorIR].isInstance(v)) collect(v.asInstanceOf[AnyRef])
-      }
-    }
     val rnd = new Random(seed)
     for (_ <- 0 until 20000) {
       val numInputs = 1 + rnd.nextInt(3)
@@ -268,7 +419,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
       val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
       val depth = 1 + rnd.nextInt(4)
-      if (rnd.nextInt(5) == 0) collect(shapes.cond(depth)) else collect(shapes.value(depth).node)
+      val root: AnyRef = if (rnd.nextInt(5) == 0) shapes.cond(depth) else shapes.value(depth).node
+      collectNodeTypes(root, seen)
     }
     val missing = permitted -- seen
     assert(missing.isEmpty,
@@ -276,10 +428,45 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
         "state here why the node type is deliberately out of the fuzzer's reach")
   }
 
+  test("the long-lane generator reaches every node type that admits 64-bit lanes") {
+    // The same assertion for the second corpus, against the set the IR itself defines: a node
+    // type is in the long lane's reach exactly when its constructor accepts long leaves. So a
+    // lane-generic node added to the IR fails here until `LongShapes` builds it, and a
+    // calendar node - which refuses a 64-bit child where it is built - is not asked for.
+    val (laneGeneric, intOnly) = recordNodeTypes.partition(admitsLongLanes)
+    // The split has to be the one the emitter's javadoc describes, or the probe is not asking
+    // the constructors what it thinks it is: every calendar node refuses, and the leaves and
+    // the arithmetic accept.
+    assert(intOnly.map(_.getSimpleName).contains("Year"))
+    assert(laneGeneric.map(_.getSimpleName).contains("ConstDivide"))
+    val seen = scala.collection.mutable.Set.empty[String]
+    val rnd = new Random(longSeed)
+    for (_ <- 0 until 20000) {
+      val numInputs = 1 + rnd.nextInt(3)
+      val numLiterals = rnd.nextInt(3)
+      val shapes = new LongShapes(rnd, numInputs, numLiterals)
+      val depth = 1 + rnd.nextInt(4)
+      val root: AnyRef = if (rnd.nextInt(5) == 0) shapes.cond(depth) else shapes.value(depth).node
+      collectNodeTypes(root, seen)
+    }
+    val missing = laneGeneric.map(_.getSimpleName) -- seen
+    assert(missing.isEmpty,
+      s"the long-lane generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an " +
+        "arm to LongShapes, or state here why the node type is deliberately out of its reach")
+  }
+
   test(s"random IR trees match the reference evaluator (seed $seed, $iterations iterations)") {
     only match {
       case Some(k) => runOne(k)
       case None => (0 until iterations).foreach(runOne)
+    }
+  }
+
+  test(s"random long-lane IR trees match the reference evaluator (seed $longSeed, " +
+      s"$iterations iterations)") {
+    only match {
+      case Some(k) => runOneLong(k)
+      case None => (0 until iterations).foreach(runOneLong)
     }
   }
 }
