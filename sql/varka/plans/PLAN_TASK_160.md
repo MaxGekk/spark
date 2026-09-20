@@ -71,4 +71,23 @@ what catches that, as it does today.
 
 ## 5. Outcome
 
-*Filled in from the fork's runs once they have happened.*
+**The first attempt found a defect of its own.** The verdict was inline Python
+inside the workflow's `run` block; YAML strips the block's indentation and
+Python read the remainder as an unexpected indent, so the precondition failed
+before selecting anything, on the pull request and on both scratch branches.
+The rule now runs as `dev/varka_scope.py`, a command line over the same
+function, which is also easier to try by hand.
+
+**Prediction 3 held on the second attempt.** The pull request's own run
+reported `varka change scope: spark` for its five changed files and turned the
+full matrix on.
+
+**Predictions 1 and 2 cannot be taken from a branch.** The two scratch branches
+carried the workflow change themselves, so their diff against master was the
+workflow and `modules.py` plus the one file under test - six and five files -
+and both were classified `spark`, correctly. A branch cannot exercise the
+`scoped` and `docs` verdicts until the precondition that computes them is on
+master; the first Varka-only and documents-only pushes after this merges are
+the acceptance runs, and their job lists and times go here then. Until then the
+evidence for those two verdicts is the script on the three file lists and the
+doctests.
