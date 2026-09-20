@@ -895,3 +895,19 @@ Not worth borrowing: `xfmod`, Payne-Hanek reduction, the DFT, the coefficient
 generator (until Varka writes an approximation of its own), and OpenVML entire.
 For Spark's FP functions the Vector API's operators are SLEEF or SVML already;
 see the section above.
+
+## A refusal at a forced width is the back end's, not the lane count's
+
+Task 153's census, taken on an x86 laptop at `-XX:MaxVectorSize=16`, found every
+masked 64-bit operation refused at two lanes, and section 3 of its plan read that
+as what "a NEON-only aarch64 host" would do. The arm runner's own census
+(`varka-width-audit.yml`, 20 September 2026: Neoverse N2, ASIMD with SVE2, a
+128-bit species) refuses nothing in the same hundred shapes. The x86 matcher has
+no lowering for masked ops at a species below its own width; the aarch64 matcher,
+whose native species is 128 bits, has. So a forced-width census on one
+architecture says what that back end does below its width and nothing about the
+architecture whose width it is imitating; the question has to be asked on the
+host class it is about, which the workflow now does in about forty minutes per
+architecture. The one qualification still open is SVE: the runner's JDK enables
+it, and a NEON-only JVM has not been asked.
+
