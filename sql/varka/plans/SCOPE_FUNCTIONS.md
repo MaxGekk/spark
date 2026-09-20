@@ -78,7 +78,7 @@ on the row order the generator sees. `try_add`, `try_subtract`,
 `try_multiply`, `try_divide`, `try_mod` are the overflow family and belong with
 tasks 63 and 104, not here.
 
-## 3. The measured fact: which of these can be bit-exact
+## 3. The measured fact: none of these is bit-exact through the Vector API
 
 Varka's contract is that a fused result equals the row engine's. For the math
 family the row engine is a scalar library call, and Spark uses **two** scalar
@@ -89,54 +89,92 @@ libraries:
 * `StrictMath` - fdlibm, the portable reference - for `exp expm1 log ln log10
   log1p pow`, and `log2` through `StrictMath.log`.
 
-Whether a lane agrees with the scalar call is a property of the host's two
-libraries, so it was measured rather than reasoned about.
-`dev/varka_canary/MathLaneProbe.java` runs each operator over 262144 inputs
-after C2 and compares every lane against both libraries. On 19 September 2026,
-JDK 25, this repository's Zen 5, with the JVM's own log confirming an
-`__jsvml_*_ha_z0` symbol resolved for every operator and `PrintIntrinsics`
-refusing none:
+Whether a lane agrees with the scalar call is a property of the host's
+libraries, so it was measured rather than reasoned about, on the three machine
+classes Varka runs on. `dev/varka_canary/MathLaneProbe.java` runs each operator
+over 262144 inputs after C2, with the operator a compile-time constant in its
+own loop and every operator bound before any is warm - the two conditions
+without which C2 compiles the per-lane scalar fallback instead, silently and
+with correct answers, and the probe measures `Math` against itself. That is
+what the first reading of this section did, on 19 September 2026, and reported
+as bit identity; the skills entry on it in
+`sql/varka/skills/vector-api-and-width.md` says how. The probe now carries a
+second pass with the fallback forced
+(`-Djdk.incubator.vector.VectorMathLibrary=java`) as the control, prints
+nanoseconds per element so a fallback shows in the numbers, and runs under
+`-Djdk.incubator.vector.DEBUG=true` so the JDK names the symbol each operator
+was bound to. The outputs are committed beside the probe as
+`dev/varka_canary/mathlane-*.txt`; the two runner readings are the CI workflow
+`varka-canary.yml`'s, the same day, JDK 25.0.4 on all three hosts.
 
-| operator | lanes differing from `java.lang.Math` | from `StrictMath` |
-|---|---:|---:|
-| `SIN`, `COS`, `TAN` | 0 | 8707, 8726, 9549 (1 ulp) |
-| `EXP`, `LOG` | 0 | 24936, 12921 (1 ulp) |
-| `LOG10` | 0 | 24198 (2 ulp) |
-| `TANH`, `CBRT` | 0 | 4772 (2 ulp), 21962 (1 ulp) |
-| `EXPM1`, `LOG1P`, `ATAN` | 0 | 0 |
+| host | library | lanes | every operator bound? | per element, against the fallback |
+|---|---|---:|---|---|
+| Zen 5, `UseAVX=3` (this repository's laptop) | SVML `__jsvml_*8_ha_z0` | 8 | yes | 5x to 14x faster |
+| EPYC 7763 (Zen 3), `UseAVX=2` (`ubuntu-latest`) | SVML `__jsvml_*4_ha_l9` | 4 | no: `POW` has no AVX2 symbol | 2.5x to 9x faster; `TANH` 2x **slower** |
+| Neoverse N2, NEON (`ubuntu-24.04-arm`) | SLEEF `*d2_u10advsimd` (`HYPOT` `_u05`) | 2 | no: `TANH` has no symbol | 1.1x to 3.9x faster |
 
-**The lanes are `java.lang.Math` bit for bit**, on every operator and every
-input tried - HotSpot's scalar `Math.sin` intrinsic and `libjsvml` are both
-Intel's, and they agree. Two consequences follow, and they cut the family in
-half:
+Lanes differing from the library Spark calls, out of 262144; the largest
+difference is one unit in the last place except where marked (2):
 
-1. **Every function Spark computes with `java.lang.Math` ports bit-exactly, for
-   free**: `sin cos tan asin acos atan sinh cosh tanh cbrt sqrt atan2 hypot`,
-   and the composites over them. The contract holds without a proof.
-2. **`exp`, `log`, `ln`, `log2`, `log10` and `pow` cannot be bit-exact through
-   the Vector API on this host.** Spark computes them with fdlibm; the lanes
-   compute them with SVML; and the two differ by one or two units in the last
-   place on between five and ten percent of ordinary inputs. `expm1` and
-   `log1p` happened to agree on every input tried, which is worth knowing and
-   not worth relying on. `pow` is a binary operator the probe does not yet
-   drive, and there is no reason to expect it to be the exception.
+| operator | Spark calls | Zen 5, `_z0` | EPYC 7763, `_l9` | Neoverse N2, SLEEF |
+|---|---|---:|---:|---:|
+| `SIN` | `Math` | 484 | 284 | 24466 |
+| `COS` | `Math` | 530 | 347 | 23212 |
+| `TAN` | `Math` | 1354 | 898 | 10121 |
+| `ATAN` | `Math` | 9019 | 4426 | 9611 |
+| `TANH` | `Math` | 1535 | 455 | unbound: 0 |
+| `CBRT` | `Math` | 1637 | 188 | 21981 |
+| `ATAN2` | `Math` | 15984 | 15983 | 21507 |
+| `HYPOT` | `Math` | 34258 | 34237 | 34155 |
+| `EXP` | `StrictMath` | 27425 | 24969 | 27347 |
+| `EXPM1` | `StrictMath` | 25691 | 25694 | 25701 |
+| `LOG` | `StrictMath` | 12938 | 12924 | 13198 |
+| `LOG10` | `StrictMath` | 24210 (2) | 24199 (2) | 24250 (2) |
+| `LOG1P` | `StrictMath` | 12224 | 12211 | 12377 |
+| `POW` | `StrictMath` | 28701 | unbound: 25672 | 25775 |
 
-For those six the options are three, and none is free. A **ULP contract** in
-place of bit identity - the tier SLEEF names `_u10`, the place
-`SCOPE_STANDARD_MODE.md` keeps for a deliberate deviation - which also has to
-say what the ghost fallback means when one query is answered half by each
-library. A **Varka-emitted fdlibm**: `exp` and `log` are a table and a short
-polynomial, they vectorise, and a lane that reproduces fdlibm's arithmetic
-reproduces its bits; bit-exact, slower than SVML by a factor to be measured,
-and a kernel to maintain. Or a **decline** until Spark itself moves off
-`StrictMath`, which it has shown no sign of doing. `SCOPE_MILESTONE_6.md` item
-36 holds the decision.
+An unbound operator runs the scalar `Math` call per lane, at scalar speed: that
+is why `TANH` on NEON is exact, and why `POW` at AVX2 still differs from
+`StrictMath` - `Math.pow` on x86 is HotSpot's intrinsic, not fdlibm.
 
-**All of this is one host.** On aarch64 the lanes are SLEEF, and whether
-`Math.sin` is an intrinsic there or a call into fdlibm decides which half of the
-table that platform lands in. The probe is committed so that the answer is a
-run and not a guess; task 121's runners and the aarch64 CI job are where it
-runs next.
+Four things follow.
+
+1. **No operator reproduces the row engine's bits on any host.** Against the
+   library Spark calls, every bound operator differs on anything from a single
+   lane (`log10` at AVX2) to thirteen percent of them (`hypot`), by one unit in
+   the last place, two for `log10` everywhere and `tanh` on x86. The only exact
+   lanes are the ones with no library symbol, and those are exact because they
+   *are* the scalar call.
+2. **The bits are per library build, not per architecture.** SVML's AVX-512 and
+   AVX2 builds disagree with each other - `exp` differs from `Math` on 12193
+   lanes at `_z0` and on 1373 at `_l9` - and SLEEF is a third answer. A ULP
+   bound can be stated once for every host; a bit pattern cannot, even within
+   x86.
+3. **`java.lang.Math` is itself per host.** On aarch64 HotSpot intrinsifies only
+   `sin` and `cos` and every other `Math` call *is* fdlibm, so there `Math` and
+   `StrictMath` agree on twelve of the fourteen; x86 carries Intel's scalar
+   intrinsics for `sin cos tan exp log log10 pow tanh cbrt`. The row engine's
+   own answer for `sin(x)` already differs between the two architectures a
+   cluster may mix. The six `StrictMath` functions are the only ones whose
+   row-engine bits are the same everywhere.
+4. **The speed-up is width.** Eight lanes buy 5x to 14x, four buy 2.5x to 9x
+   (except `tanh`, where SVML's AVX2 build loses to HotSpot's scalar intrinsic
+   by 2x), two buy 1.1x to 3.9x. On NEON the operators that clear 2x are `exp`,
+   `log10`, `expm1`, `log1p`, `pow` and `atan2`; `cbrt` gains nothing.
+
+So the choice is one choice for the whole family, not for six functions, and
+none of the three options is free. A **ULP contract**: each ported function
+stated in the coverage table as "within 1 ulp of `java.lang.Math`" or "within
+2 ulp of `StrictMath`" - the tier SLEEF names `_u10`, the place
+`SCOPE_STANDARD_MODE.md` keeps for a deliberate deviation - with an answer for
+what the ghost fallback means when one query is served partly by each library,
+which is the mix a cluster of x86 and aarch64 executors already produces for
+the `Math` functions today. A **Varka-emitted fdlibm** for the six `StrictMath`
+functions, whose row-engine bits are the same on every host: `exp` and `log`
+are a table and a short polynomial, and a lane that reproduces fdlibm's
+arithmetic reproduces its bits - bit-exact, slower than SVML by a factor to be
+measured, and a kernel to maintain. Or a **decline** of the family, since no
+function in it is exact. `SCOPE_MILESTONE_6.md` item 36 holds the decision.
 
 ## 4. What is shared across the families
 

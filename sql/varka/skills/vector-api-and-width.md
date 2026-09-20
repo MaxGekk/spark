@@ -773,39 +773,61 @@ vector type. The general form of the lesson: an op counter scoped to one type
 stops being a cost model the moment a second type appears, and it fails
 silently and in the flattering direction.
 
-## The Vector API's math operators are `java.lang.Math` bit for bit on x86, and Spark calls `StrictMath` for six of them
+## The Vector API's math lanes match no scalar library's bits on any host, and a probe that lets C2 fall back measures `Math` against itself
 
 `DoubleVector.lanewise(VectorOperators.SIN)` and its siblings are not Java: C2
-lowers them to a vector math library - Intel's SVML on x86 (`libjsvml.so`, the
-symbols `__jsvml_sin8_ha_z0` and so on), a SLEEF derivative on aarch64, which is
-why the JDK ships `legal/jdk.incubator.vector/sleef.md`. Whether those lanes
-agree with the scalar call Spark's row engine makes is therefore a property of
-two libraries on one host, and it was measured: `dev/varka_canary/MathLaneProbe.java`,
-262144 inputs per operator after C2, 19 September 2026, JDK 25, Zen 5, with
-`-Xlog:library=info` confirming the SVML symbol for every operator and
-`PrintIntrinsics` refusing none.
+lowers them to a vector math library - Intel's SVML on x86 (`libjsvml.so`,
+`__jsvml_sin8_ha_z0` at AVX-512, `__jsvml_sin4_ha_l9` at AVX2), SLEEF on
+aarch64 (`sind2_u10advsimd`), which is why the JDK ships
+`legal/jdk.incubator.vector/sleef.md`. Whether those lanes agree with the
+scalar call Spark's row engine makes is a property of the host's libraries, and
+`dev/varka_canary/MathLaneProbe.java` measured it on 19 September 2026 on the
+three machine classes Varka runs on, with the outputs committed beside it.
 
-**Against `java.lang.Math`: zero lanes differ, on all eleven operators.**
-HotSpot's scalar `Math.sin` intrinsic and `libjsvml` are both Intel's and they
-agree bit for bit. **Against `StrictMath`** - fdlibm - eight of the eleven
-differ by one or two ULP on two to ten percent of inputs.
+**The answer: on no host and for no operator.** Against the library Spark calls
+- `java.lang.Math` for the trigonometric family, `cbrt`, `atan2`, `hypot`;
+`StrictMath` for `exp expm1 log log10 log1p pow` - every bound operator differs
+on up to thirteen percent of ordinary inputs, by one ULP, two for `log10` and
+for `tanh` on x86; the three library builds differ from one another as well;
+and on aarch64 `Math` itself is fdlibm for everything but `sin` and `cos`,
+where x86 has Intel's scalar intrinsics for nine functions. The only exact
+lanes are the operators the JDK has no symbol for (`pow` at AVX2, `tanh` on
+NEON), which run the scalar call per lane at scalar speed. `SCOPE_FUNCTIONS.md`
+section 3 tabulates it and `SCOPE_MILESTONE_6.md` item 36 holds the decision it
+forces: a ULP contract, an emitted fdlibm, or a decline, for the family as a
+whole.
 
-The consequence is not symmetric, because Spark uses both libraries. It computes
-`sin cos tan asin acos atan sinh cosh tanh cbrt sqrt atan2 hypot rint signum`
-with `java.lang.Math`, so a lane reproduces the row engine exactly and Varka's
-contract holds for free. It computes `exp expm1 log log10 log1p pow` (and `log2`
-through `StrictMath.log`) with `StrictMath`, and for `exp`, `log`, `log10` and
-`pow` a lane cannot match the row engine through the Vector API on this host.
-`expm1` and `log1p` happened to agree on every input tried.
+**The first reading of this probe said the opposite**, and the way it was wrong
+is worth more than the table. It reported the lanes equal to `java.lang.Math`
+bit for bit, with the JDK's log showing every SVML symbol resolved. Both facts
+were true and the conclusion was not, for two reasons that each substitute the
+scalar fallback silently, producing correct answers at scalar speed:
 
-Three things to carry from this. **Measure, do not reason**: the obvious
-expectation was that SVML would differ from *both* scalar libraries, and it
-differs from neither in the case that matters most. **The answer is per host**:
-on aarch64 the lanes are SLEEF and `Math.sin` may be a call into fdlibm rather
-than an intrinsic, so the table has to be re-read there before it is relied on.
-And **the six `StrictMath` functions need a decision, not a lowering** - a ULP
-contract, a Varka-emitted fdlibm, or a decline - which
-`SCOPE_MILESTONE_6.md` item 36 holds and `SCOPE_FUNCTIONS.md` section 3 explains.
+* **The operator must be a compile-time constant at the call site.** The probe
+  passed `VectorOperators.Unary op` as a method parameter; C2's log said
+  `** missing constant: opr=LoadL` for the library call and compiled
+  `defaultImpl` instead - a per-lane `Math.sin` loop, which agrees with `Math`
+  by construction. Varka's emitted kernels name each operator as a `getstatic`
+  of a `static final` field, which is a constant; a shared helper that took the
+  operator as an argument would not be.
+* **The library binding is lazy, and C2 folds it only if it exists when the
+  method compiles.** The JDK resolves an operator's symbol on its first use and
+  keeps it in a `@Stable` table. A method compiled while an operator it names
+  is still unbound keeps a memory load for that entry, and with it the
+  fallback, until something else forces a recompile. Warming fourteen operators
+  one after another through one method reproduced this on two of three hosts,
+  for different operators on each; touching every operator once before any is
+  hot removed it.
+
+Neither failure shows in the results, since the fallback's answers are right.
+What shows it is the control the probe now carries: the same run with
+`-Djdk.incubator.vector.VectorMathLibrary=java`, which must come out several
+times slower per element and must agree with `Math` on every lane. To see the
+binding rather than infer it, `-Djdk.incubator.vector.DEBUG=true` prints the
+library and the symbol per operator, and
+`-XX:+UnlockDiagnosticVMOptions -XX:+PrintIntrinsics` prints `late inline
+succeeded` for `libraryUnaryOp` or the reason it refused. A lane result quoted
+without that control is a number about whichever code C2 happened to compile.
 
 ## SLEEF and OpenVML, read for Varka: no integer division anywhere, and what does transfer
 

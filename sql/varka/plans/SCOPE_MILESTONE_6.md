@@ -2931,27 +2931,40 @@ the double route as `a - trunc(a / b) * b`, a new lowering.
 Sequencing follows task 28's lane-as-a-property-of-the-node work, since a
 double lane is the third lane and the first whose values are not integers.
 
-### Item 36. Six functions the row engine computes with `StrictMath`
+### Item 36. The math family needs a ULP contract, an emitted fdlibm, or a decline - on every host
 
-*Opened 19 September 2026, from `SCOPE_FUNCTIONS.md` section 3.*
+*Opened 19 September 2026, from `SCOPE_FUNCTIONS.md` section 3; re-read the
+same day on both CI runner architectures, after the first reading proved to be
+the scalar fallback measuring itself.*
 
-`dev/varka_canary/MathLaneProbe.java` found the Vector API's math lanes equal to
-`java.lang.Math` bit for bit on x86 - and Spark computes `exp`, `expm1`, `log`,
-`log10`, `log1p` and `pow` with `StrictMath` instead, fdlibm, from which the
-lanes differ by one or two ULP on five to ten percent of ordinary inputs
-(`expm1` and `log1p` happened to agree). So four of the six, and `log2` with
-them, cannot meet Varka's bit-identity contract through the Vector API on this
-host.
+`dev/varka_canary/MathLaneProbe.java`, run with the library actually reached -
+the operator a compile-time constant, every operator bound before warm-up, a
+forced-fallback control pass beside it - finds that **no math operator
+reproduces the row engine's bits on any host**. Against the library Spark
+calls, SVML at AVX-512, SVML at AVX2 and SLEEF on NEON each differ on up to
+thirteen percent of ordinary inputs, by one ULP, two for `log10` everywhere and
+`tanh` on x86; and the three library builds disagree with one another, so there
+is no bit pattern to promise even within x86. The two exact operators - `pow`
+at AVX2, `tanh` on NEON - are exact because the JDK has no symbol for them and
+runs the scalar call per lane, at scalar speed. `SCOPE_FUNCTIONS.md` section 3
+has the tables; the outputs are committed beside the probe.
 
-The options, none free: a **ULP contract** for these functions - SLEEF's named
-tier, the standard-mode register's place - with a stated answer for what the
-ghost fallback means when one query is served half by each library; a
-**Varka-emitted fdlibm**, since `exp` and `log` are a table and a short
-polynomial and a lane that reproduces fdlibm's arithmetic reproduces its bits,
-at a cost against SVML to be measured; or a **decline** until Spark leaves
-`StrictMath`. This is a decision about the contract before it is a task, which
-is why it is a scope item. The probe must run on aarch64 first: there the lanes
-are SLEEF and `Math.sin` may itself be fdlibm, which moves the whole table.
+The options, none free, now apply to the whole family rather than to six
+functions. A **ULP contract**: each ported function states in the coverage
+table "within 1 ulp of `java.lang.Math`" or "within 2 ulp of `StrictMath`" -
+SLEEF's `_u10` tier, the standard-mode register's place for a deliberate
+deviation - with a stated answer for the ghost fallback serving one query
+partly from each library, which is the mix a cluster of x86 and aarch64
+executors already produces for `sin`, since HotSpot's `Math.sin` differs
+between the two. A **Varka-emitted fdlibm** for `exp expm1 log log10 log1p
+pow`, the six whose row-engine bits are the same on every host: `exp` and `log`
+are a table and a short polynomial, and a lane that reproduces fdlibm's
+arithmetic reproduces its bits, at a cost against SVML to be measured. Or a
+**decline** of the family. The speed at stake is width-bound - 5x to 14x at
+eight lanes, 2.5x to 9x at four, 1.1x to 3.9x at two, so on NEON only `exp`,
+`log10`, `expm1`, `log1p`, `pow` and `atan2` clear 2x - which is an input to
+the decision, not a way round it. This is a decision about the contract before
+it is a task, which is why it is a scope item.
 
 ### Item 37. A third AVX2 lowering for the 64-bit divide, from 32-bit converts
 

@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import static jdk.incubator.vector.VectorOperators.*;
+
 import jdk.incubator.vector.*;
 
 /**
@@ -37,27 +39,70 @@ import jdk.incubator.vector.*;
  *
  * How to run:
  *   java --add-modules jdk.incubator.vector dev/varka_canary/MathLaneProbe.java
- * To see which library the lanes reached - the diagnosis, not a guess:
- *   java --add-modules jdk.incubator.vector -Xlog:library=info \
- *     dev/varka_canary/MathLaneProbe.java 2>&1 | grep -E 'jsvml|sleef'
- * and -XX:+UnlockDiagnosticVMOptions -XX:+PrintIntrinsics shows any operator C2 refused.
+ * The control that shows the library was reached at all - the same run with the per-lane
+ * scalar fallback forced, which must come out several times slower per element and agree
+ * with java.lang.Math on every lane:
+ *   java --add-modules jdk.incubator.vector -Djdk.incubator.vector.VectorMathLibrary=java \
+ *     dev/varka_canary/MathLaneProbe.java
+ * -Djdk.incubator.vector.DEBUG=true prints which library and which symbol each operator was
+ * bound to, and -XX:+UnlockDiagnosticVMOptions -XX:+PrintIntrinsics shows whether C2 then
+ * inlined the call ("late inline succeeded") or refused it ("missing constant").
  *
- * On 19 September 2026, JDK 25, Zen 5 (this repo's laptop): every operator resolved an
- * {@code __jsvml_*_ha_z0} symbol, none was refused, and all eleven agreed with
- * {@code java.lang.Math} on every one of 262144 inputs. Against {@code StrictMath} eight of
- * them differed by one or two ULP on between two and ten percent of inputs; expm1, log1p
- * and atan agreed with both. Of the eight, only exp, log and log10 are functions Spark
- * computes with {@code StrictMath}, so those three are where a lane and the row engine
- * part. The consequence for Spark's function set is drawn in
- * SCOPE_FUNCTIONS.md. The result is a property of the host's two libraries, so it has to be
- * re-read on aarch64 before it is relied on there.
+ * The readings, 19 September 2026, JDK 25.0.4, with the library reached on every operator
+ * that has a symbol (the control pass several times slower per element, PrintIntrinsics
+ * reporting "late inline succeeded"): on Zen 5 at AVX-512, on EPYC 7763 at AVX2 and on
+ * Neoverse N2 with NEON, no operator agrees with either scalar library on every input.
+ * Against the library Spark calls, the lanes differ by one ULP on up to thirteen percent of
+ * inputs, by two for log10 and, on x86, tanh; and the three library builds differ from one
+ * another. The outputs are committed beside this file as mathlane-*.txt, the tables and
+ * their consequence for Spark's function set are in SCOPE_FUNCTIONS.md section 3, and
+ * varka-canary.yml re-takes the two runner readings on every push that touches this
+ * directory.
  */
 public class MathLaneProbe {
   static final VectorSpecies<Double> S = DoubleVector.SPECIES_PREFERRED;
+  static final int L = S.length();
 
-  static void run(VectorOperators.Unary op, double[] x, double[] v) {
-    for (int i = 0; i < x.length; i += S.length()) {
-      DoubleVector.fromArray(S, x, i).lanewise(op).intoArray(v, i);
+  static DoubleVector ld(double[] a, int i) {
+    return DoubleVector.fromArray(S, a, i);
+  }
+
+  /**
+   * One loop per operator, with the operator written as a constant in each. C2 only emits
+   * the call into the vector math library when the operator is a compile-time constant; an
+   * operator that arrives as a method parameter makes it fall back to a per-lane scalar call,
+   * silently, and the lanes then agree with {@code java.lang.Math} by construction. The
+   * nanoseconds-per-element column exists to make that fallback visible: a library call is
+   * several times faster than the scalar one.
+   */
+  static void run(int k, double[] x, double[] v) {
+    int n = x.length;
+    switch (k) {
+      case 0 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(SIN).intoArray(v, i); } }
+      case 1 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(COS).intoArray(v, i); } }
+      case 2 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(TAN).intoArray(v, i); } }
+      case 3 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(EXP).intoArray(v, i); } }
+      case 4 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(LOG).intoArray(v, i); } }
+      case 5 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(LOG10).intoArray(v, i); } }
+      case 6 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(EXPM1).intoArray(v, i); } }
+      case 7 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(LOG1P).intoArray(v, i); } }
+      case 8 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(ATAN).intoArray(v, i); } }
+      case 9 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(TANH).intoArray(v, i); } }
+      case 10 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(CBRT).intoArray(v, i); } }
+      default -> throw new IllegalArgumentException("no unary operator " + k);
+    }
+  }
+
+  static void run2(int k, double[] x, double[] y, double[] v) {
+    int n = x.length;
+    switch (k) {
+      case 0 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(POW, ld(y, i))
+          .intoArray(v, i); } }
+      case 1 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(ATAN2, ld(y, i))
+          .intoArray(v, i); } }
+      case 2 -> { for (int i = 0; i < n; i += L) { ld(x, i).lanewise(HYPOT, ld(y, i))
+          .intoArray(v, i); } }
+      default -> throw new IllegalArgumentException("no binary operator " + k);
     }
   }
 
@@ -81,9 +126,67 @@ public class MathLaneProbe {
     };
   }
 
+  /** The binary operators Spark reaches: pow through StrictMath, atan2 and hypot through Math. */
+  static double math2(String name, double x, double y) {
+    return switch (name) {
+      case "POW" -> Math.pow(x, y); case "ATAN2" -> Math.atan2(x, y); default -> Math.hypot(x, y);
+    };
+  }
+
+  static double strict2(String name, double x, double y) {
+    return switch (name) {
+      case "POW" -> StrictMath.pow(x, y); case "ATAN2" -> StrictMath.atan2(x, y);
+      default -> StrictMath.hypot(x, y);
+    };
+  }
+
+  /**
+   * What machine this ran on, printed first so a result can be attributed: the JVM's own view
+   * of the architecture and vector width, and the AVX level where the flag exists. A row of
+   * results without this line is the thing task 150 exists to prevent.
+   */
+  static String machine() {
+    String avx;
+    try {
+      avx = java.lang.management.ManagementFactory
+          .getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class)
+          .getVMOption("UseAVX").getValue();
+    } catch (RuntimeException e) {
+      avx = "n/a";
+    }
+    String mvs;
+    try {
+      mvs = java.lang.management.ManagementFactory
+          .getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class)
+          .getVMOption("MaxVectorSize").getValue();
+    } catch (RuntimeException e) {
+      mvs = "n/a";
+    }
+    return "arch=" + System.getProperty("os.arch") + " jvm=" + System.getProperty("java.vm.version")
+        + " UseAVX=" + avx + " MaxVectorSize=" + mvs + " species double=" + S.length()
+        + " library=" + System.getProperty("jdk.incubator.vector.VectorMathLibrary", "default");
+  }
+
+  static void report(String name, double nsPerElem, double[] v, double[] x, double[] y) {
+    long diffMath = 0, diffStrict = 0, ulpMath = 0, ulpStrict = 0;
+    for (int i = 0; i < v.length; i++) {
+      long b = Double.doubleToLongBits(v[i]);
+      double m = y == null ? math(name, x[i]) : math2(name, x[i], y[i]);
+      double s = y == null ? strict(name, x[i]) : strict2(name, x[i], y[i]);
+      long em = Math.abs(b - Double.doubleToLongBits(m));
+      long es = Math.abs(b - Double.doubleToLongBits(s));
+      if (em != 0) { diffMath++; ulpMath = Math.max(ulpMath, em); }
+      if (es != 0) { diffStrict++; ulpStrict = Math.max(ulpStrict, es); }
+    }
+    System.out.printf("%-6s %5.1f ns/elem  vs Math: %6d lanes differ (max %d ulp)"
+        + "  vs StrictMath: %6d lanes differ (max %d ulp)%n",
+        name, nsPerElem, diffMath, ulpMath, diffStrict, ulpStrict);
+  }
+
   public static void main(String[] a) {
     int n = 1 << 18;
     int rounds = a.length > 0 ? Integer.parseInt(a[0]) : 200;
+    int timed = 20;
     double[] x = new double[n];
     double[] v = new double[n];
     java.util.Random r = new java.util.Random(7);
@@ -92,26 +195,45 @@ public class MathLaneProbe {
     }
     String[] names = {"SIN", "COS", "TAN", "EXP", "LOG", "LOG10", "EXPM1", "LOG1P", "ATAN",
         "TANH", "CBRT"};
-    VectorOperators.Unary[] ops = {VectorOperators.SIN, VectorOperators.COS,
-        VectorOperators.TAN, VectorOperators.EXP, VectorOperators.LOG, VectorOperators.LOG10,
-        VectorOperators.EXPM1, VectorOperators.LOG1P, VectorOperators.ATAN,
-        VectorOperators.TANH, VectorOperators.CBRT};
-    System.out.println("species double=" + S.length() + "; inputs=" + n
-        + "; rounds before measuring=" + rounds);
-    for (int k = 0; k < ops.length; k++) {
+    String[] names2 = {"POW", "ATAN2", "HYPOT"};
+    // Touch every operator once, in the interpreter, before anything is hot. The JDK binds an
+    // operator to its library symbol on first use and C2 folds that binding into compiled
+    // code only if it exists at compile time; a method compiled while an operator it names
+    // is still unbound keeps a memory load and the scalar fallback for good. Warming the
+    // operators one at a time had exactly that effect on some hosts.
+    double[] one = new double[L];
+    java.util.Arrays.fill(one, 1.5);
+    for (int k = 0; k < names.length; k++) {
+      run(k, one, one.clone());
+    }
+    for (int k = 0; k < names2.length; k++) {
+      run2(k, one, one, one.clone());
+    }
+    System.out.println(machine() + "; inputs=" + n + "; rounds before measuring=" + rounds);
+    for (int k = 0; k < names.length; k++) {
       for (int w = 0; w < rounds; w++) {
-        run(ops[k], x, v);
+        run(k, x, v);
       }
-      long diffMath = 0, diffStrict = 0, ulpMath = 0, ulpStrict = 0;
-      for (int i = 0; i < n; i++) {
-        long b = Double.doubleToLongBits(v[i]);
-        long em = Math.abs(b - Double.doubleToLongBits(math(names[k], x[i])));
-        long es = Math.abs(b - Double.doubleToLongBits(strict(names[k], x[i])));
-        if (em != 0) { diffMath++; ulpMath = Math.max(ulpMath, em); }
-        if (es != 0) { diffStrict++; ulpStrict = Math.max(ulpStrict, es); }
+      long t0 = System.nanoTime();
+      for (int w = 0; w < timed; w++) {
+        run(k, x, v);
       }
-      System.out.printf("%-6s vs Math: %6d lanes differ (max %d ulp)   vs StrictMath: %6d"
-          + " lanes differ (max %d ulp)%n", names[k], diffMath, ulpMath, diffStrict, ulpStrict);
+      report(names[k], (System.nanoTime() - t0) / (double) timed / n, v, x, null);
+    }
+    // The binary operators, over a second positive operand in a moderate range.
+    double[] y = new double[n];
+    for (int i = 0; i < n; i++) {
+      y[i] = 0.5 + r.nextDouble() * 4;
+    }
+    for (int k = 0; k < names2.length; k++) {
+      for (int w = 0; w < rounds; w++) {
+        run2(k, x, y, v);
+      }
+      long t0 = System.nanoTime();
+      for (int w = 0; w < timed; w++) {
+        run2(k, x, y, v);
+      }
+      report(names2[k], (System.nanoTime() - t0) / (double) timed / n, v, x, y);
     }
   }
 }
