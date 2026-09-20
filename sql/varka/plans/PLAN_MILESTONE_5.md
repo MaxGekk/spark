@@ -3438,6 +3438,44 @@ one, and `PrintIntrinsics` for the `convertShape` and the masked store at
 cheaper store the cause points to - a plain store where the lane group is
 full, a different conversion at two lanes - and re-measure on the same file.
 
+### 2.93 The widening store: a decimal output is sixteen bytes a row (task 157)
+
+*Opened 20 September 2026, from `PLAN_TASK_102.md` section 9.*
+
+Task 102's section 2.3 said `second(t)` with its fraction and
+`time_to_seconds(t)` were blocked on a representation and not on a lane; section
+9 read the representation. Every decimal the `TIME` family produces has
+precision 18 or less, so its value is an unscaled long the long lane already
+computes; what does not fit is the column, which Arrow holds as sixteen bytes a
+row at every precision. For an output that is a store's worth of work: the
+mirror image of route A's narrowing store, a root-only node whose store writes
+the value word and its sign extension into each sixteen-byte slot - two lane
+operations and a second store per group, with the loop, the validity and the
+tree beneath unchanged - and a `DecimalVector` destination in the evaluator.
+
+The row is the store, measured the way route A was: against the form that needs
+no emitter change, the evaluator widening a long output into the decimal
+buffer in a scalar loop per batch, which is the baseline the store has to beat;
+and with the exhaustive check that the unscaled-long form of the fraction agrees
+with the row engine's `Double` round trip on every nanosecond of a minute. The
+decimal *input* - `make_time` over a decimal column - is milestone 6's item 1,
+the de-interleave, and is not here.
+
+### 2.94 Group E: the `time_to_*` and `time_from_*` conversions, and two honest declines (task 158)
+
+*Opened 20 September 2026, from `PLAN_TASK_102.md` 9.3.*
+
+`time_to_millis`, `time_to_micros`, `time_from_seconds`, `time_from_millis` and
+`time_from_micros` are not in the compiler's `StaticInvoke` table: the nine it
+was built from predate them, so they decline as `unsupported expression` and the
+table's completeness guard, which checks the table against its own list, does
+not see them. They are group B's shapes - a truncating constant division by
+10^6 or 10^3, a multiply by a constant under the conversion's overflow and range
+rules - and five rows for the `TIME` surface at group B's price. The same change
+gives the two decimal expressions of group D the decline section 2.3 asked for,
+naming the Arrow representation rather than saying the expression is not
+lowered yet.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3621,6 +3659,8 @@ can start has.
 | 154 | The width-audit census pins `missing constant` and `unbox failed` lines its own description calls non-verdicts, and they flip between runs on unrelated rows, so the local check fails on a quiet tree and a regeneration blesses a timing (section 2.90). **Scoped** (20 September 2026) from the first regeneration after task 153, in task 102 group C | Pin the `not supported` lines only, with the other kinds dropped or kept in an advisory block the comparison ignores; the file's description updated; the census regenerated | Two regenerations on the same host agree byte for byte; the suite passes without regeneration on a tree that changes no shape |
 | 155 | Route A's end-to-end prediction is scored by the `TIME` surface, not by a new benchmark (section 2.91). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.3's third prediction, which the outcome could not score; narrowed the same day because task 105's `TimeSurfaceBenchmark` is the end-to-end measurement and 118 quotes it | When 105's files exist, prediction 3 scored from the `hour(t)` row's engine-off ratio and written into `PLAN_TASK_102.md` 8.6; no benchmark class added | 8.6 no longer says "not scored", and the figure it quotes is in a committed results file |
 | 156 | The narrowed store costs 12% to 18% at two 64-bit lanes on `second` and the three-field shape, where `hour` and `minute` are within 5% and every shape is within 4% at 512 bits (section 2.92). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.6: the direction is explained by the per-group cost over two rows, the shape dependence is not | The cause from the JVM's own output - the 128-bit assembly of the narrowed body against the wide one, `PrintIntrinsics` for the `L2I` and the masked store at `vlen=2` - and either the cost accepted with the cause recorded or the cheaper store it points to, re-measured on `VarkaTimeBenchmark`'s 128-bit file | The 128-bit narrowed rows within 5% of the wide rows on every shape, or the cause written in the plan and the census |
+| 157 | The widening store: a decimal output is sixteen bytes a row (section 2.93). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` section 9: every `TIME` decimal is an unscaled long in the lane the family already uses, and the column is the only blocker | A root-only `WidenDecimal` node whose store writes the value word and its sign extension per sixteen-byte slot; a `DecimalVector` destination in the evaluator; `second(t)` with its fraction and `time_to_seconds` lowered through it; measured against the evaluator widening a long output in a scalar loop, which is the baseline; the fraction's unscaled-long form checked against the row engine's `Double` round trip over every nanosecond of a minute | Both expressions agree with the row engine over every second of the day through both consumers; the store beats the scalar widening on `VarkaTimeBenchmark`'s ladder or the plan says by how much it does not |
+| 158 | Group E: the five `time_to_*`/`time_from_*` conversions the table does not know, and the two decimal declines that do not name their reason (section 2.94). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 9.3 | The five in `timeTargets` and the compiler as group B's shapes, with the conversion's overflow and day-range rules read before choosing a guard or a checked multiply; the table's completeness guard widened to the registry's `TIME` functions; `second` with fraction and `time_to_seconds` declining by name with the Arrow representation as the reason | Five new coverage rows fusing; every `TIME` function in the registry either lowers or declines by name, which the coverage suite states |
 
 ## 4. Files
 
