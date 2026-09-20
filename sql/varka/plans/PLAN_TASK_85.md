@@ -793,3 +793,13 @@ either extreme, so the 64-bit sign test they exist for never fired once: the
 extremes matrix and the condemn-the-batch test are the int lane's own overflow
 tests re-run at 64 bits, including `-Long.MIN_VALUE` and a `Long.MAX_VALUE + 1`
 that an int lane's sign test would not see.
+
+### 9.7 Closed, 20 September 2026
+
+Step 6 of section 7's sequencing was this section, the milestone row and the
+record of task 119's first part. All three exist: 9.1 to 9.6 above, the row in
+`PLAN_MILESTONE_5.md`, and `PLAN_TASK_119.md` for the long-lane oracle that
+landed on its own (#262). The lane has since carried the long-lane division
+(task 88 step 3), the `TIME` expressions (task 102) and the multiply-high
+lowering (task 149) without a change to the descriptor, which is the outcome
+2.16 asked the design to make possible. The row is marked done.
