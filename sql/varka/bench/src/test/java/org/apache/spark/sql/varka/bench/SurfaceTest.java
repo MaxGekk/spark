@@ -122,7 +122,7 @@ public class SurfaceTest {
       for (DateSurfaceBenchmark.TableShape shape : DateSurfaceBenchmark.TableShape.values()) {
         DateSurfaceBenchmark.buildTable(spark, 1_000L, 1,
             org.apache.spark.storage.StorageLevel.MEMORY_ONLY(), shape);
-        List<String> built = List.of(spark.table("varka_dates").schema().fieldNames());
+        List<String> built = List.of(spark.table(shape.tableName()).schema().fieldNames());
         assertEquals(shape.columns(), built, shape + " builds a different set than it claims");
       }
     } finally {
@@ -130,6 +130,10 @@ public class SurfaceTest {
       // reads it, so a shape left behind here fails them instead of this one. Restoring it
       // is not tidiness: the first version of this test did not, and two unrelated tests
       // failed with an unresolved interval column and a cache that was no longer cached.
+      // The times table is dropped for the same reason: the residency check counts every
+      // cached partition in the session, and the driver only ever caches one table.
+      spark.catalog().uncacheTable("varka_times");
+      spark.catalog().dropTempView("varka_times");
       DateSurfaceBenchmark.buildTable(spark, 1_000L, 2,
           org.apache.spark.storage.StorageLevel.MEMORY_ONLY(), DateSurfaceBenchmark.TableShape.ALL);
     }
