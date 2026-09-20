@@ -142,7 +142,8 @@ object VarkaWidthAuditProbe {
         sink += call(masked = true)
         n += 1
       }
-      if (sink == 42) System.err.println("(unreachable, keeps the loop's result live)")
+      // Keeps the calls' results live; a status of 42 does not exist.
+      if (sink == 42) throw new IllegalStateException("unreachable: status 42")
     } finally {
       arena.close()
     }
