@@ -235,7 +235,7 @@ def main():
             f"{', '.join(a.dirs)}"
         )
 
-    stems = {"surface": "DateSurface", "chains": "DateChain"}
+    stems = {"surface": "DateSurface", "chains": "DateChain", "time": "TimeSurface"}
     os.makedirs(a.out, exist_ok=True)
     for (benchmark, label), files in groups.items():
         if benchmark not in stems:

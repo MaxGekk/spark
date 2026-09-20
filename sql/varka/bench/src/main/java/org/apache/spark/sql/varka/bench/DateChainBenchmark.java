@@ -47,7 +47,8 @@ import java.io.IOException;
 public final class DateChainBenchmark {
 
   public static void main(String[] argv) throws IOException {
-    DateSurfaceBenchmark.run(argv, Chains.ENTRIES, "chains", "VarkaDateChain");
+    DateSurfaceBenchmark.run(argv, Chains.ENTRIES, "chains", "VarkaDateChain",
+        DateSurfaceBenchmark.TableShape.ALL);
   }
 
   private DateChainBenchmark() {}

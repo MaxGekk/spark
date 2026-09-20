@@ -57,8 +57,12 @@ import scala.jdk.javaapi.CollectionConverters;
  *     varka-bench.jar --label spark-4.2.0 --rows 500000000 --out FILE [--partitions 1] [--iters 5]
  *     [--warmup-seconds 2] [--min-seconds 2] [--only REGEX] [--shard I/N]
  *     [--provenance key=value]... [--expect-fused] [--max-fixed-share PERCENT]
- *     [--allow-nonresident-cache] [--storage-level MEMORY_ONLY]
+ *     [--allow-nonresident-cache] [--storage-level MEMORY_ONLY] [--table-columns all]
  * </pre>
+ *
+ * <p>The same driver runs the date chains ({@link DateChainBenchmark}) and the {@code TIME}
+ * surface ({@link TimeSurfaceBenchmark}); each hands {@link #run} its entry list and the
+ * {@link TableShape} its entries read.
  *
  * {@code --expect-fused} (the fork with Varka on) fails the run, after writing the file, when an
  * entry the surface marks as fused planned without a Varka node; {@code --max-fixed-share}
@@ -174,8 +178,9 @@ public final class DateSurfaceBenchmark {
     double maxFixedShare = Double.NaN;
     final Map<String, String> provenance = new LinkedHashMap<>();
 
-    static Args parse(String[] argv, int entryCount) {
+    static Args parse(String[] argv, int entryCount, TableShape shape) {
       Args a = new Args();
+      a.tableShape = shape;
       for (int i = 0; i < argv.length; i++) {
         String k = argv[i];
         String v = i + 1 < argv.length ? argv[i + 1] : null;
@@ -254,7 +259,7 @@ public final class DateSurfaceBenchmark {
   private DateSurfaceBenchmark() {}
 
   public static void main(String[] argv) throws IOException {
-    run(argv, Surface.ENTRIES, "surface", "VarkaDateSurface");
+    run(argv, Surface.ENTRIES, "surface", "VarkaDateSurface", TableShape.ALL);
   }
 
   /**
@@ -263,12 +268,13 @@ public final class DateSurfaceBenchmark {
    * <p>Parameterised rather than copied because {@link DateChainBenchmark} measures a
    * different question over the same machinery, and everything here that is easy to get
    * wrong - the residency guard, the fixed-share rule, the {@code EXPLAIN} check, the
-   * provenance block, the shard arithmetic - should be got right once. The entry list and
-   * the application name are the whole of the difference.
+   * provenance block, the shard arithmetic - should be got right once. The entry list, the
+   * application name and the table the entries read ({@code shape}, which
+   * {@code --table-columns} may still override) are the whole of the difference.
    */
   static void run(String[] argv, List<Surface.Entry> entries, String benchmark,
-      String appName) throws IOException {
-    Args args = Args.parse(argv, entries.size());
+      String appName, TableShape shape) throws IOException {
+    Args args = Args.parse(argv, entries.size(), shape);
     double load = Provenance.loadAverage();
     SparkSession spark = SparkSession.builder().appName(appName).getOrCreate();
     ExecutorTime executor = new ExecutorTime();
@@ -355,9 +361,10 @@ public final class DateSurfaceBenchmark {
     String sql = entry.projection() == null ? entry.filter() : entry.projection();
     List<String> present = shape.columns();
     for (String token : sql.split("[^A-Za-z0-9_]+")) {
-      // Only the table's own column names matter; anything else in the expression is a
-      // function, a keyword or a literal.
-      if (TableShape.ALL.columns().contains(token) && !present.contains(token)) {
+      // Only a table's own column names matter; anything else in the expression is a
+      // function, a keyword or a literal. Every shape's columns count, so a TIME entry
+      // handed the date table is refused for reading `t` rather than run over nothing.
+      if (TableShape.knownColumns().contains(token) && !present.contains(token)) {
         throw new IllegalArgumentException("entry \"" + entry.label() + "\" reads column '"
             + token + "', which --table-columns " + shape.name().toLowerCase(Locale.ROOT)
             + " does not build");
@@ -379,31 +386,65 @@ public final class DateSurfaceBenchmark {
    * because a silently shorter run produces a file that looks comparable and is not.
    */
   enum TableShape {
-    ALL, DATES;
+    ALL, DATES, TIMES;
 
     static TableShape of(String s) {
       return switch (s) {
         case "all" -> ALL;
         case "dates" -> DATES;
+        case "times" -> TIMES;
         default -> throw new IllegalArgumentException(
-            "--table-columns takes all or dates, not '" + s + "'");
+            "--table-columns takes all, dates or times, not '" + s + "'");
       };
     }
 
     /** The columns this shape builds, in the order the table declares them. */
     java.util.List<String> columns() {
-      return this == ALL
-          ? java.util.List.of("d", "d2", "i", "ymm", "ymy", "ym")
-          : java.util.List.of("d", "d2", "i");
+      return switch (this) {
+        case ALL -> java.util.List.of("d", "d2", "i", "ymm", "ymy", "ym");
+        case DATES -> java.util.List.of("d", "d2", "i");
+        case TIMES -> java.util.List.of("t", "t2", "dt", "dt2", "l", "l2");
+      };
+    }
+
+    /** Every column any shape builds; what {@link #requireColumns} recognises as a column. */
+    static java.util.Set<String> knownColumns() {
+      java.util.Set<String> all = new java.util.HashSet<>();
+      for (TableShape shape : values()) {
+        all.addAll(shape.columns());
+      }
+      return all;
+    }
+
+    /** The view the entries of this shape read. */
+    String tableName() {
+      return this == TIMES ? "varka_times" : "varka_dates";
+    }
+
+    /**
+     * The column the filter shape's columnar consumer selects: the nullable first column, so
+     * the filter's checksum folds the values it let through and the store writes a column of
+     * the family's own width.
+     */
+    String filterColumn() {
+      return this == TIMES ? "t" : "d";
     }
 
     String provenance() {
-      return this == ALL ? "all (6)" : "dates only (3)";
+      return switch (this) {
+        case ALL -> "all (6)";
+        case DATES -> "dates only (3)";
+        case TIMES -> "times (6)";
+      };
     }
   }
 
   static void buildTable(SparkSession spark, long rows, int partitions, StorageLevel level,
       TableShape shape) {
+    if (shape == TableShape.TIMES) {
+      buildTimesTable(spark, rows, partitions, level);
+      return;
+    }
     String dates = "CASE WHEN id %% 31 = 0 THEN NULL"
         + " ELSE date_add(DATE'2020-01-01', CAST(id %% 1460 AS INT)) END AS d,"
         + " date_add(DATE'2021-01-01', CAST(id %% 1500 AS INT)) AS d2,"
@@ -428,6 +469,51 @@ public final class DateSurfaceBenchmark {
     // partition count alone is a complete residency statement.
     spark.catalog().cacheTable("varka_dates", level);
     spark.sql("SELECT count(*) FROM varka_dates").collect();
+  }
+
+  /**
+   * The {@code TIME} family's table, {@code varka_times}: two {@code TIME(6)} columns, two
+   * day-time intervals and two {@code bigint}s, one 64-bit lane each, generated the way
+   * {@code varka_dates} is - from {@code range}, with a fixed null pattern per column.
+   *
+   * <p>{@code t} is spread over the whole day by three coprime strides and has every 31st row
+   * null, like {@code d}; {@code t2} is a second such spread. {@code dt} is under a minute and
+   * runs forward before noon and backward after it, so {@code t + dt} stays inside the day on
+   * every row: a sum that crosses midnight is Spark's own error and Varka's guard declines the
+   * batch, and a surface row is meant to time the kernel rather than the decline (task 102).
+   * {@code dt2} is a sub-second interval; {@code l} and {@code l2} are counts under ten
+   * thousand million, so the long-lane comparisons against {@code 5000000000} select about
+   * half. Every 47th {@code dt} and every 53rd {@code l2} is null.
+   *
+   * <p>The type is behind {@code spark.sql.timeType.enabled}, which is internal and off
+   * outside tests on every distribution the surface runs against, so the session is switched
+   * on here rather than by every caller: an arm that forgot the flag would otherwise fail to
+   * parse the table on the stock distribution alone.
+   */
+  static void buildTimesTable(SparkSession spark, long rows, int partitions,
+      StorageLevel level) {
+    spark.conf().set("spark.sql.timeType.enabled", "true");
+    String seconds = "CAST(pmod(id * %d, 60) + pmod(id * %d, 1000) / 1000.0 AS DECIMAL(16, 6))";
+    String t = "make_time(CAST(pmod(id * 7, 24) AS INT), CAST(pmod(id * 13, 60) AS INT), "
+        + String.format(Locale.ROOT, seconds, 17, 1) + ")";
+    String t2 = "make_time(CAST(pmod(id * 11, 24) AS INT), CAST(pmod(id * 3, 60) AS INT), "
+        + String.format(Locale.ROOT, seconds, 23, 7) + ")";
+    String dtMagnitude = "make_dt_interval(0, 0, CAST(pmod(id, 59) AS INT), "
+        + "CAST(pmod(id, 1000) / 1000.0 AS DECIMAL(18, 6)))";
+    String select = "CASE WHEN id %% 31 = 0 THEN NULL ELSE " + t + " END AS t, "
+        + t2 + " AS t2, "
+        + "CASE WHEN id %% 47 = 46 THEN NULL WHEN pmod(id * 7, 24) < 12 THEN " + dtMagnitude
+        + " ELSE -" + dtMagnitude + " END AS dt, "
+        + "make_dt_interval(0, 0, 0, CAST(pmod(id * 3, 1000) / 1000.0 AS DECIMAL(18, 6)))"
+        + " AS dt2, "
+        + "pmod(id * 1000003, 10000000000) AS l, "
+        + "CASE WHEN id %% 53 = 52 THEN NULL ELSE pmod(id * 999983 + 7, 10000000000) END AS l2";
+    spark.sql(String.format(Locale.ROOT,
+        "SELECT " + select + " FROM range(0, %d, 1, %d)", rows, partitions))
+        .createOrReplaceTempView("varka_times");
+    // MEMORY_ONLY for the reason the date table gives above.
+    spark.catalog().cacheTable("varka_times", level);
+    spark.sql("SELECT count(*) FROM varka_times").collect();
   }
 
   /**
@@ -485,8 +571,12 @@ public final class DateSurfaceBenchmark {
     return cached >= partitions && disk == 0;
   }
 
+  static String projectionQuery(Surface.Entry e, TableShape shape) {
+    return "SELECT " + e.projection() + " AS a FROM " + shape.tableName();
+  }
+
   static String projectionQuery(Surface.Entry e) {
-    return "SELECT " + e.projection() + " AS a FROM varka_dates";
+    return projectionQuery(e, TableShape.ALL);
   }
 
   /**
@@ -540,13 +630,25 @@ public final class DateSurfaceBenchmark {
     return new Checksum(r.getLong(0), r.getLong(1), r.isNullAt(2) ? 0L : r.getLong(2));
   }
 
-  /** The filter with a columnar consumer: the selected dates written to the noop sink. */
+  /**
+   * The filter with a columnar consumer: the selected values of the table's first column
+   * written to the noop sink.
+   */
+  static String filterColumnarQuery(Surface.Entry e, TableShape shape) {
+    return "SELECT " + shape.filterColumn() + " FROM " + shape.tableName() + " WHERE "
+        + e.filter();
+  }
+
   static String filterColumnarQuery(Surface.Entry e) {
-    return "SELECT d FROM varka_dates WHERE " + e.filter() + "";
+    return filterColumnarQuery(e, TableShape.ALL);
+  }
+
+  static String filterQuery(Surface.Entry e, TableShape shape) {
+    return "SELECT count(*) FROM " + shape.tableName() + " WHERE " + e.filter();
   }
 
   static String filterQuery(Surface.Entry e) {
-    return "SELECT count(*) FROM varka_dates WHERE " + e.filter();
+    return filterQuery(e, TableShape.ALL);
   }
 
   /** What the physical plan says about a shape: see {@link #classifyPlan}. */
@@ -605,25 +707,27 @@ public final class DateSurfaceBenchmark {
     // reuses the map stage's output on the second run and only the one-partition result stage
     // executes: 4 ms and no executor time for 200M rows, which the first laptop run measured
     // before this comment existed. A fresh plan is a fresh lineage and nothing is reused.
+    TableShape shape = args.tableShape;
     if (entry.projection() != null) {
-      String q = projectionQuery(entry);
+      String q = projectionQuery(entry, shape);
       Runnable body = () -> spark.sql(q).write().format("noop").mode("overwrite").save();
       measureShape(spark, executor, batches, drain, "projection, columnar consumer", q, body,
           args, warmup, min, wall, exec, plans, shares, log, entry, violations);
     }
     List<String> sums = new ArrayList<>();
     if (entry.projection() != null) {
-      sums.add("projection " + checksum(spark, projectionQuery(entry), "a"));
+      sums.add("projection " + checksum(spark, projectionQuery(entry, shape), "a"));
     }
     Long selected = null;
     if (entry.filter() != null) {
-      selected = spark.sql(filterQuery(entry)).collectAsList().get(0).getLong(0);
-      sums.add("filter " + checksum(spark, filterColumnarQuery(entry), "d"));
-      String qc = filterColumnarQuery(entry);
+      selected = spark.sql(filterQuery(entry, shape)).collectAsList().get(0).getLong(0);
+      sums.add("filter " + checksum(spark, filterColumnarQuery(entry, shape),
+          shape.filterColumn()));
+      String qc = filterColumnarQuery(entry, shape);
       Runnable bodyc = () -> spark.sql(qc).write().format("noop").mode("overwrite").save();
       measureShape(spark, executor, batches, drain, "filter, columnar consumer", qc, bodyc,
           args, warmup, min, wall, exec, plans, shares, log, entry, violations);
-      String q = filterQuery(entry);
+      String q = filterQuery(entry, shape);
       Runnable body = () -> spark.sql(q).collect();
       measureShape(spark, executor, batches, drain, "filter, counted", q, body, args,
           warmup, min, wall, exec, plans, shares, log, entry, violations);
