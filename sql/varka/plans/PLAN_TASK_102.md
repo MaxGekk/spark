@@ -679,3 +679,40 @@ here: no committed benchmark runs a `TIME` expression through the whole
 engine against the row path, and this repository adds a baseline benchmark as
 its own PR before the change it measures. It stays open as a follow-up row.
 
+
+### 8.7 `BoundedDivide` built, 20 September 2026
+
+Section 8.5's second step, as 8.4 specified it: an int-lane node
+`BoundedDivide(child, divisor, bound)` whose lowering is one multiply and one
+logical shift. `BoundedDivide.of` derives the pair by the search
+`VarkaTimeBenchmark.magic` runs - the largest shift whose multiplier fits an
+int and whose unsigned product over `[0, bound)` stays under 2^32 - and proves
+the quotient exact over every dividend under the bound before the node exists;
+a pair that does not exist is refused, which is what `/ 60` over the whole day
+gets. The record carries the pair, so two nodes compare by their arithmetic and
+the canonical form (`divb:60/3600`) names the bound the caller undertook.
+
+The bound is the caller's obligation and no guard rides the node. The fuzzer
+discharges it structurally, since the grammar tracks a subtree's magnitude and
+not its sign: its arm draws the node over a calendar field - the day of the
+year under 367, the month under 13, the day of the month under 32 - which is
+non-negative and bounded by what it is, so no guard is needed and none can
+fire. (The first cut drew it over a `GuardedRange` to the bound, and the
+fuzzer's second iteration found what the guard arms' own comments say: a guard
+that fires is a decline the reference cannot spell.) The range lattice reads
+the quotient's interval from the bound alone. The emitter suite
+runs four forms - `/ 3600` over the day, `/ 60` over the hour, `/ 7` and `/ 24`
+- with a batch as long as the bound at 128 and 512 bits, so every dividend the
+node is defined over is compared once against the true division, in a full
+lane group and in the tail.
+
+What it is for. Today no compiler arm builds it: the seconds-of-day column that
+would make `hour` a bounded division of an int does not exist until the split
+leaf (route B) or the cache encoding (route C, milestone 6's item 11). So the
+node ships as the emitted twin of the hand-written arm, priced beside it in
+`VarkaTimeBenchmark` as `seconds of day, int32 lanes, emitted bounded multiply`
+at the next regeneration, and as the division the calendar prefix's hand-emitted
+magic can become a node of. The prediction for that regeneration: the emitted
+bounded arm reads within 5% of the hand-written arm on every shape at every
+width, since the two are the same multiply and shift with the emitter's loads
+and stores around them; and the double-route int arm stays where it is.
