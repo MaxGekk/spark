@@ -2841,6 +2841,11 @@ public final class VarkaLoopEmitter {
           if (node instanceof ConstDivide n && takesMagicDivide(analysis, n)) {
             s.constDivideTmp.put(node, new int[] {slot++, slot++, slot++, slot++});
           }
+          // The multiply-high form reads its dividend three times - two halves and the sign
+          // bit - so it parks the vector in one slot rather than juggling the stack.
+          if (node instanceof ConstDivide n && takesMulHiDivide(analysis, n)) {
+            s.constDivideTmp.put(node, new int[] {slot++});
+          }
           if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay
               || node instanceof TruncDateDynamic || node instanceof ThursdayOf
               || node instanceof DayOfWeekIso) {
@@ -6289,16 +6294,20 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * {@code child / divisor}, the one division with no magic form to fall back on.
+   * {@code child / divisor}, the division over a dividend nothing bounds.
    *
    * <p>{@link VarkaVectorIR.ConstDivide} exists for dividends the emitter cannot bound, so the
-   * range-narrowed magic is not an option however {@link VarkaEmitOptions#division()} is set,
-   * and the double route is not a variant here but the lowering. It is always the true divide:
+   * calendar's range-narrowed magic is not an option however {@link VarkaEmitOptions#division()}
+   * is set. At the int lane it takes the multiply-high through 64-bit lanes
+   * ({@link #emitMulHiDivide}, task 149), which is exact over the whole lane, or - with
+   * {@link VarkaEmitOptions#mulHiDivide()} off, the reference arm - the conversion through
+   * double lanes it replaced. At the long lane it is the conversion form, or the magic-number
+   * form on a host whose converts do not intrinsify. The conversion is always the true divide:
    * the reciprocal is exact only for divisors a closed form admits, and choosing between them
    * per divisor is a performance question this node does not need to answer to be correct.
    *
-   * <p>No carry, no guard and no overflow mask: the quotient is exact over the whole lane, and
-   * dividing by a non-zero constant other than -1 cannot overflow.
+   * <p>No carry, no guard and no overflow mask: every form's quotient is exact over the whole
+   * lane, and dividing by a non-zero constant other than -1 cannot overflow.
    */
   private static void emitConstDivide(CodeBuilder cb, ConstDivide n, boolean dense,
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
@@ -6312,9 +6321,132 @@ public final class VarkaLoopEmitter {
       emitMagicDivide(cb, analysis, n, s);
       return;
     }
+    if (takesMulHiDivide(analysis, n)) {
+      emitMulHiDivide(cb, analysis, n, s);
+      return;
+    }
     emitDoubleDivide(cb, analysis.lane,
         new Divider(VarkaEmitOptions.Division.DOUBLE_DIV, analysis.divider.species()),
         n.divisor());
+  }
+
+  /**
+   * Whether an int-lane constant division takes the multiply-high form (task 149): the lane
+   * is the int one, the divisor is not the identity, the option is on, and the width names a
+   * species to widen into - the same condition under which the conversion form can convert,
+   * since both widen each int half into a lane of twice the width.
+   */
+  private static boolean takesMulHiDivide(Analysis analysis, ConstDivide n) {
+    return analysis.lane == Lane.INT && n.divisor() != 1
+        && analysis.options.mulHiDivide() && analysis.divider.canConvert();
+  }
+
+  /**
+   * The multiplier and shift of a signed 32-bit division by a constant, Granlund and
+   * Montgomery's, in the derivation Hacker's Delight (10-6, {@code magic}) gives: for a
+   * divisor {@code d >= 2}, the smallest shift {@code s} and the multiplier {@code M} such
+   * that {@code mulhi(n, M) (+ n where M < 0 as int32) >> s}, plus one where {@code n} is
+   * negative, is {@code n / d} for every int32 {@code n}. It is what C2 itself emits for a
+   * scalar {@code n / 12}.
+   *
+   * <p>Returned as the form the lanes compute rather than the form the book states. The
+   * "{@code + n} where {@code M < 0}" term is the multiplier's missing {@code 2^32}: with a
+   * 64-bit product the multiplier can simply be taken unsigned, {@code Mu = M mod 2^32}, and
+   * {@code (n * Mu) >> (32 + s)} is the book's quotient before its sign correction in one
+   * multiply and one shift. The product fits: {@code |n| <= 2^31} and {@code Mu < 2^32}. So
+   * the pair is {@code (Mu, 32 + s)}, and the caller adds the dividend's sign bit.
+   *
+   * <p>Exactness over all 2^32 dividends is not argued from the book; {@code
+   * VarkaLoopEmitterSuite}'s opt-in sweep computes this form for every dividend and every
+   * divisor the emitter and the fuzz grammar divide by, and compares against Java's {@code /}.
+   */
+  static long[] signedMagic(int d) {
+    if (d < 2) {
+      throw new IllegalArgumentException("the signed magic is derived for divisors >= 2, not " + d);
+    }
+    long two31 = 1L << 31;
+    long anc = two31 - 1 - two31 % d;
+    int p = 31;
+    long q1 = two31 / anc;
+    long r1 = two31 - q1 * anc;
+    long q2 = two31 / d;
+    long r2 = two31 - q2 * d;
+    long delta;
+    do {
+      p++;
+      q1 *= 2;
+      r1 *= 2;
+      if (r1 >= anc) {
+        q1++;
+        r1 -= anc;
+      }
+      q2 *= 2;
+      r2 *= 2;
+      if (r2 >= d) {
+        q2++;
+        r2 -= d;
+      }
+      delta = d - r2;
+    } while (q1 < delta || (q1 == delta && r1 == 0));
+    // q2 + 1 is the book's M as a 32-bit pattern; taken unsigned, the "+ n" case folds in.
+    long mu = (q2 + 1) & 0xFFFFFFFFL;
+    return new long[] {mu, 32 + (p - 32)};
+  }
+
+  /** {@link #signedMagic}, for the suite that pins the constants and sweeps the form. */
+  static long[] signedMagicForTest(int d) {
+    return signedMagic(d);
+  }
+
+  /**
+   * {@code [v] -> [v / d]} at the int lane by a multiply-high through 64-bit lanes (task 149),
+   * the lowering a scalar compiler gives {@code n / 12} and the one the conversion form's
+   * divider-bound rate asked for (`PLAN_TASK_149.md` 3).
+   *
+   * <p>Each int half widens with {@code I2L} into a long vector of half the lanes - the same
+   * two-part split the conversion form makes into doubles - multiplies by the unsigned magic,
+   * shifts the product right arithmetically by {@code 32 + s}, and narrows back with
+   * {@code L2I} into the disjoint lanes the other half left at zero; {@code or} rejoins them.
+   * That is the truncated quotient for a non-negative dividend and one below it for a
+   * negative one, so the dividend's sign bit is added, which is the book's {@code q + (n >>>
+   * 31)}. A negative divisor divides by its magnitude and negates, which is exact for every
+   * divisor this node admits (it refuses -1, the one case where the negation could overflow).
+   * Eleven lane operations at most, and no divide: two widenings, two multiplies, two shifts,
+   * two narrowings, an or, a shift and an add, plus a multiply for a negative divisor.
+   */
+  private static void emitMulHiDivide(CodeBuilder cb, Analysis analysis, ConstDivide n,
+      Slots s) {
+    int dividend = s.constDivideTmp.get(n)[0];
+    long[] magic = signedMagic((int) Math.abs(n.divisor()));
+    String species = analysis.divider.species();
+    cb.astore(dividend);                                        // []
+    for (int half = 0; half < 2; half++) {
+      cb.aload(dividend);                                       // [.., v]
+      cb.getstatic(VECTOR_OPERATORS, "I2L", VO_CONVERSION);
+      cb.getstatic(LONG_VECTOR, species, VECTOR_SPECIES);
+      cb.loadConstant(half);
+      cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+      cb.checkcast(LONG_VECTOR);                                // [.., (long) half]
+      cb.loadConstant(magic[0]);
+      cb.invokevirtual(LONG_VECTOR, "mul", Lane.LONG.lanewiseVI);   // [.., half * Mu]
+      cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
+      // The long lane's shift count is a long, as every scalar convenience of that lane is.
+      cb.loadConstant(magic[1]);
+      cb.invokevirtual(LONG_VECTOR, "lanewise", Lane.LONG.lanewiseBinaryI); // [.., q']
+      cb.getstatic(VECTOR_OPERATORS, "L2I", VO_CONVERSION);
+      cb.getstatic(INT_VECTOR, species, VECTOR_SPECIES);
+      cb.loadConstant(-half);
+      cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+      cb.checkcast(INT_VECTOR);                                 // [.., q' in this half's lanes]
+    }
+    cb.invokevirtual(INT_VECTOR, "or", Lane.INT.lanewiseVV);    // [q' over all lanes]
+    cb.aload(dividend);
+    emitShift(cb, "LSHR", 31);                                  // [q', sign bit]
+    cb.invokevirtual(INT_VECTOR, "add", Lane.INT.lanewiseVV);   // [q]
+    if (n.divisor() < 0) {
+      cb.loadConstant(-1);
+      cb.invokevirtual(INT_VECTOR, "mul", Lane.INT.lanewiseVI); // [-q]
+    }
   }
 
   /**

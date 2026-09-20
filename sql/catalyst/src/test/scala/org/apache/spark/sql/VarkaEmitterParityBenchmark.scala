@@ -2120,12 +2120,13 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
       }
 
       runBenchmark("task 88 step 4: extract(YEAR FROM ym), the division with no magic form") {
-        // The one shape the double route does not merely lower differently but lowers at all.
         // `extract(YEAR FROM ym)` is a month count divided by twelve over a column nothing
-        // bounds, and the calendar's magic is exact over about one forty-thousandth of int32,
-        // so there is no vector lowering to compare against - the comparand is the scalar
-        // division the row engine performs, and the number is the lane against Spark rather
-        // than one lowering against another (prediction 3 of `PLAN_TASK_88.md` 6.1).
+        // bounds, and the calendar's range-narrowed magic is exact over about one
+        // forty-thousandth of int32, so the calendar's lowering is not available and the
+        // comparand is the scalar division the row engine performs (prediction 3 of
+        // `PLAN_TASK_88.md` 6.1). Task 88 gave it the conversion through double lanes; task
+        // 149 the multiply-high through 64-bit lanes, which is what a scalar compiler emits
+        // for the same division and what the scalar loop below is in fact running.
         //
         // The column spans signed int32 rather than the epoch days the other blocks use,
         // because that is the range the shape actually sees and the reason the magic declines
@@ -2145,10 +2146,22 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         val benchmark = new Benchmark(s"extract(YEAR FROM ym) over $numRows rows, null-free",
           numRows, minNumIters = 5, warmupTime = 2.seconds, minTime = 2.seconds, output = output)
-        val years = emit(Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0), 12)), 1, 0,
-          loader, 983)
-        benchmark.addCase("double lane, true divide: the only lowering this division has") { _ =>
-          val status = years.run(Array(months.address()), Array(0L), Array(0),
+        // Task 149 gave this division a second lowering, the multiply-high through 64-bit
+        // lanes, and made it the default: the conversion form stays as the reference arm
+        // behind `mulHiDivide`, so the two are adjacent here and the scalar loop is the
+        // comparand for both. The shipped case keeps its id; its bytes changed, which is the
+        // point of the row.
+        val divide = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0), 12))
+        val mulHi = emit(divide, 1, 0, loader, 983)
+        val converting = emit(divide, 1, 0, loader, 984,
+          VarkaEmitOptions.DEFAULTS.withMulHiDivide(false))
+        benchmark.addCase("multiply-high through 64-bit lanes (shipped)") { _ =>
+          val status = mulHi.run(Array(months.address()), Array(0L), Array(0),
+            Array(dst.address()), Array(dstValidity.address()), Array.emptyIntArray, numRows)
+          require(status == 0, s"the kernel declined a batch: status $status")
+        }
+        benchmark.addCase("double lane, true divide: the conversion form it replaced") { _ =>
+          val status = converting.run(Array(months.address()), Array(0L), Array(0),
             Array(dst.address()), Array(dstValidity.address()), Array.emptyIntArray, numRows)
           require(status == 0, s"the kernel declined a batch: status $status")
         }
