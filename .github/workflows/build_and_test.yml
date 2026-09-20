@@ -212,11 +212,7 @@ jobs:
           # Documents alone are not a scoped change either; they have their own job.
           varka_scope=spark
           if [ -n "${changed_files:-}" ]; then
-            varka_scope=$(echo "$changed_files" | (cd dev && python3 -c "
-          import sys
-          import sparktestsupport.modules as m
-          print(m.varka_change_scope(sys.stdin.read().split()))
-          "))
+            varka_scope=$(echo "$changed_files" | ./dev/varka_scope.py)
           fi
           echo "varka change scope: $varka_scope"
           varka_scoped=false
