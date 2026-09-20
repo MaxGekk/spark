@@ -3224,6 +3224,16 @@ line in `emitDoubleConvert` - broadcast the divisor once, from the species
 constant, and divide by the vector - and moves emitted bytes, so it is this
 task's to make and to measure, not the audit's.
 
+*Admission check, 20 September 2026, `PLAN_TASK_149.md`.* Task 153's audit
+offered a lead - a `missing constant` line on the conversion form's divisor
+broadcast - and the one-line fix for it was built, measured and reverted:
+the int form ran within noise of its committed rows, and the line is the
+retried kind, not a refusal. The real limit is the divider: two double
+divides per lane group at any width, against a scalar loop that C2 has
+strength-reduced into a multiply-high. The plan designs that same
+multiply-high for the int lane through 64-bit lanes, with an exhaustive proof
+script, and registers its predictions; the build is the task's next step.
+
 ### 2.86 The assembly gate fails on part of the runner pool, and cannot say which part (task 150)
 
 *Opened 19 September 2026, on the gate's second failure in its first two days.*
