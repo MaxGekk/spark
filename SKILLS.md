@@ -90,6 +90,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Two things share the name `uncommon_trap`, and only one of them happened](sql/varka/skills/the-jit.md#two-things-share-the-name-uncommon_trap-and-only-one-of-them-happened)
 * [Calling into an uncompilable method costs something even when it does nothing](sql/varka/skills/the-jit.md#calling-into-an-uncompilable-method-costs-something-even-when-it-does-nothing)
 * [A hand-written comparison kernel needs every fast path the real one has](sql/varka/skills/the-jit.md#a-hand-written-comparison-kernel-needs-every-fast-path-the-real-one-has)
+* [A kernel clean at 512 bits can be a per-lane loop at 128, and only the narrow companion shows it](sql/varka/skills/the-jit.md#a-kernel-clean-at-512-bits-can-be-a-per-lane-loop-at-128-and-only-the-narrow-companion-shows-it)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
