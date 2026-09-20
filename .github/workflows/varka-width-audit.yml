@@ -1,0 +1,117 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+
+# Take the width audit's census (VarkaWidthAuditSuite, task 153) on each runner
+# architecture the pool offers, and publish it as an artifact and a summary. The
+# census says, per vector width a host can run, which Vector API calls C2 refuses to
+# lower in Varka's kernels; the committed sql/varka/width_audit.json is one x86
+# laptop's, and the fleet's 128-bit hosts are aarch64, where the 64-bit lane's
+# masks were never looked at. Unlike the canary workflow this needs the catalyst
+# test classes, so it builds them: about half an hour on a cold runner.
+#
+# The suite's invariant - nothing refused at the host's own width, the 64-bit
+# converts below AVX-512 excepted - is expected to fail on a host where the
+# story differs, and that failure is the finding, so the step continues and the
+# census is written and uploaded either way. Nothing here is committed: a
+# census is a property of the CPU and the JDK, and the committed file stays the
+# laptop's; what a runner measured is recorded in the plan by hand from the
+# artifact.
+name: Varka width audit
+
+on:
+  push:
+    paths:
+      - '.github/workflows/varka-width-audit.yml'
+      - 'sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/codegen/varka/VarkaWidthAudit*.scala'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: "Width audit on ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+    - name: Checkout Varka
+      uses: actions/checkout@v6
+    - name: Install JDK 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '25'
+    - name: Cache the build's dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/coursier
+          ~/.ivy2
+          ~/.sbt
+        key: varka-width-audit-${{ matrix.arch }}-${{ hashFiles('project/**', 'pom.xml') }}
+        restore-keys: varka-width-audit-${{ matrix.arch }}-
+    - name: Describe the machine
+      run: |
+        echo "## Width audit on ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+        {
+          echo '```'
+          grep -m1 -E 'model name|^CPU part|^Model' /proc/cpuinfo || true
+          grep -m1 -oE 'avx512[a-z]*|asimd|sve[0-9]*' /proc/cpuinfo | sort -u | tr '\n' ' ' || true
+          echo
+          java -version 2>&1 | head -1
+          java -XX:+PrintFlagsFinal -version 2>/dev/null | grep -E ' (MaxVectorSize|UseAVX|UseSVE) ' || true
+          echo '```'
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+    - name: Take the census
+      # The regeneration writes this host's census over the committed file in the checkout;
+      # the failure of the invariant on a host where the story differs is the finding, so the
+      # step continues and the summary below reads the file either way.
+      continue-on-error: true
+      env:
+        VARKA_AUDIT_REGEN: "true"
+      run: ./build/sbt "catalyst/testOnly *VarkaWidthAuditSuite" 2>&1 | tail -60
+    - name: Summarise the census
+      run: |
+        python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+        import json, re
+        d = json.load(open("sql/varka/width_audit.json"))
+        h = d["host"]
+        print(f"### {h['cpu']} ({h['arch']}), preferred {h['preferred_bits']} bits, UseAVX {h['use_avx']}")
+        def construction(line):
+            for key, name in (("op=comp", "compare to mask"), ("op=blend", "blend"), ("op=cast", "cast"),
+                              ("op=broadcast", "broadcast"), ("op=test", "mask test"), ("is_masked_op=1", "masked op"),
+                              ("ismask=1", "mask logic"), ("op=load", "load/store"), ("op=store", "load/store")):
+                if key in line: return name
+            return "other"
+        for bits, shapes in d["widths"].items():
+            refused = {s: lines for s, lines in shapes.items() if lines}
+            print(f"\n**{bits} bits**: {len(refused)} of {len(shapes)} shapes have a refusal")
+            for s, lines in sorted(refused.items()):
+                cs = sorted({construction(l) for l in lines})
+                print(f"- `{s}`: {', '.join(cs)}")
+        PY
+    - name: Upload the census
+      uses: actions/upload-artifact@v4
+      with:
+        name: width-audit-${{ matrix.arch }}
+        path: sql/varka/width_audit.json
