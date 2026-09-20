@@ -34,6 +34,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
@@ -173,6 +174,8 @@ public final class VarkaRangeAnalysis {
       // prove their bounds structurally (task 102) or through a guard like this one.
       case GuardedRange n -> kind == Kind.INT
           ? VarkaValueRange.of(n.lo(), n.hi()) : VarkaValueRange.UNKNOWN;
+      // A 32-bit value computed in the long lane, whose ranges this lattice does not track.
+      case NarrowLane n -> VarkaValueRange.UNKNOWN;
       case Greatest n -> hull(n.left(), n.right(), kind, policy, literals);
       case Least n -> hull(n.left(), n.right(), kind, policy, literals);
       case IfElse n -> hull(n.thenNode(), n.elseNode(), kind, policy, literals);

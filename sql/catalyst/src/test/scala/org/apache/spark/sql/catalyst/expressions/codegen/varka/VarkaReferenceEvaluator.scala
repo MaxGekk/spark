@@ -53,6 +53,10 @@ object VarkaReferenceEvaluator {
     // A range guard changes no value; a lane outside it declines the batch, which the suites
     // assert on the status rather than on a value this evaluator could spell.
     case n: GuardedRange => evalValue(n.child(), row, lits)
+    // A narrowing root is a long-lane shape: its child is computed over 64-bit rows, so it is
+    // answered by `evalLong`, and a suite takes the low 32 bits of that as the store does.
+    case n: NarrowLane => throw new IllegalArgumentException(
+      "a narrowing root is evaluated through evalLong: " + n)
     case n: DateDiff =>
       for (e <- evalValue(n.end(), row, lits); s <- evalValue(n.start(), row, lits)) yield e - s
     case n: DayOfWeek =>
@@ -231,6 +235,10 @@ object VarkaReferenceEvaluator {
     case n: ConstDivide =>
       evalLong(n.child(), row, lits).map(_ / n.divisor())
     case n: GuardedRange => evalLong(n.child(), row, lits)
+    // The narrowing is the kernel's store, not a value change: the reference answers the child
+    // in full and the suite narrows it the way the store does, so a value that does not fit an
+    // int would show as a difference rather than be truncated on both sides.
+    case n: NarrowLane => evalLong(n.child(), row, lits)
     case n: Greatest =>
       (evalLong(n.left(), row, lits), evalLong(n.right(), row, lits)) match {
         case (Some(a), Some(b)) => Some(math.max(a, b))

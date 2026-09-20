@@ -22,7 +22,7 @@ import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolv
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, CurrentTime, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimeExpression, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimestampAddInterval, TimeToMicros, TimeToMillis, TimeToSeconds, TimeTrunc, ToTime, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.optimizer.ReplaceExpressions
 import org.apache.spark.sql.catalyst.plans.logical.{OneRowRelation, Project}
@@ -834,6 +834,45 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(compiled.outputTypes === Seq(TimeType(6)))
   }
 
+  test("hour, minute and second lower to long-lane divisions under a narrowing root") {
+    // Group C's route A (`PLAN_TASK_102.md` 8.3): the three extracts are `LocalTime` field
+    // reads on the row engine and constant divisions of the nanoseconds of day here, `minute`
+    // and `second` taking the remainder of a further division by sixty. Each is an int column
+    // computed in the long lane, so the kernel is a long-lane one whose output type is an int,
+    // and the narrowing root is what tells the store so.
+    val hour = VarkaExpressionCompiler.compile(Seq(out(HoursOfTime(t6))), withLong).get
+    assert(hour.outputs === Seq(new NarrowLane(new ConstDivide(longCol, 3600000000000L))))
+    assert(hour.lane === LaneType.LONG)
+    assert(hour.outputTypes === Seq(IntegerType))
+    assert(hour.inputOrdinals === Seq(8))
+    def remainderOfSixty(x: VarkaVectorIR): VarkaVectorIR =
+      new IntArith(IntOp.SUB, Overflow.WRAP, x,
+        new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(x, 60L), longSlot(0)))
+    val minute = VarkaExpressionCompiler.compile(Seq(out(MinutesOfTime(t6))), withLong).get
+    assert(minute.outputs === Seq(new NarrowLane(
+      remainderOfSixty(new ConstDivide(longCol, 60000000000L)))))
+    assert(minute.longLiterals === Seq(60L))
+    assert(minute.outputTypes === Seq(IntegerType))
+    val second = VarkaExpressionCompiler.compile(Seq(out(SecondsOfTime(t6))), withLong).get
+    assert(second.outputs === Seq(new NarrowLane(
+      remainderOfSixty(new ConstDivide(longCol, 1000000000L)))))
+    assert(second.lane === LaneType.LONG)
+    // A narrowed root beside a wide one is one kernel: both are computed in the long lane, and
+    // the output types say which store each takes.
+    val both = VarkaExpressionCompiler.compile(
+      Seq(out(HoursOfTime(t6)), out(TimeTrunc(Literal("HOUR"), t6))), withLong).get
+    assert(both.lane === LaneType.LONG)
+    assert(both.outputTypes === Seq(IntegerType, TimeType(6)))
+  }
+
+  test("an extract under another expression declines, until task 28 narrows inside a tree") {
+    // The narrowing is the kernel's store, so `hour(t) + 1` would put a 32-bit value under a
+    // node of a 64-bit tree, which the emitter refuses; the compiler declines it first, with
+    // the reason, and the entry beside it still fuses.
+    val reason = declineReason(Add(HoursOfTime(t6), Literal(1)), withLong)
+    assert(reason.contains("only an output can take it"), reason)
+  }
+
   test("time_to_millis and time_to_micros lower to a constant division of the nanoseconds") {
     // Group E (`PLAN_TASK_102.md` 9.3): `floorDiv` of a non-negative count is the truncating
     // division the lane has, and the result is a bigint on the same lane.
@@ -959,8 +998,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // Task 102 lowers these one group at a time, and the difference between "not lowered yet"
     // and "unsupported" is what tells a reader where the work stands. The same distinction task
     // 89 drew for `extract(MONTH FROM ym)`.
-    val reason = declineReason(HoursOfTime(t6), withLong)
-    assert(reason.contains("hour(t)"), reason)
+    // make_time is the one still waiting on task 28's widening, now that the extracts and the
+    // conversions are lowered and the decimal-valued two decline by their own reason.
+    val reason = declineReason(
+      MakeTime(Literal(1), Literal(2), Literal(Decimal(3), DecimalType(16, 6))), withLong)
+    assert(reason.contains("make_time"), reason)
     assert(reason.contains("task 102"), reason)
   }
 

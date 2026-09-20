@@ -227,6 +227,11 @@ class VarkaCoverageSuite extends SparkFunSuite {
         "DateTimeUtils reads them"),
       Row("time_trunc('MINUTE', t)"),
       Row("time_trunc('MILLISECOND', t2)"),
+      Row("hour(t)", "an int computed in the 64-bit lane and narrowed at the kernel's store, " +
+        "the one place a lane changes width until task 28; so the extract fuses as an output " +
+        "and declines under another expression"),
+      Row("minute(t2)"),
+      Row("second(t)"),
       Row("time_to_millis(t)"),
       Row("time_to_micros(t2)"),
       Row("time_from_seconds(l)", "the count is guarded to the day's worth of its unit, where " +

@@ -38,7 +38,7 @@ import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, An
   Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaValueRange, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.util.{DateTimeConstants, DateTimeUtils}
 import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, Decimal, DecimalType, IntegerType, LongType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
@@ -67,8 +67,12 @@ private[sql] case class CompiledVarkaProjection(
   require(literals.isEmpty || longLiterals.isEmpty,
     "a kernel is single-lane, so at most one of its literal tables is populated")
 
-  /** The lane every output root is on, and so the `run` overload the evaluator calls. */
-  def lane: LaneType = outputs.head.laneType()
+  /**
+   * The lane the kernel's loop runs at, and so the `run` overload the evaluator calls: every
+   * root's emission lane, which is the root's own except for a narrowing root, whose 32-bit
+   * column is computed in the 64-bit lane (`VarkaVectorIR.emissionLane`).
+   */
+  def lane: LaneType = VarkaVectorIR.emissionLane(outputs.head)
 
   /** The slot count of the one literal table this kernel reads - what the emitter is told. */
   def numLiterals: Int = literals.size + longLiterals.size
@@ -375,7 +379,7 @@ private[sql] object VarkaExpressionCompiler {
           val literalsMark = literals.size
           val longMark = sink.longMark
           val boundsMark = sink.boundsMark
-          compileNode(e, inputs, literals, sink) match {
+          compileRoot(e, inputs, literals, sink) match {
             // One kernel holds one lane: its loop, its epilogue and its stores are one species.
             // The first fused entry fixes the lane and an entry of the other lane is demoted to
             // residual with a reason that says so - checked here, before the budgets, because
@@ -383,13 +387,15 @@ private[sql] object VarkaExpressionCompiler {
             // mismatch reported as a budget breach sends a reader hunting a chain-depth problem
             // that is not there. Task 28's width conversion is what will let both lanes share a
             // tree; until then the mixed projection fuses one lane and leaves the other.
-            case Some(ir) if outputs.nonEmpty && ir.laneType() != outputs.head.laneType() =>
+            case Some(ir) if outputs.nonEmpty &&
+                VarkaVectorIR.emissionLane(ir) != VarkaVectorIR.emissionLane(outputs.head) =>
               truncate(inputs, inputsMark)
               truncate(literals, literalsMark)
               sink.truncateLong(longMark)
               sink.truncateBounds(boundsMark)
               sink.take()
-              sink.note(laneMismatch(ir.laneType(), outputs.head.laneType()), e)
+              sink.note(laneMismatch(VarkaVectorIR.emissionLane(ir),
+                VarkaVectorIR.emissionLane(outputs.head)), e)
               sink.take().foreach(decline => declines += position -> decline)
               ResidualOutput
             // An accepted entry must also fit the emitter's structural budgets together with the
@@ -639,17 +645,48 @@ private[sql] object VarkaExpressionCompiler {
    * column of unit names would need a kernel per distinct value. `trunc(d, fmt)` made the same
    * choice for the date lane.
    */
+  /**
+   * An output root: [[compileNode]], plus the one lowering only a root may take. The three
+   * `TIME` field extracts compute a 64-bit division and deliver an int, and the emitter narrows
+   * a lane at the kernel's store and nowhere else until task 28 gives it a width conversion;
+   * so `hour(t)` as an output fuses under a narrowing root, while `hour(t) + 1` and
+   * `hour(t) = 12`, which put the narrowed value under another node, reach [[compileTime]]
+   * through [[compileNode]] and decline with that reason.
+   */
+  private def compileRoot(
+      expr: Expression,
+      inputs: mutable.LinkedHashMap[Int, Int],
+      literals: mutable.LinkedHashMap[Int, Int],
+      sink: DeclineSink): Option[VarkaVectorIR] = expr match {
+    case r: RuntimeReplaceable => compileRoot(r.replacement, inputs, literals, sink)
+    case si: StaticInvoke if timeTargets.contains((si.staticObject, si.functionName)) =>
+      compileTime(si, inputs, literals, sink, atRoot = true)
+    case other => compileNode(other, inputs, literals, sink)
+  }
+
   private def compileTime(
       si: StaticInvoke,
       inputs: mutable.LinkedHashMap[Int, Int],
       literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Option[VarkaVectorIR] = {
+      sink: DeclineSink,
+      atRoot: Boolean = false): Option[VarkaVectorIR] = {
     val label = timeTargets((si.staticObject, si.functionName))
     def long(e: Expression): Option[VarkaVectorIR] =
       compileNode(e, inputs, literals, sink).filter { ir =>
         // The arguments are TIME and interval columns, literals and their widening casts, all
         // of which the leaf arms above put on the long lane; anything else declined already.
         ir.laneType() == LaneType.LONG
+      }
+    // An int computed in the long lane, which only an output root can deliver (see
+    // `compileRoot`): the narrowing is the kernel's store, so under another node the entry
+    // declines and says why.
+    def narrowed(time: Expression)(build: VarkaVectorIR => VarkaVectorIR): Option[VarkaVectorIR] =
+      if (atRoot) {
+        long(time).map(t => new NarrowLane(build(t)))
+      } else {
+        sink.note(s"$label is an int computed in the long lane, which the kernel narrows at " +
+          "its store: only an output can take it until task 28 narrows inside a tree", si)
+        None
       }
     def literalUnit(e: Expression, table: Map[String, Long], what: String): Option[Long] =
       e match {
@@ -679,6 +716,21 @@ private[sql] object VarkaExpressionCompiler {
           t <- long(time)
         } yield new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(t, unit),
           sink.longSlot(unit))
+      // The three field extracts (group C): hour is one division of the nanoseconds of day,
+      // minute and second a division and the remainder of a further division by sixty, each
+      // built the way `DateTimeUtils` computes it through `LocalTime` and delivered as an int
+      // column by a narrowing root - the value stays in the long lane and narrows at the store
+      // (`PLAN_TASK_102.md` 8.3). Every dividend is nanoseconds of day or a quotient of it,
+      // under the type's bound and so under `ConstDivide.EXACT_DIVIDEND_BOUND` structurally,
+      // and every result is under 86400, so nothing overflows and nothing is guarded.
+      case ("getHoursOfTime", Seq(time)) =>
+        narrowed(time)(t => new ConstDivide(t, nanosPerTimeUnit("HOUR")))
+      case ("getMinutesOfTime", Seq(time)) =>
+        narrowed(time)(t =>
+          remainderOfSixty(new ConstDivide(t, nanosPerTimeUnit("MINUTE")), sink))
+      case ("getSecondsOfTime", Seq(time)) =>
+        narrowed(time)(t =>
+          remainderOfSixty(new ConstDivide(t, nanosPerTimeUnit("SECOND")), sink))
       // timeAddInterval(t, p, dt, endField, target): addExact(t, multiplyExact(dt, 1000)),
       // thrown out of if the sum leaves [0, NANOS_PER_DAY), then truncated to `target` digits.
       // Two guards make the lane's wrapping arithmetic exact and the throw a decline. The
@@ -800,6 +852,16 @@ private[sql] object VarkaExpressionCompiler {
     "MINUTE" -> DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE,
     "HOUR" -> DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE
       * DateTimeConstants.MINUTES_PER_HOUR)
+
+  /**
+   * `x % 60` for a non-negative long-lane `x`, as `x - (x / 60) * 60`: the IR has no remainder
+   * node, and the subtraction cannot go wrong for a count that is a quotient of the day.
+   */
+  private def remainderOfSixty(x: VarkaVectorIR, sink: DeclineSink): VarkaVectorIR =
+    new IntArith(IntOp.SUB, Overflow.WRAP, x,
+      new IntArith(IntOp.MUL, Overflow.WRAP,
+        new ConstDivide(x, DateTimeConstants.SECONDS_PER_MINUTE),
+        sink.longSlot(DateTimeConstants.SECONDS_PER_MINUTE)))
 
   /** The reason an entry of one lane records when the kernel is already on the other. */
   private def laneMismatch(entry: LaneType, kernel: LaneType): String =

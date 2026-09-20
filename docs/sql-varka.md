@@ -397,6 +397,9 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 | `time_diff('microsecond', t2, t)` | units are read case-insensitively, as DateTimeUtils reads them | vector |
 | `time_trunc('MINUTE', t)` |  | vector |
 | `time_trunc('MILLISECOND', t2)` |  | vector |
+| `hour(t)` | an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until task 28; so the extract fuses as an output and declines under another expression | vector |
+| `minute(t2)` |  | vector |
+| `second(t)` |  | vector |
 | `time_to_millis(t)` |  | vector |
 | `time_to_micros(t2)` |  | vector |
 | `time_from_seconds(l)` | the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt | per-lane: compare to mask, mask logic, mask broadcast, mask test |
