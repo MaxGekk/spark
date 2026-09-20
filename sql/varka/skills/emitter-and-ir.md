@@ -630,6 +630,14 @@ What made it small, and what to carry to the next width change:
   before any test compared a value. A pass-through node that needs the word for
   itself (a guard) and one that merely forwards it (a narrowing) look alike in
   the IR and differ exactly here.
+- **A new permitted subtype is invisible to the incremental compiler's exhaustiveness
+  check.** Two Scala matches over the sealed IR in `VarkaRangeAnalysisSuite` had no
+  `NarrowLane` arm, and every `Test/compile` in the working tree that added the node
+  stayed green: the sealed hierarchy is a Java interface, and Zinc did not recompile
+  the Scala files that match on it. A fresh worktree's full compile failed on both as
+  fatal warnings, which is what CI would have done. After adding a node type, compile
+  the test sources from clean once, or grep for the matches over the hierarchy's
+  sibling arms and add the new one by hand before trusting the incremental build.
 - **A changed invariant has readers in the tests too, and they read regenerated
   files.** "A root's lane is the kernel's lane" had been re-derived in five
   places: two in the emitter, two in the compiler, and one each in the width
