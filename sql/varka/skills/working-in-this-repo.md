@@ -43,6 +43,11 @@ these files by `dev/varka_toc.py`.
   error at all, just a bare exit 1: pass the fully-qualified name for any
   benchmark outside `org.apache.spark.sql` directly, rather than trying a bare
   name first and reading the silence as a machine or environment problem.
+- The quote check walks the history of the results directories as well as their
+  current files, and while a merge is in progress it walks `MERGE_HEAD` beside
+  `HEAD` (task 161): a number that only the incoming side committed is not an
+  orphan. If the hook refuses a merge commit for numbers master holds, the fix
+  is the checker, not `--no-verify`.
 - Run `dev/varka_precommit.sh` before committing, or install it as the pre-commit hook:
   non-ASCII outside strings, lines over 100 columns, TODO/FIXME under Varka
   directories, the quote check, and ruff (`check` and `format --check`) on Python

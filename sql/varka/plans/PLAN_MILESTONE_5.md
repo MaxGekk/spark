@@ -3493,6 +3493,20 @@ when `emitted_bytes.json` and the shape hashes do not move, so no benchmark is
 rerun and no behaviour can change unnoticed. `PLAN_TASK_159.md` names the seams
 and the order; every step waits for the pull requests open at the time to merge.
 
+### 2.97 The quote check reads the merge it is asked to commit (task 161)
+
+*Opened and closed 20 September 2026, from a merge commit the hook refused.*
+
+The quote check holds every number a plan quotes to a committed results file,
+current or historical, and the pre-commit hook runs it on every commit. Its
+history walk started at `HEAD`, which during a merge is the branch alone: a
+number that only master's side of the merge ever committed was an orphan to the
+hook and correct the moment the merge was committed. Task 154's branch met it
+after task 149's numbers left the current files (`PLAN_TASK_161.md`): 13
+orphans on the uncommitted merge, 0 on master and 0 on the same merge once
+committed past the hook. The walk now takes `MERGE_HEAD` beside `HEAD` when it
+exists, so the hook judges the tree and history the merge commit will have.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3679,6 +3693,7 @@ can start has.
 | 157 | The widening store: a decimal output is sixteen bytes a row (section 2.93). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` section 9: every `TIME` decimal is an unscaled long in the lane the family already uses, and the column is the only blocker | A root-only `WidenDecimal` node whose store writes the value word and its sign extension per sixteen-byte slot; a `DecimalVector` destination in the evaluator; `second(t)` with its fraction and `time_to_seconds` lowered through it; measured against the evaluator widening a long output in a scalar loop, which is the baseline; the fraction's unscaled-long form checked against the row engine's `Double` round trip over every nanosecond of a minute | Both expressions agree with the row engine over every second of the day through both consumers; the store beats the scalar widening on `VarkaTimeBenchmark`'s ladder or the plan says by how much it does not |
 | 158 | Group E: the five `time_to_*`/`time_from_*` conversions the table does not know, and the two decimal declines that do not name their reason (section 2.94). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 9.3 | The five in `timeTargets` and the compiler as group B's shapes, with the conversion's overflow and day-range rules read before choosing a guard or a checked multiply; the table's completeness guard widened to the registry's `TIME` functions; `second` with fraction and `time_to_seconds` declining by name with the Arrow representation as the reason | Five new coverage rows fusing; every `TIME` function in the registry either lowers or declines by name, which the coverage suite states |
 | 159 | Refactor for readability: the emitter split by its phases, the compiler by expression family, the evaluator by responsibility, the emitter suite by family, the serializer one class per file, the options as a builder, and last one place per IR node (section 2.95). **Scoped** (20 September 2026) from the owner's review; after the pull requests open at the time (#267 to #275) merge | One PR per seam, each a pure move, in `PLAN_TASK_159.md`'s order: options builder, the emitter's six seams, the suite, the compiler with task 86, the evaluator, the serializer, the per-node dispatch | `emitted_bytes.json` and the shape hashes unchanged at every step, checked by the flattened-key diff; no results file, band or docs table moves; every new file opens with its purpose |
+| 161 | The quote check reads the merge it is asked to commit (section 2.97). **Done** (`PLAN_TASK_161.md`, 20 September 2026) from task 154's merge commit, which the hook refused for 13 numbers that master's history holds: the history walk starts at `MERGE_HEAD` beside `HEAD` while a merge is in progress | A merge of master started with `--no-commit` on a branch that predates task 149 reads 0 orphans with the change and 13 without; a plain tree reads what it read before |
 
 ## 4. Files
 
