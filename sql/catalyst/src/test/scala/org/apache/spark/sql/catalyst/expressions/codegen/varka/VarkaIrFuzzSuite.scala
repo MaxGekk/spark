@@ -422,7 +422,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       val root: AnyRef = if (rnd.nextInt(5) == 0) shapes.cond(depth) else shapes.value(depth).node
       collectNodeTypes(root, seen)
     }
-    val missing = permitted -- seen
+    // Deliberately out of reach: `NarrowLane` is admitted at an output root only, and the
+    // generator composes nodes under other nodes, so a shape holding one is not a shape to fuzz
+    // until task 28 lets a narrowing sit inside a tree; its root form is the emitter suite's.
+    val missing = permitted -- seen - "NarrowLane"
     assert(missing.isEmpty,
       s"the generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an arm, or " +
         "state here why the node type is deliberately out of the fuzzer's reach")
@@ -449,7 +452,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       val root: AnyRef = if (rnd.nextInt(5) == 0) shapes.cond(depth) else shapes.value(depth).node
       collectNodeTypes(root, seen)
     }
-    val missing = laneGeneric.map(_.getSimpleName) -- seen
+    // `NarrowLane` constructs over long leaves and so counts as lane-generic here, and is out
+    // of reach for the reason the int test states: a root-only node has no place in a tree.
+    val missing = laneGeneric.map(_.getSimpleName) -- seen - "NarrowLane"
     assert(missing.isEmpty,
       s"the long-lane generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an " +
         "arm to LongShapes, or state here why the node type is deliberately out of its reach")

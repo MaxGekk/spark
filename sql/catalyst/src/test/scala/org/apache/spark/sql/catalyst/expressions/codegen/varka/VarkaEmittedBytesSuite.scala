@@ -108,8 +108,11 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
     // `lanes` is the int lane's count, and names a width: 4 lanes are 128 bits and 16 are 512.
     // A long-lane shape is emitted at the same two widths, which are 2 and 8 of its lanes;
     // sixteen 64-bit lanes would be a species that does not exist, and the emitter would fall
-    // back to SPECIES_PREFERRED and pin nothing about width.
-    val laneCount = if (roots.head.laneType() == LaneType.LONG) lanes / 2 else lanes
+    // back to SPECIES_PREFERRED and pin nothing about width. The lane asked for is the
+    // emission's, which for a narrowing root (an int output computed in the long lane) is the
+    // long lane.
+    val laneCount =
+      if (VarkaVectorIR.emissionLane(roots.head) == LaneType.LONG) lanes / 2 else lanes
     val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(laneCount)
     val bytes = VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null,
       options)

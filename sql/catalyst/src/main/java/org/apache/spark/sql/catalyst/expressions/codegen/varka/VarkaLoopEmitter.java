@@ -65,6 +65,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lea
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Not;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Or;
@@ -928,11 +929,13 @@ public final class VarkaLoopEmitter {
     if (outputs.isEmpty()) {
       throw new IllegalArgumentException("no output chains to emit");
     }
-    Lane lane = Lane.of(outputs.get(0).laneType());
+    // The emission lane, not the root's: a NarrowLane root is a 32-bit column computed in the
+    // 64-bit lane its child is on, and the loop runs at the child's species.
+    Lane lane = Lane.of(VarkaVectorIR.emissionLane(outputs.get(0)));
     for (VarkaVectorIR output : outputs) {
-      if (output.laneType() != lane.laneType) {
+      if (VarkaVectorIR.emissionLane(output) != lane.laneType) {
         throw new IllegalArgumentException("outputs mix lanes: " + lane.laneType + " and "
-            + output.laneType());
+            + VarkaVectorIR.emissionLane(output));
       }
     }
     return lane;
@@ -1519,6 +1522,7 @@ public final class VarkaLoopEmitter {
       case SubDays n -> new VarkaVectorIR[] {n.days(), n.offset()};
       case GuardedDay n -> new VarkaVectorIR[] {n.days()};
       case GuardedRange n -> new VarkaVectorIR[] {n.child()};
+      case NarrowLane n -> new VarkaVectorIR[] {n.child()};
       case DateDiff n -> new VarkaVectorIR[] {n.end(), n.start()};
       case DayOfWeek n -> new VarkaVectorIR[] {n.days()};
       case WeekDay n -> new VarkaVectorIR[] {n.days()};
@@ -1571,7 +1575,7 @@ public final class VarkaLoopEmitter {
       return false;
     }
     for (VarkaVectorIR output : outputs) {
-      if (output.laneType() != outputs.get(0).laneType()) {
+      if (VarkaVectorIR.emissionLane(output) != VarkaVectorIR.emissionLane(outputs.get(0))) {
         return false;
       }
     }
@@ -1823,6 +1827,8 @@ public final class VarkaLoopEmitter {
     final Divider divider;
     /** Distinct nodes in first-visit order, with how often each is used. */
     final Map<VarkaVectorIR, Integer> useCount = new LinkedHashMap<>();
+    /** The output roots, for the one node type admitted only there. */
+    final Set<VarkaVectorIR> roots = new HashSet<>();
     /** Per distinct node, the bitset of input ordinals its subtree references. */
     final Map<VarkaVectorIR, Long> columns = new HashMap<>();
     /** Distinct nodes, children strictly before parents - the line map's numbering and
@@ -1930,7 +1936,8 @@ public final class VarkaLoopEmitter {
     void analyzeRoot(VarkaVectorIR root) {
       // A Cond root is legal: it emits this output's selection bitmap into dstValidity, with the
       // dstData slot unused (see the class doc). Value positions below a root still reject
-      // conditions via requireValue.
+      // conditions via requireValue. A NarrowLane root is legal too, and only as a root.
+      roots.add(root);
       analyze(root);
       if (height.get(root) > MAX_CHAIN_DEPTH) {
         throw new IllegalArgumentException(
@@ -2123,6 +2130,7 @@ public final class VarkaLoopEmitter {
         case ThursdayOf n -> wordOwner.get(n.days());
         case GuardedDay n -> wordOwner.get(n.days());
         case GuardedRange n -> wordOwner.get(n.child());
+        case NarrowLane n -> wordOwner.get(n.child());
         case Year n -> wordOwner.get(n.days());
         case Month n -> wordOwner.get(n.days());
         case DayOfMonth n -> wordOwner.get(n.days());
@@ -2176,6 +2184,7 @@ public final class VarkaLoopEmitter {
         case ThursdayOf n -> pureWord.get(n.days());
         case GuardedDay n -> pureWord.get(n.days());
         case GuardedRange n -> pureWord.get(n.child());
+        case NarrowLane n -> pureWord.get(n.child());
         case Year n -> pureWord.get(n.days());
         case Month n -> pureWord.get(n.days());
         case DayOfMonth n -> pureWord.get(n.days());
@@ -2221,8 +2230,18 @@ public final class VarkaLoopEmitter {
       // One species per emitted class, enforced per node. `laneOf` reads the output roots
       // only, so this is the sole defence against a node further down disagreeing - which
       // would emit one lane's descriptors over the other's data. The IR's own constructors
-      // make such a tree unbuildable; this is what catches one built another way.
-      if (node.laneType() != lane.laneType) {
+      // make such a tree unbuildable; this is what catches one built another way. The one
+      // node whose own lane differs from the emission's is the narrowing root, which is on
+      // the int lane by value and the long lane by computation; it is held to the emission
+      // lane through its child, and to the root position here: an output root only, until
+      // task 28 gives the emitter a bi-lane loop, since below a root it would put a 32-bit
+      // value into a computation nothing here can hold. Asked before the lane check so the
+      // refusal names the cause rather than the lane mix that follows from it.
+      if (node instanceof NarrowLane && !roots.contains(node)) {
+        throw new IllegalArgumentException(
+            "a narrowing is an output root only; found one under another node: " + node);
+      }
+      if (VarkaVectorIR.emissionLane(node) != lane.laneType) {
         throw new IllegalArgumentException("a " + node.laneType() + " node in a "
             + lane.laneType + " emission: " + node.getClass().getSimpleName());
       }
@@ -2275,6 +2294,8 @@ public final class VarkaLoopEmitter {
         // A pass-through of its child's value with a range check beside it, so it analyses
         // exactly as any other one-date operation: same validity, own word, one child.
         case GuardedDay n -> analyzeOp(node, false, n.days());
+        // The narrowing root: its child's value, its child's validity, narrowed at the store.
+        case NarrowLane n -> analyzeOp(node, false, n.child());
         case GuardedRange n -> {
           // At the int lane the bounds have to be what the lane can compare against; the long
           // lane holds any bound. Refused here, where the tree is, rather than at the push.
@@ -2936,6 +2957,7 @@ public final class VarkaLoopEmitter {
       case ThursdayOf n -> s.wordRef.get(n.days());
       case GuardedDay n -> s.wordRef.get(n.days());
       case GuardedRange n -> s.wordRef.get(n.child());
+      case NarrowLane n -> s.wordRef.get(n.child());
       case Year n -> s.wordRef.get(n.days());
       case Month n -> s.wordRef.get(n.days());
       case DayOfMonth n -> s.wordRef.get(n.days());
@@ -3168,6 +3190,9 @@ public final class VarkaLoopEmitter {
         // checks a value without changing its validity, so it forwards rather than owning one.
         case GuardedDay g -> demand.accept(analysis.wordOwner.get(g.days()));
         case GuardedRange g -> demand.accept(analysis.wordOwner.get(g.child()));
+        // The narrowing reads no word: its validity is its child's, and the one consumer of
+        // that word is its root write, which demands it above unless the bitmap pass serves it.
+        case NarrowLane g -> { }
         // The rest read no word here. A value node's own word, where it needs one, is
         // demanded by its root write, by a guard below, or by a consumer above it; a leaf
         // owns no word at all; and `IfElse`'s blend reads its branches' words through the
@@ -3224,6 +3249,7 @@ public final class VarkaLoopEmitter {
           demand.accept(analysis.wordOwner.get(x.offset())); }
         case GuardedDay x -> demand.accept(analysis.wordOwner.get(x.days()));
         case GuardedRange x -> demand.accept(analysis.wordOwner.get(x.child()));
+        case NarrowLane x -> demand.accept(analysis.wordOwner.get(x.child()));
         case SubDays x -> { demand.accept(analysis.wordOwner.get(x.days()));
           demand.accept(analysis.wordOwner.get(x.offset())); }
         case NextDay x -> { demand.accept(analysis.wordOwner.get(x.days()));
@@ -3745,6 +3771,45 @@ public final class VarkaLoopEmitter {
    * Shared by the loop, which calls it per iteration, and the epilogue, which calls it once
    * with {@code s.epilogueMask} set - the only difference between them inside here.
    */
+  /**
+   * The store of a {@link NarrowLane} root: {@code [long vector] -> []}, four bytes a row.
+   *
+   * <p>The 64-bit value narrows with {@code L2I} into the int species of the <i>same width</i>
+   * (part 0), so the quotients land in the low half of the int lanes and the upper half is
+   * zero; the store writes the low half under a mask, at half the long lane's byte offset,
+   * since the destination is an int column. The mask is {@code indexInRange(0, lanes)} on the
+   * int species - the low {@code lanes} lanes, which in the loop is the long species' count and
+   * in the epilogue the remainder - so one form serves both bodies and C2 folds it to a
+   * constant where {@code lanes} is one.
+   *
+   * <p>Two choices are deliberate. The int species is the width's own and not a half-width
+   * one: a second {@code IntVector} species in the JVM makes the shared templates inline
+   * bimorphically and boxes every other int kernel in the process (`PLAN_TASK_28.md` 2.2). And
+   * the mask is an int mask, which C2 lowers at every width, where the long lane's masks are
+   * per-lane at two lanes (task 153) - so a narrowed store costs a masked int store and
+   * nothing that scalarises.
+   */
+  private static void emitNarrowStore(CodeBuilder cb, Analysis analysis, Slots s, int o) {
+    // The int species of the long species' width: twice the long lane count, or the preferred
+    // species where no count is baked, which the long lane's preferred species matches in bits.
+    String intSpecies = Lane.INT.speciesField(analysis.lanes == 0 ? 0 : analysis.lanes * 2);
+    cb.getstatic(VECTOR_OPERATORS, "L2I", VO_CONVERSION);
+    cb.getstatic(INT_VECTOR, intSpecies, VECTOR_SPECIES);
+    cb.loadConstant(0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(INT_VECTOR);                                   // [ints, low half live]
+    cb.aload(s.dstSeg[o]);
+    cb.lload(s.byteOffset);
+    cb.loadConstant(1);
+    cb.lushr();                                                 // i * 4
+    cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
+    cb.getstatic(INT_VECTOR, intSpecies, VECTOR_SPECIES);
+    cb.loadConstant(0);
+    cb.iload(s.lanes);
+    cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
+    cb.invokevirtual(INT_VECTOR, "intoMemorySegment", Lane.INT.intoMemorySegmentMasked);
+  }
+
   private static void emitLaneGroup(CodeBuilder cb, boolean dense,
       List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, Slots s) {
     int numInputs = analysis.numInputs;
@@ -3833,16 +3898,20 @@ public final class VarkaLoopEmitter {
         emitRootValidityOr(cb, dense, analysis, s, o, root);
       }
       emitValue(cb, root, dense, analysis, s, computed);
-      cb.aload(s.dstSeg[o]);
-      cb.lload(s.byteOffset);
-      cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
-      if (s.epilogueMask != null) {
-        cb.aload(s.epilogueMask);
-        cb.invokevirtual(analysis.lane.vector, "intoMemorySegment",
-            analysis.lane.intoMemorySegmentMasked);
+      if (root instanceof NarrowLane) {
+        emitNarrowStore(cb, analysis, s, o);
       } else {
-        cb.invokevirtual(analysis.lane.vector, "intoMemorySegment",
-            analysis.lane.intoMemorySegmentDense);
+        cb.aload(s.dstSeg[o]);
+        cb.lload(s.byteOffset);
+        cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
+        if (s.epilogueMask != null) {
+          cb.aload(s.epilogueMask);
+          cb.invokevirtual(analysis.lane.vector, "intoMemorySegment",
+              analysis.lane.intoMemorySegmentMasked);
+        } else {
+          cb.invokevirtual(analysis.lane.vector, "intoMemorySegment",
+              analysis.lane.intoMemorySegmentDense);
+        }
       }
       if (!validityWritten && !wordKnownEarly) {
         emitRootValidityOr(cb, dense, analysis, s, o, root);
@@ -4253,6 +4322,13 @@ public final class VarkaLoopEmitter {
           emitRangeGuard(cb, node, dense ? null : s.wordRef.get(n.days()), guardTmp, dense,
               analysis, s, VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_MAX_DAYS);
         }
+      }
+      case NarrowLane n -> {
+        // The value stays in the long lane here; the narrowing happens at the root's store,
+        // which is the only place this node can be (see `emitNarrowStore`). The word is the
+        // child's.
+        emitValue(cb, n.child(), dense, analysis, s, computed);
+        line(cb, analysis, node);
       }
       case GuardedRange n -> {
         // The day guard's twin at whichever lane the child is on, with the bounds the node

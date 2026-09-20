@@ -4795,6 +4795,80 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   // rather than a wrap where Spark throws.
   // -------------------------------------------------------------------------------------------
 
+  test("a narrowing root stores four bytes a row of what the long lane computed, at both widths") {
+    // Route A of `PLAN_TASK_102.md` 8.3: the extracts of a TIME are 64-bit divisions whose
+    // results are ints, and a `NarrowLane` root stores the low half of each lane at `i * 4`
+    // where a wide root stores the whole lane at `i * 8`. A narrowed root shares its kernel
+    // with a wide one here on purpose, since the offset is per root; the rows reach both ends
+    // of the day and the sub-second edges; and the values are the long reference's narrowed
+    // the way the store narrows them. Validity is the child's, which the store leaves alone,
+    // so the nulls and the tail are asserted as for any long root.
+    val t = new ColumnRef(0, LaneType.LONG)
+    val sixty = new LiteralSlot(0, LaneType.LONG)
+    def remainderOfSixty(x: VarkaVectorIR): VarkaVectorIR =
+      new IntArith(IntOp.SUB, Overflow.WRAP, x,
+        new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(x, 60L), sixty))
+    val hour = new NarrowLane(new ConstDivide(t, 3600000000000L))
+    val minute = new NarrowLane(remainderOfSixty(new ConstDivide(t, 60000000000L)))
+    val second = new NarrowLane(remainderOfSixty(new ConstDivide(t, 1000000000L)))
+    val roots = Seq[VarkaVectorIR](hour, minute, t, second)
+    val edges = Seq(0L, 999999999L, 1000000000L, 3599999999999L, 3600000000000L,
+      43200000000000L, 86399999999999L)
+    def value(i: Int): Long = if (i < edges.length) edges(i) else {
+      java.lang.Long.remainderUnsigned(i.toLong * 0x9E3779B97F4A7C15L, 86400000000000L)
+    }
+    for (lanes <- Seq(2, 8)) {
+      val (name, bytes) = emitMulti(roots, 1, 1, VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+      // The store, counted from the bytes: one masked int store per narrowed root across the
+      // dense bodies, the same in the masked epilogue, and nothing else on the int species - no
+      // second species and no int arithmetic, which is what keeps the templates monomorphic.
+      def intVectorCalls(method: String): Int =
+        VarkaEmitterTestSupport.invocationCount(bytes, method, "jdk.incubator.vector.IntVector")
+      val denseBodies = VarkaEmitterTestSupport.methodNames(bytes).asScala
+        .filter(_.startsWith("loopDense"))
+      assert(denseBodies.map(intVectorCalls).sum === 3, s"at $lanes lanes: three narrowed stores")
+      assert(intVectorCalls("epilogueMasked") === 3, s"at $lanes lanes: three in the epilogue")
+      val (kernel, loader) = load((name, bytes))
+      try {
+        for (length <- Seq(1, 7, 17, 64, 129); (patternName, isNull) <- nullPatterns) {
+          val arena = Arena.ofConfined()
+          try {
+            val in = makeLongInput(arena, length, isNull, value)
+            val outs = roots.map {
+              case _: NarrowLane => makeOutput(arena, length)
+              case _ => makeLongOutput(arena, length)
+            }
+            val status = kernel.run(Array(in.data.address()), Array(in.validityAddress(length)),
+              Array(in.nullCount), outs.map(_._1.address()).toArray,
+              outs.map(_._2.address()).toArray, Array.empty[Int], Array(60L), length)
+            assert(status === 0, s"lanes=$lanes len=$length $patternName: status $status")
+            for (i <- 0 until length; (root, o) <- roots.zipWithIndex) {
+              val row = Seq(if (isNull(i)) None else Some(value(i)))
+              val expected = evalLong(root, row, Array(60L))
+              val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+              val where = s"lanes=$lanes len=$length $patternName out=$o row=$i"
+              assert(bit === expected.isDefined, s"$where: validity (want $expected)")
+              expected.foreach { v =>
+                root match {
+                  case _: NarrowLane =>
+                    assert(outs(o)._1.get(ValueLayout.JAVA_INT, i * 4L) === v.toInt,
+                      s"$where: the narrowed value")
+                  case _ =>
+                    assert(outs(o)._1.get(ValueLayout.JAVA_LONG, i * 8L) === v,
+                      s"$where: the wide value beside it")
+                }
+              }
+            }
+          } finally {
+            arena.close()
+          }
+        }
+      } finally {
+        loader.release()
+      }
+    }
+  }
+
   test("a long-lane range guard passes the value through and declines the batch on a lane " +
       "outside its bounds, in the loop and in the epilogue") {
     // GuardedDay's twin at 64 bits, with bounds the node carries. Three things are checked
