@@ -19,10 +19,10 @@ package org.apache.spark.sql.execution
 
 import java.time.{Duration, LocalTime}
 
-import org.apache.spark.SparkArithmeticException
+import org.apache.spark.{SparkArithmeticException, SparkDateTimeException}
 import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
-import org.apache.spark.sql.types.{DayTimeIntervalType, StructField, StructType, TimeType}
+import org.apache.spark.sql.types.{DayTimeIntervalType, LongType, StructField, StructType, TimeType}
 
 /**
  * Task 102's first TIME kernels against the row engine, over every second of a day.
@@ -46,6 +46,7 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions {
   private val secondsPerDay = 86400
   private val day = "varka_time_day"
   private val crossing = "varka_time_crossing"
+  private val outside = "varka_time_outside"
 
   /**
    * Every second of the day, plus a sub-second edge on every thirteenth row: one microsecond,
@@ -64,7 +65,9 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions {
     val forward = t.isBefore(LocalTime.NOON)
     val dt = if (forward) Duration.ofHours(1) else Duration.ofHours(-1)
     val dt2 = if (forward) Duration.ofMillis(500) else Duration.ofMillis(-500)
-    Row(if (i % 31 == 30) null else t, t2, t3, if (i % 47 == 46) null else dt, dt2)
+    // `s` is the second of day as a bigint, the count the `time_from_*` conversions take.
+    Row(if (i % 31 == 30) null else t, t2, t3, if (i % 47 == 46) null else dt, dt2,
+      if (i % 31 == 30) null else t.toSecondOfDay.toLong)
   }
 
   /** Three rows whose sum leaves the day, one that stays, and a null. */
@@ -78,7 +81,12 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions {
   private val daySchema = StructType(Seq(
     StructField("t", TimeType(6)), StructField("t2", TimeType(6)),
     StructField("t3", TimeType(3)), StructField("dt", DayTimeIntervalType()),
-    StructField("dt2", DayTimeIntervalType())))
+    StructField("dt2", DayTimeIntervalType()), StructField("s", LongType)))
+
+  /** Counts outside the day on either side, and one inside: the conversions' range check. */
+  private def outsideRows: Seq[Row] = Seq(Row(86400L), Row(-1L), Row(3600L), Row(null))
+
+  private val outsideSchema = StructType(Seq(StructField("s", LongType)))
 
   private val crossingSchema = StructType(Seq(
     StructField("t", TimeType(6)), StructField("dt", DayTimeIntervalType())))
@@ -90,6 +98,9 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions {
     session.createDataFrame(session.sparkContext.parallelize(crossingRows, 1), crossingSchema)
       .createOrReplaceTempView(crossing)
     session.catalog.cacheTable(crossing)
+    session.createDataFrame(session.sparkContext.parallelize(outsideRows, 1), outsideSchema)
+      .createOrReplaceTempView(outside)
+    session.catalog.cacheTable(outside)
   }
 
   override protected def beforeAll(): Unit = {
@@ -221,5 +232,31 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions {
     val node = plan.collectFirst { case v if isVarkaNode(v) => v }.get
     val declined = node.metrics.get("numFallbackBatchesDeclined").map(_.value).getOrElse(0L)
     assert(declined > 0L, s"expected the crossing batch to decline, metrics: ${node.metrics}")
+  }
+
+  test("time_to_millis, time_to_micros and the time_from_* conversions agree with the row " +
+      "engine over every second of the day") {
+    // Group E (`PLAN_TASK_102.md` 9.3): the two divisions at three precisions, and the three
+    // multiplies from a bigint count and from their own divisions' results, through both
+    // consumers. Every row is inside the day, so every batch is the kernel's.
+    for (column <- Seq("t", "t2", "t3"); field <- Seq("time_to_millis", "time_to_micros")) {
+      checkBoth(s"$field($column)")
+    }
+    checkBoth("time_from_seconds(s)")
+    checkBoth("time_from_millis(time_to_millis(t))")
+    checkBoth("time_from_micros(time_to_micros(t2))")
+  }
+
+  test("a count outside the day raises Spark's own error under Varka, from the same rows") {
+    // The guard the conversions ride: the kernel declines the batch that holds 86400 and -1,
+    // and the row engine raises what it raises without Varka, on the same condition.
+    val query = s"SELECT time_from_seconds(s) AS v FROM $outside"
+    assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
+    // A SparkDateTimeException, not the arithmetic one `t + dt` raises: the conversion's range
+    // check is its own error, and the kernel's decline has to hand the row engine that one.
+    val expected = intercept[SparkDateTimeException](spark.sql(query).collect())
+    val actual = intercept[SparkDateTimeException](varkaSpark.sql(query).collect())
+    assert(actual.getCondition === expected.getCondition)
+    assert(actual.getMessage === expected.getMessage)
   }
 }
