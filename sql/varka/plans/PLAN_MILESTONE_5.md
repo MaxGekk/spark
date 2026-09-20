@@ -2275,6 +2275,16 @@ suite's column list gains `t` and `t2` (`TIME`), `l` (`bigint`) and `dt`
 (`INTERVAL DAY TO SECOND`) at the same time, and `sql/varka/coverage.json` grows
 the families with it.
 
+*Group C planned, 20 September 2026 (`PLAN_TASK_102.md` 8).* Tasks 152 and
+153 priced the three ways an int32 field leaves a long-lane kernel. The
+narrowing store - task 28's `NarrowLane` admitted as an output root, four
+bytes a row under an int mask, no second int species - ships the three
+extracts at the conversion form's rate with one contained emitter change and
+is the next step. The split form pays its 5x to 14x only when the seconds
+column is stored, which is the cache's representation and item 11's; its
+pieces, a `BoundedDivide` node and a split leaf filled by a vector kernel, are
+designed there for that day.
+
 ### 2.38 Day-time interval expressions (task 103)
 
 *Opened 15 September 2026 by the re-scope; absorbs task 39. Adjusted 17
