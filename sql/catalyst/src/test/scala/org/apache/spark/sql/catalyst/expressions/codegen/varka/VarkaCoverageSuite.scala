@@ -424,13 +424,72 @@ class VarkaCoverageSuite extends SparkFunSuite {
   private val beginMark = "<!-- BEGIN generated coverage table -->"
   private val endMark = "<!-- END generated coverage table -->"
 
+  /**
+   * The width audit's census (`sql/varka/width_audit.json`, task 153), read for one column of
+   * the table: whether C2 lowers every Vector API call of the row's kernel at 128-bit lanes -
+   * the species a NEON-only aarch64 host runs at, and the one where this JVM has no lowering
+   * for a masked 64-bit operation. Absent when the census has not been taken.
+   */
+  private lazy val widthAudit: Option[(String, Map[String, Seq[String]])] = {
+    val file = getWorkspaceFilePath("sql", "varka", "width_audit.json").toFile
+    if (!file.exists()) {
+      None
+    } else {
+      val doc = new ObjectMapper().readTree(file)
+      val host = doc.get("host").get("cpu").asText()
+      val narrow = Option(doc.get("widths").get("128")).map { n =>
+        n.fieldNames().asScala.map { sql =>
+          sql -> n.get(sql).elements().asScala.map(_.asText()).toSeq
+        }.toMap
+      }.getOrElse(Map.empty[String, Seq[String]])
+      Some(host -> narrow)
+    }
+  }
+
+  /**
+   * The column's cell for one row, from what C2 printed for the row's kernel at 128 bits. Only
+   * a `not supported` line is a refusal, and it names its construction; C2's other two kinds
+   * of line (`VarkaWidthAuditSuite.isRefusal`) prove nothing about the final code, stay in the
+   * census file, and do not reach the table.
+   */
+  private def narrowVerdict(sql: String): String = widthAudit match {
+    case None => "not audited"
+    case Some((_, narrow)) => narrow.get(sql) match {
+      case None => "not audited"
+      case Some(lines) =>
+        val refused = lines.filter(_.startsWith("not supported"))
+        if (refused.isEmpty) "vector"
+        else s"per-lane: ${refused.map(constructionOf).distinct.mkString(", ")}"
+    }
+  }
+
+  /** The construction a `not supported` line is about, in words a reader of the table has. */
+  private def constructionOf(line: String): String =
+    if (line.contains("op=comp")) "compare to mask"
+    else if (line.contains("op=blend")) "blend"
+    else if (line.contains("op=cast")) "mask cast"
+    else if (line.contains("op=broadcast") && line.contains("ismask=1")) "mask broadcast"
+    else if (line.contains("op=test")) "mask test"
+    else if (line.contains("is_masked_op=1")) "masked operation"
+    else if (line.contains("ismask=1")) "mask logic"
+    else if (line.contains("op=load") || line.contains("op=store")) "load or store"
+    else "other"
+
   private def render(): String = {
     val sb = new StringBuilder
+    widthAudit.foreach { case (host, _) =>
+      sb.append("The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on " +
+        s"$host: `vector` means C2 refused no Vector API call in the row's kernel at a " +
+        "128-bit species; `per-lane` names the constructions it had no lowering for, which " +
+        "then run as Java loops over the lanes (task 153).\n\n")
+    }
     families.foreach { family =>
       sb.append(s"#### ${family.title}\n\n")
-      sb.append(if (family.predicates) "| Predicate | Notes |\n" else "| Expression | Notes |\n")
-      sb.append("|---|---|\n")
-      family.rows.foreach(r => sb.append(s"| `${r.sql}` | ${r.note} |\n"))
+      sb.append(if (family.predicates) "| Predicate | Notes | 128-bit lanes |\n"
+        else "| Expression | Notes | 128-bit lanes |\n")
+      sb.append("|---|---|---|\n")
+      family.rows.foreach(r =>
+        sb.append(s"| `${r.sql}` | ${r.note} | ${narrowVerdict(r.sql)} |\n"))
       sb.append("\n")
     }
     sb.toString

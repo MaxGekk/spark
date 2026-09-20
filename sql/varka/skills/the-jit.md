@@ -430,3 +430,39 @@ path is only a fair bound if it takes every fast path the emitted dispatcher can
 the data it is fed - a masked-only comparison kernel run on null-free data is not measuring
 the same thing the emitted kernel is, and the gap does not announce itself; nothing crashes
 or looks wrong, the "ceiling" just quietly is not one.
+
+## Ask C2 which vector calls it refused, per shape, and know which of its three answers is a verdict
+
+Task 153 (20 September 2026) turned one measured collapse into a table by
+forking a probe per vector width under `-Xbatch` and a `PrintIntrinsics`
+directive scoped to the emitted classes (`-XX:CompileCommand=PrintIntrinsics,
+<class prefix>*::*`), with a marker printed before and after each shape.
+`-Xbatch` is what makes the markers attribute: compilation then happens on the
+calling thread, between the markers, instead of on a background thread whose
+lines land under whichever shape is running. `VarkaWidthAuditSuite` is the
+machinery and `sql/varka/width_audit.json` the census; three things to carry.
+
+- **C2 prints three kinds of line, and only one is a verdict.** `** not
+  supported: ...` is architectural - no lowering for that operation at that
+  lane count and element type on this machine, and no retry changes it; it is
+  the kind behind the measured 128-bit collapse and the only kind to assert on.
+  `** missing constant: ...` is a first late-inline attempt that C2 retries after
+  more optimisation: `i + 1` prints two at 128 bits and the committed 128-bit
+  numbers show it fully vectorised, so reading it as a fallback would have
+  called forty vectorised int rows scalar. `** unbox failed: ...` is a vector
+  reaching the call as a heap object, and in a JVM that has compiled many
+  kernels it appears on shapes that print nothing when run alone - the
+  second-species pollution the assembly gate's self-test demonstrates.
+- **Run the shape alone before believing what the sequence said about it.** A
+  one-JVM sweep over a hundred kernels is the realistic condition and the right
+  census, but a line under one shape can be the JVM's history rather than the
+  shape's code. The probe takes a name filter for exactly this, and
+  `-XX:CompileCommand=PrintInlining,<pattern>` beside the intrinsics directive
+  shows which inlined method a line came from.
+- **At two 64-bit lanes this JVM lowers no mask at all.** Compare to mask,
+  blend, mask cast, broadcast, logic and test are all `not supported` at
+  `vlen=2 etype=long`, and all fine at four lanes of either element type. Every
+  long-lane guard, overflow test, selection and `CASE` is built from them, so
+  on this JVM a two-lane species - NEON's - runs them per lane. The unmasked
+  arithmetic and the conversion-form division vectorise. Design a 64-bit
+  construction for the narrow species without a mask, or decline it there.

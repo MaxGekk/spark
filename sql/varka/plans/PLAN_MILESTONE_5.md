@@ -3183,6 +3183,18 @@ is what a decline routes to. **Done when** a committed 128-bit row shows the
 kernel is not slower than a plain loop, or the shape declines with the width in
 its reason. Size: small to medium.
 
+*A lead, 20 September 2026, from task 153's audit.* At every width, alone or
+in sequence, this shape's kernel prints `** missing constant ... bitwise=ConI`
+under `PrintIntrinsics`: the int-lane conversion form divides with
+`DoubleVector.div(double)`, whose broadcast of the divisor runs on the vector
+instance's own species, and after a half-width `convertShape` C2 cannot prove
+that species constant on its first late-inline attempt. If the retry also
+fails, the divisor is broadcast by a Java loop once per lane group, which would
+account for a division that loses to a scalar loop at 128 bits. The fix is one
+line in `emitDoubleConvert` - broadcast the divisor once, from the species
+constant, and divide by the vector - and moves emitted bytes, so it is this
+task's to make and to measure, not the audit's.
+
 ### 2.86 The assembly gate fails on part of the runner pool, and cannot say which part (task 150)
 
 *Opened 19 September 2026, on the gate's second failure in its first two days.*
@@ -3262,6 +3274,34 @@ model, the JDK and the vector-library binding printed beside the output, on
 dispatch or on a push touching the directory. It is the cheap way to ask a
 per-host question - no Spark build, seconds per runner - and task 150's
 per-machine gate can start from the same "print the machine first" step.
+
+### 2.89 Masked 64-bit operations have no 128-bit lowering, and every long-lane guard is one (task 153)
+
+*Opened 20 September 2026, from `VarkaTimeBenchmark`'s 128-bit companion
+(task 152); closed the same day, `PLAN_TASK_153.md`.*
+
+The wide run of that file says the 64-bit magic divide costs at most nothing
+against the conversion form; the narrow run says it runs at one fiftieth of
+it, and `PrintIntrinsics` names the cause: at `vlen=2` C2 refuses the masked
+`NEG`, the masked `SUB`, both compares that feed them and the mask broadcast,
+and the Vector API runs each as a Java loop over the lanes (`PLAN_TASK_152.md`
+6.5). The magic form is opt-in; the open question was everything else built
+the same way at the long lane, on a fleet whose NEON-only hosts run at exactly
+that species.
+
+**Answered by the audit.** `VarkaWidthAuditSuite` reads C2's refusals per shape
+and per width from its own log rather than from a rate. At the host's 512 bits
+and at 256 there is no refusal in any shape. At 128 bits every long-lane
+construction that touches a mask is refused - compare to mask, blend, the
+validity word's cast to and from a mask, mask broadcast, mask logic, the
+`anyTrue` test - and no int-lane construction is; seventeen of the twenty
+long coverage rows are per-lane at two 64-bit lanes, and the three that are
+not are the mask-free divisions. The coverage table now carries that verdict
+per row, and the invariant that nothing is refused at a host's own width runs
+on every runner class in the catalyst shard. What remains is the design
+choice per construction - a mask-free form or a decline below 256 bits - which
+goes with the next long-lane kernel (task 102 group C), and the NEON
+confirmation, which needs a catalyst run on the arm runner.
 
 ## 3. Task breakdown
 
@@ -3440,6 +3480,7 @@ can start has.
 | 148 | The group budget under-counts an int-lane division sevenfold (section 2.84). **Scoped** (19 September 2026) from the same review: `weightOf` prices `ConstDivide` at the default 1 while its conversion form emits seven lane operations, so sixteen of them pack into one loop method carrying about a hundred and twelve. Task 88 step 3 corrected the long lane, where the magic form is fourteen, and left this one alone deliberately - it predates the lane and correcting it moves committed bytes, which belongs in a change whose subject that is | A weight of 7 for an int-lane `ConstDivide`, with `emitted_bytes.json` regenerated and the diff reviewed | `VarkaEmittedBytesSuite` green on a regenerated file, and the byte movement explained shape by shape |
 | 149 | `extract(YEAR FROM ym)` loses to a scalar loop at 128-bit lanes (section 2.85). **Scoped** (19 September 2026) from task 88 step 4's own numbers: the kernel reads 2102.7 M rows/s against a scalar loop's 2857.7 at 128-bit, where at 512-bit it reads 3897.6 against 3003.5. `ConstDivide` is the only lowering this expression has, so on a NEON-only aarch64 or a pre-AVX2 x86 - the machines 128-bit lanes describe - admitting it is a pessimisation rather than an acceleration, and nothing in the admission looks at the width | Find where the seven-operation conversion form stops paying at four lanes, and either decline the shape below a width or find the lowering that does pay there; a scalar-loop comparand at both widths is the measurement, and the row engine is the comparand that decides admission | A committed 128-bit row where the kernel is not slower than a plain loop, or a recorded decline with the width in its reason |
 | 150 | The assembly gate fails on part of the runner pool, and cannot say which part (section 2.86). **Scoped** (19 September 2026) on the gate's second failure in two days: the same four tests on #255's first run and on #258, a pass in between on a re-run of the same commit, identical bytes under it each time, and on the second run the suite's own gather self-test not packing at 128-bit lanes - a statement about the runner, whose CPU the gate's log does not record | The machine printed at the top of the gate job - CPU model, `UseAVX`, `MaxVectorSize`, the datapath readings - and expectations per machine class on task 124's baseline, with the self-tests as the precondition that cancels rather than fails the 128-bit and hand-written assertions | A gate failure names its CPU, and the gate is green on one run from each family in `PLAN_TASK_62.md` 11's census |
+| 153 | Masked 64-bit operations have no 128-bit lowering in this JVM, and every long-lane guard is built from one (section 2.89). **DONE** (20 September 2026, `PLAN_TASK_153.md`): `VarkaWidthAuditSuite` forks a probe per vector width under a scoped `PrintIntrinsics` and reads C2's own refusals per shape - every coverage row and fifteen hand-built constructions - asserting on every host that nothing is refused at the host's preferred width, and pinning the per-width census as `sql/varka/width_audit.json` with the host named. The census: no refusal at 512 or 256 bits; at 128 bits every long-lane construction that touches a mask - compare to mask, blend, mask cast, broadcast, logic and test - is refused and no int-lane one is, so seventeen of the twenty long coverage rows are per-lane at two 64-bit lanes, which the coverage table now says per row | The three test files, the census, the coverage table's *128-bit lanes* column; the mask-free forms or the decline below 256 bits are left to the long-lane kernel design they inform (task 102 group C), and the NEON confirmation to a catalyst run on the arm runner | Every long-lane coverage row names, in the coverage table, whether it vectorises at 128-bit lanes |
 | 151 | The math lanes re-read with the library reached, on both runner architectures (section 2.87). **Done** (19 September 2026): `MathLaneProbe` had been measuring the scalar fallback against itself - the operator arrived as a method parameter, which C2 refuses with "missing constant", and then the lazy library binding was compiled in before it existed - so `SCOPE_FUNCTIONS.md` section 3's "bit for bit" reading was wrong. Re-taken on Zen 5 (AVX-512), EPYC 7763 (AVX2) and Neoverse N2 (NEON) through a new `varka-canary.yml` workflow: no operator matches the row engine's bits on any host, one ULP against `Math`, two against `StrictMath` for `log10` and x86 `tanh`, and the three library builds differ among themselves | One loop per operator constant, a pre-binding pass, a forced-fallback control pass and a nanoseconds-per-element column in the probe; a workflow that runs any canary on `ubuntu-latest` and `ubuntu-24.04-arm` on dispatch or on a push touching `dev/varka_canary`; the three outputs committed as `dev/varka_canary/mathlane-*.txt`; section 3, item 36 and the skills entry rewritten | The tables in `SCOPE_FUNCTIONS.md` section 3 carry three hosts, and the FP-contract decision in `SCOPE_MILESTONE_6.md` item 36 is stated for the whole family |
 
 ## 4. Files
