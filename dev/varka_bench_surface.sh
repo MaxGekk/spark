@@ -22,7 +22,7 @@
 #       [--driver-memory 16g] \
 #       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--replace] [--shard I/N] \
 #       [--skip-build] \
-#       [--benchmark surface|chains] [--table-columns all|dates] \
+#       [--benchmark surface|chains|time] [--table-columns all|dates|times] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
 #
 # --benchmark chains runs Chains through the same driver instead of Surface, writing
@@ -33,6 +33,14 @@
 # computes. See the Chains javadoc. The chains also clear the fixed-share rule at 1e8
 # rows, where the surface needs 5e8, because more work per row buys the same executor
 # time as more rows without needing the memory to hold them.
+#
+# --benchmark time runs Times, the TIME surface (PLAN_MILESTONE_5.md 2.40), writing
+# TimeSurface-<label>-results.txt over its own table, varka_times: TIME, day-time
+# interval and bigint columns, one 64-bit lane each. The driver switches
+# spark.sql.timeType.enabled on for every arm, since the type is off by default in
+# every distribution; the stock arm is the same 4.2.0 release, which carries the type
+# and its functions. Its rows are 8 bytes wide where the date surface's are 4, so the
+# row count the fixed-share rule wants fits half as many rows in the same memory.
 #
 # --only REGEX runs the matching entries only, and the file it writes holds just those:
 # the driver replaces the file rather than merging into it. So an --only run under a
@@ -80,8 +88,8 @@
 # one-core run's except through their ratio.
 #
 # Each LABEL names one run and its results file,
-# sql/varka/bench/benchmarks/<STEM>-<LABEL>-results.txt, where STEM is DateSurface
-# or DateChain by --benchmark. SPARK_HOME is a
+# sql/varka/bench/benchmarks/<STEM>-<LABEL>-results.txt, where STEM is DateSurface,
+# DateChain or TimeSurface by --benchmark. SPARK_HOME is a
 # distribution's root - a downloaded release, or this checkout after
 # `build/sbt package` (its bin/spark-submit runs the assembled jars). The third
 # field is a comma-separated list of extra `--conf` settings; the word `varka`
@@ -152,7 +160,8 @@ done
 case "$benchmark" in
   surface) main_class=org.apache.spark.sql.varka.bench.DateSurfaceBenchmark; stem=DateSurface ;;
   chains)  main_class=org.apache.spark.sql.varka.bench.DateChainBenchmark;   stem=DateChain ;;
-  *) echo "--benchmark wants surface or chains, got '$benchmark'" >&2; exit 2 ;;
+  time)    main_class=org.apache.spark.sql.varka.bench.TimeSurfaceBenchmark; stem=TimeSurface ;;
+  *) echo "--benchmark wants surface, chains or time, got '$benchmark'" >&2; exit 2 ;;
 esac
 
 # The --only truncation guard (task 100). Checked before the machine checks below, not just
