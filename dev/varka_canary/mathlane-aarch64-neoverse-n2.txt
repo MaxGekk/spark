@@ -1,0 +1,54 @@
+# MathLaneProbe on GitHub's ubuntu-24.04-arm runner, 19 September 2026, JDK 25.0.4+7 (Zulu).
+# GitHub Actions run 35468234337, job 105964377798, on the MaxGekk/spark fork.
+# CPU part 0xd49 is Arm's Neoverse N2; the runner reports asimd, sve and sve2, and the JVM
+# still picks a 128-bit species (MaxVectorSize=16), the SVE vector length of that core.
+# CPU part	: 0xd49
+# asimd sve sve2 
+# openjdk version "25.0.4" 2026-07-21 LTS
+### vector math library
+DEBUG: VectorMathLibrary: SLEEF library is used
+DEBUG: VectorMathLibrary: SIN sind2_u10advsimd => 0x0000ff77f0853c84
+DEBUG: VectorMathLibrary: COS cosd2_u10advsimd => 0x0000ff77f0854440
+DEBUG: VectorMathLibrary: TAN tand2_u10advsimd => 0x0000ff77f0853430
+DEBUG: VectorMathLibrary: EXP expd2_u10advsimd => 0x0000ff77f0855a80
+DEBUG: VectorMathLibrary: LOG logd2_u10advsimd => 0x0000ff77f08554b0
+DEBUG: VectorMathLibrary: LOG10 log10d2_u10advsimd => 0x0000ff77f0855690
+DEBUG: VectorMathLibrary: EXPM1 expm1d2_u10advsimd => 0x0000ff77f0855bb4
+DEBUG: VectorMathLibrary: LOG1P log1pd2_u10advsimd => 0x0000ff77f0855890
+DEBUG: VectorMathLibrary: ATAN atand2_u10advsimd => 0x0000ff77f0854fa0
+DEBUG: VectorMathLibrary: CBRT cbrtd2_u10advsimd => 0x0000ff77f08551e0
+DEBUG: VectorMathLibrary: POW powd2_u10advsimd => 0x0000ff77f0856924
+DEBUG: VectorMathLibrary: ATAN2 atan2d2_u10advsimd => 0x0000ff77f0856620
+DEBUG: VectorMathLibrary: HYPOT hypotd2_u05advsimd => 0x0000ff77f0856e04
+arch=aarch64 jvm=25.0.4+7-LTS UseAVX=n/a MaxVectorSize=16 species double=2 library=default; inputs=262144; rounds before measuring=200
+SIN     10.5 ns/elem  vs Math:  24466 lanes differ (max 1 ulp)  vs StrictMath:  11179 lanes differ (max 1 ulp)
+COS     12.3 ns/elem  vs Math:  23212 lanes differ (max 1 ulp)  vs StrictMath:  11061 lanes differ (max 1 ulp)
+TAN     16.1 ns/elem  vs Math:  10121 lanes differ (max 1 ulp)  vs StrictMath:  10121 lanes differ (max 1 ulp)
+EXP      4.6 ns/elem  vs Math:  27347 lanes differ (max 1 ulp)  vs StrictMath:  27347 lanes differ (max 1 ulp)
+LOG      9.5 ns/elem  vs Math:  13198 lanes differ (max 1 ulp)  vs StrictMath:  13198 lanes differ (max 1 ulp)
+LOG10    9.9 ns/elem  vs Math:  24250 lanes differ (max 2 ulp)  vs StrictMath:  24250 lanes differ (max 2 ulp)
+EXPM1   10.9 ns/elem  vs Math:  25701 lanes differ (max 1 ulp)  vs StrictMath:  25701 lanes differ (max 1 ulp)
+LOG1P   10.2 ns/elem  vs Math:  12377 lanes differ (max 1 ulp)  vs StrictMath:  12377 lanes differ (max 1 ulp)
+ATAN    10.1 ns/elem  vs Math:   9611 lanes differ (max 1 ulp)  vs StrictMath:   9611 lanes differ (max 1 ulp)
+TANH    31.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+CBRT    16.2 ns/elem  vs Math:  21981 lanes differ (max 1 ulp)  vs StrictMath:  21981 lanes differ (max 1 ulp)
+POW     25.7 ns/elem  vs Math:  25775 lanes differ (max 1 ulp)  vs StrictMath:  25775 lanes differ (max 1 ulp)
+ATAN2   13.7 ns/elem  vs Math:  21507 lanes differ (max 1 ulp)  vs StrictMath:  21507 lanes differ (max 1 ulp)
+HYPOT   10.4 ns/elem  vs Math:  34155 lanes differ (max 1 ulp)  vs StrictMath:  34155 lanes differ (max 1 ulp)
+### control: per-lane scalar fallback forced
+DEBUG: VectorMathLibrary: Java library is used
+arch=aarch64 jvm=25.0.4+7-LTS UseAVX=n/a MaxVectorSize=16 species double=2 library=java; inputs=262144; rounds before measuring=200
+SIN     19.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:  19081 lanes differ (max 1 ulp)
+COS     18.3 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:  17697 lanes differ (max 1 ulp)
+TAN     26.1 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+EXP     18.1 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+LOG     15.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+LOG10   20.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+EXPM1   26.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+LOG1P   24.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+ATAN    19.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+TANH    24.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+CBRT    17.5 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+POW     58.8 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+ATAN2   28.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+HYPOT   18.9 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)

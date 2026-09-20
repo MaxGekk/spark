@@ -1,0 +1,108 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Run one of Varka's canary programs (dev/varka_canary/*.java) on each runner
+# architecture the pool offers, and print what it says beside what machine it
+# ran on. A canary is a single-file Java program that answers a question about
+# the JVM and the hardware - whether a conversion intrinsifies, whether the
+# vector math lanes agree with the scalar library - and the answer is a property
+# of the host, so it has to be asked on every host class the project ships to.
+# This workflow is the cheap way to ask: no Spark build, one JDK, seconds per
+# runner. It enforces nothing; a result is read from the job log and recorded
+# in the plan or the canary's own header by hand.
+name: Varka canary
+
+on:
+  # A push that touches a canary runs the default one, so a new probe answers on both
+  # architectures before it is merged. Dispatch is for asking a question again later; it
+  # is only offered once this file is on the default branch, which is GitHub's rule.
+  push:
+    paths:
+      - 'dev/varka_canary/**'
+      - '.github/workflows/varka-canary.yml'
+  workflow_dispatch:
+    inputs:
+      canary:
+        description: 'The class under dev/varka_canary to run, e.g. MathLaneProbe'
+        required: true
+        default: 'MathLaneProbe'
+      args:
+        description: 'Arguments to pass to its main'
+        required: false
+        default: ''
+
+jobs:
+  canary:
+    name: "${{ inputs.canary || 'MathLaneProbe' }} on ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - name: Checkout Varka
+      uses: actions/checkout@v6
+      with:
+        sparse-checkout: dev/varka_canary
+    - name: Install JDK 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '25'
+    - name: Describe the machine
+      env:
+        CANARY: ${{ inputs.canary || 'MathLaneProbe' }}
+      run: |
+        echo "## $CANARY on ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+        {
+          echo '```'
+          grep -m1 -E 'model name|^CPU part|^Model' /proc/cpuinfo || true
+          grep -m1 -oE 'avx512[a-z]*|asimd|sve[0-9]*' /proc/cpuinfo | sort -u | tr '\n' ' ' || true
+          echo
+          java -version 2>&1 | head -1
+          echo '```'
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+    - name: Run the canary
+      env:
+        CANARY: ${{ inputs.canary || 'MathLaneProbe' }}
+        ARGS: ${{ inputs.args || '' }}
+      # The vector debug property makes the JDK name the math library it bound each operator
+      # to (SVML, SLEEF or the Java fallback) and the symbol, which is the evidence that a
+      # lane result came from the library rather than from a per-lane scalar call. For the
+      # math probe a second pass forces the fallback: it is the control the library pass is
+      # read against, in time per element and in which lanes differ.
+      run: |
+        probe() {
+          echo "### $1"
+          echo '```'
+          java --add-modules jdk.incubator.vector -Djdk.incubator.vector.DEBUG=true $2 \
+            "dev/varka_canary/${CANARY}.java" ${ARGS} 2>&1 \
+            | grep -vE 'WARNING: Using incubator|DEBUG: (CPUFeatures|X64|AArch64)' \
+            | sed -E 's/ \(cpu features:.*//'
+          echo '```'
+        }
+        {
+          probe "vector math library"
+          if [ "$CANARY" = MathLaneProbe ]; then
+            probe "control: per-lane scalar fallback forced" \
+              -Djdk.incubator.vector.VectorMathLibrary=java
+          fi
+        } | tee -a "$GITHUB_STEP_SUMMARY"
