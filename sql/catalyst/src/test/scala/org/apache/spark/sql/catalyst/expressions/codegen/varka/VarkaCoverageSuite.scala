@@ -148,8 +148,8 @@ class VarkaCoverageSuite extends SparkFunSuite {
       Row("ym - ymm"),
       Row("CAST(ymy AS INTERVAL MONTH)"),
       Row("extract(YEAR FROM ym)",
-        "a division by twelve over a month count nothing bounds, so it is the first one the "
-          + "calendar's range-narrowed magic cannot serve and the double lane can"),
+        "a division by twelve over a month count nothing bounds, so the calendar's "
+          + "range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does"),
       Row("extract(YEAR FROM ym) - 1", "the quotient feeding further int arithmetic"))),
 
     Family("Integer arithmetic", predicates = false, Seq(

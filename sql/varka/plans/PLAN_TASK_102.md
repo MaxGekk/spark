@@ -587,3 +587,99 @@ case.
    serves the calendar's own divisions as a node later.
 3. The split leaf and the cache encoding under item 11, when milestone 6 takes
    the representation question up; `make_time` with task 28 and 2.3.
+
+## 9. Group D, read: the decimal is a store, and there is a group E
+
+*20 September 2026, a reading pass; no code. Section 2.3 said the two decimal
+expressions are blocked on a representation and not on a lane. This section
+reads the representation and finds it is a store's worth of work for the
+outputs, a de-interleave's worth for the one input, and that the table is
+missing a family.*
+
+### 9.1 What each expression computes
+
+Read off `DateTimeUtils`, as section 2.6 read the others:
+
+| expression | result type | the helper's arithmetic on nanoseconds of day `n` |
+|---|---|---|
+| `second(t)` with its fraction (`SecondsOfTimeWithFraction`) | `DecimalType(2 + p, p)`, `p` the `TIME(p)` precision | `seconds = n / 10^9 % 60`; `fraction = (n % 10^9) * 10^p / 10^9`; the value is `seconds + fraction / 10^p`, built through a `Double` and `Decimal.apply(Double)` |
+| `time_to_seconds(t)` | `DecimalType(14, 6)` | `Decimal(n) / Decimal(10^9)` at scale 6, i.e. the unscaled long `n / 1000` |
+| `time_to_millis(t)`, `time_to_micros(t)` | `LongType` | `floorDiv(n, 10^6)`, `floorDiv(n, 10^3)` - and `n` is non-negative, so a truncating division |
+| `time_from_seconds(l)`, `time_from_millis(l)`, `time_from_micros(l)` | `TIME(6)` | `multiplyExact(l, 10^9 / 10^6 / 10^3)` under the conversion's error handling; `time_from_seconds` also takes a decimal or a double |
+| `make_time(h, m, s)` | `TIME(6)` | `s` is `DecimalType(16, 6)`: its unscaled long split by `floorDiv`/`floorMod` at 10^6, then `LocalTime.of` |
+
+Every decimal in the table has precision 18 or less - 11 at the widest for the
+fraction, 14 and 16 for the others - so every value is an unscaled `long`,
+which is the lane group B already computes in. `SecondsOfTimeWithFraction`'s
+round trip through a `Double` is the one place the row engine's answer is not
+literally the integer form: `Decimal.apply(Double)` goes through the double's
+shortest decimal rendering, which for a value of at most eleven significant
+digits is the intended digits, so `seconds * 10^p + fraction` as the unscaled
+long should agree on every nanosecond of the minute. That is a claim to prove
+by exhaustion (sixty million values at `p = 6`) before a kernel ships it, not
+to argue.
+
+### 9.2 What the column is
+
+`ArrowUtils` maps every `DecimalType` to a 128-bit Arrow decimal: sixteen bytes a
+row at any precision. Vanilla's bridge allocates on both sides of it -
+`ArrowWriter` writes through a `java.math.BigDecimal` per row and
+`ArrowColumnVector` reads one back - which is why the fraction row of the `TIME`
+surface will measure an allocation as much as a division, as 2.40 predicted for
+the extracts. The zero-allocation reading is already in the tree: the Arrow
+cache serializer knows the low-order unscaled word of a compact decimal sits at
+a fixed offset inside the sixteen bytes (`compactDecimalUnscaledOffset`) and
+reads it straight into the row writer for precision 18 or less; the write side
+has no such path yet.
+
+Varka admits none of it today: `isArrowBacked` has no `DecimalVector` arm, the
+evaluator's output allocation has no decimal destination, and the compiler
+never sees a decimal column because the leaf refuses it. So the three decimal
+positions divide by direction:
+
+- **Outputs** (`second` with fraction, `time_to_seconds`): the kernel computes
+  an unscaled long in the lane it has, and the store writes it into sixteen
+  bytes a row - the low word the value, the high word its sign extension. That
+  is the mirror image of route A's narrowing store: a **widening store**, a
+  root-only node like `NarrowLane` whose store interleaves the value vector
+  with `value >> 63` and writes two vectors' worth of bytes per lane group. Two
+  lane operations and a second store; the loop, the validity and everything
+  below the root unchanged. The evaluator allocates a `DecimalVector` for a
+  decimal output and hands its data buffer to the kernel as it does an int
+  vector's.
+- **The input** (`make_time`'s seconds column): the kernel must read the low
+  word out of every other eight bytes, which is `SCOPE_MILESTONE_6.md` item 1's
+  de-interleave - the thing that item names as the first measurement of its
+  milestone - and belongs there. A `make_time` whose seconds are a literal is
+  group B's arithmetic and needs only task 28's widening, as 2.4 said.
+
+### 9.3 Group E: the family the table does not know
+
+`time_to_millis`, `time_to_micros` and the three `time_from_*` are not in
+`timeTargets`: the nine the table was built from predate them, so today they
+decline as `unsupported expression` rather than by name, and the completeness
+guard of section 2.1 does not see them because it checks the table against its
+own list. They are group B's shapes: a truncating `ConstDivide` by 10^6 or 10^3
+for the two `time_to_*` that return a long, and a multiply by a constant with an
+overflow check for the `time_from_*`, plus whatever range the conversion's error
+handling enforces on the day, which the implementation reads before it decides
+between a guard and a checked multiply. Five rows for the surface at group B's
+price.
+
+### 9.4 What this leaves, and where
+
+Two rows for the milestone, opened from here:
+
+- **The widening store for decimal outputs** (row 157): `second` with its
+  fraction and `time_to_seconds` through a `WidenDecimal` root, with the
+  exhaustive agreement check of 9.1 and the evaluator's decimal destination;
+  measured against the evaluator widening a long output in a scalar loop per
+  batch, which is the form that needs no emitter change and is the baseline
+  the store has to beat. After 105 and 118: neither expression is in the post's
+  headline, and the surface can carry them as declines until then.
+- **Group E** (row 158): the five conversions into the table and the compiler,
+  with the two decimal declines of group D naming the representation as 2.3
+  asked - today they say only that the expression is not lowered yet, which is
+  the reading task 89 warned a reader would take as "the division is missing".
+
+`make_time` over a decimal column stays with milestone 6's item 1.

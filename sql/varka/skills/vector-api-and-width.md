@@ -896,6 +896,35 @@ generator (until Varka writes an approximation of its own), and OpenVML entire.
 For Spark's FP functions the Vector API's operators are SLEEF or SVML already;
 see the section above.
 
+## A vector divide is a divider, whatever the lane width; a multiply-high is not
+
+Task 149 (20 September 2026). The int-lane constant division converted each
+half of its lanes to doubles and divided there: seven operations, and the
+committed rows said it beat a scalar loop by 1.3x at 512 bits and lost to it at
+128. Two things about that were worth learning once.
+
+- **The cost was the two `vdivpd`, not the seven operations, and it does not
+  shrink with the width.** A vector double divide's throughput is set by the
+  divider unit; at four lanes it costs nearly what it costs at sixteen, so a
+  form built on it is four times more expensive per row at 128 bits than at
+  512, while a scalar loop that C2 has strength-reduced to a multiply-high is
+  flat. Read a rate that falls with the width as a divider, and a rate that
+  stays flat as a multiplier.
+- **The fix is the one the scalar compiler already made.** Hacker's Delight's
+  signed magic through 64-bit lanes - `I2L`, multiply by the multiplier taken
+  unsigned, arithmetic shift by `32 + s`, `L2I`, add the sign bit - is eleven
+  operations and no divide, and it measured 2.3x the divide at 512 bits and
+  1.6x at 128 (`PLAN_TASK_149.md` 9). Taking the multiplier unsigned folds the
+  book's "add the dividend when the multiplier is negative" into the product,
+  which a 64-bit lane can hold; the proof is an exhaustive sweep over all 2^32
+  dividends per divisor, opt-in in `VarkaLoopEmitterSuite`, not the book.
+- **Measure a one-line fix with a filtered run before regenerating an hour of
+  benchmarks.** The task's first lead - a `missing constant` line on the
+  divisor's broadcast - was built and looked right; a two-minute
+  `-Dvarka.bench.only` run of the one affected arm showed it changed nothing,
+  and the line turned out to be C2's retried kind. The regeneration that would
+  have blessed it was stopped before it started.
+
 ## A refusal at a forced width is the back end's, not the lane count's
 
 Task 153's census, taken on an x86 laptop at `-XX:MaxVectorSize=16`, found every
