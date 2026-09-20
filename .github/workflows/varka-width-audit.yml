@@ -76,6 +76,8 @@ jobs:
         {
           echo '```'
           grep -m1 -E 'model name|^CPU part|^Model' /proc/cpuinfo || true
+          # aarch64 has no model name in cpuinfo, only the part number; 0xd49 is Neoverse N2.
+          grep -m1 -E '^CPU implementer' /proc/cpuinfo || true
           grep -m1 -oE 'avx512[a-z]*|asimd|sve[0-9]*' /proc/cpuinfo | sort -u | tr '\n' ' ' || true
           echo
           java -version 2>&1 | head -1
@@ -103,9 +105,14 @@ jobs:
                               ("ismask=1", "mask logic"), ("op=load", "load/store"), ("op=store", "load/store")):
                 if key in line: return name
             return "other"
+        # Only a 'not supported' line is a refusal; C2's 'missing constant' and 'unbox failed'
+        # lines are timing (task 154) and are counted apart so the summary cannot mistake them.
         for bits, shapes in d["widths"].items():
-            refused = {s: lines for s, lines in shapes.items() if lines}
-            print(f"\n**{bits} bits**: {len(refused)} of {len(shapes)} shapes have a refusal")
+            refused = {s: [l for l in lines if l.startswith("not supported")] for s, lines in shapes.items()}
+            refused = {s: ls for s, ls in refused.items() if ls}
+            other = sum(1 for lines in shapes.values() for l in lines if not l.startswith("not supported"))
+            print(f"\n**{bits} bits**: {len(refused)} of {len(shapes)} shapes have a refusal"
+                  f" ({other} non-verdict lines left aside)")
             for s, lines in sorted(refused.items()):
                 cs = sorted({construction(l) for l in lines})
                 print(f"- `{s}`: {', '.join(cs)}")
