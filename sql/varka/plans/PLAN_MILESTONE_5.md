@@ -3432,6 +3432,24 @@ one, and `PrintIntrinsics` for the `convertShape` and the masked store at
 cheaper store the cause points to - a plain store where the lane group is
 full, a different conversion at two lanes - and re-measure on the same file.
 
+### 2.95 Refactor for readability, with the bytes oracle as the proof (task 159)
+
+*Opened 20 September 2026 from the owner's review of the week's pull requests.*
+
+The classes a newcomer opens first are the longest: the emitter at 6860 lines
+and 86 methods, the compiler at 2211 with one 478-line match, the cache
+serializer at 1775, the evaluator at 1527, and the emitter's suite at 5297.
+Adding a node this week touched about twelve emitter sites each time, and two
+of them were found only by a clean compile. The task splits each file along the
+seams it already draws - the emitter by its five phases, the compiler by
+expression family (where task 86's one operand admission lands), the evaluator
+by responsibility, the suite by family, the serializer one class per file - and
+ends with one place per IR node, which is 2.13's rule made structure. What makes
+it safe is the instrument the project already has: a step is a refactor exactly
+when `emitted_bytes.json` and the shape hashes do not move, so no benchmark is
+rerun and no behaviour can change unnoticed. `PLAN_TASK_159.md` names the seams
+and the order; every step waits for the pull requests open at the time to merge.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3615,6 +3633,7 @@ can start has.
 | 154 | The width-audit census pins `missing constant` and `unbox failed` lines its own description calls non-verdicts, and they flip between runs on unrelated rows, so the local check fails on a quiet tree and a regeneration blesses a timing (section 2.90). **Scoped** (20 September 2026) from the first regeneration after task 153, in task 102 group C | Pin the `not supported` lines only, with the other kinds dropped or kept in an advisory block the comparison ignores; the file's description updated; the census regenerated | Two regenerations on the same host agree byte for byte; the suite passes without regeneration on a tree that changes no shape |
 | 155 | Route A's end-to-end prediction is scored by the `TIME` surface, not by a new benchmark (section 2.91). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.3's third prediction, which the outcome could not score; narrowed the same day because task 105's `TimeSurfaceBenchmark` is the end-to-end measurement and 118 quotes it | When 105's files exist, prediction 3 scored from the `hour(t)` row's engine-off ratio and written into `PLAN_TASK_102.md` 8.6; no benchmark class added | 8.6 no longer says "not scored", and the figure it quotes is in a committed results file |
 | 156 | The narrowed store costs 12% to 18% at two 64-bit lanes on `second` and the three-field shape, where `hour` and `minute` are within 5% and every shape is within 4% at 512 bits (section 2.92). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 8.6: the direction is explained by the per-group cost over two rows, the shape dependence is not | The cause from the JVM's own output - the 128-bit assembly of the narrowed body against the wide one, `PrintIntrinsics` for the `L2I` and the masked store at `vlen=2` - and either the cost accepted with the cause recorded or the cheaper store it points to, re-measured on `VarkaTimeBenchmark`'s 128-bit file | The 128-bit narrowed rows within 5% of the wide rows on every shape, or the cause written in the plan and the census |
+| 159 | Refactor for readability: the emitter split by its phases, the compiler by expression family, the evaluator by responsibility, the emitter suite by family, the serializer one class per file, the options as a builder, and last one place per IR node (section 2.95). **Scoped** (20 September 2026) from the owner's review; after the pull requests open at the time (#267 to #275) merge | One PR per seam, each a pure move, in `PLAN_TASK_159.md`'s order: options builder, the emitter's six seams, the suite, the compiler with task 86, the evaluator, the serializer, the per-node dispatch | `emitted_bytes.json` and the shape hashes unchanged at every step, checked by the flattened-key diff; no results file, band or docs table moves; every new file opens with its purpose |
 
 ## 4. Files
 
