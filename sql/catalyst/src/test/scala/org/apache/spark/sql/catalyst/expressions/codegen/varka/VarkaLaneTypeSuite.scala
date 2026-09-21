@@ -243,7 +243,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     val binary = ClassDesc.of("jdk.incubator.vector.VectorOperators$Binary")
     val comparison = ClassDesc.of("jdk.incubator.vector.VectorOperators$Comparison")
     val int = ConstantDescs.CD_int
-    val lane = VarkaLoopEmitter.Lane.INT
+    val lane = Lane.INT
 
     assert(lane.vector === v)
     assert(lane.bits === 32)
@@ -271,7 +271,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
   test("the species constant a lane names follows its own width") {
     // Sixteen int lanes is 512 bits; the same count at a wider lane would name a wider species,
     // which is why the name is the lane's business and not a shared helper's.
-    val lane = VarkaLoopEmitter.Lane.INT
+    val lane = Lane.INT
     assert(lane.speciesField(0) === "SPECIES_PREFERRED")
     assert(lane.speciesField(2) === "SPECIES_64")
     assert(lane.speciesField(4) === "SPECIES_128")
@@ -405,7 +405,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
         s"VarkaVectorSupport is missing the pair this test assumes for $n lanes")
     }
     // Every width the options accept - 0, meaning no override, and the powers of two.
-    for (lane <- Seq(VarkaLoopEmitter.Lane.INT, VarkaLoopEmitter.Lane.LONG);
+    for (lane <- Seq(Lane.INT, Lane.LONG);
          n <- Seq(0, 1, 2, 4, 8, 16, 32)) {
       val baked = VarkaLoopEmitter.emitLanesForTest(
         VarkaEmitOptions.DEFAULTS.withLanesOverride(n), lane)
@@ -416,8 +416,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     // The case that shipped broken, named rather than left to the loop: one 64-bit lane has a
     // species and no helpers, so it must not be baked.
     assert(VarkaLoopEmitter.emitLanesForTest(
-      VarkaEmitOptions.DEFAULTS.withLanesOverride(1), VarkaLoopEmitter.Lane.LONG) === 0)
-    assert(VarkaLoopEmitter.Lane.LONG.hasSpecies(1), "SPECIES_64 is one long lane")
+      VarkaEmitOptions.DEFAULTS.withLanesOverride(1), Lane.LONG) === 0)
+    assert(Lane.LONG.hasSpecies(1), "SPECIES_64 is one long lane")
   }
 
   test("a long-lane shape emits a class that verifies") {

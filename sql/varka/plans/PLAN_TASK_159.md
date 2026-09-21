@@ -70,6 +70,19 @@ The file's section headers are the plan. In order of least entanglement:
    `Lane`, the descriptor constants, `speciesField`, `emitLanes`, the
    validity-helper naming, into `VarkaLane.java`. Package-private; the emitter
    keeps calling them by the same names.
+   *Done 21 September 2026, as two files rather than one:* the descriptor
+   table (the `ClassDesc` and `MethodTypeDesc` constants and the `run`
+   method's parameter slots) is `VarkaDescriptors.java`, a final class the
+   emitter and the lane import statically, so no use site changes; the enum is
+   `Lane.java`, top level under its own name, since renaming it to `VarkaLane`
+   would have touched a hundred sites for no reader's gain. Two visibility
+   changes and nothing else: the enum's `laneType` field and its methods went
+   from private to package-private, and the three suite references to the
+   nested name became the top-level one. The emitter lost 435 lines; the
+   bytes oracle, the shape hashes, the emitter suite and the javadoc build are
+   unchanged. `speciesField`, `emitLanes` and the validity-helper naming stay
+   where they were: `speciesField` is the lane's and moved with it, the other
+   two are body-emitter code and belong to seam 6.
 2. **The weights and budgets** (around 266): the calendar op weights,
    `GROUP_BUDGET`, `FUSED_CEILING`, `fitsBudgets`' arithmetic, into
    `VarkaEmitBudget.java`.
