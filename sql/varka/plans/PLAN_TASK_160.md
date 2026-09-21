@@ -91,3 +91,39 @@ master; the first Varka-only and documents-only pushes after this merges are
 the acceptance runs, and their job lists and times go here then. Until then the
 evidence for those two verdicts is the script on the three file lists and the
 doctests.
+
+**The acceptance runs, 21 September 2026, on the merged master.** Two scratch
+branches, each one file on top of master: a blank line in
+`VarkaLoopEmitter.java` (classified `scoped`) and a blank line in this plan
+(classified `docs`).
+
+| change | wall | job-minutes | jobs that ran |
+|---|---|---|---|
+| full matrix (section 1) | about 90 min | 1283 | 35 |
+| Varka-only | 35 min | 94 | the two `varka-scoped` entries (16 and 7 min), the assembly gate (6), documentation generation (25), the linters (31), and four one-minute checks |
+| documents-only | 46 min | 96 | the docs checks, the Java 25 Maven build (44), documentation generation (14), the linters (29), and four one-minute checks |
+
+Prediction 1 held in substance and missed one job: the matrix is gone and
+the wall time is a little over a third of the full run's, but documentation
+generation ran too, because the workflow turns it on for every pull request
+and the scoped branch of the precondition did not turn it off. It stays on for
+a `scoped` change on purpose: it builds catalyst's javadoc, which a Varka Java
+file can break, and `dev/varka_gate.sh`'s `doc` step exists for the same
+reason.
+
+Prediction 2 failed by two jobs: besides the docs checks and the linters, a
+documents-only change ran the Java 25 Maven build for 44 minutes and
+documentation generation for 14, since the precondition's `docs` branch set
+nothing at all. The same change now sets the matrix flags off for `docs` as
+for `scoped`, and documentation generation off for `docs` alone, so a
+documents-only push runs the docs checks, the linters and the one-minute
+checks, about 30 minutes of wall time, all of it the linters.
+
+One more defect found reading the block: the scoped branch set the core-utils
+flag off and the next line recomputed it from the changed modules, which
+happened to give the same answer for a Varka change. The recompute now comes
+first and the scope's override last.
+
+The linters at about 30 minutes are now the floor for any change; what they
+spend it on is a separate question, not this task's.
+

@@ -215,9 +215,9 @@ jobs:
             varka_scope=$(echo "$changed_files" | ./dev/varka_scope.py)
           fi
           echo "varka change scope: $varka_scope"
+          build_core_utils=`./dev/is-changed.py -m "core,unsafe,kvstore,utils,utils-java,network-common,network-shuffle,sketch,variant,launcher"`
           varka_scoped=false
-          if [ "$varka_scope" = "scoped" ]; then
-            varka_scoped=true
+          if [ "$varka_scope" = "scoped" ] || [ "$varka_scope" = "docs" ]; then
             build=false
             build_core_utils=false
             pyspark=false
@@ -228,7 +228,15 @@ jobs:
             docker=false
             java25=false
           fi
-          build_core_utils=`./dev/is-changed.py -m "core,unsafe,kvstore,utils,utils-java,network-common,network-shuffle,sketch,variant,launcher"`
+          if [ "$varka_scope" = "scoped" ]; then
+            varka_scoped=true
+          fi
+          # Documents cannot change Spark's generated documentation either; the first
+          # documents-only run after this shipped spent 44 minutes in the Java 25 Maven build
+          # and 14 in documentation generation for a plan file (PLAN_TASK_160.md section 5).
+          if [ "$varka_scope" = "docs" ]; then
+            docs=false
+          fi
           varka_engine=`./dev/is-changed.py -m varka-engine`
           varka_bench=`./dev/is-changed.py -m varka-bench`
           varka_docs=`./dev/is-changed.py -m varka-docs`
