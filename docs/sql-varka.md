@@ -267,7 +267,7 @@ VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
 ```
 
 <!-- BEGIN generated coverage table -->
-The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M: `vector` means C2 refused no Vector API call in the row's kernel at a 128-bit species; `per-lane` names the constructions it had no lowering for, which then run as Java loops over the lanes (task 153).
+The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M at a forced 128-bit species: `vector` means C2 refused no Vector API call in the row's kernel there; `per-lane` names the constructions it had no lowering for, which then run as Java loops over the lanes (task 153). It is this x86 JVM's table below its own width: the pool's aarch64 runner, whose native species is 128 bits, refuses nothing (`PLAN_TASK_153.md` 6).
 
 #### Day arithmetic
 
