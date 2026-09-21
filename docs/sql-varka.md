@@ -402,7 +402,7 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 | `second(t)` |  | vector |
 | `time_to_millis(t)` |  | vector |
 | `time_to_micros(t2)` |  | vector |
-| `time_from_seconds(l)` | the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `time_from_millis(time_to_millis(t2))` | the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 | `time_from_micros(time_to_micros(t))` |  | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 | `t + INTERVAL '0 00:00:00' DAY TO SECOND` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 

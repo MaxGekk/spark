@@ -45,3 +45,21 @@ multiplies from a bigint second-of-day column and from their own divisions'
 results, through both consumers; a table holding 86400 and -1 raises Spark's own
 error under Varka from the same rows. Four coverage rows, so the `TIME` surface's
 table (task 105) can carry them at group B's price.
+
+## 4. A fixture lesson from CI
+
+The first push carried the coverage row `time_from_seconds(l)`. The coverage
+suite fused it and `VarkaTimeArithmeticSuite` agreed with the row engine over
+its own second-of-day column, but `VarkaCoverageDifferentialSuite` runs every
+coverage row over a fixture whose `l` spans the bigint range, and a count of
+five billion seconds is not a time of day: the row engine raised Spark's error
+and the test failed on the exception. The int column the fixture keeps in 1..12
+is not a way out: the compiler has no widening cast from the int lane to the
+long one, so `time_from_seconds(i)` declines (task 28's narrowing inside a tree
+has no widening twin yet). The row now reads `time_from_millis(time_to_millis(t2))`,
+a count inside the day by construction, which exercises the same guarded
+multiply at the millisecond unit; the seconds unit is covered by
+`VarkaTimeArithmeticSuite` over its own second-of-day column. The lesson - a
+coverage row is also a differential query over that fixture - is in the testing
+skill.
+

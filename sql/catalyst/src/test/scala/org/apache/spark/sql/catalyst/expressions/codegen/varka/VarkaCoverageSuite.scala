@@ -234,9 +234,10 @@ class VarkaCoverageSuite extends SparkFunSuite {
       Row("second(t)"),
       Row("time_to_millis(t)"),
       Row("time_to_micros(t2)"),
-      Row("time_from_seconds(l)", "the count is guarded to the day's worth of its unit, where " +
-        "the multiply is exact; a count outside declines the batch and the row engine raises " +
-        "Spark's error, as for t + dt"),
+      Row("time_from_millis(time_to_millis(t2))", "the count is guarded to the day's worth of " +
+        "its unit, where the multiply is exact; a count outside declines the batch and the row " +
+        "engine raises Spark's error, as for t + dt - so the count here is one that is inside " +
+        "the day by construction"),
       Row("time_from_micros(time_to_micros(t))"),
       Row("t + INTERVAL '0 00:00:00' DAY TO SECOND",
         "a zero interval on purpose: this fixture reaches both ends of the day, so any other " +

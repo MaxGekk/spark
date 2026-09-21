@@ -639,12 +639,12 @@
     "catalyst" : [ "TimeToMicros" ],
     "note" : ""
   }, {
-    "sql" : "time_from_seconds(l)",
-    "executable" : "time_from_seconds(l)",
+    "sql" : "time_from_millis(time_to_millis(t2))",
+    "executable" : "time_from_millis(time_to_millis(t2))",
     "family" : "Time arithmetic",
     "form" : "projection",
-    "catalyst" : [ "TimeFromSeconds" ],
-    "note" : "the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt"
+    "catalyst" : [ "TimeFromMillis", "TimeToMillis" ],
+    "note" : "the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction"
   }, {
     "sql" : "time_from_micros(time_to_micros(t))",
     "executable" : "time_from_micros(time_to_micros(t))",
