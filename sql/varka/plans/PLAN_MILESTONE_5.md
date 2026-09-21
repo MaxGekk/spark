@@ -3451,22 +3451,6 @@ within 3% at 512 and 256 bits and within 3% at 128 on `hour`, `minute` and
 `second`, 10% under it on the three-field shape, and better than the masked
 form on every shape at every width. Shipping it is row 162.
 
-### 2.98 Ship the half-species narrowed store (task 162)
-
-*Opened 21 September 2026, from task 156's outcome.*
-
-Task 156 built the half-species store as an arm and measured it against the
-masked store it was meant to replace: never worse, better by 7% to 11% on the
-shapes that hurt at 128 bits, and past L3 at the wide widths the best of the
-three stores, `hour` 44% over the wide store at 512 bits. The masked form is
-still what ships. This task flips the default where the emitter bakes the lane
-count, builds the general case for the path that does not - the half of the
-preferred species as a static final of the emitted class, so the kernel picks
-it at load time on the machine it runs on - and regenerates the oracles. The
-10% the three-field shape still gives up at 128 bits is read in the assembly
-with task 156's dump, and either named as the per-store overhead two lanes
-cannot amortise or closed.
-
 ### 2.93 The widening store: a decimal output is sixteen bytes a row (task 157)
 
 *Opened 20 September 2026, from `PLAN_TASK_102.md` section 9.*
@@ -3521,6 +3505,40 @@ it safe is the instrument the project already has: a step is a refactor exactly
 when `emitted_bytes.json` and the shape hashes do not move, so no benchmark is
 rerun and no behaviour can change unnoticed. `PLAN_TASK_159.md` names the seams
 and the order; every step waits for the pull requests open at the time to merge.
+
+### 2.96 Run only the CI a change can reach (task 160)
+
+*Opened 20 September 2026 on the owner's question whether the build's ninety
+minutes were necessary for every Varka pull request.*
+
+A full Build on the fork is 35 jobs and 1283 job-minutes, about ninety minutes
+of wall time, dominated by the `sql` shards, the connect and streaming shard,
+Docker and TPC-DS. The precondition already selects by module; what defeats it
+for Varka is that any change under `sql/catalyst` sets `build=true`, and that
+runs the whole matrix, because catalyst is upstream of everything Spark tests.
+Varka's code lives in files named for it and in `varka` directories, its hooks
+into Spark are six shared files, and Spark's suites run with the engine off, so
+a change confined to Varka's files cannot change what they see. The task
+classifies a change by its paths - `spark`, `scoped`, `docs`, `none` - runs the
+Varka suites of catalyst and sql/core in one job for a `scoped` change and the
+matrix for a `spark` one, and proves the classification by the runs it
+produces (`PLAN_TASK_160.md`).
+
+### 2.98 Ship the half-species narrowed store (task 162)
+
+*Opened 21 September 2026, from task 156's outcome.*
+
+Task 156 built the half-species store as an arm and measured it against the
+masked store it was meant to replace: never worse, better by 7% to 11% on the
+shapes that hurt at 128 bits, and past L3 at the wide widths the best of the
+three stores, `hour` 44% over the wide store at 512 bits. The masked form is
+still what ships. This task flips the default where the emitter bakes the lane
+count, builds the general case for the path that does not - the half of the
+preferred species as a static final of the emitted class, so the kernel picks
+it at load time on the machine it runs on - and regenerates the oracles. The
+10% the three-field shape still gives up at 128 bits is read in the assembly
+with task 156's dump, and either named as the per-store overhead two lanes
+cannot amortise or closed.
 
 ## 3. Task breakdown
 
@@ -3708,6 +3726,7 @@ can start has.
 | 157 | The widening store: a decimal output is sixteen bytes a row (section 2.93). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` section 9: every `TIME` decimal is an unscaled long in the lane the family already uses, and the column is the only blocker | A root-only `WidenDecimal` node whose store writes the value word and its sign extension per sixteen-byte slot; a `DecimalVector` destination in the evaluator; `second(t)` with its fraction and `time_to_seconds` lowered through it; measured against the evaluator widening a long output in a scalar loop, which is the baseline; the fraction's unscaled-long form checked against the row engine's `Double` round trip over every nanosecond of a minute | Both expressions agree with the row engine over every second of the day through both consumers; the store beats the scalar widening on `VarkaTimeBenchmark`'s ladder or the plan says by how much it does not |
 | 158 | Group E: the five `time_to_*`/`time_from_*` conversions the table does not know, and the two decimal declines that do not name their reason (section 2.94). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 9.3 | The five in `timeTargets` and the compiler as group B's shapes, with the conversion's overflow and day-range rules read before choosing a guard or a checked multiply; the table's completeness guard widened to the registry's `TIME` functions; `second` with fraction and `time_to_seconds` declining by name with the Arrow representation as the reason | Five new coverage rows fusing; every `TIME` function in the registry either lowers or declines by name, which the coverage suite states |
 | 159 | Refactor for readability: the emitter split by its phases, the compiler by expression family, the evaluator by responsibility, the emitter suite by family, the serializer one class per file, the options as a builder, and last one place per IR node (section 2.95). **Scoped** (20 September 2026) from the owner's review; after the pull requests open at the time (#267 to #275) merge | One PR per seam, each a pure move, in `PLAN_TASK_159.md`'s order: options builder, the emitter's six seams, the suite, the compiler with task 86, the evaluator, the serializer, the per-node dispatch | `emitted_bytes.json` and the shape hashes unchanged at every step, checked by the flattened-key diff; no results file, band or docs table moves; every new file opens with its purpose |
+| 160 | Run only the CI a change can reach (section 2.96). **Scoped and implemented** (20 September 2026, `PLAN_TASK_160.md`): a full Build is 35 jobs and 1283 job-minutes for a Varka change because any catalyst file sets `build=true` | `varka_change_scope` in `sparktestsupport.modules` with doctests; the precondition running the `varka-scoped` job (the `*Varka*` suites of catalyst and sql/core in parallel) instead of the matrix for a change confined to Varka's files, and the matrix for any other | Three recorded runs on the fork: a Varka-only change (the two scoped entries, about a third of the matrix's wall time), a documents-only change (the docs checks and the linters), and a workflow change (the full matrix) |
 | 162 | Ship the half-species narrowed store (section 2.98). **Scoped** (21 September 2026) from task 156's measurement: the half-species arm is the best narrowed store at every width and the best store of all past L3 at 512 and 256 bits, and the masked form is still the shipped one | The default flipped where the lane count is baked; the general case, half of the preferred species as a static final of the emitted class, for the unbaked path; `emitted_bytes.json` and the census regenerated; the 128-bit residue on `second` and the three-field shape read in the assembly with task 156's dump | `VarkaTimeBenchmark`'s three files regenerated with the shipped rows at the half-species arm's rates; the assembly gate green; the residue named or closed |
 
 ## 4. Files
