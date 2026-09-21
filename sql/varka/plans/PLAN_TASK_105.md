@@ -189,3 +189,45 @@ measurement; no per-entry figure above is quoted in the README before it
 exists. Task 121 then takes the same table under `-XX:UseAVX=2`, and task 118
 writes the README section.
 
+## 7. The band, 21 September 2026
+
+Twelve fork-arm runs at the committed setting, 500000000 rows in 48g, over
+the day: five in the morning window, seven in the afternoon one, each started
+on a quiet machine, under an 8% fixed-share bound for the band alone (the
+committed arms ran under 6%; the first band attempt had read `hour(t)` at 6.2%
+with an sbt run starting beside it, and the band measures spread, not the
+number). `TimeSurface-jdk25-band.txt`, 86 cases.
+
+**The surface is not the chains.** The date chains' band read every case under
+3% (`PLAN_TASK_101.md` 9); this surface reads median 3.38%, p90 10.15%, max
+17.03%, with 38 cases in tier 0, 38 in tier 1 and 10 in tier 2. The split is by
+shape, and it is the split a reader needs:
+
+* **Every projection the message quotes is tier 0 or 1.** `hour(t)` 2.10%,
+  `minute(t)` 2.32%, `second(t)` 2.22%, `time_trunc('MINUTE', t)` 2.59%,
+  `time_trunc('MILLISECOND', t2)` 2.80%; the arithmetic and selection
+  projections between 2.9% and 5.2%. A regeneration that moves one of these
+  rows by more than its tier has moved something.
+* **The filters carry the spread**, and the two-column and counted filters
+  most: `greatest(t, t2)` as a columnar filter 16.82%, `t < TIME'12:00:00'`
+  counted 15.29%, `t + dt` counted 14.34%, `greatest(t, t2)` counted 13.06%.
+  These are the rows whose Varka rate is within a factor of two of the row
+  engine's - a job of a second or two where the columnar boundary and the
+  task's fixed cost are a real share - and their tier says they are read only
+  against it.
+
+The two halves do not agree the way the chains' did: the first six runs put
+two cases in tier 2 and the last six put six there, the same filter shapes
+in both, so the filters' spread grew through the afternoon while the
+projections' did not. Nothing else ran on the machine in either half; the
+band records the day it was measured on and the tiers are the conservative
+reading. Whether the surface band tightens on a night's run, as the chains'
+did, is a question for the next regeneration and is written here rather than
+assumed.
+
+What this settles for task 118: the extracts and truncations can be quoted
+with their committed values and a 3% tier; the filter rows are quoted with
+their tier beside them or as a range, never bare; and the band file is
+committed before the README quotes any row, which is the order task 101
+asked for.
+
