@@ -1,3 +1,102 @@
+## Contributing to Varka
+
+Varka is a research fork of Apache Spark: a vectorized code generator that
+compiles projections and filters into vector loops with JDK 25's Class-File API
+and the Vector API. The section below is about contributing to Varka's own
+code, plans and measurements. The section after it is Spark's, and it still
+applies to anything that touches Spark itself.
+
+### Read first
+
+* [`README.md`](README.md), in particular "Reading the source", and
+  [`docs/sql-varka.md`](docs/sql-varka.md): what the engine does and how a
+  query becomes a vector loop.
+* [`sql/varka/VISION.md`](sql/varka/VISION.md): the architecture and where it
+  is going.
+* [`sql/varka/AGENTS.md`](sql/varka/AGENTS.md): the house rules, written for
+  anyone (or anything) editing the engine.
+* [`SKILLS.md`](SKILLS.md), the index over
+  [`sql/varka/skills/`](sql/varka/skills/): measured lessons, many of them
+  negative results, kept so a settled question is not reopened by accident.
+
+### Finding work
+
+Development runs in milestones, and each milestone is one file under
+[`sql/varka/plans/`](sql/varka/plans/) with a numbered task table. The
+milestone in flight is [`PLAN_MILESTONE_5.md`](sql/varka/plans/PLAN_MILESTONE_5.md);
+rows marked **Scoped** or **Planned** are open, rows marked **Done** carry a
+pointer to their outcome, and each row names what has to be true before the
+task starts and what counts as done. Every task has, or gets, its own
+`PLAN_TASK_<n>.md`. The next milestone's scope catalogue is
+[`SCOPE_MILESTONE_6.md`](sql/varka/plans/SCOPE_MILESTONE_6.md), and design
+input there is as welcome as code.
+
+Before writing code for a task, open a GitHub issue naming the row, so the
+plan is agreed first. If the work is not in any table, say so in the issue:
+new tasks are added as rows, and a finding made while doing one task becomes a
+new row rather than a note in the old one.
+
+Measurements from hardware the project does not have are a contribution in
+their own right. The benchmark workflows print the CPU model and a datapath
+probe with every run, and numbers from AMD AVX2 machines or Arm fill gaps in
+the committed tables.
+
+### How the work is done
+
+* **Plans are records.** A task file is written as the work happens: what was
+  planned, what was built, what was measured, and where the plan was wrong.
+  Predictions are written down before the measurement and scored after it,
+  and they stay in the file.
+* **Numbers trace to files.** Every performance claim in a document quotes a
+  committed results file under a `benchmarks/` directory. `dev/varka_quote_check.py`
+  enforces it, and the benchmark scripts (`dev/varka_bench_regen.sh`,
+  `dev/varka_bench_diff.py`) regenerate and compare those files; see the
+  "Measurements" section of `sql/varka/AGENTS.md`.
+* **No `TODO` in code.** Unfinished work lives in a plan file with its reason,
+  never as a marker in the source.
+* **Comments explain the code to a new reader.** How the code came to be this
+  way belongs in the plans and in git.
+* **Refactors are proven by the oracles.** `sql/varka/emitted_bytes.json`
+  pins what the emitter produces for every documented shape; a change that
+  should not alter the generated code leaves it unchanged.
+
+### Building and testing
+
+JDK 25 is required. Build with `./build/sbt` (or Maven, as the quick start
+shows). The Varka suites live beside Spark's:
+
+    ./build/sbt "catalyst/testOnly *Varka*" "sql/testOnly *Varka*"
+
+`dev/varka_gate.sh` is the standing gate in one command: compile, the Varka
+suites at the host's vector width and at 128 bits, the javadoc build, the
+linters and the quote check, each step logged, one summary table.
+`dev/varka_gate.sh --list` shows the steps. Install the pre-commit hook once
+per clone:
+
+    dev/varka_precommit.sh --install-hook
+
+It checks the column limit, non-ASCII characters outside string literals,
+stray `TODO` markers, the quoted numbers, and Python formatting.
+
+CI runs only what a change can reach: a change confined to Varka's files runs
+the Varka suites and the assembly gate in about half an hour; a change to a
+shared Spark file runs Spark's full matrix.
+
+### Pull requests
+
+Titles read `[VARKA] <what the change achieves>`, short and goal-oriented.
+The description follows [`.github/PULL_REQUEST_TEMPLATE`](.github/PULL_REQUEST_TEMPLATE)
+and explains the mechanism in prose, not only the diff. If a generative AI
+tool took part, the last section says so with a `Generated-by:` line naming
+the tool and version, as the
+[ASF generative tooling guidance](https://www.apache.org/legal/generative-tooling.html)
+asks. Pull requests open against `master` of `vecbricks/varka`, from a branch
+on your fork.
+
+By contributing you affirm, as for Spark below, that the contribution is your
+original work and that you license it to the project under the project's
+open source license.
+
 ## Contributing to Spark
 
 *Before opening a pull request*, review the 
