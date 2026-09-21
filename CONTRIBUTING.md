@@ -11,6 +11,9 @@ applies to anything that touches Spark itself.
 * [`README.md`](README.md), in particular "Reading the source", and
   [`docs/sql-varka.md`](docs/sql-varka.md): what the engine does and how a
   query becomes a vector loop.
+* [`sql/varka/WALKTHROUGH.md`](sql/varka/WALKTHROUGH.md): one expression
+  from SQL text to the assembly the gate checks, with the tools that show each
+  step.
 * [`sql/varka/VISION.md`](sql/varka/VISION.md): the architecture and where it
   is going.
 * [`sql/varka/AGENTS.md`](sql/varka/AGENTS.md): the house rules, written for
@@ -31,15 +34,18 @@ task starts and what counts as done. Every task has, or gets, its own
 [`SCOPE_MILESTONE_6.md`](sql/varka/plans/SCOPE_MILESTONE_6.md), and design
 input there is as welcome as code.
 
-Before writing code for a task, open a GitHub issue naming the row, so the
-plan is agreed first. If the work is not in any table, say so in the issue:
-new tasks are added as rows, and a finding made while doing one task becomes a
-new row rather than a note in the old one.
+Before writing code for a task, open a GitHub issue with the "Varka: take a
+task" template, so the plan is agreed first. If the work is not in any table,
+say so in the issue: new tasks are added as rows, and a finding made while
+doing one task becomes a new row rather than a note in the old one. A task's
+plan file starts from
+[`sql/varka/plans/PLAN_TASK_TEMPLATE.md`](sql/varka/plans/PLAN_TASK_TEMPLATE.md).
 
 Measurements from hardware the project does not have are a contribution in
-their own right. The benchmark workflows print the CPU model and a datapath
-probe with every run, and numbers from AMD AVX2 machines or Arm fill gaps in
-the committed tables.
+their own right, and need no build: run `dev/varka_datapath.sh` and open an
+issue with the "Varka: add my machine" template. The machines the numbers were
+measured on so far are in [`sql/varka/HARDWARE.md`](sql/varka/HARDWARE.md),
+and AMD AVX2 machines and Arm are the gaps.
 
 ### How the work is done
 

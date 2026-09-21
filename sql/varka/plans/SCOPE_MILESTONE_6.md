@@ -3021,6 +3021,12 @@ than a front door. Three low-cost pieces would give the project a first rung.
    run, the outcome - so a first plan file has the shape without reading ten
    examples.
 
+*Pieces 2 and 3 shipped on 21 September 2026, on the owner's instruction:
+`sql/varka/HARDWARE.md` with the "add my machine" template, the "take a task"
+template, `PLAN_TASK_TEMPLATE.md`, and `sql/varka/WALKTHROUGH.md` (one
+expression from SQL to assembly). Piece 1, the issue sync, is what remains for
+this milestone.*
+
 Set aside with reasons: a chat channel or mailing list before there are three
 regular contributors, and any contributor agreement beyond the license
 affirmation `CONTRIBUTING.md` already carries. **Done when** every open row
