@@ -625,6 +625,34 @@
     "catalyst" : [ "SecondsOfTime" ],
     "note" : ""
   }, {
+    "sql" : "time_to_millis(t)",
+    "executable" : "time_to_millis(t)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeToMillis" ],
+    "note" : ""
+  }, {
+    "sql" : "time_to_micros(t2)",
+    "executable" : "time_to_micros(t2)",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeToMicros" ],
+    "note" : ""
+  }, {
+    "sql" : "time_from_millis(time_to_millis(t2))",
+    "executable" : "time_from_millis(time_to_millis(t2))",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeFromMillis", "TimeToMillis" ],
+    "note" : "the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction"
+  }, {
+    "sql" : "time_from_micros(time_to_micros(t))",
+    "executable" : "time_from_micros(time_to_micros(t))",
+    "family" : "Time arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "TimeFromMicros", "TimeToMicros" ],
+    "note" : ""
+  }, {
     "sql" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
     "executable" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
     "family" : "Time arithmetic",

@@ -371,3 +371,19 @@ string names it (`unsupported expression` over a `Cast`). And when a new type
 arrives, ask what casts type coercion inserts around its literals and columns,
 and whether each is the identity on the lane; an identity gets a relabel arm,
 anything else gets a decline with a reason.
+
+A third habit, from task 158: a coverage row is also a differential query.
+`VarkaCoverageDifferentialSuite` runs every row of the table over one generic
+fixture whose columns are chosen to be extreme - `l` and `l2` span the bigint
+range, `dt` runs to a hundred thousand days - and compares the two engines. A
+row whose function has a domain narrower than its column's fixture values does
+not fail as a mismatch; the row engine raises Spark's error and the test fails
+on the exception, on CI, after the local coverage and end-to-end suites passed.
+`time_from_seconds(l)` did exactly that (`5000000000` seconds is not a time of
+day). Write such a row over a value that is in the domain by construction -
+`time_from_millis(time_to_millis(t2))` - or over a column the fixture keeps
+there (`i` stays in 1..12 for `make_date`, though an int column reaches a
+long-lane function only through a widening cast the compiler does not lower
+yet), and run the differential suite, not only the coverage suite, before
+pushing a row: the scoped CI job runs `sql/testOnly *Varka*`, and that is the
+local command that matches it.

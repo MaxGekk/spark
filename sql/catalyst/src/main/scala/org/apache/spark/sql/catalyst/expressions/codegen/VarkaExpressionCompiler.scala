@@ -25,7 +25,17 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkIllegalArgumentException
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode, Expression, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, GreaterThanOrEqual, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter, RuntimeReplaceable, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimeTrunc, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute,
+  BindReferences, BoundReference, CaseWhen, Cast, Coalesce, DateAdd, DateAddYMInterval, DateDiff,
+  DateFromUnixDate, DateSub, DateVarkaSupport, DayOfMonth, DayOfWeek, DayOfYear, EqualTo, EvalMode,
+  Expression, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears,
+  GreaterThan, GreaterThanOrEqual, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay,
+  Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime,
+  Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, Or, Quarter,
+  RuntimeReplaceable, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes,
+  TimeAddInterval, TimeDiff, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimeToMicros,
+  TimeToMillis, TimeToSeconds, TimeTrunc, TruncDate, UnaryMinus, UnixDate, WeekDay, WeekOfYear,
+  Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaValueRange, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis.{GuardPolicy, Kind}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, Cond, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedDay, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
@@ -560,6 +570,7 @@ private[sql] object VarkaExpressionCompiler {
     val d = Literal.create(Decimal(0), DecimalType(16, 6))
     val dt = Literal.create(0L, DayTimeIntervalType())
     val u = Literal.create(UTF8String.fromString("HOUR"), StringType)
+    val l = Literal.create(0L, LongType)
     Seq[(Expression, String)](
       HoursOfTime(t) -> "hour(t)",
       MinutesOfTime(t) -> "minute(t)",
@@ -569,7 +580,14 @@ private[sql] object VarkaExpressionCompiler {
       TimeTrunc(u, t) -> "time_trunc",
       SubtractTimes(t, t) -> "t1 - t2",
       TimeDiff(u, t, t) -> "timediff",
-      TimeAddInterval(t, dt) -> "t + interval").map {
+      TimeAddInterval(t, dt) -> "t + interval",
+      // Group E (task 158): the conversions, and the one of them that returns a decimal.
+      TimeToSeconds(t) -> "time_to_seconds",
+      TimeToMillis(t) -> "time_to_millis",
+      TimeToMicros(t) -> "time_to_micros",
+      TimeFromSeconds(l) -> "time_from_seconds",
+      TimeFromMillis(l) -> "time_from_millis",
+      TimeFromMicros(l) -> "time_from_micros").map {
       case (e, label) =>
         e.asInstanceOf[RuntimeReplaceable].replacement match {
           case si: StaticInvoke => (si.staticObject, si.functionName) -> label
@@ -593,6 +611,16 @@ private[sql] object VarkaExpressionCompiler {
    */
   private def timeNotLoweredYet(label: String): String =
     s"$label is a TIME expression Varka does not lower yet (task 102)"
+
+  /**
+   * The reason the two decimal-valued `TIME` expressions decline, which is the representation
+   * and not the arithmetic: their value is an unscaled long the lane already computes, and the
+   * column Arrow holds it in is sixteen bytes a row, which no Varka output writes yet
+   * (`PLAN_TASK_102.md` section 9, task 157).
+   */
+  private def decimalColumnNotYet(label: String): String =
+    s"$label returns a decimal, whose Arrow column is sixteen bytes a row and which no Varka " +
+      "output writes yet; the value is an unscaled long the lane holds (task 157)"
 
   /**
    * The lowerings of the `TIME` expressions, keyed on the `DateTimeUtils` method each one's
@@ -747,11 +775,43 @@ private[sql] object VarkaExpressionCompiler {
         for (t <- long(time); n <- nanos) yield
           new GuardedRange(new IntArith(IntOp.ADD, Overflow.WRAP, t, n), 0L,
             DateTimeConstants.NANOS_PER_DAY - 1)
+      // Group E (task 158): the conversions. `timeToMillis` and `timeToMicros` are floor
+      // divisions of a non-negative count, so a truncating constant division; the three
+      // `timeFrom*` are `multiplyExact` under the conversion's own range check, which throws
+      // unless the result is inside the day - so the count is guarded to the day's worth of its
+      // unit, where the product cannot overflow and the result is a TIME, and a count outside
+      // declines the batch to the row engine, which raises Spark's error. A count that is not on
+      // the long lane - an int column, a decimal, a double - declines where its leaf does.
+      case ("timeToMillis", Seq(time)) =>
+        long(time).map(t => new ConstDivide(t, DateTimeConstants.NANOS_PER_MILLIS))
+      case ("timeToMicros", Seq(time)) =>
+        long(time).map(t => new ConstDivide(t, DateTimeConstants.NANOS_PER_MICROS))
+      case ("timeFromSeconds", Seq(count)) =>
+        timeFromUnits(count, DateTimeConstants.NANOS_PER_SECOND, sink, long)
+      case ("timeFromMillis", Seq(count)) =>
+        timeFromUnits(count, DateTimeConstants.NANOS_PER_MILLIS, sink, long)
+      case ("timeFromMicros", Seq(count)) =>
+        timeFromUnits(count, DateTimeConstants.NANOS_PER_MICROS, sink, long)
+      case ("getSecondsOfTimeWithFraction", _) | ("timeToSeconds", _) =>
+        sink.note(decimalColumnNotYet(label), si)
+        None
       case _ =>
         sink.note(timeNotLoweredYet(label), si)
         None
     }
   }
+
+  /**
+   * `count * nanosPerUnit` as a TIME: the count guarded to `[0, (NANOS_PER_DAY - 1) / unit]`,
+   * inside which the wrapping multiply is exact and the result is inside the day, so the guard
+   * is the conversion's own range check and its decline is the row engine's error.
+   */
+  private def timeFromUnits(count: Expression, nanosPerUnit: Long, sink: DeclineSink,
+      long: Expression => Option[VarkaVectorIR]): Option[VarkaVectorIR] =
+    long(count).map { n =>
+      val guarded = new GuardedRange(n, 0L, (DateTimeConstants.NANOS_PER_DAY - 1) / nanosPerUnit)
+      new IntArith(IntOp.MUL, Overflow.WRAP, guarded, sink.longSlot(nanosPerUnit))
+    }
 
   /**
    * Whether `truncateTimeToPrecision(sum, target)` inside `timeAddInterval` can change the sum,

@@ -19,7 +19,8 @@ package org.apache.spark.sql.catalyst.expressions.codegen
 
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimestampAddInterval, TimeTrunc, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, CurrentTime, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimeExpression, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimestampAddInterval, TimeToMicros, TimeToMillis, TimeToSeconds, TimeTrunc, ToTime, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
@@ -28,6 +29,7 @@ import org.apache.spark.sql.catalyst.plans.logical.{OneRowRelation, Project}
 import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.types.{ByteType, DateType, DayTimeIntervalType, Decimal, DecimalType, IntegerType, LongType, ShortType, StringType, TimestampNTZType, TimestampType, TimeType, YearMonthIntervalType}
 import org.apache.spark.unsafe.types.UTF8String
+import org.apache.spark.util.Utils
 
 /**
  * Unit tests for [[VarkaExpressionCompiler]] (milestone 2, task 10): the recursive
@@ -712,6 +714,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val dec = Literal.create(Decimal(0), DecimalType(16, 6))
     val dti = Literal.create(0L, DayTimeIntervalType())
     val unit = Literal.create(UTF8String.fromString("HOUR"), StringType)
+    val l = Literal.create(0L, LongType)
     Seq(
       HoursOfTime(t) -> "hour(t)",
       MinutesOfTime(t) -> "minute(t)",
@@ -721,7 +724,38 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
       TimeTrunc(unit, t) -> "time_trunc",
       SubtractTimes(t, t) -> "t1 - t2",
       TimeDiff(unit, t, t) -> "timediff",
-      TimeAddInterval(t, dti) -> "t + interval")
+      TimeAddInterval(t, dti) -> "t + interval",
+      TimeToSeconds(t) -> "time_to_seconds",
+      TimeToMillis(t) -> "time_to_millis",
+      TimeToMicros(t) -> "time_to_micros",
+      TimeFromSeconds(l) -> "time_from_seconds",
+      TimeFromMillis(l) -> "time_from_millis",
+      TimeFromMicros(l) -> "time_from_micros")
+  }
+
+  /**
+   * The list above against the registry, so a TIME function Spark adds cannot stay out of the
+   * table unnoticed: every built-in function whose expression class is a `TimeExpression` must
+   * be represented in `everyTimeExpression`, and so in the table, by an instance of its class.
+   * Section 9.3 of `PLAN_TASK_102.md` is what this guards against - five conversions that were
+   * in the registry and declined as `unsupported expression` because the table's own list did
+   * not know them.
+   */
+  test("every TIME function in the registry is in the table's list") {
+    val registered = FunctionRegistry.builtin.listFunction().flatMap { name =>
+      FunctionRegistry.builtin.lookupFunction(name).map(_.getClassName)
+    }.distinct.filter { className =>
+      classOf[TimeExpression].isAssignableFrom(Utils.classForName(className))
+    }.toSet
+    val listed = everyTimeExpression.map(_._1.getClass.getName).toSet
+    // The two the table has no business with, named so a third cannot join them unnoticed:
+    // `current_time` is a per-query constant the optimizer folds before any projection reaches
+    // the compiler, and `to_time` parses a string, which no lane holds and which the leaf
+    // declines as a non-date column - neither is a StaticInvoke over a TIME value.
+    val outsideTheTableByDesign = Set(classOf[CurrentTime], classOf[ToTime]).map(_.getName)
+    assert(registered -- listed === outsideTheTableByDesign,
+      "TIME functions in the registry that the table's list does not hold, beyond the two " +
+        "named here")
   }
 
   /**
@@ -839,6 +873,48 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     assert(reason.contains("only an output can take it"), reason)
   }
 
+  test("time_to_millis and time_to_micros lower to a constant division of the nanoseconds") {
+    // Group E (`PLAN_TASK_102.md` 9.3): `floorDiv` of a non-negative count is the truncating
+    // division the lane has, and the result is a bigint on the same lane.
+    val millis = VarkaExpressionCompiler.compile(Seq(out(TimeToMillis(t6))), withLong).get
+    assert(millis.outputs === Seq(new ConstDivide(longCol, 1000000L)))
+    assert(millis.outputTypes === Seq(LongType))
+    val micros = VarkaExpressionCompiler.compile(Seq(out(TimeToMicros(t3))), withLong).get
+    assert(micros.outputs === Seq(new ConstDivide(longCol, 1000L)))
+    assert(micros.inputOrdinals === Seq(7))
+  }
+
+  test("time_from_seconds, millis and micros lower to a guarded multiply into the day") {
+    // `multiplyExact` under the conversion's range check: the count is guarded to the day's
+    // worth of its unit, inside which the wrapping multiply is exact and the result is a TIME;
+    // a count outside declines the batch and the row engine raises Spark's error.
+    def form(unit: Long): VarkaVectorIR = new IntArith(IntOp.MUL, Overflow.WRAP,
+      new GuardedRange(longCol, 0L, (86400000000000L - 1) / unit), longSlot(0))
+    val seconds = VarkaExpressionCompiler.compile(Seq(out(TimeFromSeconds(l))), withLong).get
+    assert(seconds.outputs === Seq(form(1000000000L)))
+    assert(seconds.longLiterals === Seq(1000000000L))
+    assert(seconds.outputTypes === Seq(TimeType(6)))
+    val millis = VarkaExpressionCompiler.compile(Seq(out(TimeFromMillis(l))), withLong).get
+    assert(millis.outputs === Seq(form(1000000L)))
+    val micros = VarkaExpressionCompiler.compile(Seq(out(TimeFromMicros(l))), withLong).get
+    assert(micros.outputs === Seq(form(1000L)))
+    // A round trip composes: the conversion's division under the conversion's multiply.
+    val trip = VarkaExpressionCompiler.compile(
+      Seq(out(TimeFromMicros(TimeToMicros(t6)))), withLong).get
+    assert(trip.outputs === Seq(new IntArith(IntOp.MUL, Overflow.WRAP,
+      new GuardedRange(new ConstDivide(longCol, 1000L), 0L, 86399999999L), longSlot(0))))
+  }
+
+  test("the decimal-valued TIME expressions decline by naming the representation") {
+    // Section 2.3 asked for this: a reader who sees "not lowered yet" concludes the division is
+    // missing, where the value is an unscaled long the lane holds and the column is what waits.
+    for (e <- Seq(SecondsOfTimeWithFraction(t6), TimeToSeconds(t6))) {
+      val reason = declineReason(e, withLong)
+      assert(reason.contains("returns a decimal"), reason)
+      assert(reason.contains("task 157"), reason)
+    }
+  }
+
   test("a TIME unit or level that is not a literal, or not a unit, declines with the reason") {
     // The divisor is part of the kernel's shape, so a unit that is not known at compile time
     // would need a kernel per distinct value - the same rule trunc(d, fmt) applies. An unknown
@@ -922,9 +998,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // Task 102 lowers these one group at a time, and the difference between "not lowered yet"
     // and "unsupported" is what tells a reader where the work stands. The same distinction task
     // 89 drew for `extract(MONTH FROM ym)`.
-    // Group D's fractional second is the one still waiting, now that the extracts are lowered.
-    val reason = declineReason(SecondsOfTimeWithFraction(t6), withLong)
-    assert(reason.contains("second(t) with its fraction"), reason)
+    // make_time is the one still waiting on task 28's widening, now that the extracts and the
+    // conversions are lowered and the decimal-valued two decline by their own reason.
+    val reason = declineReason(
+      MakeTime(Literal(1), Literal(2), Literal(Decimal(3), DecimalType(16, 6))), withLong)
+    assert(reason.contains("make_time"), reason)
     assert(reason.contains("task 102"), reason)
   }
 
