@@ -3033,6 +3033,56 @@ affirmation `CONTRIBUTING.md` already carries. **Done when** every open row
 of the milestone in flight is an issue, closing a row closes its issue on the
 next sync, and `HARDWARE.md` has at least one machine that is not the owner's.
 
+### Item 39. Moved from milestone 5 on 21 September 2026
+
+Planning milestone 5's closing task (`PLAN_TASK_118.md`) read the milestone's
+exit against its open rows: the message about the 64-bit lane and `TIME`, the
+three-type support claim as the coverage table states it, and the full-width
+number. Twenty-eight open rows had no bearing on those and moved here, on the 15
+September precedent (item 15): text and task numbers unchanged, each design
+section still where it was in `PLAN_MILESTONE_5.md` with a note under its
+heading, so every citation resolves. Twelve of them were this catalogue's own
+items 16 to 29, scoped into milestone 5 on 16 September, and simply return.
+None is ordered against this milestone's spine (section 5); each re-enters
+with its own argument, and the reason it left is the start of that argument.
+
+| task | what it is | `PLAN_MILESTONE_5.md` | why it left milestone 5 |
+| ---: | :--- | :--- | :--- |
+| 28 | Lane-width conversion | 2.2 | the widening cast; nothing in the message needs it, and task 104 that would have leaned on it moves too |
+| 30 | ANSI integer arithmetic | 2.4 | the int32 arithmetic remainder (`/`, `div`, `%`); the 64-bit half is task 104 and moves with it |
+| 39 | `date - date` | 2.5 | absorbed by task 103 and moves with it |
+| 81 | Spark's own date tests as a differential corpus | 2.11 | the date lane's differential corpus; a newcomer's task through the task template |
+| 83 | One refusal, instead of four | 2.14 | an engine refactor on the int32 refusal paths; not the lane the milestone ships |
+| 86 | One operand admission, stated once | 2.17 | an int32 admission refactor; not the lane the milestone ships |
+| 89 | The year-month interval divisions | 2.20 | the year-month divisions beyond `extract(YEAR FROM ym)`, which landed; int32 date-lane work |
+| 91 | A guard bound the shift above it chooses | 2.22 | an int32 guard-bound tuning |
+| 92 | The validity write, keyed on the bit layout | 2.23 | an int-lane validity option, measured and defaulting off |
+| 95 | Two int32 shapes decline that a reader would expect to fuse | 2.30 | two int32 date shapes; the date lane is milestone 4's |
+| 96 | `make_ym_interval` takes only arguments derived from a date | 2.31 | a year-month interval argument rule on the date lane |
+| 103 | Day-time interval expressions, absorbing task 39 | 2.38 | day-time interval arithmetic; the milestone claims comparisons, selections and the interval as an operand of `TIME` arithmetic, as the coverage table states them |
+| 104 | `Long` arithmetic, task 30's int64 half | 2.39 | bigint arithmetic; the milestone claims comparisons and selections over bigint, as the coverage table states them |
+| 127 | The 64-bit operations table on AVX2 | 2.62 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 128 | 64-bit compaction with a sparse guard | 2.63 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 129 | Selectivity policy re-measured at 64-bit lanes | 2.64 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 130 | Narrowing, built four ways | 2.65 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 131 | The batch-size sweep | 2.66 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 132 | Kernel time split from conversion time, and a pivot budget | 2.67 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 133 | The frequency-licence probes | 2.68 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 135 | The backward interval pass | 2.70 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 136 | The preimage rewrite | 2.71 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 137 | Batch bounds at cache-write time, and a bounds check ahead of `IN` | 2.72 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 138 | Three test forms | 2.73 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 139 | A per-expression switch, and the tier ladder | 2.74 | one of the thirteen rows scoped on 16 September from this catalogue's own items 16 to 29; it returns to where it came from |
+| 148 | The group budget under-counts an int-lane division sevenfold | 2.84 | an emitter budget finding on the int lane; recorded, not the message |
+| 157 | The widening store: a decimal output is sixteen bytes a row | 2.93 | the decimal store; the two decimal declines are named in the coverage table, which is the honest form for the message |
+| 163 | The emitted three-field int kernel trails its hand-written twin by 10% to 20% while cache-resident | 2.99 | an emitter performance finding on the int lane; recorded, not the message |
+
+Two of them change what the milestone 5 message may claim, and the plan of its
+closing task says so in as many words: without 104 the `bigint` claim is
+"comparisons and selections", and without 103 the day-time interval claim is
+"comparisons, selections and the interval as an operand of `TIME` arithmetic".
+Both are the first rows to re-enter when the long lane's arithmetic is taken up.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
