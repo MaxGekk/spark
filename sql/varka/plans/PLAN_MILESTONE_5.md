@@ -3493,6 +3493,20 @@ when `emitted_bytes.json` and the shape hashes do not move, so no benchmark is
 rerun and no behaviour can change unnoticed. `PLAN_TASK_159.md` names the seams
 and the order; every step waits for the pull requests open at the time to merge.
 
+### 2.99 The emitted three-field int kernel trails its hand-written twin in cache (task 163)
+
+*Opened 21 September 2026, from `PLAN_TASK_102.md` 8.8.*
+
+`BoundedDivide` made the emitted int-lane extracts the same arithmetic as the
+hand-written kernel: one multiply and one shift per division. Measured, the
+single fields agree within 5% at every width, and the three-field shape agrees
+past L3, where the stores set the rate. In cache it does not: 18% under the
+hand-written kernel in L3 at 512 bits and 20% at 256. The arithmetic being
+equal, the difference is the emitter's own - how it loads once and stores three
+times, and what it keeps live across three roots - and it is the first place
+the emitter is measurably behind a hand-written loop on equal instructions.
+That is worth knowing before the calendar prefix is made of these nodes.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3877,6 +3891,7 @@ row of task 102's family, not a task of its own. The survey, so it is not redone
 | 113 | the rest, unverified | see 2.48's list, each with its ticket | - |
 | 114 | `time_bucket` returns timestamps only | [SPARK-54507](https://issues.apache.org/jira/browse/SPARK-54507) | `time_trunc`'s kernel with a literal width |
 | 115 | no `time_format` | [SPARK-54588](https://issues.apache.org/jira/browse/SPARK-54588) | none - a string |
+| 163 | The emitted three-field int kernel trails its hand-written twin by 10% to 20% while cache-resident (section 2.99). **Scoped** (21 September 2026) from `PLAN_TASK_102.md` 8.8: the same multiplies and shifts, the single fields within 5%, the three-field shape 18% and 20% under in L3 at 512 and 256 bits and within 3% past L3 | Both kernels' assembly at 512 bits with `dev/varka_emit.sh --asm`: the loads, the three stores and the liveness around three roots against the hand-written loop, and the cost named or closed in the emitter | The emitted three-field bounded arm within 5% of the hand-written one in L3 at 512 and 256 bits in `VarkaTimeBenchmark`'s files, or the cause written in the plan and the skills file |
 
 Present and confirmed, so not gaps: `extract`, every cast, CSV, JSON, Parquet,
 ORC, JDBC and Avro, `to_char` ([SPARK-57575](https://issues.apache.org/jira/browse/SPARK-57575)), Hive interop

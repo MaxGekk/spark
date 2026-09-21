@@ -716,6 +716,40 @@ magic can become a node of. The prediction for that regeneration: the emitted
 bounded arm reads within 5% of the hand-written arm on every shape at every
 width, since the two are the same multiply and shift with the emitter's loads
 and stores around them; and the double-route int arm stays where it is.
+### 8.8 `BoundedDivide` measured, 21 September 2026
+
+The regeneration 8.7 asked for, at 512, 256 and 128 bits. The emitted bounded
+arm against its hand-written twin, in M rows/s:
+
+| width | rows | shape | emitted bounded | hand-written |
+|---|---|---|---|---|
+| 512 | 262144 | `hour` | 18531.3 | 17774.9 |
+| 512 | 262144 | `second` | 16130.9 | 16666.3 |
+| 512 | 262144 | three fields | 7852.6 | 9602.0 |
+| 512 | 8388608 | three fields | 1938.4 | 1990.9 |
+| 256 | 262144 | `hour` | 18675.2 | 18414.2 |
+| 256 | 262144 | three fields | 7595.1 | 9546.0 |
+| 128 | 262144 | `hour` | 17213.5 | 17897.5 |
+| 128 | 262144 | three fields | 7725.3 | 7831.5 |
+| 128 | 8388608 | three fields | 2163.2 | 2222.5 |
+
+The first prediction, within 5% of the hand-written arm on every shape at every
+width, holds for `hour`, `minute` and `second` at every width and row count
+(the in-L2 rows at 512 bits sit at the edge, 5% to 6% under), and holds for the
+three-field shape at 128 bits and past L3 everywhere. It fails for the
+three-field shape while cache-resident at the two wide widths: 18% under the
+hand-written kernel in L3 at 512 bits, 20% at 256, and 8% to 10% in L2. The two
+kernels are the same multiplies and shifts, so the difference is in what the
+emitter puts around three roots - its loads, its three stores and its liveness
+- and it shows only where the stores are not the bottleneck. Milestone row 163
+takes it. The second prediction holds: the double-route int arm moved by at
+most 4% at any width, most rows under 2%.
+
+So the node is priced: where a bounded int division is available it is the
+hand-written rate for one field, and for three fields it is the hand-written
+rate past L3 and short of it in cache. Nothing in the compiler builds the node
+yet; that waits for the seconds-of-day column (route B or route C).
+
 ## 9. Group D, read: the decimal is a store, and there is a group E
 
 *20 September 2026, a reading pass; no code. Section 2.3 said the two decimal
