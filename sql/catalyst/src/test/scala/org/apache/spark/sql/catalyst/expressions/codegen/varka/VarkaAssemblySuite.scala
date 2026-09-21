@@ -638,16 +638,24 @@ class VarkaAssemblySuite extends SparkFunSuite {
    * assertions stay hard. Row 165 is the investigation of why, from the JVM's own output.
    */
   private lazy val narrowSpeciesRefusal: Option[String] = {
-    val run = runProbe("gatherLookup", s"$probeClass::gatherLookup", Seq("-XX:MaxVectorSize=16"))
+    // -XX:+PrintIntrinsics makes C2 say why it refused an intrinsic, one `**` line per refusal
+    // (the width census reads the same lines), so a refusing machine names its reason in the
+    // cancel message and task 165 starts from the JVM's own words rather than a guess.
+    val run = runProbe("gatherLookup", s"$probeClass::gatherLookup",
+      Seq("-XX:MaxVectorSize=16", "-XX:+PrintIntrinsics"))
     requireHealthyChild(run)
     requireDisassembler(run)
     val nmethod = standardC2(run, "VarkaAssemblyProbe::gatherLookup")
     if (countIn(nmethod, packedGather, Some(registerClass(run.preferredBits))) > 0) {
       None
     } else {
+      val refusals = run.output.linesIterator.map(_.trim).filter(_.startsWith("** "))
+        .toSeq.distinct.take(12)
+      val why = if (refusals.isEmpty) "C2 printed no intrinsic refusal for it"
+        else "C2's own refusals:\n  " + refusals.mkString("\n  ")
       Some(s"on this machine ($host) C2 compiles the probe's own gather at a forced 128-bit " +
         s"species to a scalar body of ${nmethod.insns.size} instructions, so the 128-bit " +
-        "assertions are not evidence here; the default-width ones still run. " +
+        s"assertions are not evidence here; the default-width ones still run. $why. " +
         "PLAN_TASK_150.md section 6 records the finding, milestone row 165 investigates it.")
     }
   }
