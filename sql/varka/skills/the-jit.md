@@ -143,6 +143,32 @@ these files by `dev/varka_toc.py`.
   in a test, so the next wide node moves a number instead of quietly falling off.
   Task 32 step B1's ladder is in `PLAN_TASK_32.md` section 7.1.
 
+## A forked probe's warm-up count buys a compile request, not a compile
+
+The assembly suite's child (`VarkaAssemblyProbe`) calls a method 200000 times so that C2
+compiles it, then measures and prints. The count is far past `Tier4InvocationThreshold`, and
+it was still not enough: on GitHub's four-core runners the gate failed one run in three with
+a C1 body for the hand-written kernel (`saw c1`) and scalar C2 bodies for the 128-bit cases,
+byte-identical from run to run, while the same commit passed on a re-run. The laptop
+reproduces the four failures when sbt and its children are pinned to two cores that busy
+loops already occupy (task 150).
+
+Background compilation is the reason. Crossing the threshold queues a compile; the calls keep
+running in the interpreter or in C1 while the compiler thread waits for a core, and on a
+starved machine the calls run out first. A C2 body that does arrive early, before the vector
+classes the intrinsics need were loaded, is the Java fallback: scalar, and boxing when
+inlined, which is what the identical instruction counts were.
+
+`-Xbatch` on the child makes the compile happen on the calling thread, so the crossing call
+returns with the nmethod installed and a count-based warm-up means what it says. Under the
+same starvation the suite goes from four failures to none. The flag is already what
+`PLAN_TASK_153.md`'s width probe runs under, for the related reason that a synchronous
+compile is one whose diagnostics attribute to the method that asked for it.
+
+The general rule for any harness that forks a JVM and reads what C2 did: either compile
+synchronously, or wait for evidence of the compile (a `PrintCompilation` line for the
+method, a WhiteBox query), and never infer it from an iteration count, however generous.
+
 ## Watching what C2 compiled, at runtime, with no flags
 
 JFR's `jdk.Compilation` event carries `method`, `compileLevel`, `isOsr` and `codeSize`, and

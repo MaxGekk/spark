@@ -19,9 +19,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.io.{BufferedReader, File, InputStreamReader}
 import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Paths}
 import java.util.concurrent.TimeUnit
 
 import scala.collection.mutable.ArrayBuffer
+import scala.jdk.CollectionConverters._
+import scala.util.Try
 import scala.util.matching.Regex
 
 import org.apache.spark.SparkFunSuite
@@ -140,6 +143,18 @@ class VarkaAssemblySuite extends SparkFunSuite {
 
   private lazy val arch: String = System.getProperty("os.arch")
 
+  /**
+   * The machine a failure is read against: the CPU model and the processors the JVM sees. A
+   * runner is one draw from a pool of CPU families and neighbours (task 150), so a message that
+   * does not say which machine it came from cannot be compared with the next one.
+   */
+  private lazy val host: String = {
+    val model = Try(Files.readAllLines(Paths.get("/proc/cpuinfo")).asScala
+      .find(_.startsWith("model name")).map(_.dropWhile(_ != ':').drop(1).trim))
+      .toOption.flatten.getOrElse("unknown CPU")
+    s"$model, ${Runtime.getRuntime.availableProcessors} processors"
+  }
+
   private lazy val hsdis: Hsdis = {
     val libName = s"hsdis-$arch.so"
     val candidates: Seq[File] =
@@ -207,6 +222,13 @@ class VarkaAssemblySuite extends SparkFunSuite {
     // which is a restricted method: without this the child prints a warning per call site.
     command.add("--enable-native-access=ALL-UNNAMED")
     command.add("-XX:+UnlockDiagnosticVMOptions")
+    // The probe warms a method by calling it a fixed number of times, and that count buys a
+    // compile request, not a compile: with background compilation the calls can run out before
+    // the compiler thread gets a core, and the parent then reads a C1 body, or a C2 body compiled
+    // early enough to be the Vector API's scalar fallback. That is what the gate's failures on
+    // contended runners were (task 150), and pinning sbt to two busy cores reproduces them. With
+    // -Xbatch the crossing call returns with the nmethod installed, on any machine.
+    command.add("-Xbatch")
     command.add(s"-XX:CompileCommand=print,$printPattern")
     extraFlags.foreach(command.add)
     command.add("-cp")
@@ -340,7 +362,8 @@ class VarkaAssemblySuite extends SparkFunSuite {
           .mkString(", ")}")
     forMethod.find(n => n.tier == "c2" && !n.osr).getOrElse {
       fail(s"no standard (non-OSR) C2 nmethod for $method; saw " +
-        forMethod.map(n => s"${n.tier}${if (n.osr) "-osr" else ""}").mkString(", "))
+        forMethod.map(n => s"${n.tier}${if (n.osr) "-osr" else ""}").mkString(", ") +
+        s" (host: $host)")
     }
   }
 
@@ -366,7 +389,7 @@ class VarkaAssemblySuite extends SparkFunSuite {
       fail(s"${nmethod.method}: expected at least one ${family.description} on a %$regClass " +
         s"register and found none, in ${nmethod.insns.size} instructions " +
         s"(${scalar} ${scalarIntAdd.description}). The intrinsic did not fire, or this body " +
-        s"came out scalar.")
+        s"came out scalar (host: $host).")
     }
   }
 
@@ -419,7 +442,8 @@ class VarkaAssemblySuite extends SparkFunSuite {
         "species of the same lane type having been through the shared templates in this JVM; " +
         "run the child with -XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining and look for " +
         "'callee changed to' lines naming a second species class (SKILLS.md, 'Every operator " +
-        "the plans rely on').")
+        "the plans rely on')." +
+        s" (host: $host)")
   }
 
   /** The self-test's positive half: the measurement sees the box where one is known to be. */

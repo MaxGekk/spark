@@ -1280,6 +1280,11 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y libcapstone-dev
     - name: Build hsdis
       run: ./dev/varka_hsdis_build.sh --out "$HOME/hsdis"
+    # The runner is a lottery over CPU families, and a failure below is read against the
+    # machine it ran on (task 150): the model, its vector flags, the JVM's UseAVX and
+    # MaxVectorSize, and the datapath readings, the same report the surface benchmark makes.
+    - name: Report the machine
+      run: ./dev/varka_datapath.sh --require any
     - name: Assert the instructions
       env:
         VARKA_HSDIS_REQUIRED: "true"
