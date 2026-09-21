@@ -26,7 +26,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeRef
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{ByteType, DataType, DateType, IntegerType, ShortType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * The emitter's debugging view, one command: what a projection compiles to, what the emitter
@@ -122,21 +122,25 @@ object VarkaEmitDump {
     fused.outputs.zipWithIndex.foreach { case (o, k) =>
       report(s"output $k IR: ${VarkaVectorIR.canonical(o)}")
     }
+    // The literal count is both arrays': a long-lane shape keeps its literals in longArgs.
     val key = new VarkaShapeKey(fused.outputs.asJava, fused.inputOrdinals.size,
-      fused.literals.size, options)
+      fused.numLiterals, options)
     report(s"shape hash: ${VarkaShapeCacheImpl.shapeHash(key)}  options: " +
       (if (options.isDefault) "(defaults)" else options.canonical()))
 
     val bytes = VarkaLoopEmitter.emit(className, fused.outputs.asJava, fused.inputOrdinals.size,
-      fused.literals.size, null, null, options)
+      fused.numLiterals, null, null, options)
     report("")
-    report(f"${"method"}%-18s ${"bytes"}%6s ${"IntVector"}%9s ${"DoubleVector"}%12s " +
-      f"${"convert"}%7s ${"VectorMask"}%10s ${"validity"}%8s ${"lines"}%5s")
+    report(f"${"method"}%-18s ${"bytes"}%6s ${"IntVector"}%9s ${"LongVector"}%10s " +
+      f"${"DoubleVector"}%12s ${"convert"}%7s ${"VectorMask"}%10s ${"validity"}%8s ${"lines"}%5s")
     val methods = VarkaEmitterTestSupport.methodNames(bytes).asScala.filter(_ != "<init>").sorted
     methods.foreach { m =>
       val size = VarkaEmitterTestSupport.codeSize(bytes, m)
       val vectorOps =
         VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.IntVector")
+      // The long lane (task 85), read beside the int one so a 64-bit body's own ops show.
+      val longOps =
+        VarkaEmitterTestSupport.invocationCount(bytes, m, "jdk.incubator.vector.LongVector")
       // The double lane, which a `division` setting other than MAGIC moves work onto: without
       // these two columns the IntVector count alone reports such a body as cheaper than it is,
       // which is the one reading this table must never give.
@@ -153,7 +157,7 @@ object VarkaEmitDump {
       val validityOps = VarkaEmitterTestSupport.invocationCount(
         bytes, m, "org.apache.spark.sql.varka.vector.VarkaVectorSupport", Seq("ofAddress").asJava)
       val lines = VarkaEmitterTestSupport.lineNumbers(bytes, m).size
-      report(f"$m%-18s $size%6d $vectorOps%9d $doubleOps%12d $convertOps%7d " +
+      report(f"$m%-18s $size%6d $vectorOps%9d $longOps%10d $doubleOps%12d $convertOps%7d " +
         f"$maskOps%10d $validityOps%8d $lines%5d")
     }
     VarkaDebugInfo.read(bytes).ifPresent { info =>
@@ -163,8 +167,7 @@ object VarkaEmitDump {
     }
 
     if (rounds > 0) {
-      runHot(bytes, fused.inputOrdinals.size, fused.outputs.size, fused.literals.toArray,
-        fused.inputOrdinals.map(childOutput), rounds, nulls)
+      runHot(bytes, fused, fused.inputOrdinals.map(childOutput), rounds, nulls)
     }
   }
 
@@ -226,6 +229,12 @@ object VarkaEmitDump {
       case "ymm" | "interval month" => YearMonthIntervalType(YearMonthIntervalType.MONTH)
       case "ymy" | "interval year" => YearMonthIntervalType(YearMonthIntervalType.YEAR)
       case "ym" | "interval year to month" => YearMonthIntervalType()
+      // The long lane's three types (task 29): one 64-bit column each.
+      case "bigint" | "long" => LongType
+      case "time" => TimeType(TimeType.MICROS_PRECISION)
+      case t if t.startsWith("time(") && t.endsWith(")") =>
+        TimeType(t.stripPrefix("time(").stripSuffix(")").trim.toInt)
+      case "dt" | "interval day to second" => DayTimeIntervalType()
       case other => throw new IllegalArgumentException(s"unsupported column type $other")
     }
     AttributeReference(name.trim, dt)()
@@ -281,23 +290,32 @@ object VarkaEmitDump {
     }
   }
 
-  /** Load the class and run it `rounds` times over synthetic int32 columns, so a
-   *  `-XX:CompileCommand=print` on the loop method has something to print. `outputs` is the
-   *  kernel's output count, passed in rather than inferred from its loop methods: since task
-   *  32 step B2 one loop method can hold several outputs, and a destination array sized by
-   *  method count made the kernel index past it.
+  /** Load the class and run it `rounds` times over synthetic columns of the kernel's lane, so
+   *  a `-XX:CompileCommand=print` on the loop method has something to print. The output count
+   *  is the projection's, not inferred from the loop methods: since task 32 step B2 one loop
+   *  method can hold several outputs, and a destination array sized by method count made the
+   *  kernel index past it. A long-lane kernel takes 64-bit inputs holding nanoseconds of day,
+   *  which is inside every `TIME` guard and every division bound, and each output buffer has
+   *  the width of its Spark type - four bytes for a narrowed int, eight otherwise - so the
+   *  narrowing store of task 102 is driven as the evaluator drives it.
    *
    *  `nulls` is how many rows of each input are null. Zero - the default - reports a null-free
    *  batch, which the emitted `run` dispatches to the dense driver, so only the dense methods
    *  are ever compiled; any positive count takes the masked path instead. Without it a
    *  `--rounds` probe cannot see the masked body at all, which is what a
    *  `-XX:+PrintCompilation` run of the task 70 review needed. */
-  private def runHot(bytes: Array[Byte], numInputs: Int, outputs: Int, literals: Array[Int],
+  private def runHot(bytes: Array[Byte],
+      fused: org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection,
       inputs: Seq[Attribute], rounds: Int, nulls: Int): Unit = {
     if (inputs.exists(a => a.dataType == ShortType || a.dataType == ByteType)) {
       report("(--rounds skipped: synthetic data is int32 only, and a short or byte column is read)")
       return
     }
+    val numInputs = fused.inputOrdinals.size
+    val outputs = fused.outputs.size
+    val literals = fused.literals.toArray
+    val long = fused.lane == VarkaVectorIR.LaneType.LONG
+    val inputBytes = if (long) 8L else 4L
     val rows = 1024
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
     loader.defineGeneratedClass(className, bytes)
@@ -306,8 +324,13 @@ object VarkaEmitDump {
     val arena = Arena.ofConfined()
     try {
       def buffer(bytesLen: Long): MemorySegment = arena.allocate(bytesLen, 64)
-      val src = Array.fill(numInputs)(buffer(rows * 4L))
-      src.foreach(s => (0 until rows).foreach(r => s.set(ValueLayout.JAVA_INT, r * 4L, 18000 + r)))
+      val src = Array.fill(numInputs)(buffer(rows * inputBytes))
+      src.foreach { s =>
+        (0 until rows).foreach { r =>
+          if (long) s.set(ValueLayout.JAVA_LONG, r * 8L, (r * 1000003L * 977L) % 86400000000000L)
+          else s.set(ValueLayout.JAVA_INT, r * 4L, 18000 + r)
+        }
+      }
       val validity = buffer((rows + 7) / 8L)
       validity.fill(0xFF.toByte)
       // Every `stride`-th row null, spread over the batch so both a full lane group and the
@@ -324,12 +347,20 @@ object VarkaEmitDump {
           r += stride
         }
       }
-      val dst = Array.fill(outputs)(buffer(rows * 4L).address())
+      val dst = fused.outputTypes.map { t =>
+        buffer(rows * (if (t.defaultSize >= 8) 8L else 4L)).address()
+      }.toArray
       val dstValidity = Array.fill(outputs)(buffer((rows + 7) / 8L).address())
+      val longArgs = fused.longLiterals.toArray
       var status = 0
       for (_ <- 0 until rounds) {
-        status |= kernel.run(src.map(_.address()), Array.fill(numInputs)(validity.address()),
-          Array.fill(numInputs)(nulls), dst, dstValidity, literals, rows)
+        status |= (if (long) {
+          kernel.run(src.map(_.address()), Array.fill(numInputs)(validity.address()),
+            Array.fill(numInputs)(nulls), dst, dstValidity, literals, longArgs, rows)
+        } else {
+          kernel.run(src.map(_.address()), Array.fill(numInputs)(validity.address()),
+            Array.fill(numInputs)(nulls), dst, dstValidity, literals, rows)
+        })
       }
       report(s"ran $rounds rounds of $rows rows, $nulls null per input; status $status")
     } finally {
