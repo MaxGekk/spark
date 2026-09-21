@@ -37,6 +37,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Gua
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
@@ -200,6 +201,9 @@ public final class VarkaRangeAnalysis {
       // correct, and it hands one on where it had one.
       case ConstDivide n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN
           : range(n.child(), Kind.INT, policy, literals).divideBy(n.divisor());
+      // The bound is the node's contract, so the quotient's range follows from it alone.
+      case BoundedDivide n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN
+          : VarkaValueRange.of(0, (n.bound() - 1) / n.divisor());
       // A condition has no value of its own.
       case Cond c -> VarkaValueRange.UNKNOWN;
     };

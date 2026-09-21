@@ -439,8 +439,9 @@ class VarkaCoverageSuite extends SparkFunSuite {
   /**
    * The width audit's census (`sql/varka/width_audit.json`, task 153), read for one column of
    * the table: whether C2 lowers every Vector API call of the row's kernel at 128-bit lanes -
-   * the species a NEON-only aarch64 host runs at, and the one where this JVM has no lowering
-   * for a masked 64-bit operation. Absent when the census has not been taken.
+   * the species a NEON-only aarch64 host runs at. The refusals it records are this x86 JVM's at
+   * a forced 128-bit species; the aarch64 runner's own census refuses nothing there
+   * (`PLAN_TASK_153.md` 6). Absent when the census has not been taken.
    */
   private lazy val widthAudit: Option[(String, Map[String, Seq[String]])] = {
     val file = getWorkspaceFilePath("sql", "varka", "width_audit.json").toFile
@@ -459,10 +460,11 @@ class VarkaCoverageSuite extends SparkFunSuite {
   }
 
   /**
-   * The column's cell for one row, from what C2 printed for the row's kernel at 128 bits. Only
-   * a `not supported` line is a refusal, and it names its construction; C2's other two kinds
-   * of line (`VarkaWidthAuditSuite.isRefusal`) prove nothing about the final code, stay in the
-   * census file, and do not reach the table.
+   * The column's cell for one row, from what C2 printed for the row's kernel at 128 bits. A
+   * `not supported` line is a refusal, and it names its construction; the census file carries
+   * those lines alone, since C2's other two kinds prove nothing about the final code and vary
+   * between runs (`VarkaWidthAuditSuite.isRefusal`, task 154). The filter here is kept so a
+   * census written before that change still renders the same column.
    */
   private def narrowVerdict(sql: String): String = widthAudit match {
     case None => "not audited"
@@ -491,9 +493,11 @@ class VarkaCoverageSuite extends SparkFunSuite {
     val sb = new StringBuilder
     widthAudit.foreach { case (host, _) =>
       sb.append("The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on " +
-        s"$host: `vector` means C2 refused no Vector API call in the row's kernel at a " +
-        "128-bit species; `per-lane` names the constructions it had no lowering for, which " +
-        "then run as Java loops over the lanes (task 153).\n\n")
+        s"$host at a forced 128-bit species: `vector` means C2 refused no Vector API call in " +
+        "the row's kernel there; `per-lane` names the constructions it had no lowering for, " +
+        "which then run as Java loops over the lanes (task 153). It is this x86 JVM's table " +
+        "below its own width: the pool's aarch64 runner, whose native species is 128 bits, " +
+        "refuses nothing (`PLAN_TASK_153.md` 6).\n\n")
     }
     families.foreach { family =>
       sb.append(s"#### ${family.title}\n\n")

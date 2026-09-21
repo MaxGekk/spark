@@ -56,6 +56,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Gua
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
@@ -1551,6 +1552,7 @@ public final class VarkaLoopEmitter {
       case IntArith n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IntNeg n -> new VarkaVectorIR[] {n.child()};
       case ConstDivide n -> new VarkaVectorIR[] {n.child()};
+      case BoundedDivide n -> new VarkaVectorIR[] {n.child()};
     };
   }
 
@@ -2124,6 +2126,7 @@ public final class VarkaLoopEmitter {
             : andOwner(node, n.left(), n.right());
         case IntNeg n -> wordOwner.get(n.child());
         case ConstDivide n -> wordOwner.get(n.child());
+        case BoundedDivide n -> wordOwner.get(n.child());
         case DayOfWeek n -> wordOwner.get(n.days());
         case WeekDay n -> wordOwner.get(n.days());
         case DayOfWeekIso n -> wordOwner.get(n.days());
@@ -2176,6 +2179,7 @@ public final class VarkaLoopEmitter {
             : andExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case IntNeg n -> pureWord.get(n.child());
         case ConstDivide n -> pureWord.get(n.child());
+        case BoundedDivide n -> pureWord.get(n.child());
         case Greatest n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case Least n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
         case DayOfWeek n -> pureWord.get(n.days());
@@ -2370,6 +2374,9 @@ public final class VarkaLoopEmitter {
           }
           analyzeOp(node, false, n.child());
         }
+        // The bounded division: exact by its constructor over the bound the caller proved,
+        // and like the constant division it neither overflows nor nulls a lane.
+        case BoundedDivide n -> analyzeOp(node, false, n.child());
         case ConstDivide n -> {
           // A division by a non-zero constant cannot overflow or null a lane, so it carries no
           // overflow mode and joins no validity: it is its child's word exactly, the way
@@ -2981,6 +2988,7 @@ public final class VarkaLoopEmitter {
           : andRef(s.wordRef.get(n.left()), s.wordRef.get(n.right()));
       case IntNeg n -> s.wordRef.get(n.child());
       case ConstDivide n -> s.wordRef.get(n.child());
+      case BoundedDivide n -> s.wordRef.get(n.child());
       // Greatest/Least (OR) and IfElse (blend) always compute their own word.
       default -> Integer.MIN_VALUE;
     };
@@ -3233,6 +3241,7 @@ public final class VarkaLoopEmitter {
         }
         case IntNeg x -> { }
         case ConstDivide x -> { }
+        case BoundedDivide x -> { }
         case IfElse x -> { }
         case And x -> { }
         case Or x -> { }
@@ -3297,6 +3306,7 @@ public final class VarkaLoopEmitter {
         // child does. Written out rather than defaulted, per this switch's own rule.
         case IntNeg x -> { }
         case ConstDivide x -> { }
+        case BoundedDivide x -> { }
         case Compare x -> { }
         case And x -> { }
         case Or x -> { }
@@ -3795,6 +3805,37 @@ public final class VarkaLoopEmitter {
    * nothing that scalarises.
    */
   private static void emitNarrowStore(CodeBuilder cb, Analysis analysis, Slots s, int o) {
+    // The half-species form (`narrowHalfSpecies`): the int species with the long lane's own
+    // count, half the bits, so the converted vector is exactly the group's values and the
+    // dense body stores it whole. Only where the count is baked, since the half of the
+    // preferred species has no named constant.
+    boolean half = analysis.options.narrowHalfSpecies() && analysis.lanes != 0;
+    if (half) {
+      String halfSpecies = Lane.INT.speciesField(analysis.lanes);
+      cb.getstatic(VECTOR_OPERATORS, "L2I", VO_CONVERSION);
+      cb.getstatic(INT_VECTOR, halfSpecies, VECTOR_SPECIES);
+      cb.loadConstant(0);
+      cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+      cb.checkcast(INT_VECTOR);
+      cb.aload(s.dstSeg[o]);
+      cb.iload(s.iVar);
+      cb.i2l();
+      cb.loadConstant(4L);
+      cb.lmul();
+      cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
+      // Whole in a loop body, under the remainder mask in an epilogue - the same split as the
+      // wide store's, and in either null mode: `dense` names the validity path, not the body.
+      if (s.epilogueMask == null) {
+        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", Lane.INT.intoMemorySegmentDense);
+      } else {
+        cb.getstatic(INT_VECTOR, halfSpecies, VECTOR_SPECIES);
+        cb.loadConstant(0);
+        cb.iload(s.lanes);
+        cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
+        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", Lane.INT.intoMemorySegmentMasked);
+      }
+      return;
+    }
     // The int species of the long species' width: twice the long lane count, or the preferred
     // species where no count is baked, which the long lane's preferred species matches in bits.
     String intSpecies = Lane.INT.speciesField(analysis.lanes == 0 ? 0 : analysis.lanes * 2);
@@ -3804,9 +3845,15 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
     cb.checkcast(INT_VECTOR);                                   // [ints, low half live]
     cb.aload(s.dstSeg[o]);
-    cb.lload(s.byteOffset);
-    cb.loadConstant(1);
-    cb.lushr();                                                 // i * 4
+    // The int column's offset is derived from the row index the way the lane's own offset
+    // is, `(long) i * 4`, and not as `byteOffset >>> 1`: C2 folds a linear function of the
+    // induction variable into the store's addressing mode and hoists its bounds check out of
+    // the loop, and a shift of the wide offset is neither - it cost four scalar ops, a range
+    // check and the loop's unrolling per group (`PLAN_TASK_156.md`).
+    cb.iload(s.iVar);
+    cb.i2l();
+    cb.loadConstant(4L);
+    cb.lmul();                                                  // i * 4
     cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
     cb.getstatic(INT_VECTOR, intSpecies, VECTOR_SPECIES);
     cb.loadConstant(0);
@@ -4294,6 +4341,16 @@ public final class VarkaLoopEmitter {
       case IntArith n -> emitIntArith(cb, n, dense, analysis, s, computed);
       case IntNeg n -> emitIntNeg(cb, n, dense, analysis, s, computed);
       case ConstDivide n -> emitConstDivide(cb, n, dense, analysis, s, computed);
+      case BoundedDivide n -> {
+        // `(x * M) >>> k`: the product is under 2^32 for every dividend under the bound, so
+        // the int multiply's wrap is the unsigned product the logical shift reads, and the
+        // constructor proved the quotient exact there. Two lane operations, no correction.
+        emitValue(cb, n.child(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        cb.loadConstant(n.multiplier());
+        cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
+        emitShift(cb, "LSHR", n.shift());
+      }
       case DateDiff n -> {
         analysis.lane.requireInt(n);
         emitAndValidatedOp(cb, node, n.end(), n.start(), "sub", LANEWISE_VV,

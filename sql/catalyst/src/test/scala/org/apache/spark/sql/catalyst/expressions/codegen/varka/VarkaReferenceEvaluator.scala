@@ -161,6 +161,9 @@ object VarkaReferenceEvaluator {
       // constructor makes safe: an int-lane division whose divisor does not fit in an int is
       // refused where it is built.
       evalValue(n.child(), row, lits).map(_ / n.divisor().toInt)
+    // The definition, a true division: the kernel's single multiply must agree with it over
+    // the bound, and a dividend outside the bound is one the suites never hand the kernel.
+    case n: BoundedDivide => evalValue(n.child(), row, lits).map(_ / n.divisor())
     case n: MakeDate =>
       // The definition: LocalDate.of, null (None) where the calendar rejects the triple - never
       // the length rule the emitter computes. The year limit is the kernel's business, not the
@@ -235,6 +238,8 @@ object VarkaReferenceEvaluator {
     case n: ConstDivide =>
       evalLong(n.child(), row, lits).map(_ / n.divisor())
     case n: GuardedRange => evalLong(n.child(), row, lits)
+    case n: BoundedDivide =>
+      throw new IllegalArgumentException("a bounded division is an int-lane node: " + n)
     // The narrowing is the kernel's store, not a value change: the reference answers the child
     // in full and the suite narrows it the way the store does, so a value that does not fit an
     // int would show as a difference rather than be truncated on both sides.

@@ -185,10 +185,16 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
    * at 128 bits and the committed 128-bit results show it fully vectorised. `unbox failed`
    * says a vector value reached the call as a heap object, which is task 55's boxing; here it
    * appears only once other kernels have been through the shared templates in the same JVM.
-   * The census records all three verbatim; the invariant below rests on the first alone, and
-   * the coverage table's column names the other two as unconfirmed rather than as vector.
+   * The invariant below and the committed census both rest on the first alone: the other two
+   * depend on when C2 got to a method in the forked JVM, and the first regenerations after
+   * task 153 saw them appear and vanish on shapes nothing had touched, so a file that carried
+   * them failed on a quiet tree and blessed whichever timing a regeneration had (task 154).
    */
   private def isRefusal(line: String): Boolean = line.startsWith("not supported")
+
+  /** A census's verdict lines per shape: what the file pins and what two runs must agree on. */
+  private def verdicts(census: Census): Map[String, Seq[String]] =
+    census.refusals.map { case (name, lines) => name -> lines.filter(isRefusal) }
 
   /**
    * The one refusal a host class is known to have at its own width, and the emitter already
@@ -229,7 +235,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
       map
     }
     val widths = byWidth.map { case (bits, census) =>
-      bits.toString -> ordered(census.refusals.toSeq.sortBy(_._1).map { case (name, ops) =>
+      bits.toString -> ordered(verdicts(census).toSeq.sortBy(_._1).map { case (name, ops) =>
         name -> ops.asJava
       }: _*)
     }
@@ -237,14 +243,15 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
       "generated_by" -> ("VarkaWidthAuditSuite; regenerate on the host named below with " +
         "VARKA_AUDIT_REGEN=true build/sbt 'catalyst/testOnly *VarkaWidthAuditSuite'"),
       "description" -> ("For every audited shape and every vector width this host can run, " +
-        "the lines C2 printed under PrintIntrinsics for the shape's Vector API calls, taken " +
-        "in one JVM per width with the shapes run in this order. A 'not supported' line is a " +
-        "refusal: that operation runs as a per-lane Java loop at that width. A 'missing " +
-        "constant' line is a first late-inline attempt that C2 may retry, and an 'unbox " +
-        "failed' line is a vector reaching the call as a heap object once the shared " +
-        "templates have seen other kernels; neither is a verdict on its own. An empty list is " +
-        "a shape C2 said nothing about. The census is a property of the CPU and the JDK, so " +
-        "the host is part of the record."),
+        "the 'not supported' lines C2 printed under PrintIntrinsics for the shape's Vector " +
+        "API calls, taken in one JVM per width with the shapes run in this order. Each is a " +
+        "refusal: that operation runs as a per-lane Java loop at that width. The two other " +
+        "kinds of line C2 prints - 'missing constant', a first late-inline attempt it may " +
+        "retry, and 'unbox failed', a vector reaching a call as a heap object once the shared " +
+        "templates have seen other kernels - are not verdicts and are not recorded: they " +
+        "depend on JIT timing in the probe and moved between runs of an unchanged tree. An " +
+        "empty list is a shape C2 refused nothing in. The census is a property of the CPU " +
+        "and the JDK, so the host is part of the record."),
       "host" -> ordered(
         "cpu" -> cpuModel,
         "arch" -> System.getProperty("os.arch"),
@@ -253,6 +260,18 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
         "use_avx" -> atPreferred.useAVX),
       "widths" -> ordered(widths: _*))
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"
+  }
+
+  test("two censuses of one width agree on their verdicts, whatever else C2 printed") {
+    // The property the committed file rests on: a refusal is architectural and prints on
+    // every run, where the other two kinds are timing and may not. A second probe at the
+    // preferred width has to give the same verdict lines per shape as the first; the raw
+    // line sets are allowed to differ, which is exactly why the file does not carry them.
+    val again = audit(None)
+    assert(again.preferredBits === atPreferred.preferredBits)
+    assert(verdicts(again) === verdicts(atPreferred),
+      "the verdict lines of two probes at one width differ, so the census is not a property " +
+        "of the machine and the JDK alone")
   }
 
   test("sql/varka/width_audit.json is this host's census, per width") {

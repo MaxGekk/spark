@@ -43,18 +43,24 @@ import org.apache.spark.sql.catalyst.util.DateTimeConstants._
  * 8.3). In the split form the same extracts are divisions of a number under 86400 by 3600 and
  * 60, in 32-bit lanes, twice as many to a register and half the bytes to read.
  *
- * Six arms per shape, adjacent, on the same rows:
+ * Eight arms per shape, adjacent, on the same rows:
  *
  *  - **nanoseconds of day, int64 lanes, conversion form** - the shipped lowering on this
  *    machine, `ConstDivide` through `L2D`, `vdivpd`, `D2L`, stored wide;
  *  - **nanoseconds of day, int64 lanes, conversion form, narrowed store** - the same tree
  *    under a `NarrowLane` root, which is what `hour(t)` compiles to: the quotient narrowed with
  *    `L2I` and stored at four bytes a row under an int mask;
+ *  - **nanoseconds of day, int64 lanes, conversion form, narrowed store, half species** - the
+ *    same root stored through the int species of half the width, whole, which is the form
+ *    `PLAN_TASK_156.md` weighs against the masked one;
  *  - **nanoseconds of day, int64 lanes, magic form** - the same tree emitted with
  *    `useAVX = 2`, the lowering every AVX2-only host in the runner census takes;
  *  - **seconds of day, int32 lanes, emitted** - the split form's extracts as the emitter
  *    lowers an int-lane `ConstDivide`: the multiply-high through 64-bit lanes since task 149,
  *    with the double route it replaced beside it as the reference arm;
+ *  - **seconds of day, int32 lanes, emitted bounded multiply** - the same extracts as the
+ *    emitter's `BoundedDivide` lowers them, one multiply and one shift each, the emitted twin
+ *    of the hand-written arm below (`PLAN_TASK_102.md` 8.4);
  *  - **seconds of day, int32 lanes, hand-written magic multiply** - the split form as item 11
  *    imagines it: one multiply and one logical shift per division, exact over the bounded
  *    dividend, which is the lowering the calendar prefix uses and `ConstDivide` does not have.
@@ -149,6 +155,15 @@ object VarkaTimeBenchmark extends BenchmarkBase {
   /** The int lane's conversion through double lanes, the reference arm since task 149. */
   private val doubleRoute = VarkaEmitOptions.DEFAULTS.withMulHiDivide(false)
 
+  /**
+   * The narrowed store through the half-width int species (`PLAN_TASK_156.md`): honoured only
+   * at a baked lane count, so the count is the host's own, which at every width this file is
+   * regenerated at is what the shipped form emits for anyway.
+   */
+  private val halfSpecies = VarkaEmitOptions.DEFAULTS
+    .withLanesOverride(jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length())
+    .withNarrowHalfSpecies(true)
+
   /** The literal slots of the long form: nanoseconds per hour, per minute, per second. */
   private val NANOS_PER_HOUR = SECONDS_PER_HOUR * NANOS_PER_SECOND
   private val NANOS_PER_MINUTE = SECONDS_PER_MINUTE * NANOS_PER_SECOND
@@ -188,6 +203,24 @@ object VarkaTimeBenchmark extends BenchmarkBase {
     val hour = new ConstDivide(s, SECONDS_PER_HOUR)
     val afterHours = sub(s, mul(hour, lit(0)))
     val minute = new ConstDivide(afterHours, SECONDS_PER_MINUTE)
+    val second = sub(afterHours, mul(minute, lit(1)))
+    Map("hour" -> hour, "minute" -> minute, "second" -> second)
+  }
+
+  /**
+   * The split form's extracts as the emitter now lowers a division it can bound: `hour` from
+   * the seconds under 86400, `minute` from the seconds after the hours under 3600, each one
+   * multiply and one shift, with the same constants the hand-written arm searches for. The
+   * emitted twin of that arm (`PLAN_TASK_102.md` 8.4).
+   */
+  private def boundedIntFields: Map[String, VarkaVectorIR] = {
+    val s = new ColumnRef(0, LaneType.INT)
+    def lit(i: Int) = new LiteralSlot(i, LaneType.INT)
+    def sub(a: VarkaVectorIR, b: VarkaVectorIR) = new IntArith(IntOp.SUB, Overflow.WRAP, a, b)
+    def mul(a: VarkaVectorIR, b: VarkaVectorIR) = new IntArith(IntOp.MUL, Overflow.WRAP, a, b)
+    val hour = BoundedDivide.of(s, SECONDS_PER_HOUR.toInt, SECONDS_PER_DAY.toInt)
+    val afterHours = sub(s, mul(hour, lit(0)))
+    val minute = BoundedDivide.of(afterHours, SECONDS_PER_MINUTE.toInt, SECONDS_PER_HOUR.toInt)
     val second = sub(afterHours, mul(minute, lit(1)))
     Map("hour" -> hour, "minute" -> minute, "second" -> second)
   }
@@ -284,14 +317,20 @@ object VarkaTimeBenchmark extends BenchmarkBase {
       def kernelId(): Int = { val n = nextId; nextId += 1; n }
       val longK = longFields
       val intK = intFields
+      val boundedK = boundedIntFields
       val emitted = shapes.map { case (name, fields) =>
         val longRoots = fields.map(longK)
         val intRoots = fields.map(intK)
+        val boundedRoots = fields.map(boundedK)
         name -> Seq(
           ("nanoseconds of day, int64 lanes, conversion form (shipped)",
             emit(longRoots, 1, longLits.length, loader, kernelId()), LaneType.LONG, false),
           ("nanoseconds of day, int64 lanes, conversion form, narrowed store (shipped)",
             emit(longRoots.map(new NarrowLane(_)), 1, longLits.length, loader, kernelId()),
+            LaneType.LONG, true),
+          ("nanoseconds of day, int64 lanes, conversion form, narrowed store, half species",
+            emit(longRoots.map(new NarrowLane(_)), 1, longLits.length, loader, kernelId(),
+              halfSpecies),
             LaneType.LONG, true),
           ("nanoseconds of day, int64 lanes, magic form (the AVX2 lowering)",
             emit(longRoots, 1, longLits.length, loader, kernelId(), magicForm),
@@ -300,7 +339,9 @@ object VarkaTimeBenchmark extends BenchmarkBase {
             emit(intRoots, 1, intLits.length, loader, kernelId()), LaneType.INT, false),
           ("seconds of day, int32 lanes, emitted (the double route it replaced)",
             emit(intRoots, 1, intLits.length, loader, kernelId(), doubleRoute), LaneType.INT,
-            false))
+            false),
+          ("seconds of day, int32 lanes, emitted bounded multiply",
+            emit(boundedRoots, 1, intLits.length, loader, kernelId()), LaneType.INT, false))
       }
       val t = new ColumnRef(0, LaneType.LONG)
       val seconds = new ConstDivide(t, NANOS_PER_SECOND)

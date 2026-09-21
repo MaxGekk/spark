@@ -108,7 +108,9 @@ correctly and at the rate task 152 measured for the magic form. The
 conversion-form division and the plain long arithmetic vectorise. Whether the
 aarch64 JVM's matcher has the same table as this x86 one at `vlen=2` is not
 established here - the audit runs where catalyst's tests run, which is x86 -
-and section 5 says where that answer comes from.
+and section 5 says where that answer comes from. *It came on 20 September:
+section 6. The aarch64 matcher refuses nothing, so this paragraph describes the
+x86 JVM at a forced 128-bit species and not the fleet's aarch64 hosts.*
 
 **The audit's first CI run, on the runner pool: the 64-bit converts below
 AVX-512.** The invariant ran in #264's catalyst shard on an AMD EPYC 7763
@@ -169,11 +171,8 @@ belongs with task 55's lineage.
   benchmark; it does not make it. It belongs with the split form's guard
   (task 102 group C), which is the next long-lane kernel to be designed and
   the first that can be designed knowing this.
-* **The aarch64 answer.** The census is x86 at a forced width. The catalyst
-  tests do not run on the arm runner; the engine job does, without the
-  emitter. One dispatchable run of `VarkaWidthAuditSuite` on `ubuntu-24.04-arm`
-  with a catalyst build - task 121's runner question again - is what turns
-  "this JVM at two lanes" into "NEON".
+* **The aarch64 answer.** *Answered, section 6:* the census is x86 at a forced
+  width, and the arm runner's own census refuses nothing.
 * **Task 149's lead**, above, and **the pollution boxing** on three shipped
   shapes, which the assembly gate's allocation check could cover if its probe
   ran the shapes in sequence rather than one per JVM.
@@ -185,3 +184,54 @@ belongs with task 55's lineage.
 * **The census as a runner census.** The suite prints its table in the catalyst
   shard's log on every CI run, on whatever runner class the shard lands on, so
   the fork's logs accumulate the answer per machine class for free.
+
+## 6. The aarch64 answer, 20 September 2026
+
+`.github/workflows/varka-width-audit.yml` builds the catalyst test classes on
+each runner architecture the pool offers and regenerates the census there; the
+first run's `aarch64` job took it on a Neoverse N2 (`CPU part 0xd49`, GitHub's
+`ubuntu-24.04-arm`, `asimd sve sve2`, JDK 25.0.4, `MaxVectorSize=16`, so a
+128-bit species, `UseSVE=2`).
+
+**C2 refused nothing.** Across the hundred shapes - every coverage row and the
+fifteen constructions - the census at 128 bits holds no `not supported` line.
+Every long-lane selection, `CASE`, guard, checked add and masked operation that
+the x86 JVM runs as a per-lane Java loop at two 64-bit lanes is lowered by the
+aarch64 matcher at the same lane count. What the file does hold is 42
+`missing constant` lines and two `unbox failed`, C2's timing lines, which task
+154 removes from the census and which the workflow's summary at first counted
+as refusals; the corrected summary counts `not supported` alone.
+
+So section 3's fleet paragraph was the x86 matcher's table, not two-lane
+arithmetic: the refusal of masked 64-bit operations at `vlen=2` is a property of
+the x86 back end at a species below its own width, and the fleet's aarch64
+hosts, whose native species *is* 128 bits, run the long-lane guards vectorised.
+Three things follow.
+
+- The coverage table's *128-bit lanes* column is this laptop's census at a
+  forced width, which is what its caption now says; the column is right for an
+  x86 host at `-XX:MaxVectorSize=16` and wrong as a statement about NEON.
+- The mask-free forms or the decline that section 5 left to the next long-lane
+  kernel design are an x86-at-128-bits question, and 128 bits is not where x86
+  runs; the choice loses most of its urgency.
+- Task 156's half-species store exists to escape a masked store's bounds branch
+  at two lanes; on the host class that actually runs two 64-bit lanes the masked
+  operations are lowered, and whether the branch and the lost unrolling still
+  cost there is that task's measurement to take, not this census's to assume.
+
+**The x86 runner, for the comparison.** The same run's `x86_64` job landed on an
+AMD EPYC 7763 (Zen 3, `UseAVX=2`, `MaxVectorSize=32`, so a 256-bit species). At
+a forced 128-bit species it refuses what this laptop refuses: 32 of the hundred
+shapes, every one a long-lane mask construction at two lanes - compare to mask,
+blend, the validity word's casts, mask broadcast - and no int-lane one. At its
+own 256 bits it refuses only the 64-bit lane's `L2D` and `D2L`, in the six
+division shapes, which is #264's finding reproduced from the census rather than
+from the invariant's failure. So the two-lane table is the x86 back end's on Zen
+3 as on Zen 5, and it is not aarch64's.
+
+One qualification. The runner carries SVE2 and the JDK enables it
+(`UseSVE=2`); the matcher's masked lowerings at 128 bits may be SVE's predicate
+registers rather than NEON's, and a NEON-only host - Graviton2, Apple silicon
+under a JVM without SVE - has not been audited. The workflow asks the question
+of whatever arm runner the pool offers, and its answer names the part.
+
