@@ -419,34 +419,223 @@ public record VarkaEmitOptions(
     }
   }
 
-  /** {@link #DEFAULTS} with one field changed, for the suites and benchmarks that vary one. */
-  /** {@code DEFAULTS} with one field changed, for the suites and benchmarks that vary one. */
+  /**
+   * A copy of this value with any components changed: {@code toBuilder().cse(false).build()}.
+   * The builder holds one field per record component and nothing else; {@link Builder#build()}
+   * calls the canonical constructor, so its validation runs on every built value.
+   */
+  public Builder toBuilder() {
+    Builder b = new Builder();
+      b.groupBudget = groupBudget;
+      b.fusedCeiling = fusedCeiling;
+      b.cse = cse;
+      b.shareChronoPrefix = shareChronoPrefix;
+      b.denseValidityOnce = denseValidityOnce;
+      b.elideChronoMonth = elideChronoMonth;
+      b.neriSchneiderMonth = neriSchneiderMonth;
+      b.julianMap = julianMap;
+      b.guardDayProducers = guardDayProducers;
+      b.validityByWidth = validityByWidth;
+      b.validityOrFirst = validityOrFirst;
+      b.validityByBitmap = validityByBitmap;
+      b.checkIntOverflow = checkIntOverflow;
+      b.lanesOverride = lanesOverride;
+      b.truncDate = truncDate;
+      b.floorMod7 = floorMod7;
+      b.division = division;
+      b.useAVX = useAVX;
+      b.misdescribeAdd = misdescribeAdd;
+      b.misdescribeWordLiveness = misdescribeWordLiveness;
+      b.guardUnderArm = guardUnderArm;
+      b.shareWholeNodes = shareWholeNodes;
+      b.validityByWord = validityByWord;
+      b.mulHiDivide = mulHiDivide;
+      b.narrowHalfSpecies = narrowHalfSpecies;
+    return b;
+  }
+
+  /** One field per component of {@link VarkaEmitOptions}; see {@link #toBuilder()}. */
+  public static final class Builder {
+    private int groupBudget;
+    private int fusedCeiling;
+    private boolean cse;
+    private boolean shareChronoPrefix;
+    private boolean denseValidityOnce;
+    private boolean elideChronoMonth;
+    private boolean neriSchneiderMonth;
+    private boolean julianMap;
+    private boolean guardDayProducers;
+    private boolean validityByWidth;
+    private boolean validityOrFirst;
+    private boolean validityByBitmap;
+    private boolean checkIntOverflow;
+    private int lanesOverride;
+    private TruncDateForm truncDate;
+    private FloorMod7 floorMod7;
+    private Division division;
+    private int useAVX;
+    private boolean misdescribeAdd;
+    private boolean misdescribeWordLiveness;
+    private boolean guardUnderArm;
+    private boolean shareWholeNodes;
+    private boolean validityByWord;
+    private boolean mulHiDivide;
+    private boolean narrowHalfSpecies;
+
+    private Builder() {
+    }
+
+    public Builder groupBudget(int groupBudget) {
+      this.groupBudget = groupBudget;
+      return this;
+    }
+
+    public Builder fusedCeiling(int fusedCeiling) {
+      this.fusedCeiling = fusedCeiling;
+      return this;
+    }
+
+    public Builder cse(boolean cse) {
+      this.cse = cse;
+      return this;
+    }
+
+    public Builder shareChronoPrefix(boolean shareChronoPrefix) {
+      this.shareChronoPrefix = shareChronoPrefix;
+      return this;
+    }
+
+    public Builder denseValidityOnce(boolean denseValidityOnce) {
+      this.denseValidityOnce = denseValidityOnce;
+      return this;
+    }
+
+    public Builder elideChronoMonth(boolean elideChronoMonth) {
+      this.elideChronoMonth = elideChronoMonth;
+      return this;
+    }
+
+    public Builder neriSchneiderMonth(boolean neriSchneiderMonth) {
+      this.neriSchneiderMonth = neriSchneiderMonth;
+      return this;
+    }
+
+    public Builder julianMap(boolean julianMap) {
+      this.julianMap = julianMap;
+      return this;
+    }
+
+    public Builder guardDayProducers(boolean guardDayProducers) {
+      this.guardDayProducers = guardDayProducers;
+      return this;
+    }
+
+    public Builder validityByWidth(boolean validityByWidth) {
+      this.validityByWidth = validityByWidth;
+      return this;
+    }
+
+    public Builder validityOrFirst(boolean validityOrFirst) {
+      this.validityOrFirst = validityOrFirst;
+      return this;
+    }
+
+    public Builder validityByBitmap(boolean validityByBitmap) {
+      this.validityByBitmap = validityByBitmap;
+      return this;
+    }
+
+    public Builder checkIntOverflow(boolean checkIntOverflow) {
+      this.checkIntOverflow = checkIntOverflow;
+      return this;
+    }
+
+    public Builder lanesOverride(int lanesOverride) {
+      this.lanesOverride = lanesOverride;
+      return this;
+    }
+
+    public Builder truncDate(TruncDateForm truncDate) {
+      this.truncDate = truncDate;
+      return this;
+    }
+
+    public Builder floorMod7(FloorMod7 floorMod7) {
+      this.floorMod7 = floorMod7;
+      return this;
+    }
+
+    public Builder division(Division division) {
+      this.division = division;
+      return this;
+    }
+
+    public Builder useAVX(int useAVX) {
+      this.useAVX = useAVX;
+      return this;
+    }
+
+    public Builder misdescribeAdd(boolean misdescribeAdd) {
+      this.misdescribeAdd = misdescribeAdd;
+      return this;
+    }
+
+    public Builder misdescribeWordLiveness(boolean misdescribeWordLiveness) {
+      this.misdescribeWordLiveness = misdescribeWordLiveness;
+      return this;
+    }
+
+    public Builder guardUnderArm(boolean guardUnderArm) {
+      this.guardUnderArm = guardUnderArm;
+      return this;
+    }
+
+    public Builder shareWholeNodes(boolean shareWholeNodes) {
+      this.shareWholeNodes = shareWholeNodes;
+      return this;
+    }
+
+    public Builder validityByWord(boolean validityByWord) {
+      this.validityByWord = validityByWord;
+      return this;
+    }
+
+    public Builder mulHiDivide(boolean mulHiDivide) {
+      this.mulHiDivide = mulHiDivide;
+      return this;
+    }
+
+    public Builder narrowHalfSpecies(boolean narrowHalfSpecies) {
+      this.narrowHalfSpecies = narrowHalfSpecies;
+      return this;
+    }
+
+    public VarkaEmitOptions build() {
+      return new VarkaEmitOptions(
+          groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
+          elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
+          validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
+          lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
+          misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
+          mulHiDivide, narrowHalfSpecies);
+    }
+  }
+
+  /**
+   * {@link #DEFAULTS} with one field changed, for the suites and benchmarks that vary one. Each
+   * of these is {@code toBuilder().x(v).build()}, so adding a component is one field, one
+   * setter and one line in {@link Builder#build()} rather than an edit to every copy method.
+   */
   public VarkaEmitOptions withNarrowHalfSpecies(boolean enabled) {
-    return new VarkaEmitOptions(
-        groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce, elideChronoMonth,
-        neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth, validityOrFirst,
-        validityByBitmap, checkIntOverflow, lanesOverride, truncDate, floorMod7, division,
-        useAVX, misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes,
-        validityByWord, mulHiDivide, enabled);
+    return toBuilder().narrowHalfSpecies(enabled).build();
   }
 
   public VarkaEmitOptions withShareWholeNodes(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanesOverride,
-        truncDate, floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness,
-        guardUnderArm, enabled,
-        validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().shareWholeNodes(enabled).build();
   }
 
   public VarkaEmitOptions withValidityByWord(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanesOverride,
-        truncDate, floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness,
-        guardUnderArm, shareWholeNodes, enabled,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().validityByWord(enabled).build();
   }
 
   /**
@@ -456,120 +645,55 @@ public record VarkaEmitOptions(
    * has no wider lane to multiply into and is not affected.
    */
   public VarkaEmitOptions withMulHiDivide(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        enabled, narrowHalfSpecies);
+    return toBuilder().mulHiDivide(enabled).build();
   }
 
   public VarkaEmitOptions withGroupBudget(int budget) {
-    return new VarkaEmitOptions(budget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
-        elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
-        misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().groupBudget(budget).build();
   }
 
   public VarkaEmitOptions withFusedCeiling(int ceiling) {
-    return new VarkaEmitOptions(groupBudget, ceiling, cse, shareChronoPrefix, denseValidityOnce,
-        elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
-        misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().fusedCeiling(ceiling).build();
   }
 
   public VarkaEmitOptions withCse(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, enabled, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().cse(enabled).build();
   }
 
   public VarkaEmitOptions withShareChronoPrefix(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, enabled, denseValidityOnce,
-        elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
-        misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().shareChronoPrefix(enabled).build();
   }
 
   public VarkaEmitOptions withDenseValidityOnce(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix, enabled,
-        elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
-        misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().denseValidityOnce(enabled).build();
   }
 
   public VarkaEmitOptions withElideChronoMonth(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, enabled, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().elideChronoMonth(enabled).build();
   }
 
   public VarkaEmitOptions withNeriSchneiderMonth(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, enabled, julianMap, guardDayProducers, validityByWidth,
-        validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
-        misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().neriSchneiderMonth(enabled).build();
   }
 
   public VarkaEmitOptions withJulianMap(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, enabled, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().julianMap(enabled).build();
   }
 
   public VarkaEmitOptions withGuardDayProducers(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, enabled,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().guardDayProducers(enabled).build();
   }
 
   public VarkaEmitOptions withValidityByWidth(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        enabled, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().validityByWidth(enabled).build();
   }
 
   public VarkaEmitOptions withValidityOrFirst(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, enabled, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().validityOrFirst(enabled).build();
   }
 
   public VarkaEmitOptions withValidityByBitmap(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, enabled, checkIntOverflow, lanesOverride, truncDate,
-        floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().validityByBitmap(enabled).build();
   }
 
   /**
@@ -580,58 +704,27 @@ public record VarkaEmitOptions(
    * "unchanged bytes" assertion compares against.
    */
   public VarkaEmitOptions withGuardUnderArm(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanesOverride,
-        truncDate, floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness, enabled,
-        shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().guardUnderArm(enabled).build();
   }
 
   public VarkaEmitOptions withCheckIntOverflow(boolean enabled) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, enabled, lanesOverride, truncDate,
-        floorMod7, division, useAVX, misdescribeAdd, misdescribeWordLiveness, guardUnderArm,
-        shareWholeNodes,
-        validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().checkIntOverflow(enabled).build();
   }
 
   public VarkaEmitOptions withLanesOverride(int lanes) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow, lanes, truncDate,
-        floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().lanesOverride(lanes).build();
   }
 
   public VarkaEmitOptions withTruncDate(TruncDateForm form) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, form, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().truncDate(form).build();
   }
 
   public VarkaEmitOptions withFloorMod7(FloorMod7 lowering) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, lowering, division, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().floorMod7(lowering).build();
   }
 
   public VarkaEmitOptions withDivision(Division lowering) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, lowering, useAVX,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().division(lowering).build();
   }
 
   /**
@@ -640,30 +733,15 @@ public record VarkaEmitOptions(
    * what lets one committed file describe more than one host.
    */
   public VarkaEmitOptions withUseAVX(int level) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, level,
-        misdescribeAdd, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().useAVX(level).build();
   }
 
   public VarkaEmitOptions withMisdescribeAdd(boolean misdescribe) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribe, misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().misdescribeAdd(misdescribe).build();
   }
 
   public VarkaEmitOptions withMisdescribeWordLiveness(boolean misdescribe) {
-    return new VarkaEmitOptions(groupBudget, fusedCeiling, cse, shareChronoPrefix,
-        denseValidityOnce, elideChronoMonth, neriSchneiderMonth, julianMap, guardDayProducers,
-        validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
-        lanesOverride, truncDate, floorMod7, division, useAVX,
-        misdescribeAdd, misdescribe, guardUnderArm, shareWholeNodes, validityByWord,
-        mulHiDivide, narrowHalfSpecies);
+    return toBuilder().misdescribeWordLiveness(misdescribe).build();
   }
 
   public boolean isDefault() {
