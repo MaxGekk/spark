@@ -93,6 +93,111 @@ varka_docs_regexes = (
 )
 
 
+# The files a Varka-only change may touch without reaching Spark's own tests: sources named
+# for Varka, the `varka` packages and directories, Varka's committed benchmark and oracle files,
+# the Varka development scripts and the Varka workflows. Spark's own tests run with the engine
+# off, so a change confined to these files cannot change what they see; a change to any other
+# file - the six shared hooks (`SQLConf`, `StaticSQLConf`, `BaseSessionStateBuilder`,
+# `datetimeExpressions`, `CodeGenerator`, the Arrow cache serializer) among them - is a Spark
+# change and runs Spark's matrix. `build_and_test.yml`'s precondition asks this per changed
+# file (task 160); a file that is neither this nor a Varka document nor ignored ends the
+# scoping.
+varka_scoped_regexes = (
+    r"(^|/)[^/]*[Vv]arka[^/]*$",
+    r"(^|/)varka/",
+    r"^sql/varka/",
+    r"^dev/varka_",
+    r"^\.github/workflows/varka-",
+)
+
+
+def is_varka_scoped(filename: str) -> bool:
+    """
+    Return whether a repository-relative path belongs to Varka alone, so that a change
+    confined to such files runs the Varka jobs and not Spark's module matrix.
+
+    Varka-named sources, tests, benchmark results and documents, anywhere in the tree:
+
+    >>> is_varka_scoped("sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/"
+    ...                 "expressions/codegen/varka/VarkaLoopEmitter.java")
+    True
+    >>> is_varka_scoped("sql/core/src/main/scala/org/apache/spark/sql/execution/"
+    ...                 "VarkaKernelEvaluator.scala")
+    True
+    >>> is_varka_scoped("sql/catalyst/benchmarks/VarkaTimeBenchmark-jdk25-results.txt")
+    True
+    >>> is_varka_scoped("docs/sql-varka.md")
+    True
+
+    The Varka packages and directories, whatever the file is named:
+
+    >>> is_varka_scoped("sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/"
+    ...                 "expressions/codegen/varka/VarkaIrGrammar.scala")
+    True
+    >>> is_varka_scoped("sql/varka/emitted_bytes.json")
+    True
+    >>> is_varka_scoped("sql/varka/engine/src/main/java/org/apache/spark/sql/varka/vector/"
+    ...                 "VarkaVectorSupport.java")
+    True
+    >>> is_varka_scoped("dev/varka_bench_regen.sh")
+    True
+    >>> is_varka_scoped(".github/workflows/varka-canary.yml")
+    True
+
+    The shared hooks, Spark's own files and the build's own workflow are not Varka's alone:
+
+    >>> is_varka_scoped("sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala")
+    False
+    >>> is_varka_scoped("sql/core/src/main/scala/org/apache/spark/sql/execution/columnar/"
+    ...                 "ArrowCachedBatchSerializer.scala")
+    False
+    >>> is_varka_scoped(".github/workflows/build_and_test.yml")
+    False
+    >>> is_varka_scoped("dev/sparktestsupport/modules.py")
+    False
+    """
+    return any(re.search(regex, filename) for regex in varka_scoped_regexes)
+
+
+def varka_change_scope(filenames) -> str:
+    """
+    Classify a change by its files, for the build's precondition: ``"spark"`` when any file
+    is outside Varka's own (Spark's matrix runs), ``"scoped"`` when every file is Varka's and
+    at least one is code (the Varka suites run and the matrix does not), ``"docs"`` when the
+    only Varka files are documents (their own job runs and nothing else), ``"none"`` when
+    nothing but ignored files changed.
+
+    >>> varka_change_scope(["sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/"
+    ...                     "expressions/codegen/varka/VarkaLoopEmitter.java",
+    ...                     "sql/varka/plans/PLAN_TASK_160.md"])
+    'scoped'
+    >>> varka_change_scope(["sql/varka/plans/PLAN_TASK_160.md", "SKILLS.md"])
+    'docs'
+    >>> varka_change_scope(["sql/core/src/main/scala/org/apache/spark/sql/execution/"
+    ...                     "VarkaKernelEvaluator.scala",
+    ...                     "sql/catalyst/src/main/scala/org/apache/spark/sql/internal/"
+    ...                     "SQLConf.scala"])
+    'spark'
+    >>> varka_change_scope([".github/workflows/build_and_test.yml"])
+    'spark'
+    >>> varka_change_scope(["sql/varka/papers/neri-schneider-2022.md"])
+    'none'
+    >>> varka_change_scope([])
+    'none'
+    """
+
+    def is_doc(f):
+        return any(re.match(r, f) for r in varka_docs_regexes)
+
+    live = [f for f in filenames if not is_ignored_file(f)]
+    if any(not (is_varka_scoped(f) or is_doc(f)) for f in live):
+        return "spark"
+    code = [f for f in live if not is_doc(f)]
+    if code:
+        return "scoped"
+    return "docs" if live else "none"
+
+
 def is_ignored_file(filename: str) -> bool:
     """
     Return whether a repository-relative path should be ignored when selecting
