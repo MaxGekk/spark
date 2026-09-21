@@ -118,3 +118,74 @@ may clear the rule at fewer rows. Section 5 says how the number is found.
    shards if one arm takes over twenty minutes, written as
    `TimeSurface-jdk25-band.txt`; no per-entry figure is quoted before it exists.
 6. Task 118 takes the file to the full-width runner and writes the README.
+
+## 6. The four arms, 21 September 2026
+
+Measured on the laptop at 500000000 rows in a 48g driver, one partition, one
+core, with the fixed-share bound lifted from 5% to 6% for one row. Section 5's
+ladder found why: the times table is 45.6 bytes a row, so 250000000 rows fit a
+32g driver but left the fastest projections over the 5% rule (`hour(t)` at
+9.8%), and 500000000 rows are 22.8 GiB, which a 32g driver cannot keep
+resident and a 48g one can. At that setting every row is under 5% except
+`hour(t)` at 5.9%, which understates that row's Varka rate by at most a
+twentieth and makes its ratio conservative. Wall-time rates in M rows/s, from
+the four committed `TimeSurface-*-results.txt` files; the ratio is against
+stock 4.2.0 on JDK 25.
+
+| entry | shape | stock 4.2.0 JDK 25 | fork, engine off | fork, Varka | ratio |
+|---|---|---|---|---|---|
+| `hour(t)` | projection | 61.3 | 60.8 | 1041.4 | 17x |
+| `minute(t)` | projection | 61.1 | 60.5 | 821.3 | 13x |
+| `second(t)` | projection | 61.1 | 60.8 | 835.4 | 14x |
+| `time_trunc('MINUTE', t)` | projection | 28.5 | 28.2 | 978.0 | 34x |
+| `time_trunc('MILLISECOND', t2)` | projection | 25.5 | 25.5 | 973.0 | 38x |
+| `t - t2` | projection | 55.2 | 55.0 | 796.9 | 14x |
+| `time_diff('HOUR', t, t2)` | projection | 36.4 | 36.5 | 791.9 | 22x |
+| `t + dt` | projection | 33.5 | 52.3 | 689.1 | 21x |
+| `greatest(t, t2)` | projection | 54.0 | 52.3 | 876.6 | 16x |
+| `greatest(l, l2)` | projection | 55.2 | 55.0 | 915.6 | 17x |
+| `t < TIME'12:00:00'` | filter, columnar consumer | 95.1 | 95.8 | 330.7 | 3.5x |
+| `t < TIME'12:00:00'` | filter, counted | 131.0 | 132.4 | 110.1 | 0.84x |
+| `l2 IS NULL` | filter, columnar consumer | 93.1 | 92.2 | 549.3 | 5.9x |
+| `dt IS NOT NULL` | filter, counted | 208.4 | 201.6 | 70.4 | 0.34x |
+
+The predictions, scored:
+
+1. **Failed for the extracts, held for the truncations.** `hour`, `minute` and
+   `second` read 17x, 13x and 14x against stock, under the date surface's
+   projection median of 19.5x, not above it; the two `time_trunc` rows read 34x
+   and 38x, above it. The prediction's reason was the stock arm's `LocalTime`
+   per row; stock reads about 61 M rows/s on the extracts, about the same as
+   its date extracts, so the object either costs little or is elided, and the
+   ratio is set by Varka's rate, which the narrowed store and the 64-bit lane
+   put at 800 to 1000 M rows/s against the date surface's 1200 and more.
+   `time_trunc` is the row the prediction described: stock reads 25 to 28
+   M rows/s there.
+2. **Held on the baseline, failed upward on the arithmetic.** The engine-off
+   arm reads within 3% of stock on every row but one; `t + dt` is the
+   exception, where the fork's own row engine reads 52.3 against stock's 33.5,
+   a difference in Spark master's `TIME + INTERVAL` path against 4.2.0's, not
+   in Varka. The arithmetic rows do not sit near the date surface's 10x: `t - t2`
+   reads 14x, `time_diff` 22x and 31x, `t + dt` 21x, the comparisons and
+   selections 16x, because stock is slower on them than on its date arithmetic
+   (25 to 55 M rows/s) while Varka's long lane reads 800 to 900.
+3. **Held on the count, not on the memory.** 500000000 rows is the count that
+   clears the rules, and the cache is resident there, at 48g rather than 32g;
+   the estimate of 48 bytes a row was right and the driver it implied was not
+   computed from it.
+4. **Held, with the same losses.** The columnar-consumer filters win by less
+   than the projections (3.5x and 5.9x at the best, 1.3x to 1.7x on the
+   two-column comparisons), and the counted filters least: nine of the
+   nineteen counted rows are under 1x, `dt IS NOT NULL` counted at 0.34x the
+   worst, as the date surface's `d IS NOT NULL` counted was its worst at
+   0.45x. The cause is the date surface's: a count over a mask is one aggregate
+   the row engine does in a few cycles a row, and the columnar boundary costs
+   more than the kernel saves. It is recorded there and not repeated here.
+5. **Held.** Every entry fused with no fallback batch, at the smoke run and at
+   every arm.
+
+The band (task 101's method, twelve fork-arm runs) is the remaining
+measurement; no per-entry figure above is quoted in the README before it
+exists. Task 121 then takes the same table under `-XX:UseAVX=2`, and task 118
+writes the README section.
+
