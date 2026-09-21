@@ -99,8 +99,18 @@ def committed_numbers(top):
     # any committed version of these files - and costs nothing measurable, since the
     # directories are small (both forms ran in 1.1s over ~50 MB of patch text).
     dirs = sorted({os.path.dirname(r) for r in rel})
+    # While a merge is being committed, the incoming side's history is not yet reachable
+    # from HEAD, so a number only that side ever committed would be reported as an orphan
+    # and the pre-commit hook would block a merge that is clean once committed. Walking
+    # MERGE_HEAD too gives the hook the same view the committed merge will have.
+    revs = ["HEAD"]
+    merging = subprocess.run(
+        ["git", "-C", top, "rev-parse", "-q", "--verify", "MERGE_HEAD"], capture_output=True
+    )
+    if merging.returncode == 0:
+        revs.append("MERGE_HEAD")
     log = subprocess.run(
-        ["git", "-C", top, "log", "-p", "--full-history", "--format=", "--", *dirs],
+        ["git", "-C", top, "log", "-p", "--full-history", "--format=", *revs, "--", *dirs],
         check=True,
         capture_output=True,
         text=True,
