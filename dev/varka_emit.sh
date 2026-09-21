@@ -24,6 +24,11 @@
 #   dev/varka_emit.sh "year(d)" --rounds 20000 --nulls 64   # drive the masked path
 #   dev/varka_emit.sh "year(d)" "month(d)" "add_months(d, 1)" --table \
 #     --variant neriSchneiderMonth=false
+#   dev/varka_emit.sh "second(t)" --columns t:time --asm --width=16   # 128-bit species
+#
+# --width=N (bytes, as the JVM's MaxVectorSize counts them: 16 is 128 bits, 32 is 256)
+# runs the --asm probe at that species instead of the host's preferred one, which is how
+# a two-lane 64-bit body is read on a 512-bit machine.
 #
 # Everything but --asm is passed through to VarkaEmitDump (catalyst test scope);
 # --table prints the markdown op-count table a plan registers (one row per
@@ -44,10 +49,11 @@ usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 case "${1:-}" in -h|--help) usage 0 ;; esac
 
 root="$(git rev-parse --show-toplevel)"; cd "$root"
-asm=0; pass=()
+asm=0; width=""; pass=()
 for a in "$@"; do
   case "$a" in
     --asm) asm=1 ;;
+    --width=*) width="${a#--width=}" ;;
     *) pass+=("$a") ;;
   esac
 done
@@ -94,7 +100,9 @@ mkdir -p target/varka-emit
 log="target/varka-emit/asm-$(date +%H%M%S).log"
 print_cmd="-XX:CompileCommand=print,org.apache.spark.sql.varka.execution.VarkaFusedDump::loopDense0"
 flags='set Test/javaOptions ++= Seq("-XX:+UnlockDiagnosticVMOptions",'
-flags+=" \"-XX:CompileCommand=quiet\", \"$print_cmd\")"
+flags+=" \"-XX:CompileCommand=quiet\", \"$print_cmd\""
+[ -n "$width" ] && flags+=", \"-XX:MaxVectorSize=$width\""
+flags+=")"
 LD_LIBRARY_PATH="${VARKA_HSDIS_DIR:-}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 build/sbt -batch "project catalyst" "$flags" \
   "Test/runMain $main$quoted --rounds 50000" > "$log" 2>&1 || true

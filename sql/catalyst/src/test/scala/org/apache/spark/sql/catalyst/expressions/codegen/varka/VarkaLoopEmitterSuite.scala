@@ -4884,17 +4884,23 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     def value(i: Int): Long = if (i < edges.length) edges(i) else {
       java.lang.Long.remainderUnsigned(i.toLong * 0x9E3779B97F4A7C15L, 86400000000000L)
     }
-    for (lanes <- Seq(2, 8)) {
-      val (name, bytes) = emitMulti(roots, 1, 1, VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
-      // The store, counted from the bytes: one masked int store per narrowed root across the
-      // dense bodies, the same in the masked epilogue, and nothing else on the int species - no
-      // second species and no int arithmetic, which is what keeps the templates monomorphic.
+    // Both store forms (`VarkaEmitOptions.narrowHalfSpecies`): the masked store into the
+    // lane's own width, and the whole store into the half-width species, which at a baked
+    // count the option selects; the values and the validity must not depend on the choice.
+    for (lanes <- Seq(2, 8); half <- Seq(false, true)) {
+      val (name, bytes) = emitMulti(roots, 1, 1,
+        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withNarrowHalfSpecies(half))
+      // The store, counted from the bytes: one int store per narrowed root across the dense
+      // bodies, the same in the masked epilogue, and nothing else on the int species - no int
+      // arithmetic, so the narrowing is the store and only the store.
       def intVectorCalls(method: String): Int =
         VarkaEmitterTestSupport.invocationCount(bytes, method, "jdk.incubator.vector.IntVector")
       val denseBodies = VarkaEmitterTestSupport.methodNames(bytes).asScala
         .filter(_.startsWith("loopDense"))
-      assert(denseBodies.map(intVectorCalls).sum === 3, s"at $lanes lanes: three narrowed stores")
-      assert(intVectorCalls("epilogueMasked") === 3, s"at $lanes lanes: three in the epilogue")
+      assert(denseBodies.map(intVectorCalls).sum === 3,
+        s"at $lanes lanes, half=$half: three narrowed stores")
+      assert(intVectorCalls("epilogueMasked") === 3,
+        s"at $lanes lanes, half=$half: three in the epilogue")
       val (kernel, loader) = load((name, bytes))
       try {
         for (length <- Seq(1, 7, 17, 64, 129); (patternName, isNull) <- nullPatterns) {
@@ -4908,12 +4914,13 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
             val status = kernel.run(Array(in.data.address()), Array(in.validityAddress(length)),
               Array(in.nullCount), outs.map(_._1.address()).toArray,
               outs.map(_._2.address()).toArray, Array.empty[Int], Array(60L), length)
-            assert(status === 0, s"lanes=$lanes len=$length $patternName: status $status")
+            assert(status === 0,
+              s"lanes=$lanes half=$half len=$length $patternName: status $status")
             for (i <- 0 until length; (root, o) <- roots.zipWithIndex) {
               val row = Seq(if (isNull(i)) None else Some(value(i)))
               val expected = evalLong(root, row, Array(60L))
               val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
-              val where = s"lanes=$lanes len=$length $patternName out=$o row=$i"
+              val where = s"lanes=$lanes half=$half len=$length $patternName out=$o row=$i"
               assert(bit === expected.isDefined, s"$where: validity (want $expected)")
               expected.foreach { v =>
                 root match {

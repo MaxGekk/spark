@@ -3795,6 +3795,37 @@ public final class VarkaLoopEmitter {
    * nothing that scalarises.
    */
   private static void emitNarrowStore(CodeBuilder cb, Analysis analysis, Slots s, int o) {
+    // The half-species form (`narrowHalfSpecies`): the int species with the long lane's own
+    // count, half the bits, so the converted vector is exactly the group's values and the
+    // dense body stores it whole. Only where the count is baked, since the half of the
+    // preferred species has no named constant.
+    boolean half = analysis.options.narrowHalfSpecies() && analysis.lanes != 0;
+    if (half) {
+      String halfSpecies = Lane.INT.speciesField(analysis.lanes);
+      cb.getstatic(VECTOR_OPERATORS, "L2I", VO_CONVERSION);
+      cb.getstatic(INT_VECTOR, halfSpecies, VECTOR_SPECIES);
+      cb.loadConstant(0);
+      cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+      cb.checkcast(INT_VECTOR);
+      cb.aload(s.dstSeg[o]);
+      cb.iload(s.iVar);
+      cb.i2l();
+      cb.loadConstant(4L);
+      cb.lmul();
+      cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
+      // Whole in a loop body, under the remainder mask in an epilogue - the same split as the
+      // wide store's, and in either null mode: `dense` names the validity path, not the body.
+      if (s.epilogueMask == null) {
+        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", Lane.INT.intoMemorySegmentDense);
+      } else {
+        cb.getstatic(INT_VECTOR, halfSpecies, VECTOR_SPECIES);
+        cb.loadConstant(0);
+        cb.iload(s.lanes);
+        cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
+        cb.invokevirtual(INT_VECTOR, "intoMemorySegment", Lane.INT.intoMemorySegmentMasked);
+      }
+      return;
+    }
     // The int species of the long species' width: twice the long lane count, or the preferred
     // species where no count is baked, which the long lane's preferred species matches in bits.
     String intSpecies = Lane.INT.speciesField(analysis.lanes == 0 ? 0 : analysis.lanes * 2);
@@ -3804,9 +3835,15 @@ public final class VarkaLoopEmitter {
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
     cb.checkcast(INT_VECTOR);                                   // [ints, low half live]
     cb.aload(s.dstSeg[o]);
-    cb.lload(s.byteOffset);
-    cb.loadConstant(1);
-    cb.lushr();                                                 // i * 4
+    // The int column's offset is derived from the row index the way the lane's own offset
+    // is, `(long) i * 4`, and not as `byteOffset >>> 1`: C2 folds a linear function of the
+    // induction variable into the store's addressing mode and hoists its bounds check out of
+    // the loop, and a shift of the wide offset is neither - it cost four scalar ops, a range
+    // check and the loop's unrolling per group (`PLAN_TASK_156.md`).
+    cb.iload(s.iVar);
+    cb.i2l();
+    cb.loadConstant(4L);
+    cb.lmul();                                                  // i * 4
     cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
     cb.getstatic(INT_VECTOR, intSpecies, VECTOR_SPECIES);
     cb.loadConstant(0);
