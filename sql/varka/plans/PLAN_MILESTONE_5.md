@@ -3524,6 +3524,20 @@ Varka suites of catalyst and sql/core in one job for a `scoped` change and the
 matrix for a `spark` one, and proves the classification by the runs it
 produces (`PLAN_TASK_160.md`).
 
+### 2.97 The quote check reads the merge it is asked to commit (task 161)
+
+*Opened and closed 20 September 2026, from a merge commit the hook refused.*
+
+The quote check holds every number a plan quotes to a committed results file,
+current or historical, and the pre-commit hook runs it on every commit. Its
+history walk started at `HEAD`, which during a merge is the branch alone: a
+number that only master's side of the merge ever committed was an orphan to the
+hook and correct the moment the merge was committed. Task 154's branch met it
+after task 149's numbers left the current files (`PLAN_TASK_161.md`): 13
+orphans on the uncommitted merge, 0 on master and 0 on the same merge once
+committed past the hook. The walk now takes `MERGE_HEAD` beside `HEAD` when it
+exists, so the hook judges the tree and history the merge commit will have.
+
 ### 2.98 Ship the half-species narrowed store (task 162)
 
 *Opened 21 September 2026, from task 156's outcome.*
@@ -3539,20 +3553,6 @@ it at load time on the machine it runs on - and regenerates the oracles. The
 10% the three-field shape still gives up at 128 bits is read in the assembly
 with task 156's dump, and either named as the per-store overhead two lanes
 cannot amortise or closed.
-
-### 2.97 The quote check reads the merge it is asked to commit (task 161)
-
-*Opened and closed 20 September 2026, from a merge commit the hook refused.*
-
-The quote check holds every number a plan quotes to a committed results file,
-current or historical, and the pre-commit hook runs it on every commit. Its
-history walk started at `HEAD`, which during a merge is the branch alone: a
-number that only master's side of the merge ever committed was an orphan to the
-hook and correct the moment the merge was committed. Task 154's branch met it
-after task 149's numbers left the current files (`PLAN_TASK_161.md`): 13
-orphans on the uncommitted merge, 0 on master and 0 on the same merge once
-committed past the hook. The walk now takes `MERGE_HEAD` beside `HEAD` when it
-exists, so the hook judges the tree and history the merge commit will have.
 
 ## 3. Task breakdown
 
