@@ -58,6 +58,7 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.NextDay, VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono,
             VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate,
             VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.ConstDivide,
+            VarkaVectorIR.BoundedDivide,
             VarkaVectorIR.Cond,
             VarkaVectorIR.GuardedDay, VarkaVectorIR.GuardedRange, VarkaVectorIR.NarrowLane {
 
@@ -84,6 +85,7 @@ public sealed interface VarkaVectorIR
       case IntArith n -> n.left().laneType();
       case IntNeg n -> n.child().laneType();
       case ConstDivide n -> n.child().laneType();
+      case BoundedDivide n -> LaneType.INT;
       case Greatest n -> n.left().laneType();
       case Least n -> n.left().laneType();
       case IfElse n -> n.thenNode().laneType();
@@ -499,6 +501,76 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * {@code child / divisor} for a non-negative int dividend the caller proves under
+   * {@code bound}: one multiply and one logical shift, exact by construction.
+   *
+   * <p>The pair {@code (multiplier, shift)} is the largest shift whose multiplier fits an int
+   * and whose unsigned product {@code (bound - 1) * multiplier} stays under {@code 2^32}, with
+   * {@code (x * multiplier) >>> shift == x / divisor} proven by exhaustion over
+   * {@code [0, bound)} where it is built ({@link #of}); a pair that does not exist is refused
+   * there. So the lowering is the calendar prefix's magic multiply given a node - two lane
+   * operations where {@link ConstDivide}'s conversion route costs seven - and its precondition
+   * is the bound, which the caller discharges structurally: a seconds-of-day column is under
+   * 86400 by the leaf that made it, the seconds after the hours under 3600 by arithmetic. No
+   * guard rides the node and none should; a caller that cannot prove the bound guards below it
+   * with {@link GuardedRange} or uses {@link ConstDivide} (`PLAN_TASK_102.md` 8.4).
+   *
+   * <p>Int lane only: the search is over 32-bit products, and the 64-bit lane has its own
+   * division family. The components carry the pair so the record's equality and canonical
+   * form are its arithmetic, not a search that has to be repeated to compare two nodes.
+   */
+  record BoundedDivide(VarkaVectorIR child, int divisor, int bound, int multiplier, int shift)
+      implements VarkaVectorIR {
+
+    /** The node over {@code child}, with the pair found by search and proven over the bound. */
+    public static BoundedDivide of(VarkaVectorIR child, int divisor, int bound) {
+      int[] pair = magic(divisor, bound);
+      return new BoundedDivide(child, divisor, bound, pair[0], pair[1]);
+    }
+
+    public BoundedDivide {
+      if (child.laneType() != LaneType.INT) {
+        throw new IllegalArgumentException("boundedDivide takes an INT child, not "
+            + child.laneType() + ", from a " + child.getClass().getSimpleName());
+      }
+      if (divisor < 2 || bound < 2) {
+        throw new IllegalArgumentException(
+            "a bounded division needs a divisor and a bound of at least 2, not / " + divisor
+                + " over [0, " + bound + ")");
+      }
+      int[] pair = magic(divisor, bound);
+      if (pair[0] != multiplier || pair[1] != shift) {
+        throw new IllegalArgumentException("the pair (" + multiplier + ", " + shift
+            + ") is not the exact single-multiply form of / " + divisor + " over [0, " + bound
+            + "), which is (" + pair[0] + ", " + pair[1] + ")");
+      }
+    }
+
+    /**
+     * The exact single-multiply form of {@code / divisor} over {@code [0, bound)}: the largest
+     * shift whose multiplier fits and whose product cannot overflow the unsigned 32-bit
+     * product the lane computes, checked over every dividend rather than argued.
+     */
+    static int[] magic(int divisor, int bound) {
+      for (int k = 31; k >= 1; k--) {
+        long m = ((1L << k) + divisor - 1) / divisor;
+        if (m > Integer.MAX_VALUE || (bound - 1L) * m >= (1L << 32)) {
+          continue;
+        }
+        boolean exact = true;
+        for (int x = 0; x < bound && exact; x++) {
+          exact = ((x * m) >>> k) == x / divisor;
+        }
+        if (exact) {
+          return new int[] {(int) m, k};
+        }
+      }
+      throw new IllegalArgumentException(
+          "no exact single-multiply form for / " + divisor + " over [0, " + bound + ")");
+    }
+  }
+
+  /**
    * {@code left OP right} over two operands on one lane, which the constructor requires to
    * agree - dates at the int lane, and the mask this produces is of that lane's species.
    * Null-intolerant: the result is known (true or false) exactly where both operands are valid,
@@ -861,6 +933,8 @@ public sealed interface VarkaVectorIR
           + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case IntNeg n -> "(neg:" + n.mode().name() + " " + canonical(n.child()) + ")";
       case ConstDivide n -> "(divc:" + n.divisor() + " " + canonical(n.child()) + ")";
+      case BoundedDivide n ->
+          "(divb:" + n.divisor() + "/" + n.bound() + " " + canonical(n.child()) + ")";
     };
   }
 
@@ -940,6 +1014,8 @@ public sealed interface VarkaVectorIR
           + lineOf.applyAsInt(n.left()) + " " + lineOf.applyAsInt(n.right()) + ")";
       case IntNeg n -> "(neg:" + n.mode().name() + " " + lineOf.applyAsInt(n.child()) + ")";
       case ConstDivide n -> "(divc:" + n.divisor() + " " + lineOf.applyAsInt(n.child()) + ")";
+      case BoundedDivide n ->
+          "(divb:" + n.divisor() + "/" + n.bound() + " " + lineOf.applyAsInt(n.child()) + ")";
     };
   }
 }

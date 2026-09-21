@@ -43,7 +43,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeConstants._
  * 8.3). In the split form the same extracts are divisions of a number under 86400 by 3600 and
  * 60, in 32-bit lanes, twice as many to a register and half the bytes to read.
  *
- * Seven arms per shape, adjacent, on the same rows:
+ * Eight arms per shape, adjacent, on the same rows:
  *
  *  - **nanoseconds of day, int64 lanes, conversion form** - the shipped lowering on this
  *    machine, `ConstDivide` through `L2D`, `vdivpd`, `D2L`, stored wide;
@@ -58,6 +58,9 @@ import org.apache.spark.sql.catalyst.util.DateTimeConstants._
  *  - **seconds of day, int32 lanes, emitted** - the split form's extracts as the emitter
  *    lowers an int-lane `ConstDivide`: the multiply-high through 64-bit lanes since task 149,
  *    with the double route it replaced beside it as the reference arm;
+ *  - **seconds of day, int32 lanes, emitted bounded multiply** - the same extracts as the
+ *    emitter's `BoundedDivide` lowers them, one multiply and one shift each, the emitted twin
+ *    of the hand-written arm below (`PLAN_TASK_102.md` 8.4);
  *  - **seconds of day, int32 lanes, hand-written magic multiply** - the split form as item 11
  *    imagines it: one multiply and one logical shift per division, exact over the bounded
  *    dividend, which is the lowering the calendar prefix uses and `ConstDivide` does not have.
@@ -204,6 +207,24 @@ object VarkaTimeBenchmark extends BenchmarkBase {
     Map("hour" -> hour, "minute" -> minute, "second" -> second)
   }
 
+  /**
+   * The split form's extracts as the emitter now lowers a division it can bound: `hour` from
+   * the seconds under 86400, `minute` from the seconds after the hours under 3600, each one
+   * multiply and one shift, with the same constants the hand-written arm searches for. The
+   * emitted twin of that arm (`PLAN_TASK_102.md` 8.4).
+   */
+  private def boundedIntFields: Map[String, VarkaVectorIR] = {
+    val s = new ColumnRef(0, LaneType.INT)
+    def lit(i: Int) = new LiteralSlot(i, LaneType.INT)
+    def sub(a: VarkaVectorIR, b: VarkaVectorIR) = new IntArith(IntOp.SUB, Overflow.WRAP, a, b)
+    def mul(a: VarkaVectorIR, b: VarkaVectorIR) = new IntArith(IntOp.MUL, Overflow.WRAP, a, b)
+    val hour = BoundedDivide.of(s, SECONDS_PER_HOUR.toInt, SECONDS_PER_DAY.toInt)
+    val afterHours = sub(s, mul(hour, lit(0)))
+    val minute = BoundedDivide.of(afterHours, SECONDS_PER_MINUTE.toInt, SECONDS_PER_HOUR.toInt)
+    val second = sub(afterHours, mul(minute, lit(1)))
+    Map("hour" -> hour, "minute" -> minute, "second" -> second)
+  }
+
   /** The shapes priced: each field alone, and the three together, where sharing pays. */
   private val shapes: Seq[(String, Seq[String])] = Seq(
     "hour" -> Seq("hour"),
@@ -296,9 +317,11 @@ object VarkaTimeBenchmark extends BenchmarkBase {
       def kernelId(): Int = { val n = nextId; nextId += 1; n }
       val longK = longFields
       val intK = intFields
+      val boundedK = boundedIntFields
       val emitted = shapes.map { case (name, fields) =>
         val longRoots = fields.map(longK)
         val intRoots = fields.map(intK)
+        val boundedRoots = fields.map(boundedK)
         name -> Seq(
           ("nanoseconds of day, int64 lanes, conversion form (shipped)",
             emit(longRoots, 1, longLits.length, loader, kernelId()), LaneType.LONG, false),
@@ -316,7 +339,9 @@ object VarkaTimeBenchmark extends BenchmarkBase {
             emit(intRoots, 1, intLits.length, loader, kernelId()), LaneType.INT, false),
           ("seconds of day, int32 lanes, emitted (the double route it replaced)",
             emit(intRoots, 1, intLits.length, loader, kernelId(), doubleRoute), LaneType.INT,
-            false))
+            false),
+          ("seconds of day, int32 lanes, emitted bounded multiply",
+            emit(boundedRoots, 1, intLits.length, loader, kernelId()), LaneType.INT, false))
       }
       val t = new ColumnRef(0, LaneType.LONG)
       val seconds = new ConstDivide(t, NANOS_PER_SECOND)

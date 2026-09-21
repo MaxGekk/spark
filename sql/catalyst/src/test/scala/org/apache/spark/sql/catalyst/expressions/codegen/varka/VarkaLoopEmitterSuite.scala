@@ -4862,6 +4862,27 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
   // rather than a wrap where Spark throws.
   // -------------------------------------------------------------------------------------------
 
+  test("a bounded division is exact over its whole bound at both widths, and refuses a pair " +
+      "that does not exist") {
+    // PLAN_TASK_102.md 8.4: one multiply and one logical shift, exact for every dividend under
+    // the bound by the constructor's search. The batch is the bound long, so every dividend
+    // the node is defined over is compared once against the true division, in a full lane
+    // group and in the tail, at 128 and 512 bits.
+    for ((d, bound) <- Seq((3600, 86400), (60, 3600), (7, 4096), (24, 1440)); lanes <- Seq(4, 16)) {
+      val root = Seq[VarkaVectorIR](BoundedDivide.of(new ColumnRef(0), d, bound))
+      checkMatrix(root, 1, Array.empty[Int], Seq(1, 17, bound), combos(1),
+        data = (_, i) => i % bound, ctx = s"divb $d over $bound",
+        options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+    }
+    // No single multiply is exact for / 60 over the whole day: the product would pass 2^32.
+    val e = intercept[IllegalArgumentException](BoundedDivide.of(new ColumnRef(0), 60, 86400))
+    assert(e.getMessage.contains("no exact single-multiply form"), e.getMessage)
+    // And a pair handed in by hand is checked against the search rather than trusted.
+    val wrong = intercept[IllegalArgumentException](
+      new BoundedDivide(new ColumnRef(0), 3600, 86400, 37283, 26))
+    assert(wrong.getMessage.contains("is not the exact single-multiply form"), wrong.getMessage)
+  }
+
   test("a narrowing root stores four bytes a row of what the long lane computed, at both widths") {
     // Route A of `PLAN_TASK_102.md` 8.3: the extracts of a TIME are 64-bit divisions whose
     // results are ints, and a `NarrowLane` root stores the low half of each lane at `i * 4`

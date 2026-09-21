@@ -57,6 +57,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     new IntArith(IntOp.ADD, Overflow.WRAP, intCol, intLit),
     new IntNeg(Overflow.WRAP, intCol),
     new ConstDivide(intCol, 12),
+    BoundedDivide.of(intCol, 60, 3600),
     new Compare(CompareOp.LT, intCol, intLit),
     new And(new IsNotNull(intCol), new IsNotNull(intCol)),
     new Or(new IsNotNull(intCol), new IsNotNull(intCol)),
@@ -145,6 +146,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
     // The completeness assertion below is what keeps the list honest as nodes are added.
     val refusals: Seq[(String, Int, () => Any)] = Seq(
       ("guardedDay", 0, () => new GuardedDay(longCol)),
+      ("boundedDivide", 0, () => BoundedDivide.of(longCol, 60, 3600)),
       ("addDays", 0, () => new AddDays(longCol, intLit)),
       ("addDays", 1, () => new AddDays(intCol, longLit)),
       ("subDays", 0, () => new SubDays(longCol, intLit)),
@@ -297,6 +299,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
         case "IntArith" => new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)
         case "IntNeg" => new IntNeg(Overflow.WRAP, c)
         case "ConstDivide" => new ConstDivide(c, 12)
+        case "BoundedDivide" => BoundedDivide.of(c, 60, 3600)
         case "Greatest" => new Greatest(c, c1)
         case "Least" => new Least(c, c1)
         case "Compare" => new Compare(CompareOp.LT, c, c1)

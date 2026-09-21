@@ -3540,6 +3540,20 @@ it at load time on the machine it runs on - and regenerates the oracles. The
 with task 156's dump, and either named as the per-store overhead two lanes
 cannot amortise or closed.
 
+### 2.99 The emitted three-field int kernel trails its hand-written twin in cache (task 163)
+
+*Opened 21 September 2026, from `PLAN_TASK_102.md` 8.8.*
+
+`BoundedDivide` made the emitted int-lane extracts the same arithmetic as the
+hand-written kernel: one multiply and one shift per division. Measured, the
+single fields agree within 5% at every width, and the three-field shape agrees
+past L3, where the stores set the rate. In cache it does not: 18% under the
+hand-written kernel in L3 at 512 bits and 20% at 256. The arithmetic being
+equal, the difference is the emitter's own - how it loads once and stores three
+times, and what it keeps live across three roots - and it is the first place
+the emitter is measurably behind a hand-written loop on equal instructions.
+That is worth knowing before the calendar prefix is made of these nodes.
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3728,6 +3742,7 @@ can start has.
 | 159 | Refactor for readability: the emitter split by its phases, the compiler by expression family, the evaluator by responsibility, the emitter suite by family, the serializer one class per file, the options as a builder, and last one place per IR node (section 2.95). **Scoped** (20 September 2026) from the owner's review; after the pull requests open at the time (#267 to #275) merge | One PR per seam, each a pure move, in `PLAN_TASK_159.md`'s order: options builder, the emitter's six seams, the suite, the compiler with task 86, the evaluator, the serializer, the per-node dispatch | `emitted_bytes.json` and the shape hashes unchanged at every step, checked by the flattened-key diff; no results file, band or docs table moves; every new file opens with its purpose |
 | 160 | Run only the CI a change can reach (section 2.96). **Scoped and implemented** (20 September 2026, `PLAN_TASK_160.md`): a full Build is 35 jobs and 1283 job-minutes for a Varka change because any catalyst file sets `build=true` | `varka_change_scope` in `sparktestsupport.modules` with doctests; the precondition running the `varka-scoped` job (the `*Varka*` suites of catalyst and sql/core in parallel) instead of the matrix for a change confined to Varka's files, and the matrix for any other | Three recorded runs on the fork: a Varka-only change (the two scoped entries, about a third of the matrix's wall time), a documents-only change (the docs checks and the linters), and a workflow change (the full matrix) |
 | 162 | Ship the half-species narrowed store (section 2.98). **Scoped** (21 September 2026) from task 156's measurement: the half-species arm is the best narrowed store at every width and the best store of all past L3 at 512 and 256 bits, and the masked form is still the shipped one | The default flipped where the lane count is baked; the general case, half of the preferred species as a static final of the emitted class, for the unbaked path; `emitted_bytes.json` and the census regenerated; the 128-bit residue on `second` and the three-field shape read in the assembly with task 156's dump | `VarkaTimeBenchmark`'s three files regenerated with the shipped rows at the half-species arm's rates; the assembly gate green; the residue named or closed |
+| 163 | The emitted three-field int kernel trails its hand-written twin by 10% to 20% while cache-resident (section 2.99). **Scoped** (21 September 2026) from `PLAN_TASK_102.md` 8.8: the same multiplies and shifts, the single fields within 5%, the three-field shape 18% and 20% under in L3 at 512 and 256 bits and within 3% past L3 | Both kernels' assembly at 512 bits with `dev/varka_emit.sh --asm`: the loads, the three stores and the liveness around three roots against the hand-written loop, and the cost named or closed in the emitter | The emitted three-field bounded arm within 5% of the hand-written one in L3 at 512 and 256 bits in `VarkaTimeBenchmark`'s files, or the cause written in the plan and the skills file |
 
 ## 4. Files
 
