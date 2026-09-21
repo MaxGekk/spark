@@ -3497,6 +3497,24 @@ when `emitted_bytes.json` and the shape hashes do not move, so no benchmark is
 rerun and no behaviour can change unnoticed. `PLAN_TASK_159.md` names the seams
 and the order; every step waits for the pull requests open at the time to merge.
 
+### 2.96 Run only the CI a change can reach (task 160)
+
+*Opened 20 September 2026 on the owner's question whether the build's ninety
+minutes were necessary for every Varka pull request.*
+
+A full Build on the fork is 35 jobs and 1283 job-minutes, about ninety minutes
+of wall time, dominated by the `sql` shards, the connect and streaming shard,
+Docker and TPC-DS. The precondition already selects by module; what defeats it
+for Varka is that any change under `sql/catalyst` sets `build=true`, and that
+runs the whole matrix, because catalyst is upstream of everything Spark tests.
+Varka's code lives in files named for it and in `varka` directories, its hooks
+into Spark are six shared files, and Spark's suites run with the engine off, so
+a change confined to Varka's files cannot change what they see. The task
+classifies a change by its paths - `spark`, `scoped`, `docs`, `none` - runs the
+Varka suites of catalyst and sql/core in one job for a `scoped` change and the
+matrix for a `spark` one, and proves the classification by the runs it
+produces (`PLAN_TASK_160.md`).
+
 ## 3. Task breakdown
 
 The rows as milestone 4's table carried them, task numbers unchanged. *(The order
@@ -3683,6 +3701,7 @@ can start has.
 | 157 | The widening store: a decimal output is sixteen bytes a row (section 2.93). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` section 9: every `TIME` decimal is an unscaled long in the lane the family already uses, and the column is the only blocker | A root-only `WidenDecimal` node whose store writes the value word and its sign extension per sixteen-byte slot; a `DecimalVector` destination in the evaluator; `second(t)` with its fraction and `time_to_seconds` lowered through it; measured against the evaluator widening a long output in a scalar loop, which is the baseline; the fraction's unscaled-long form checked against the row engine's `Double` round trip over every nanosecond of a minute | Both expressions agree with the row engine over every second of the day through both consumers; the store beats the scalar widening on `VarkaTimeBenchmark`'s ladder or the plan says by how much it does not |
 | 158 | Group E: the five `time_to_*`/`time_from_*` conversions the table does not know, and the two decimal declines that do not name their reason (section 2.94). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 9.3 | The five in `timeTargets` and the compiler as group B's shapes, with the conversion's overflow and day-range rules read before choosing a guard or a checked multiply; the table's completeness guard widened to the registry's `TIME` functions; `second` with fraction and `time_to_seconds` declining by name with the Arrow representation as the reason | Five new coverage rows fusing; every `TIME` function in the registry either lowers or declines by name, which the coverage suite states |
 | 159 | Refactor for readability: the emitter split by its phases, the compiler by expression family, the evaluator by responsibility, the emitter suite by family, the serializer one class per file, the options as a builder, and last one place per IR node (section 2.95). **Scoped** (20 September 2026) from the owner's review; after the pull requests open at the time (#267 to #275) merge | One PR per seam, each a pure move, in `PLAN_TASK_159.md`'s order: options builder, the emitter's six seams, the suite, the compiler with task 86, the evaluator, the serializer, the per-node dispatch | `emitted_bytes.json` and the shape hashes unchanged at every step, checked by the flattened-key diff; no results file, band or docs table moves; every new file opens with its purpose |
+| 160 | Run only the CI a change can reach (section 2.96). **Scoped and implemented** (20 September 2026, `PLAN_TASK_160.md`): a full Build is 35 jobs and 1283 job-minutes for a Varka change because any catalyst file sets `build=true` | `varka_change_scope` in `sparktestsupport.modules` with doctests; the precondition running the `varka-scoped` job (the `*Varka*` suites of catalyst and sql/core in parallel) instead of the matrix for a change confined to Varka's files, and the matrix for any other | Three recorded runs on the fork: a Varka-only change (the two scoped entries, about a third of the matrix's wall time), a documents-only change (the docs checks and the linters), and a workflow change (the full matrix) |
 
 ## 4. Files
 
