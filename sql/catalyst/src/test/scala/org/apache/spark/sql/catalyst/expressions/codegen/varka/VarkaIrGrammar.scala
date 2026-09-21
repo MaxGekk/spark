@@ -164,6 +164,7 @@ object VarkaIrGrammar {
       }
       case n: IntNeg => (v(n.child()), g(n.child()))
       case n: ConstDivide => (v(n.child()) / math.abs(n.divisor().toLong), g(n.child()))
+      case n: BoundedDivide => (((n.bound() - 1) / n.divisor()).toLong, g(n.child()))
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `g` picks up.
@@ -270,7 +271,7 @@ object VarkaIrGrammar {
     def value(depth: Int): Gen = {
       if (depth == 0 || budget <= 1) return leaf()
       budget -= 1
-      rnd.nextInt(23) match {
+      rnd.nextInt(24) match {
         case 0 =>
           val a = value(depth - 1); val b = literal()
           Gen(new AddDays(a.node, b.node), satAdd(a.bound, b.bound))
@@ -378,6 +379,20 @@ object VarkaIrGrammar {
           val a = value(depth - 1)
           val d = ConstDivideDivisors(rnd.nextInt(ConstDivideDivisors.length))
           Gen(new ConstDivide(a.node, d), a.bound / math.abs(d.toLong))
+        case 23 =>
+          // Group C's bounded division (PLAN_TASK_102.md 8.4): exact only for a non-negative
+          // dividend under its bound. The grammar tracks a subtree's magnitude and not its
+          // sign, so the dividend is a calendar field, non-negative and bounded by what it is:
+          // the day of the year under 367, the month under 13, the day of the month under 32.
+          // A guard that fired would be a decline the reference cannot spell, as the arms
+          // above say, so nothing is guarded here and nothing can fire.
+          val a = value(depth - 1)
+          if (!fitsUnderChrono(a)) return a
+          rnd.nextInt(3) match {
+            case 0 => Gen(BoundedDivide.of(new DayOfYear(a.node), 7, 367), 53)
+            case 1 => Gen(BoundedDivide.of(new Month(a.node), 4, 13), 4)
+            case _ => Gen(BoundedDivide.of(new DayOfMonth(a.node), 7, 32), 5)
+          }
         case 20 =>
           // Task 93's range check, over a subtree that stays inside the narrowed range - the
           // same condition the calendar family below draws under, and for the same reason. A

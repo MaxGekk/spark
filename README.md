@@ -472,6 +472,18 @@ Docs map: [`docs/sql-varka.md`](docs/sql-varka.md) (user-facing guide),
 [`SKILLS.md`](SKILLS.md) (the index over the measured lessons the project keeps,
 which live in [`sql/varka/skills/`](sql/varka/skills/)).
 
+## Contributing
+
+The work is organised as milestones with a numbered task table each; the
+milestone in flight is
+[`sql/varka/plans/PLAN_MILESTONE_5.md`](sql/varka/plans/PLAN_MILESTONE_5.md),
+and its rows marked **Scoped** or **Planned** are open. Pick one, open an
+issue naming the row, and read [`CONTRIBUTING.md`](CONTRIBUTING.md) for how
+the work is done here: plans as records, numbers that trace to committed
+files, the one-command gate, and the pull request conventions. Measurements
+from hardware the project does not have, AMD AVX2 machines and Arm in
+particular, are a contribution on their own.
+
 ## About Apache Spark
 
 This is a research fork of [Apache Spark](https://spark.apache.org/) and is

@@ -679,6 +679,77 @@ here: no committed benchmark runs a `TIME` expression through the whole
 engine against the row path, and this repository adds a baseline benchmark as
 its own PR before the change it measures. It stays open as a follow-up row.
 
+
+### 8.7 `BoundedDivide` built, 20 September 2026
+
+Section 8.5's second step, as 8.4 specified it: an int-lane node
+`BoundedDivide(child, divisor, bound)` whose lowering is one multiply and one
+logical shift. `BoundedDivide.of` derives the pair by the search
+`VarkaTimeBenchmark.magic` runs - the largest shift whose multiplier fits an
+int and whose unsigned product over `[0, bound)` stays under 2^32 - and proves
+the quotient exact over every dividend under the bound before the node exists;
+a pair that does not exist is refused, which is what `/ 60` over the whole day
+gets. The record carries the pair, so two nodes compare by their arithmetic and
+the canonical form (`divb:60/3600`) names the bound the caller undertook.
+
+The bound is the caller's obligation and no guard rides the node. The fuzzer
+discharges it structurally, since the grammar tracks a subtree's magnitude and
+not its sign: its arm draws the node over a calendar field - the day of the
+year under 367, the month under 13, the day of the month under 32 - which is
+non-negative and bounded by what it is, so no guard is needed and none can
+fire. (The first cut drew it over a `GuardedRange` to the bound, and the
+fuzzer's second iteration found what the guard arms' own comments say: a guard
+that fires is a decline the reference cannot spell.) The range lattice reads
+the quotient's interval from the bound alone. The emitter suite
+runs four forms - `/ 3600` over the day, `/ 60` over the hour, `/ 7` and `/ 24`
+- with a batch as long as the bound at 128 and 512 bits, so every dividend the
+node is defined over is compared once against the true division, in a full
+lane group and in the tail.
+
+What it is for. Today no compiler arm builds it: the seconds-of-day column that
+would make `hour` a bounded division of an int does not exist until the split
+leaf (route B) or the cache encoding (route C, milestone 6's item 11). So the
+node ships as the emitted twin of the hand-written arm, priced beside it in
+`VarkaTimeBenchmark` as `seconds of day, int32 lanes, emitted bounded multiply`
+at the next regeneration, and as the division the calendar prefix's hand-emitted
+magic can become a node of. The prediction for that regeneration: the emitted
+bounded arm reads within 5% of the hand-written arm on every shape at every
+width, since the two are the same multiply and shift with the emitter's loads
+and stores around them; and the double-route int arm stays where it is.
+### 8.8 `BoundedDivide` measured, 21 September 2026
+
+The regeneration 8.7 asked for, at 512, 256 and 128 bits. The emitted bounded
+arm against its hand-written twin, in M rows/s:
+
+| width | rows | shape | emitted bounded | hand-written |
+|---|---|---|---|---|
+| 512 | 262144 | `hour` | 18531.3 | 17774.9 |
+| 512 | 262144 | `second` | 16130.9 | 16666.3 |
+| 512 | 262144 | three fields | 7852.6 | 9602.0 |
+| 512 | 8388608 | three fields | 1938.4 | 1990.9 |
+| 256 | 262144 | `hour` | 18675.2 | 18414.2 |
+| 256 | 262144 | three fields | 7595.1 | 9546.0 |
+| 128 | 262144 | `hour` | 17213.5 | 17897.5 |
+| 128 | 262144 | three fields | 7725.3 | 7831.5 |
+| 128 | 8388608 | three fields | 2163.2 | 2222.5 |
+
+The first prediction, within 5% of the hand-written arm on every shape at every
+width, holds for `hour`, `minute` and `second` at every width and row count
+(the in-L2 rows at 512 bits sit at the edge, 5% to 6% under), and holds for the
+three-field shape at 128 bits and past L3 everywhere. It fails for the
+three-field shape while cache-resident at the two wide widths: 18% under the
+hand-written kernel in L3 at 512 bits, 20% at 256, and 8% to 10% in L2. The two
+kernels are the same multiplies and shifts, so the difference is in what the
+emitter puts around three roots - its loads, its three stores and its liveness
+- and it shows only where the stores are not the bottleneck. Milestone row 163
+takes it. The second prediction holds: the double-route int arm moved by at
+most 4% at any width, most rows under 2%.
+
+So the node is priced: where a bounded int division is available it is the
+hand-written rate for one field, and for three fields it is the hand-written
+rate past L3 and short of it in cache. Nothing in the compiler builds the node
+yet; that waits for the seconds-of-day column (route B or route C).
+
 ## 9. Group D, read: the decimal is a store, and there is a group E
 
 *20 September 2026, a reading pass; no code. Section 2.3 said the two decimal

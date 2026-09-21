@@ -1,12 +1,12 @@
 benchmark:   org.apache.spark.sql.VarkaTimeBenchmark
-commit:      3f28180aa1f
-date:        2026-09-20T21:57:05Z
+commit:      41265209620
+date:        2026-09-21T04:32:08Z
 jdk:         OpenJDK Runtime Environment (build 25.0.4+7-1-26.04-Ubuntu)
 kernel:      7.0.0-31-generic
 cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 power:       governor=performance epp=performance profile=performance
 pinned to:   taskset -c 0,12,13,14,15,1,2,3
-load at start: 0.63
-canary:      ok (compute +0.1% cache -2.7% memory -1.2% )
+load at start: 0.47
+canary:      ok (compute +0.2% cache +4.0% memory -0.6% )
 wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaTimeBenchmark
 narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=32"' "Test/runMain org.apache.spark.sql.VarkaTimeBenchmark"

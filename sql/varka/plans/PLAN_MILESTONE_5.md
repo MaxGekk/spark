@@ -3524,6 +3524,20 @@ Varka suites of catalyst and sql/core in one job for a `scoped` change and the
 matrix for a `spark` one, and proves the classification by the runs it
 produces (`PLAN_TASK_160.md`).
 
+### 2.97 The quote check reads the merge it is asked to commit (task 161)
+
+*Opened and closed 20 September 2026, from a merge commit the hook refused.*
+
+The quote check holds every number a plan quotes to a committed results file,
+current or historical, and the pre-commit hook runs it on every commit. Its
+history walk started at `HEAD`, which during a merge is the branch alone: a
+number that only master's side of the merge ever committed was an orphan to the
+hook and correct the moment the merge was committed. Task 154's branch met it
+after task 149's numbers left the current files (`PLAN_TASK_161.md`): 13
+orphans on the uncommitted merge, 0 on master and 0 on the same merge once
+committed past the hook. The walk now takes `MERGE_HEAD` beside `HEAD` when it
+exists, so the hook judges the tree and history the merge commit will have.
+
 ### 2.98 Ship the half-species narrowed store (task 162)
 
 *Opened 21 September 2026, from task 156's outcome.*
@@ -3539,6 +3553,20 @@ it at load time on the machine it runs on - and regenerates the oracles. The
 10% the three-field shape still gives up at 128 bits is read in the assembly
 with task 156's dump, and either named as the per-store overhead two lanes
 cannot amortise or closed.
+
+### 2.99 The emitted three-field int kernel trails its hand-written twin in cache (task 163)
+
+*Opened 21 September 2026, from `PLAN_TASK_102.md` 8.8.*
+
+`BoundedDivide` made the emitted int-lane extracts the same arithmetic as the
+hand-written kernel: one multiply and one shift per division. Measured, the
+single fields agree within 5% at every width, and the three-field shape agrees
+past L3, where the stores set the rate. In cache it does not: 18% under the
+hand-written kernel in L3 at 512 bits and 20% at 256. The arithmetic being
+equal, the difference is the emitter's own - how it loads once and stores three
+times, and what it keeps live across three roots - and it is the first place
+the emitter is measurably behind a hand-written loop on equal instructions.
+That is worth knowing before the calendar prefix is made of these nodes.
 
 ## 3. Task breakdown
 
@@ -3727,7 +3755,9 @@ can start has.
 | 158 | Group E: the five `time_to_*`/`time_from_*` conversions the table does not know, and the two decimal declines that do not name their reason (section 2.94). **Scoped** (20 September 2026) from `PLAN_TASK_102.md` 9.3 | The five in `timeTargets` and the compiler as group B's shapes, with the conversion's overflow and day-range rules read before choosing a guard or a checked multiply; the table's completeness guard widened to the registry's `TIME` functions; `second` with fraction and `time_to_seconds` declining by name with the Arrow representation as the reason | Five new coverage rows fusing; every `TIME` function in the registry either lowers or declines by name, which the coverage suite states |
 | 159 | Refactor for readability: the emitter split by its phases, the compiler by expression family, the evaluator by responsibility, the emitter suite by family, the serializer one class per file, the options as a builder, and last one place per IR node (section 2.95). **Scoped** (20 September 2026) from the owner's review; after the pull requests open at the time (#267 to #275) merge | One PR per seam, each a pure move, in `PLAN_TASK_159.md`'s order: options builder, the emitter's six seams, the suite, the compiler with task 86, the evaluator, the serializer, the per-node dispatch | `emitted_bytes.json` and the shape hashes unchanged at every step, checked by the flattened-key diff; no results file, band or docs table moves; every new file opens with its purpose |
 | 160 | Run only the CI a change can reach (section 2.96). **Done** (`PLAN_TASK_160.md`, 21 September 2026: a Varka-only change runs in 35 minutes and 94 job-minutes against 90 and 1283; the documents-only run found the Java 25 build and documentation generation still on, and the precondition now turns them off). Scoped and implemented (20 September 2026): a full Build is 35 jobs and 1283 job-minutes for a Varka change because any catalyst file sets `build=true` | `varka_change_scope` in `sparktestsupport.modules` with doctests; the precondition running the `varka-scoped` job (the `*Varka*` suites of catalyst and sql/core in parallel) instead of the matrix for a change confined to Varka's files, and the matrix for any other | Three recorded runs on the fork: a Varka-only change (the two scoped entries, about a third of the matrix's wall time), a documents-only change (the docs checks and the linters), and a workflow change (the full matrix) |
+| 161 | The quote check reads the merge it is asked to commit (section 2.97). **Done** (`PLAN_TASK_161.md`, 20 September 2026) from task 154's merge commit, which the hook refused for 13 numbers that master's history holds: the history walk starts at `MERGE_HEAD` beside `HEAD` while a merge is in progress | A merge of master started with `--no-commit` on a branch that predates task 149 reads 0 orphans with the change and 13 without; a plain tree reads what it read before |
 | 162 | Ship the half-species narrowed store (section 2.98). **Scoped** (21 September 2026) from task 156's measurement: the half-species arm is the best narrowed store at every width and the best store of all past L3 at 512 and 256 bits, and the masked form is still the shipped one | The default flipped where the lane count is baked; the general case, half of the preferred species as a static final of the emitted class, for the unbaked path; `emitted_bytes.json` and the census regenerated; the 128-bit residue on `second` and the three-field shape read in the assembly with task 156's dump | `VarkaTimeBenchmark`'s three files regenerated with the shipped rows at the half-species arm's rates; the assembly gate green; the residue named or closed |
+| 163 | The emitted three-field int kernel trails its hand-written twin by 10% to 20% while cache-resident (section 2.99). **Scoped** (21 September 2026) from `PLAN_TASK_102.md` 8.8: the same multiplies and shifts, the single fields within 5%, the three-field shape 18% and 20% under in L3 at 512 and 256 bits and within 3% past L3 | Both kernels' assembly at 512 bits with `dev/varka_emit.sh --asm`: the loads, the three stores and the liveness around three roots against the hand-written loop, and the cost named or closed in the emitter | The emitted three-field bounded arm within 5% of the hand-written one in L3 at 512 and 256 bits in `VarkaTimeBenchmark`'s files, or the cause written in the plan and the skills file |
 
 ## 4. Files
 
