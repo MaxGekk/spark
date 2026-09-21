@@ -2187,7 +2187,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // The ceiling bounds clause 2: at prefix + two tails the third sibling opens a new group,
     // which the fourth joins - two methods of two.
     val tight = VarkaEmitOptions.DEFAULTS.withFusedCeiling(
-      VarkaLoopEmitter.CHRONO_PREFIX_WEIGHT + 2 * VarkaLoopEmitter.CHRONO_FIELD_TAIL_WEIGHT)
+      VarkaEmitBudget.CHRONO_PREFIX_WEIGHT + 2 * VarkaEmitBudget.CHRONO_FIELD_TAIL_WEIGHT)
     assert(loops(fields, 1, 0, tight) === 2)
     // Greedy in output order, pinned as the limitation 10.2 names rather than fixed: month(d)
     // is offered to the group holding year(d2), whose prefix it cannot reuse, so it forms a
@@ -3389,7 +3389,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     def ops(roots: Seq[VarkaVectorIR], inputs: Int = 1, lits: Int = 0,
         options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): Int =
       laneOps(emitMulti(roots, inputs, lits, options)._2, "loopDense0")
-    val prefix = VarkaLoopEmitter.CHRONO_PREFIX_WEIGHT
+    val prefix = VarkaEmitBudget.CHRONO_PREFIX_WEIGHT
     // A prefix no tail in the group reads the month out of elides the month step (task 48).
     val prefixNoMonth = prefix - monthStepOps(VarkaEmitOptions.DEFAULTS)
     val month = new Month(col)
@@ -3403,18 +3403,18 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
       ("year", new Year(col), 5, false, 0, 1),
       ("dayofmonth", new DayOfMonth(col), 5, true, 0, 1),
       ("quarter", new Quarter(col), 7, true, 0, 1),
-      ("dayofyear", new DayOfYear(col), VarkaLoopEmitter.DAY_OF_YEAR_TAIL_WEIGHT, false, 0, 1),
-      ("last_day", new LastDay(col), VarkaLoopEmitter.LAST_DAY_TAIL_WEIGHT, true, 0, 1),
+      ("dayofyear", new DayOfYear(col), VarkaEmitBudget.DAY_OF_YEAR_TAIL_WEIGHT, false, 0, 1),
+      ("last_day", new LastDay(col), VarkaEmitBudget.LAST_DAY_TAIL_WEIGHT, true, 0, 1),
       ("add_months", new AddMonths(col, new LiteralSlot(0)),
-        VarkaLoopEmitter.ADD_MONTHS_TAIL_WEIGHT, true, 1, 1),
+        VarkaEmitBudget.ADD_MONTHS_TAIL_WEIGHT, true, 1, 1),
       ("trunc YEAR", new TruncDate(col, TruncLevel.YEAR),
-        VarkaLoopEmitter.TRUNC_YEAR_TAIL_WEIGHT, false, 0, 1),
+        VarkaEmitBudget.TRUNC_YEAR_TAIL_WEIGHT, false, 0, 1),
       ("trunc MONTH", new TruncDate(col, TruncLevel.MONTH),
-        VarkaLoopEmitter.TRUNC_MONTH_TAIL_WEIGHT, true, 0, 1),
+        VarkaEmitBudget.TRUNC_MONTH_TAIL_WEIGHT, true, 0, 1),
       ("trunc QUARTER", new TruncDate(col, TruncLevel.QUARTER),
-        VarkaLoopEmitter.TRUNC_QUARTER_TAIL_WEIGHT, true, 0, 1),
+        VarkaEmitBudget.TRUNC_QUARTER_TAIL_WEIGHT, true, 0, 1),
       ("trunc dynamic", new TruncDateDynamic(col, new ColumnRef(1)),
-        VarkaLoopEmitter.TRUNC_DYNAMIC_TAIL_WEIGHT, true, 0, 2))
+        VarkaEmitBudget.TRUNC_DYNAMIC_TAIL_WEIGHT, true, 0, 2))
     for ((name, node, tail, readsMonth, lits, inputs) <- register) {
       val alone = ops(Seq(node), inputs, lits)
       val own = if (readsMonth) prefix else prefixNoMonth
@@ -3428,9 +3428,9 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // and shares nothing with month(d)'s; the shift's own ops are the ThursdayOf node's weight.
     val shift = new ThursdayOf(col)
     assert(ops(Seq(new WeekOfYear(shift))) ===
-      ops(Seq(shift)) + prefixNoMonth + VarkaLoopEmitter.WEEK_OF_YEAR_TAIL_WEIGHT)
+      ops(Seq(shift)) + prefixNoMonth + VarkaEmitBudget.WEEK_OF_YEAR_TAIL_WEIGHT)
     // The four fields share one tail constant, at the widest of the four.
-    assert(VarkaLoopEmitter.CHRONO_FIELD_TAIL_WEIGHT === 7)
+    assert(VarkaEmitBudget.CHRONO_FIELD_TAIL_WEIGHT === 7)
   }
 
   test("a year-only body computes no month, and the switch says so") {

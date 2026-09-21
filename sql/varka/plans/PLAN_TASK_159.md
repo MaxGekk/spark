@@ -97,6 +97,18 @@ The file's section headers are the plan. In order of least entanglement:
 2. **The weights and budgets** (around 266): the calendar op weights,
    `GROUP_BUDGET`, `FUSED_CEILING`, `fitsBudgets`' arithmetic, into
    `VarkaEmitBudget.java`.
+   *Done 21 September 2026.* `GROUP_BUDGET` and `FUSED_CEILING`, the
+   per-lowering weights and temporary-slot counts, `weightOf` and `isChrono`
+   are `VarkaEmitBudget.java`, imported statically by the emitter; `fitsBudgets`
+   stays on the emitter as the entry the compiler calls, and the three
+   validation limits (`MAX_CHAIN_DEPTH`, `MAX_FUSED_NODES`, `MAX_INPUTS`) stay
+   with the validation they bound, which is seam 3's. The moved constants went
+   from private to package-private; the options' default and the emitter
+   suite's references name the new class. The javadoc that linked emitter
+   members from the moved text names them as code instead of linking, which is
+   shorter than the link it replaces, so no comment line moved. The emitter
+   lost 343 lines; the bytes oracle, the shape hashes, the suites and the
+   javadoc build are unchanged.
 3. **The analysis** (around 1703 to 2538): `Analysis` with the validation, the
    DAG walk, the word algebra, the bitmap pass, the fragment keys, into
    `VarkaEmitAnalysis.java`, with the 790-line record broken into the passes
