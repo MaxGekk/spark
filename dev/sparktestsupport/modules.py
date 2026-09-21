@@ -83,6 +83,8 @@ ignored_file_patterns = (
 varka_docs_regexes = (
     r"README\.md$",
     r"SKILLS\.md$",
+    r"CONTRIBUTING\.md$",
+    r"\.github/ISSUE_TEMPLATE/varka-",
     r"docs/sql-varka\.md$",
     r"sql/varka/[^/]+\.md$",
     r"sql/varka/plans/",
@@ -172,6 +174,9 @@ def varka_change_scope(filenames) -> str:
     ...                     "sql/varka/plans/PLAN_TASK_160.md"])
     'scoped'
     >>> varka_change_scope(["sql/varka/plans/PLAN_TASK_160.md", "SKILLS.md"])
+    'docs'
+    >>> varka_change_scope(["CONTRIBUTING.md", ".github/ISSUE_TEMPLATE/varka-take-a-task.md",
+    ...                     "sql/varka/HARDWARE.md"])
     'docs'
     >>> varka_change_scope(["sql/core/src/main/scala/org/apache/spark/sql/execution/"
     ...                     "VarkaKernelEvaluator.scala",

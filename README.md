@@ -312,7 +312,10 @@ Spark and stayed correct.
 Varka is about 50 non-test source files across three modules, and they are not
 equally interesting. What follows is one query's journey, in the order the code
 runs it. Read these nine and you have the engine; the rest is telemetry,
-caching and leaf helpers hanging off them.
+caching and leaf helpers hanging off them. For the same journey taken by one
+expression, with the compiler's tree, the IR, the emitted loop and the
+assembly it compiles to, read
+[`sql/varka/WALKTHROUGH.md`](sql/varka/WALKTHROUGH.md).
 
 **Plan time - deciding what Varka will run.**
 
@@ -482,7 +485,9 @@ issue naming the row, and read [`CONTRIBUTING.md`](CONTRIBUTING.md) for how
 the work is done here: plans as records, numbers that trace to committed
 files, the one-command gate, and the pull request conventions. Measurements
 from hardware the project does not have, AMD AVX2 machines and Arm in
-particular, are a contribution on their own.
+particular, are a contribution on their own: run `dev/varka_datapath.sh` and
+open an issue with the "Add my machine" template, and the machine joins
+[`sql/varka/HARDWARE.md`](sql/varka/HARDWARE.md).
 
 ## About Apache Spark
 

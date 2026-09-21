@@ -107,8 +107,12 @@ LD_LIBRARY_PATH="${VARKA_HSDIS_DIR:-}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 build/sbt -batch "project catalyst" "$flags" \
   "Test/runMain $main$quoted --rounds 50000" > "$log" 2>&1 || true
 # The tool's own report lines only; the disassembly HotSpot printed in between stays in the log.
+# The report lines: the entries, the IR, the shape hash, the per-method table (a name and
+# four or more counters) and the line map.
+keep='^(entry |inputs |literals |output [0-9]+ IR|shape hash|method +bytes'
+keep+='|[A-Za-z0-9_]+( +[0-9]+){4,}$|line map|  [0-9]+=|ran [0-9]+ rounds|\(--rounds)'
 sed -E 's/^\[(info|error)\] ?//' "$log" \
-  | grep -E '^(entry |inputs |literals |output [0-9]+ IR|shape hash|method +bytes|[A-Za-z0-9_]+ +[0-9]+ +[0-9]+ +[0-9]+ +[0-9]+$|line map|  [0-9]+=|ran [0-9]+ rounds|\(--rounds)'
+  | grep -E "$keep"
 echo
 echo "== mnemonics in the standard C2 compilation of loopDense0 (full disassembly: $log) =="
 sed -E 's/^\[info\] ?//' "$log" | awk '
