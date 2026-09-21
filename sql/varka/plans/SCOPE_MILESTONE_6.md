@@ -2985,6 +2985,48 @@ runner beside the identity form. **Done when** the AVX2 default is chosen from
 a committed file rather than from the identity being the one that was written
 first.
 
+### Item 38. Onboarding: the task tables as issues, a hardware census, and templates
+
+*Opened 21 September 2026, from the first "can we contribute?" under the
+public post, and deferred to this milestone by the owner's decision: milestone
+5 stays as it is.*
+
+A newcomer arriving from the post finds a contributing guide (`CONTRIBUTING.md`,
+#284) and, behind it, a task table inside a plan file that is a record rather
+than a front door. Three low-cost pieces would give the project a first rung.
+
+1. **The task tables mirrored as GitHub issues.** Issues are now enabled on the
+   fork (they are off on a fork by default; the owner switched them on). A
+   script, `dev/varka_issues.py`, reads the current milestone's task table,
+   opens one issue per row marked Scoped or Planned - `[Task <n>] <title>`,
+   the row's deliverables and validation as the body, a link to the plan file
+   - and closes the issue when the row turns Done, quoting the row's outcome.
+   The table stays the source of truth; the issues are the view GitHub shows.
+   Labels: `task`, `milestone-<n>`, and `good first issue` from a short
+   hand-kept list of at most five rows a newcomer can finish in a day. The
+   status vocabulary of milestone 5's table is not uniform (Scoped, Planned,
+   Done, DONE, Withdrawn, Moved, Partly done, landed, and eight rows with no
+   marker), so the script's first job is to state the rule it applies and
+   list the rows it cannot classify.
+2. **A hardware census page and its issue template.** `dev/varka_datapath.sh`
+   prints a machine's CPU model, vector flags, the JVM's `UseAVX` and
+   `MaxVectorSize`, and the datapath readings at three widths. A `HARDWARE.md`
+   table seeded with the laptop and the runner census of `PLAN_TASK_62.md`
+   section 11, plus an "add my machine" issue template that asks for that
+   script's output, makes a first contribution that needs no build and fills
+   the AVX2 and Arm gaps the committed tables have.
+3. **Templates.** An issue template for taking a task (which row, the plan
+   file, the acceptance line), and a `PLAN_TASK_TEMPLATE.md` with the sections
+   the house rules expect - the question, the change, predictions before the
+   run, the outcome - so a first plan file has the shape without reading ten
+   examples.
+
+Set aside with reasons: a chat channel or mailing list before there are three
+regular contributors, and any contributor agreement beyond the license
+affirmation `CONTRIBUTING.md` already carries. **Done when** every open row
+of the milestone in flight is an issue, closing a row closes its issue on the
+next sync, and `HARDWARE.md` has at least one machine that is not the owner's.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
