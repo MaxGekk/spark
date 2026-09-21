@@ -62,6 +62,17 @@ the record's components in declaration order, which is what
 rendering string for every existing value is byte-identical, which the shape
 hashes prove.
 
+*Done 21 September 2026.* `toBuilder()` and a nested `Builder` with one field
+and one setter per component; the twenty-five `with*` methods stay, each one
+line delegating to the builder, so the 167 call sites in the suites and
+benchmarks do not change. `canonical()` stays hand-pinned: the shape cache
+suite already walks the components and fails if one cannot change the
+rendering, which is the guard that matters, and a reflective walk would add a
+dependency for no reader's benefit. Adding a component is now the record
+component, the builder's field and setter, one argument in `build()`, the
+rendering and the default, instead of an edit to every copy method. The bytes
+oracle, the shape hashes and the emitter suite are unchanged.
+
 ### 3.2 `VarkaLoopEmitter` split by its own phases (large; one PR per seam)
 
 The file's section headers are the plan. In order of least entanglement:
