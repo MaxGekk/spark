@@ -626,7 +626,37 @@ class VarkaAssemblySuite extends SparkFunSuite {
     assertGatherBoxesWhenPolluted(Seq.empty)
   }
 
+  /**
+   * Whether this JVM compiles the probe's own gather to a packed gather at a forced 128-bit
+   * species, read once. On this laptop it does. On the CI pool's runners it does not: the same
+   * probe, under the same `-XX:MaxVectorSize=16`, comes out as a scalar body of 248 instructions,
+   * deterministically, on an EPYC 9V45 and on Intel Xeons alike (`PLAN_TASK_150.md` section 6),
+   * with `-Xbatch` in place so it is not the compile that was missing. That is a fact about the
+   * JVM on that machine, not about Varka's kernels, and a machine whose own probe does not pack
+   * at 128 bits cannot say whether the kernels do. So the 128-bit assertions below take this as
+   * their precondition and cancel, naming the host, where it fails; the default-width
+   * assertions stay hard. Row 165 is the investigation of why, from the JVM's own output.
+   */
+  private lazy val narrowSpeciesRefusal: Option[String] = {
+    val run = runProbe("gatherLookup", s"$probeClass::gatherLookup", Seq("-XX:MaxVectorSize=16"))
+    requireHealthyChild(run)
+    requireDisassembler(run)
+    val nmethod = standardC2(run, "VarkaAssemblyProbe::gatherLookup")
+    if (countIn(nmethod, packedGather, Some(registerClass(run.preferredBits))) > 0) {
+      None
+    } else {
+      Some(s"on this machine ($host) C2 compiles the probe's own gather at a forced 128-bit " +
+        s"species to a scalar body of ${nmethod.insns.size} instructions, so the 128-bit " +
+        "assertions are not evidence here; the default-width ones still run. " +
+        "PLAN_TASK_150.md section 6 records the finding, milestone row 165 investigates it.")
+    }
+  }
+
+  /** Cancel a 128-bit assertion where the probe's own gather does not pack at that species. */
+  private def requireNarrowSpecies(): Unit = narrowSpeciesRefusal.foreach(reason => cancel(reason))
+
   test("self-test: the allocation pair holds at 128-bit lanes") {
+    requireNarrowSpecies()
     val narrow = Seq("-XX:MaxVectorSize=16")
     assertGatherClean(narrow)
     assertGatherBoxesWhenPolluted(narrow)
@@ -707,6 +737,7 @@ class VarkaAssemblySuite extends SparkFunSuite {
     // The case that catches a hard-coded zmm, and the one PLAN_TASK_31.md prediction 3 expects
     // to break first: xmm is also what scalar SSE uses for some operations, so a family table
     // that works by symmetry from the wide run is not good enough.
+    requireNarrowSpecies()
     val narrow = Seq("-XX:MaxVectorSize=16")
     assertFamilies("dateAddDays", s"$dateVectorOps::vectorAddDays",
       "DateVectorOps::vectorAddDays", Seq(packedLoadStore, packedIntAdd), narrow)

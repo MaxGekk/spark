@@ -77,3 +77,31 @@ does not pack here" would have hidden exactly the contention this task found.
 The gate on this branch's own pull request is the CI reading; the acceptance the row
 carried, one green run from each family in the census, is now one green run per runner the
 gate happens to land on, which every later pull request supplies.
+
+## 6. The gate after the fix, 21 September 2026
+
+The first gate run with `-Xbatch` on master, on #292, named its machine for the
+first time: an AMD EPYC 9V45 with four processors, the same Zen 5 family as
+this laptop, at `UseAVX=3` and `MaxVectorSize=64`. The two forced-inlining
+tests that had read `saw c1` passed, which is what the synchronous compile was
+for. The two 128-bit tests still failed, with the same bodies as before: the
+probe's own gather at `-XX:MaxVectorSize=16` a scalar body of 248
+instructions, the emitted year loop at that species 501. The same counts had
+been read on the Intel Xeon runners in the earlier failures.
+
+So section 3's reproduction found one of two causes. Starving the laptop of
+cores did produce all four failures, and `-Xbatch` removed the two that were
+about compilation finishing in time. The other two are deterministic, appear
+on a runner of the laptop's own CPU family with the fix in place, and never
+appear on the laptop. That is a difference between the runner's JVM and this
+one at a forced species, not contention and not the CPU, and this plan does not
+know what it is. The honest control is the one section 1 originally scoped: the
+probe's own 128-bit gather is read once, and where it comes out scalar the two
+128-bit assertions cancel, naming the host and the count, while every
+default-width assertion stays hard. A machine whose own probe does not pack at
+128 bits cannot say whether the kernels do.
+
+Finding the cause is row 165: the probe run on a runner under
+`-XX:+PrintIntrinsics` and `-XX:+PrintInlining` at the forced species, which
+says why the gather intrinsic was refused, against the same run on the laptop.
+
