@@ -113,3 +113,80 @@ If 2 and 3 hold, the half-species form becomes the shipped one where the lane
 count is baked, and the general case - the half of the preferred species as a
 static final of the emitted class - is the follow-up; if 3 fails, the masked
 form stays and the cost is recorded as the price of one species per type.
+
+## 6. Outcome, 21 September 2026
+
+The three files were regenerated overnight on the laptop, the wide and 128-bit
+pair first and the 256-bit companion after the machine had gone quiet again.
+Rates in M rows/s, from the committed files; "masked" is the shipped narrowed
+store with the offset fix, "half" the new arm.
+
+In L3 (262144 rows):
+
+| width | shape | wide store | masked | half species |
+|---|---|---|---|---|
+| 512 | `hour` | 4176.5 | 4021.7 | 4032.3 |
+| 512 | `second` | 1406.4 | 1416.5 | 1407.2 |
+| 512 | three fields | 1372.6 | 1364.6 | 1359.9 |
+| 256 | `hour` | 4711.9 | 4264.2 | 4334.8 |
+| 256 | `second` | 1437.4 | 1428.5 | 1434.9 |
+| 256 | three fields | 1370.3 | 1305.5 | 1343.7 |
+| 128 | `hour` | 2413.6 | 2299.4 | 2342.9 |
+| 128 | `minute` | 1182.4 | 1150.9 | 1184.9 |
+| 128 | `second` | 763.5 | 691.6 | 738.7 |
+| 128 | three fields | 762.0 | 623.1 | 689.3 |
+
+Past L3 (8388608 rows):
+
+| width | shape | wide store | masked | half species |
+|---|---|---|---|---|
+| 512 | `hour` | 2529.8 | 3112.1 | 3635.7 |
+| 512 | three fields | 1019.9 | 1078.4 | 1247.1 |
+| 256 | `hour` | 2587.4 | 3102.6 | 3391.6 |
+| 256 | three fields | 1010.3 | 1053.2 | 1192.5 |
+| 128 | `hour` | 2303.5 | 2004.8 | 2241.9 |
+| 128 | three fields | 658.5 | 580.8 | 671.3 |
+
+The predictions, scored:
+
+1. **Held.** The masked form moved little: at 128 bits `second` reads 9%
+   under the wide store where 8.6 read 12%, and the three-field shape 18%
+   under it where 8.6 read 18%. The offset arithmetic was a small part of the
+   cost, as predicted; the unrolling the masked loop lacks is the rest.
+2. **Held at 512 and 256 bits, failed at 128 on two shapes.** In L3 the half
+   species is within 1% of the wide store at 512 bits and within 3% at 256 on
+   every shape but `hour` (8% under, where the masked form is 9% under). At
+   128 bits `hour` and `minute` are within 3%, `second` is 3% under and the
+   three-field shape 10% under. So the wide store's loop shape is most of the
+   128-bit gap but not all of it: with two long lanes a row group is two rows,
+   and the three-field shape stores three half vectors per group where the wide
+   store stores three full ones, so per-store overheads that the wider lanes
+   amortise show through here. The half species still beats the masked form on
+   every shape at 128 bits, by 7% on `second` and 11% on the three fields.
+3. **Not decidable at 3%, and the failure it was guarding against did not
+   happen.** The int32 arms moved, upward, by 3% to 9% on the emitted rows and
+   by more on the hand-written and copy rows, and the wide-store rows moved
+   both ways by up to 5%: the whole file shifted against a committed file
+   measured on another day, in the direction of a faster machine. A boxed
+   second species costs multiples, not percents (`SKILLS.md`, the assembly
+   suite's pair), and nothing reads slower by more than 5%, so the second int
+   species did not box the int32 arms. One reading is bimodal rather than
+   moved: the 128-bit wide store on `second` past L3 reads 427.7 against 757.9
+   before, with `hour` and `minute` beside it unchanged; it is the wide arm,
+   not the one under test, and is not quoted.
+4. **Held, and then some.** Past L3 at 512 bits the half species keeps the
+   narrowed store's advantage over the wide one and widens it: `hour` reads
+   44% over the wide store where the masked form read 23%, and the three
+   fields 22% where the masked form read 6%. The same holds at 256 bits.
+
+**What follows.** The half species dominates the masked form: equal within
+noise or better at every width and shape, and the best arm of the three past
+L3 at 512 and 256 bits. Section 5's rule made the flip conditional on
+prediction 2 holding everywhere; it holds at the two wide widths and holds
+partly at 128, where the half species is still the better narrowed store. So
+the half-species form should become the shipped one. That is its own task
+(milestone row 162): the default flips where the lane count is baked, the
+general case - half of the preferred species as a static final of the emitted
+class - is built for the unbaked path, `emitted_bytes.json` and the census
+regenerate, and the 128-bit residue on `second` and the three fields is read in
+the assembly, which this task's dump can already produce.
