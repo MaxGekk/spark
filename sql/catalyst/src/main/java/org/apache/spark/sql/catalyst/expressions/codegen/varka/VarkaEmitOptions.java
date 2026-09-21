@@ -59,13 +59,13 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * other would merge two variants' execution identities.
  *
  * @param groupBudget the most vector ops one emitted loop method may carry; see
- *                    {@link VarkaLoopEmitter#GROUP_BUDGET} for the measured reason it is 16, and
+ *                    {@link VarkaEmitBudget#GROUP_BUDGET} for the measured reason it is 16, and
  *                    for the retuning question the parity benchmark prices by varying it.
  * @param fusedCeiling the most vector ops one emitted loop method may carry when the outputs
  *                     in it share a civil-from-days prefix: an output joins a
  *                     group past {@link #groupBudget} only when doing so lets it skip a prefix
  *                     the group already computes, and never past this. See
- *                     {@link VarkaLoopEmitter#FUSED_CEILING} for the ladder that set it.
+ *                     {@link VarkaEmitBudget#FUSED_CEILING} for the ladder that set it.
  * @param cse whether shared subtrees are computed once and reused. Results must not change - CSE
  *            is an optimization, never a semantics change - and the emitter suite pins exactly
  *            that; the parity benchmark uses it to price CSE itself.
@@ -387,7 +387,7 @@ public record VarkaEmitOptions(
   /** What production always emits with; see the hashing note in the class doc. */
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
-          VarkaLoopEmitter.GROUP_BUDGET, VarkaLoopEmitter.FUSED_CEILING,
+          VarkaEmitBudget.GROUP_BUDGET, VarkaEmitBudget.FUSED_CEILING,
           true, true, true, true, true, true, true, true, true, true, true,
           0,
           TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, USE_AVX_UNKNOWN,
