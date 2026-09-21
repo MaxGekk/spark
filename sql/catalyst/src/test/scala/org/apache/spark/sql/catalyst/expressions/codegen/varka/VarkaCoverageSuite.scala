@@ -453,10 +453,11 @@ class VarkaCoverageSuite extends SparkFunSuite {
   }
 
   /**
-   * The column's cell for one row, from what C2 printed for the row's kernel at 128 bits. Only
-   * a `not supported` line is a refusal, and it names its construction; C2's other two kinds
-   * of line (`VarkaWidthAuditSuite.isRefusal`) prove nothing about the final code, stay in the
-   * census file, and do not reach the table.
+   * The column's cell for one row, from what C2 printed for the row's kernel at 128 bits. A
+   * `not supported` line is a refusal, and it names its construction; the census file carries
+   * those lines alone, since C2's other two kinds prove nothing about the final code and vary
+   * between runs (`VarkaWidthAuditSuite.isRefusal`, task 154). The filter here is kept so a
+   * census written before that change still renders the same column.
    */
   private def narrowVerdict(sql: String): String = widthAudit match {
     case None => "not audited"
