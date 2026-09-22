@@ -668,16 +668,37 @@ That is a finding for the milestone, not this task's.
    L2 rung (7% under) and 3343.4 against 2622.0 past L3; `second` 1418.4
    against 1471.9 and the three 1347.1 against 1485.4 at L2.
 
+3. *At least 15x against the row engine end to end.* **Held, at 17.1x**, scored
+   on 22 September 2026 (task 155) from task 105's `TimeSurfaceBenchmark`
+   rather than from a benchmark of this route's own, since that class is
+   already the end-to-end measurement this prediction asks for. `hour(t)` over
+   five hundred million rows through the columnar consumer reads 1041.4 M
+   rows/s in `TimeSurface-varka-jdk25-results.txt` against 60.8 in
+   `TimeSurface-varka-off-jdk25-results.txt`, the same fork with the engine
+   switched off, and 61.3 in `TimeSurface-spark-4.2.0-jdk25-results.txt`,
+   stock Spark - an engine-off ratio of 17.1x and a stock ratio of 17.0x. On
+   executor time alone, which drops a single-partition run's driver share,
+   1106.2 against 61.0 is 18.1x.
+
+   The margin is not a band artefact. Both rows are tier 0 in
+   `TimeSurface-jdk25-band.txt`, the wall-clock case reading 2.10% and the
+   executor-time case 1.83% over twelve runs, and the threshold sits an eighth
+   below the measured ratio. Both arms fold to the same checksum over the same
+   non-null count, so the comparand computed the same answer.
+
+   The ratio is a statement about the whole columnar path, not about the
+   kernel, and the same file shows why the two must not be confused:
+   `time_trunc('MINUTE', t)` runs at 978.0, within 7% of `hour(t)`'s kernel
+   rate, yet scores 34.7x because its row-engine comparand reads 28.2 rather
+   than 60.8. A surface ratio moves with what the row engine costs for that
+   expression as much as with what the kernel saves.
+
 4. *No committed hash moves; three rows are added.* **Held exactly**: the
    flattened-key diff of `emitted_bytes.json` shows the three rows at both
    widths and no other key added, removed or changed - including the fuzz
    blocks, which a node the grammar draws would have reshuffled and this one,
    being root-only, does not.
 
-Prediction 3 (at least 15x against the row engine end to end) is not scored
-here: no committed benchmark runs a `TIME` expression through the whole
-engine against the row path, and this repository adds a baseline benchmark as
-its own PR before the change it measures. It stays open as a follow-up row.
 
 
 ### 8.7 `BoundedDivide` built, 20 September 2026
