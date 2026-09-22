@@ -3,53 +3,44 @@ becomes one loop with one load per column and one store per output."""
 
 from rough import Rough, finish
 
-r = Rough(1320, 600, seed=41)
-r.text(60, 45, "SELECT time_trunc('MINUTE', t + dt), hour(t + dt) FROM times", size=26)
+r = Rough(900, 1000, seed=41)
+r.text(40, 40, "SELECT time_trunc('MINUTE', t + dt), hour(t + dt)", size=25)
 
-# Columns at the bottom.
-r.rect(200, 470, 140, 50, fill="blue", label="t", size=22)
-r.rect(420, 470, 140, 50, fill="violet", label="dt", size=22)
-r.text(380, 555, "one load per input column", size=17, anchor="middle", color="#868e96")
+# The expression graph, roots at the top.
+r.text(250, 95, "store: time_trunc", size=19, anchor="middle")
+r.text(650, 95, "store: hour", size=19, anchor="middle")
+r.arrow(250, 150, 250, 112)
+r.arrow(650, 150, 650, 112)
+r.rect(150, 155, 200, 60, fill="green", label="* 60e9", size=23)
+r.rect(550, 155, 200, 60, fill="grey", label="narrow to int", size=21)
+r.arrow(250, 270, 250, 220)
+r.arrow(650, 270, 650, 220)
+r.rect(150, 275, 200, 60, fill="green", label="/ 60e9", size=23)
+r.rect(550, 275, 200, 60, fill="green", label="/ 3600e9", size=23)
+r.arrow(400, 395, 270, 340)
+r.arrow(500, 395, 630, 340)
+r.rect(350, 400, 200, 60, fill="orange", label="t + dt", size=24)
+r.text(575, 480, "guard: still inside the day?", size=16, color="#868e96")
+r.note(40, 420, "computed once,\nkept in a register,\nused by both outputs", size=19)
+r.arrow(300, 545, 400, 465)
+r.arrow(600, 545, 500, 465)
+r.rect(200, 550, 180, 56, fill="blue", label="t", size=24)
+r.rect(520, 550, 180, 56, fill="violet", label="dt", size=24)
+r.text(450, 640, "one load per input column", size=18, anchor="middle", color="#868e96")
 
-# The shared sum.
-r.arrow(270, 465, 350, 400)
-r.arrow(490, 465, 410, 400)
-r.rect(300, 340, 160, 56, fill="orange", label="t + dt", size=22)
-r.text(470, 405, "guard: still inside the day?", size=14, color="#868e96")
-r.note(70, 360, "computed once,\nkept in a register,\nused by both outputs", size=17)
-
-# Left branch: time_trunc.
-r.arrow(340, 336, 250, 270)
-r.rect(150, 210, 190, 56, fill="green", label="/ 60e9", size=21)
-r.arrow(245, 206, 245, 160)
-r.rect(150, 100, 190, 56, fill="green", label="* 60e9", size=21)
-r.arrow(245, 96, 245, 70)
-r.text(245, 60, "store: time_trunc", size=17, anchor="middle")
-
-# Right branch: hour.
-r.arrow(420, 336, 510, 270)
-r.rect(420, 210, 190, 56, fill="green", label="/ 3600e9", size=21)
-r.arrow(515, 206, 515, 160)
-r.rect(420, 100, 190, 56, fill="grey", label="narrow to int", size=19)
-r.arrow(515, 96, 515, 70)
-r.text(515, 60, "store: hour", size=17, anchor="middle")
-
-# The loop box on the right.
-r.rect(760, 100, 480, 420, fill=None, width=2.2)
-r.text(1000, 130, "the one emitted loop", size=24, anchor="middle")
-for i, ln in enumerate(
-    [
-        "for (i = 0; i < rows; i += 8) {",
-        "  a = load(t, i);  b = load(dt, i)",
-        "  s = a + b            // shared",
-        "  m = s / 60e9 * 60e9",
-        "  h = (s / 3600e9).narrow()",
-        "  store(out0, i, m)",
-        "  store(out1, i, h)",
-        "}",
-    ]
-):
-    r.text(790, 175 + i * 34, ln, size=18)
-r.note(790, 470, "no call per row, no call per output:\none body, eight rows a turn", size=16)
+# The loop it becomes.
+r.rect(40, 680, 820, 300, width=2.2)
+r.text(450, 710, "the one emitted loop", size=24, anchor="middle")
+lines = [
+    "for (i = 0; i < rows; i += 8) {",
+    "  a = load(t, i);  b = load(dt, i)",
+    "  s = a + b                       // shared",
+    "  store(out0, i, s / 60e9 * 60e9)",
+    "  store(out1, i, (s / 3600e9).narrow())",
+    "}",
+]
+for i, ln in enumerate(lines):
+    r.text(70, 750 + i * 34, ln, size=20)
+r.note(560, 800, "one body,\neight rows a turn,\nno call per row", size=19)
 
 finish(r, "fig6-fusion-shared-subtree")

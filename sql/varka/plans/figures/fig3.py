@@ -2,45 +2,40 @@
 
 from rough import Rough, finish
 
-r = Rough(1320, 560, seed=5)
+r = Rough(900, 760, seed=5)
 cols = [
-    ("t", "blue", "TIME(6)\n8 bytes"),
-    ("t2", "blue", "TIME(6)\n8 bytes"),
-    ("dt", "violet", "interval\n8 bytes"),
-    ("dt2", "violet", "interval\n8 bytes"),
-    ("l", "orange", "bigint\n8 bytes"),
-    ("l2", "orange", "bigint\n8 bytes"),
+    ("t", "blue", "TIME(6)"),
+    ("t2", "blue", "TIME(6)"),
+    ("dt", "violet", "interval"),
+    ("dt2", "violet", "interval"),
+    ("l", "orange", "bigint"),
+    ("l2", "orange", "bigint"),
 ]
-r.text(60, 45, "one Arrow batch of the varka_times table", size=28)
+r.text(40, 45, "one Arrow batch of the varka_times table", size=28)
 for i, (name, fill, kind) in enumerate(cols):
-    x = 60 + i * 150
-    r.text(x + 50, 90, name, size=24, anchor="middle")
-    # the data buffer: a tall strip of cells
+    x = 40 + i * 138
+    r.text(x + 48, 95, name, size=26, anchor="middle")
     for j in range(8):
-        r.rect(x, 110 + j * 30, 100, 26, fill=fill, size=12)
-    r.text(x + 50, 365, kind, size=15, anchor="middle")
-    # the validity bitmap: one bit a row, drawn as a thin strip
-    r.rect(x + 108, 110, 14, 236, fill="grey")
-    r.text(x + 115, 365, "1 bit\na row", size=12, anchor="middle", color="#868e96")
-# Panama bracket under the whole thing
-r.line(60, 430, 970, 430)
-r.line(60, 415, 60, 430)
-r.line(970, 415, 970, 430)
-r.text(
-    515,
-    460,
-    "MemorySegment.ofAddress(buf.memoryAddress()).reinterpret(rows * 8)",
-    size=18,
-    anchor="middle",
-)
+        r.rect(x, 120 + j * 34, 96, 30, fill=fill)
+    r.rect(x + 104, 120, 16, 266, fill="grey")
+    r.text(x + 48, 415, kind + "\n8 bytes", size=17, anchor="middle")
+    r.text(x + 112, 415, "1 bit\na row", size=14, anchor="middle", color="#868e96")
+r.line(40, 470, 860, 470)
+r.line(40, 455, 40, 470)
+r.line(860, 455, 860, 470)
+r.text(450, 500, "MemorySegment.ofAddress(buf.memoryAddress())", size=20, anchor="middle")
+r.text(450, 528, ".reinterpret(rows * 8)", size=20, anchor="middle")
 r.note(
-    60, 500, "the loop reads the bytes where Arrow put them:\nno copy, no object, no JNI", size=18
+    40, 580, "the loop reads the bytes where Arrow put them:\nno copy, no object, no JNI", size=21
 )
-# the row on the right, for contrast
-r.text(1130, 90, "a row", size=24, anchor="middle")
-r.rect(1050, 110, 160, 40, fill="yellow", label="UnsafeRow", size=17)
-r.text(1130, 195, "one object,\nsix fields,\none at a time", size=16, anchor="middle")
-r.arrow(1130, 235, 1130, 265)
-r.text(1130, 295, "what stock codegen\nloops over", size=16, anchor="middle", color="#868e96")
+r.rect(560, 590, 200, 48, fill="yellow", label="UnsafeRow", size=20)
+r.text(
+    660,
+    665,
+    "what stock codegen loops over:\none object, six fields, one at a time",
+    size=17,
+    anchor="middle",
+    color="#868e96",
+)
 
 finish(r, "fig3-batch-is-columns")

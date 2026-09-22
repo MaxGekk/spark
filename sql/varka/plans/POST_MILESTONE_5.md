@@ -14,10 +14,14 @@ it - `hour`, `minute`, `second`, `time_trunc`, arithmetic with intervals,
 differences between two times. It arrived behind a flag and is on its way to
 being on by default.
 
-On this laptop, stock Spark 4.2 computes `hour(t)` over a cached column at
-61.3 million rows a second per core. Varka, a research fork of Spark that
-compiles a projection into one vector loop, computes the same `hour(t)` at
-1041.4 million rows a second on the same core: about seventeen times faster.
+On the development laptop - an AMD Ryzen AI 9 HX PRO 370, a Zen 5 core with a
+full 512-bit vector datapath, running OpenJDK 25 on one core - stock Spark 4.2
+computes `hour(t)` over a cached column at 61.3 million rows a second. Varka, a
+research fork of Spark that compiles a projection into one vector loop,
+computes the same `hour(t)` on the same core at 1041.4 million rows a second:
+about seventeen times faster. Every number in this post comes from a committed
+results file that names its machine, JDK, row count and vector width, so each
+one can be checked without rerunning anything.
 This post is about where those seventeen come from. Not from a faster
 algorithm - the algorithm is a division - but from what the loop around it
 looks like, what it reads, and what it does not do per row.

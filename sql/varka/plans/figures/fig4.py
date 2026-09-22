@@ -3,69 +3,54 @@ fallback that hands a refused batch to the row engine."""
 
 from rough import Rough, finish
 
-r = Rough(1320, 600, seed=23)
+r = Rough(900, 720, seed=23)
 
 # The pipeline across the top.
-r.rect(60, 80, 200, 90, fill="grey", label="Project\nhour(t), t + dt", size=18)
-r.text(160, 195, "the Catalyst plan node", size=15, anchor="middle", color="#868e96")
-r.arrow(265, 125, 335, 125)
-r.rect(340, 80, 200, 90, fill="violet", label="Varka compiler", size=20)
+r.rect(30, 70, 170, 90, fill="grey", label="Project\nhour(t), t + dt", size=19)
+r.text(115, 185, "the plan node", size=16, anchor="middle", color="#868e96")
+r.arrow(205, 115, 240, 115)
+r.rect(245, 70, 170, 90, fill="violet", label="Varka\ncompiler", size=20)
+r.text(330, 185, "expressions to\na small vector IR", size=16, anchor="middle", color="#868e96")
+r.arrow(420, 115, 455, 115)
+r.rect(460, 50, 250, 130, fill="green")
+r.text(585, 75, "emitted class", size=22, anchor="middle")
+r.text(585, 105, "Class-File API, JDK 25", size=17, anchor="middle")
+r.text(585, 132, "SourceFile: Project#12", size=17, anchor="middle")
+r.text(585, 159, "VarkaDebugInfo: the IR", size=17, anchor="middle")
 r.text(
-    440,
-    195,
-    "Catalyst expressions to\na small vector IR",
-    size=15,
-    anchor="middle",
-    color="#868e96",
-)
-r.arrow(545, 125, 615, 125)
-r.rect(620, 60, 260, 130, fill="green")
-r.text(750, 85, "emitted class", size=21, anchor="middle")
-r.text(750, 115, "Class-File API, JDK 25", size=16, anchor="middle")
-r.text(750, 143, "SourceFile: Project#12", size=16, anchor="middle")
-r.text(750, 170, "VarkaDebugInfo: the IR", size=16, anchor="middle")
-r.text(
-    750,
-    215,
+    585,
+    205,
     "one class per projection shape,\nloaded with the task, unloaded with it",
-    size=15,
+    size=16,
     anchor="middle",
     color="#868e96",
 )
-r.arrow(885, 125, 955, 125)
-r.rect(960, 80, 200, 90, fill="orange", label="C2", size=24)
-r.text(
-    1060,
-    195,
-    "the JIT sees one loop,\nmonomorphic calls",
-    size=15,
-    anchor="middle",
-    color="#868e96",
-)
+r.arrow(715, 115, 750, 115)
+r.rect(755, 70, 120, 90, fill="orange", label="C2", size=26)
+r.text(815, 185, "one loop,\nmonomorphic", size=16, anchor="middle", color="#868e96")
 
-# The batches flowing through the kernel, and the trapdoor.
-r.text(60, 300, "at run time, batch by batch:", size=22)
-for i in range(4):
-    r.rect(60 + i * 90, 330, 76, 40, fill="blue", label="batch %d" % (i + 1), size=15)
-r.arrow(425, 350, 495, 350)
-r.rect(500, 300, 300, 100, fill="green", label="the kernel: 8 lanes a step", size=19)
-r.arrow(805, 350, 875, 350)
+# Run time: batches through the kernel, and the trapdoor.
+r.text(30, 290, "at run time, batch by batch:", size=24)
 for i in range(3):
-    r.rect(880 + i * 90, 330, 76, 40, fill="green", label="out %d" % (i + 1), size=15)
-# trapdoor under the kernel
-r.line(560, 400, 740, 400, width=3, color="#e03131")
-r.text(650, 425, "trapdoor", size=15, anchor="middle", color="#e03131")
-r.curve([(650, 435), (650, 480)], arrow=True, color="#e03131")
-r.rect(520, 485, 260, 60, fill="yellow", label="stock Spark's row engine", size=18)
-r.arrow(785, 515, 900, 515, color="#e03131")
-r.rect(905, 495, 60, 40, fill="green", label="out", size=15)
+    r.rect(30 + i * 95, 325, 82, 44, fill="blue", label="batch %d" % (i + 1), size=17)
+r.arrow(320, 347, 355, 347)
+r.rect(360, 305, 300, 90, fill="green", label="the kernel:\n8 lanes a step", size=20)
+r.arrow(665, 347, 700, 347)
+for i in range(2):
+    r.rect(705 + i * 90, 325, 78, 44, fill="green", label="out %d" % (i + 1), size=17)
+r.line(420, 396, 600, 396, width=3.5, color="#e03131")
+r.text(510, 425, "the trapdoor", size=18, anchor="middle", color="#e03131")
+r.arrow(510, 440, 510, 490, color="#e03131")
+r.rect(360, 495, 300, 60, fill="yellow", label="stock Spark's row engine", size=20)
+r.arrow(665, 525, 700, 525, color="#e03131")
+r.rect(705, 503, 78, 44, fill="green", label="out", size=17)
 r.note(
-    60,
-    470,
-    "a batch the kernel refuses - a sum past midnight,\na shape it cannot"
-    " compile - is recomputed by\nthe row engine. The query never fails and\nthe other"
-    " batches never notice.",
-    size=17,
+    30,
+    610,
+    "a batch the kernel refuses - a sum past midnight, a shape it cannot\n"
+    "compile - is recomputed by the row engine. The query never fails,\n"
+    "and the other batches never notice.",
+    size=20,
 )
 
 finish(r, "fig4-one-class-per-projection")

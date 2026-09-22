@@ -2,52 +2,51 @@
 
 from rough import Rough, finish
 
-r = Rough(1320, 600, seed=7)
+r = Rough(900, 1140, seed=7)
 
-# Left: stock Spark.
-r.text(60, 50, "Stock Spark: one row at a time", size=30)
+# Top: stock Spark.
+r.text(40, 45, "Stock Spark: one row at a time", size=30)
 for i in range(6):
-    r.rect(60, 110 + i * 34, 150, 28, fill="yellow", label="row %d" % (i + 1), size=17)
-r.text(135, 325, "...", size=26, anchor="middle")
-r.rect(300, 130, 260, 200, fill="grey")
-r.text(430, 165, "generated Java", size=22, anchor="middle")
-for i, ln in enumerate(
-    ["for (row : batch) {", "  LocalTime.of(...)", "   .getHour()", "  ; allocate ; store", "}"]
-):
-    r.text(430, 200 + i * 29, ln, size=18, anchor="middle")
+    r.rect(40, 90 + i * 40, 150, 34, fill="yellow", label="row %d" % (i + 1), size=20)
+r.text(115, 345, "...", size=28, anchor="middle")
+r.rect(270, 105, 330, 220, fill="grey")
+r.text(435, 140, "generated Java", size=24, anchor="middle")
+code = ["for (row : batch) {", "  LocalTime.of(...)", "     .getHour()", "  allocate; store", "}"]
+for i, ln in enumerate(code):
+    r.text(300, 178 + i * 32, ln, size=20)
 for i in range(3):
-    r.arrow(215, 124 + i * 34, 295, 160 + i * 20)
+    r.arrow(195, 107 + i * 40, 265, 150 + i * 30)
 for i in range(6):
-    r.rect(600, 110 + i * 34, 90, 28, fill="yellow", label="h", size=17)
+    r.rect(680, 90 + i * 40, 110, 34, fill="yellow", label="h", size=20)
     if i < 3:
-        r.arrow(565, 160 + i * 20, 595, 124 + i * 34)
-r.note(70, 380, "one object per row,\none lane of the core's 8 used", size=19)
-r.text(70, 460, "the 512-bit register:", size=19)
+        r.arrow(605, 150 + i * 30, 675, 107 + i * 40)
+r.note(40, 400, "one object per row, and one lane of the core's eight used", size=21)
+r.text(40, 465, "the 512-bit register:", size=21)
 for i in range(8):
-    r.rect(70 + i * 44, 480, 40, 34, fill="orange" if i == 0 else None)
-r.text(70, 545, "1 of 8 lanes busy", size=17, color="#6741d9")
+    r.rect(40 + i * 82, 490, 74, 46, fill="orange" if i == 0 else None)
+r.text(40, 565, "1 of 8 lanes busy", size=20, color="#6741d9")
 
-r.line(705, 40, 705, 570, dash="8 8", width=1.2)
+r.line(40, 610, 860, 610, dash="10 10", width=1.2)
 
-# Right: Varka.
-X = 760
-r.text(X, 50, "Varka: one loop over the column", size=30)
+# Bottom: Varka.
+Y = 660
+r.text(40, Y, "Varka: one loop over the column", size=30)
 for i in range(8):
-    r.rect(X, 100 + i * 30, 110, 26, fill="blue", label="t%d" % (i + 1), size=15)
-r.text(X + 55, 355, "Arrow column t\n(8 bytes a row)", size=17, anchor="middle")
-r.rect(X + 190, 120, 220, 210, fill="green")
-r.text(X + 300, 150, "emitted vector loop", size=22, anchor="middle")
-r.text(X + 300, 180, "load 8 lanes", size=18, anchor="middle")
-r.text(X + 300, 208, "divide by 3600e9", size=18, anchor="middle")
+    r.rect(40, Y + 40 + i * 38, 130, 32, fill="blue", label="t%d" % (i + 1), size=18)
+r.text(105, Y + 365, "Arrow column t,\n8 bytes a row", size=18, anchor="middle")
+r.rect(250, Y + 60, 380, 270, fill="green")
+r.text(440, Y + 95, "emitted vector loop", size=24, anchor="middle")
+r.text(440, Y + 130, "load 8 lanes", size=20, anchor="middle")
+r.text(440, Y + 160, "divide by 3600e9", size=20, anchor="middle")
 for i in range(8):
-    r.rect(X + 205 + i * 24, 235, 20, 24, fill="orange")
-r.text(X + 300, 285, "8 rows per instruction", size=18, anchor="middle")
-r.text(X + 300, 312, "store 8 lanes", size=18, anchor="middle")
-r.arrow(X + 115, 220, X + 185, 220)
+    r.rect(272 + i * 42, Y + 185, 36, 40, fill="orange")
+r.text(440, Y + 260, "8 rows per instruction", size=20, anchor="middle")
+r.text(440, Y + 292, "store 8 lanes", size=20, anchor="middle")
+r.arrow(175, Y + 190, 245, Y + 190)
 for i in range(8):
-    r.rect(X + 440, 100 + i * 30, 60, 26, fill="green", label="h%d" % (i + 1), size=15)
-r.arrow(X + 410, 220, X + 435, 220)
-r.text(X + 470, 355, "hour(t)\nint column", size=17, anchor="middle")
-r.note(X + 10, 420, "no object per row,\none store per output,\nall 8 lanes busy", size=19)
+    r.rect(700, Y + 40 + i * 38, 110, 32, fill="green", label="h%d" % (i + 1), size=18)
+r.arrow(635, Y + 190, 695, Y + 190)
+r.text(755, Y + 365, "hour(t),\nan int column", size=18, anchor="middle")
+r.note(250, Y + 400, "no object per row, one store per output, all 8 lanes busy", size=21)
 
 finish(r, "fig1-row-loop-vs-vector-loop")
