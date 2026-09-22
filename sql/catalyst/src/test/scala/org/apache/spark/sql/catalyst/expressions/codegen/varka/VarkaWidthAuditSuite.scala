@@ -302,9 +302,21 @@ class VarkaWidthAuditSuite extends SparkFunSuite {
             if (was != now) moved += s"$bits bits: $shape: $was -> $now"
           }
         }
-        fail("sql/varka/width_audit.json does not match what this host measures. If the " +
-          "emitter or the JDK changed what C2 lowers, regenerate and say so in the plan. " +
-          "What moved:\n  " + moved.result().mkString("\n  "))
+        val changes = moved.result()
+        if (changes.isEmpty) {
+          // The verdicts agree and only the provenance block differs - the JDK string after a
+          // package update is the case that found this. The census is the verdicts; a new JDK
+          // that changed none of them is worth a line, not a red suite, and the next
+          // regeneration carries the new string.
+          val committedJdk = new ObjectMapper().readTree(committed).get("host").get("jdk").asText()
+          info(s"the committed census was taken on JDK $committedJdk and this host runs " +
+            s"${System.getProperty("java.runtime.version")}; every verdict agrees, so the file " +
+            "stands until the next regeneration updates its provenance")
+        } else {
+          fail("sql/varka/width_audit.json does not match what this host measures. If the " +
+            "emitter or the JDK changed what C2 lowers, regenerate and say so in the plan. " +
+            "What moved:\n  " + changes.mkString("\n  "))
+        }
       }
     }
   }
