@@ -403,12 +403,14 @@ final class Slots {
           // rounding and the mask saying where the rounding went up held at once. The
           // conversion form needs none, so the slots follow the form rather than the node, and
           // the predicate is shared with the emission so the two cannot disagree about it.
-          if (node instanceof ConstDivide n && takesMagicDivide(analysis, n)) {
+          if (node instanceof ConstDivide n
+              && VarkaDivisionLowering.takesMagicDivide(analysis, n)) {
             s.constDivideTmp.put(node, new int[] {slot++, slot++, slot++, slot++});
           }
           // The multiply-high form reads its dividend three times - two halves and the sign
           // bit - so it parks the vector in one slot rather than juggling the stack.
-          if (node instanceof ConstDivide n && takesMulHiDivide(analysis, n)) {
+          if (node instanceof ConstDivide n
+              && VarkaDivisionLowering.takesMulHiDivide(analysis, n)) {
             s.constDivideTmp.put(node, new int[] {slot++});
           }
           if (node instanceof DayOfWeek || node instanceof WeekDay || node instanceof NextDay
