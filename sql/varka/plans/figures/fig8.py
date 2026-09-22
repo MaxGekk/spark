@@ -3,7 +3,7 @@ from a benchmark run to a committed results file."""
 
 from rough import Rough, finish
 
-r = Rough(900, 1200, seed=61)
+r = Rough(900, 1270, seed=61)
 gates = [
     (
         "the canary",
