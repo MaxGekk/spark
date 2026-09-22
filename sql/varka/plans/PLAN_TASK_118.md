@@ -126,6 +126,13 @@ Each item is something that was missed once and is a step here.
     flipped). Control: the closing pull requests carry results files and
     documents only, so they run the documents path or the scoped one, and a
     flake cannot block the merge of a number.
+14. **A surface ratio is the row engine's cost as much as the kernel's saving**
+    (task 155: `time_trunc('MINUTE', t)` runs within 7% of `hour(t)`'s kernel
+    rate and scores 34.7x against 17.1x, because the row engine costs twice as
+    much on it). Control: the post headlines the kernel rate in rows per
+    second with the ratio beside it and says which is which, and every ratio
+    it quotes names the row-engine rate it is against, so a reader can tell a
+    fast kernel from a slow comparand.
 
 ## 4. The measurement, and its predictions
 

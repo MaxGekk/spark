@@ -3667,6 +3667,57 @@ read from the JVM rather than guessed. `PrintIntrinsics` says why an intrinsic
 was refused; the width-audit workflow already runs the census on the pool and
 can carry the probe.
 
+### 2.102 The two 64-bit division forms have never been run through the JVM near the bound (task 166)
+
+*Opened 22 September 2026, from the milestone's closing review, on the owner's
+instruction.*
+
+`ConstDivide`'s dividend bound is 2^52, and the claim that the conversion form
+is exact under it and the magic form exact under it and wrong above it rests on
+`sql/varka/plans/verify_double_division.py`, a numpy model of the two lowerings
+over their divisors. Task 147 made the bound a stated obligation on the node;
+nothing has ever run the *emitted* kernel near it. The long-lane fuzzer's
+column bound is 2^46, one bit above a day of nanoseconds and six bits below
+where the lowerings break, so the emitted magic form has been checked exact
+under 2^52 and run under 2^46. If the model and the JVM's arithmetic disagree
+anywhere - a rounding mode, an intrinsic the JIT substitutes, a masked lane -
+the disagreement is in the six bits no test has visited, and the milestone's
+message about `TIME` divisions would be resting on a Python script.
+
+**How.** One test in `VarkaEmitterDivisionSuite` that emits both long-lane
+forms - the conversion form at the default level and the magic form at
+`useAVX=2` - at both widths, and drives them over dividends in `[2^51, 2^52)`
+and `[2^52, 2^53)` at both signs, comparing against Java's `/`: exact below
+the bound, and above it the documented failures, the conversion form off by
+one on a non-multiple and the magic form reading the dividend modulo 2^52. The
+test asserts the *shape* of each failure and not merely its presence, because a
+failure of a different shape would mean the model is wrong. **Done when** the
+kernel's own bytes confirm what the script models for every divisor Varka
+divides by, or the script is corrected to what they do. Size: small.
+
+### 2.103 The bytes oracle pins shapes, not options (task 167)
+
+*Opened 22 September 2026, from the same review.*
+
+`emitted_bytes.json` proved eight refactoring seams byte-identical in one
+morning, which is what it is for. What it covers is the coverage table's
+shapes and the fuzz blocks at `VarkaEmitOptions.DEFAULTS`, plus the A/B arms
+a handful of tests pin by hand. Whether every option a user or a benchmark
+can reach - `division`, `useAVX`, `shareChronoPrefix`, `validityByBitmap`,
+`narrowHalfSpecies`, the guard switches - emits what the suites believe it
+does is not a question the oracle answers, and task 121's session switch makes
+one of them reachable from SQL for the first time.
+
+**How.** An inventory first: which options the committed blocks and the
+pinned A/B tests hold at which values, read from the suites rather than
+recalled. Then a decision from the inventory: either a small block per option
+arm over a fixed shape set, so an option's off and on bytes are both pinned,
+or a recorded reason that the defaults and the existing arms suffice, with the
+options that are test-only named as such in `VarkaEmitOptions`' javadoc.
+**Done when** the oracle's coverage of the option space is stated in the
+suite that regenerates it, and every option reachable from production is
+either pinned at each value or declared test-only. Size: small to medium.
+
 ## 3. Task breakdown
 
 *The order that applies since 21 September 2026, from planning the closing
@@ -3867,6 +3918,8 @@ can start has.
 | 163 | **Moved to milestone 6** (21 September 2026, `SCOPE_MILESTONE_6.md` item 39): an emitter performance finding on the int lane; recorded, not the message. The emitted three-field int kernel trails its hand-written twin by 10% to 20% while cache-resident (section 2.99). **Scoped** (21 September 2026) from `PLAN_TASK_102.md` 8.8: the same multiplies and shifts, the single fields within 5%, the three-field shape 18% and 20% under in L3 at 512 and 256 bits and within 3% past L3 | Both kernels' assembly at 512 bits with `dev/varka_emit.sh --asm`: the loads, the three stores and the liveness around three roots against the hand-written loop, and the cost named or closed in the emitter | The emitted three-field bounded arm within 5% of the hand-written one in L3 at 512 and 256 bits in `VarkaTimeBenchmark`'s files, or the cause written in the plan and the skills file |
 | 164 | A `TIME` chains benchmark, for the full-width number (section 2.100). **Planned** (`PLAN_TASK_164.md`, 22 September 2026: `TimeChainBenchmark` and `TimeChains` mirroring the date pair, with the op floor re-derived rather than inherited - every input to `Chains`'s model changes at the long lane, where a row is eight bytes and a division is seven or fourteen lane operations - the entries mixing `TIME`, day-time intervals and `bigint` as the date chains mix their three types, and the job size priced by an ungated ladder before any gated dispatch). *Scoped* (21 September 2026) from `PLAN_TASK_118.md` section 3, item 5: the `TIME` surface cannot be measured honestly on a runner, as the date surface could not, and the chains are what the full-width machine measures | `TimeChainBenchmark` beside `DateChainBenchmark`: at most twelve chained `TIME` entries over the `varka_times` table under the same `MIN_OPS` floor, the `chains` machinery reused, its own results files and band; the laptop's four arms first, then the runner through the workflow | Every entry fuses with no fallback batch; the job-size rule met at 2e8 rows in 12g on a runner; the band measured before any figure is quoted |
 | 165 | C2 compiles the probe's own gather scalar at a forced 128-bit species on the runner pool and not on the laptop (section 2.101). **Narrowed** (22 September 2026, `PLAN_TASK_165.md` 5): the refusing runners quote the same three `missing constant` lines the laptop prints while packing and no `not supported` line, and their body is shorter than the laptop's packed one, so the gather's intrinsic is not refused by the matcher but never applied; the laptop reproduces a *different* scalar compile under `UseAVX=1` (the matcher's refusal, a 565-instruction loop) and packs under `UseAVX=2` and at four processors, which rules out the processor count and a missing instruction. The gate's probe now runs with `PrintInlining` and quotes the `loadWithMap` decisions, which name the mechanism on the next refusing run. *Planned* (`PLAN_TASK_165.md`, 21 September 2026: the gate's cancel quotes C2's refusal, then Zulu 25 and a four-processor count tried on the laptop, the VM's feature set read against the laptop's; four predictions); scoped (21 September 2026) from `PLAN_TASK_150.md` section 6: an EPYC 9V45 at four processors and the Intel Xeons read the same 248-instruction body under `-XX:MaxVectorSize=16` with `-Xbatch`, the laptop's Zen 5 packs it | The probe on a runner under `-XX:+PrintIntrinsics` and `-XX:+PrintInlining` at the forced species, through the width-audit workflow or a dispatch of the gate, against the laptop's output; the reason C2 gives read, and either a JVM condition named (a flag, a processor count, a vendor build) or a Varka assumption corrected | The refusal's reason quoted from the JVM's own output in the plan; the 128-bit assertions' cancel condition narrowed to that reason or removed |
+| 166 | The two 64-bit division forms have never been run through the JVM near the bound (section 2.102). **Scoped** (22 September 2026) from the closing review: `verify_double_division.py` models the lowerings and the long-lane fuzzer stops at 2^46, so the emitted magic form is checked exact under 2^52 and run under 2^46 | A `VarkaEmitterDivisionSuite` case driving both forms at both widths over `[2^51, 2^52)` and `[2^52, 2^53)` against Java's `/`, asserting exactness below the bound and the documented shape of each failure above it | The kernel's bytes confirm the script's verdict for every divisor Varka divides by, or the script is corrected |
+| 167 | The bytes oracle pins shapes, not options (section 2.103). **Scoped** (22 September 2026) from the closing review: the committed blocks hold the defaults plus a handful of hand-pinned A/B arms, and task 121 makes an option reachable from SQL | An inventory of which options the oracle holds at which values, read from the suites; then either a block per option arm over a fixed shape set or a recorded reason the defaults suffice, with test-only options named in `VarkaEmitOptions` | The oracle's coverage of the option space is stated where it is regenerated, and every production-reachable option is pinned at each value or declared test-only |
 
 ## 4. Files
 
