@@ -238,9 +238,21 @@ master, and on `t + dt` master's own row path already runs at 52.3 million
 rows a second where 4.2.0 runs at 33.5. So every ratio is against stock, and
 where the two baselines disagree by more than a fifth the ratio against the
 fork's own row engine is printed beside it. Runs are one core over cached
-Arrow rows - five hundred million for the `TIME` surface, two hundred million
-for the chains - with at least five iterations over two-second windows,
-recording wall time and executor time separately.
+Arrow rows, with at least five iterations over two-second windows, recording
+wall time and executor time separately.
+
+**Two tables, two machines, and the reason is arithmetic.** The *chains* -
+composed expressions, several operations deep - are measured on GitHub Actions,
+on a runner whose vector datapath the measuring job itself proves is 512 bits
+wide. They are the numbers this post leads with, and anyone can reproduce them
+by dispatching the same workflow. The *surface* - one row per expression, the
+coverage document - stays on the development laptop and is labelled as such,
+because it cannot be measured honestly on a runner at all: its lightest entries
+run at 0.8 nanoseconds a row, a cloud runner's per-iteration constant is about
+36 milliseconds, and keeping that constant under 5% would need some seven
+hundred million rows, which is about 32 GiB of cached table on a machine with
+15 GiB of memory. A surface row therefore says *what* fuses and roughly what it
+is worth on a developer's machine; a chain row is the claim.
 
 ![The gates a run passes before it is quoted](figures/out/fig8-the-gates.svg)
 
