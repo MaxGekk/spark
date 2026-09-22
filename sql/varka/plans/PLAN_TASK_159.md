@@ -261,6 +261,21 @@ The Arrow admission (`isArrowBacked` and its vector-class table), the output
 allocation, the derived-input fills, the run loop with its metrics, and the
 compaction, each its own file behind the evaluator that composes them.
 
+*Done 22 September 2026, as one class per file rather than one responsibility
+per file.* `VarkaKernelEvaluator.scala` held five classes; it keeps the
+projection evaluator with its companion object and the owned-vector wrapper,
+and `VarkaEvaluatorBase.scala` (the task-lifetime machinery every evaluator
+shares, with its two exceptions and the `Morsel` it hands the kernel),
+`VarkaFilterEvaluator.scala` (the selection bitmap and the compaction, with
+`VarkaSelection`) and `VarkaExecMetrics.scala` (the metric names) are files
+of their own. The responsibilities the list above names are methods of the
+base class over its own state - the allocator, the open-batch ledger, the
+scratch slots, the runner - and pulling each into a file would mean a trait
+or a helper object per responsibility with that state threaded through, which
+is more structure than the reading needs: the base class reads in order,
+admission, tracking, scratch, cleanup, fills, run, and is 815 lines. No code
+moved inside a class; the imports of each file are what it uses.
+
 ### 3.6 `ArrowCachedBatchSerializer` one class per file (small)
 
 The five iterators and the shared `ArrowColumnReader` into files of their own,
