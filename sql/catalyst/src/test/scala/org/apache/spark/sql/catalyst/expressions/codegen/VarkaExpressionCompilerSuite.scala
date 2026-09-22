@@ -779,7 +779,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
           // compiler refuses without the language import, and the table's own key type is the
           // one that matters.
           assert(
-            VarkaExpressionCompiler.timeTargets.contains((si.staticObject, si.functionName)),
+            VarkaTimeCompiler.timeTargets.contains((si.staticObject, si.functionName)),
             s"$label rewrote to ${si.staticObject.getName}.${si.functionName}, which the table " +
               "does not hold - a rename upstream, or a new expression")
         case other =>
@@ -792,7 +792,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
   test("the table holds every TIME expression and keys them distinctly") {
     // Coverage in both directions: nothing in the list is missing from the table, and no two
     // expressions share a key - a collision would silently make one of them report as the other.
-    assert(VarkaExpressionCompiler.timeTargets.size === everyTimeExpression.size,
+    assert(VarkaTimeCompiler.timeTargets.size === everyTimeExpression.size,
       "the table and the list of TIME expressions disagree in size, so one has a duplicate key")
   }
 
@@ -983,14 +983,14 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     for (p <- Seq(0, 1, 3, 6, 9)) {
       val fine = DayTimeIntervalType(DayTimeIntervalType.DAY, DayTimeIntervalType.SECOND)
       val coarse = DayTimeIntervalType(DayTimeIntervalType.DAY, DayTimeIntervalType.MINUTE)
-      assert(!VarkaExpressionCompiler.timeAddIntervalTruncates(TimeType(p), fine, math.max(p, 6)),
+      assert(!VarkaTimeCompiler.timeAddIntervalTruncates(TimeType(p), fine, math.max(p, 6)),
         s"TIME($p) + a second-ended interval")
-      assert(!VarkaExpressionCompiler.timeAddIntervalTruncates(TimeType(p), coarse, p),
+      assert(!VarkaTimeCompiler.timeAddIntervalTruncates(TimeType(p), coarse, p),
         s"TIME($p) + a minute-ended interval")
     }
     // And the check is not vacuous: a target coarser than the sum's granularity truncates -
     // a nanosecond time plus a microsecond interval, asked for at six digits.
-    assert(VarkaExpressionCompiler.timeAddIntervalTruncates(TimeType(9),
+    assert(VarkaTimeCompiler.timeAddIntervalTruncates(TimeType(9),
       DayTimeIntervalType(DayTimeIntervalType.DAY, DayTimeIntervalType.SECOND), 6))
   }
 

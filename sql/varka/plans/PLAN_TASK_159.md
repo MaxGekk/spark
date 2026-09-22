@@ -185,6 +185,32 @@ it. In Scala: the split is not the moment to port, and no PR of this task
 changes structure and language at once; a family at a time can be ported after,
 against the same oracle.
 
+*Done 22 September 2026, without task 86.* Four family objects beside the
+compiler: `VarkaChronoCompiler` (date arithmetic, the day-of-week nodes,
+`next_day`, the extractions, `make_date`, `last_day`, the ISO week, `trunc`,
+month arithmetic, with the range analysis that admits a day producer and the
+weekday and trunc-level folds), `VarkaIntervalCompiler` (the year-month
+interval leaves, casts and algebra), `VarkaTimeCompiler` (the long-lane and
+TIME leaves and casts, `compileTime` and its target table) and
+`VarkaConditionCompiler` (`compileCond` with the comparisons, `IN`, the
+validity predicates and the connectives, and the value-side `IF`, `CASE WHEN`
+and `coalesce`). Each exposes its arms of `compileNode` as a partial function
+over the three tables, and `compileNode` chains them after the date leaves and
+before the int arithmetic, the picks and the fallbacks it keeps. The chain is
+order-safe because no expression matches arms of two families - every arm is
+gated by the expression class or its data type - and the fallbacks stay last;
+within a family the arms keep their original order. The families reach the
+shared operand helpers and the recursion through an import of the compiler
+object; the compiler qualifies the few family members it calls back
+(`isDayOfWeekIso`, `andFold`, `foldPick`, `compileCond`, `compileTime`,
+`timeTargets`). Behaviour did not change: the compiler suite, the coverage
+suite and the bytes oracle pass unchanged, which is the proof; the coverage
+suite's source scan of the arms reads the five files rather than one, and
+said so itself when it found seventeen names instead of sixty. Task 86's
+operand-admission table is a behaviour change, which section 4 keeps out of
+this task, and it is a milestone 6 row now (`SCOPE_MILESTONE_6.md` item 39),
+so it did not come along. The compiler went from 2271 lines to 862.
+
 ### 3.5 `VarkaKernelEvaluator` by responsibility (medium)
 
 The Arrow admission (`isArrowBacked` and its vector-class table), the output

@@ -874,7 +874,7 @@ final class Analysis {
    * guard: its range is established by a compile-time fold or by the derived weekday leaf, and a
    * derived value there would reach {@code emitFloorMod7} unchecked.
    *
-   * <p>The two therefore share no rule any more. {@code VarkaExpressionCompiler.compileMonths}
+   * <p>The two therefore share no rule any more. {@code VarkaChronoCompiler.compileMonths}
    * admits exactly these three kinds; the two are meant to be read together, and an enumeration
    * test over the kinds is what would keep them together mechanically.
    */
@@ -893,7 +893,7 @@ final class Analysis {
    * takes the stricter {@link #requireOffsetShape}, because its range comes from a compile-time
    * fold with no runtime guard behind it - unlike {@code add_months}' month count, which takes
    * this same shape for the reason {@link #requireMonthCountShape} gives.
-   * `VarkaExpressionCompiler.compileOffset` admits exactly these three kinds; the two are meant
+   * `VarkaChronoCompiler.compileOffset` admits exactly these three kinds; the two are meant
    * to be read together.
    */
   private static void requireDayOffsetShape(VarkaVectorIR offset, String position) {
