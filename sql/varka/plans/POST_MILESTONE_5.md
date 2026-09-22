@@ -91,10 +91,20 @@ read and a four-byte write per row - rather than the division.
 
 ## 3. A batch is columns, not rows
 
-The first thing Varka changes is what the loop reads. Spark already has a
-columnar format in the JVM: cached tables live in `ColumnarBatch`es, and a
-Varka session caches them as Arrow. An Arrow column is two buffers - the values
-back to back, and a validity bitmap with one bit per row - and nothing else.
+The first thing Varka changes is what the loop reads. Spark already carries
+columns in the JVM - a cached table lives in `ColumnarBatch`es - and Varka adds
+a cache serializer that writes those batches as Arrow. That is where the
+kernels get their columns today, and it is how every benchmark in this post is
+set up: the table is cached, so the measurement times the loop rather than a
+scan. An Arrow column is two buffers, the values back to back and a validity
+bitmap with one bit per row, and nothing else.
+
+The cache is the first source, not the only one it can have. A columnar
+datasource that hands Arrow batches straight out of a file - Parquet is the
+obvious one, since its pages are already columns - would feed the same kernels
+with no cache step in front, and that is the natural next reader for this
+engine. Nothing below depends on where the batch came from; it depends only on
+the batch being Arrow.
 
 ![One Arrow batch of six columns, and the row it is not](figures/out/fig3-batch-is-columns.svg)
 
