@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, UnsafeP
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection,
   VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps,
-  VarkaSelectionBitmap}
+  VarkaEmitOptions, VarkaSelectionBitmap}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.{StructType}
@@ -60,8 +60,10 @@ private[sql] class VarkaFilterEvaluator(
     offHeapColumnVectorEnabled: Boolean,
     operatorName: String,
     classDumpDirectory: Option[String] = None,
-    metrics: VarkaExecMetrics = VarkaExecMetrics())
-    extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics) {
+    metrics: VarkaExecMetrics = VarkaExecMetrics(),
+    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN)
+    extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics,
+      emitUseAVX) {
 
   private lazy val compiled = {
     val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput)

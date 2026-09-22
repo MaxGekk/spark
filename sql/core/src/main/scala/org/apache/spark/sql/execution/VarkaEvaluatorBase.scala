@@ -34,8 +34,8 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{IntRangeOps, TruncLevelLeaf,
-  VarkaAllocationSampler, VarkaDerivedKind, VarkaFallbackEvent, VarkaFusedKernel, VarkaShapeCache,
-  VarkaShapeKey, VarkaVectorIR, WeekdayLeaf}
+  VarkaAllocationSampler, VarkaDerivedKind, VarkaEmitOptions, VarkaFallbackEvent, VarkaFusedKernel,
+  VarkaShapeCache, VarkaShapeKey, VarkaVectorIR, WeekdayLeaf}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
@@ -76,7 +76,8 @@ private[sql] abstract class VarkaEvaluatorBase(
     childOutput: Seq[Attribute],
     operatorName: String,
     classDumpDirectory: Option[String],
-    metrics: VarkaExecMetrics)
+    metrics: VarkaExecMetrics,
+    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN)
     extends Logging {
 
   /** The fused sub-plan the kernel computes; None when nothing is Varka-eligible. */
@@ -158,10 +159,19 @@ private[sql] abstract class VarkaEvaluatorBase(
     sb.toString
   }
 
-  /** The cache key of the fused sub-plan: exactly the emitter inputs the bytes follow. */
-  protected def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
-    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.numLiterals,
-      VarkaColumnarToRowExec.currentEmitOptions)
+  /**
+   * The cache key of the fused sub-plan: exactly the emitter inputs the bytes follow. The
+   * session's `spark.sql.codegen.varka.emit.useAVX`, read on the driver and carried here,
+   * is the one production knob on the options; it is applied over the test hook's options
+   * rather than instead of them, so a suite that drives a variant and sets the level gets
+   * both, and it is left alone at the default so that the hook's own level survives.
+   */
+  protected def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey = {
+    val base = VarkaColumnarToRowExec.currentEmitOptions
+    val options =
+      if (emitUseAVX == VarkaEmitOptions.USE_AVX_UNKNOWN) base else base.withUseAVX(emitUseAVX)
+    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.numLiterals, options)
+  }
 
   /**
    * The kernel named the way its telemetry names it: the

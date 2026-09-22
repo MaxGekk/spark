@@ -26,7 +26,7 @@ import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYea
 import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
-  VarkaFallbackEvent, VarkaKernelAllocationEvent}
+  VarkaEmitOptions, VarkaFallbackEvent, VarkaKernelAllocationEvent}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, IntegerType, LongType, StructType, TimeType, YearMonthIntervalType}
@@ -95,8 +95,10 @@ private[sql] class VarkaKernelEvaluator(
     offHeapColumnVectorEnabled: Boolean,
     operatorName: String,
     classDumpDirectory: Option[String] = None,
-    metrics: VarkaExecMetrics = VarkaExecMetrics())
-    extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics) {
+    metrics: VarkaExecMetrics = VarkaExecMetrics(),
+    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN)
+    extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics,
+      emitUseAVX) {
 
   // The projection classified entry by entry and its fused sub-projection compiled to vector
   // IR; None when no entry is Varka-eligible (should not happen given [[VarkaColumnarRule]],

@@ -939,8 +939,9 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
   saturates to unknown rather than wrapping, so no caller can prove a check
   away by overflowing.
 * **No unused configuration.** Every `spark.sql.codegen.varka.*` entry must be
-  consumed. Today `enabled`, `classDumpDirectory` and `cache.maxEntries`
-  exist, and each is read on the execution path that documents it.
+  consumed. Today `enabled`, `classDumpDirectory`, `cache.maxEntries`,
+  `compilationWatch.enabled` and `emit.useAVX` exist, and each is read on the
+  execution path that documents it.
 
 ## Module and file layout
 
@@ -959,6 +960,7 @@ All Varka configurations are internal:
 | :--- | :--- | :--- |
 | `spark.sql.codegen.varka.enabled` | `false` | When true, an eligible projection (at least one fusable entry) over Arrow `DateDayVector` columns runs the fused SIMD kernel instead of per-row codegen - as `VarkaProjectExec` where the consumer takes batches, and as `VarkaColumnarToRowExec` where it wants rows; ineligible entries run the row path per row and merge, and non-Arrow batches fall back entirely. |
 | `spark.sql.codegen.varka.classDumpDirectory` | (none) | Diagnostics (task 16). When set, every emitted kernel class is written to this directory under its `SourceFile` name, for `javap`. A failed write is logged and never fails the query; every task of a shape holds identical bytes and overwrites one file. |
+| `spark.sql.codegen.varka.emit.useAVX` | `-1` | The `-XX:UseAVX` level the emitter lowers for where a lowering depends on it (task 121): `3` or above takes a 64-bit division through double lanes, `2` the magic-number form, because the converts do not become instructions below AVX-512; `-1` leaves the emitter's own default, which is deliberately not the host's level so the shape hashes and the committed bytes describe no one machine. The level is part of the shape hash, so a session that sets it emits and caches its own classes. For benchmarks and A/Bs. |
 | `spark.sql.codegen.varka.cache.maxEntries` | `100` | Static (task 18). Capacity of the JVM-wide cache of loaded fused-kernel classes, keyed on the kernel's structural shape; the least recently used class is released on eviction, bounding Metaspace by this size. `0` restores the per-task emit-and-unload lifecycle. |
 
 The rule is registered on every `SparkSession` but does nothing while the

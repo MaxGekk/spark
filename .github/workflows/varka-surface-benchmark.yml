@@ -89,6 +89,11 @@ on:
         description: 'I/N - run entries I, I+N, I+2N of the surface, so N dispatches cover it once. For the row count the fixed-share rule wants, the whole surface does not fit one job. Merge with dev/varka_bench_merge.py. See PLAN_TASK_62.md 11.11.'
         required: false
         default: ''
+      extra-confs:
+        type: string
+        description: 'Comma-separated key=value settings appended to every arm, stock and fork alike, e.g. spark.driver.extraJavaOptions=-XX:UseAVX=2,spark.sql.codegen.varka.emit.useAVX=2 for task 121 (in local[1] the driver is the executor, so the JVM flag reaches the kernels). Empty appends nothing.'
+        required: false
+        default: ''
       create-commit:
         type: boolean
         description: 'Commit the results files to this branch'
@@ -342,6 +347,7 @@ jobs:
         ONLY: ${{ inputs.only }}
         SHARD: ${{ inputs.shard }}
         BENCHMARK: ${{ inputs.benchmark }}
+        EXTRA_CONFS: ${{ inputs.extra-confs }}
       run: |
         set -euo pipefail
         STOCK="$HOME/stock-spark/spark-${STOCK_VERSION}-bin-hadoop3"
@@ -358,12 +364,15 @@ jobs:
         # Guarded like ONLY and SHARD above it: an empty value would pass
         # `--benchmark ""` and the shell driver would reject it.
         [ -n "$BENCHMARK" ] && ARGS+=(--benchmark "$BENCHMARK")
+        # An arm's third field is a comma list of confs, `varka` among them: extra confs open
+        # that field on the arms that have none and extend it on the one that does.
+        OPEN="${EXTRA_CONFS:+:$EXTRA_CONFS}"; MORE="${EXTRA_CONFS:+,$EXTRA_CONFS}"
         # Varka last: the comparison table's ratios are the last file against the others.
         dev/varka_bench_surface.sh "${ARGS[@]}" \
-          "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17" \
-          "spark-${STOCK_VERSION}-jdk25=$STOCK:$J25" \
-          "varka-off-jdk25=$PWD:$J25" \
-          "varka-jdk25=$PWD:$J25:varka"
+          "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17$OPEN" \
+          "spark-${STOCK_VERSION}-jdk25=$STOCK:$J25$OPEN" \
+          "varka-off-jdk25=$PWD:$J25$OPEN" \
+          "varka-jdk25=$PWD:$J25:varka$MORE"
 
     # `!cancelled()` and not the default, because the step this follows fails on purpose:
     # a run whose fixed share is over the ceiling has still done every measurement, and

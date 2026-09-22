@@ -25,6 +25,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, SortOrder, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -122,7 +123,8 @@ case class VarkaProjectExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      varkaMetrics)
+      varkaMetrics,
+      emitUseAVX = conf.varkaEmitUseAVX)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -141,7 +143,8 @@ private[sql] class VarkaProjectEvaluatorFactory(
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
-    varkaMetrics: VarkaExecMetrics)
+    varkaMetrics: VarkaExecMetrics,
+    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN)
     extends PartitionEvaluatorFactory[ColumnarBatch, ColumnarBatch] with Logging {
 
   override def createEvaluator(): PartitionEvaluator[ColumnarBatch, ColumnarBatch] = {
@@ -152,7 +155,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
 
     private val kernels = new VarkaKernelEvaluator(
       projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "Project",
-      classDumpDirectory, varkaMetrics)
+      classDumpDirectory, varkaMetrics, emitUseAVX)
 
     // The per-row projection behind the fallback, and the schema its rows are written back into.
     // Lazy: a task the kernels serve end to end never compiles it, so the Janino

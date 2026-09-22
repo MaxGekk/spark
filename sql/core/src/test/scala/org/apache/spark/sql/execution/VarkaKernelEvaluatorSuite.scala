@@ -176,6 +176,29 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession {
     }
   }
 
+  test("the emit.useAVX level reaches the shape key, so a session at a level emits its own " +
+      "class") {
+    // Task 121's session switch: `spark.sql.codegen.varka.emit.useAVX` is read on the driver,
+    // carried to the evaluator and applied onto the emit options that form the shape key. The
+    // level is part of the shape hash, so the class name moves with it - which is what keeps a
+    // level-2 kernel from being served to a default-level session out of the shared cache.
+    withTask { (input, _) =>
+      val byDefault = evaluator()
+      byDefault.release(byDefault.project(input))
+      val atTwo = new VarkaKernelEvaluator(mixedList, childOutput,
+        offHeapColumnVectorEnabled = false, operatorName = "Test", None, VarkaExecMetrics(),
+        emitUseAVX = 2)
+      atTwo.release(atTwo.project(input))
+      val defaultBytes = byDefault.emittedClassBytes.get
+      val level2Bytes = atTwo.emittedClassBytes.get
+      // Same IR, different shape: only the options moved.
+      assert(VarkaDebugInfoReader.ir(defaultBytes) === VarkaDebugInfoReader.ir(level2Bytes))
+      assert(VarkaDebugInfoReader.sourceFile(defaultBytes) !==
+        VarkaDebugInfoReader.sourceFile(level2Bytes),
+        "a level in the options must change the shape hash and so the class")
+    }
+  }
+
   test("the emitted class carries shape-level telemetry, joined back to this execution") {
     withTask { (input, completeTask) =>
       val kernels = evaluator()
