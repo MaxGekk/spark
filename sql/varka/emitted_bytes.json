@@ -1,6 +1,6 @@
 {
   "generated_by" : "VarkaEmittedBytesSuite; regenerate with VARKA_BYTES_REGEN=true build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'",
-  "description" : "Hashes of every emitted method body, rendered symbolically, for every coverage row and for a fixed sequence of fuzz shapes at each lane, at 128 and 512 bits (lanesOverride 4 and 16 at the int lane, 2 and 8 at the long one). A difference is a change in what an emitted method does.",
+  "description" : "Hashes of every emitted method body, rendered symbolically, for every coverage row and for a fixed sequence of fuzz shapes at each lane, at 128 and 512 bits (lanesOverride 4 and 16 at the int lane, 2 and 8 at the long one). A difference is a change in what an emitted method does. `option_arms` covers the emissions a session can select rather than only the defaults: one digest over every shape at each width per value of spark.sql.codegen.varka.emit.useAVX, the only emit option a configuration reaches. The rest of VarkaEmitOptions is test-only.",
   "coverage_rows_skipped" : [ ],
   "lanes" : {
     "4" : {
@@ -2058,6 +2058,28 @@
         "block_size" : 100,
         "blocks" : [ "4970f19b659ab04d", "6cd733752b60de2c", "56c36d592b8ef9f1", "ef91dde857531098", "ebfeca242b5e4547", "ca3be1237e8debc5", "2807d40c7f6d7fdf", "aeef6ef90f2583aa", "4ef021459d585b36", "e98ffedb07624926", "590799cb69c3ed90", "782ca0dabf0e805b", "5bf391fd5234bbfc", "e25b57e46b2b99e8", "4c2546d64a726c4a", "ed28e4b37b1ace5f", "bf1c8daa9d7edb72", "fd81600d93077007", "78f519113c3da829", "ee5ed00e3e78e419", "468d4ddc42296857", "8ef15c60e42853f5", "f00a42f71b308aab", "5a2c3890b8a43e82", "17ca85418366a30c", "daed195feb209263", "431b19e73d2dabcc", "0acf66ee23f70064", "f717cc4ae9e405da", "13737a930e3ebe50", "e680e2a5ab7cc6f6", "1a00554a8221d0e4", "b8876af747081572", "8cbbde2cb2b24330", "972805247c20b55d", "766fcf5600071569", "ff7fb60f7804941d", "b63f6dc06922ac33", "c51f1671ff90840a", "3a36feae23687dad", "173ecd7d91784de9", "792d61d436f1ca7f", "46af7a7bc5a3f1fb", "7dab1719c8a13d6e", "f2c00fcb6ca6d25d", "b0ea0648272de68f", "66c04932fab3ce38", "e199c2faf6e6eeae", "0826e960102b3b0d", "d8722a3a2fd86900", "b8aef55105b0d563", "0a9a7591a0120433", "694c971466317a28", "90df9232a92da9d1", "e2dd0a573f62b617", "e771ab34bced2a0d", "8c308443e18a5b8f", "3d894b8a67702d70", "933c4004b2aca62e", "28014aceb6e0a7ae", "e7af96363067881e", "049407f89f5a0cda", "b3b2fb60ee198dc2", "0715cb098b529db0", "2d12bfe1b30918dc", "2566842f23541dd6", "a0a830a389d76dcb", "ed7901d85994c8df", "9cf41a93de24baa0", "8aaebc148cf3e25f", "0d53714117834826", "91ba01c984f9af24", "9e7f8fc311569dc2", "bafd4579f29488f7", "f824ae58c266cb7e", "b9e8b10d909a9d51", "6b556e2d92de7028", "48519627551b16b3", "c4863d214fffa842", "24669a74c746c008", "9894015cf53af1be", "b7768b014cc33766", "86450ab42aa5ab07", "d3c88a21bab235f7", "65e5d0f958ab256b", "3ec98322d26ee999", "fe3eb315aa440884", "47c800037228fa77", "eae002b9b168c68a", "5305dbb9f4a6d39c", "14e84a60f5827da9", "6ed58a24d3b9cb76", "c1431eb2497f2cfc", "dd1524e371a916d3", "b784e7a72b286772", "b95580a99c5275a7", "71e837c2ffaed5b8", "247a653865cb6a7e", "183fe51b15517e7a", "1b239e7644146824" ]
       }
+    }
+  },
+  "option_arms" : {
+    "useAVX=-1" : {
+      "4" : "108e24d5ded4a314",
+      "16" : "7c38fa4d9f20839a"
+    },
+    "useAVX=0" : {
+      "4" : "da4b6652ef6dc452",
+      "16" : "0ba00de8c4154166"
+    },
+    "useAVX=1" : {
+      "4" : "da4b6652ef6dc452",
+      "16" : "0ba00de8c4154166"
+    },
+    "useAVX=2" : {
+      "4" : "da4b6652ef6dc452",
+      "16" : "0ba00de8c4154166"
+    },
+    "useAVX=3" : {
+      "4" : "108e24d5ded4a314",
+      "16" : "7c38fa4d9f20839a"
     }
   }
 }

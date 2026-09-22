@@ -51,6 +51,22 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * used to be independent booleans that could both be set at once, where the emitter silently
  * preferred one; {@link FloorMod7} makes the choice exclusive.
  *
+ * <p><b>One field is reachable from SQL; the rest are test-only.</b>
+ * {@link #useAVX} has a session configuration in front of it,
+ * {@code spark.sql.codegen.varka.emit.useAVX}, because which division lowering is right is a
+ * property of the machine and a machine can be wrong about itself. Every other field on this
+ * record is set by a suite, a fuzz iteration or a benchmark arm through a test hook, and no
+ * configuration reaches it. The distinction decides what the bytes oracle has to pin: the
+ * emissions a user can select are pinned per value in {@code emitted_bytes.json}'s
+ * {@code option_arms}, and the test-only ones are covered by the defaults, with
+ * {@code VarkaEmittedBytesSuite}'s opt-in audit recording which of them move bytes at all.
+ * A field that gains a configuration has to gain a pinned arm with it.
+ *
+ * <p><b>Two fields exist to break the emitter.</b> {@link #misdescribeAdd} and
+ * {@link #misdescribeWordLiveness} feed it a wrong descriptor and an inverted liveness verdict
+ * so that its own self-checks can be shown to fire; emission under the second of them raises
+ * rather than producing a class, which is the point of it.
+ *
  * <p><b>Defaults hash to what they always hashed.</b> {@link VarkaShapeCacheImpl#shapeHash}
  * renders these into the hash only when they differ from {@link #DEFAULTS}, so production hashes,
  * class names and telemetry are unchanged bit for bit and only the variants a suite asks for get
