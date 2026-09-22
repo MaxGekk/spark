@@ -198,6 +198,19 @@ The file's section headers are the plan. In order of least entanglement:
    the file boundary: `invokeCall`, `planFragmentsReadingMonth` and `emitCond`
    went from private to package-private; the facade names the new class at
    its eight calls, `Slots` at its two. The emitter lost 920 lines, to 1722.
+   *The vector walk done 22 September 2026, as `VarkaVectorWalk.java`*:
+   `emitValue` and `emitCond`, the int arithmetic with its overflow masks, the
+   guards and their arm contexts, the picks, `emitShift`, and `line`,
+   `loadWord`, `storeWord`, under a class comment that says what the walk
+   leaves on the stack and in the slots and which families it hands off. The
+   body emitter and the two lowering classes reach it by a static import, the
+   way they already reach the facade's constants; nothing else crossed the
+   boundary, since seam 5 had already widened what the lowerings call. The
+   facade's class comment lost its "largest file in the engine" opening for a
+   map of the nine files the emitter now is, and keeps the design notes on the
+   emitted class, which hold across them. The emitter lost 780 lines, to 942:
+   `emit`, the budgets and grouping, the fragment keys, the class assembly and
+   the entry-point validation.
 
 `VarkaLoopEmitter` keeps `emit`, `fitsBudgets`, `bitmapPassCounts` and the
 class-level javadoc that explains the whole, and becomes the map a reader
