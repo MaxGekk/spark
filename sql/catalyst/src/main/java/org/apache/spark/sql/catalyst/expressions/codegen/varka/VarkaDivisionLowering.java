@@ -23,7 +23,7 @@ import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopE
 import java.lang.classfile.CodeBuilder;
 import java.util.Set;
 
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter.ChronoDivide;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChronoLowering.ChronoDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 
 /**
