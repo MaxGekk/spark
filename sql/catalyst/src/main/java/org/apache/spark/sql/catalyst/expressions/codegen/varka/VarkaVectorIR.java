@@ -453,14 +453,26 @@ public sealed interface VarkaVectorIR
    * bit of the exponent field its {@code 0x4330000000000000} identity relies on, so past the
    * bound the OR drops the bit and the value read back is the dividend modulo {@code 2^52}.
    *
-   * <p>Nothing checks the bound. The obligation is stated and not enforced, which is a gap
-   * rather than a design: a per-batch guard declining out-of-range dividends to the row engine
-   * is what the kernel's status bitmask already exists for, and `PLAN_MILESTONE_5.md` 2.83
-   * carries it. This node cannot check a bound it is not handed, so whoever
-   * builds it over a {@code LONG} child must have proven one: structurally, the way nanoseconds
-   * of day are, or through a per-batch input bound that declines the rest to the row engine.
+   * <p><b>So a long-lane division states the bound its caller proved</b>, in
+   * {@code dividendBound}, and cannot be built without one: the two-argument constructor
+   * serves the int lane alone and refuses a {@code LONG} child, and the compact constructor
+   * refuses a bound above what a lowering can honour. No static check can know a column's
+   * values, so what the node enforces is that a claim was made and is admissible; making it
+   * true is the caller's, and there are two ways. Structurally, the way nanoseconds of day are
+   * under {@code NANOS_PER_DAY} by the type of a {@code TIME} - which is every long-lane
+   * division the compiler builds today. Or by guarding: a caller with nothing to prove wraps
+   * its child in a {@link GuardedRange} over the bound it then states, and a batch with a lane
+   * outside it goes to the row engine.
+   *
+   * <p>The bound is deliberately absent from {@link #canonical}. It changes no emitted byte -
+   * the guard, where there is one, is a separate node the shape key already separates - so two
+   * trees differing only in what their caller proved are one kernel. It is a component all the
+   * same, and therefore part of this record's equality, so a caller must derive it from the
+   * tree rather than from the call site: two equal subtrees carrying different bounds would
+   * stop being common subexpressions.
    */
-  record ConstDivide(VarkaVectorIR child, long divisor) implements VarkaVectorIR {
+  record ConstDivide(VarkaVectorIR child, long divisor, long dividendBound)
+      implements VarkaVectorIR {
 
     /**
      * The exclusive bound on a 64-bit dividend's magnitude that a caller must prove. It is a
@@ -480,6 +492,34 @@ public sealed interface VarkaVectorIR
      */
     public static final long EXACT_DIVIDEND_BOUND = 1L << 52;
 
+    /**
+     * The bound every int-lane dividend satisfies by its type, and what the two-argument
+     * constructor fills in. It is one past the magnitude of {@code Integer.MIN_VALUE}, which
+     * is the widest an int32 dividend can be. An int32 converts to a double exactly, so the
+     * int lane has no precondition of its own; carrying the bound all the same keeps one
+     * record rather than two.
+     */
+    public static final long INT_DIVIDEND_BOUND = (1L << 31) + 1;
+
+    /**
+     * What the two-argument form passes, so the checks below can tell it from a real bound.
+     * Negative rather than zero: a bound of zero is nonsense but reachable, since a caller
+     * that divides a bounded value far enough arrives there, and a sentinel it collides with
+     * would report a missing bound where one was given.
+     */
+    private static final long UNSTATED = -1;
+
+    /**
+     * The int lane's form, where the bound is the lane's own and there is nothing to prove. It
+     * refuses a {@code LONG} child rather than filling one in: at the long lane the bound is
+     * the caller's undertaking and stating it is the whole point, so a call that leaves it out
+     * must not quietly acquire one - that would be the gap this record's javadoc describes,
+     * moved one level up.
+     */
+    public ConstDivide(VarkaVectorIR child, long divisor) {
+      this(child, divisor, UNSTATED);
+    }
+
     public ConstDivide {
       if (divisor == 0) {
         throw new IllegalArgumentException("a constant division by zero has no lowering");
@@ -496,6 +536,27 @@ public sealed interface VarkaVectorIR
       if (child.laneType() == LaneType.INT && (int) divisor != divisor) {
         throw new IllegalArgumentException(
             "a constant division at the int lane needs an int divisor, not " + divisor);
+      }
+      // The bound is the caller's undertaking and this is where it becomes unforgeable: a node
+      // claiming more than a lowering can honour does not exist, so no walk downstream has to
+      // ask whether one does. A claim it cannot honour is refused; a claim it can is trusted,
+      // because no static check can know a column's values. The two checks above run first so
+      // that a division by zero or by -1 reports what is wrong with the divisor rather than
+      // what is missing beside it.
+      if (dividendBound == UNSTATED) {
+        if (child.laneType() != LaneType.INT) {
+          throw new IllegalArgumentException("a constant division at the long lane must state "
+              + "the dividend bound its caller proved: / " + divisor + " over a "
+              + child.getClass().getSimpleName());
+        }
+        dividendBound = INT_DIVIDEND_BOUND;
+      }
+      // One ceiling for both lanes: a claim above what the long lane's lowerings honour means
+      // nothing anywhere, and an int-lane value is under INT_DIVIDEND_BOUND whatever is
+      // claimed, so the int lane needs no ceiling of its own.
+      if (dividendBound < 1 || dividendBound > EXACT_DIVIDEND_BOUND) {
+        throw new IllegalArgumentException("a constant division's dividend bound must lie in "
+            + "[1, " + EXACT_DIVIDEND_BOUND + "], not " + dividendBound);
       }
     }
   }

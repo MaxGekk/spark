@@ -592,7 +592,11 @@ object VarkaIrGrammar {
           val a = value(depth - 1)
           if (a.bound >= ConstDivide.EXACT_DIVIDEND_BOUND) return a
           val d = LongDivisors(rnd.nextInt(LongDivisors.length))
-          Gen(new ConstDivide(a.node, d), a.bound / math.abs(d))
+          // The grammar has tracked this subtree's bound all along; the node now carries it,
+          // which is the whole of task 147 seen from the generator's side. Plus one, because
+          // the grammar's bound is the widest magnitude a value takes and the node's is one the
+          // value stays under - a guard from -bound to +bound admits bound itself.
+          Gen(new ConstDivide(a.node, d, a.bound + 1), a.bound / math.abs(d))
         case 5 =>
           val a = value(depth - 1)
           if (saturated(a.bound)) {
