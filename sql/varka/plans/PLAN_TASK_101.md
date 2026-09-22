@@ -154,3 +154,46 @@ one entry per arm 8% to 27% from its twin - and no band. Section 5 of the
 milestone plan reads "the `TIME` surface is quoted only from under its own band
 file"; on tonight's evidence the chains' band is cheap to produce and the
 surface's is not, which is worth knowing before task 105 plans its own.
+
+## 10. The surface's band, 22 September 2026
+
+Section 9.2 priced a surface band at seventeen hours from an arm that took
+1h40m, and found three ways round it. The fourth was the plain one: the fork's
+Varka arm alone, at the committed setting of 1e9 rows in one partition, takes
+34 minutes once the table is built, because the 1h40m was the four arms with
+stock's row engine among them. Twelve runs of that arm were one night, 23:25 to
+06:15 Tivat time, each started on a quiet machine under an 8% fixed-share
+bound (the band measures spread, not the number; the committed arms ran under
+5%), in a 64g driver since the 23.2 GiB table is not resident in 48g.
+`DateSurface-jdk25-band.txt`, 126 cases.
+
+**The projections are quiet and the counted filters are not**, the split the
+`TIME` surface's band showed the day before (`PLAN_TASK_105.md` section 7).
+Across the 126 cases: median spread 2.11%, p90 3.30%; 107 cases in tier 0, 9 in
+tier 1, 8 in tier 2 and 2 in tier 3. Every projection row is within 3.2% - the
+widest, `date_add(d, i)` at 3.19% and `abs(ymm)` at 3.06%, sit just over the
+tier 0 line - so the whole date table the README quotes can be read with a 3%
+tier. The spread is the filters', and one shape is a different kind of case:
+
+| filter, counted | spread | tier |
+|---|---|---|
+| `d < d2` | 44.85% | 3 |
+| `d < d2 AND month(d) = 6` | 17.95% | 2 |
+| `d = d2` | 11.63% | 2 |
+| `d IN (three dates)` | 10.51% | 2 |
+| `d IS NULL` | 6.66% | 1 |
+| `d BETWEEN two dates` | 2.13% | 0 |
+
+`d < d2` counted is the README's known-loss row (0.80x against stock) and it
+moves by half of itself between runs of an unchanged file: tier 3, which the
+band file defines as not readable from a diff at all. That row's ratio is a
+statement about a range, not a number, and the README already prints it as a
+loss with its cause; the band says it may not be quoted more precisely than
+that. The two-column and `IN` counted filters are the next widest, as their
+`TIME` counterparts were, for the same reason - jobs of a second or two where
+the columnar boundary is a real share of the time and the kernel is not.
+
+What this closes: row 101's second half. Both surfaces and the chains now have
+a band file, the regeneration diff reads each case against its tier, and task
+118 quotes no surface row bare.
+

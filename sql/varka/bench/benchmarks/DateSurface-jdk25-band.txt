@@ -1,0 +1,139 @@
+Band for 126 cases: how far apart repeated runs of an unchanged file land.
+Written by dev/varka_bench_band.py. Read by dev/varka_bench_diff.py --band, which
+uses a case's tier to decide whether its move in a regeneration means anything.
+
+tier 0 <= 3%   1 <= 10%   2 <= 25%   3 not readable from a diff at all
+
+runs:    12
+commit:  0e2d0cb8f1d
+date:    2026-09-22T04:15:13+00:00
+jdk:     openjdk version "25.0.4" 2026-07-21
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+
+tier   spread occ  table | case
+0     2.92   1  -ymm over 1000000000 rows | projection, columnar consumer
+0     2.86   1  -ymm over 1000000000 rows, executor time | projection, columnar consumer
+0     1.91   1  CASE WHEN d < d2 THEN d ELSE d2 END over 1000000000 rows | projection, columnar consumer
+0     1.86   1  CASE WHEN d < d2 THEN d ELSE d2 END over 1000000000 rows, executor time | projection, columnar consumer
+0     2.64   1  CAST(i AS INTERVAL MONTH) over 1000000000 rows | projection, columnar consumer
+0     2.68   1  CAST(i AS INTERVAL MONTH) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.55   1  CAST(month(d) AS INTERVAL YEAR) * 3 over 1000000000 rows | projection, columnar consumer
+0     1.45   1  CAST(month(d) AS INTERVAL YEAR) * 3 over 1000000000 rows, executor time | projection, columnar consumer
+0     2.67   1  CAST(ymm AS INT) over 1000000000 rows | projection, columnar consumer
+0     2.68   1  CAST(ymm AS INT) over 1000000000 rows, executor time | projection, columnar consumer
+1     3.06   1  abs(ymm) over 1000000000 rows | projection, columnar consumer
+1     3.30   1  abs(ymm) over 1000000000 rows, executor time | projection, columnar consumer
+0     0.77   1  add_months(d, 3) over 1000000000 rows | projection, columnar consumer
+0     0.68   1  add_months(d, 3) over 1000000000 rows, executor time | projection, columnar consumer
+0     0.60   1  add_months(d, i) over 1000000000 rows | projection, columnar consumer
+0     0.62   1  add_months(d, i) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.93   1  coalesce(d, d2) over 1000000000 rows | projection, columnar consumer
+0     2.02   1  coalesce(d, d2) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.50   1  d + CAST(i AS INTERVAL DAY) over 1000000000 rows | projection, columnar consumer
+0     2.72   1  d + CAST(i AS INTERVAL DAY) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.18   1  d + CAST(month(d) AS INTERVAL YEAR) over 1000000000 rows | projection, columnar consumer
+0     1.01   1  d + CAST(month(d) AS INTERVAL YEAR) over 1000000000 rows, executor time | projection, columnar consumer
+0     0.69   1  d + INTERVAL 3 MONTH over 1000000000 rows | projection, columnar consumer
+0     0.59   1  d + INTERVAL 3 MONTH over 1000000000 rows, executor time | projection, columnar consumer
+0     0.57   1  d + ym over 1000000000 rows | projection, columnar consumer
+0     0.63   1  d + ym over 1000000000 rows, executor time | projection, columnar consumer
+0     0.52   1  d + ymm over 1000000000 rows | projection, columnar consumer
+0     0.47   1  d + ymm over 1000000000 rows, executor time | projection, columnar consumer
+0     0.63   1  d + ymy over 1000000000 rows | projection, columnar consumer
+0     0.47   1  d + ymy over 1000000000 rows, executor time | projection, columnar consumer
+0     1.74   1  d - ymm over 1000000000 rows | projection, columnar consumer
+0     1.77   1  d - ymm over 1000000000 rows, executor time | projection, columnar consumer
+1     3.30   1  d < d2 AND month(d) = 6 over 1000000000 rows | filter, columnar consumer
+2    17.95   1  d < d2 AND month(d) = 6 over 1000000000 rows | filter, counted
+1     3.36   1  d < d2 AND month(d) = 6 over 1000000000 rows, executor time | filter, columnar consumer
+2    18.10   1  d < d2 AND month(d) = 6 over 1000000000 rows, executor time | filter, counted
+0     1.19   1  d < d2 over 1000000000 rows | filter, columnar consumer
+3    44.85   1  d < d2 over 1000000000 rows | filter, counted
+0     1.19   1  d < d2 over 1000000000 rows, executor time | filter, columnar consumer
+3    45.05   1  d < d2 over 1000000000 rows, executor time | filter, counted
+2    11.76   1  d = d2 over 1000000000 rows | filter, columnar consumer
+2    11.63   1  d = d2 over 1000000000 rows | filter, counted
+2    11.74   1  d = d2 over 1000000000 rows, executor time | filter, columnar consumer
+2    11.72   1  d = d2 over 1000000000 rows, executor time | filter, counted
+0     2.27   1  d BETWEEN DATE'2020-06-01' AND DATE'2021-06-01' over 1000000000 rows | filter, columnar consumer
+0     2.13   1  d BETWEEN DATE'2020-06-01' AND DATE'2021-06-01' over 1000000000 rows | filter, counted
+0     2.45   1  d BETWEEN DATE'2020-06-01' AND DATE'2021-06-01' over 1000000000 rows, executor time | filter, columnar consumer
+0     2.24   1  d BETWEEN DATE'2020-06-01' AND DATE'2021-06-01' over 1000000000 rows, executor time | filter, counted
+0     2.41   1  d IN (DATE'2020-01-01', DATE'2020-07-01', DATE'2021-01-01') over 1000000000 rows | filter, columnar consumer
+2    10.51   1  d IN (DATE'2020-01-01', DATE'2020-07-01', DATE'2021-01-01') over 1000000000 rows | filter, counted
+0     2.12   1  d IN (DATE'2020-01-01', DATE'2020-07-01', DATE'2021-01-01') over 1000000000 rows, executor time | filter, columnar consumer
+2    10.80   1  d IN (DATE'2020-01-01', DATE'2020-07-01', DATE'2021-01-01') over 1000000000 rows, executor time | filter, counted
+0     2.13   1  d IS NOT NULL over 1000000000 rows | filter, columnar consumer
+0     1.00   1  d IS NOT NULL over 1000000000 rows | filter, counted
+0     2.29   1  d IS NOT NULL over 1000000000 rows, executor time | filter, columnar consumer
+0     1.00   1  d IS NOT NULL over 1000000000 rows, executor time | filter, counted
+0     1.79   1  d IS NULL over 1000000000 rows | filter, columnar consumer
+1     6.66   1  d IS NULL over 1000000000 rows | filter, counted
+0     1.82   1  d IS NULL over 1000000000 rows, executor time | filter, columnar consumer
+1     6.87   1  d IS NULL over 1000000000 rows, executor time | filter, counted
+0     2.50   1  date_add(d, 3) over 1000000000 rows | projection, columnar consumer
+0     2.63   1  date_add(d, 3) over 1000000000 rows, executor time | projection, columnar consumer
+1     3.19   1  date_add(d, i) over 1000000000 rows | projection, columnar consumer
+1     3.13   1  date_add(d, i) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.49   1  date_from_unix_date(unix_date(d)) over 1000000000 rows | projection, columnar consumer
+0     2.80   1  date_from_unix_date(unix_date(d)) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.49   1  date_sub(d, 5) over 1000000000 rows | projection, columnar consumer
+0     2.63   1  date_sub(d, 5) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.51   1  datediff(d2, d) over 1000000000 rows | projection, columnar consumer
+1     3.10   1  datediff(d2, d) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.09   1  day(d) over 1000000000 rows | projection, columnar consumer
+0     2.10   1  day(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.64   1  dayofweek(d) over 1000000000 rows | filter, columnar consumer
+0     1.13   1  dayofweek(d) over 1000000000 rows | filter, counted
+0     2.78   1  dayofweek(d) over 1000000000 rows | projection, columnar consumer
+0     1.89   1  dayofweek(d) over 1000000000 rows, executor time | filter, columnar consumer
+0     1.15   1  dayofweek(d) over 1000000000 rows, executor time | filter, counted
+0     2.91   1  dayofweek(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.89   1  dayofyear(d) over 1000000000 rows | projection, columnar consumer
+0     1.50   1  dayofyear(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.09   1  extract(DAYOFWEEK_ISO FROM d) over 1000000000 rows | projection, columnar consumer
+0     2.26   1  extract(DAYOFWEEK_ISO FROM d) over 1000000000 rows, executor time | projection, columnar consumer
+0     0.90   1  extract(YEAROFWEEK FROM d) over 1000000000 rows | projection, columnar consumer
+0     1.05   1  extract(YEAROFWEEK FROM d) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.18   1  greatest(d, d2) over 1000000000 rows | projection, columnar consumer
+0     2.20   1  greatest(d, d2) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.91   1  if(d < d2, d, d2) over 1000000000 rows | projection, columnar consumer
+0     1.86   1  if(d < d2, d, d2) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.74   1  last_day(d) over 1000000000 rows | projection, columnar consumer
+0     1.85   1  last_day(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.41   1  least(d, d2) over 1000000000 rows | projection, columnar consumer
+0     2.49   1  least(d, d2) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.01   1  make_ym_interval(year(d), month(d)) over 1000000000 rows | projection, columnar consumer
+0     1.88   1  make_ym_interval(year(d), month(d)) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.58   1  month(d) over 1000000000 rows | projection, columnar consumer
+0     1.38   1  month(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.14   1  next_day(d, 'MONDAY') over 1000000000 rows | projection, columnar consumer
+0     2.30   1  next_day(d, 'MONDAY') over 1000000000 rows, executor time | projection, columnar consumer
+0     1.95   1  quarter(d) over 1000000000 rows | projection, columnar consumer
+0     1.55   1  quarter(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.35   1  trunc(d, 'MONTH') over 1000000000 rows | projection, columnar consumer
+0     2.22   1  trunc(d, 'MONTH') over 1000000000 rows, executor time | projection, columnar consumer
+0     1.55   1  trunc(d, 'QUARTER') over 1000000000 rows | projection, columnar consumer
+0     1.37   1  trunc(d, 'QUARTER') over 1000000000 rows, executor time | projection, columnar consumer
+0     2.51   1  trunc(d, 'WEEK') over 1000000000 rows | projection, columnar consumer
+0     2.42   1  trunc(d, 'WEEK') over 1000000000 rows, executor time | projection, columnar consumer
+0     1.88   1  trunc(d, 'YEAR') over 1000000000 rows | projection, columnar consumer
+0     1.68   1  trunc(d, 'YEAR') over 1000000000 rows, executor time | projection, columnar consumer
+0     2.73   1  unix_date(d) over 1000000000 rows | projection, columnar consumer
+0     2.61   1  unix_date(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.96   1  weekday(d) over 1000000000 rows | projection, columnar consumer
+0     2.64   1  weekday(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.33   1  weekofyear(d) over 1000000000 rows | projection, columnar consumer
+0     1.17   1  weekofyear(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.28   1  year(d) over 1000000000 rows | filter, columnar consumer
+0     0.97   1  year(d) over 1000000000 rows | filter, counted
+0     2.52   1  year(d) over 1000000000 rows | projection, columnar consumer
+0     2.13   1  year(d) over 1000000000 rows, executor time | filter, columnar consumer
+0     0.93   1  year(d) over 1000000000 rows, executor time | filter, counted
+0     2.11   1  year(d) over 1000000000 rows, executor time | projection, columnar consumer
+0     1.67   1  year(date_add(d, 30)) over 1000000000 rows | projection, columnar consumer
+0     1.70   1  year(date_add(d, 30)) over 1000000000 rows, executor time | projection, columnar consumer
+0     2.51   1  ymm + ymy over 1000000000 rows | projection, columnar consumer
+0     2.46   1  ymm + ymy over 1000000000 rows, executor time | projection, columnar consumer
+0     1.69   1  ymm - ymy over 1000000000 rows | projection, columnar consumer
+0     1.63   1  ymm - ymy over 1000000000 rows, executor time | projection, columnar consumer
