@@ -3083,6 +3083,123 @@ closing task says so in as many words: without 104 the `bigint` claim is
 "comparisons, selections and the interval as an operand of `TIME` arithmetic".
 Both are the first rows to re-enter when the long lane's arithmetic is taken up.
 
+### Item 40. The emitter's shared constants out of the facade
+
+*Opened 22 September 2026, from the retrospective on task 159's refactor, on
+the owner's instruction; items 40 to 47 come from the same review.*
+
+After the split, `VarkaVectorWalk`, `VarkaBodyEmitter` and the two lowering
+classes reach the word sentinels (`WORD_ALL_TRUE`, `WORD_DEAD`) and the limits
+(`MAX_CHAIN_DEPTH`, `MAX_FUSED_NODES`, `MAX_INPUTS`) through a static import of
+`VarkaLoopEmitter`, so the dependency graph has cycles that hide who needs
+what: a lowering imports the facade to get a constant. The limits belong in
+`VarkaEmitBudget` with the budgets they bound; the word sentinels belong with
+`loadWord` and `storeWord` in the walk, which is the one path every word goes
+through. **Done when** no class under `codegen/varka` static-imports
+`VarkaLoopEmitter`, the facade imports the pieces and not the reverse, and
+the bytes oracle is unchanged.
+
+### Item 41. A disjointness test for the compiler's family chain
+
+`VarkaExpressionCompiler.compileNode` chains the four family partial functions
+(task 159 step 3.4) and the chain is order-safe because every arm is gated by
+the expression class or its data type, so no expression matches arms of two
+families. That is an argument, not a test, and a fifth family or a widened
+guard would break it silently: the first family in the chain would win. A
+test that runs every expression of the coverage table and of the compiler
+suite's corpus through each family's `arms(...).isDefinedAt`, plus the leaf,
+arithmetic and fallback groups the compiler keeps, and asserts that exactly one
+answers, turns the argument into a fact that stays true. **Done when** the
+test exists in the compiler suite and fails when an arm is duplicated across
+two families on purpose.
+
+### Item 42. Port `VarkaIntervalCompiler` to Java, the first family port
+
+The compiler split leaves four family objects, and the project's direction is
+Java (`sql/varka/CLAUDE.md`). `VarkaIntervalCompiler` is the smallest, about
+250 lines and self-contained: the year-month interval leaves, casts and
+algebra. It is the right first port because it exercises the translation that
+every later port repeats - a Scala `match` with guards over Catalyst
+expressions into a Java `switch` with pattern matching over the same classes -
+on something a reviewer reads in ten minutes, and its oracle is complete: the
+compiler suite, the coverage suite and the bytes oracle. The dispatch stays a
+partial function on the Scala side until the last family moves. **Done when**
+the object is a Java class with the same arms and the same decline reasons,
+the Scala file is deleted, and the three oracles are unchanged.
+
+### Item 43. Javadoc position, checked
+
+The refactor found three doc comments attached to the wrong method, each
+because Java attaches a `/** */` block to the next declaration and two stacked
+blocks raise no warning: `guardedWord`'s sat on `isDayOffsetShape`,
+`guardScratch`'s on `reachesGuardedDay`, `emitDoubleDivide`'s on
+`takesMagicDivide`. Checkstyle's `InvalidJavadocPosition` reports exactly this.
+**Done when** the check is on in `dev/checkstyle.xml`, whatever it finds in
+the Varka sources is fixed, and `dev/lint-java` passes.
+
+### Item 44. A CI queue script
+
+The fork runs at most twenty jobs at once, so the standing rule is one Build
+run per PR at a time, in merge order. Today that rule is kept by hand and by
+scratch scripts: one that cancels a new PR's automatic run, one that reruns the
+held runs one after another when the previous run completes, one that prints
+which PR is ready to merge. They belong in the repository as
+`dev/varka_ci_queue.sh`: `hold <pr>` cancels the run and records it, `run`
+reruns the held runs in order, each starting when the previous has completed
+(polling the run's status, never `gh run watch`, which returns at once without
+a terminal), and `status` prints each open PR with its run's state and whether
+the run's head is the PR's. Every wait keys on a completed status, and the
+script exits through a trap on every path. **Done when** the script exists,
+`CONTRIBUTING.md` names it, and the scratch scripts are gone.
+
+### Item 45. A scoped CI path for oracle-proven refactors
+
+A byte-identical move inside the emitter costs the full matrix, about fifty
+minutes and 1283 job-minutes, because a catalyst Java file changed, and the
+one-at-a-time rule made task 159's PRs a serial chain across a day. The bytes
+oracle, the shape hashes and the coverage table already prove that such a PR
+changes nothing an emitted class does. A `[REFACTOR]` tag in the title, or a
+label, could send the PR down the scoped path plus the oracle suites and the
+Varka `sql/core` suites, provided master runs the full matrix after the merge,
+which is the condition to verify first: a scoped PR run is only safe if the
+matrix still runs somewhere before a release. The trade-off is recorded either
+way. **Done when** the precondition is checked and written down, and either
+the tag exists and `dev/varka_scope.py` honours it, or the item says why not.
+
+### Item 46. The refactoring tools under `dev/`
+
+Task 159 was done with three scratch scripts that any later refactor or port
+wants: a member map (every top-level member of a Java or Scala file with its
+line range, doc comment included, and what it calls), a call graph between
+named groups of members (which is how each seam's crossings were enumerated
+before cutting), and an unused-import stripper driven by scalac's own
+`-Wunused:imports` errors, since Spark's build makes those errors and a moved
+file inherits every import of its source. They belong under `dev/` with a
+README that says when to use each; a plan's member list is generated from the
+map rather than written from memory, which is how task 159's plan came to name
+an `emitBoundedDivide` that never existed. **Done when** the three scripts are
+committed with usage in the README, and `PLAN_TASK_TEMPLATE.md` points to the
+member map for a refactor's inventory.
+
+### Item 47. One place per node, deferred
+
+Task 159's step 3.7 proposed each IR node's emitter knowledge - its children,
+its word rule, its value emission, its range rule - in one class behind a
+sealed interface, with the thirteen switches over the IR becoming one dispatch.
+It was not built, on the owner's constraint against abstractions written for
+types that do not exist yet: after the split, a new node already has one
+obvious place per family, and the sealed IR makes the compiler refuse a switch
+that misses it. The step reopens when a real second case arrives - a second
+lane type, or a second physical representation of one logical type (item 11) -
+so that the abstraction is written against two concrete cases rather than
+none. **Done when** it is either built against that second case or this item
+records why it was not needed even then.
+
+Task 28, the lane-width conversion, is already in item 39's table; the
+retrospective adds a third reason to take it first when the long lane's
+arithmetic re-enters: `time_from_seconds(i)` declines, `hour(t) + 1` declines,
+and the coverage differential had to change a row because of it.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
