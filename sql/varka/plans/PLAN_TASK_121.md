@@ -54,6 +54,19 @@ Three small pieces and two runs.
    `SparkConfigBindingPolicySuite` runs. The level stays in the shape hash, so
    a session that sets it gets its own class names, which is what the hash
    promises.
+   *Done 22 September 2026.* `spark.sql.codegen.varka.emit.useAVX`, an int
+   defaulting to -1, `NOT_APPLICABLE` for view binding since a lowering
+   choice changes how a kernel computes and never what a view resolves to.
+   It is read on the driver in the three exec nodes beside
+   `classDumpDirectory` and carried through the evaluator factories to
+   `VarkaEvaluatorBase.shapeKey`, where it is applied *over* the test hook's
+   options rather than instead of them, and left alone at the default so the
+   hook's own level survives. Two tests: the evaluator suite shows a level-2
+   evaluator emitting a different class from the default one over the same
+   IR, and the `TIME` arithmetic suite runs the extracts, a truncation and a
+   difference under the switch against the row engine through both consumers.
+   The workflow gained `extra-confs`, appended to every arm's conf field, so a
+   dispatch can carry the JVM flag and the switch together (step 2 below).
 2. **The JVM flag reaches the arms.** `dev/varka_bench_surface.sh` already
    accepts `key=value` entries in an arm's conf field and passes them as
    `--conf`; `spark.driver.extraJavaOptions=-XX:UseAVX=2` is such an entry and
@@ -61,6 +74,7 @@ Three small pieces and two runs.
    for the flag. The workflow gets one input, `extra-confs`, appended to every
    arm's conf field, so a dispatch can carry the flag and the switch to a
    runner.
+   *Done 22 September 2026, with step 1.*
 3. **The files.** `TimeSurface-<label>-avx2-results.txt` for four arms on the
    laptop under `-XX:UseAVX=2` - stock 4.2.0 on JDK 25, the fork with the
    engine off, the fork with Varka at the default level (the per-lane

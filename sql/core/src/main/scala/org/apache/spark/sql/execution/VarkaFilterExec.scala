@@ -24,6 +24,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -135,7 +136,8 @@ case class VarkaFilterExec(condition: Expression, child: SparkPlan)
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      VarkaExecMetrics.fromNode(longMetric))
+      VarkaExecMetrics.fromNode(longMetric),
+      emitUseAVX = conf.varkaEmitUseAVX)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -154,7 +156,8 @@ private[sql] class VarkaFilterEvaluatorFactory(
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
-    varkaMetrics: VarkaExecMetrics)
+    varkaMetrics: VarkaExecMetrics,
+    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN)
     extends PartitionEvaluatorFactory[ColumnarBatch, ColumnarBatch] with Logging {
 
   override def createEvaluator(): PartitionEvaluator[ColumnarBatch, ColumnarBatch] = {
@@ -166,7 +169,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
 
     private val kernels = new VarkaFilterEvaluator(
       condition, childOutput, offHeapColumnVectorEnabled, operatorName = "Filter",
-      classDumpDirectory, varkaMetrics)
+      classDumpDirectory, varkaMetrics, emitUseAVX)
 
     // The per-row predicate and converter behind the fallback. Lazy: a task the
     // kernel serves end to end never pays the Janino compile.
@@ -346,7 +349,8 @@ case class VarkaFilterColumnarToRowExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      VarkaExecMetrics.fromNode(longMetric))
+      VarkaExecMetrics.fromNode(longMetric),
+      emitUseAVX = conf.varkaEmitUseAVX)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -365,7 +369,8 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     classDumpDirectory: Option[String],
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
-    varkaMetrics: VarkaExecMetrics)
+    varkaMetrics: VarkaExecMetrics,
+    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN)
     extends PartitionEvaluatorFactory[ColumnarBatch, InternalRow] with Logging {
 
   override def createEvaluator(): PartitionEvaluator[ColumnarBatch, InternalRow] = {
@@ -379,7 +384,7 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     // keeps the constructor honest about what this node allocates (nothing but the bitmap).
     private val kernels = new VarkaFilterEvaluator(
       condition, childOutput, offHeapColumnVectorEnabled = false,
-      operatorName = "FilterToRow", classDumpDirectory, varkaMetrics)
+      operatorName = "FilterToRow", classDumpDirectory, varkaMetrics, emitUseAVX)
 
     // The emitted rows hold their own bytes (an UnsafeProjection copy), so they outlive the
     // input batch exactly as VarkaColumnarToRowExec's rows do; the fallback predicate is the

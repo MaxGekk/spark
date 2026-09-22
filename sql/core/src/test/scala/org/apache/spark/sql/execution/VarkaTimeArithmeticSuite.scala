@@ -22,6 +22,7 @@ import java.time.{Duration, LocalTime}
 import org.apache.spark.{SparkArithmeticException, SparkDateTimeException}
 import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DayTimeIntervalType, LongType, StructField, StructType, TimeType}
 
 /**
@@ -232,6 +233,22 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions {
     val node = plan.collectFirst { case v if isVarkaNode(v) => v }.get
     val declined = node.metrics.get("numFallbackBatchesDeclined").map(_.value).getOrElse(0L)
     assert(declined > 0L, s"expected the crossing batch to decline, metrics: ${node.metrics}")
+  }
+
+  test("the emit.useAVX session switch selects the magic form, and the answers do not move") {
+    // Task 121: `spark.sql.codegen.varka.emit.useAVX=2` makes a session emit the magic-number
+    // form of the 64-bit division - the lowering a host without intrinsified converts takes -
+    // through the same plan and the same cache path, with the row engine as the oracle for it
+    // as for the conversion form. The switch is a session property, so it is set on the fused
+    // session alone and unset in a finally.
+    varkaSpark.conf.set(SQLConf.VARKA_EMIT_USE_AVX.key, "2")
+    try {
+      for (field <- Seq("hour", "minute", "second")) checkBoth(s"$field(t)")
+      checkBoth("time_trunc('MINUTE', t)")
+      checkBoth("time_diff('HOUR', t, t2)")
+    } finally {
+      varkaSpark.conf.unset(SQLConf.VARKA_EMIT_USE_AVX.key)
+    }
   }
 
   test("hour, minute and second agree with the row engine over every second of the day") {
