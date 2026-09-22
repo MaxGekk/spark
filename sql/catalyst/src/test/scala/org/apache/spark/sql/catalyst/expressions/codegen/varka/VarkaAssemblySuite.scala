@@ -641,8 +641,14 @@ class VarkaAssemblySuite extends SparkFunSuite {
     // -XX:+PrintIntrinsics makes C2 say why it refused an intrinsic, one `**` line per refusal
     // (the width census reads the same lines), so a refusing machine names its reason in the
     // cancel message and task 165 starts from the JVM's own words rather than a guess.
+    // -XX:+PrintInlining beside it, because the refusals alone did not decide task 165: the
+    // runners print the same three `missing constant` lines this laptop prints while packing,
+    // and no `not supported` line, so the gather's intrinsic is either not attempted or
+    // attempted and undone on those hosts. The `VectorSupport::loadWithMap` inlining lines say
+    // which - `(intrinsic) late inline succeeded` where it packs - and the calls left in the
+    // body say whether a scalar call to it remains.
     val run = runProbe("gatherLookup", s"$probeClass::gatherLookup",
-      Seq("-XX:MaxVectorSize=16", "-XX:+PrintIntrinsics"))
+      Seq("-XX:MaxVectorSize=16", "-XX:+PrintIntrinsics", "-XX:+PrintInlining"))
     requireHealthyChild(run)
     requireDisassembler(run)
     val nmethod = standardC2(run, "VarkaAssemblyProbe::gatherLookup")
@@ -653,10 +659,16 @@ class VarkaAssemblySuite extends SparkFunSuite {
         .toSeq.distinct.take(12)
       val why = if (refusals.isEmpty) "C2 printed no intrinsic refusal for it"
         else "C2's own refusals:\n  " + refusals.mkString("\n  ")
+      val inlining = run.output.linesIterator.map(_.trim)
+        .filter(_.contains("VectorSupport::loadWithMap")).toSeq.distinct.take(6)
+      val how = if (inlining.isEmpty) "PrintInlining named no loadWithMap decision"
+        else "the gather's inlining decisions:\n  " + inlining.mkString("\n  ")
+      val calls = nmethod.insns.count(_.mnemonic == "call")
       Some(s"on this machine ($host) C2 compiles the probe's own gather at a forced 128-bit " +
-        s"species to a scalar body of ${nmethod.insns.size} instructions, so the 128-bit " +
-        s"assertions are not evidence here; the default-width ones still run. $why. " +
-        "PLAN_TASK_150.md section 6 records the finding, milestone row 165 investigates it.")
+        s"species to a scalar body of ${nmethod.insns.size} instructions with $calls calls, " +
+        "so the 128-bit assertions are not evidence here; the default-width ones still run. " +
+        s"$why. $how. PLAN_TASK_150.md section 6 records the finding, milestone row 165 " +
+        "investigates it.")
     }
   }
 

@@ -87,9 +87,55 @@ here with its command line and the JVM's `CPU:` line. The assembly suite passes
 unchanged on the laptop throughout; the suite changes only when the decision of
 section 2 step 4 is taken.
 
-## 5. Outcome
+## 5. Outcome, so far: 22 September 2026
 
-*Written from the first refusing run's message.*
+The refusing runs came before a dispatch was needed - four of the last forty
+gate jobs cancelled, all on Intel Xeons (6973P-C and Platinum 8573C, four
+processors each, `UseAVX=3`, `MaxVectorSize=64`, the full `avx512` set with
+`avx512vl` reported) - and the laptop reproductions of section 2 item 3 were
+run the same morning. Predictions scored against both:
+
+1. *The refusal is the matcher's, a `not supported` line for the gather.*
+   **Failed.** The runner's cancel message quotes exactly three refusal lines,
+   all `missing constant` (two over `RShiftI`, one over `DecodeN`), and they
+   are the same three lines this laptop prints while packing the gather. No
+   `not supported` line appears on the runner at all. The body is 248
+   instructions, which is *shorter* than the laptop's packed body of 381, and
+   nothing like the laptop's genuinely scalar body of 565 (below). So the
+   runner's gather is neither refused by the matcher nor compiled as a scalar
+   loop; the intrinsic is not applied and the body that results is not the
+   fallback loop either. Section 2 item 2's third reading is the live one.
+2. *The processor count is not it.* **Held.** The laptop under
+   `-XX:ActiveProcessorCount=4 -XX:MaxVectorSize=16` packs the gather: seven
+   `vpgatherdd` in a 381-instruction body, the same as without the flag.
+3. *The JDK build is not it either.* **Not decidable here**: no Zulu 25 is
+   installed on the laptop and the pool's JDK is the same OpenJDK build line.
+   It stays open, and the next reproduction attempt is not this one.
+4. *The 512-bit path is unaffected.* **Held**, as every refusing run's
+   default-width assertions show.
+
+**What reproduces the runner's shape, and what does not.** Under
+`-XX:UseAVX=1 -XX:MaxVectorSize=16` the laptop compiles the gather scalar, but
+for a different reason and to a different body: C2 prints
+`** not supported: arity=0 op=gather vlen=4 etype=int is_masked_op=0`, the
+matcher refusing an instruction the level has not got, and the body is 565
+instructions with no gather - the real scalar loop. Under `UseAVX=2` at the
+same species it packs, which is consistent with the Zen 3 and Zen 4 runners,
+which run at `UseAVX=2` and have never cancelled. So the runner's condition is
+specific to `UseAVX=3` hosts that are not this laptop, and it is not a missing
+instruction: it is an intrinsic that was never applied, in a body too short to
+be the scalar loop, which points at the call to
+`VectorSupport.loadWithMap` staying a call rather than becoming code.
+
+**The next step is in the gate, not in a dispatch.** The precondition probe
+now runs with `-XX:+PrintInlining` beside `PrintIntrinsics`, and the cancel
+message quotes the `VectorSupport::loadWithMap` inlining decisions and the
+body's call count. On this laptop those decisions read
+`(intrinsic) late inline succeeded` three times over; on a refusing runner
+they will read `late inline failed` with a reason, or be absent, and either
+answer names the mechanism. The four refusing hosts appear in about one gate
+job in ten, so the answer arrives within a day of merges without anyone
+dispatching anything.
 
 ## 6. Explicitly out of this task
 
