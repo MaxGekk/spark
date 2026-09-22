@@ -185,6 +185,19 @@ The file's section headers are the plan. In order of least entanglement:
 6. **The body emitters** (around 3315 to 4269): `emitBody`, `emitLaneGroup`,
    the prologue, loop and epilogue, the driver, into `VarkaBodyEmitter.java`,
    which is what remains of the class besides the facade.
+   *The body methods done 22 September 2026, as `VarkaBodyEmitter.java`*:
+   `emitBody` with the three roles, the vector loop and the epilogue, the
+   lane-group step, the validity reads and writes, the bitmap pass, the
+   narrowed store, the status return, the telemetry renderers and the word
+   invariant check, under a class comment that says what a driver, a loop
+   method and an epilogue each are. The vector walk - `emitValue`, `emitCond`,
+   the int arithmetic, the guards, the picks, and `line`, `loadWord`,
+   `storeWord` that every consumer reads a word through - is the one region
+   left besides the facade, and this list did not name it: it goes out as its
+   own file next, under the name its banner already gives it. What crossed
+   the file boundary: `invokeCall`, `planFragmentsReadingMonth` and `emitCond`
+   went from private to package-private; the facade names the new class at
+   its eight calls, `Slots` at its two. The emitter lost 920 lines, to 1722.
 
 `VarkaLoopEmitter` keeps `emit`, `fitsBudgets`, `bitmapPassCounts` and the
 class-level javadoc that explains the whole, and becomes the map a reader
