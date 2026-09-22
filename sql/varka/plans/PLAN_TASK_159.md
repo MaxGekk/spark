@@ -169,6 +169,19 @@ The file's section headers are the plan. In order of least entanglement:
    `ChronoDivide` went from private to package-private; the emitter, `Slots`,
    `Analysis` and the emitter suite name the new class where they call it. The
    emitter lost 416 lines, to 4206.
+   *The calendar family done 22 September 2026, as `VarkaChronoLowering.java`.*
+   `emitMakeDate`, the day-of-week arithmetic, `emitChrono` with the prefix,
+   every field's tail, `emitAddMonths`, `emitDaysFromCivil`, the truncations,
+   `emitEra`, and the prefix's own divisions (`ChronoDivide`, `emitDivide`,
+   `emitMagic`, `emitCarry`), under a class comment that says what the prefix
+   is and why every division here can name a `ChronoDivide`. `emitPick` stayed:
+   the null-skipping `greatest`/`least` is not calendar code, it only sat next
+   to it. What crossed the file boundary: `emitAndWord`, `emitRangeGuard`,
+   `emitGuardCollect`, `loadWord`, `storeWord` and `tailReadsMarchMonth` went
+   from private to package-private, and the five entry points `emitValue`
+   dispatches to (`emitChrono`, `emitAddMonths`, `emitMakeDate`,
+   `emitFloorMod7`, `emitModOffset`) are named with their class at the call
+   sites. The emitter lost 1564 lines, to 2642.
 6. **The body emitters** (around 3315 to 4269): `emitBody`, `emitLaneGroup`,
    the prologue, loop and epilogue, the driver, into `VarkaBodyEmitter.java`,
    which is what remains of the class besides the facade.
