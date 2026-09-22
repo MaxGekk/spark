@@ -189,9 +189,68 @@ rendering moves, it fails, and this task expects it not to.
 - The `sql/core` differential over `TIME`, for prediction 4 end to end.
 - `dev/scalastyle`, `dev/lint-java`, the 100-column and non-ASCII scans.
 
-## 5. Outcome
+## 5. Outcome, 22 September 2026
 
-<!-- filled when the work is done -->
+Built as 2.2 describes it, with 2.4's correction and four things the plan did
+not look for. No emitted byte moved and no shape hash changed, which is what
+the design was chosen for.
+
+**The predictions.**
+
+1. *No committed hash in `emitted_bytes.json` moves.* **Held**, after one
+   detour worth recording: an early version of the fuzzer's arm clamped the
+   bound it propagates to its children, which changed the corpus the grammar
+   draws and moved seven `fuzz_long` blocks. The clamp was on the wrong number.
+   The node's stated bound needs the clamp and the propagated one does not, and
+   with that separated the oracle is untouched.
+2. *No row of the `TIME` surface moves outside its band.* **Not measured, and
+   not needed**: prediction 1 held, so no kernel changed and there is nothing
+   for a benchmark to see. No results file is regenerated.
+3. *The shape hash changes for no existing shape.* **Held.**
+   `VarkaShapeCacheSuite`'s pinned key over every node type is unchanged, which
+   is 2.4's decision working.
+4. *A long column past the bound declines the batch under both lowerings.*
+   **Held**, in a new `VarkaEmitterLongLaneSuite` case over a guarded division
+   at four combinations of lowering and width, in a full lane group and in the
+   masked tail, with the quotient checked at both signs where the guard holds.
+5. *The fuzzer exercises the refusal rather than a test written for it.*
+   **Held differently than expected**: the grammar had tracked each subtree's
+   bound all along and simply never told the node, so the arm states what it
+   already knew and nothing was refused at all. The refusal is exercised by the
+   division suite instead.
+
+**What the task found that it did not look for.** All four are lessons about
+the shape of this kind of obligation rather than about this node.
+
+1. **The analysis check 2.2 item 3 asked for was dead code.** A record cannot
+   be built except through its constructor, so "refuse a long-lane division
+   that carries no bound" could never fire there. What replaced it is not
+   subsumed: when a caller discharges the obligation by guarding, the guard has
+   to deliver the bound the caller then states, and that is a relation between
+   two nodes rather than a property of one. It is the check that caught the
+   off-by-one in the fuzzer's arm.
+2. **The bound is part of the record's equality, so it must be derived from
+   the tree and not written at the call site.** Two equal subtrees carrying
+   separately-written bounds would stop being one common subexpression, and
+   the emitted bytes would move for a reason a reader would never guess. That
+   is why `remainderOfSixty` takes a `ConstDivide` and derives its child's
+   bound from it, in the compiler and in both suites that mirror it.
+3. **A sentinel of zero collides with a real bound.** A caller that divides a
+   bounded value far enough arrives at zero, which the fuzzer does; with zero
+   as the "unstated" marker the node reported a missing bound where one had
+   been given. The sentinel is negative.
+4. **The two bounds count differently and the boundary is where that shows.**
+   The fuzzer's bound is the widest magnitude a value takes, inclusive; the
+   node's is one the value stays under. A guard from `-b` to `b` admits `b`
+   itself, so a claim of `b` over it is one short - which is exactly the shape
+   the new analysis check refuses, and the first thing it refused.
+
+**One deviation from the row.** Its deliverable asked for a new status bit;
+2.3 records why the existing one is used instead, and the decline is visible in
+the metrics either way.
+
+Nothing here became a new milestone row: every finding is about this change and
+is recorded above.
 
 ## 6. Explicitly out of this task
 

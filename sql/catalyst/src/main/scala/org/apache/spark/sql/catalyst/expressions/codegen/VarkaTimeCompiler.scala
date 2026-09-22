@@ -232,19 +232,20 @@ private[codegen] object VarkaTimeCompiler {
       case ("subtractTimes", Seq(end, start)) =>
         for (e <- long(end); st <- long(start)) yield
           new ConstDivide(new IntArith(IntOp.SUB, Overflow.WRAP, e, st),
-            DateTimeConstants.NANOS_PER_MICROS)
+            DateTimeConstants.NANOS_PER_MICROS, dayOfNanos)
       case ("timeDiff", Seq(unit, start, end)) =>
         for {
           nanos <- literalUnit(unit, nanosPerTimeUnit, "unit")
           e <- long(end)
           st <- long(start)
-        } yield new ConstDivide(new IntArith(IntOp.SUB, Overflow.WRAP, e, st), nanos)
+        } yield new ConstDivide(new IntArith(IntOp.SUB, Overflow.WRAP, e, st), nanos,
+          dayOfNanos)
       case ("timeTrunc", Seq(level, time)) =>
         for {
           unit <- literalUnit(level, nanosPerTimeUnit, "level")
           t <- long(time)
-        } yield new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(t, unit),
-          sink.longSlot(unit))
+        } yield new IntArith(IntOp.MUL, Overflow.WRAP,
+          new ConstDivide(t, unit, dayOfNanos), sink.longSlot(unit))
       // The three field extracts (group C): hour is one division of the nanoseconds of day,
       // minute and second a division and the remainder of a further division by sixty, each
       // built the way `DateTimeUtils` computes it through `LocalTime` and delivered as an int
@@ -253,13 +254,13 @@ private[codegen] object VarkaTimeCompiler {
       // under the type's bound and so under `ConstDivide.EXACT_DIVIDEND_BOUND` structurally,
       // and every result is under 86400, so nothing overflows and nothing is guarded.
       case ("getHoursOfTime", Seq(time)) =>
-        narrowed(time)(t => new ConstDivide(t, nanosPerTimeUnit("HOUR")))
+        narrowed(time)(t => new ConstDivide(t, nanosPerTimeUnit("HOUR"), dayOfNanos))
       case ("getMinutesOfTime", Seq(time)) =>
         narrowed(time)(t =>
-          remainderOfSixty(new ConstDivide(t, nanosPerTimeUnit("MINUTE")), sink))
+          remainderOfSixty(new ConstDivide(t, nanosPerTimeUnit("MINUTE"), dayOfNanos), sink))
       case ("getSecondsOfTime", Seq(time)) =>
         narrowed(time)(t =>
-          remainderOfSixty(new ConstDivide(t, nanosPerTimeUnit("SECOND")), sink))
+          remainderOfSixty(new ConstDivide(t, nanosPerTimeUnit("SECOND"), dayOfNanos), sink))
       // timeAddInterval(t, p, dt, endField, target): addExact(t, multiplyExact(dt, 1000)),
       // thrown out of if the sum leaves [0, NANOS_PER_DAY), then truncated to `target` digits.
       // Two guards make the lane's wrapping arithmetic exact and the throw a decline. The
@@ -312,9 +313,9 @@ private[codegen] object VarkaTimeCompiler {
       // declines the batch to the row engine, which raises Spark's error. A count that is not on
       // the long lane - an int column, a decimal, a double - declines where its leaf does.
       case ("timeToMillis", Seq(time)) =>
-        long(time).map(t => new ConstDivide(t, DateTimeConstants.NANOS_PER_MILLIS))
+        long(time).map(t => new ConstDivide(t, DateTimeConstants.NANOS_PER_MILLIS, dayOfNanos))
       case ("timeToMicros", Seq(time)) =>
-        long(time).map(t => new ConstDivide(t, DateTimeConstants.NANOS_PER_MICROS))
+        long(time).map(t => new ConstDivide(t, DateTimeConstants.NANOS_PER_MICROS, dayOfNanos))
       case ("timeFromSeconds", Seq(count)) =>
         timeFromUnits(count, DateTimeConstants.NANOS_PER_SECOND, sink, long)
       case ("timeFromMillis", Seq(count)) =>
@@ -386,9 +387,23 @@ private[codegen] object VarkaTimeCompiler {
    * `x % 60` for a non-negative long-lane `x`, as `x - (x / 60) * 60`: the IR has no remainder
    * node, and the subtraction cannot go wrong for a count that is a quotient of the day.
    */
-  private def remainderOfSixty(x: VarkaVectorIR, sink: DeclineSink): VarkaVectorIR =
+  private def remainderOfSixty(x: ConstDivide, sink: DeclineSink): VarkaVectorIR =
     new IntArith(IntOp.SUB, Overflow.WRAP, x,
       new IntArith(IntOp.MUL, Overflow.WRAP,
-        new ConstDivide(x, DateTimeConstants.SECONDS_PER_MINUTE),
+        new ConstDivide(x, DateTimeConstants.SECONDS_PER_MINUTE, quotientBound(x)),
         sink.longSlot(DateTimeConstants.SECONDS_PER_MINUTE)))
+
+  /**
+   * The bound a quotient inherits from its dividend's: `|x| < b` divided by `d` gives
+   * `|x / d| < ceil(b / |d|)`. Derived from the node rather than restated beside it, because
+   * the bound is part of `ConstDivide`'s equality: two equal subtrees carrying bounds that were
+   * written out separately would stop being one common subexpression.
+   */
+  private def quotientBound(x: ConstDivide): Long = {
+    val d = math.abs(x.divisor)
+    math.max(1L, (x.dividendBound + d - 1) / d)
+  }
+
+  /** Every `TIME` is a count of nanoseconds of day, which is the bound its divisions state. */
+  private val dayOfNanos: Long = DateTimeConstants.NANOS_PER_DAY
 }

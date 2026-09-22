@@ -385,7 +385,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // exact range. Two things fail differently here: precision, which breaks at the ends of the
     // range first, and truncation toward zero, which a floor-producing lowering gets wrong only
     // on negative dividends with a remainder - hence both signs of every value.
-    val col = new ConstDivide(new ColumnRef(0, LaneType.LONG), 1)
+    val col = new ConstDivide(new ColumnRef(0, LaneType.LONG), 1, ConstDivide.EXACT_DIVIDEND_BOUND)
     // The level is pinned rather than inherited. `DEFAULTS.useAVX` is the machine's, so
     // without this the test would check the conversion form on an AVX-512 host and the magic
     // form on every other - covering one lowering twice and the other never, on a machine
@@ -401,7 +401,8 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
       60L,                  // minute(t) and second(t) step 2
       -60L)                 // a negative divisor, whose quotient truncates the other way
     for (d <- divisors; lanes <- Seq(2, 8)) {
-      val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), d))
+      val root = Seq[VarkaVectorIR](
+        new ConstDivide(new ColumnRef(0, LaneType.LONG), d, ConstDivide.EXACT_DIVIDEND_BOUND))
       val vs = dividendsAround(d)
       checkLongMatrix(root, 1, Array.empty[Long], Seq(1, 7, 17, 64, 129), combos(1),
         (_, i) => vs(i % vs.length), s"long divc/$d", lanes, converting)
@@ -420,7 +421,8 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     val avx2 = VarkaEmitOptions.DEFAULTS.withUseAVX(2)
     val divisors = Seq(3_600_000_000_000L, 1_000_000_000L, 1_000L, 86_400_000_000L, 60L, -60L)
     for (d <- divisors; lanes <- Seq(2, 8)) {
-      val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), d))
+      val root = Seq[VarkaVectorIR](
+        new ConstDivide(new ColumnRef(0, LaneType.LONG), d, ConstDivide.EXACT_DIVIDEND_BOUND))
       val vs = dividendsAround(d)
       checkLongMatrix(root, 1, Array.empty[Long], Seq(1, 7, 17, 64, 129), combos(1),
         (_, i) => vs(i % vs.length), s"avx2 divc/$d", lanes, avx2)
@@ -431,7 +433,8 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // What selects it, stated as bytes rather than as intent. `convertShape` is the conversion
     // form's signature call and the magic form has none; the int lane has no magic form at all,
     // since its dividend is exactly representable and the conversion is what it is built on.
-    val long64 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000))
+    val long64 = Seq[VarkaVectorIR](
+      new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000, ConstDivide.EXACT_DIVIDEND_BOUND))
     val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     def converts(roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Int =
       convertShapes(emitMulti(roots, 1, 0, options)._2)
@@ -469,7 +472,8 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // Both levels are named. `DEFAULTS.useAVX` is whatever the machine reports, so emitting
     // with it would assert the conversion form's shape against whichever form the host picked.
     val converting = VarkaEmitOptions.DEFAULTS.withUseAVX(3)
-    val long64 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000))
+    val long64 = Seq[VarkaVectorIR](
+      new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000, ConstDivide.EXACT_DIVIDEND_BOUND))
     val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     assert(longDoubleDivisions(emitMulti(long64, 1, 0, converting)._2) === 1)
     assert(doubleDivisions(emitMulti(int32, 1, 0, converting.withMulHiDivide(false))._2) === 1)
@@ -485,11 +489,26 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // The int lane's refusals, restated at the width they now apply to. The -1 message names
     // the lane's own most negative value, because that is the input it is about.
     val col = new ColumnRef(0, LaneType.LONG)
-    val zero = intercept[IllegalArgumentException](new ConstDivide(col, 0))
+    val bound = ConstDivide.EXACT_DIVIDEND_BOUND
+    val zero = intercept[IllegalArgumentException](new ConstDivide(col, 0, bound))
     assert(zero.getMessage.contains("division by zero"), zero.getMessage)
     val minusOne =
-      intercept[IllegalArgumentException](emitMulti(Seq(new ConstDivide(col, -1)), 1, 0))
+      intercept[IllegalArgumentException](emitMulti(Seq(new ConstDivide(col, -1, bound)), 1, 0))
     assert(minusOne.getMessage.contains("overflows at Long.MIN_VALUE"), minusOne.getMessage)
+    // And the bound itself: the two-argument form is the int lane's, so a long-lane division
+    // that leaves the bound out is refused where it is built rather than emitted unguarded,
+    // and a bound no lowering can honour is refused beside it (task 147).
+    val unstated = intercept[IllegalArgumentException](new ConstDivide(col, 60))
+    assert(unstated.getMessage.contains("must state the dividend bound"), unstated.getMessage)
+    val overClaimed =
+      intercept[IllegalArgumentException](new ConstDivide(col, 60, bound + 1))
+    assert(overClaimed.getMessage.contains("dividend bound must lie in"), overClaimed.getMessage)
+    // A guard discharges the obligation only if it delivers what the division then claims:
+    // the guard admits its own endpoints, so a claim equal to them is one short.
+    val short = intercept[IllegalArgumentException](
+      emitMulti(Seq(new ConstDivide(new GuardedRange(col, -1000L, 1000L), 60, 1000L)), 1, 0))
+    assert(short.getMessage.contains("the guard below it admits"), short.getMessage)
+    emitMulti(Seq(new ConstDivide(new GuardedRange(col, -1000L, 1000L), 60, 1001L)), 1, 0)
     // And a divisor the int lane cannot hold is a mistake in the tree rather than a division
     // whose every quotient is zero.
     val tooWide = intercept[IllegalArgumentException](

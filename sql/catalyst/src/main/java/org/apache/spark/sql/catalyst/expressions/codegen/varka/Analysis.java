@@ -774,6 +774,20 @@ final class Analysis {
               "a constant division needs a double species to convert through, which "
               + lane.laneType + " at " + lanes + " lanes has not: " + node);
         }
+        // A caller with no structural bound discharges the dividend obligation by guarding,
+        // and this is the one part of that discharge a static check can verify: the guard it
+        // wrapped has to deliver the bound it then stated. The node's own constructor refuses
+        // a bound a lowering cannot honour, and nothing static can know a column's values, so
+        // a guard that lets through more than the claim covers is the remaining way to state a
+        // bound and not get it.
+        if (n.child() instanceof GuardedRange g) {
+          long widest = Math.max(Math.abs(g.lo()), Math.abs(g.hi()));
+          if (widest >= n.dividendBound()) {
+            throw new IllegalArgumentException("a constant division claims its dividend is "
+                + "under " + n.dividendBound() + " and the guard below it admits " + widest
+                + ": " + VarkaVectorIR.canonical(node));
+          }
+        }
         analyzeOp(node, false, n.child());
       }
       case Greatest n -> analyzeOp(node, true, n.left(), n.right());
