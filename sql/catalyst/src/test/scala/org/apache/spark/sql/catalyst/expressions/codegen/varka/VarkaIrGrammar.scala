@@ -497,7 +497,14 @@ object VarkaIrGrammar {
    * fits under it - the long lane's `fitsUnderChrono`. A sum of two columns fits; a product of
    * two does not, and stays undivided.
    */
-  val longColumnBound = 1L << 46
+  val longColumnBound: Long = {
+    // A campaign can raise it to the divisions' own bound, `-Dvarka.fuzz.longColumnBound` at
+    // 2^52 - 1, so random trees divide in the six bits between a day of nanoseconds and where the
+    // lowerings stop being exact (milestone 5 row 166). The default keeps the committed fuzz
+    // blocks what they are: the bound reaches the trees the grammar draws, so changing it
+    // changes `emitted_bytes.json`'s `fuzz_long` blocks, and a regeneration must say so.
+    sys.props.get("varka.fuzz.longColumnBound").map(_.toLong).getOrElse(1L << 46)
+  }
   val longLiteralBound = 1L << 20
 
   /** One drawn long-lane shape: the roots and the column and literal counts they read. */
