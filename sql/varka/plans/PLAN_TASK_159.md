@@ -114,6 +114,21 @@ The file's section headers are the plan. In order of least entanglement:
    `VarkaEmitAnalysis.java`, with the 790-line record broken into the passes
    it already runs in sequence (`analyzeRoot`, `collectArmContexts`,
    `collectGuardedProducers`, `planWordAlgebra`, `planBitmapPass`).
+   *Done 22 September 2026, as `Analysis.java`* under the name the emitter
+   already used, like `Lane`: the class with the validity-word algebra's types
+   (`WordOwner`, `WordExpr`, `BitmapPass`) nested in it, since the emitter
+   reads them through the analysis and nothing else does. The passes were
+   already methods called in sequence from `emit`; splitting the class further
+   was not needed to read it. What crossed the file boundary: four emitter
+   helpers the analysis calls (`childrenOf`, `chronoChild`, `emitLanes`,
+   `isDayOffsetShape`) and two nested types it names (`ArmStep`, `Divider`)
+   went from private to package-private; `referenced` stayed with the body
+   emitters that call it. Unused imports were pruned on both sides for
+   checkstyle. The emitter lost 833 lines, to 5401. The bytes oracle, the shape
+   hashes, the emitter suite and the javadoc build are unchanged; the width
+   census check failed on untouched master the same morning because the
+   laptop's JDK had been updated overnight and the census compares its JDK
+   string, which is a tooling fix of its own and not this seam's.
 4. **Slot planning** (around 2539 to 3314): `Slots` and `planSlots` into
    `VarkaSlotPlan.java`.
 5. **The lowerings by family** (from around 4270): the calendar family
