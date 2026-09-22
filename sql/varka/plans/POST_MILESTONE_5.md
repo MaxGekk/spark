@@ -14,14 +14,17 @@ it - `hour`, `minute`, `second`, `time_trunc`, arithmetic with intervals,
 differences between two times. It arrived behind a flag and is on its way to
 being on by default.
 
-On the development laptop - an AMD Ryzen AI 9 HX PRO 370, a Zen 5 core with a
-full 512-bit vector datapath, running OpenJDK 25 on one core - stock Spark 4.2
-computes `hour(t)` over a cached column at 61.3 million rows a second. Varka, a
-research fork of Spark that compiles a projection into one vector loop,
-computes the same `hour(t)` on the same core at 1041.4 million rows a second:
-about seventeen times faster. Every number in this post comes from a committed
-results file that names its machine, JDK, row count and vector width, so each
-one can be checked without rerunning anything.
+On the development laptop - an AMD Ryzen AI 9 HX PRO 370, a Zen 5 core that
+runs 512-bit instructions on a 256-bit datapath, OpenJDK 25, one core - stock
+Spark 4.2 computes `hour(t)` over a cached column at 61.3 million rows a
+second. Varka, a research fork of Spark that compiles a projection into one
+vector loop, computes the same `hour(t)` on the same core at 1041.4 million rows
+a second: about seventeen times faster. The numbers that need a genuine 512-bit
+datapath are measured on one, a GitHub-hosted runner with an AMD EPYC 9V45,
+through a workflow anyone can dispatch; section 8 says which numbers those
+are. Every figure in this post comes from a committed results file that names
+its machine, JDK, row count and measured vector width, so each one can be
+checked without rerunning anything.
 This post is about where those seventeen come from. Not from a faster
 algorithm - the algorithm is a division - but from what the loop around it
 looks like, what it reads, and what it does not do per row.
@@ -219,84 +222,47 @@ the closing section is built around.
 
 ## 7. How it is measured
 
-A benchmark that says "17x" is only worth reading if you can see what was
-compared with what, on which machine, and what would have made the run
-invalid. So before the numbers, the method - which is most of the work of this
-milestone and, I think, the part most worth borrowing.
+A "17x" is worth exactly as much as the method behind it, so briefly: what was
+compared, on what, and what would have made a run invalid.
 
 ![The four arms every table compares](figures/out/fig7-four-arms.svg)
 
 *Figure 7. Two stock releases on two JDKs, the fork with the engine off, and
-the fork with it on, over the same cached rows, timed by one benchmark jar
-that depends on no part of the fork.*
+the fork with it on, over the same cached rows, timed by one benchmark jar that
+depends on no part of the fork.*
 
-**Four arms, not two.** Every table compares stock Spark 4.2.0 on JDK 17,
-stock 4.2.0 on JDK 25, this fork with the engine switched off, and this fork
-with Varka on. The first pair says what the JVM is worth on its own. The
-second pair - stock against the fork with the engine off - says what the fork
-is worth without Varka, which is not nothing: the fork tracks Spark master, and
-on `t + dt` master's own row path already runs at 52.3 million rows a second
-where 4.2.0 runs at 33.5. A ratio quoted against stock alone would credit that
-to the engine. So every ratio here is against stock, and where the two
-baselines disagree by more than a fifth the ratio against the fork's own row
-engine is printed beside it. The benchmark itself is a standalone jar that
-runs on any Spark 4.x distribution and depends on nothing in the fork, so the
-same jar measures the fork and the releases it is compared with.
-
-**One core, cached rows, long windows.** The `TIME` surface runs over five
-hundred million rows of a six-column table, cached as Arrow in 22.8 GiB, on
-one core, with at least five iterations over two-second windows after a
-two-second warm-up, recording wall time and executor time separately. Five
-hundred million because the lightest entries run at 0.8 nanoseconds a row and
-the job's fixed cost on this laptop is about 15 milliseconds: at fewer rows the
-harness would be measuring itself.
+**Four arms.** Every table compares stock Spark 4.2.0 on JDK 17 and on JDK 25,
+this fork with the engine off, and this fork with Varka on. The engine-off arm
+is the control that separates the engine from the fork: the fork tracks Spark
+master, and on `t + dt` master's own row path already runs at 52.3 million
+rows a second where 4.2.0 runs at 33.5. So every ratio is against stock, and
+where the two baselines disagree by more than a fifth the ratio against the
+fork's own row engine is printed beside it. Runs are one core over cached
+Arrow rows - five hundred million for the `TIME` surface, two hundred million
+for the chains - with at least five iterations over two-second windows,
+recording wall time and executor time separately.
 
 ![The gates a run passes before it is quoted](figures/out/fig8-the-gates.svg)
 
 *Figure 8. Six guards between a run and a committed file, each one the memory
-of a number that was wrong once. A run that clears them is worth reading; the
-rest never reach a document.*
+of a number that was wrong once.*
 
-**The gates.** Each of these exists because a number was wrong once and the
-reason was found afterwards.
-
-- *The canary* runs three fixed loops - compute-bound, cache-resident,
-  memory-bound - before every run and compares them with a committed baseline
-  for the host. The same code has measured its memory-bound kernels 20% apart
-  on different days with every compute-bound row flat; the canary is how a run
-  knows the machine is in its measured state, and refuses when it is not.
-- *The datapath probe* asks the machine how wide its vector unit really is,
-  rather than reading a CPU model name. The 256-bit-to-128-bit ratio is the
-  control and reads about 2 everywhere; the 512-to-256 ratio reads 1.14 on
-  this laptop, whose Zen 5 core double-pumps, 1.35 on the Intel Xeons of the
-  CI pool, and 2.01 on an AMD EPYC 9V45 - one runner in about eighteen. That
-  last machine is the only one where "512 bits doubles the lanes" is true
-  without qualification, and it is where the chains are measured.
-- *Residency* refuses a run whose cached table did not stay entirely in memory.
-  This one hurt: a table that does not fit recomputes on every iteration, and
-  that run passes every other rule with a *better* fixed share than an honest
-  one.
-- *The `EXPLAIN` check and the fallback count* fail a run if any entry
-  expected to fuse planned without a Varka node, or if any batch of it fell
-  through the trapdoor to the row engine. Not "all batches" - any: a partial
-  fallback publishes a rate blended from kernel and row-engine batches, which
-  looks like a kernel rate and is not one.
-- *The fixed-share rule* fails a run whose per-iteration constant - scheduling
-  a task, collecting its result - exceeds 5% of any Varka row's wall time. On
-  a cloud runner that constant is about 36 milliseconds, which is why the
-  surface cannot be measured there honestly at all and the chains, which do
-  enough work per row, can. One row of the `TIME` surface sits at 5.9% and the
-  bound was lifted to 6% for it; the file says so.
-- *The band* is twelve repeated runs of the unchanged benchmark, from which
-  each case gets a tier: a move within its tier in a later regeneration is
-  noise. Which cases are noisy reproduces strongly between independent halves
-  of the runs; how noisy a given case is does not, so the tiers record the
-  first and do not invent the second. No row is quoted without its band.
-
-And after all of that, a quote check: every number with decimals in the
-README, the docs and the plans must appear in a committed results file, now or
-in its history, or the build fails. The figures in the next section are read
-off those files, not typed from memory.
+**Six gates.** A run is refused unless the *canary* - three fixed loops -
+reads within a few percent of the host's committed baseline, so the machine is
+in its measured state; the *datapath probe* records how wide the vector unit
+really is (the 512:256 ratio reads 1.14 on this laptop, 1.35 on the Intel Xeons
+of the CI pool and 2.01 on the EPYC 9V45, and only the last is full width);
+and the table stayed *resident*, because one that spills recomputes every
+iteration and passes every other rule with a better number. A run fails if
+any entry expected to fuse planned without a Varka node or if a single batch
+fell through the trapdoor, since a blend of kernel and row-engine batches
+looks like a kernel rate; and it fails the *fixed-share rule* if the job's
+constant - about 15 ms on the laptop, 36 ms on a runner - exceeds 5% of any
+Varka row's wall time (one row sits at 5.9%, and the bound was lifted to 6% for
+it, in writing). Finally the *band*: twelve repeated runs give each case a
+tier, and no row is quoted without one. After all that, a check that every
+number with decimals in the documents traces to a committed file, or the build
+fails.
 
 ## 8. The numbers
 
