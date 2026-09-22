@@ -298,7 +298,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite {
         case "LiteralSlot" => l
         case "IntArith" => new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)
         case "IntNeg" => new IntNeg(Overflow.WRAP, c)
-        case "ConstDivide" => new ConstDivide(c, 12)
+        case "ConstDivide" => new ConstDivide(c, 12, ConstDivide.EXACT_DIVIDEND_BOUND)
         case "BoundedDivide" => BoundedDivide.of(c, 60, 3600)
         case "Greatest" => new Greatest(c, c1)
         case "Least" => new Least(c, c1)

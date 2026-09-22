@@ -198,12 +198,17 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase {
     // so the nulls and the tail are asserted as for any long root.
     val t = new ColumnRef(0, LaneType.LONG)
     val sixty = new LiteralSlot(0, LaneType.LONG)
-    def remainderOfSixty(x: VarkaVectorIR): VarkaVectorIR =
+    // Every dividend here is a time of day or a quotient of one, which is the bound each
+    // division states; a quotient's is derived from its own node so that two equal subtrees
+    // carry equal bounds and stay one common subexpression.
+    val nanosPerDay = 86400000000000L
+    def remainderOfSixty(x: ConstDivide): VarkaVectorIR =
       new IntArith(IntOp.SUB, Overflow.WRAP, x,
-        new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(x, 60L), sixty))
-    val hour = new NarrowLane(new ConstDivide(t, 3600000000000L))
-    val minute = new NarrowLane(remainderOfSixty(new ConstDivide(t, 60000000000L)))
-    val second = new NarrowLane(remainderOfSixty(new ConstDivide(t, 1000000000L)))
+        new IntArith(IntOp.MUL, Overflow.WRAP,
+          new ConstDivide(x, 60L, x.dividendBound() / math.abs(x.divisor())), sixty))
+    val hour = new NarrowLane(new ConstDivide(t, 3600000000000L, nanosPerDay))
+    val minute = new NarrowLane(remainderOfSixty(new ConstDivide(t, 60000000000L, nanosPerDay)))
+    val second = new NarrowLane(remainderOfSixty(new ConstDivide(t, 1000000000L, nanosPerDay)))
     val roots = Seq[VarkaVectorIR](hour, minute, t, second)
     val edges = Seq(0L, 999999999L, 1000000000L, 3599999999999L, 3600000000000L,
       43200000000000L, 86399999999999L)
@@ -310,6 +315,56 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase {
           VarkaFusedKernel.STATUS_CHRONO_RANGE, "an epilogue lane")
         // A null lane holding an out-of-range payload does not fire the guard.
         assert(status(64, i => if (i == 5) -1L else 1L, i => i == 5) === 0, "a null lane")
+      } finally {
+        loader.release()
+      }
+    }
+  }
+
+  test("a guarded long-lane division declines the batch on a dividend past the bound its " +
+      "caller stated, under both lowerings") {
+    // Task 147's acceptance line. A caller with no structural bound discharges `ConstDivide`'s
+    // dividend obligation by guarding, and the guard is what makes the claim true at run time:
+    // a lane past it condemns the batch and the row engine answers it. Both lowerings are run,
+    // because they fail differently above the bound - the conversion form by one, the magic
+    // form by reading the dividend modulo 2^52 - and neither may be reached.
+    val bound = 1L << 40
+    val root = Seq[VarkaVectorIR](
+      new ConstDivide(new GuardedRange(new ColumnRef(0, LaneType.LONG), -(bound - 1), bound - 1),
+        1000L, bound))
+    val lowerings = Seq(
+      ("conversion", VarkaEmitOptions.DEFAULTS),
+      ("magic", VarkaEmitOptions.DEFAULTS.withUseAVX(2)))
+    for ((name, options) <- lowerings; lanes <- Seq(2, 8)) {
+      val (kernel, loader) = load(emitMulti(root, 1, 0, options.withLanesOverride(lanes)))
+      try {
+        def status(length: Int, value: Int => Long): Int = {
+          val arena = Arena.ofConfined()
+          try {
+            val in = makeLongInput(arena, length, _ => false, value)
+            val (data, validity) = makeLongOutput(arena, length)
+            val st = kernel.run(Array(in.data.address()), Array(in.validityAddress(length)),
+              Array(in.nullCount), Array(data.address()), Array(validity.address()),
+              Array.empty[Int], Array.empty[Long], length)
+            if (st == 0) {
+              for (i <- 0 until length) {
+                assert(data.get(ValueLayout.JAVA_LONG, i * 8L) === value(i) / 1000L,
+                  s"$name lanes=$lanes row $i")
+              }
+            }
+            st
+          } finally {
+            arena.close()
+          }
+        }
+        // Inside the bound the quotient is Java's, at both signs.
+        assert(status(64, i => (if (i % 2 == 0) 1L else -1L) * (i.toLong * 7919L)) === 0,
+          s"$name lanes=$lanes in range")
+        // One lane past it, in a full lane group and in the masked tail.
+        assert(status(64, i => if (i == 5) bound else 1L) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE, s"$name lanes=$lanes a loop lane")
+        assert(status(17, i => if (i == 16) -bound else 1L) ===
+          VarkaFusedKernel.STATUS_CHRONO_RANGE, s"$name lanes=$lanes an epilogue lane")
       } finally {
         loader.release()
       }

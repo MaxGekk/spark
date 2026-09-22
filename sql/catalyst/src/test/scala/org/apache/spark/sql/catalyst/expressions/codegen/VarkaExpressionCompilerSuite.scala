@@ -42,6 +42,9 @@ import org.apache.spark.util.Utils
  */
 class VarkaExpressionCompilerSuite extends SparkFunSuite {
 
+  /** The bound every `TIME` division states: a time of day is a count of nanoseconds in one. */
+  private val nanosPerDay = 86400000000000L
+
   private val d = AttributeReference("d", DateType)()
   private val d2 = AttributeReference("d2", DateType)()
   private val i = AttributeReference("i", IntegerType)()
@@ -804,7 +807,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // is registered. The end operand is compiled first, which is why it takes input 0.
     val sub = VarkaExpressionCompiler.compile(Seq(out(SubtractTimes(t6, t3))), withLong).get
     assert(sub.outputs === Seq(new ConstDivide(
-      new IntArith(IntOp.SUB, Overflow.WRAP, longCol, longCol2), 1000L)))
+      new IntArith(IntOp.SUB, Overflow.WRAP, longCol, longCol2), 1000L, nanosPerDay)))
     assert(sub.inputOrdinals === Seq(8, 7))
     assert(sub.outputTypes === Seq(DayTimeIntervalType(DayTimeIntervalType.HOUR,
       DayTimeIntervalType.SECOND)))
@@ -812,7 +815,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val diff = VarkaExpressionCompiler.compile(
       Seq(out(TimeDiff(Literal("hour"), t3, t6))), withLong).get
     assert(diff.outputs === Seq(new ConstDivide(
-      new IntArith(IntOp.SUB, Overflow.WRAP, longCol, longCol2), 3600000000000L)))
+      new IntArith(IntOp.SUB, Overflow.WRAP, longCol, longCol2), 3600000000000L, nanosPerDay)))
     assert(diff.inputOrdinals === Seq(8, 7))
     assert(diff.outputTypes === Seq(LongType))
     // The unit is read the way DateTimeUtils reads it: case-insensitively.
@@ -828,7 +831,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val compiled = VarkaExpressionCompiler.compile(
       Seq(out(TimeTrunc(Literal("MINUTE"), t6))), withLong).get
     assert(compiled.outputs === Seq(new IntArith(IntOp.MUL, Overflow.WRAP,
-      new ConstDivide(longCol, 60000000000L), longSlot(0))))
+      new ConstDivide(longCol, 60000000000L, nanosPerDay), longSlot(0))))
     assert(compiled.longLiterals === Seq(60000000000L))
     assert(compiled.inputOrdinals === Seq(8))
     assert(compiled.outputTypes === Seq(TimeType(6)))
@@ -841,21 +844,23 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // computed in the long lane, so the kernel is a long-lane one whose output type is an int,
     // and the narrowing root is what tells the store so.
     val hour = VarkaExpressionCompiler.compile(Seq(out(HoursOfTime(t6))), withLong).get
-    assert(hour.outputs === Seq(new NarrowLane(new ConstDivide(longCol, 3600000000000L))))
+    assert(hour.outputs === Seq(
+      new NarrowLane(new ConstDivide(longCol, 3600000000000L, nanosPerDay))))
     assert(hour.lane === LaneType.LONG)
     assert(hour.outputTypes === Seq(IntegerType))
     assert(hour.inputOrdinals === Seq(8))
-    def remainderOfSixty(x: VarkaVectorIR): VarkaVectorIR =
+    def remainderOfSixty(x: ConstDivide): VarkaVectorIR =
       new IntArith(IntOp.SUB, Overflow.WRAP, x,
-        new IntArith(IntOp.MUL, Overflow.WRAP, new ConstDivide(x, 60L), longSlot(0)))
+        new IntArith(IntOp.MUL, Overflow.WRAP,
+          new ConstDivide(x, 60L, x.dividendBound() / math.abs(x.divisor())), longSlot(0)))
     val minute = VarkaExpressionCompiler.compile(Seq(out(MinutesOfTime(t6))), withLong).get
     assert(minute.outputs === Seq(new NarrowLane(
-      remainderOfSixty(new ConstDivide(longCol, 60000000000L)))))
+      remainderOfSixty(new ConstDivide(longCol, 60000000000L, nanosPerDay)))))
     assert(minute.longLiterals === Seq(60L))
     assert(minute.outputTypes === Seq(IntegerType))
     val second = VarkaExpressionCompiler.compile(Seq(out(SecondsOfTime(t6))), withLong).get
     assert(second.outputs === Seq(new NarrowLane(
-      remainderOfSixty(new ConstDivide(longCol, 1000000000L)))))
+      remainderOfSixty(new ConstDivide(longCol, 1000000000L, nanosPerDay)))))
     assert(second.lane === LaneType.LONG)
     // A narrowed root beside a wide one is one kernel: both are computed in the long lane, and
     // the output types say which store each takes.
@@ -877,10 +882,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     // Group E (`PLAN_TASK_102.md` 9.3): `floorDiv` of a non-negative count is the truncating
     // division the lane has, and the result is a bigint on the same lane.
     val millis = VarkaExpressionCompiler.compile(Seq(out(TimeToMillis(t6))), withLong).get
-    assert(millis.outputs === Seq(new ConstDivide(longCol, 1000000L)))
+    assert(millis.outputs === Seq(new ConstDivide(longCol, 1000000L, nanosPerDay)))
     assert(millis.outputTypes === Seq(LongType))
     val micros = VarkaExpressionCompiler.compile(Seq(out(TimeToMicros(t3))), withLong).get
-    assert(micros.outputs === Seq(new ConstDivide(longCol, 1000L)))
+    assert(micros.outputs === Seq(new ConstDivide(longCol, 1000L, nanosPerDay)))
     assert(micros.inputOrdinals === Seq(7))
   }
 
@@ -902,7 +907,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite {
     val trip = VarkaExpressionCompiler.compile(
       Seq(out(TimeFromMicros(TimeToMicros(t6)))), withLong).get
     assert(trip.outputs === Seq(new IntArith(IntOp.MUL, Overflow.WRAP,
-      new GuardedRange(new ConstDivide(longCol, 1000L), 0L, 86399999999L), longSlot(0))))
+      new GuardedRange(new ConstDivide(longCol, 1000L, nanosPerDay), 0L, 86399999999L),
+      longSlot(0))))
   }
 
   test("the decimal-valued TIME expressions decline by naming the representation") {
