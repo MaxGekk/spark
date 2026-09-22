@@ -281,6 +281,15 @@ moved inside a class; the imports of each file are what it uses.
 The five iterators and the shared `ArrowColumnReader` into files of their own,
 the serializer keeping the entry points.
 
+*Done 22 September 2026.* Four iterators, not five - the row and the columnar
+writers, the columnar and the row readers - each in its own file, and
+`ArrowColumnReader` with its companion in a fifth; the serializer keeps its
+class and companion object, 1007 lines of 1775. Every class was already a
+top-level package-private class, so nothing changed but the file it sits in
+and the imports, which each file now limits to what it uses. The gate's
+`*ArrowCachedBatchSerializerSuite` and the CI scope, which is by directory,
+name nothing that moved.
+
 ### 3.7 One place per node (large; last)
 
 Task 2.13's finding made a rule; this step makes it structure. Each IR node's
