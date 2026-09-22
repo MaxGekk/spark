@@ -77,13 +77,14 @@ on:
         default: ''
       benchmark:
         type: choice
-        description: 'Which expressions. "surface" is one entry per expression, the coverage document, whose lightest rows are memory-bandwidth-bound and so cannot show a datapath difference. "chains" composes them three and four deep until the kernel is compute-bound, which is what a 512-bit run has to measure. See PLAN_TASK_62.md 11.13.'
+        description: 'Which expressions. "surface" is one entry per expression, the coverage document, whose lightest rows are memory-bandwidth-bound and so cannot show a datapath difference. "chains" composes them three and four deep until the kernel is compute-bound, which is what a 512-bit run has to measure. See PLAN_TASK_62.md 11.13. "time" and "timechains" are the same pair over the TIME table (PLAN_TASK_164.md).'
         required: true
         default: 'surface'
         options:
           - 'surface'
           - 'chains'
           - 'time'
+          - 'timechains'
       shard:
         type: string
         description: 'I/N - run entries I, I+N, I+2N of the surface, so N dispatches cover it once. For the row count the fixed-share rule wants, the whole surface does not fit one job. Merge with dev/varka_bench_merge.py. See PLAN_TASK_62.md 11.11.'

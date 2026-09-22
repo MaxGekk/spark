@@ -135,7 +135,73 @@ pricing a run on the machine that is scarce.
 
 ## 5. Outcome
 
-<!-- filled when the work is done -->
+*Written 22 September 2026 as the benchmark was built; the measurements follow
+in their own pull requests and are scored here when they land.*
+
+**Building the list found the tool short in three places, fixed here.**
+`dev/varka_emit.sh --table` failed with `literal slot 0 outside [0, 0)` on
+every long-lane expression that carries a literal slot, because the table path
+handed the emitter the int literal count, which is zero for a long-lane shape
+whose literals live in `longArgs`; the non-table path had the right count, and
+the surface's rows had only ever been checked through it. The tool's resolver
+looked functions up before the analyzer ran, so `hour(t + dt)` reached the
+registry's builder with its `Add` still uncoerced and tripped the builder's
+"function arguments must be resolved" assertion; the lookup is now the
+analyzer's own. And a projection whose every entry declined printed no reason,
+since `compilePartial` answers `None` without its declines; the compiler now
+exposes `declines` for the tools, and the table prints the reason beside
+`declined`.
+
+**The composition ceiling.** The deepest chain the lane fuses today is 48 lane
+ops, against the date list's 293 to 483. Three rows cap it. An extract narrows
+only at an output root (task 28), so nothing may stand above `hour`. `bigint`
+and interval arithmetic are not built (tasks 104 and 103), so
+`time_diff(..) + time_diff(..)` declines and a `bigint` column enters only
+through `greatest`, `least`, a comparison or a conditional. And `t - dt`
+declines, because Spark resolves it to `t + (-dt)` and the interval negation
+is not lowered, which is task 103's to build. That last one corrects
+`PLAN_TASK_118.md` section 2, which listed `t - interval` among the fused
+forms: the coverage table has `t + INTERVAL` and never had the subtraction,
+and the correction is written there.
+
+**The op floor, derived (section 2.1).** `TimeSurface-varka-jdk25-results.txt`
+against the tool's counts: the one-column entries read 0.8 ns/row at 4 ops
+(`least(l, 5000000000)`), 0.9 at 6 (`hour(t)`), 1.0 at 7
+(`time_trunc('MINUTE', t)`) and 1.2 at 12 (`minute(t)`), which is 0.05 ns per
+op over a floor near 0.6 ns; the two-column entries, `greatest(t, t2)` at 4
+ops and 1.1 and `t + dt` at 10 and 1.4, give the same slope over a floor near
+0.9 ns. Arithmetic equals the two-column memory floor at 18 ops, and
+`TimeChains.MIN_OPS` is 36, twice that - the date list's margin over its own
+break-even. The twelve entries run from 36 to 48 ops; every one reads a `TIME`
+and an interval column, five read a `bigint`, and the outputs are a `TIME`, an
+interval, `time_diff` counts and the three extracts. Each is safe against
+midnight by construction: `dt` is added only to `t` or a truncation of `t`,
+which the table's sign rule keeps inside the day, and `dt2`, under a second,
+only to a time already truncated to the second or coarser.
+
+**Prediction 1 failed.** It put `MIN_OPS` above 280 because a long-lane op
+covers half the lanes and the row is twice as wide, and both are so: the
+per-op cost is 0.05 ns against the date model's rounded 0.02. But the date
+list's floor was set by the fixed-share rule at a chain depth the date lane
+reaches, and this lane's reachable depth is an order of magnitude shallower, so
+the floor here is set by break-even against memory - and a shallower chain
+needs fewer ops to clear a lower bar, not more.
+
+**Prediction 4 is in doubt before any dispatch, from arithmetic alone.** At
+0.05 ns per op the heaviest entry is near 3.3 ns/row. The rule's 5% at the
+runner's constant of about 36 ms (`PLAN_TASK_118.md` section 3, item 5) needs
+720 ms of executor time an iteration: 3.6 ns/row at 2e8 rows, 7.2 at 1e8. And
+2e8 rows of this table is 9.1 GiB cached (the surface file reads 22.8 GiB at
+5e8), which a 12g driver on a 15 GiB runner does not hold, where 1e8 rows at
+4.6 GiB does. So the runner asks about 7 ns/row of entries that give 3, a fixed
+share near 11%, unless the bound is lifted for the chains - as task 105 lifted
+it to 6% for one row, and as item 11 of `PLAN_TASK_118.md` section 3 requires
+be stated wherever it is. The laptop at 2e8 rows needs 1.8 ns/row against its
+18 ms constant, and every entry clears that. The dispatch decides the runner's
+bound, and the decision is recorded here when it is taken.
+
+Predictions 2, 3 and 5 wait for the runs: the laptop's four arms and the band
+first, then the runner.
 
 ## 6. Explicitly out of this task
 

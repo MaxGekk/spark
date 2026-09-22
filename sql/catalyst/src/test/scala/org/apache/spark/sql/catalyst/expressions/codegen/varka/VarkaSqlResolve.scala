@@ -17,9 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import org.apache.spark.sql.catalyst.FunctionIdentifier
-import org.apache.spark.sql.catalyst.analysis.{FunctionRegistry, SimpleAnalyzer, UnresolvedAttribute}
-import org.apache.spark.sql.catalyst.analysis.UnresolvedFunction
+import org.apache.spark.sql.catalyst.analysis.{SimpleAnalyzer, UnresolvedAttribute}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, Expression}
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
 
@@ -58,9 +56,10 @@ object VarkaSqlResolve {
       case UnresolvedAttribute(Seq(name)) =>
         byName.getOrElse(name, throw new IllegalArgumentException(
           s"unknown column $name; declare it with --columns"))
-      case f: UnresolvedFunction =>
-        FunctionRegistry.builtin.lookupFunction(FunctionIdentifier(f.nameParts.last), f.arguments)
     }
+    // Functions are left to the analyzer, whose registry is the builtin one: a lookup before it
+    // runs would hand `hour(t + dt)` its argument still uncoerced, and the builder-backed
+    // functions assert that their arguments are resolved.
     SimpleAnalyzer.execute(Project(Seq(Alias(bound, "a")()), LocalRelation(columns))) match {
       case Project(Seq(a: Alias), _) => a.child
       case other =>

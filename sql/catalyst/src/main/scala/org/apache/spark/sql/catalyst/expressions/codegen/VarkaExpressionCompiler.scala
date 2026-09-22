@@ -337,6 +337,23 @@ private[sql] object VarkaExpressionCompiler {
   def compilePartial(
       projectList: Seq[NamedExpression],
       childOutput: Seq[Attribute]): Option[PartialVarkaProjection] = {
+    classify(projectList, childOutput)._1
+  }
+
+  /**
+   * Why each declining entry declined, by position - including when nothing fused, which
+   * [[compilePartial]] reports as a bare `None`. For the tools that explain a projection rather
+   * than run it.
+   */
+  private[sql] def declines(
+      projectList: Seq[NamedExpression],
+      childOutput: Seq[Attribute]): Map[Int, VarkaDecline] = {
+    classify(projectList, childOutput)._2
+  }
+
+  private def classify(
+      projectList: Seq[NamedExpression],
+      childOutput: Seq[Attribute]): (Option[PartialVarkaProjection], Map[Int, VarkaDecline]) = {
     // Both tables assign dense indices in first-occurrence order, which makes the compiled
     // shape deterministic in the projection alone.
     val inputs = mutable.LinkedHashMap.empty[Int, Int]
@@ -414,14 +431,15 @@ private[sql] object VarkaExpressionCompiler {
           }
       }
     }
+    val reasons = declines.result()
     if (fusedCount > 0 && inputs.nonEmpty) {
       val (ordinals, derived) = VarkaDerivedInput.resolve(inputs)
-      Some(PartialVarkaProjection(specs, CompiledVarkaProjection(
+      (Some(PartialVarkaProjection(specs, CompiledVarkaProjection(
         outputs.toSeq, outputTypes.result(), ordinals, literals.keys.toSeq,
         sink.inputBounds(inputs), derived, sink.longLiteralValues),
-        declines.result()))
+        reasons)), reasons)
     } else {
-      None
+      (None, reasons)
     }
   }
 
