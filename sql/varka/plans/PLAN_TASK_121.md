@@ -118,7 +118,52 @@ quote check holds every number section 5 will quote to the new files.
 
 ## 5. Outcome
 
-*Written after the runs.*
+### 5.1 Prediction 1, 22 September 2026: the shipped lowering under the flag
+
+The first arm ran before any of section 2's pieces were built, because it
+needed none of them: the fork's Varka arm of the `TIME` surface at task 105's
+setting (500000000 rows, 48g, one partition) with
+`spark.driver.extraJavaOptions=-XX:UseAVX=2` in the arm's conf field, which the
+surface script already passes through. The JVM read the flag - the file's
+`MaxVectorSize` line says 32, four 64-bit lanes - and the file is
+`TimeSurface-varka-jdk25-avx2-results.txt`. Wall-time rates in M rows/s
+against the committed `UseAVX=3` arm:
+
+| entry | `UseAVX=3` | `UseAVX=2`, shipped lowering |
+|---|---|---|
+| `hour(t)` | 1041.4 | 132.4 |
+| `minute(t)` | 821.3 | 72.3 |
+| `second(t)` | 835.4 | 73.0 |
+| `time_trunc('MINUTE', t)` | 978.0 | 125.2 |
+| `time_trunc('MILLISECOND', t2)` | 973.0 | 126.4 |
+| `t - t2` | 796.9 | 123.8 |
+| `time_diff('HOUR', t, t2)` | 791.9 | 123.4 |
+| `t + dt` | 689.1 | 690.8 |
+| `greatest(t, t2)` | 876.6 | 798.6 |
+| `least(l, 5000000000)` | 1238.2 | 1234.6 |
+
+**Prediction 1 held, by more than it said.** It predicted the extracts under a
+third of their `UseAVX=3` rate; they read under a seventh, `hour(t)` at 0.13x
+and `minute(t)` and `second(t)` at 0.09x, and every row with a 64-bit constant
+division in it - the truncations, `t - t2`, both `time_diff` units - sits
+between 0.13x and 0.16x. The rows without a division do not move by more than
+their tier: `t + dt` and `least(l, ...)` are unchanged, the selections within
+a fifth, which is the 256-bit species against the 512-bit one and nothing
+else. So on an AVX2 host today, with the lowering that ships, every `TIME`
+division row runs at a hundred M rows/s: still above stock's 61 (the four
+arms, `PLAN_TASK_105.md` section 6), and a tenth of what the same kernel does
+on this machine's own level.
+
+Two things the run adds to the plan. The provenance block does not record the
+`UseAVX` level itself, only `MaxVectorSize` and the CPU flags, so a reader has
+to infer the flag from the file name and the 32; the surface driver should
+print the level beside `MaxVectorSize`, which is a line in `Provenance`. And
+`t - t2` collapsing with the divisions says its lowering carries a division
+too, which section 2's reading of the magic form should confirm before the
+second arm is run.
+
+The second arm, the magic lowering under the same flag, waits on the session
+switch of section 2 step 1, as planned.
 
 ## 6. Explicitly out of this task
 
