@@ -101,11 +101,8 @@ a range its type guarantees and no shape can be emitted unguarded by accident.
    the same shape - and it is worth both, because the constructor guards
    construction while the analysis guards a tree that arrived any other way,
    which is what the fuzzer does.
-4. **The canonical form carries the bound**, so two divisions that differ only
-   in what their caller proved are different shapes and cannot share a kernel,
-   on the reasoning `GuardedRange` gives for holding its own bounds: a
-   placement carried beside the IR rather than inside it would let one shape be
-   served the other's guards.
+4. **The canonical form does not carry the bound** - see 2.4, which corrects
+   what this item first said.
 
 ### 2.3 The status bit stays `STATUS_CHRONO_RANGE`
 
@@ -119,6 +116,39 @@ already reports through this bit for `TIME + INTERVAL`, which is the same kind
 of decline for the same kind of reason. **The row's "new status bit" is
 therefore not built**, and this section is the record of that decision rather
 than a silent omission.
+
+### 2.4 Correction, 22 September 2026: the bound stays out of the shape key
+
+Item 4 of 2.2 first read "the canonical form carries the bound, so two
+divisions that differ only in what their caller proved are different shapes and
+cannot share a kernel", by analogy with `GuardedRange`, which does hold its
+bounds inside the IR. Checking it against `canonical` before building it shows
+the analogy is the wrong one, and predictions 1 and 3 would have failed by
+construction: `canonical` is a hand-written switch, so a new record component
+reaches the shape hash only if someone puts it there, and putting it there
+renames every committed key that contains a `ConstDivide`.
+
+The distinction the first version missed is whether a bound is an *emission*
+parameter or a *compile-time obligation*.
+
+- `GuardedRange(child, lo, hi)` emits two compares against `lo` and `hi`. Two
+  nodes with different bounds emit different bytes, so they must be different
+  shapes, and its javadoc's reasoning - a placement carried beside the IR would
+  let one shape be served the other's guards - is about code that exists.
+- `BoundedDivide(child, divisor, bound, multiplier, shift)` renders as
+  `divb:60/3600`, and its bound belongs there for the same reason: the search
+  derives the multiply-and-shift pair *from* the bound, so two bounds are two
+  different pairs of emitted constants.
+- `ConstDivide`'s dividend bound emits nothing at all. The guard, where one is
+  needed, is a separate `GuardedRange` node that the shape key already
+  separates. Two trees differing only in what their caller proved emit
+  identical bytes, and splitting the shape cache between them would buy
+  nothing and cost a second compilation.
+
+So the bound is a record component the constructor and the analysis read, and
+the rendering is left exactly as it is. The test that pins this is the one
+`VarkaShapeCacheSuite` already runs over a key using every node type: if the
+rendering moves, it fails, and this task expects it not to.
 
 ## 3. Predictions, registered before the run
 
