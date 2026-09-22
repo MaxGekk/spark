@@ -387,3 +387,42 @@ long-lane function only through a widening cast the compiler does not lower
 yet), and run the differential suite, not only the coverage suite, before
 pushing a row: the scoped CI job runs `sql/testOnly *Varka*`, and that is the
 local command that matches it.
+
+## A fuzz campaign is sixteen JVMs, not one sbt, and it re-finds what is already on the books
+
+From the 22 September 2026 campaign run while CI was busy (milestone 5 rows 166
+and 167, the knob in #316).
+
+- **Run the fuzzer as plain JVMs.** `VarkaIrFuzzSuite` needs nothing from sbt
+  but a classpath: `build/sbt -batch "export catalyst/Test/fullClasspath"` once,
+  then `java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED
+  -Dspark.testing=1 -Dvarka.fuzz.iterations=N -Dvarka.fuzz.seed=S -cp "$CP"
+  org.scalatest.tools.Runner -oW -s ...VarkaIrFuzzSuite` per process. One JVM
+  does about two hundred iterations a second per lane; sixteen of them with
+  distinct seeds on the 24-core laptop did eight million per lane in
+  twenty-five minutes. Under sbt the same campaign is one core and a day. Give
+  each JVM its own seed and its own log, and let a driver script wait on the
+  process ids, which exit on every path.
+- **Six arms, one finding, and it was row 87.** Twenty-nine million int-lane
+  and twenty-nine million long-lane trees, with every emit option randomised
+  per iteration and `useAVX` over unknown, 0, 2 and 3: the default tree; the
+  long-column bound raised from 2^46 to 2^52 - 1 on task 147's node, so the
+  divisions state their bound and the guard-versus-claim check runs live; and
+  both again under `-XX:MaxVectorSize=16` and `=32`. The long lane never
+  failed, in 14.4 million trees at the raised bound across three widths - the
+  region row 166 names as never visited. The only failures were two int-lane
+  seeds hitting the 65535-byte epilogue cap that row 87 already records and
+  the owner asked to keep for a future fix: `-Dvarka.fuzz.seed=20260922006
+  -Dvarka.fuzz.only=35105` (66102 bytes) and `-Dvarka.fuzz.seed=20260922008
+  -Dvarka.fuzz.only=94624` (73013 bytes), both `epilogueMasked`, both nested
+  `make_date` trees at `groupBudget` 400.
+- **Arms that vary only the long lane repeat the int lane.** The bound knob
+  and the width flag change nothing about the int-lane sequence, so the same
+  two seeds failed identically in every arm. Harmless, but half of each later
+  arm was a rerun; a campaign that means to vary the long lane alone should
+  give the int lane fresh seeds or skip it with `-Dvarka.fuzz.only`.
+- **A negative campaign is evidence, not the deliverable.** Fourteen million
+  random trees near the bound saying nothing is worth knowing before the post,
+  and row 166 still asks for the deterministic test that drives both forms
+  over `[2^51, 2^53)` and asserts the shape of each failure - a random draw
+  cannot promise it visited the last bit below the bound, and a test can.

@@ -3695,6 +3695,15 @@ failure of a different shape would mean the model is wrong. **Done when** the
 kernel's own bytes confirm what the script models for every divisor Varka
 divides by, or the script is corrected to what they do. Size: small.
 
+*A first campaign, 22 September 2026.* With the long-lane fuzzer's column bound
+raised to 2^52 - 1 on task 147's tree (`#316`'s knob), 14.4 million random
+long-lane trees at the default width and under `-XX:MaxVectorSize=16` and
+`=32` found no disagreement with the reference evaluator, with `useAVX`
+randomised so the magic form ran near the bound. That is evidence the six bits
+hold, not the deliverable: a random draw cannot promise it visited the last
+bit below the bound, and the deterministic test above can. The campaign's
+record is in `sql/varka/skills/testing-and-debugging.md`.
+
 ### 2.103 The bytes oracle pins shapes, not options (task 167)
 
 *Opened 22 September 2026, from the same review.*
