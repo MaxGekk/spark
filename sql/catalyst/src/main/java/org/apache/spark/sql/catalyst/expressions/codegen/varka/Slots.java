@@ -322,9 +322,9 @@ final class Slots {
     // one accumulator per output this body writes a word at a time. Allocated after guardAcc and
     // before epilogueMask, and only in a loop body that word-writes at all, so every other emission
     // keeps the slot numbering it had - the byte-identity the option's off arm is asserted on.
-    if (mode == BodyMode.LOOP && wordWrites(analysis)) {
+    if (mode == BodyMode.LOOP && VarkaBodyEmitter.wordWrites(analysis)) {
       for (int o : outputIdx) {
-        if (keepsPerGroupWrite(analysis, dense, outputs, o)) {
+        if (VarkaBodyEmitter.keepsPerGroupWrite(analysis, dense, outputs, o)) {
           if (s.validityAcc == null) {
             s.validityAcc = new int[outputs.size()];
             Arrays.fill(s.validityAcc, -1);
