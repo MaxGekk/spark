@@ -47,7 +47,7 @@ column value is read out of an `UnsafeRow`, every intermediate is a local, and
 anything that needs an object - a `LocalTime`, a `Decimal`, a `UTF8String` -
 gets a new one per row.
 
-![Stock Spark's row loop against Varka's one loop over the column](figures/out/fig1-row-loop-vs-vector-loop.svg)
+![Stock Spark's row loop against Varka's one loop over the column](figures/svg/fig1-row-loop-vs-vector-loop.svg)
 
 *Figure 1. Left: the generated Java takes rows one at a time and uses one lane
 of a core that has eight 64-bit lanes to offer. Right: Varka's emitted loop
@@ -70,7 +70,7 @@ there, from `DateTimeUtils`:
 def getHoursOfTime(nanos: Long): Int = LocalTime.ofNanoOfDay(nanos).getHour
 ```
 
-![What hour(t) costs stock Spark against what it costs the lane](figures/out/fig2-localtime-per-row.svg)
+![What hour(t) costs stock Spark against what it costs the lane](figures/svg/fig2-localtime-per-row.svg)
 
 *Figure 2. Stock Spark builds a `LocalTime` - four fields, one allocation - to
 read one of the fields back. The lane divides.*
@@ -82,8 +82,8 @@ to fill four fields, allocates an object to hold them, and the caller reads one
 field and drops the object. Escape analysis sometimes removes the allocation
 and sometimes does not, and the four divisions stay either way. Measured over
 five hundred million cached rows, `hour(t)` costs stock Spark 16.3 nanoseconds a
-row on this machine, and `minute(t)` and `second(t)` the same to the decimal,
-because they are the same object built for a different field.
+row on this machine, and `minute(t)` and `second(t)` 16.4 each, because they
+are the same object built for a different field.
 
 Varka's lane does one 64-bit division and stores the quotient. It costs
 1.0 nanoseconds a row, and most of that is the memory traffic - an eight-byte
@@ -106,7 +106,7 @@ with no cache step in front, and that is the natural next reader for this
 engine. Nothing below depends on where the batch came from; it depends only on
 the batch being Arrow.
 
-![One Arrow batch of six columns, and the row it is not](figures/out/fig3-batch-is-columns.svg)
+![One Arrow batch of six columns, and the row it is not](figures/svg/fig3-batch-is-columns.svg)
 
 *Figure 3. The `varka_times` table the benchmarks use: two `TIME` columns, two
 day-time intervals, two `bigint`s, eight bytes a row each, plus a bit per row
@@ -136,7 +136,7 @@ projection into a small vector IR, and an emitter writes a Java class for that
 IR with JDK 25's Class-File API: one class per projection shape, holding one
 loop.
 
-![From the plan node to an emitted class, and the trapdoor under the kernel](figures/out/fig4-one-class-per-projection.svg)
+![From the plan node to an emitted class, and the trapdoor under the kernel](figures/svg/fig4-one-class-per-projection.svg)
 
 *Figure 4. Above: a projection becomes an IR, the IR becomes bytecode, the JIT
 sees one loop with monomorphic call sites. Below: batch by batch at run time,
@@ -170,10 +170,10 @@ division and a multiplication, `time_diff` a subtraction and a division. On the
 cheap instructions. On the 64-bit lane there is no multiply-high in the Vector
 API, and a 64-bit product overflows anyway, so the lane goes through doubles.
 
-![The two lowerings of a 64-bit division by a constant](figures/out/fig5-two-division-forms.svg)
+![The two lowerings of a 64-bit division by a constant](figures/svg/fig5-two-division-forms.svg)
 
 *Figure 5. With AVX-512 the machine converts eight longs to eight doubles in
-one instruction, divides, and converts back: seven vector operations. With AVX2
+one instruction, divides, and converts back: three vector operations. With AVX2
 there is no such conversion, so the lane reads the bits of the long as a double
 through an identity and back again: fourteen.*
 
@@ -181,7 +181,9 @@ A double holds every integer below 2^53 exactly, and a correctly rounded
 quotient of two such integers is exact as an integer whenever the dividend is
 below 2^52, which every nanosecond-of-day is by a wide margin. So the
 conversion form is exact, and on a machine with AVX-512 it is a convert, a
-divide and a convert.
+divide and a convert - three vector operations, because a 64-bit lane and a
+double lane are the same width, so there are no halves to split and rejoin the
+way the 32-bit lane has to.
 
 Most laptops and a good share of cloud machines have AVX2 and not AVX-512, and
 AVX2 has no instruction that turns a vector of longs into a vector of doubles.
@@ -193,7 +195,7 @@ recovers `u` as a double with no conversion instruction at all, and the same
 identity run backwards turns the quotient into a long. The floor that Java's
 truncating division needs is built by hand - the Vector API has no lanewise
 floor either - and the sign is handled by dividing the magnitude and negating
-the lanes that need it afterwards. Fourteen operations against seven, all of
+the lanes that need it afterwards. Fourteen operations against three, all of
 them vector operations, all of them instructions AVX2 has.
 
 Both forms are exact for every dividend under 2^52, and the emitter carries
@@ -215,7 +217,7 @@ Varka compiles the projection as one graph, finds the shared subtrees, and
 emits one loop in which the shared value is computed once per eight rows and
 stays in a register.
 
-![Two outputs sharing a subtree, and the loop they become](figures/out/fig6-fusion-shared-subtree.svg)
+![Two outputs sharing a subtree, and the loop they become](figures/svg/fig6-fusion-shared-subtree.svg)
 
 *Figure 6. Left: the expression graph of two outputs over the same guarded
 sum. Right: the loop the emitter writes for it - one load per input column,
@@ -235,7 +237,7 @@ the closing section is built around.
 A "17x" is worth exactly as much as the method behind it, so briefly: what was
 compared, on what, and what would have made a run invalid.
 
-![The four arms every table compares](figures/out/fig7-four-arms.svg)
+![The four arms every table compares](figures/svg/fig7-four-arms.svg)
 
 *Figure 7. Two stock releases on two JDKs, the fork with the engine off, and
 the fork with it on, over the same cached rows, timed by one benchmark jar that
@@ -259,12 +261,13 @@ by dispatching the same workflow. The *surface* - one row per expression, the
 coverage document - stays on the development laptop and is labelled as such,
 because it cannot be measured honestly on a runner at all: its lightest entries
 run at 0.8 nanoseconds a row, a cloud runner's per-iteration constant is about
-36 milliseconds, and keeping that constant under 5% would need some seven
-hundred million rows, which is about 32 GiB of cached table on a machine with
-15 GiB of memory. A surface row therefore says *what* fuses and roughly what it
+36 milliseconds, and keeping that constant under 5% means the work has to last
+at least 720 milliseconds - some nine hundred million rows, which at this
+table's 46 bytes a row is about 38 GiB of cache on a machine with 15 GiB of
+memory. A surface row therefore says *what* fuses and roughly what it
 is worth on a developer's machine; a chain row is the claim.
 
-![The gates a run passes before it is quoted](figures/out/fig8-the-gates.svg)
+![The gates a run passes before it is quoted](figures/svg/fig8-the-gates.svg)
 
 *Figure 8. Six guards between a run and a committed file, each one the memory
 of a number that was wrong once.*
@@ -286,7 +289,7 @@ tier, and no row is quoted without one. After all that, a check that every
 number with decimals in the documents traces to a committed file, or the build
 fails.
 
-![Where the full-width numbers come from](figures/out/fig9-the-full-width-runner.svg)
+![Where the full-width numbers come from](figures/svg/fig9-the-full-width-runner.svg)
 
 *Figure 9. The GitHub-hosted pool as eighteen dispatches saw it, and the
 workflow that measures on the one machine in it whose datapath is genuinely

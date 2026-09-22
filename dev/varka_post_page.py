@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# How far apart do repeated runs of one benchmark land, per case?
+# Render a post's Markdown and its figures into the page that gets published.
 
 """Render a Varka post from its Markdown source into a standalone web page.
 
@@ -91,8 +91,14 @@ def inline_figures(html, source_dir):
     def one(match):
         alt, src = match.group(1), match.group(2)
         path = os.path.join(source_dir, src)
-        if not os.path.exists(path) or not src.endswith(".svg"):
+        if not src.endswith(".svg"):
             return match.group(0)
+        if not os.path.exists(path):
+            # Loudly: a figure whose SVG is absent used to pass through as an <img> pointing
+            # at nothing, so the page shipped with a hole in it and the build still exited 0.
+            raise SystemExit(
+                "missing figure %s - run the scripts in %s/figures" % (src, source_dir)
+            )
         with open(path) as handle:
             svg = handle.read()
         # The drawings are authored at a fixed pixel size; the page scales them by width, so
@@ -104,29 +110,42 @@ def inline_figures(html, source_dir):
     return re.sub(r'<p><img alt="([^"]*)" src="([^"]+)" ?/?></p>', one, html)
 
 
+def summarise(html, title):
+    """The link card's blurb: the post's opening prose, cut at a sentence end if there is one
+    in reach and at a word boundary otherwise - never mid-word, which is what a card shows."""
+    plain = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+    if plain.startswith(title):
+        plain = plain[len(title) :].strip()
+    if len(plain) <= 220:
+        return plain.replace('"', "&quot;")
+    cut = plain[:220]
+    stop = cut.rfind(". ")
+    if stop > 80:
+        return cut[: stop + 1].replace('"', "&quot;")
+    space = cut.rfind(" ")
+    if space > 80:
+        cut = cut[:space]
+    return (cut.rstrip(" ,;:-") + "...").replace('"', "&quot;")
+
+
 def render(source, out_dir, og_image=""):
     import markdown
 
     source_dir = os.path.dirname(os.path.abspath(source))
     with open(source) as handle:
         text = handle.read()
-    title = text.split("\n", 1)[0].lstrip("# ").strip().replace("`", "")
-    # The first italic line under the title is the post's own note to its editors, not
-    # something a reader of the published page needs.
-    body = re.sub(r"\n\*The long read that closes.*?\*\n", "\n", text, count=1, flags=re.S)
+    head, rest = text.split("\n", 1)
+    title = head.lstrip("# ").strip().replace("`", "")
+    # Whatever italic block opens the file under the title is the post's note to its own
+    # editors - when it was drafted, what it still owes - and not something a reader of the
+    # published page needs. Keyed on that shape rather than on one post's words.
+    body = head + "\n" + re.sub(r"^\s*\*[^*].*?\*\s*$", "", rest, count=1, flags=re.S | re.M)
     html = markdown.markdown(body, extensions=["fenced_code", "tables"])
+    # The blurb is taken before the figures go in: an inlined SVG carries a <style> block
+    # whose base64 font would otherwise be stripped into the card's text.
+    summary = summarise(html, title)
     html = inline_figures(html, source_dir)
     html = html.replace("<p><em>Figure", '<p class="cap"><em>Figure')
-    # The card's blurb is the post's opening prose, not its title again: strip the tags,
-    # drop the heading line, and cut at a sentence end so the card never trails off mid-word.
-    plain = " ".join(re.sub(r"<[^>]+>", " ", html).split())
-    if plain.startswith(title):
-        plain = plain[len(title) :].strip()
-    summary = plain[:220]
-    stop = summary.rfind(". ")
-    if stop > 80:
-        summary = summary[: stop + 1]
-    summary = summary.replace('"', "&quot;")
     og = ""
     if og_image:
         og = '<meta property="og:image" content="%s">' % og_image
@@ -150,7 +169,7 @@ def render(source, out_dir, og_image=""):
         handle.write(page)
     # The SVGs travel too, so the page can be opened from the output directory alone even
     # though this build inlines them.
-    figures = os.path.join(source_dir, "figures", "out")
+    figures = os.path.join(source_dir, "figures", "svg")
     if os.path.isdir(figures):
         shutil.copytree(figures, os.path.join(out_dir, "figures"), dirs_exist_ok=True)
     return out, page

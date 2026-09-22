@@ -4,8 +4,11 @@ short script beside this file that builds a `Rough` and calls `finish`, which em
 of the font so the SVG renders the same everywhere. Deterministic per seed, so a figure
 re-renders identically until its script changes.
 
-Run any `fig*.py` from this directory; the SVG lands in `out/`. The font (Patrick Hand, OFL)
+Run any `fig*.py` from this directory; the SVG lands in `svg/`. The font (Patrick Hand, OFL)
 is fetched into `fonts/` on first use if it is not there.
+
+Needs `fonttools` and `brotli`: the glyphs each figure uses are subset out of the font and
+embedded as woff2, so the drawing carries its own lettering and renders the same anywhere.
 """
 
 import base64
@@ -178,7 +181,10 @@ class Rough:
                 )
                 for i in range(n + 3)
             ]
-            d = "M%.1f %.1f" % pts[0]
+            # From pts[1], as `curve` does: the loop's first cubic ends at pts[2] and its
+            # control points belong to the pts[1] -> pts[2] segment, so opening at pts[0]
+            # skips a point and draws the first arc as a chord.
+            d = "M%.1f %.1f" % pts[1]
             for i in range(1, len(pts) - 2):
                 p0, p1, p2, p3 = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
                 c1 = (p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6)
@@ -237,7 +243,7 @@ def finish(r, name):
     if not os.path.exists(FONT_FILE):
         os.makedirs(os.path.dirname(FONT_FILE), exist_ok=True)
         urllib.request.urlretrieve(FONT_URL, FONT_FILE)
-    out_dir = os.path.join(HERE, "out")
+    out_dir = os.path.join(HERE, "svg")
     os.makedirs(out_dir, exist_ok=True)
     chars = sorted(set(c for c in "".join(r.parts) if c.isprintable()))
     sub = os.path.join(out_dir, name + ".woff2")

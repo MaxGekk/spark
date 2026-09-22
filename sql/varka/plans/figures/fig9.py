@@ -15,7 +15,11 @@ for i, k in enumerate(kinds):
         80,
         48,
         fill=fills[k],
-        label={"zen3": "1.00", "zen4": "1.00", "xeon": "1.35", "zen5": "2.01"}[k],
+        # The census's own readings (PLAN_TASK_62.md 11.9), not the later measuring run's:
+        # Zen 3 read 1.00, the three Zen 4s 0.91 to 1.00, the Xeons 1.33 to 1.36, and the one
+        # Zen 5 1.99. The committed results file below carries 2.01 because that is a
+        # different run on a different day.
+        label={"zen3": "1.00", "zen4": "1.00", "xeon": "1.35", "zen5": "1.99"}[k],
         size=18,
     )
 r.text(

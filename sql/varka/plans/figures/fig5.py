@@ -1,6 +1,6 @@
-"""Figure 5: dividing eight nanosecond counts at once - the conversion form where the machine
-converts long lanes to double lanes in one instruction (AVX-512), and the magic form that
-reads the bits as a double where it does not (AVX2)."""
+"""Figure 5: dividing eight nanosecond counts at once - the conversion form, three operations
+where the machine converts long lanes to double lanes in one instruction (AVX-512), and the
+fourteen-operation magic form that reads the bits as a double where it does not (AVX2)."""
 
 from rough import Rough, finish
 
@@ -11,7 +11,7 @@ for i in range(8):
 r.text(40, 150, "8 longs in one 512-bit register", size=18, color="#868e96")
 
 # Path A: the conversion form.
-r.text(40, 210, "AVX-512: the conversion form, 7 vector ops", size=23)
+r.text(40, 210, "AVX-512: the conversion form, 3 vector ops", size=23)
 for i, (lbl, fill) in enumerate([("to double", "grey"), ("divide", "green"), ("to long", "grey")]):
     x = 40 + i * 230
     r.rect(x, 240, 190, 64, fill=fill, label=lbl, size=21)
