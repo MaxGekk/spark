@@ -110,15 +110,23 @@ def render(source, out_dir, og_image=""):
     source_dir = os.path.dirname(os.path.abspath(source))
     with open(source) as handle:
         text = handle.read()
-    title = text.split("\n", 1)[0].lstrip("# ").strip()
+    title = text.split("\n", 1)[0].lstrip("# ").strip().replace("`", "")
     # The first italic line under the title is the post's own note to its editors, not
     # something a reader of the published page needs.
     body = re.sub(r"\n\*The long read that closes.*?\*\n", "\n", text, count=1, flags=re.S)
     html = markdown.markdown(body, extensions=["fenced_code", "tables"])
     html = inline_figures(html, source_dir)
     html = html.replace("<p><em>Figure", '<p class="cap"><em>Figure')
-    summary = re.sub(r"<[^>]+>", "", html)
-    summary = " ".join(summary.split())[:200]
+    # The card's blurb is the post's opening prose, not its title again: strip the tags,
+    # drop the heading line, and cut at a sentence end so the card never trails off mid-word.
+    plain = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+    if plain.startswith(title):
+        plain = plain[len(title) :].strip()
+    summary = plain[:220]
+    stop = summary.rfind(". ")
+    if stop > 80:
+        summary = summary[: stop + 1]
+    summary = summary.replace('"', "&quot;")
     og = ""
     if og_image:
         og = '<meta property="og:image" content="%s">' % og_image
