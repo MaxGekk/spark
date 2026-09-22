@@ -122,7 +122,7 @@ final class VarkaEmitBudget {
    * emitted alone and beside {@code month(d)} in one loop method ({@code dev/varka_emit.sh
    * "month(d)" "<node>" --options groupBudget=200}), and the pair's {@code loopDense0} count
    * minus {@code month(d)}'s own (35) is the node's tail; {@code dayofmonth(d)} alone (36)
-   * minus its tail (5) is the prefix. {@code VarkaLoopEmitterSuite} pins every line of the
+   * minus its tail (5) is the prefix. {@code VarkaEmitterBudgetSuite} pins every line of the
    * register against the emitted bytes, so a lowering change that moves a count fails there
    * rather than leaving a weight to drift.
    */
@@ -254,7 +254,7 @@ final class VarkaEmitBudget {
    * What {@link VarkaVectorIR.MakeDate} weighs against {@link #GROUP_BUDGET}, counted
    * the way {@link #DAY_OF_YEAR_WEIGHT} is: the validity arithmetic (the clamp, the month length
    * with its leap flag, four compares) and {@code emitDaysFromCivil}'s recompose. Read off the
-   * emitted bytes by the register in {@code VarkaLoopEmitterSuite}, not estimated.
+   * emitted bytes by the register in {@code VarkaEmitterBudgetSuite}, not estimated.
    */
   static final int MAKE_DATE_WEIGHT = 60;
 
@@ -286,7 +286,7 @@ final class VarkaEmitBudget {
    * What {@link VarkaVectorIR.DayOfWeekIso} weighs against {@link #GROUP_BUDGET},
    * counted the way {@link #NEXT_DAY_WEIGHT} is: {@code WeekDay}'s mod-7 tail (17 dense-loop
    * {@code IntVector} calls under the shipped lowering, per the register in
-   * {@code VarkaLoopEmitterSuite}) plus one add.
+   * {@code VarkaEmitterBudgetSuite}) plus one add.
    */
   static final int DAY_OF_WEEK_ISO_WEIGHT = 18;
 

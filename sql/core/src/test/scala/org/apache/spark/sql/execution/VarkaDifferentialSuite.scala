@@ -1021,7 +1021,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
   test("a shared subchain across outputs is fused and matches the row engine") {
     // The milestone's DAG example: `date_add(d, 1)` feeds both outputs and the emitted loop
     // computes it once per lane group. Correctness here; the CSE mechanics are pinned in
-    // VarkaLoopEmitterSuite and the win is priced in VarkaEmitterParityBenchmark.
+    // VarkaEmitterArithmeticSuite and the win is priced in VarkaEmitterParityBenchmark.
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -1456,7 +1456,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions {
     // 400, and 14400, which is. emitLeapFlag's magic constants once overflowed a 32-bit lane's
     // signed product past roughly year 12400 - silently, with no narrow boundary list catching
     // it - so these two rows are the end-to-end companion to the exhaustive unit-level sweep
-    // in VarkaLoopEmitterSuite, over the same class of failure through actual SQL. They go
+    // in VarkaEmitterChronoSuite, over the same class of failure through actual SQL. They go
     // through the column, not a literal expression: a literal-only date_add(DATE '...', n)
     // constant-folds away before Varka ever sees it, which is a shape this test does not
     // want to depend on the optimizer leaving alone.

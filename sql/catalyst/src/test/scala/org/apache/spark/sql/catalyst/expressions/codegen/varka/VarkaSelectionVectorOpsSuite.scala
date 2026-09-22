@@ -26,7 +26,7 @@ import org.apache.spark.SparkFunSuite
  * kernel previously had only end-to-end coverage through the differential suite, and the
  * filter suite's release test had silently stopped exercising compaction when the
  * all-selected fast path started forwarding). Lengths straddle every lane and byte boundary
- * the way `VarkaLoopEmitterSuite`'s do, so every remainder runs at 4, 8 and 16 lanes alike.
+ * the way `VarkaEmitterTestBase`'s do, so every remainder runs at 4, 8 and 16 lanes alike.
  *
  * Named with the `Varka` prefix, unlike the class it tests, so the documented
  * `testOnly *Varka*` gate picks it up.

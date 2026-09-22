@@ -18,7 +18,7 @@ time, and the rest are conditional on what the expression needs.
 | :--- | :--- | :--- |
 | `VarkaVectorIR.java` | 10/10 | the node |
 | `VarkaLoopEmitter.java` | 10/10 | the code it emits |
-| `VarkaLoopEmitterSuite.scala` | 10/10 | proof the emitted loop matches the reference |
+| `VarkaEmitter<Family>Suite.scala` | 10/10 | proof the emitted loop matches the reference |
 | `PLAN_MILESTONE_4.md` | 10/10 | the task row |
 
 | | Nearly always | |
@@ -87,7 +87,7 @@ analysis passes the node participates in - the exhaustiveness errors from step 2
 list them. If the node is a value over one date, check whether it can share the
 `civil-from-days` prefix rather than recomputing it.
 
-> *Check:* `build/sbt 'catalyst/testOnly *VarkaLoopEmitterSuite'`.
+> *Check:* `build/sbt 'catalyst/testOnly *VarkaEmitter*Suite'`.
 
 **5. Say what its nulls do.** A node that is null when any input is null needs
 nothing: that is the default. Anything else - a node that can produce a null from

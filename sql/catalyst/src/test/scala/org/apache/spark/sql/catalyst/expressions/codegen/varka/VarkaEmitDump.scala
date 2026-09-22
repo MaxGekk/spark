@@ -45,7 +45,7 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeInterval
  * function registry, then handed to [[VarkaExpressionCompiler]] exactly as a projection would
  * be. The output is the IR each entry lowered to, the shape hash production would name the
  * class by, and for every emitted method its bytecode size, its `IntVector`, `DoubleVector`,
- * `convertShape` and `VectorMask` invocation counts (the metric `VarkaLoopEmitterSuite`'s
+ * `convertShape` and `VectorMask` invocation counts (the metric the `VarkaEmitter*Suite`s'
  * op-count tests use, so a prediction registered from here is on the suite's own scale) and its
  * line-map entries. With
  * `--rounds N` the kernel is also loaded and run N times over synthetic data, which is what

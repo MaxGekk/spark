@@ -27,7 +27,7 @@ import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
  * consumers, the row transition and the cache builder.
  *
  * The kernel-level proof that the long lane computes what the reference says is task 85's
- * (`VarkaLoopEmitterSuite`). What only this suite can catch is a lane that reads the right bits
+ * (`VarkaEmitterLongLaneSuite`). What only this suite can catch is a lane that reads the right bits
  * in the wrong unit - a `TIME(3)` compared against a literal Catalyst cast from another
  * precision, an interval read as nanoseconds - because the kernel never sees the unit; and a
  * destination vector the row path cannot read back. The fixtures therefore carry every precision

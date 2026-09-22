@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The emitted dense path used to zero the bitmap and then OR lane-masked words into it, which
  * leaves the bits past {@code rows} in the final byte at zero. This sets them directly, and
- * {@code VarkaLoopEmitterSuite.assertSameOutput} compares dense against masked validity byte for
+ * {@code VarkaEmitterTestBase.assertSameOutput} compares dense against masked validity byte for
  * byte - so filling the whole last byte would be a difference the differential reports as a
  * failure. Everything here is about that last byte.
  */
