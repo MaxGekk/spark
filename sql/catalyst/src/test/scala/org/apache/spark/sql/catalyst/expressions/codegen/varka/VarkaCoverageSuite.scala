@@ -369,8 +369,9 @@ class VarkaCoverageSuite extends SparkFunSuite {
   // --- the compiler's own list ------------------------------------------------------------
 
   /**
-   * The Catalyst expression classes `VarkaExpressionCompiler` matches on, read from its source
-   * because there is no runtime list to ask: the arms are a `match`, not a registry.
+   * The Catalyst expression classes the compiler matches on, read from its source because there
+   * is no runtime list to ask: the arms are a `match`, not a registry. The arms live in
+   * `VarkaExpressionCompiler` and the four family objects it chains, so all five files are read.
    *
    * Every `case` pattern naming a capitalised type is collected, then kept only if it names a
    * real class in `org.apache.spark.sql.catalyst.expressions`. That filter is what removes the
@@ -382,10 +383,14 @@ class VarkaCoverageSuite extends SparkFunSuite {
    * as one Varka admits.
    */
   private lazy val admittedByCompiler: Set[String] = {
-    val source = withoutComments(Files.readString(
-      getWorkspaceFilePath("sql", "catalyst", "src", "main", "scala",
-        "org", "apache", "spark", "sql", "catalyst", "expressions", "codegen",
-        "VarkaExpressionCompiler.scala")))
+    val compilerFiles = Seq("VarkaExpressionCompiler", "VarkaChronoCompiler",
+      "VarkaIntervalCompiler", "VarkaTimeCompiler", "VarkaConditionCompiler")
+    val source = compilerFiles.map { name =>
+      withoutComments(Files.readString(
+        getWorkspaceFilePath("sql", "catalyst", "src", "main", "scala",
+          "org", "apache", "spark", "sql", "catalyst", "expressions", "codegen",
+          s"$name.scala")))
+    }.mkString("\n")
     val patterns = Seq(
       """case\s+([A-Z]\w*)\s*\(""".r,
       """case\s+\w+\s*@\s*([A-Z]\w*)\s*\(""".r,

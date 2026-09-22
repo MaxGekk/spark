@@ -264,7 +264,7 @@ public sealed interface VarkaVectorIR
    * exactly, and reported through {@code STATUS_CHRONO_RANGE} where it does not.
    *
    * <p><b>Why the compiler inserts a node instead of the emitter finding the place.</b> The
-   * range analysis lives in {@code VarkaExpressionCompiler.dayRange}, and it needs literal
+   * range analysis lives in {@code VarkaChronoCompiler.dayRange}, and it needs literal
    * values to run: a literal day shift moves the interval by its own amount. The emitter never
    * sees those - {@link LiteralSlot} carries an index and {@code emit} is handed
    * {@code numLiterals}, not the values - so it cannot decide where a check belongs. Nor can it
