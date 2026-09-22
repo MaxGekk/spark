@@ -264,6 +264,27 @@ tier, and no row is quoted without one. After all that, a check that every
 number with decimals in the documents traces to a committed file, or the build
 fails.
 
+![Where the full-width numbers come from](figures/out/fig9-the-full-width-runner.svg)
+
+*Figure 9. The GitHub-hosted pool as eighteen dispatches saw it, and the
+workflow that measures on the one machine in it whose datapath is genuinely
+512 bits wide - proven by the measuring job itself, and written into the file.*
+
+**Where the 512-bit numbers come from.** Not from this laptop, whose Zen 5
+core double-pumps. The chains are measured by a GitHub Actions workflow,
+`varka-surface-benchmark.yml`, that anyone can dispatch: a `build` job caches
+the jars for the commit on whatever runner it gets, and a `measure` job starts
+by running the datapath probe *on its own VM* - a probe in any other job would
+be describing a different machine, which is a mistake the previous milestone
+made once - and stops within a minute unless the ratio is near 2. Across the
+pool that is one dispatch in about eighteen, an AMD EPYC 9V45; the Intel Xeons
+carry every AVX-512 flag and still read 1.35, because they issue 512-bit
+integer operations on fewer ports. A hit runs the four arms in about an hour
+and commits a file whose header carries the CPU and the probe's reading from
+the same VM, so the claim and its evidence cannot come apart. Milestone 4's
+date chains were measured this way - **9.4x to 14.2x against stock, median
+10.2x** - and the `TIME` chains of section 8 will be too.
+
 ## 8. The numbers
 
 *To write from the committed files: the surface's median and the honest split
