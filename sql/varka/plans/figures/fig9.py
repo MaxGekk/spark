@@ -3,7 +3,7 @@ job itself proves has a 512-bit datapath, found by dispatching until the pool ha
 
 from rough import Rough, finish
 
-r = Rough(900, 760, seed=71)
+r = Rough(900, 780, seed=71)
 r.text(40, 40, "the runner pool, as eighteen dispatches saw it", size=24)
 kinds = ["zen3"] * 8 + ["zen4"] * 3 + ["xeon"] * 6 + ["zen5"]
 fills = {"zen3": "grey", "zen4": "grey", "xeon": "yellow", "zen5": "green"}
@@ -29,11 +29,11 @@ r.note(560, 250, "AMD EPYC 9V45 (Zen 5):\none dispatch in about eighteen", size=
 
 # The workflow.
 r.text(40, 320, "one dispatch of varka-surface-benchmark.yml", size=24)
-r.rect(40, 350, 240, 110, fill="grey")
+r.rect(40, 350, 240, 140, fill="grey")
 r.text(160, 378, "build", size=22, anchor="middle")
-r.text(160, 408, "any runner; the jars are\ncached by commit", size=16, anchor="middle")
-r.arrow(285, 405, 325, 405)
-r.rect(330, 350, 530, 110, fill="blue")
+r.text(160, 430, "any runner; the jars are\ncached by commit", size=16, anchor="middle")
+r.arrow(285, 420, 325, 420)
+r.rect(330, 350, 530, 140, fill="blue")
 r.text(595, 378, "measure, on a fresh VM", size=22, anchor="middle")
 r.text(
     595,
@@ -44,12 +44,12 @@ r.text(
     size=15,
     anchor="middle",
 )
-r.arrow(595, 465, 595, 505)
-r.rect(430, 510, 330, 90, fill="green")
-r.text(595, 535, "DateChain-varka-jdk25-results.txt", size=18, anchor="middle")
-r.text(595, 565, "cpu: AMD EPYC 9V45   datapath: ratio 2.01", size=16, anchor="middle")
-r.arrow(400, 465, 340, 530, color="#e03131")
-r.text(330, 540, "refused:\nwrong machine", size=17, anchor="end", color="#e03131")
+r.arrow(595, 495, 595, 525)
+r.rect(430, 530, 330, 90, fill="green")
+r.text(595, 555, "DateChain-varka-jdk25-results.txt", size=18, anchor="middle")
+r.text(595, 585, "cpu: AMD EPYC 9V45   datapath: ratio 2.01", size=16, anchor="middle")
+r.arrow(400, 495, 340, 560, color="#e03131")
+r.text(330, 570, "refused:\nwrong machine", size=17, anchor="end", color="#e03131")
 r.note(
     40,
     650,
