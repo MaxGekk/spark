@@ -131,6 +131,23 @@ The file's section headers are the plan. In order of least entanglement:
    string, which is a tooling fix of its own and not this seam's.
 4. **Slot planning** (around 2539 to 3314): `Slots` and `planSlots` into
    `VarkaSlotPlan.java`.
+   *Done 22 September 2026, as `Slots.java`*, again under the name the emitter
+   already used: the frame layout as the class, `planSlots` as its static
+   `plan`, and the planner's own helpers (the word-reference aliasing, the
+   algebra cross-check, the guard predicates, the word liveness pass) private
+   to it. The class comment says what the layout is and the two facts that
+   shape it - slot numbers are pinned bytes, words are aliased before they are
+   allocated - which the old nested class never said in one place. Two doc
+   comments that had drifted onto the wrong methods (`guardedWord`'s onto
+   `isDayOffsetShape`, `guardScratch`'s onto `reachesGuardedDay`) sit on their
+   methods again. `isDayOffsetShape` stayed in the emitter: it is the shape rule
+   the compiler shares, not slot planning, and only lived among it. What
+   crossed the file boundary: `BodyMode`, `FragmentKind` and `FragmentKey`, the
+   two word sentinels and seven emitter predicates the planner calls
+   (`fragmentKey`, `keepsPerGroupWrite`, `reaches`, `referenced`,
+   `takesMagicDivide`, `takesMulHiDivide`, `wordWrites`) went from private to
+   package-private. The emitter lost 779 lines, to 4622. The bytes oracle, the
+   shape hashes, the emitter suite and the javadoc build are unchanged.
 5. **The lowerings by family** (from around 4270): the calendar family
    (`emitChronoPrefix`, `emitAddMonths`, `emitMakeDate`, `emitPick`, the
    `ChronoDivide` forms) into `VarkaChronoLowering.java`; the division family
