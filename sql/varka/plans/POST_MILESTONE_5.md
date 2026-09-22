@@ -299,16 +299,13 @@ date chains were measured this way - **9.4x to 14.2x against stock, median
 
 ## 8. The numbers
 
-*To write from the committed files: the surface's median and the honest split
-between kernel rate and row-engine cost (`PLAN_TASK_155.md`), the `TIME`
-chains on the laptop and on the full-width runner (task 164), the AVX2 arm
-(task 121).*
-
-## 9. What it does not do yet, and how to reproduce it
-
-*To write: the coverage table's declines read from `coverage.json`, tasks 28,
-103 and 104 by name, and the README's reproduction recipe with the `time` and
-`timechains` selectors.*
+*To write from the committed files: the `TIME` chains on the full-width runner
+as the headline (task 164), the surface as the laptop coverage table with the
+honest split between kernel rate and row-engine cost (`PLAN_TASK_155.md`), and
+the AVX2 arm (task 121). It closes with a short paragraph - not a section - on
+what still declines, read from `coverage.json` on the day, naming tasks 28,
+103 and 104; the reproduction recipe stays in the README, which the post links
+to.*
 
 ---
 
