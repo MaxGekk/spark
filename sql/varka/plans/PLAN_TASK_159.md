@@ -154,6 +154,21 @@ The file's section headers are the plan. In order of least entanglement:
    (`emitConstDivide`, the magic and multiply-high forms, `emitBoundedDivide`,
    `Divider`) into `VarkaDivisionLowering.java`; the stores, wide and narrowed,
    with the body emitters.
+   *The division family done 22 September 2026, as `VarkaDivisionLowering.java`.*
+   `Divider`, `emitConstDivide`, the multiply-high, magic-number and double
+   forms with their predicates and `signedMagic`, in a class whose comment says
+   what its two callers want from it. The line between the families is where
+   the code already drew it: `ChronoDivide`, `emitDivide`, `emitMagic` and
+   `emitCarry` are the calendar prefix's range-narrowed divisions and stay for
+   the chrono move; the double forms are shared and live here, since the
+   prefix's `emitDivide` calls `emitDoubleDivide` for them. `emitBoundedDivide`
+   in the list above does not exist - the bounded division is an arm of
+   `emitValue` two operations long, and stays one. A doc comment that had
+   drifted off `emitDoubleDivide` onto `takesMagicDivide` sits on its method
+   again. What crossed the file boundary: `emitValue`, `line`, `emitShift` and
+   `ChronoDivide` went from private to package-private; the emitter, `Slots`,
+   `Analysis` and the emitter suite name the new class where they call it. The
+   emitter lost 416 lines, to 4206.
 6. **The body emitters** (around 3315 to 4269): `emitBody`, `emitLaneGroup`,
    the prologue, loop and epilogue, the driver, into `VarkaBodyEmitter.java`,
    which is what remains of the class besides the facade.

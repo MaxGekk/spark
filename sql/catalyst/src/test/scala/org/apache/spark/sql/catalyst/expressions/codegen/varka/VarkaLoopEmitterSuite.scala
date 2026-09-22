@@ -4636,7 +4636,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     // works are known, and a derivation that drifted would produce a form that is merely
     // nearly exact - which the sweep would catch, at a price this catches for free.
     def magic(d: Int): (Long, Long) = {
-      val m = VarkaLoopEmitter.signedMagicForTest(d)
+      val m = VarkaDivisionLowering.signedMagicForTest(d)
       (m(0), m(1))
     }
     assert(magic(12) === (0x2AAAAAABL, 32 + 1))
@@ -4644,7 +4644,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assert(magic(3) === (0x55555556L, 32 + 0))
     assert(magic(2) === (0x80000001L, 32 + 0))
     assert(magic(100) === (0x51EB851FL, 32 + 5))
-    intercept[IllegalArgumentException](VarkaLoopEmitter.signedMagicForTest(1))
+    intercept[IllegalArgumentException](VarkaDivisionLowering.signedMagicForTest(1))
   }
 
   test("the multiply-high form is exact over every int32 dividend for every divisor in use " +
@@ -4656,7 +4656,7 @@ class VarkaLoopEmitterSuite extends SparkFunSuite {
     assume(System.getProperty("varka.sweep") == "true",
       "set -Dvarka.sweep=true to sweep the multiply-high form")
     for (d <- intDivisors) {
-      val magic = VarkaLoopEmitter.signedMagicForTest(math.abs(d))
+      val magic = VarkaDivisionLowering.signedMagicForTest(math.abs(d))
       val mu = magic(0)
       val shift = magic(1).toInt
       val sign = if (d < 0) -1 else 1
