@@ -108,6 +108,9 @@ object VarkaEmitDump {
 
     val partial = VarkaExpressionCompiler.compilePartial(named, childOutput).getOrElse {
       report("nothing fused: every entry declined or no column is referenced")
+      VarkaExpressionCompiler.declines(named, childOutput).toSeq.sortBy(_._1).foreach {
+        case (position, decline) => report(f"entry $position%2d  ${exprs(position)}%-40s  $decline")
+      }
       System.exit(1)
       throw new IllegalStateException()
     }
@@ -196,11 +199,16 @@ object VarkaEmitDump {
     exprs.zip(named).foreach { case (text, one) =>
       val fused = VarkaExpressionCompiler.compilePartial(Seq(one), childOutput).map(_.fused)
       fused match {
-        case None => report(s"| `$text` | declined |")
+        case None =>
+          val why = VarkaExpressionCompiler.declines(Seq(one), childOutput).get(0)
+            .map(d => s"declined: $d").getOrElse("declined")
+          report(s"| `$text` | $why |")
         case Some(f) =>
           val counts = columns.map { case (_, opts) =>
+            // The literal count is both arrays': a long-lane shape keeps its literals in
+            // longArgs, which `f.literals` does not count.
             val bytes = VarkaLoopEmitter.emit(className, f.outputs.asJava,
-              f.inputOrdinals.size, f.literals.size, null, null, opts)
+              f.inputOrdinals.size, f.numLiterals, null, null, opts)
             laneOps(bytes)
           }
           val deltas = counts.tail.map(c => f"${c - counts.head}%+d")
