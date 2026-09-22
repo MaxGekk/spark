@@ -307,7 +307,7 @@ public final class VarkaVectorSupport {
    *
    * <p><b>Exactly {@code rows} bits, not the whole last byte.</b> Today's dense path zeroes
    * {@code (rows + 7) / 8} bytes and then ORs lane-masked words, so the bits past {@code rows}
-   * in the final byte are left zero. {@code VarkaLoopEmitterSuite}'s {@code assertSameOutput}
+   * in the final byte are left zero. {@code VarkaEmitterTestBase}'s {@code assertSameOutput}
    * compares dense and masked validity byte for byte, and while Arrow's {@code getNullCount}
    * stops at {@code valueCount}, nothing promises every reader does. Producing bit-identical
    * output to the loop is the contract here, and it is what lets the existing differential be

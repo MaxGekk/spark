@@ -63,7 +63,7 @@ run_step fuzz build/sbt -batch "project catalyst" "$fuzz_opts" 'testOnly *VarkaI
 if [ "$sweep" -eq 1 ]; then
   run_step sweep build/sbt -batch "project catalyst" \
     'set Test/javaOptions += "-Dvarka.sweep=true"' \
-    'testOnly *VarkaChronoSuite *VarkaLoopEmitterSuite -- -z opt-in'
+    'testOnly *VarkaChronoSuite *VarkaEmitter*Suite -- -z opt-in'
 fi
 [ "$gate" -eq 1 ] && run_step gate dev/varka_gate.sh
 

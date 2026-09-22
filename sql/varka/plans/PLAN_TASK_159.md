@@ -202,6 +202,22 @@ tests move into `VarkaEmitterArithmeticSuite`, `VarkaEmitterChronoSuite`,
 what its family is. The tests do not change; a targeted run stops paying for
 the whole file.
 
+*Done 22 September 2026*, as the trait and seven suites rather than six: the
+tests of `emit`'s own contract - the refusals with a reason, the descriptor
+failure, verification and unloading, the pinned renderings, the telemetry
+attributes - fit none of the families and got `VarkaEmitterContractSuite`.
+Every test kept its name and body; the 161 tests run as 155 passed and the
+six opt-in sweeps cancelled, the same as before. A helper went to the base
+when two families need it and to the family when one does, which put 52 in
+the base (the matrices, the columns, the calendar boundary days that the
+budget tests read too) and 29 in the families. The base's members are
+`protected` where they were `private`. Every place that named the old suite -
+the gate and nightly scripts' opt-in run, `ADDING_AN_EXPRESSION.md`, the
+javadoc of the budget constants and the IR, the sibling suites' comments -
+names the base or the family it meant. The sections below the base's doc
+comment show the mapping: the suite that runs a family's tests is
+`*VarkaEmitter<Family>Suite`, and `*VarkaEmitter*Suite` runs them all.
+
 ### 3.4 `VarkaExpressionCompiler` by expression family, with task 86 (medium)
 
 `compileNode`'s match and `compileTime` become one object per family - the date

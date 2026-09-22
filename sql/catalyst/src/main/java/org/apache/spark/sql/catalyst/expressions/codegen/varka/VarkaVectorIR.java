@@ -953,9 +953,9 @@ public sealed interface VarkaVectorIR
    *
    * <p>Pinned the same way and for the same reason as {@link #canonical}: the rendering travels
    * inside the class bytes and is read back by tooling that has no live session, so
-   * {@code VarkaLoopEmitterSuite} holds a committed line map over every node type. The switch is
-   * exhaustive over the sealed interface, so a new node type refuses to compile until it renders
-   * here too.
+   * {@code VarkaEmitterContractSuite} holds a committed line map over every node type. The
+   * switch is exhaustive over the sealed interface, so a new node type refuses to compile until
+   * it renders here too.
    *
    * @param node the node to render.
    * @param lineOf the line number already assigned to a child node.

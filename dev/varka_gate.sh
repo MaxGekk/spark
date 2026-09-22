@@ -122,7 +122,7 @@ for s in "${selected[@]}"; do
               'catalyst/testOnly *Varka*' 'sql/testOnly *Varka*' ;;
     sweep) run_step sweep build/sbt -batch "project catalyst" \
              'set Test/javaOptions += "-Dvarka.sweep=true"' \
-             'testOnly *VarkaChronoSuite *VarkaLoopEmitterSuite -- -z opt-in' ;;
+             'testOnly *VarkaChronoSuite *VarkaEmitter*Suite -- -z opt-in' ;;
     doc) run_step doc build/sbt -batch catalyst/doc ;;
     engine) run_step engine ./build/mvn -q -f sql/varka/engine/pom.xml test ;;
     bench) run_step bench ./build/mvn -q -f sql/varka/bench/pom.xml test ;;

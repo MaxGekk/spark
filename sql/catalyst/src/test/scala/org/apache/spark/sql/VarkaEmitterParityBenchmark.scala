@@ -847,7 +847,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // groupOutputs admits an output that reuses the prefix, up to FUSED_CEILING - so
         // "shared" is emitted with the defaults and "separate" with sharing off, which turns
         // clause 2 off along with the fragment and reproduces the pre-B2 grouping exactly
-        // (VarkaLoopEmitterSuite pins both layouts). Before B2 the shared arm was forced with
+        // (VarkaEmitterBudgetSuite pins both layouts). Before B2 the shared arm was forced with
         // withGroupBudget(200), the measurement rig 7.2 cleared the gate with; the bytes are
         // the same. Neither the option nor the grouping affects results, only which bytes
         // compute them.
@@ -915,7 +915,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         }
         // The regression guard section 5.2 asks for: two chrono nodes over different dates
         // must not be pushed into one method by clause 2, since there is nothing between them
-        // to share. VarkaLoopEmitterSuite pins the two-method layout; this prices what the
+        // to share. VarkaEmitterBudgetSuite pins the two-method layout; this prices what the
         // right non-merge costs against the single-date case above. Before B2 this kernel was
         // emitted under withGroupBudget(200), which put the two in one method by clause 1 with
         // two prefixes in it; under the defaults they are two methods, so this row's number is
@@ -937,7 +937,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // offset is a column - and only under a calendar node. `year(date_add(d, off))` is the
         // one shape that pays it, so that is what is priced, guard on against guard off,
         // adjacent and on both null patterns like the task 48 and 53 pairs; `date_add(d, off)`
-        // alone is the control, byte-identical under both settings (VarkaLoopEmitterSuite
+        // alone is the control, byte-identical under both settings (VarkaEmitterBudgetSuite
         // asserts it) and measured here so a difference in that row is run noise, not the
         // guard. The second date buffer stands in for the offset column: its values are days in
         // [-10000, 10000), so every sum stays in range and the status must read zero.

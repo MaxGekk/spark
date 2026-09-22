@@ -30,7 +30,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * (`java.time`, `DateTimeUtils`) rather than `VarkaChrono`, the model the lowerings were derived
  * from, so the emitted bytes are held to the definition and not to themselves.
  *
- * Shared by [[VarkaLoopEmitterSuite]]'s curated matrices and [[VarkaIrFuzzSuite]]'s random
+ * Shared by [[VarkaEmitterTestBase]]'s curated matrices and [[VarkaIrFuzzSuite]]'s random
  * trees, which is the reason it is an object rather than the suite's private methods it began
  * as: one oracle, two very different sets of shapes driven through it.
  */

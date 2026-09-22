@@ -176,7 +176,7 @@ final class VarkaDivisionLowering {
    * the pair is {@code (Mu, 32 + s)}, and the caller adds the dividend's sign bit.
    *
    * <p>Exactness over all 2^32 dividends is not argued from the book; {@code
-   * VarkaLoopEmitterSuite}'s opt-in sweep computes this form for every dividend and every
+   * VarkaEmitterDivisionSuite}'s opt-in sweep computes this form for every dividend and every
    * divisor the emitter and the fuzz grammar divide by, and compares against Java's {@code /}.
    */
   static long[] signedMagic(int d) {

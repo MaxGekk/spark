@@ -35,7 +35,7 @@ import org.junit.jupiter.api.Test;
  * {@link VarkaVectorSupport#copyValidity}, {@link VarkaVectorSupport#andValidity} and
  * {@link VarkaVectorSupport#orValidity} (task 70), whose whole value is bit-exactness: each
  * produces exactly what the emitted loop produces when it ORs lane-masked words into a zeroed
- * bitmap, which is what {@code VarkaLoopEmitterSuite.assertSameOutput} compares byte for byte.
+ * bitmap, which is what {@code VarkaEmitterTestBase.assertSameOutput} compares byte for byte.
  * So every test here is about four things - the bits below {@code rows}, the bits past them in
  * the final byte, the byte after the bitmap, and that the operands come back unchanged - and one
  * more the loop never had to think about: the destination aliasing an operand, which is how a

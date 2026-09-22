@@ -188,7 +188,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
         for (i <- 0 until length) {
           if (patterns(c)(i)) {
             // Poisoned, not left at the drawn value (task 70's harness rule, the same one
-            // VarkaLoopEmitterSuite.poison states). `data` is drawn inside `columnBound` and
+            // VarkaEmitterTestBase.poison states). `data` is drawn inside `columnBound` and
             // `MONTH_ARITH_MAX_MONTHS`, so a null lane holding its drawn value is in range by
             // construction and can never reach a guard's condemning comparison - which is the
             // one thing the fuzzer is here to reach. Alternating on the null ordinal puts each

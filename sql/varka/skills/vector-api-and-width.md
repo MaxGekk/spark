@@ -917,7 +917,7 @@ committed rows said it beat a scalar loop by 1.3x at 512 bits and lost to it at
   1.6x at 128 (`PLAN_TASK_149.md` 9). Taking the multiplier unsigned folds the
   book's "add the dividend when the multiplier is negative" into the product,
   which a 64-bit lane can hold; the proof is an exhaustive sweep over all 2^32
-  dividends per divisor, opt-in in `VarkaLoopEmitterSuite`, not the book.
+  dividends per divisor, opt-in in `VarkaEmitterDivisionSuite`, not the book.
 - **Measure a one-line fix with a filtered run before regenerating an hour of
   benchmarks.** The task's first lead - a `missing constant` line on the
   divisor's broadcast - was built and looked right; a two-minute
