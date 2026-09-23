@@ -1,5 +1,17 @@
 # Varka Milestone 6 Scope: coverage
 
+*Re-scoped on 23 September 2026, when milestone 5 closed. Milestone 6 is the
+compiler's foundation and its promotion - `PLAN_MILESTONE_6.md` is its plan -
+and **the coverage spine argued for below moves to milestone 7 unchanged**:
+decimal lanes, decimal arithmetic, aggregate wiring, grouped aggregation, string
+keys, and a first end-to-end TPC-H q6 number. Nothing here is withdrawn. The
+survey of section 1 stays the best argument for what comes after the foundation,
+section 5's ordering is milestone 7's ordering, and the items this document holds
+keep their numbers. Six items are taken now and are named in
+`PLAN_MILESTONE_6.md` with the numbers they have here: 8, 15 (task 87), 39 (task
+148), 40, 41, 42, 43, 44, 45 and 49. Read the title as "the coverage scope",
+not "what milestone 6 does".*
+
 *Renumbered from milestone 5 on 4 September 2026, when milestone 4 was
 re-scoped to the date family and the emitter and the other lanes became a
 milestone of their own (`PLAN_MILESTONE_5.md`). The text below still says
