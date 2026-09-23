@@ -117,9 +117,13 @@ right; it is that Varka *can* get it right, because it can measure.
 3. **One realistic query** - not a synthetic 200-expression projection - where
    Spark logs "the whole-stage codegen was disabled for this plan" and Varka
    does not, with both arms measured.
-4. **The post is published**, with the comparison to native accelerators
+4. **The census is complete** (task 188): every place vanilla Spark's codegen
+   gives up is enumerated from its source, with Varka's answer to each - immune,
+   solved, or declined with a reason - rather than the handful anyone happened
+   to notice.
+5. **The post is published**, with the comparison to native accelerators
    grounded in the record this repository already holds rather than asserted.
-5. Beside the spine: the compiler is more legible than it was, the CI and
+6. Beside the spine: the compiler is more legible than it was, the CI and
    benchmark infrastructure stops costing manual work, and promotion has run
    continuously rather than once at the end.
 
@@ -412,6 +416,73 @@ the owner's decision. Three pieces, none expensive:
 3. **Templates**: one for taking a task, and `PLAN_TASK_TEMPLATE.md`, which
    task 184 also writes into.
 
+### 2.11 The cliffs, researched one at a time (tasks 185-188)
+
+1.1 lists three places Spark's whole-stage codegen gives up, and a fourth turned
+up by reading one level deeper. That is the shape of the problem: they are found
+by looking, not by knowing, so each becomes a task of its own with the same two
+halves - **establish what vanilla does, reproducibly, from its own output; then
+solve it in Varka, or record why Varka cannot reach it.** A claim built on three
+examples somebody happened to grep for is a claim a reader can extend and
+embarrass; a claim built on a census is not.
+
+The fourth, found on 23 September 2026 and the sharpest of them:
+`CodeGenerator.splitExpressionsWithCurrentInputs` does not split at all inside
+whole-stage codegen.
+
+    if (INPUT_ROW == null || currentVars != null) {
+      expressions.mkString("\n")
+    } else {
+      splitExpressions(...)
+    }
+
+Above that branch sits a one-line `TODO` comment asking for whole-stage codegen
+to be supported. (The marker is described rather than quoted because this
+repository's own pre-commit hook refuses one in a plan file, which is the rule
+working: a marker here would read as Varka's work rather than Spark's.)
+
+`currentVars != null` *is* the whole-stage case. So in the one place where the
+method-size cliff matters most, the mitigation for it is switched off and the
+generated method simply grows until the 65535 check fires and the subtree loses
+codegen. The 1024-character heuristic of 1.1 is not even applied there.
+
+* **Task 185, the schema-width cliff.** `spark.sql.codegen.maxFields`, default
+  100, and `isTooManyFields` counting nested fields. Establish the row count and
+  schema at which vanilla deactivates codegen, from Spark's own log; then the
+  Varka side, where the expectation is immunity because a projection reads the
+  columns it names rather than the width of the schema around them. That
+  expectation is registered as a prediction and scored.
+* **Task 186, the method-size cliff.** 65535 bytes, guessed with 1024
+  characters of source - and, inside whole-stage codegen, not guessed at all.
+  Establish both: the shape that trips it, and whether the no-split path above
+  is why it trips so much earlier than the character threshold implies. Varka's
+  answer is tasks 87, 148 and 168; this task is the vanilla half and the
+  comparison.
+* **Task 187, the constant-pool cliff.** 65535 entries, guessed with 1,000,000
+  bytes of source (`GENERATED_CLASS_SIZE_THRESHOLD`). Establish a shape that
+  reaches it - this is the limit a class of many distinct constants approaches
+  from a direction method size does not, which is also why task 168 has to count
+  it on the Varka side rather than assume bytes cover it.
+* **Task 188, the census.** Enumerate *every* place Spark's codegen gives up, in
+  the source rather than from memory: these four, the fallback path to
+  interpreted evaluation, `MAX_JVM_METHOD_PARAMS_LENGTH`, whatever a
+  Janino compile error does, and anything else the read finds. **Done when** the
+  list is complete enough that the next person to read `CodeGenerator` and
+  `WholeStageCodegenExec` end to end adds nothing to it, and each entry says
+  whether Varka is immune, has solved it, or declines with a reason.
+
+**Why these are research tasks and not assertions.** Every one of them is a
+statement about another project's behaviour, published under this project's
+name. The house rule that a number must trace to a committed results file
+applies here to a *claim*: it traces to Spark's own log line, its own source at
+a named revision, and a reproducer in this tree. Task 188 is what keeps the post
+from being a list of three things I noticed.
+
+**Admission check, for each.** A committed reproducer that makes vanilla say it
+out loud - the log line, or the generated code's own size - with the Spark
+revision named; the Varka arm beside it; and, where Varka is immune, the
+argument for *why*, in the plan, not in a commit message.
+
 ### 2.10 The closing task (task 181)
 
 The post itself, in task 118's shape: the claim of 1.1, the figure of 2.5, the
@@ -427,8 +498,9 @@ what this repository already records - `VISION.md` and the Velox read in
 memory.
 
 **Done when** the post is published, every number in it traces to a committed
-results file under `dev/varka_quote_check.py`, and the claim of 1.3 items 1 to 3
-is true.
+results file under `dev/varka_quote_check.py`, every claim about Spark's
+behaviour traces to task 188's census with a revision named, and the claim of
+1.3 items 1 to 3 is true.
 
 ## 3. Task breakdown
 
@@ -455,6 +527,10 @@ milestone 4.
 | 180 | Promotion, continuously | 2.9 | continuous |
 | 183 | Onboarding: task tables as issues, a hardware census, templates | item 38 | small |
 | 184 | The refactoring tools under `dev/` | item 46 | small |
+| 185 | The schema-width cliff: `spark.sql.codegen.maxFields` | 2.11 | small |
+| 186 | The method-size cliff, and the split that is switched off | 2.11 | small |
+| 187 | The constant-pool cliff | 2.11 | small |
+| 188 | The census: every place Spark's codegen gives up | 2.11 | medium |
 | 181 | The closing task: the post | 2.10 | last by definition |
 
 ## 4. Ordering
@@ -469,7 +545,8 @@ then published.
 | 0 | 87, 176, 178, 179, 182 | 87 opens the milestone; the infrastructure tasks are independent of everything and pay for themselves immediately, and 182 is what lets 171's ladder be claimed against an upstream baseline |
 | 1 | 168, 148, 173, 174, 184 | 168 after 87, because 87's measurement decides the shape of the budget; 148 rides with it, since both move `emitted_bytes.json` and one regeneration should carry both; 173 and 174 are independent |
 | 2 | 169, 177 | 169 after 168: the decline reasons are the budget's, and 177 wants the oracle's proof to be stable first |
-| 3 | 170, 171 | both need the budget to exist before a ladder means anything |
+| 3 | 170, 171, 185, 186, 187 | 170 and 171 need the budget to exist before a ladder means anything; the three cliff studies are the vanilla half of what 171 plots, and each is independent of the others |
+| 3b | 188 | after 185, 186 and 187: the census is written against three worked examples rather than from a cold read |
 | 4 | 172, 175, 183 | 172 after the ladder says where the cliff is; 175 after 184, whose member map is what its inventory is generated from; 183 once there is a milestone table worth mirroring, which is after wave 1 settles the rows |
 | 5 | 181 | last by definition |
 
