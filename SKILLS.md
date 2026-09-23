@@ -113,6 +113,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [SLEEF and OpenVML, read for Varka: no integer division anywhere, and what does transfer](sql/varka/skills/vector-api-and-width.md#sleef-and-openvml-read-for-varka-no-integer-division-anywhere-and-what-does-transfer)
 * [A vector divide is a divider, whatever the lane width; a multiply-high is not](sql/varka/skills/vector-api-and-width.md#a-vector-divide-is-a-divider-whatever-the-lane-width-a-multiply-high-is-not)
 * [A refusal at a forced width is the back end's, not the lane count's](sql/varka/skills/vector-api-and-width.md#a-refusal-at-a-forced-width-is-the-back-ends-not-the-lane-counts)
+* [An intrinsic refusal line is not a verdict about this compile; the inlining decisions are](sql/varka/skills/vector-api-and-width.md#an-intrinsic-refusal-line-is-not-a-verdict-about-this-compile-the-inlining-decisions-are)
 * [A masked store through two lanes costs the loop, not the mask; a half species keeps the loop](sql/varka/skills/vector-api-and-width.md#a-masked-store-through-two-lanes-costs-the-loop-not-the-mask-a-half-species-keeps-the-loop)
 
 #### [Working in this repository](sql/varka/skills/working-in-this-repo.md)
