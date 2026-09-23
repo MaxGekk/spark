@@ -167,10 +167,14 @@ The "which figure generalises" paragraph says that the allocation rows
 arithmetic rows, with the engine-off ratio beside the stock ratio on every
 row. The reproduction guide gains the flag on both arms and the `time`
 selector. "Reading the source" gains the long-lane entry points and the
-walkthrough. The post has a short and a long draft in
-`sql/varka/plans/POST_MILESTONE_5.md`: ideas first, numbers last, the median
-never the best row, the honest split, and the support claim of section 2
-verbatim; the quote check runs on it like on any document.
+walkthrough. The post has a long draft in
+`sql/varka/plans/POST_MILESTONE_5.md` and a short one in
+`POST_MILESTONE_5_SHORT.md`: ideas first, numbers last, the median never the
+best row, the honest split, and the support claim of section 2 verbatim; the
+quote check runs on both like on any document. *Correction, 23 September 2026:
+the two drafts were meant to share one file, and they cannot -
+`dev/varka_post_page.py` publishes everything in the long read's file, so a
+trailer drafted at the end of it appeared on the page as part of the piece.*
 
 **Predictions, registered before the runs that remain.**
 
