@@ -146,6 +146,70 @@ fork's own row engine, because the fork tracks Spark master and its `truncDate`
 is faster than 4.2.0's. That difference is upstream Spark's, not Varka's.
 It is the only row of fifty where the two baselines disagree by more than 20%.
 
+### The TIME chains, on the same verified 512-bit machine
+
+`TimeChain-*-results.txt`. Twelve chained `TIME` expressions three to five
+operations deep - truncations, differences, interval addition and the
+hour/minute/second extracts - over 100M Arrow-cached rows, one partition, table
+fully resident. AMD EPYC 9V45, JDK 25, datapath probe **1.97**.
+
+| Expression | ns/row | vs stock 4.2 (JDK 25) |
+| :--- | ---: | ---: |
+| `time_diff('MILLISECOND', greatest(time_trunc('MINUTE', t + dt) + dt2, t2), least(...))` | 4.2 | **46.9x** |
+| `time_diff('HOUR', time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', ...))` | 3.7 | **46.3x** |
+| `least(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2) + dt2, time_trunc('HOUR', t) + dt)` | 3.9 | **44.8x** |
+| `hour(least(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2) + dt2, ...))` | 4.3 | **41.8x** |
+| `minute(least(time_trunc('MINUTE', t + dt), time_trunc('SECOND', t2) + dt2))` | 4.2 | **29.8x** |
+| `if(l > l2, time_diff('MINUTE', time_trunc('HOUR', t) + dt, t2), time_diff('SECOND', ...))` | 4.5 | **19.6x** |
+| all twelve | 3.7 - 5.5 | **19.6x - 46.9x**, median 31.8x |
+
+By executor time, which excludes the job's fixed cost, the same twelve read
+21.0x to 53.2x with a median of **34.9x**. Against the fork with the engine off
+they read 17.5x to 36.4x, median 25.9x.
+
+These are the one set of files taken above this project's 5% fixed-cost
+ceiling. A cloud runner's constant is about 36 ms, Varka does 0.42 s of work per
+iteration here, and no row count both fits 15 GiB and keeps the constant under
+5% - so the bound was lifted to 11% and each file records the bound it was held
+to. The constant inflates every arm alike, so it drags the ratio *down*: the
+wall column above is the conservative one, which is why the executor figures are
+reported beside it rather than instead of it.
+
+### The TIME surface: one entry per supported TIME expression
+
+`TimeSurface-*-results.txt`. Every `TIME` and day-time interval expression the
+engine covers, over 500M Arrow-cached rows on an AMD Ryzen AI 9 HX PRO 370
+(JDK 25), with `spark.sql.timeType.enabled=true` on every arm. As with the date
+surface this is the coverage document, and it commits the losses.
+
+| Case | vs stock 4.2 (JDK 25) |
+| :--- | ---: |
+| `time_trunc('MILLISECOND', t2)`, projection | 38.2x |
+| `time_trunc('MINUTE', t)`, projection | 34.3x |
+| `time_diff('microsecond', t2, t)`, projection | 31.4x |
+| `t + dt`, projection | 20.6x |
+| `hour(t)`, projection | 17.0x |
+| `t - t2`, projection | 14.4x |
+| `minute(t)`, projection | 13.4x |
+| `WHERE time_trunc('MINUTE', t) = ...`, columnar consumer | 9.9x |
+| `WHERE l2 IS NULL`, counted | 2.7x |
+| `WHERE t < t2`, counted | **0.93x** |
+| `WHERE greatest(l, l2) > ...`, counted | **0.76x** |
+| `WHERE dt IS NOT NULL`, counted | **0.34x** |
+
+15 projection rows span 13.4x to 38.2x with a median of 16.2x; 28 filter rows
+span 0.34x to 9.9x. The losses are the same read-back floor the date surface
+has, and the explanation below applies unchanged: a `COUNT(*)` over a cheap
+predicate has almost nothing in the row for a vector loop to save.
+
+Two things this table is not. The extracts - `hour`, `minute`, `second` - are
+measuring vanilla Spark's `LocalTime` allocation as much as Varka's lane, so
+they are the rows least likely to generalise to a workload that is not already
+building one object per row. And the whole table is a development-machine
+measurement: the laptop's own datapath probe reads 1.14, so nothing here is a
+claim about 512-bit hardware. The chains above are, and they are the reason that
+list exists separately.
+
 ### Why 10x and 39x are both true
 
 Stock Spark's cost per row is *overhead plus arithmetic*; Varka's is
@@ -189,6 +253,24 @@ attributable to the wider datapath: these kernels are limited by the dependency
 chains between their operations rather than by how many vector operations issue
 per cycle. A same-machine confirmation at `MaxVectorSize` 32 against 64 is
 future work.
+
+**On `TIME` the answer is the other way round, and the reason is the division.**
+The same twelve `TIME` chains ran on an AMD EPYC 7763 - Zen 3, `avx avx2` only -
+at the same row count and commit. The three scalar arms gain 1.64x, 1.76x and
+1.80x between the machines, the same generation effect as above; Varka gains
+**14.6x**. Divide the machine out and **8.3x is the kernel's**, which is two
+things multiplied: the lane count doubles, four 64-bit lanes to eight, and the
+division lowering changes, because a machine without AVX-512 falls back to a
+fourteen-operation magic sequence where one with it emits a three-operation
+conversion through double lanes. Two times 4.7 is 9.4 predicted against 8.3
+measured. The same effect is visible on one machine: the `TIME` surface's
+division rows under `-XX:UseAVX=2` run at 0.09 to 0.16 of their full-width rate
+on the same laptop.
+
+So the width is worth 1.14x on date chains and the lowering is worth 4.7x on
+`TIME` chains, and both are honest. A date chain is a dependency chain of cheap
+operations and waits on latency; a `TIME` chain *is* its divisions, so the
+instruction the hardware offers for them decides the rate.
 
 ### Reproducing it
 

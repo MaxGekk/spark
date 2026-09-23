@@ -419,6 +419,34 @@ is still first because its A/B is what decides the default.
 asks. Nothing above is to be rewritten to look prescient; a correction is added
 and says what it corrects - 2.2 is the first of them.*
 
+### 9.5 The row closes, 23 September 2026
+
+All four steps of section 8 landed, and the successor step 4 names - task 89,
+the per-(divisor, range) default the numbers were supposed to open - moved to
+milestone 6 with the rest of the int32 date-lane work, so nothing in this row
+waits on anything. What it leaves behind:
+
+* **`MAGIC` stays the default** on every calendar shape at both widths. The
+  true divide reads 0.27x to 0.31x of it and the reciprocal 0.41x to 0.48x,
+  width-independent to within two points. The double route is not dead: it is
+  the lowering for the divisions that have no magic at all, which is what the
+  long lane needed and why step 3 exists.
+* **The dividend bound is 2^52**, not 2^53 - the tighter of the two lowerings',
+  because the tree is built before either is chosen. Task 147 later made
+  `ConstDivide` carry the bound its caller proved rather than state it in prose.
+* **The long-lane conversion form is three operations** against the int lane's
+  seven, because a long lane and a double lane are the same width and there are
+  no halves to rejoin.
+
+That last number is the one that travelled furthest. It was registered here as
+an op count and nothing more; the `TIME` chains of row 164 turned it into a
+measured **4.7x of lowering** between a machine with AVX-512 and one without,
+which is the larger half of milestone 5's headline and the reason the post's
+answer about width came out opposite to the date chains'. An op count
+registered before a timing is cheap, and this row is the case for keeping the
+habit: the timing that needed it arrived four days later, in a different task,
+on a different machine.
+
 ### 9.4 Step 4: the A/B, 19 September 2026
 
 *Numbered for where it belongs in the sequence; steps 3's own sections land with
