@@ -67,6 +67,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [The shape a test picked because nothing lowered it](sql/varka/skills/emitter-and-ir.md#the-shape-a-test-picked-because-nothing-lowered-it)
 * [A refusal shared by two positions carries one reason, and it can be true of only one](sql/varka/skills/emitter-and-ir.md#a-refusal-shared-by-two-positions-carries-one-reason-and-it-can-be-true-of-only-one)
 * [Adding an IR node moves the bytes oracle's fuzz digests, not its shapes - prove it by diffing keys](sql/varka/skills/emitter-and-ir.md#adding-an-ir-node-moves-the-bytes-oracles-fuzz-digests-not-its-shapes---prove-it-by-diffing-keys)
+* [A projection that only forwards columns is a selection, and the node with no kernel is the fast path](sql/varka/skills/emitter-and-ir.md#a-projection-that-only-forwards-columns-is-a-selection-and-the-node-with-no-kernel-is-the-fast-path)
 * [The bytes oracle pins one point in the option space, so an option a session can set needs an arm of its own](sql/varka/skills/emitter-and-ir.md#the-bytes-oracle-pins-one-point-in-the-option-space-so-an-option-a-session-can-set-needs-an-arm-of-its-own)
 * [A lane can change width at a root's store without the loop ever holding two widths](sql/varka/skills/emitter-and-ir.md#a-lane-can-change-width-at-a-roots-store-without-the-loop-ever-holding-two-widths)
 

@@ -128,6 +128,53 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession {
     assert(plan.metrics("numResidualEntries").value === 1)
   }
 
+  test("a projection that only forwards columns selects them, and copies nothing") {
+    // A projection that computes nothing compiles to no kernel, so the per-batch dispatch
+    // would otherwise hand every batch to the row-by-row fallback and rebuild columns the
+    // input already holds. It is a selection: the output batch references the input's own
+    // vectors, reordered and dropped. Row 145 is why this path exists - the plan that needs
+    // it is a narrowing projection over a Varka filter, and it was paying the copy.
+    val dates = Seq(Int.box(0), null, Int.box(20000))
+    val ints = Seq(Int.box(7), Int.box(8), null)
+    val plan = node(
+      project(intAttr, attrD),
+      Seq(BatchSpec("arrow", Seq(dates, ints))),
+      Seq(attrD, intAttr))
+    val read = plan.executeColumnar().mapPartitions { batches =>
+      batches.map { batch =>
+        (batch.numCols(), (0 until batch.numRows()).map { r =>
+          (0 until batch.numCols()).map { c =>
+            if (batch.column(c).isNullAt(r)) null else Int.box(batch.column(c).getInt(r))
+          }.toList
+        }.toList)
+      }.toList.iterator
+    }.collect().toSeq
+    // Reordered and narrowed: the int column first, the date second, and `d2` never read.
+    assert(read === Seq((2, List(List(7, 0), List(8, null), List(null, 20000)))))
+    // Served, not fallen back: a refused batch would count under a fallback cause instead.
+    assert(plan.metrics("numVarkaBatches").value === 1)
+    assert(plan.metrics("numResidualEntries").value === 0)
+  }
+
+  test("a forwarded-only batch is released without closing the input's vectors") {
+    // The ownership half. `release` closes exactly what the evaluator owns, and a selection
+    // owns nothing: every column in it belongs to the input batch, which the child will
+    // reclaim. A batch that reached `release`'s "not one of ours" arm would be closed whole
+    // and take the input's vectors with it, which is the same class of error as a dropped
+    // filter - invisible in the answers and fatal to the next batch.
+    val ints = Seq(Int.box(7), Int.box(8), Int.box(9))
+    val plan = node(
+      project(intAttr),
+      Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), Int.box(2), Int.box(3)), ints)),
+        BatchSpec("arrow", Seq(Seq(Int.box(4), Int.box(5), Int.box(6)), ints))),
+      Seq(attrD, intAttr))
+    // Two batches, read in order: the second is only produced after the first was released,
+    // so if releasing the first had closed the input's vectors the second would fail or
+    // answer wrongly.
+    assert(values(plan) === Seq(7, 8, 9, 7, 8, 9))
+    assert(plan.metrics("numVarkaBatches").value === 2)
+  }
+
   test("a non-Arrow batch is materialised by the fallback, not dropped") {
     val plan = node(
       project(Alias(DateAdd(attrD, Literal(3)), "add")()),

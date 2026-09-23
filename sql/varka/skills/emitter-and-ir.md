@@ -588,6 +588,46 @@ a lane-generic node moves both sequences' blocks, a calendar node only the
 first, and the two long block lists moving on an int-only change is the signal
 that the long grammar was touched when it should not have been.
 
+## A projection that only forwards columns is a selection, and the node with no kernel is the fast path
+
+Varka's eligibility question is "does any entry of this projection *fuse*", and
+forwarding a bare column is not fusing it. So `SELECT i2 FROM t WHERE i > k` -
+a predicate reading more columns than its consumer wants, which is what survives
+Spark's own column pruning - compiles to no kernel at all. Two costs followed
+from that, and they are different costs at different layers.
+
+**In the plan**, a projection that is not eligible cannot become a Varka node, so
+the only node able to perform the narrowing was the filter's *to-row* node, and
+absorbing it there settles the plan at a row boundary. A consumer that wanted
+batches was handed rows however it asked, and the query paid task 19's read-back
+floor through a plan difference rather than a kernel difference. The fix is to
+ask "can Varka serve this plan columnar" rather than "does any entry fuse":
+`VarkaColumnarRule`'s pre stage builds `VarkaProjectExec(narrowing, filter)`, the
+pair `columnarSibling` had always built for the cache path, and the post stage
+collapses it back into the fused row node wherever a transition was inserted
+anyway - so the columnar route is added without any row-consumer plan changing.
+
+**In the evaluator**, the same "no kernel" fact sent every batch to the per-row
+fallback, which allocates a batch and projects row by row. That produced columns
+the input batch already held, and it cost about five sixths of what the plan fix
+had just won: 120.3 to 164.6 M rows/s, where the un-narrowed shape ran at 862.
+A projection that only forwards is a **selection** - the output is the input's
+own vectors, reordered and dropped - and with that path it reads 883.7.
+
+Two things to carry. First, *a node without a kernel can still be the fast path*;
+"nothing fuses" is a statement about arithmetic, not about whether Varka should
+handle the batch. Second, the ownership rule that makes such a batch safe:
+`VarkaEvaluatorBase.release` closes a batch it does not recognise **whole**, so a
+forwarded-only batch has to be tracked owning nothing. Building one with
+`new ColumnarBatch(...)` and handing it out would close the input's vectors
+underneath the child - invisible in every answer and fatal to the next batch.
+
+And the measurement lesson beside it: the same change appeared to regress an
+untouched shape by 23%, and the band measured afterwards put that case at a
+30.6% spread with nothing changed - tier 3, unreadable. A file without a band
+cannot distinguish a regression from its own noise, which is `PLAN_TASK_145.md`
+5.4 and the reason row 90's rule exists.
+
 ## The bytes oracle pins one point in the option space, so an option a session can set needs an arm of its own
 
 `emitted_bytes.json` hashes every emitted method body at
