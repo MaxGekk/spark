@@ -61,13 +61,34 @@ running on HotSpot, it may be preferable to set the value to 8000 to match
 HotSpot's implementation." In the default configuration a query can keep
 whole-stage codegen and silently lose the JIT.
 
-**Varka emits bytecode directly through the Class-File API.** It knows the exact
-size of every method as it builds it, so it can split at the right point and
-bound the result. That is not an optimisation Spark has not got around to; it is
-one a source-generating compiler cannot express.
+**And the method size is one of three cliffs, not the whole story.** Read
+together they say something larger than any of them alone, which is that the
+limit Spark keeps meeting is not any particular number but its own inability to
+see what the JVM counts.
 
-The sentence the post is built on: *Spark guesses in the wrong unit and abandons
-the plan when the guess is wrong; Varka measures in the right unit and splits.*
+* **`spark.sql.codegen.maxFields`, default 100.** `isTooManyFields` deactivates
+  whole-stage codegen for a schema with more than a hundred fields, nested ones
+  included. This is not a guess and not a failure: a wide table simply does not
+  get codegen. It is also the most common of the three in real schemas.
+* **The method size, 65535**, guessed with 1024 characters of source, above.
+* **The constant pool, 65536 entries.** `CodeGenerator` carries
+  `MAX_JVM_CONSTANT_POOL_SIZE = 65535` and makes the same confession a second
+  time, in the same words: *"The number of named constants that can exist in the
+  class is limited by the Constant Pool limit, 65,536. **We cannot know how many
+  constants will be inserted for a class**, so we use a threshold of 1000k bytes
+  to determine when a function should be inlined to a private, inner class"* -
+  `GENERATED_CLASS_SIZE_THRESHOLD = 1000000`. A second JVM limit, a second proxy
+  in the wrong unit, a second number chosen because the real one is unknowable
+  from source.
+
+**Varka emits bytecode directly through the Class-File API.** It knows the exact
+size of every method and the exact contents of the constant pool as it builds
+them, and it reads the columns a projection names rather than the width of the
+schema it sits in. All three limits are things it can count.
+
+The sentence the post is built on, in its general form: *Spark generates source,
+so it cannot measure what the JVM enforces; it guesses with proxies and gives up
+when a guess fails. Varka generates bytecode and can count.*
 
 ### 1.2 What Varka has to fix first, to be allowed to say it
 
@@ -140,20 +161,33 @@ emitter has five overlapping limits - `MAX_CHAIN_DEPTH`, `MAX_FUSED_NODES`,
 bounding a different quantity, with nothing making them compose. The 64KB bug is
 what that looks like when a method nobody counted grows.
 
-**The task.** One budget abstraction, in bytes, that every emitted method passes
-through: the loop methods, the epilogue, the prologue, and anything a later
-milestone adds. The unit is the one the JVM enforces. Each cap keeps its own
-decline reason, so a refusal says which bound it hit rather than that something
-was too big.
+**The task.** One budget abstraction that every emitted method passes through -
+the loop methods, the epilogue, the prologue, and anything a later milestone
+adds - counted in the units the JVM enforces. Each cap keeps its own decline
+reason, so a refusal says which bound it hit rather than that something was too
+big.
+
+**Bytes are not the only limit, and an earlier draft of this section said they
+were.** A class file has several, and 1.1's reading of Spark says why that
+matters: the engine that cannot count them is the one that has to guess at each
+one separately. The budget covers, at minimum, the method's bytecode size
+(65535), the constant pool (65535 entries, which a class of many distinct
+divisors and magic constants can approach from a direction method size does
+not), and the method parameter count (255, which the emitter's own signatures
+bound today only by convention). Where a limit is unreachable by construction,
+this task records *why* it is unreachable rather than leaving it uncounted -
+that sentence is what a later lane type will need.
 
 What this buys beyond 2.1: a second case is cheap. Sixty-four-bit lanes widen
 every node, which is why milestone 5 warned this would bite sooner, and the next
 lane or output type should not need its own bug first.
 
 **Admission check.** A shape at each cap, declining with the right reason;
-`dev/varka_emit.sh --table` reporting the byte cost per method so the budget is
-inspectable rather than only enforced; the bytes oracle unmoved for every shape
-that fits, which is what says the budget changed no emission it admits.
+`dev/varka_emit.sh --table` reporting the cost per method against each limit, so
+the budget is inspectable rather than only enforced; the bytes oracle unmoved
+for every shape that fits, which is what says the budget changed no emission it
+admits; and, for any JVM limit the task concludes is unreachable, the argument
+for that written where the next reader will find it.
 
 ### 2.2a The weight the budget counts is wrong for a division (task 148)
 
@@ -254,6 +288,17 @@ logged. If none can be found that is honestly realistic, that is a finding and
 the post says so - the claim narrows from "queries hit this" to "shapes inside
 Varka's documented caps hit this, and here is the class of them", which is still
 true and still Spark cannot fix it.
+
+**1.1's third cliff makes this easier than the risk of section 6 assumed.**
+`spark.sql.codegen.maxFields` deactivates whole-stage codegen for a schema with
+more than a hundred fields, which needs no deep expression tree and no
+adversarial shape at all - a wide table is enough, and wide tables are ordinary.
+So the realistic query is probably a wide one rather than a deep one, and the
+search starts there. Varka is expected to be untouched by that cliff because it
+reads the columns a projection names rather than the width of the schema around
+them, and **that expectation is a prediction this task registers and scores**
+rather than an assumption: a wide-schema shape where Varka also declines would
+be the more interesting outcome.
 
 **Admission check.** The query, its schema, both arms' numbers, and Spark's log
 line, committed; or a written finding that the realistic case is narrower than
@@ -451,7 +496,8 @@ The milestone's own acceptance, beyond each task's admission check:
    well-reported, but not universal, and a post implying every query hits it
    will be dismantled by the first knowledgeable reader. Task 172 exists to
    bound the claim honestly, and 1.3 item 3 makes it a precondition of
-   publishing rather than a footnote.
+   publishing rather than a footnote. *The maxFields cliff of 1.1 is not a
+   heuristic and does not have this problem, which is why 2.6 starts there.*
 2. **"We split better" is not the claim.** If Varka merely raises its own
    threshold, the milestone has produced an incremental improvement and the post
    has no thesis. The claim is structural - no method-size fallback at all, by
