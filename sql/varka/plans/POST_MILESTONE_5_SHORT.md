@@ -57,6 +57,19 @@ nanoseconds since midnight, takes two paths: stock Spark builds a LocalTime
 object with four fields and reads one of them, 16.3 nanoseconds a row; Varka
 divides by 3 600 000 000 000, eight lanes at a time, 1.0 nanosecond a row."
 
+## Published
+
+23 September 2026:
+<https://www.linkedin.com/posts/maxgekk_spark-builds-a-localtime-object-every-time-share-7508422005449322497-Szne/>
+
+The arm this post runs is **the link in the body**, so the next one puts it in
+the first comment and the referral counts decide. LinkedIn rendered it as a
+link-preview card rather than as a native image - which is what happens when
+the body carries a URL - so `card.png` is what a reader sees, at 1200x630,
+through the page's own Open Graph tags. That is a better outcome than the
+August post's bare card, but it is not the native-image arm, and the mechanics
+below still describe what that arm would be.
+
 ## Mechanics, and the one thing to test
 
 * **Post the image, not a link preview.** The previous post was a link card,
