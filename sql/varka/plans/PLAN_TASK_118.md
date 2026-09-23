@@ -30,7 +30,12 @@ memory. As of this plan:
   `t + interval`, `t - interval`, `t - t2`, `time_diff` in every unit, the
   three `time_to_*` and the three `time_from_*` conversions - plus
   comparisons, `greatest`/`least`, `CASE`/`IF` and the null tests over `TIME`
-  columns. What declines, by name and with its reason in the table: the two
+  columns. *Correction, 22 September 2026, from task 164: `t - interval` was
+  written from memory and the table never had it. Spark resolves `t - dt` to
+  `t + (-dt)`, the interval negation is not lowered, and the compiler declines
+  it - a literal interval folds before it reaches the compiler, a column does
+  not. Item 12 of section 3 is the control for exactly this, and the message
+  says `t + interval` only until task 103 builds the negation.* What declines, by name and with its reason in the table: the two
   decimal-valued functions (`second` with a fraction and `time_to_seconds`),
   `make_time` with a decimal seconds argument, `current_time` and `to_time`
   from strings. `spark.sql.timeType.enabled` has to be on, as it does in

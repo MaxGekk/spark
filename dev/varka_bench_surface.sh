@@ -22,7 +22,7 @@
 #       [--driver-memory 16g] \
 #       [--max-fixed-share PERCENT] [--force] [--only REGEX] [--replace] [--shard I/N] \
 #       [--skip-build] \
-#       [--benchmark surface|chains|time] [--table-columns all|dates|times] \
+#       [--benchmark surface|chains|time|timechains] [--table-columns all|dates|times] \
 #       LABEL=SPARK_HOME:JAVA_HOME[:conf=value,conf=value...] ...
 #
 # --benchmark chains runs Chains through the same driver instead of Surface, writing
@@ -41,6 +41,11 @@
 # every distribution; the stock arm is the same 4.2.0 release, which carries the type
 # and its functions. Its rows are 8 bytes wide where the date surface's are 4, so the
 # row count the fixed-share rule wants fits half as many rows in the same memory.
+#
+# --benchmark timechains runs TimeChains over the same varka_times table, writing
+# TimeChain-<label>-results.txt: the TIME lane's chains, composed until the arithmetic
+# exceeds the memory floor, for the datapath question the TIME surface cannot answer.
+# See the TimeChains javadoc for the op floor and what limits the composition.
 #
 # --only REGEX runs the matching entries only, and the file it writes holds just those:
 # the driver replaces the file rather than merging into it. So an --only run under a
@@ -161,7 +166,8 @@ case "$benchmark" in
   surface) main_class=org.apache.spark.sql.varka.bench.DateSurfaceBenchmark; stem=DateSurface ;;
   chains)  main_class=org.apache.spark.sql.varka.bench.DateChainBenchmark;   stem=DateChain ;;
   time)    main_class=org.apache.spark.sql.varka.bench.TimeSurfaceBenchmark; stem=TimeSurface ;;
-  *) echo "--benchmark wants surface, chains or time, got '$benchmark'" >&2; exit 2 ;;
+  timechains) main_class=org.apache.spark.sql.varka.bench.TimeChainBenchmark; stem=TimeChain ;;
+  *) echo "--benchmark wants surface, chains, time or timechains, got '$benchmark'" >&2; exit 2 ;;
 esac
 
 # The --only truncation guard (task 100). Checked before the machine checks below, not just

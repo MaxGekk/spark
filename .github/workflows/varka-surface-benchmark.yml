@@ -77,16 +77,27 @@ on:
         default: ''
       benchmark:
         type: choice
-        description: 'Which expressions. "surface" is one entry per expression, the coverage document, whose lightest rows are memory-bandwidth-bound and so cannot show a datapath difference. "chains" composes them three and four deep until the kernel is compute-bound, which is what a 512-bit run has to measure. See PLAN_TASK_62.md 11.13.'
+        description: 'Which expressions. "surface" is one entry per expression, the coverage document, whose lightest rows are memory-bandwidth-bound and so cannot show a datapath difference. "chains" composes them three and four deep until the kernel is compute-bound, which is what a 512-bit run has to measure. See PLAN_TASK_62.md 11.13. "time" and "timechains" are the same pair over the TIME table (PLAN_TASK_164.md).'
         required: true
         default: 'surface'
         options:
           - 'surface'
           - 'chains'
           - 'time'
+          - 'timechains'
       shard:
         type: string
         description: 'I/N - run entries I, I+N, I+2N of the surface, so N dispatches cover it once. For the row count the fixed-share rule wants, the whole surface does not fit one job. Merge with dev/varka_bench_merge.py. See PLAN_TASK_62.md 11.11.'
+        required: false
+        default: ''
+      max-fixed-share:
+        type: string
+        description: 'The ceiling the driver holds a Varka row to: the job constant (scheduling a task, collecting its result) as a share of that row wall time. 5 is the standing rule. It is lifted only where a benchmark has been outrun by the engine - the TIME chains on a full-width runner do 0.4 s of work per iteration against a 36 ms constant, and no row count that fits a 15 GiB machine brings that under 5% - and wherever a lifted bound produced a committed number, the README methodology says so. The constant inflates every arm alike, so it compresses a ratio rather than flattering it.'
+        required: false
+        default: '5'
+      extra-confs:
+        type: string
+        description: 'Comma-separated key=value settings appended to every arm, stock and fork alike, e.g. spark.driver.extraJavaOptions=-XX:UseAVX=2,spark.sql.codegen.varka.emit.useAVX=2 for task 121 (in local[1] the driver is the executor, so the JVM flag reaches the kernels). Empty appends nothing.'
         required: false
         default: ''
       create-commit:
@@ -342,6 +353,8 @@ jobs:
         ONLY: ${{ inputs.only }}
         SHARD: ${{ inputs.shard }}
         BENCHMARK: ${{ inputs.benchmark }}
+        EXTRA_CONFS: ${{ inputs.extra-confs }}
+        MAX_FIXED_SHARE: ${{ inputs.max-fixed-share }}
       run: |
         set -euo pipefail
         STOCK="$HOME/stock-spark/spark-${STOCK_VERSION}-bin-hadoop3"
@@ -353,17 +366,21 @@ jobs:
         # The file's canary line then reads OFF, which tells a reader what the absolute
         # numbers are worth. See PLAN_TASK_62.md 11.4.
         ARGS+=(--force --skip-build)
+        [ -n "$MAX_FIXED_SHARE" ] && ARGS+=(--max-fixed-share "$MAX_FIXED_SHARE")
         [ -n "$ONLY" ] && ARGS+=(--only "$ONLY")
         [ -n "$SHARD" ] && ARGS+=(--shard "$SHARD")
         # Guarded like ONLY and SHARD above it: an empty value would pass
         # `--benchmark ""` and the shell driver would reject it.
         [ -n "$BENCHMARK" ] && ARGS+=(--benchmark "$BENCHMARK")
+        # An arm's third field is a comma list of confs, `varka` among them: extra confs open
+        # that field on the arms that have none and extend it on the one that does.
+        OPEN="${EXTRA_CONFS:+:$EXTRA_CONFS}"; MORE="${EXTRA_CONFS:+,$EXTRA_CONFS}"
         # Varka last: the comparison table's ratios are the last file against the others.
         dev/varka_bench_surface.sh "${ARGS[@]}" \
-          "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17" \
-          "spark-${STOCK_VERSION}-jdk25=$STOCK:$J25" \
-          "varka-off-jdk25=$PWD:$J25" \
-          "varka-jdk25=$PWD:$J25:varka"
+          "spark-${STOCK_VERSION}-jdk17=$STOCK:$J17$OPEN" \
+          "spark-${STOCK_VERSION}-jdk25=$STOCK:$J25$OPEN" \
+          "varka-off-jdk25=$PWD:$J25$OPEN" \
+          "varka-jdk25=$PWD:$J25:varka$MORE"
 
     # `!cancelled()` and not the default, because the step this follows fails on purpose:
     # a run whose fixed share is over the ceiling has still done every measurement, and

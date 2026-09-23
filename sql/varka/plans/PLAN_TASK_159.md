@@ -198,6 +198,19 @@ The file's section headers are the plan. In order of least entanglement:
    the file boundary: `invokeCall`, `planFragmentsReadingMonth` and `emitCond`
    went from private to package-private; the facade names the new class at
    its eight calls, `Slots` at its two. The emitter lost 920 lines, to 1722.
+   *The vector walk done 22 September 2026, as `VarkaVectorWalk.java`*:
+   `emitValue` and `emitCond`, the int arithmetic with its overflow masks, the
+   guards and their arm contexts, the picks, `emitShift`, and `line`,
+   `loadWord`, `storeWord`, under a class comment that says what the walk
+   leaves on the stack and in the slots and which families it hands off. The
+   body emitter and the two lowering classes reach it by a static import, the
+   way they already reach the facade's constants; nothing else crossed the
+   boundary, since seam 5 had already widened what the lowerings call. The
+   facade's class comment lost its "largest file in the engine" opening for a
+   map of the nine files the emitter now is, and keeps the design notes on the
+   emitted class, which hold across them. The emitter lost 780 lines, to 942:
+   `emit`, the budgets and grouping, the fragment keys, the class assembly and
+   the entry-point validation.
 
 `VarkaLoopEmitter` keeps `emit`, `fitsBudgets`, `bitmapPassCounts` and the
 class-level javadoc that explains the whole, and becomes the map a reader
@@ -341,3 +354,23 @@ compiler and a move under an open change is a conflict for both.
   and moves only what is genuinely per node.
 - **Open work.** Anything in flight against the emitter has to land or rebase;
   section 5 sequences for it.
+
+## 7. Outcome
+
+*Written 22 September 2026, with the last seam's pull request.*
+
+Steps 3.1 to 3.6 landed, one pull request per seam and each a pure move: the
+options builder; the emitter's six seams, which left `VarkaLoopEmitter` a
+942-line facade over `Slots`, `Analysis`, `VarkaDivisionLowering`,
+`VarkaChronoLowering`, `VarkaBodyEmitter` and `VarkaVectorWalk`; the emitter
+suite by family; the expression compiler by family, with task 86's coverage
+scan over the five files; the evaluator by responsibility; and the serializer
+one class per file. The acceptance test of section 2 held at every step:
+`emitted_bytes.json` and the shape hashes unchanged under the flattened-key
+diff, no results file, band or docs table moved, and every new file opens with
+its purpose.
+
+Step 3.7, one place per node, is not done here. It is the one step that is not
+a move, and it is deferred to milestone 6 as `SCOPE_MILESTONE_6.md` item 47,
+which records what was learned about it on the way: the passes that read
+several nodes at once are the part a per-node dispatch cannot absorb.

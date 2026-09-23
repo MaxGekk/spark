@@ -256,3 +256,30 @@ locking that says nothing about where the other commit came from. And it does no
 reproduce when `GIT_DIR` is set by hand to a relative path such as `.git`, which
 re-resolves against whatever directory the fixture is in - so a test of the fix
 must export the absolute path a real hook receives.
+
+## The Maven build CI runs takes about fifteen minutes here, and it is the only place three failures appear
+
+Measured on 22 September 2026 on the development laptop, 24 cores, because the
+project had quoted this build's cost for months without ever timing it:
+`./build/mvn -DskipTests` with the full profile set CI uses (`yarn`,
+`kubernetes`, `volcano`, `hive`, `hive-thriftserver`, `hadoop-cloud`,
+`jvm-profiler`, `spark-ganglia-lgpl`, `kinesis-asl`, `credential-aws`) and
+`clean install` took **13 minutes**, and `build/sbt catalyst/doc` one more.
+
+Fifteen minutes is cheap enough that it should be run before a push that
+touches module boundaries, because it is the only local check for three
+failures sbt cannot produce, each of which otherwise costs a CI round trip:
+
+- a Guava type crossing a module boundary, which Maven's shading relocates and
+  sbt does not;
+- the `--add-modules` that zinc needs *reflectively*, after a successful
+  compile, for a class holding a `jdk.incubator.vector` type in a field - the
+  one that fails with `NoClassDefFoundError` when the compile said nothing;
+- scaladoc's cyclic reference on `java.lang.classfile`, which `catalyst/doc`
+  reproduces in about a minute on its own and is worth running alone when the
+  change is Scala touching emitter-adjacent code.
+
+The full Maven *test* run is a different matter and is not worth an idle night:
+CI shards it across about ten parallel jobs of one to two hours each, so a
+single machine is looking at six to twelve hours, nearly all of it exercising
+code Varka never touches.

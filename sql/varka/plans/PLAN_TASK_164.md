@@ -135,7 +135,143 @@ pricing a run on the machine that is scarce.
 
 ## 5. Outcome
 
-<!-- filled when the work is done -->
+*Written 22 September 2026 as the benchmark was built; the measurements follow
+in their own pull requests and are scored here when they land.*
+
+**Building the list found the tool short in three places, fixed here.**
+`dev/varka_emit.sh --table` failed with `literal slot 0 outside [0, 0)` on
+every long-lane expression that carries a literal slot, because the table path
+handed the emitter the int literal count, which is zero for a long-lane shape
+whose literals live in `longArgs`; the non-table path had the right count, and
+the surface's rows had only ever been checked through it. The tool's resolver
+looked functions up before the analyzer ran, so `hour(t + dt)` reached the
+registry's builder with its `Add` still uncoerced and tripped the builder's
+"function arguments must be resolved" assertion; the lookup is now the
+analyzer's own. And a projection whose every entry declined printed no reason,
+since `compilePartial` answers `None` without its declines; the compiler now
+exposes `declines` for the tools, and the table prints the reason beside
+`declined`.
+
+**The composition ceiling.** The deepest chain the lane fuses today is 48 lane
+ops, against the date list's 293 to 483. Three rows cap it. An extract narrows
+only at an output root (task 28), so nothing may stand above `hour`. `bigint`
+and interval arithmetic are not built (tasks 104 and 103), so
+`time_diff(..) + time_diff(..)` declines and a `bigint` column enters only
+through `greatest`, `least`, a comparison or a conditional. And `t - dt`
+declines, because Spark resolves it to `t + (-dt)` and the interval negation
+is not lowered, which is task 103's to build. That last one corrects
+`PLAN_TASK_118.md` section 2, which listed `t - interval` among the fused
+forms: the coverage table has `t + INTERVAL` and never had the subtraction,
+and the correction is written there.
+
+**The op floor, derived (section 2.1).** `TimeSurface-varka-jdk25-results.txt`
+against the tool's counts: the one-column entries read 0.8 ns/row at 4 ops
+(`least(l, 5000000000)`), 0.9 at 6 (`hour(t)`), 1.0 at 7
+(`time_trunc('MINUTE', t)`) and 1.2 at 12 (`minute(t)`), which is 0.05 ns per
+op over a floor near 0.6 ns; the two-column entries, `greatest(t, t2)` at 4
+ops and 1.1 and `t + dt` at 10 and 1.4, give the same slope over a floor near
+0.9 ns. Arithmetic equals the two-column memory floor at 18 ops, and
+`TimeChains.MIN_OPS` is 36, twice that - the date list's margin over its own
+break-even. The twelve entries run from 36 to 48 ops; every one reads a `TIME`
+and an interval column, five read a `bigint`, and the outputs are a `TIME`, an
+interval, `time_diff` counts and the three extracts. Each is safe against
+midnight by construction: `dt` is added only to `t` or a truncation of `t`,
+which the table's sign rule keeps inside the day, and `dt2`, under a second,
+only to a time already truncated to the second or coarser.
+
+**Prediction 1 failed.** It put `MIN_OPS` above 280 because a long-lane op
+covers half the lanes and the row is twice as wide, and both are so: the
+per-op cost is 0.05 ns against the date model's rounded 0.02. But the date
+list's floor was set by the fixed-share rule at a chain depth the date lane
+reaches, and this lane's reachable depth is an order of magnitude shallower, so
+the floor here is set by break-even against memory - and a shallower chain
+needs fewer ops to clear a lower bar, not more.
+
+**Prediction 4 is in doubt before any dispatch, from arithmetic alone.** At
+0.05 ns per op the heaviest entry is near 3.3 ns/row. The rule's 5% at the
+runner's constant of about 36 ms (`PLAN_TASK_118.md` section 3, item 5) needs
+720 ms of executor time an iteration: 3.6 ns/row at 2e8 rows, 7.2 at 1e8. And
+2e8 rows of this table is 9.1 GiB cached (the surface file reads 22.8 GiB at
+5e8), which a 12g driver on a 15 GiB runner does not hold, where 1e8 rows at
+4.6 GiB does. So the runner asks about 7 ns/row of entries that give 3, a fixed
+share near 11%, unless the bound is lifted for the chains - as task 105 lifted
+it to 6% for one row, and as item 11 of `PLAN_TASK_118.md` section 3 requires
+be stated wherever it is. The laptop at 2e8 rows needs 1.8 ns/row against its
+18 ms constant, and every entry clears that. The dispatch decides the runner's
+bound, and the decision is recorded here when it is taken.
+
+**The runs, 22 and 23 September 2026, both on GitHub Actions.** The row ladder
+of section 2.3 was dispatched ungated, because how many rows fit a runner and
+what the job constant costs are properties of its memory and cores rather than
+of its vector width, and gating a sizing question on the one-in-eighteen
+machine is the trap `PLAN_TASK_62.md` 11.8 records. It answered in three
+dispatches: 2e8 rows is refused outright (the table needs 9.1 GiB against a
+12g driver's 7.0 GiB store), 1.5e8 fails on the last arm, and **1e8 is
+resident at 4.6 GiB with a worst fixed share of 1.0%**. The first rung landed
+on an AMD EPYC 7763 - Zen 3, `avx avx2` only - which is the AVX2 arm in its
+natural habitat and the 256-bit end of the width subtraction, for free. The
+gated dispatches then took **twenty-four tickets to find an EPYC 9V45**, close
+to the census's one in eighteen, at a minute a miss.
+
+**Prediction 4 failed, and the way it failed is the finding.** The entries do
+not clear `--max-fixed-share` at 5% on the full-width runner: they read 7.2%
+to 9.1%. Nothing is broken - the table was resident, every entry fused with
+zero fallback batches - and the cause is the one 11.17 recorded for the date
+chains. The fast machine cut Varka's work to 0.42 s an iteration while the
+job's constant stayed near 36 ms. The date chains answered that by going from
+1e8 rows to 2e8; these cannot, because a `TIME` row is 46 bytes where a date
+row is 4, so **no row count both fits a 15 GiB runner and satisfies 5%**. The
+benchmark has been outrun by the engine it exists to measure. On the owner's
+decision the bound is lifted to 10% for this benchmark on runners, stated in
+the README's methodology as `PLAN_TASK_118.md` section 3 item 11 requires, and
+the workflow gained a `max-fixed-share` input so a run records the bound it was
+held to. Two things make that honest rather than convenient: the constant
+inflates every arm alike, so it *compresses* the ratio rather than flattering
+it, and the driver measures executor time independently, which is the figure
+the post leads with.
+
+**Prediction 2 held, and by a margin the plan did not expect.** On the EPYC
+9V45 the twelve chains run at 3.7 to 5.5 ns/row against stock 4.2.0's 82 to
+198, which is **19.6x to 46.9x, median 31.8x** by wall time and 21.0x to
+53.2x, median 34.9x by executor time; against the fork with the engine off,
+25.9x. The surface's projection rows read 13.4x to 38.2x, so the chains do
+exceed them - but on the Zen 3 runner the same twelve read only 2.6x to 5.9x,
+median 3.9x, which is *below* the surface. The prediction is right about the
+full-width machine and wrong about the lane in general, and section 2.1's
+model is what missed it: it priced an op and forgot that the machine chooses
+which ops there are.
+
+**Prediction 3 held.** Every entry fused on both machines, `fallback 0` on all
+twenty-four measured rows, checksums recorded.
+
+**Prediction 1's post-mortem, now that both machines have run.** `MIN_OPS` was
+derived from the laptop's surface at 0.05 ns per op, and the full-width runner
+does the same entries at about a tenth of that per row. The floor is not wrong
+- it still separates a memory-bound entry from a compute-bound one on the
+machine it was derived from - but it is a laptop constant, and a reader should
+not take 36 as a property of the lane.
+
+**What the two machines say about the datapath, which is the question row 164
+exists to answer.** Between the Zen 3 and the Zen 5, at the same row count and
+the same commit, the three scalar arms gain 1.64x, 1.76x and 1.80x - that is
+the machine generation, and it agrees with the 1.78x to 1.84x milestone 4
+measured on the date chains. Varka gains **14.6x**. Dividing the machine out
+leaves **8.3x for the kernel**, and it decomposes: two of it is the lane count,
+four 64-bit lanes against eight, and the rest is the lowering, because a
+machine without AVX-512 falls back to the fourteen-operation magic form where
+one with it emits the three-operation conversion form. Two times four-point-
+seven is 9.4 against 8.3 measured, which is as close as this kind of
+arithmetic gets.
+
+That is a different answer from the date chains', where the width was worth
+1.14x once the machine was divided out, and the two are consistent: a date
+chain is a dependency chain of cheap operations and is latency-bound, while a
+`TIME` chain is four to six constant divisions and its cost is the division's
+instruction count. **On this workload the lowering matters more than the
+width**, and neither number generalises to the other's shape.
+
+Prediction 5, the band, waits: a band for a runner-measured file needs repeated
+runs on the same pool and is a question for task 118 rather than this one.
 
 ## 6. Explicitly out of this task
 

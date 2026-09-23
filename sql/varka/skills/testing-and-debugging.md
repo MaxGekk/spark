@@ -426,3 +426,34 @@ and 167, the knob in #316).
   and row 166 still asks for the deterministic test that drives both forms
   over `[2^51, 2^53)` and asserts the shape of each failure - a random draw
   cannot promise it visited the last bit below the bound, and a test can.
+
+## `VarkaIrFuzzSuite` caps each test at twenty minutes, so a big `-Dvarka.fuzz.iterations` makes every JVM report failure
+
+From the campaign of 22 September 2026: 24 JVMs, 113.6 CPU-hours, seeds
+20260923001 to 024, the long-column bound raised to just under 2^52 on task
+147's tree, eight JVMs each at the default width, `MaxVectorSize=16` and `=32`.
+
+**Set the iteration count to what fits the cap, or the pass/fail signal is
+worthless.** Each of the suite's tests is wrapped in `failAfter(20 minutes)`.
+Six million iterations is hours of work, so every test reported
+
+    The code passed to failAfter did not complete within 20 minutes.
+
+on all 24 JVMs - 47 of the campaign's 48 "failures". The work still happened:
+`failAfter` records the timeout but does not stop the thread, so each JVM
+fuzzed for about five hours and then reported failure anyway. Nothing was lost
+except the signal, and the campaign had to be summarised by grepping the logs
+for a message that names a seed and an iteration rather than by exit status. A
+campaign meant to run for hours should either raise the cap or - simpler - run
+many shorter JVMs, which also spreads the seeds wider.
+
+**What it found, which is the same thing the last one found.** No correctness
+mismatch anywhere: not one disagreement with `VarkaReferenceEvaluator`, on
+either lane, at any of the three widths, including the long lane with its
+column bound raised into the six bits the fuzzer used to stop short of. The
+single real failure is row 87's epilogue cap again -
+`-Dvarka.fuzz.seed=20260923021 -Dvarka.fuzz.only=88962` at
+`MaxVectorSize=32`, a deeply nested `makeDate` tree whose `epilogueMasked`
+renders 79645 bytes against the JVM's 65535 limit. Two campaigns a fortnight
+apart have now found that shape family and nothing else, which is worth knowing
+before a public post and is not a reason to run a third.

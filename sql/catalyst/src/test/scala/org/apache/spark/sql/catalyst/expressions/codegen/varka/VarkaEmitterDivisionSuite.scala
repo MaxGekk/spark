@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import java.lang.foreign.{Arena, ValueLayout}
+
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
 /**
@@ -483,6 +485,80 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // The int lane's conversion form is the reference arm now; the shipped form multiplies.
     assert(opsOn(emitMulti(int32, 1, 0, converting.withMulHiDivide(false))._2,
       "DoubleVector") === 2)
+  }
+
+  test("both 64-bit division forms run through the JVM at the dividend bound: exact below " +
+      "it, and above it each fails in the shape its lowering predicts") {
+    // Row 166. `ConstDivide.EXACT_DIVIDEND_BOUND` is 2^52, and until now the claim that the
+    // conversion form is exact under 2^53 and the magic form exact under 2^52 and wrong above
+    // rested on `verify_double_division.py`, a model of the lowerings, while the long-lane
+    // fuzzer's columns stop at 2^46. This drives the emitted kernels themselves over the bits
+    // no test had visited, against Java's `/`, and asserts not only where each form is right
+    // but the *shape* of how it is wrong past its bound - a failure of another shape would
+    // mean the model is wrong, which is the thing worth finding.
+    //
+    // The shapes, from `VarkaDivisionLowering`'s own account. The conversion form divides in
+    // doubles: exact while the dividend is under 2^53, where a correctly rounded quotient
+    // cannot cross an integer; above that the dividend itself rounds by up to one, so the
+    // quotient is within one of Java's. The magic form reads the dividend's magnitude through
+    // the `0x4330000000000000` identity, whose mantissa is 52 bits: from 2^52 to 2^54 the OR
+    // is idempotent on the exponent bits the magnitude sets, so the value read back is the
+    // magnitude modulo 2^52, and the quotient is that of the low 52 bits with the sign applied
+    // afterwards.
+    val mask52 = (1L << 52) - 1
+    val divisors = Seq(3_600_000_000_000L, 60_000_000_000L, 1_000_000_000L, 1_000L,
+      86_400_000_000L, 60L, -60L)
+    val forms = Seq(
+      ("conversion", VarkaEmitOptions.DEFAULTS),
+      ("magic", VarkaEmitOptions.DEFAULTS.withUseAVX(2)))
+    // A region is [base, 2 * base): the ends, the first multiple boundary, one deep inside.
+    def region(base: Long, d: Long): Seq[Long] = {
+      val m = math.abs(d)
+      Seq(base, base + 1, base + m - 1, base + m, base + m + 1, base + 12_345_678_901L,
+        2 * base - 1, 2 * base - m, 2 * base - m + 1).flatMap(v => Seq(v, -v))
+    }
+    def magicShape(v: Long, d: Long): Long = {
+      val q = (math.abs(v) & mask52) / math.abs(d)
+      if ((v < 0) != (d < 0)) -q else q
+    }
+    for ((name, options) <- forms; d <- divisors; lanes <- Seq(2, 8)) {
+      val root = Seq[VarkaVectorIR](
+        new ConstDivide(new ColumnRef(0, LaneType.LONG), d, ConstDivide.EXACT_DIVIDEND_BOUND))
+      val (kernel, loader) = load(emitMulti(root, 1, 0, options.withLanesOverride(lanes)))
+      try {
+        def run(values: Seq[Long], length: Int): Seq[Long] = {
+          val arena = Arena.ofConfined()
+          try {
+            val in = makeLongInput(arena, length, _ => false, i => values(i % values.length))
+            val (data, validity) = makeLongOutput(arena, length)
+            val st = kernel.run(Array(in.data.address()), Array(in.validityAddress(length)),
+              Array(in.nullCount), Array(data.address()), Array(validity.address()),
+              Array.empty[Int], Array.empty[Long], length)
+            assert(st === 0, s"$name / $d lanes=$lanes: an unguarded division reports nothing")
+            (0 until length).map(i => data.get(ValueLayout.JAVA_LONG, i * 8L))
+          } finally {
+            arena.close()
+          }
+        }
+        for ((base, tier) <- Seq((1L << 51, "under"), (1L << 52, "past 2^52"),
+            (1L << 53, "past 2^53")); length <- Seq(64, 17)) {
+          val values = region(base, d)
+          val out = run(values, length)
+          for (i <- 0 until length) {
+            val v = values(i % values.length); val q = v / d
+            val clue = s"$name / $d lanes=$lanes $tier v=$v: got ${out(i)}, Java says $q"
+            (name, tier) match {
+              case (_, "under") => assert(out(i) === q, clue)
+              case ("conversion", "past 2^52") => assert(out(i) === q, clue)
+              case ("conversion", _) => assert(math.abs(out(i) - q) <= 1, clue)
+              case ("magic", _) => assert(out(i) === magicShape(v, d), clue)
+            }
+          }
+        }
+      } finally {
+        loader.release()
+      }
+    }
   }
 
   test("a long-lane constant division refuses the divisors that have no quotient") {
