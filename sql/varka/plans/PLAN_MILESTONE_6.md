@@ -107,6 +107,19 @@ order of magnitude across the op set. A budget counted in weight cannot bound
 bytes. The difference between Varka and Spark here is not that Varka got it
 right; it is that Varka *can* get it right, because it can measure.
 
+*Correction, 23 September 2026, from task 87's admission check
+(`PLAN_TASK_87.md` 2): the reproducer above no longer reproduces - the fuzz
+grammar has gained nodes since 8 September and a new node reshuffles the whole
+sample, so the coordinate now draws a tree that emits cleanly. More importantly,
+the 67KB failure is the far end of the problem, not the problem. On a product
+JDK `DontCompileHugeMethods` is on and `HugeMethodLimit` is fixed at 8000. The
+JVM's own `-XX:+PrintCompilation` shows a projection of sixteen `make_date`
+outputs whose 9524-byte dense epilogue it never compiles at any tier, while it
+compiles every loop method; by their sizes the masked epilogue crosses 8000 at
+thirteen outputs and the dense one at fourteen. So Varka has had exactly the
+silent default-config JIT cliff of 1.1, at an eighth of the size of the failure
+this section describes.*
+
 ### 1.3 Done when
 
 1. **No shape Varka admits can fail to emit.** Every emitted method is bounded
@@ -158,6 +171,10 @@ assertions; `MAX_FUSED_NODES`' javadoc corrected to say which methods its
 guarantee covers.
 
 ### 2.2 One budget, counted in bytes, over every emitted method (task 168)
+
+*Planned with task 87 in `PLAN_TASK_87.md`, on the owner's decision of 23
+September 2026: the epilogue is the method nobody counted, so the two are one
+mechanism, and planning them apart risked 87 building what 168 replaces.*
 
 Fixing 2.1 alone patches one method. The finding underneath it is that the
 emitter has five overlapping limits - `MAX_CHAIN_DEPTH`, `MAX_FUSED_NODES`,
@@ -241,6 +258,14 @@ that produces declines; each decline reason is pinned by a test that names the
 shape that produces it.
 
 ### 2.4 Eight thousand, not sixty-five thousand (task 170)
+
+*Narrowed on 23 September 2026 by task 87's admission check
+(`PLAN_TASK_87.md` 2.3 and 2.6.5). The choice this section sets up, 8000 against
+65535, is not a choice: a method between the two is never compiled on a product
+JDK, so a budget of 65535 would admit exactly the methods that run interpreted,
+and task 87 takes 8000 from the JVM's own output. What is left for task 170 is
+whether a lower limit earns its extra calls - C1 refuses a method from about
+1900 bytes, and one that waits for C2 runs interpreted meanwhile.*
 
 HotSpot refuses to JIT a method above `HugeMethodLimit`, 8000 bytes.
 Spark's own limit defaults to 65535 and its documentation admits the gap. A
@@ -509,11 +534,11 @@ milestone 4.
 
 | task | what it is | where it came from | size |
 | ---: | :--- | :--- | :--- |
-| 87 | The epilogue is the one method no budget bounds | `PLAN_MILESTONE_5.md` 2.18, item 15 | medium |
-| 168 | One budget, counted in bytes, over every emitted method | 2.2, from 87's analysis | medium |
+| 87 | The epilogue is the one method no budget bounds. **Planned** (`PLAN_TASK_87.md`, 23 September 2026, together with 168): the admission check found a 16-output epilogue the JIT never compiles, and by size the masked one crosses 8000 bytes at 13 outputs | `PLAN_MILESTONE_5.md` 2.18, item 15 | medium |
+| 168 | One budget, counted in bytes, over every emitted method. **Planned** with 87 in `PLAN_TASK_87.md`: one mechanism with two halves | 2.2, from 87's analysis | medium |
 | 148 | The weight the budget counts is wrong for a division | `PLAN_MILESTONE_5.md` 2.84, item 39 | small |
 | 169 | No exception escapes the emitter | 2.3, the ghost-fallback contract | small |
-| 170 | Eight thousand, not sixty-five thousand: the JIT cliff | 2.4 | small, measured |
+| 170 | Eight thousand, not sixty-five thousand: the JIT cliff. *Narrowed by task 87 to whether a limit below 8000 - C1's, about 1900 - earns its extra calls* | 2.4 | small, measured |
 | 171 | The size ladder, and the figure | 2.5, absorbing milestone 4's row 44 | medium |
 | 172 | One realistic query | 2.6 | small to medium |
 | 173 | A disjointness test for the compiler's family chain | item 41 | small |
