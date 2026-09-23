@@ -3200,6 +3200,28 @@ retrospective adds a third reason to take it first when the long lane's
 arithmetic re-enters: `time_from_seconds(i)` declines, `hour(t) + 1` declines,
 and the coverage differential had to change a row because of it.
 
+### Item 49. The two band measurements milestone 5 did not take
+
+Milestone row 90 closed on its census and its decision, and left two
+measurements behind because both need a quiet machine rather than an argument.
+
+The first is the **arithmetic benchmark's band**. `VarkaArithmeticBenchmark`
+has committed results at both widths and no band file, so a regeneration of it
+is still read against a flat threshold while every other family is read against
+its tiers. It is the last family in that state.
+
+The second is **`PLAN_TASK_63.md` 9.7's 26.1% dead-local attribution**, taken
+from two *unpinned* regenerations at a time when the worst case on that file
+moved 75%. The mechanism is plausible - the emitted bytes did change, and a
+dead local does change register pressure - but 26.1% sits at the very top of
+the band later measured for the same file, so the magnitude is not evidence.
+Section 2.12 of milestone 5 narrowed task 82 to "a 128-bit task" on the
+strength of it, which is the concrete thing a wrong number would have cost.
+
+**Done when** the arithmetic band is committed beside its results, and 9.7's
+figure has been re-taken pinned and either confirmed, corrected, or withdrawn
+with task 82's scope re-read against whatever replaces it.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
