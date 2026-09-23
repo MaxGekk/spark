@@ -90,6 +90,14 @@ larger than that is **never compiled, by either tier**. From the JVM's own
 * **16 outputs, `-XX:-DontCompileHugeMethods`.** `epilogueDense` (9524 bytes)
   compiled at tier 3 and tier 4.
 
+*Correction, 23 September 2026 (2.7): the tier-3 lines above are C1's attempts,
+read from truncated log lines. Read in full, C1 refuses every method here over
+about 1900 bytes - the 2498-byte epilogue and the 2455-byte loop method at four
+outputs, and three of the four loop methods at sixteen - with `COMPILE SKIPPED:
+out of virtual registers in LIR generator`, and each reaches tier 4 alone. What
+this section rests on is unaffected: under 8000 bytes C2 compiles the
+epilogue, over 8000 nothing does, and the control shows the rule is why.*
+
 So the absence is the huge-method rule and nothing else. By 2.2's sizes the
 masked epilogue crosses 8000 bytes at 13 outputs and the dense one at 14; the
 JVM's output confirms the rule on the dense method at 16, and the masked
@@ -193,6 +201,16 @@ it warm only on ragged batches, and a cached scan has one of those per
 partition; the method would stay interpreted exactly where it is rarely needed
 and then, when needed, be slow.
 
+*Correction, 23 September 2026 (2.7): "warmed up" overstates what even batches
+buy. A C2 compile whose profile never saw the tail branch taken turns that
+branch into an uncommon trap, so the tail body is not in the compiled code: the
+first ragged batch deoptimizes, runs interpreted, and the recompile that
+follows includes it. The decision stands on narrower ground - one
+deoptimization per shape, against an epilogue that in the other design is
+never invoked often enough to be compiled at all where tails are rare - and
+section 6 verifies it from the `made not entrant` lines rather than from this
+paragraph.*
+
 **2.6.4 When a kernel sees a ragged batch.** Both
 `spark.sql.inMemoryColumnarStorage.batchSize` and the Arrow cache's
 `spark.sql.execution.arrow.maxRecordsPerBatch` default to 10000, which divides
@@ -216,15 +234,16 @@ The middle band is harmless for a loop method, whose backedges bring C2 in
 quickly, and not for an epilogue, which has no loop and reaches C2 only by
 invocation count - `Tier4InvocationThreshold` is 5000 on this JDK.
 
-**2.6.6 How big the cliff is.** A scratch probe of the dump tool - one run in
-one fork, run long enough that the timed half comes after tiering, and *not a
-result*: the benchmark of section 6 commits the numbers - put a ragged batch at
-about three times the cost of an even one at 16 outputs, permanently, and within
-a percent of it at 12 once C2 had landed; at 12 the same probe, stopped earlier,
-read about twice, which is the warmup of 2.6.5. At four outputs the tail cost a
-few percent. So the cliff is real and permanent above 8000, and prediction 1's
-"more than an order of magnitude" is likely too strong; it stays as registered
-and the benchmark scores it.
+**2.6.6 Whether the cliff is worth a benchmark.** A scratch probe of the dump
+tool - one run in one fork, with `--rows 1031` against `--rows 1024` - was run
+for one purpose, to decide whether section 6 is worth building, and it says it
+is: above 8000 bytes a ragged batch is slower than an even one for as long as
+the kernel runs, and below it the difference fades once C2 has compiled the
+epilogue. *Corrected on 23 September 2026 (2.7): an earlier draft of this
+paragraph quoted the probe's magnitudes, and they are performance claims with no
+committed file behind them, which `sql/varka/AGENTS.md` forbids. The magnitudes
+are section 6's to establish; prediction 1 is scored against the benchmark and
+not against this probe.*
 
 **2.6.7 to 2.6.9.** A method's code length is readable today:
 `VarkaEmitterTestSupport.codeSize` parses the class through the Class-File API,
@@ -237,6 +256,38 @@ running `-XX:-DontCompileHugeMethods` behave differently; that is a sentence for
 **What the dump tool gained.** `VarkaEmitDump` takes `--rows N` (1024 by
 default) and reports the time of the second half of its rounds, which is what
 2.6.6 and the ragged-batch half of 2.6.3 needed.
+
+### 2.7 What the review of this plan corrected, 23 September 2026
+
+A code review of the pull request found ten things, and all ten were right.
+Where the old text would mislead whoever implements this, it is corrected where
+it stands and says so; the list here is the record.
+
+1. **3.3's op-count sums were wrong.** A group repeats the shared prefix, so the
+   per-group epilogues sum to more than today's single one; the invariant that
+   holds is per group, epilogue against loop.
+2. **2.6.3's "warmed up" overstated it.** C2 compiles an untaken tail branch as
+   an uncommon trap, so the first ragged batch deoptimizes. The decision stands
+   on narrower ground and is verified in section 6.
+3. **Section 4 still gave the driver the even-batch return** after 2.6.3 moved
+   it back; corrected. Keeping it in each epilogue costs every even batch one
+   call per group, and prediction 3 and risk 6 now say so.
+4. **2.3 repeated 2.5's misreading** of C1's tier-3 attempts; corrected.
+5. **`PLAN_MILESTONE_6.md` stated as observed what this plan infers** - the
+   13-output masked epilogue - and is corrected in the same pull request.
+6. **Section 6 never said whether its data had nulls**, and only a batch with
+   nulls reaches the masked epilogue; it now runs both.
+7. **A 7-row batch is not shorter than a lane group at 128 bits**; the test
+   length is now 1.
+8. **Task 170's scope conflicted with this plan's choice of 8000**;
+   `PLAN_MILESTONE_6.md` 2.4 and row 170 are corrected so the two do not own
+   one decision.
+9. **The driver was never measured.** It sets up every output by design, so it
+   grows with the kernel and a regroup cannot shrink it - 750 bytes at 16
+   outputs and 2700 at 60, from `dev/varka_emit.sh` - which 3.1 step 2 and
+   risk 7 now account for.
+10. **2.6.6 quoted a probe's timings as performance claims** with no committed
+    file behind them; they are removed and the magnitudes left to section 6.
 
 ## 3. The design
 
@@ -262,7 +313,10 @@ method is built - so the budget reads it rather than estimating it.
    constant-pool entries, 255 parameter slots. A method over 8000 bytes is
    regrouped - the group split and the class emitted again - and a shape that
    still exceeds a limit after its groups are single outputs is **declined with
-   a reason** naming the limit and the method, never thrown.
+   a reason** naming the limit and the method, never thrown. *The driver is
+   measured too (2.7 item 9): it sets up every output by design and gains a
+   call for every group a regroup adds, so it cannot be regrouped smaller; a
+   driver over a limit declines the shape.*
 3. **Weight keeps grouping; bytes keep safety.** `GROUP_BUDGET` exists for C2's
    node and inlining budgets, which are about op count, and its argument in the
    javadoc stands. What it cannot do is bound size, and after this task it is
@@ -303,18 +357,28 @@ decided by 6's measurement rather than here.*
 
 ### 3.3 Registered op counts
 
-Partitioning moves operations between methods and must not add any. Per shape,
-the sum of `IntVector` invocations over the epilogue methods equals today's
-single epilogue: **258 at 4 outputs, 698 at 12, 918 at 16, 3338 at 60** (2.2),
-and the loop methods' counts are unchanged. Under the switch, every method of
-every rung reads at most 8000 bytes in `dev/varka_emit.sh`. Asserted by 5.
+*Corrected on 23 September 2026 (2.7). An earlier draft said the per-group
+epilogues' `IntVector` counts sum to today's single epilogue. They cannot: 2.2's
+counts are a shared civil-from-days prefix of 38 operations plus 55 an output
+(93, 258, 918 and `loopMasked0`'s 313 all fit), and a group repeats the prefix
+its outputs share, which is the sharing risk 2 of section 7 names.*
+
+The invariant that holds is per group: **each `epilogueMasked<g>` carries
+exactly the `IntVector` count of `loopMasked<g>`**, and each `epilogueDense<g>`
+that of `loopDense<g>`, since each is one lane-group body of the same outputs.
+The loop methods' counts are unchanged by the switch. The total over the
+epilogue methods is larger than today's single epilogue by the repeated
+prefixes, and it is measured by `dev/varka_emit.sh` rather than predicted here.
+Under the switch, every loop and epilogue method of every rung reads at most
+8000 bytes, and the driver's size is reported beside them (3.1 step 2). Asserted
+by 5.
 
 ## 4. Files
 
 | file | what |
 |---|---|
 | `VarkaEmitBudget.java` | the limits, the per-method measurement, the regroup and the decline reasons |
-| `VarkaBodyEmitter.java` | `EPILOGUE` per group, `DRIVER` calling each epilogue and holding the even-batch return |
+| `VarkaBodyEmitter.java` | `EPILOGUE` per group, keeping the even-batch return inside each epilogue (2.6.3); `DRIVER` calling each epilogue |
 | `VarkaLoopEmitter.java` | emitting `epilogueDense<g>` / `epilogueMasked<g>`, and re-emitting on a regroup |
 | `VarkaEmitOptions.java` | `methodByteBudget`, in `canonical()` so the shape key sees it |
 | `VarkaEmitterSuite` | the ladder, the op-count and size assertions, the decline |
@@ -326,8 +390,11 @@ every rung reads at most 8000 bytes in `dev/varka_emit.sh`. Asserted by 5.
 
 * **The ladder under the switch**, 4 to 60 outputs at 512 and 128 bits: every
   emitted method at most 8000 bytes, the `IntVector` sums of 3.3 unchanged, and
-  answers equal to `VarkaReferenceEvaluator` at lengths 1024, 1031 and 7 - an
-  even batch, a ragged one, and one shorter than a lane group.
+  answers equal to `VarkaReferenceEvaluator` at lengths 1024, 1031 and 1 - an
+  even batch, a ragged one, and one shorter than a lane group at every width,
+  including the two-lane long species at 128 bits. (An earlier draft said 7,
+  which is a full lane group plus three at 128 bits, so the case of the loop
+  never entered was not tested at that width.)
 * **The JVM compiles every method.** A forked probe in the style of
   `VarkaAssemblySuite` runs the 16-output shape under `-XX:+PrintCompilation`
   and asserts every `loop` and `epilogue` method reaches tier 4 under the
@@ -348,7 +415,10 @@ every rung reads at most 8000 bytes in `dev/varka_emit.sh`. Asserted by 5.
 `VarkaMethodSizeBenchmark`, its own file per the project's rule for a new
 family. The ladder of 2.2 at 4, 8, 12, 13, 14, 16, 32 and 60 outputs, both forms
 by explicit label (`single epilogue`, `epilogue per group`), at batch lengths
-**1024 and 1031**, at 512 and 128 bits, regenerated with
+**1024 and 1031**, **null-free and with nulls** - a null-free batch runs only
+the dense driver and its epilogue, and only a batch with nulls reaches the
+masked one, so without both the masked crossing at 13 cannot appear - at 512 and
+128 bits, regenerated with
 `dev/varka_bench_regen.sh` and banded before anything is read. The control row
 is the 4-output shape, whose epilogue compiles under both forms. **Committed as
 its own pull request before the change**, so the baseline exists before the
@@ -367,6 +437,10 @@ improvement (the project's rule for a benchmark that does not exist yet).
 3. **The per-group epilogue removes the cliff and costs nothing measurable.** At
    every rung and both lengths it is within band of the single epilogue where
    the single one compiles (4 to 12 outputs), and far faster where it does not.
+   That includes the even batches, where it now makes one call per group
+   instead of one in all (risk 6): the calls return at once and cost less than
+   the band. *The last sentence was added by the review of 2.7, before any
+   run.*
 4. **The loops do not move.** Loop methods are unchanged by the switch, so on
    even batches every rung's rate is within band under both forms.
 
@@ -375,10 +449,6 @@ improvement (the project's rule for a benchmark that does not exist yet).
    C2 compiles the epilogue; above 8000 it never goes. *Added 23 September 2026
    after 2.6.6, and so not registered before a run in the strict sense: a probe
    had already read it. It is kept apart from 1 to 4 for that reason.*
-
-*Note on prediction 1, 23 September 2026: 2.6.6's probe suggests about three
-times per batch rather than more than an order of magnitude. The prediction
-stands as registered and the benchmark scores it.*
 
 **The rule for the default:** flip when the per-group form is nowhere worse than
 the single form beyond its band, at any rung, length or width.
@@ -401,6 +471,14 @@ the single form beyond its band, at any rung, length or width.
 5. **Measuring code length needs the method built.** If the Class-File API does
    not expose it without a full class build, the measurement moves after
    `ClassFile.build`, which is 3.1's step 2 as written.
+
+6. **Keeping the even-batch return inside each epilogue costs every even batch
+   one call per group** - twelve at 60 outputs - where today it costs one.
+   Prediction 3 is where it would show; if it shows, the driver can guard the
+   calls with one compare, at the price 2.6.3 describes.
+7. **The driver grows with the kernel and cannot be regrouped.** It reads 2700
+   bytes at 60 outputs, and `MAX_FUSED_NODES` keeps it far from 8000 today; a
+   later raise of that cap has to re-read this line.
 
 ## 8. Sequencing
 
