@@ -104,7 +104,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
    * body would still render identically.
    */
   private def methodHashes(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
-      lanes: Int): Seq[(String, String)] = {
+      lanes: Int,
+      arm: VarkaEmitOptions => VarkaEmitOptions = identity): Seq[(String, String)] = {
     // `lanes` is the int lane's count, and names a width: 4 lanes are 128 bits and 16 are 512.
     // A long-lane shape is emitted at the same two widths, which are 2 and 8 of its lanes;
     // sixteen 64-bit lanes would be a species that does not exist, and the emitter would fall
@@ -113,7 +114,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
     // long lane.
     val laneCount =
       if (VarkaVectorIR.emissionLane(roots.head) == LaneType.LONG) lanes / 2 else lanes
-    val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(laneCount)
+    // The arm is applied over the width, not under it: every arm below leaves the lane count
+    // alone, and the oracle's two widths are what the arm is being compared across.
+    val options = arm(VarkaEmitOptions.DEFAULTS.withLanesOverride(laneCount))
     val bytes = VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null,
       options)
     ("<class>" -> sha(VarkaEmitterTestSupport.classSummary(bytes))) +:
@@ -243,6 +246,50 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
   // The file
   // ---------------------------------------------------------------------------------------
 
+  /**
+   * The emit options a session can select, and so the emissions the oracle has to pin.
+   *
+   * Only one field of `VarkaEmitOptions` has a configuration in front of it -
+   * `spark.sql.codegen.varka.emit.useAVX`, which task 121 added so that a machine whose
+   * converts do not become instructions can ask for the magic form. Everything else on the
+   * record reaches the emitter through a test hook alone, and the audit test below records
+   * which of those move bytes. The oracle therefore pins the defaults in full, shape by
+   * shape, and each of these arms as one digest per width: a digest is enough to catch a
+   * change, and pinning five arms shape by shape would multiply a large file by five to say
+   * the same thing.
+   *
+   * A level the emitter treats as the default is pinned anyway. It costs a line and it is the
+   * only way the file can show that `useAVX=3` and an unstated level really do emit alike.
+   */
+  private def pinnedArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
+    Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 1, 2, 3).map { level =>
+      s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
+    }
+
+  /** One hash over every shape the oracle holds, emitted under `arm` at `lanes`. */
+  private def armDigest(arm: VarkaEmitOptions => VarkaEmitOptions, lanes: Int): String = {
+    val sb = new StringBuilder
+    val (rows, _) = coverage
+    rows.foreach { r =>
+      sb.append(r.sql)
+      methodHashes(r.roots, r.numInputs, r.numLiterals, lanes, arm).foreach { case (m, h) =>
+        sb.append(' ').append(m).append('=').append(h)
+      }
+      sb.append('\n')
+    }
+    Seq(fuzzShape _, longFuzzShape _).foreach { shapeAt =>
+      for (k <- 0 until shapes) {
+        val sh = shapeAt(k)
+        sb.append(k)
+        methodHashes(sh.roots, sh.numInputs, sh.numLiterals, lanes, arm).foreach {
+          case (m, h) => sb.append(' ').append(m).append('=').append(h)
+        }
+        sb.append('\n')
+      }
+    }
+    sha(sb.toString)
+  }
+
   private def render(): String = {
     def ordered(pairs: (String, Any)*): java.util.LinkedHashMap[String, Any] = {
       val map = new java.util.LinkedHashMap[String, Any]()
@@ -266,15 +313,22 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
           "seed" -> longFuzzSeed, "shapes" -> shapes, "block_size" -> blockSize,
           "blocks" -> longBlocks.asJava))
     }
+    val armHashes = ordered(pinnedArms.map { case (name, arm) =>
+      name -> ordered(widths.map(w => w.toString -> armDigest(arm, w)): _*)
+    }: _*)
     val doc = ordered(
       "generated_by" -> ("VarkaEmittedBytesSuite; regenerate with VARKA_BYTES_REGEN=true " +
         "build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'"),
       "description" -> ("Hashes of every emitted method body, rendered symbolically, for every " +
         "coverage row and for a fixed sequence of fuzz shapes at each lane, at 128 and 512 bits " +
         "(lanesOverride 4 and 16 at the int lane, 2 and 8 at the long one). A difference is a " +
-        "change in what an emitted method does."),
+        "change in what an emitted method does. `option_arms` covers the emissions a session " +
+        "can select rather than only the defaults: one digest over every shape at each width " +
+        "per value of spark.sql.codegen.varka.emit.useAVX, the only emit option a " +
+        "configuration reaches. The rest of VarkaEmitOptions is test-only."),
       "coverage_rows_skipped" -> skipped.asJava,
-      "lanes" -> ordered(perWidth: _*))
+      "lanes" -> ordered(perWidth: _*),
+      "option_arms" -> armHashes)
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"
   }
 
@@ -377,4 +431,140 @@ class VarkaEmittedBytesSuite extends SparkFunSuite {
     val at16 = methodHashes(r.roots, r.numInputs, r.numLiterals, 16).toMap
     assert(at4 != at16, s"${r.sql}: identical at 4 and 16 lanes")
   }
+
+  // ---------------------------------------------------------------------------------------
+  // The option audit (milestone 5 row 167), opt-in
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * Every value of every emit option, paired with the transform that selects it.
+   *
+   * The oracle above pins the defaults, and only the defaults, at two widths. That was enough
+   * while `VarkaEmitOptions` was reachable from tests alone; task 121 gave one of its fields a
+   * session configuration, so a user can now ask for an emission no committed hash covers.
+   * This list is the inventory row 167 asks for, and the test below turns it into the other
+   * half of the answer: which of these arms actually move the emitted bytes, and on which
+   * shapes.
+   *
+   * Booleans appear at both values rather than only the non-default one, so the report says in
+   * its own numbers which value is the default - the arm that moves nothing is it - instead of
+   * resting on a reader's memory of the DEFAULTS constructor. `lanesOverride` is absent because
+   * the oracle already emits every shape at two widths, and the two budgets appear at values
+   * that bracket the shipped ones rather than at every integer.
+   */
+  private def optionArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] = {
+    val booleans = Seq[(String, (VarkaEmitOptions, Boolean) => VarkaEmitOptions)](
+      "cse" -> (_.withCse(_)),
+      "shareChronoPrefix" -> (_.withShareChronoPrefix(_)),
+      "denseValidityOnce" -> (_.withDenseValidityOnce(_)),
+      "elideChronoMonth" -> (_.withElideChronoMonth(_)),
+      "neriSchneiderMonth" -> (_.withNeriSchneiderMonth(_)),
+      "julianMap" -> (_.withJulianMap(_)),
+      "guardDayProducers" -> (_.withGuardDayProducers(_)),
+      "validityByWidth" -> (_.withValidityByWidth(_)),
+      "validityOrFirst" -> (_.withValidityOrFirst(_)),
+      "validityByBitmap" -> (_.withValidityByBitmap(_)),
+      "checkIntOverflow" -> (_.withCheckIntOverflow(_)),
+      "guardUnderArm" -> (_.withGuardUnderArm(_)),
+      "shareWholeNodes" -> (_.withShareWholeNodes(_)),
+      "validityByWord" -> (_.withValidityByWord(_)),
+      "mulHiDivide" -> (_.withMulHiDivide(_)),
+      "narrowHalfSpecies" -> (_.withNarrowHalfSpecies(_)),
+      "misdescribeAdd" -> (_.withMisdescribeAdd(_)),
+      "misdescribeWordLiveness" -> (_.withMisdescribeWordLiveness(_)))
+    val flags = booleans.flatMap { case (name, set) =>
+      Seq(true, false).map(v => s"$name=$v" -> ((o: VarkaEmitOptions) => set(o, v)))
+    }
+    val division = VarkaEmitOptions.Division.values.toSeq.map { d =>
+      s"division=$d" -> ((o: VarkaEmitOptions) => o.withDivision(d))
+    }
+    val avx = Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 1, 2, 3).map { level =>
+      s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
+    }
+    val budgets = Seq(
+      "groupBudget=64" -> ((o: VarkaEmitOptions) => o.withGroupBudget(64)),
+      "groupBudget=800" -> ((o: VarkaEmitOptions) => o.withGroupBudget(800)),
+      "fusedCeiling=200" -> ((o: VarkaEmitOptions) => o.withFusedCeiling(200)),
+      "fusedCeiling=800" -> ((o: VarkaEmitOptions) => o.withFusedCeiling(800)))
+    flags ++ division ++ avx ++ budgets
+  }
+
+  /**
+   * What each option arm does to the emitted bytes, over the oracle's own shapes.
+   *
+   * Opt-in because it emits every shape once per arm and takes minutes rather than seconds.
+   * It asserts nothing about which arms move bytes - that is the finding, not a contract - and
+   * writes a report the task reads. What it does assert is that the audit saw every shape it
+   * meant to, so a report of "nothing moved" can never come from a loop that ran over an empty
+   * list.
+   *
+   *   VARKA_OPTION_AUDIT=true build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite -- -z audit'
+   */
+  test("the option audit: which options move the emitted bytes, and on which shapes") {
+    assume(sys.env.get("VARKA_OPTION_AUDIT").contains("true"),
+      "opt-in: set VARKA_OPTION_AUDIT=true")
+    val (rows, _) = coverage
+    val sampled = 200
+    val report = Seq.newBuilder[String]
+    report += "# Which emit options move the emitted bytes, over the oracle's own shapes."
+    report += "# Generated by VarkaEmittedBytesSuite's option audit (milestone 5 row 167)."
+    report += f"# ${rows.size} coverage rows and $sampled fuzz shapes per lane, at widths " +
+      widths.mkString(" and ") + " lanes."
+    report += ""
+    report += f"${"arm"}%-32s ${"coverage"}%10s ${"int fuzz"}%10s ${"long fuzz"}%10s"
+
+    type Hashes = (Seq[Seq[(String, String)]], Seq[Seq[(String, String)]],
+      Seq[Seq[(String, String)]])
+    def hashesFor(arm: VarkaEmitOptions => VarkaEmitOptions, lanes: Int): Hashes = {
+      val cover = rows.map(r => methodHashes(r.roots, r.numInputs, r.numLiterals, lanes, arm))
+      val ints = (0 until sampled).map { k =>
+        val sh = fuzzShape(k); methodHashes(sh.roots, sh.numInputs, sh.numLiterals, lanes, arm)
+      }
+      val longs = (0 until sampled).map { k =>
+        val sh = longFuzzShape(k)
+        methodHashes(sh.roots, sh.numInputs, sh.numLiterals, lanes, arm)
+      }
+      (cover, ints, longs)
+    }
+
+    val base = widths.map(w => w -> hashesFor(identity, w)).toMap
+    assert(base(widths.head)._1.nonEmpty && base(widths.head)._2.size == sampled,
+      "the audit emitted no shapes; a report from this run would mean nothing")
+
+    optionArms.foreach { case (name, arm) =>
+      var cover, ints, longs = 0
+      // An arm is allowed to make emission fail, and two of them exist for exactly that: the
+      // `misdescribe*` pair feeds the emitter a wrong descriptor or an inverted liveness
+      // verdict so that its own self-checks can be shown to fire. An inventory records that
+      // outcome; it must not be stopped by it, or every arm after the first fault injector
+      // goes unmeasured.
+      val raised = scala.util.Try {
+        widths.foreach { w =>
+          val (bc, bi, bl) = base(w)
+          val (ac, ai, al) = hashesFor(arm, w)
+          cover += bc.zip(ac).count { case (b, a) => b != a }
+          ints += bi.zip(ai).count { case (b, a) => b != a }
+          longs += bl.zip(al).count { case (b, a) => b != a }
+        }
+      }.failed.toOption
+      val line = raised match {
+        case Some(e) =>
+          f"$name%-32s ${"raises"}%10s ${e.getClass.getSimpleName}%s: " +
+            Option(e.getMessage).getOrElse("").take(70)
+        case None => f"$name%-32s $cover%10d $ints%10d $longs%10d"
+      }
+      report += line
+      // scalastyle:off println
+      println("option audit  " + line)
+      // scalastyle:on println
+    }
+    val out = new java.io.File("target/varka-option-audit.txt")
+    Option(out.getParentFile).foreach(_.mkdirs())
+    java.nio.file.Files.write(out.toPath,
+      (report.result().mkString("\n") + "\n").getBytes(StandardCharsets.UTF_8))
+    // scalastyle:off println
+    println(s"option audit written to ${out.getAbsolutePath}")
+    // scalastyle:on println
+  }
 }
+
