@@ -50,6 +50,11 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeInterval
  * line-map entries. With
  * `--rounds N` the kernel is also loaded and run N times over synthetic data, which is what
  * lets the wrapper's `--asm` get C2's standard compilation of the loop method printed.
+ * `--rows N` sets the batch length (1024 by default). A length that is not a multiple of the
+ * lane count gives every batch a tail, so the epilogue does vector work rather than returning
+ * at once, which is the only way a probe can see what the tail costs. The time of the second
+ * half of the rounds is reported, after tiering has had the first half to settle; it is one
+ * run in one fork, a probe's reading and not a benchmark's.
  *
  * Options take the record's own `with*` methods by name (`--options cse=false,groupBudget=24`),
  * found by reflection so a new option needs nothing here.
@@ -75,6 +80,7 @@ object VarkaEmitDump {
     var columns = defaultColumns
     var optionSpec = ""
     var rounds = 0
+    var rows = 1024
     var nulls = 0
     var table = false
     var variants = Vector.empty[String]
@@ -84,6 +90,7 @@ object VarkaEmitDump {
         case "--columns" => columns = args(i + 1); i += 2
         case "--options" => optionSpec = args(i + 1); i += 2
         case "--rounds" => rounds = args(i + 1).toInt; i += 2
+        case "--rows" => rows = args(i + 1).toInt; i += 2
         case "--nulls" => nulls = args(i + 1).toInt; i += 2
         case "--table" => table = true; i += 1
         case "--variant" => variants :+= args(i + 1); i += 2
@@ -93,7 +100,7 @@ object VarkaEmitDump {
     if (exprs.isEmpty) {
       // scalastyle:off println
       System.err.println("usage: VarkaEmitDump <sql expression>... " +
-        "[--columns d:date,i:int] [--options cse=false,...] [--rounds N] [--nulls N]")
+        "[--columns d:date,i:int] [--options cse=false,...] [--rounds N] [--rows N] [--nulls N]")
       // scalastyle:on println
       System.exit(2)
     }
@@ -170,7 +177,7 @@ object VarkaEmitDump {
     }
 
     if (rounds > 0) {
-      runHot(bytes, fused, fused.inputOrdinals.map(childOutput), rounds, nulls)
+      runHot(bytes, fused, fused.inputOrdinals.map(childOutput), rounds, nulls, rows)
     }
   }
 
@@ -314,7 +321,7 @@ object VarkaEmitDump {
    *  `-XX:+PrintCompilation` run of the task 70 review needed. */
   private def runHot(bytes: Array[Byte],
       fused: org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection,
-      inputs: Seq[Attribute], rounds: Int, nulls: Int): Unit = {
+      inputs: Seq[Attribute], rounds: Int, nulls: Int, rows: Int): Unit = {
     if (inputs.exists(a => a.dataType == ShortType || a.dataType == ByteType)) {
       report("(--rounds skipped: synthetic data is int32 only, and a short or byte column is read)")
       return
@@ -324,7 +331,6 @@ object VarkaEmitDump {
     val literals = fused.literals.toArray
     val long = fused.lane == VarkaVectorIR.LaneType.LONG
     val inputBytes = if (long) 8L else 4L
-    val rows = 1024
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
     loader.defineGeneratedClass(className, bytes)
     val kernel = loader.loadClass(className).getConstructor().newInstance()
@@ -361,7 +367,11 @@ object VarkaEmitDump {
       val dstValidity = Array.fill(outputs)(buffer((rows + 7) / 8L).address())
       val longArgs = fused.longLiterals.toArray
       var status = 0
-      for (_ <- 0 until rounds) {
+      // The second half of the rounds is timed, so the figure is after tiering has had the
+      // first half to settle. It is a probe's reading, not a benchmark's: one run, one fork.
+      var started = 0L
+      for (round <- 0 until rounds) {
+        if (round == rounds / 2) started = System.nanoTime()
         status |= (if (long) {
           kernel.run(src.map(_.address()), Array.fill(numInputs)(validity.address()),
             Array.fill(numInputs)(nulls), dst, dstValidity, literals, longArgs, rows)
@@ -370,7 +380,10 @@ object VarkaEmitDump {
             Array.fill(numInputs)(nulls), dst, dstValidity, literals, rows)
         })
       }
-      report(s"ran $rounds rounds of $rows rows, $nulls null per input; status $status")
+      val timed = rounds - rounds / 2
+      val perRound = (System.nanoTime() - started).toDouble / math.max(1, timed)
+      report(s"ran $rounds rounds of $rows rows, $nulls null per input; status $status; " +
+        f"second half $perRound%.0f ns a round")
     } finally {
       arena.close()
     }

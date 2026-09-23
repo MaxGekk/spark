@@ -136,9 +136,107 @@ describes is a register-pressure limit, which correlates with bytes on the
 family it was measured on and not on this one. It is recorded here rather than
 acted on: it is one more place a byte figure stood in for something else.
 
+*Correction, 23 September 2026, from 2.6.5 below: this section is wrong. The
+tier-3 lines it read were C1's attempts; the same log, read without truncating
+the line, follows each of the 3294- to 3964-byte loop methods with `COMPILE
+SKIPPED: out of virtual registers in LIR generator`, while the 1536-byte one
+compiles. The javadoc's figure holds for this family as well.*
+
 **What the check would have rejected.** The premise that this task fixes a rare
 67KB failure reached only by fuzzing volume. It fixes a common, silent
 interpretation cliff at 13 outputs, and the rare failure is its far end.
+
+### 2.6 The open questions, answered before any code
+
+Reviewing this plan raised nine questions; the ones that could change the
+design were answered from the tools and the JVM before a line of emitter code.
+Three of the answers change 3.1, and one of them corrects 2.5.
+
+**2.6.1 Nothing Varka ships crosses 8000 bytes today.** Every shape the bytes
+oracle pins, emitted at both widths with each method's code length read through
+`VarkaEmitterTestSupport.codeSize`:
+
+| corpus | shapes | largest loop method | largest epilogue | any method over 8000 |
+| :--- | ---: | ---: | ---: | ---: |
+| the coverage table | 92 | 1288 | 1321 | 0 |
+| the int fuzz sequence | 10000 | 5021 | 5731 | 0 |
+| the long fuzz sequence | 10000 | 1486 | 1549 | 0 |
+
+So there is no shipped shape running interpreted, and no single output the
+regroup could not split. It also means **the fuzzer cannot find this cliff**:
+its grammar draws kernels of one to three roots and never approaches the size
+where it happens, which is why the 67KB tree took 35 million iterations. The
+cliff is reached by many heavy outputs in one projection, which is a query
+shape rather than a fuzz shape - task 172's realistic query is where it lives,
+and task 179's standing fuzz job needs a wide mode to see it at all.
+
+**2.6.2 Every group method sets up every output, so splitting a group cannot
+shrink it.** `javap` of the 16- and 60-output classes: `loopMasked0` holds the
+same five outputs and the same 313 `IntVector` calls in both, and at 60 it has
+exactly 88 more `laload` and 88 more `invokestatic` (two
+`VarkaVectorSupport.ofAddress` calls for each of 44 more outputs), 44 more
+`iaload`/`istore` pairs (their literals), and 144 `aload_w` and 77 `astore_w`
+that were not there before - past 255 local slots every load and store takes a
+`wide` prefix. The source is `VarkaBodyEmitter`'s prologue,
+`for (int o = 0; o < numOutputs; o++)`, run in every body mode: the driver, each
+loop group and the epilogue materialize the destination segments of every
+output in the kernel. That is the growth 2.2 saw with the op count fixed, and it
+means a group's size has a term that scales with the whole kernel. **3.1's
+regroup step would not converge** on a large kernel without first making each
+group set up only what it writes.
+
+**2.6.3 The early return has to stay in the epilogue.** At four outputs over
+1024-row batches - sixteen lanes, so no batch ever has a tail - the epilogue was
+compiled at tier 4 (2.3). It warmed up entirely on calls that returned before
+any vector work. Moving the return into the driver, as 3.1 proposed, would make
+it warm only on ragged batches, and a cached scan has one of those per
+partition; the method would stay interpreted exactly where it is rarely needed
+and then, when needed, be slow.
+
+**2.6.4 When a kernel sees a ragged batch.** Both
+`spark.sql.inMemoryColumnarStorage.batchSize` and the Arrow cache's
+`spark.sql.execution.arrow.maxRecordsPerBatch` default to 10000, which divides
+by every lane count from two to sixteen, so a cached scan is ragged once per
+partition. After a Varka filter it is the reverse: `VarkaFilterExec` compacts
+the selected rows into a fresh batch, so a Varka projection stacked on it sees a
+tail on nearly every batch. `emitEpilogue`'s comment gives the default as 4096;
+the number is wrong and the conclusion survives it, and the code task corrects
+the comment.
+
+**2.6.5 There are three thresholds, not one.** Read from `-XX:+PrintCompilation`
+in full rather than field by field:
+
+| method size | what the JIT does |
+| :--- | :--- |
+| up to about 1900 bytes | C1 compiles it, C2 later |
+| about 1900 to 8000 | C1 refuses ("out of virtual registers in LIR") and it is interpreted until C2 lands |
+| over 8000 | never compiled, at any tier |
+
+The middle band is harmless for a loop method, whose backedges bring C2 in
+quickly, and not for an epilogue, which has no loop and reaches C2 only by
+invocation count - `Tier4InvocationThreshold` is 5000 on this JDK.
+
+**2.6.6 How big the cliff is.** A scratch probe of the dump tool - one run in
+one fork, run long enough that the timed half comes after tiering, and *not a
+result*: the benchmark of section 6 commits the numbers - put a ragged batch at
+about three times the cost of an even one at 16 outputs, permanently, and within
+a percent of it at 12 once C2 had landed; at 12 the same probe, stopped earlier,
+read about twice, which is the warmup of 2.6.5. At four outputs the tail cost a
+few percent. So the cliff is real and permanent above 8000, and prediction 1's
+"more than an order of magnitude" is likely too strong; it stays as registered
+and the benchmark scores it.
+
+**2.6.7 to 2.6.9.** A method's code length is readable today:
+`VarkaEmitterTestSupport.codeSize` parses the class through the Class-File API,
+so 3.1's measurement has a tested reader to follow. Bytecode size is the same at
+every width to within a byte (2.6.1's two widths), so the cliff is
+width-independent even though its cost is not. And OpenJ9, Graal and a user
+running `-XX:-DontCompileHugeMethods` behave differently; that is a sentence for
+`docs/sql-varka.md`, not a design input.
+
+**What the dump tool gained.** `VarkaEmitDump` takes `--rows N` (1024 by
+default) and reports the time of the second half of its rounds, which is what
+2.6.6 and the ragged-batch half of 2.6.3 needed.
 
 ## 3. The design
 
@@ -175,6 +273,19 @@ method is built - so the budget reads it rather than estimating it.
 All of it is behind a `VarkaEmitOptions` switch, `methodByteBudget` (0 is
 today's form, kept as the live reference under every test), and the default
 flips in the last commit on 6.1's rule.
+
+*Corrections, 23 September 2026, from 2.6. Step 1's early return does **not**
+move into the driver: it stays inside each `epilogue<g>`, which is how the
+epilogue warms up (2.6.3). A step comes **before** step 1: each group's methods
+materialize only the destination segments and literals of the outputs that
+group writes, so a group's size stops carrying a term that scales with the
+whole kernel (2.6.2). Without it, step 2's regroup cannot converge; with it, the
+split is what makes a method smaller. That step moves the bytes of every
+multi-group kernel, so it is measured on its own before the epilogue changes.
+And the warmup of 2.6.5 is a separate question from the 8000-byte limit: below
+it an epilogue still waits for C2 by invocation count. Whether to fold the
+masked tail into the loop method - which has backedges - or accept the warmup is
+decided by 6's measurement rather than here.*
 
 ### 3.2 What is deliberately unchanged
 
@@ -219,8 +330,8 @@ every rung reads at most 8000 bytes in `dev/varka_emit.sh`. Asserted by 5.
   even batch, a ragged one, and one shorter than a lane group.
 * **The JVM compiles every method.** A forked probe in the style of
   `VarkaAssemblySuite` runs the 16-output shape under `-XX:+PrintCompilation`
-  and asserts every `loop` and `epilogue` method reaches tier 4 under the switch
-  - the property this task exists for, asserted from the JVM rather than
+  and asserts every `loop` and `epilogue` method reaches tier 4 under the
+  switch - the property this task exists for, asserted from the JVM rather than
   inferred from a size. Under the legacy form it asserts the opposite, which is
   2.3 pinned.
 * **A shape at each limit declines with its reason and does not throw**,
@@ -259,6 +370,16 @@ improvement (the project's rule for a benchmark that does not exist yet).
 4. **The loops do not move.** Loop methods are unchanged by the switch, so on
    even batches every rung's rate is within band under both forms.
 
+5. **Below 8000 bytes, the ragged cost is warmup only.** At 12 outputs the
+   ragged penalty is visible in the first thousands of batches and gone once
+   C2 compiles the epilogue; above 8000 it never goes. *Added 23 September 2026
+   after 2.6.6, and so not registered before a run in the strict sense: a probe
+   had already read it. It is kept apart from 1 to 4 for that reason.*
+
+*Note on prediction 1, 23 September 2026: 2.6.6's probe suggests about three
+times per batch rather than more than an order of magnitude. The prediction
+stands as registered and the benchmark scores it.*
+
 **The rule for the default:** flip when the per-group form is nowhere worse than
 the single form beyond its band, at any rung, length or width.
 
@@ -290,6 +411,9 @@ Each commit green on its own.
    own pull request.
 3. The measurement in `VarkaEmitBudget` and `dev/varka_emit.sh` reporting the
    constant pool beside bytes. No behaviour change; the oracle unmoved.
+3a. Each group's methods materialize only their own outputs' segments and
+   literals (2.6.2), behind the switch, with its own byte ladder: the first
+   change that makes a group method smaller when it is split.
 4. The per-group epilogue behind `methodByteBudget`, with 5's tests and the JIT
    probe.
 5. The regroup and the declines, with the shape that reaches the class-file cap.
