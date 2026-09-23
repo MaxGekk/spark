@@ -31,7 +31,7 @@ rows marked **Scoped** or **Planned** are open, rows marked **Done** carry a
 pointer to their outcome, and each row names what has to be true before the
 task starts and what counts as done. Every task has, or gets, its own
 `PLAN_TASK_<n>.md`. The next milestone's scope catalogue is
-[`SCOPE_MILESTONE_6.md`](sql/varka/plans/SCOPE_MILESTONE_6.md), and design
+[`SCOPE_MILESTONE_7.md`](sql/varka/plans/SCOPE_MILESTONE_7.md), and design
 input there is as welcome as code.
 
 Before writing code for a task, open a GitHub issue with the "Varka: take a

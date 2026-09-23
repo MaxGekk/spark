@@ -1,4 +1,26 @@
-# Varka Milestone 6 Scope: coverage
+# Varka Milestone 7 Scope: coverage
+
+*Renumbered from milestone 6 on 23 September 2026, when milestone 6 became the
+compiler's foundation and got a task plan of its own (`PLAN_MILESTONE_6.md`).
+The house rule is that the furthest-out scope catalogue moves forward when a
+milestone's own plan becomes a task plan, and this is that move; the file keeps
+its item numbers, so every `item <n>` citation resolves unchanged.*
+
+**What this file now is.** The coverage spine it argues for - decimal lanes,
+decimal arithmetic, aggregate wiring, grouped aggregation, string keys, and a
+first end-to-end TPC-H q6 number - is milestone 7's, and section 5's ordering is
+milestone 7's ordering. Nothing here is withdrawn.
+
+***Read "milestone 6" below as "this milestone", except where a sentence is
+dated.*** The text was written when this catalogue was milestone 6's and it is
+not rewritten, because the project's rule is that a correction is added rather
+than the record edited. A dated statement such as "moved here from milestone 5
+on 21 September 2026" is a fact about the day it happened, and means the
+milestone this file then was.
+
+**Twelve items are not milestone 7's at all.** Items 8, 15 (task 87), 38, 39
+(task 148), 40, 41, 42, 43, 44, 45, 46 and 49 were taken by
+`PLAN_MILESTONE_6.md`, which names each with the number it has here.
 
 *Renumbered from milestone 5 on 4 September 2026, when milestone 4 was
 re-scoped to the date family and the emitter and the other lanes became a
