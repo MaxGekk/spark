@@ -12,26 +12,40 @@ one dense paragraph, a link-preview card, no image. It reached about 15.5k
 impressions and 81 reactions, and converted roughly 150 clicks into 16 stars -
 a healthy star rate among visitors and about a 1% click-through. The reach was
 never the problem. So this one is a trailer, on the owner's instruction kept to
-performance alone: one allocation, two rates, one ratio, and the argument at
+performance alone and written to sound like a person rather than a release
+note: one allocation, two rates, one ratio, an invitation, and the argument at
 the other end of the link.
 
 ## The draft
 
-> Spark computes `hour(t)` by building a `LocalTime`. Per row.
+*Written in the first person and meant to sound like one, because a trailer
+that reads as a specification gives nobody a reason to follow it. The numbers
+are unchanged; only the voice is.*
+
+> Spark builds a `LocalTime` object every time it reads the hour out of a TIME
+> value. One object, per row.
 >
-> Four divisions and an allocation, to read one field back out: 16.3
-> nanoseconds a row over 500 million cached rows.
+> It is the right call for a row-at-a-time engine - `java.time` is the proper
+> library and `getHour()` is the proper method. It just costs four divisions
+> and an allocation to get one number back out. On my laptop that is 16.3
+> nanoseconds a row.
 >
-> Varka is a research fork of Apache Spark that compiles a whole projection
-> into one vector loop - bytecode emitted with JDK 25's Class-File API, run
-> over Arrow columns through the Vector API and Panama. The same `hour(t)`
-> becomes one 64-bit division over eight lanes at a time: 1.0 nanosecond a row,
-> and no object.
+> I have been building Varka, a research fork of Apache Spark that compiles a
+> whole projection into a single vector loop: bytecode emitted with JDK 25's
+> Class-File API, running over Arrow columns through the Vector API and
+> Panama. The same `hour(t)` turns into one 64-bit division, eight rows at a
+> time. 1.0 nanosecond a row, and nothing allocated.
 >
-> On chained TIME expressions, three to five operations deep, it runs 31.8x
-> faster than stock Spark 4.2 on a machine with a genuine 512-bit datapath -
-> measured on GitHub Actions by a workflow anyone can dispatch, with the CPU
-> and the datapath probe's own reading written into the results file.
+> Chain a few TIME expressions together the way a real query does, and it comes
+> out 31.8x faster than stock Spark 4.2 on a machine with a true 512-bit
+> datapath. That run happened on GitHub Actions, so you can dispatch the same
+> workflow and check it yourself - the CPU and the datapath probe's own reading
+> are written into the results file.
+>
+> I have written the whole thing up: how the loop is built, where every number
+> comes from, and a dozen hand-drawn diagrams (drawn, if I am honest, by a
+> script that pretends to be hand-drawn). If this is your kind of thing, I
+> think you will enjoy it.
 >
 > https://vecbricks.github.io/eight-rows-per-instruction/
 
