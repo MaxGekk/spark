@@ -312,13 +312,80 @@ date chains were measured this way - **9.4x to 14.2x against stock, median
 
 ## 8. The numbers
 
-*To write from the committed files: the `TIME` chains on the full-width runner
-as the headline (task 164), the surface as the laptop coverage table with the
-honest split between kernel rate and row-engine cost (`PLAN_TASK_155.md`), and
-the AVX2 arm (task 121). It closes with a short paragraph - not a section - on
-what still declines, read from `coverage.json` on the day, naming tasks 28,
-103 and 104; the reproduction recipe stays in the README, which the post links
-to.*
+**The headline is the chains, on the machine that earns the word full-width.**
+Twelve chained `TIME` expressions, three to five operations deep, over a
+hundred million cached rows on one core of an AMD EPYC 9V45 whose measuring job
+proved its own datapath at 1.97. Varka runs them at **3.7 to 5.5 nanoseconds a
+row** - 182 to 273 million rows a second - against stock Spark 4.2.0's 88 to
+197 on the same machine and the same rows.
+
+![What a chained TIME expression costs per row](figures/svg/fig10-the-chains.svg)
+
+*Figure 10. The median of the twelve, on the full-width machine and on one
+without AVX-512. The scale differs between the panels; the machines are 1.8x
+apart and Varka is 14.6x.*
+
+| | against stock 4.2.0 (JDK 25) | against the fork, engine off |
+|---|---|---|
+| twelve `TIME` chains, wall time | 19.6x - 46.9x, median **31.8x** | 17.5x - 36.4x, median 25.9x |
+| the same, executor time | 21.0x - 53.2x, median **34.9x** | - |
+
+Read the executor column first. The job's fixed cost - scheduling a task,
+collecting its result - is about 36 milliseconds on a cloud runner, and Varka
+does only 0.42 seconds of work per iteration at this row count, so 7% to 9% of
+the wall time is the harness. That is over this project's own 5% ceiling, and
+the bound was lifted to 10% for this benchmark deliberately, because no row
+count both fits a runner's 15 GiB and satisfies 5%: a `TIME` row is 46 bytes,
+and the benchmark has simply been outrun by the engine it exists to measure.
+The direction matters and is the reason it is publishable: the constant
+inflates *every* arm alike, so it drags the ratio down. The wall figures above
+are the conservative ones.
+
+**What the width is worth, and what the lowering is worth.** The same twelve
+entries ran on an AMD EPYC 7763 - Zen 3, `avx avx2` only - at the same row
+count and commit. Between the two machines the three scalar arms gain 1.64x,
+1.76x and 1.80x: that is the machine generation, and it agrees with what
+milestone 4 measured on the date chains. Varka gains **14.6x**. Divide the
+machine out and **8.3x is the kernel's**, which decomposes into two parts that
+multiply: the lane count doubles, four 64-bit lanes to eight, and the division
+lowering changes, because a machine without AVX-512 falls back to the
+fourteen-operation magic form of section 5 where one with it emits the
+three-operation conversion form. Two times four-point-seven is 9.4 against 8.3
+measured.
+
+So on this workload **the lowering matters more than the width** - and that is
+the opposite of what the same experiment said about dates, where the width was
+worth 1.14x once the machine was divided out. The two are consistent once you
+look at what each kernel is made of. A date chain is a dependency chain of
+cheap operations and waits on latency; a `TIME` chain *is* its divisions, and
+what changes between the machines is how many instructions a division takes.
+Neither number generalises to the other's shape, and a post that quoted one as
+"what SIMD is worth" would be wrong twice.
+
+**The single calls, which are the coverage table and not the headline.** On the
+development laptop - 256-bit datapath, so not a full-width machine - the
+fifteen `TIME` projections of the surface read 13.4x to 38.2x against stock,
+with `hour(t)` at 1041.4 against 61.3 million rows a second. Those larger
+ratios are mostly stock Spark's per-row machinery rather than Varka's
+arithmetic, which is why the chains are the number to carry away: the deeper
+the expression, the more of stock's overhead is amortised and the more of the
+ratio is real work. And one entry is worth quoting against the fork's own row
+engine rather than against 4.2.0: `t + dt` reads 52.3 million rows a second on
+master's row path against 4.2.0's 33.5, because upstream Spark improved it
+between the two releases. That difference is upstream's, not this engine's.
+
+**What still declines**, read from `coverage.json` rather than from memory.
+`bigint` arithmetic is not built, so `l + l2` falls back and a `bigint` column
+enters a fused chain only through a comparison, `greatest`, `least` or a
+conditional (task 104). Interval arithmetic is not built either, so
+`time_diff(..) + time_diff(..)` declines and `t - dt` declines with it, since
+Spark resolves that to `t + (-dt)` and the negation is not lowered (task 103).
+An extract narrows to an int only at an output root, so `hour(t)` may end a
+chain but `hour(t) + 1` does not fuse (task 28). And two decimal-valued
+functions decline by type: `second` with a fraction, and `time_to_seconds`.
+Everything else in the table fuses, each row proved by a differential test
+against the row engine, and anything that declines runs on stock Spark's path
+and returns the same answer.
 
 ---
 
