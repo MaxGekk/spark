@@ -43,6 +43,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [`dev/scalastyle` cannot parse an underscore-separated numeral before `->`](sql/varka/skills/build-and-environment.md#devscalastyle-cannot-parse-an-underscore-separated-numeral-before--)
 * [Python's 100-column rule is a convention here, not a check](sql/varka/skills/build-and-environment.md#pythons-100-column-rule-is-a-convention-here-not-a-check)
 * [A git hook's nested git commands act on the repository being committed to](sql/varka/skills/build-and-environment.md#a-git-hooks-nested-git-commands-act-on-the-repository-being-committed-to)
+* [The Maven build CI runs takes about fifteen minutes here, and it is the only place three failures appear](sql/varka/skills/build-and-environment.md#the-maven-build-ci-runs-takes-about-fifteen-minutes-here-and-it-is-the-only-place-three-failures-appear)
 
 #### [Calendar algorithms](sql/varka/skills/calendar-algorithms.md)
 * [Reading a paper into the repo](sql/varka/skills/calendar-algorithms.md#reading-a-paper-into-the-repo)
@@ -84,6 +85,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Check that the place a prediction blames actually exists](sql/varka/skills/testing-and-debugging.md#check-that-the-place-a-prediction-blames-actually-exists)
 * [The coverage suite compiles the analyzed form; the end-to-end suites run the optimized one](sql/varka/skills/testing-and-debugging.md#the-coverage-suite-compiles-the-analyzed-form-the-end-to-end-suites-run-the-optimized-one)
 * [A fuzz campaign is sixteen JVMs, not one sbt, and it re-finds what is already on the books](sql/varka/skills/testing-and-debugging.md#a-fuzz-campaign-is-sixteen-jvms-not-one-sbt-and-it-re-finds-what-is-already-on-the-books)
+* [`VarkaIrFuzzSuite` caps each test at twenty minutes, so a big `-Dvarka.fuzz.iterations` makes every JVM report failure](sql/varka/skills/testing-and-debugging.md#varkairfuzzsuite-caps-each-test-at-twenty-minutes-so-a-big--dvarkafuzziterations-makes-every-jvm-report-failure)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
 * [C2 Compile Latency Is the Wide-Vector-Loop Cliff (root cause, proven)](sql/varka/skills/the-jit.md#c2-compile-latency-is-the-wide-vector-loop-cliff-root-cause-proven)
