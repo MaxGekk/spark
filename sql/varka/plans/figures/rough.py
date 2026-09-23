@@ -26,14 +26,17 @@ FONT_URL = "https://github.com/google/fonts/raw/main/ofl/patrickhand/PatrickHand
 
 STROKE = "#1e1e1e"
 NOTE = "#6741d9"
+# The fills are drawn as thin diagonal strokes rather than solid areas, so a pale colour
+# reads as almost nothing on a page - these sit a few steps up the scale, bright enough to
+# carry the hatching while leaving near-black label text legible on top of it.
 PALETTE = dict(
-    blue="#a5d8ff",
-    green="#b2f2bb",
-    yellow="#ffec99",
-    red="#ffc9c9",
-    violet="#d0bfff",
-    orange="#ffd8a8",
-    grey="#e9ecef",
+    blue="#4dabf7",
+    green="#51cf66",
+    yellow="#ffd43b",
+    red="#ff8787",
+    violet="#9775fa",
+    orange="#ffa94d",
+    grey="#ced4da",
     white="#ffffff",
 )
 
@@ -109,7 +112,7 @@ class Rough:
                 )
 
     # -- fills -----------------------------------------------------------------------------
-    def _hachure(self, poly, fill, gap=6.0, angle=-41.0, width=1.1):
+    def _hachure(self, poly, fill, gap=4.2, angle=-41.0, width=1.5):
         """Parallel lines at `angle`, clipped to the convex polygon `poly`."""
         a = math.radians(angle)
         ux, uy = math.cos(a), math.sin(a)

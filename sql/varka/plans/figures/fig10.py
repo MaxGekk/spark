@@ -27,8 +27,8 @@ for i, (label, ns, fill) in enumerate(bars):
 r.note(
     230,
     360,
-    "34 times the work per row, and the row engine is\nnot the slow part of it:"
-    " the object it builds is",
+    "stock spends about 34 times as long on the same row,\nand most of that is"
+    " machinery rather than arithmetic",
     size=18,
 )
 
