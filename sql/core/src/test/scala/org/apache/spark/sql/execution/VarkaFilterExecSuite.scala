@@ -497,6 +497,54 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession {
     }
   }
 
+  test("a narrowing projection keeps the columnar path through the pre stage") {
+    // The bug row 145 was opened on: `SELECT i2 FROM t WHERE i > k` fuses nothing in its
+    // projection, so before this arm the only node that could narrow was the filter's to-row
+    // node, and a consumer that wanted batches was handed rows anyway. The pre stage now
+    // builds the same pair `columnarSibling` builds, so the plan stays columnar to the sink.
+    val child = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr))
+    withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
+      val plan = ProjectExec(Seq(intAttr), FilterExec(dLess10, child))
+      val rewritten = VarkaColumnarRule.preColumnarTransitions(plan)
+      assert(rewritten === VarkaProjectExec(Seq(intAttr), VarkaFilterExec(dLess10, child)),
+        s"expected a columnar narrowing pair, got:\n$rewritten")
+      assert(rewritten.supportsColumnar)
+      assert(rewritten.output.map(_.name) === Seq(intAttr.name))
+    }
+  }
+
+  test("a transition over that pair collapses back to the fused row node") {
+    // The other half of the arm above, and the reason it changes no row-consumer plan: where
+    // a to-row transition was inserted anyway, the pair becomes exactly the node a row
+    // consumer has always had - one that reads the selection bitmap at the row boundary
+    // rather than compacting first and projecting after.
+    val child = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr))
+    withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
+      val pair = VarkaProjectExec(Seq(intAttr), VarkaFilterExec(dLess10, child))
+      assert(VarkaColumnarRule.postColumnarTransitions(ColumnarToRowExec(pair)) ===
+        VarkaFilterColumnarToRowExec(dLess10, child, Some(Seq(intAttr))))
+    }
+  }
+
+  test("a projection that fuses keeps its own node, narrowing or not") {
+    // The ordering the two arms depend on. A projection with anything to fuse is matched by
+    // the eligibility arm first and must keep a kernel of its own; only a projection that
+    // fuses nothing reaches the narrowing arm. Asserted rather than left to the reader,
+    // because the arms are adjacent and a reordering would silently take a kernel away.
+    val child = TestColumnarBatchPlan(Nil, withShort)
+    withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
+      val computed = Seq(Alias(DateAdd(attrD, Literal(3)), "add")())
+      val pre = VarkaColumnarRule.preColumnarTransitions(
+        ProjectExec(computed, FilterExec(dLess10, child)))
+      assert(pre.isInstanceOf[VarkaProjectExec])
+      // and its transition is the projection's own fused node, not the filter's
+      val post = VarkaColumnarRule.postColumnarTransitions(
+        ColumnarToRowExec(pre.asInstanceOf[VarkaProjectExec]))
+      assert(post.isInstanceOf[VarkaColumnarToRowExec],
+        s"expected the projection's fused transition, got:\n$post")
+    }
+  }
+
   test("the absorbed projection travels to the columnar sibling") {
     // VarkaFusedTransition promises "the columnar-out node computing exactly what this fused
     // transition computes", and the cache serializer swaps one for the other when a cached

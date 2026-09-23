@@ -59,6 +59,12 @@ root="$(git rev-parse --show-toplevel)"; cd "$root"
 case "${1:-}" in -h|--help) usage 0 ;; esac
 [ "$#" -ge 2 ] || { usage; }
 module="$1"; klass="$2"; runs="${3:-3}"; shift 3 2>/dev/null || shift $#
+# The benchmark's source tree is named for the module, the sbt project is not: sql/core's
+# project is `sql`, and passing `core` through reaches Spark Core, where no Varka benchmark
+# class exists. dev/varka_bench_regen.sh does the same mapping; before it was here, this
+# script's own usage line - `core VarkaThroughputBenchmark` - could not run.
+src_module="$module"
+case "$module" in core|sql) module="sql" ;; esac
 narrow=0; band=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -72,7 +78,7 @@ done
 case "$klass" in
   *.*) fqcn="$klass"; klass="${klass##*.}" ;;
   *)
-    case "$module" in catalyst) src="sql/catalyst/src/test" ;; *) src="sql/core/src/test" ;; esac
+    case "$src_module" in catalyst) src="sql/catalyst/src/test" ;; *) src="sql/core/src/test" ;; esac
     file="$(find "$src" -name "$klass.scala" | head -1)"
     [ -n "$file" ] || { echo "no $klass.scala under $src" >&2; exit 2; }
     fqcn="$(sed -n 's/^package \(.*\)$/\1/p' "$file" | head -1).$klass" ;;

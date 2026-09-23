@@ -23,7 +23,7 @@ import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkExc
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, NamedExpression, SortOrder, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -157,6 +157,31 @@ private[sql] class VarkaProjectEvaluatorFactory(
       projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "Project",
       classDumpDirectory, varkaMetrics, emitUseAVX)
 
+    /**
+     * The input ordinals this projection is, when it only forwards columns and computes
+     * nothing: entry `i` of the output is `input.column(forwardedOrdinals(i))`.
+     *
+     * Such a projection compiles to no kernel - forwarding a column is not fusing it - so
+     * without this the per-batch dispatch would send every batch to the row-by-row fallback,
+     * allocating a batch and copying every value to produce columns the input already holds.
+     * `None` as soon as anything fuses, because then the kernel path forwards the bare
+     * entries itself alongside the ones it computes.
+     */
+    private val forwardedOrdinals: Option[Array[Int]] = {
+      val ordinalOf = childOutput.map(_.exprId).zipWithIndex.toMap
+      def ordinal(e: NamedExpression): Option[Int] = e match {
+        case a: Attribute => ordinalOf.get(a.exprId)
+        case Alias(a: Attribute, _) => ordinalOf.get(a.exprId)
+        case _ => None
+      }
+      if (kernels.partialPlan.isDefined || projectList.isEmpty) {
+        None
+      } else {
+        val ordinals = projectList.map(ordinal)
+        if (ordinals.forall(_.isDefined)) Some(ordinals.map(_.get).toArray) else None
+      }
+    }
+
     // The per-row projection behind the fallback, and the schema its rows are written back into.
     // Lazy: a task the kernels serve end to end never compiles it, so the Janino
     // compile is paid only by tasks that actually fall back.
@@ -206,14 +231,22 @@ private[sql] class VarkaProjectEvaluatorFactory(
 
     // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
     // (task-21 review, both passes) and routes every degradation to the fallback.
-    private def project(input: ColumnarBatch): ColumnarBatch = {
-      kernels.serveBatch(input) {
-        val batch = kernels.project(input)
+    private def project(input: ColumnarBatch): ColumnarBatch = forwardedOrdinals match {
+      // A selection needs no kernel and no Arrow check: whatever the input's columns are, the
+      // output is those same columns. It counts with the batches this node served rather than
+      // with the ones it refused, because nothing fell back.
+      case Some(ordinals) =>
+        val batch = kernels.forwardColumns(input, ordinals)
         varkaMetrics.varkaBatches.foreach(_ += 1)
         batch
-      } {
-        fallback(input)
-      }
+      case None =>
+        kernels.serveBatch(input) {
+          val batch = kernels.project(input)
+          varkaMetrics.varkaBatches.foreach(_ += 1)
+          batch
+        } {
+          fallback(input)
+        }
     }
 
     /**

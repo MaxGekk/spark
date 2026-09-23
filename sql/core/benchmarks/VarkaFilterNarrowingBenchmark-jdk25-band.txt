@@ -1,0 +1,23 @@
+Band for 10 cases: how far apart repeated runs of an unchanged file land.
+Written by dev/varka_bench_band.py. Read by dev/varka_bench_diff.py --band, which
+uses a case's tier to decide whether its move in a regeneration means anything.
+
+tier 0 <= 3%   1 <= 10%   2 <= 25%   3 not readable from a diff at all
+
+runs:    10
+commit:  fc0e1874154
+date:    2026-09-23T08:46:49+00:00
+jdk:     openjdk version "25.0.4.1" 2026-08-18
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+
+tier   spread occ  table | case
+2    19.03   1  over 20000000 Arrow-cached rows | A one column, filtered and output (no narrowing)
+3    30.60   1  over 20000000 Arrow-cached rows | A through toRdd (row path forced)
+0     2.32   1  over 20000000 Arrow-cached rows | B through toRdd (row path forced)
+1     4.31   1  over 20000000 Arrow-cached rows | B two columns, the other output (narrowing)
+0     1.50   1  over 20000000 Arrow-cached rows | C through toRdd (row path forced)
+1     7.26   1  over 20000000 Arrow-cached rows | C two columns, both output (no narrowing)
+1     4.10   1  over 20000000 Arrow-cached rows | D two columns, both in the predicate (narrowing)
+1     5.15   1  over 20000000 Arrow-cached rows | E one column, no output (count)
+2    10.43   1  over 20000000 Arrow-cached rows | F A at about 1% selectivity
+2    12.68   1  over 20000000 Arrow-cached rows | G B at about 1% selectivity
