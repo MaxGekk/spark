@@ -866,3 +866,51 @@ Two rows for the milestone, opened from here:
   the reading task 89 warned a reader would take as "the division is missing".
 
 `make_time` over a decimal column stays with milestone 6's item 1.
+
+## 10. The row closes, 23 September 2026
+
+Milestone row 102 asked for `TIME` expressions over the long lane. Everything
+it claims is built, and everything it does not claim has a home that is not
+this row. Written as the closing rather than as a fourth outcome section,
+because what is left to say is where the pieces went.
+
+**What the row delivers.** Groups A and B: `t1 - t2`, `time_diff` and
+`time_trunc` as a subtraction and a constant division whose bound is the type's,
+and `t + dt` as a wrapping add under two range guards through a new
+`GuardedRange` node - with the precision step proved in code rather than
+emitted, and a sum that crosses midnight raising Spark's own
+`DATETIME_OVERFLOW` under Varka rather than returning a wrapped time. Group C:
+`hour`, `minute` and `second` as long-lane divisions under a `NarrowLane` root,
+an int output computed in the 64-bit lane and narrowed at the kernel's store,
+admitted at an output root only. Every second of the day agrees with the row
+engine through both consumers, at both vector widths.
+
+**What group C's planning established beyond its own shipping.** The extracts
+did not need task 28's bi-lane loop, which 2.5 had assumed: the computation
+stays in the long lane to the last instruction and only the store narrows, and
+a store is per root. `BoundedDivide` was built and priced beside it (8.7, 8.8)
+and is the int lane's bounded division family alongside task 149's
+multiply-high. It is the hand-written rate for one field at every width, and
+short of it for the three-field shape while cache-resident - 18% under at 512
+bits in L3 - which is milestone row 163's finding rather than this row's, and
+moved to `SCOPE_MILESTONE_6.md` item 39 with it. Nothing in the compiler builds
+`BoundedDivide` yet: it waits for a seconds-of-day column, which is route B or
+route C below.
+
+**Where everything not shipped here lives.** None of it is unhomed, and none of
+it is a gap in what the milestone claims:
+
+| piece | where | why not here |
+|---|---|---|
+| the split leaf and the cache encoding (routes B and C, 8.4) | `SCOPE_MILESTONE_6.md` item 11 | a second physical representation of a `TIME` column is the representation question, and item 11 owns it; 8.2's numbers are its case |
+| `second` with its fraction, `time_to_seconds` (the widening store) | row 157, moved to item 39 | a decimal output is sixteen bytes from an eight-byte lane - a store problem, not a division one |
+| `make_time` | item 1, with the decimal lanes | a constructor with a decimal operand; it needs the representation before it needs a kernel |
+| the five `time_to_*`/`time_from_*` conversions | row 158, **done** 20 September 2026 | shipped as group E |
+| the emitted three-field kernel's 10% to 20% gap in cache | row 163, moved to item 39 | an emitter finding on the int lane, recorded rather than fixed |
+
+**What the coverage table says**, which is the honest summary and the one the
+post used: the `TIME` expressions this milestone claims are the comparisons,
+the selections, the truncations, the differences, interval addition and the
+three extracts. `to_time`, decimal seconds and string formatting are declined
+by name, with their reason, which group E made them do rather than letting them
+read as "not lowered yet".
