@@ -387,6 +387,27 @@ Everything else in the table fuses, each row proved by a differential test
 against the row engine, and anything that declines runs on stock Spark's path
 and returns the same answer.
 
+**Run it yourself.** None of this is worth much if you have to take it on
+trust, so every part of the measurement is in the repository and the README's
+[reproducing it](https://github.com/vecbricks/varka#reproducing-it) section is
+the recipe. The benchmark is a standalone jar that runs on any Spark 4.x
+distribution and depends on no part of the fork, so the same jar measures the
+fork and the releases it is compared against; the expression lists are data
+you can read in a minute
+([`TimeChains.java`](https://github.com/vecbricks/varka/blob/master/sql/varka/bench/src/main/java/org/apache/spark/sql/varka/bench/TimeChains.java)
+is the twelve chains above, each with the emitter op count that earns it its
+place); and every number quoted here is a line in a
+[committed results file](https://github.com/vecbricks/varka/tree/master/sql/varka/bench/benchmarks)
+that carries the CPU, the JDK, the row count, the cache residency and the
+datapath probe's own reading.
+
+The 512-bit figures need a machine most people do not have, so the workflow
+that produced them runs on GitHub-hosted runners and anyone with a fork can
+dispatch it - the README gives the command and says what to expect, including
+that about one runner in eighteen qualifies and that a dispatch landing on
+anything narrower aborts in a minute rather than quietly measuring the wrong
+machine.
+
 ---
 
 ## The LinkedIn post

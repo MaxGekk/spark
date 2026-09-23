@@ -255,6 +255,52 @@ dev/varka_bench_diff.py sql/varka/bench/benchmarks/DateChain-spark-4.2.0-jdk25-r
                         sql/varka/bench/benchmarks/DateChain-varka-jdk25-results.txt
 ```
 
+#### The 512-bit numbers, which need a machine you probably do not have
+
+The chain tables above were measured on a full-width 512-bit machine, and most
+hardware - including every laptop we have measured - executes AVX-512
+instructions on a 256-bit datapath instead, at half the throughput. Rather than
+ask you to own the right machine, the workflow that produced those files runs
+on GitHub-hosted runners, and anyone with a fork can dispatch it:
+
+```bash
+gh workflow run varka-surface-benchmark.yml --repo <your-fork>/varka --ref master \
+  -f stop-after=run -f require-datapath=512 -f benchmark=timechains \
+  -f rows=100000000 -f partitions=1 -f driver-memory=12g \
+  -f max-fixed-share=10 -f create-commit=false
+```
+
+Three things to know before spending runner minutes on it. The gate runs the
+datapath probe **inside the measuring job**, on the VM that will do the
+measuring, so a dispatch that lands on a 256-bit machine aborts in about a
+minute rather than producing a number under the wrong label. That is what
+happens most of the time: roughly one GitHub runner in eighteen has a genuinely
+full-width datapath, so a batch of ten to fifteen dispatches is the unit of
+work, and the `Measure` job's `Run the surface` step having started is what
+tells you one got through. And a `stop-after=build` dispatch first, from any
+runner, warms the jar cache for the commit so the lucky machine spends its hour
+measuring rather than building.
+
+The results arrive as a run artifact whose files carry the CPU, the JDK, the
+kernel, the row count, the cache residency, `MaxVectorSize` and the probe's own
+reading, so the machine can be checked against the claim without taking anyone's
+word for it.
+
+#### Where the benchmarks live
+
+| what | where |
+| :--- | :--- |
+| the expressions, one list per benchmark | [`Surface.java`](sql/varka/bench/src/main/java/org/apache/spark/sql/varka/bench/Surface.java), [`Chains.java`](sql/varka/bench/src/main/java/org/apache/spark/sql/varka/bench/Chains.java), [`Times.java`](sql/varka/bench/src/main/java/org/apache/spark/sql/varka/bench/Times.java), [`TimeChains.java`](sql/varka/bench/src/main/java/org/apache/spark/sql/varka/bench/TimeChains.java) |
+| the driver: tables, arms, guards, provenance | [`DateSurfaceBenchmark.java`](sql/varka/bench/src/main/java/org/apache/spark/sql/varka/bench/DateSurfaceBenchmark.java) |
+| the shell entry point | [`dev/varka_bench_surface.sh`](dev/varka_bench_surface.sh) |
+| the workflow that runs it on GitHub | [`.github/workflows/varka-surface-benchmark.yml`](.github/workflows/varka-surface-benchmark.yml) |
+| every committed result | [`sql/varka/bench/benchmarks/`](sql/varka/bench/benchmarks) |
+
+Each entry list is data with a comment saying why each expression is in it -
+`TimeChains` records the emitter op count that earns every entry its place, and
+a unit test holds the list to it - so adding an expression is one line and
+removing one is visible in review.
+
 ### Micro-benchmarks
 
 Narrower questions - codegen cost, cold start, `CASE WHEN` predictability, the
