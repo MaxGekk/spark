@@ -207,10 +207,27 @@ class Rough:
             # Leading spaces carry indentation in code samples; SVG collapses them otherwise.
             lead = len(ln) - len(ln.lstrip(" "))
             ln = "&#160;" * lead + ln[lead:]
+            # A halo, painted under the glyphs: the fills are hachure lines and a label
+            # sitting on one competes with them stroke for stroke. Drawing the text once in
+            # the figure's own background colour, thickened, and again in its own colour on
+            # top clears just enough room around each glyph to read it, without a plate that
+            # would box the label in.
             self.parts.append(
                 '<text x="%.1f" y="%.1f" font-family="%s" font-size="%d" text-anchor="%s" '
-                'fill="%s" dominant-baseline="middle"%s>%s</text>'
-                % (x, y0 + i * lh, FONT_NAME, size, anchor, color, rot, ln)
+                'fill="%s" stroke="%s" stroke-width="%.1f" stroke-linejoin="round" '
+                'paint-order="stroke fill" dominant-baseline="middle"%s>%s</text>'
+                % (
+                    x,
+                    y0 + i * lh,
+                    FONT_NAME,
+                    size,
+                    anchor,
+                    color,
+                    self.bg,
+                    max(3.0, size * 0.28),
+                    rot,
+                    ln,
+                )
             )
 
     def note(self, x, y, s, size=18, color=NOTE):

@@ -407,10 +407,3 @@ dispatch it - the README gives the command and says what to expect, including
 that about one runner in eighteen qualifies and that a dispatch landing on
 anything narrower aborts in a minute rather than quietly measuring the wrong
 machine.
-
----
-
-## The LinkedIn post
-
-*Drafted last, from the sections above: one idea, one picture, one number, one
-ask.*
