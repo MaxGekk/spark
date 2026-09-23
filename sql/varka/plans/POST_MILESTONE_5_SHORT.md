@@ -68,9 +68,13 @@ divides by 3 600 000 000 000, eight lanes at a time, 1.0 nanosecond a row."
   settle it with an A/B rather than an opinion. Put the link in the post this
   time, and in the first comment next time, and read GitHub's traffic API for
   referrals rather than guessing from impressions.
-* **Snapshot the traffic first.** `gh api repos/vecbricks/varka/traffic/views`
-  and `.../popular/referrers` keep only fourteen days, so take a reading before
-  posting or the before-and-after cannot be recovered.
+* **Snapshot the traffic first.** Done: `dev/varka_traffic_snapshot.sh` writes
+  one capture into `sql/varka/traffic/`, and the baseline taken before this
+  post is `2026-09-23T070301Z.json` - 2675 views and 303 uniques over the
+  fourteen days the API keeps, 1214 clones, 17 stars, and 159 LinkedIn
+  referrals still on the books from the August post. Take another a week
+  after, and compare **referrals** rather than views, which move with
+  anything.
 * **Same day, not the same hour, on the other channels.** A Show HN, r/java
   (the JDK 25 and Vector API angle is the draw there and nobody has told them)
   and r/apachespark reach engineers who do not read LinkedIn, and the
