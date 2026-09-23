@@ -77,10 +77,10 @@ read one of the fields back. The lane divides.*
 
 That is a perfectly reasonable line of Scala, and it is what a row engine
 almost has to write: `java.time` is the correct library and `getHour` is the
-correct method. The cost is that `LocalTime.ofNanoOfDay` does four divisions
+correct method. The cost is that `LocalTime.ofNanoOfDay` does three divisions
 to fill four fields, allocates an object to hold them, and the caller reads one
 field and drops the object. Escape analysis sometimes removes the allocation
-and sometimes does not, and the four divisions stay either way. Measured over
+and sometimes does not, and the three divisions stay either way. Measured over
 five hundred million cached rows, `hour(t)` costs stock Spark 16.3 nanoseconds a
 row on this machine, and `minute(t)` and `second(t)` 16.4 each, because they
 are the same object built for a different field.
@@ -133,8 +133,14 @@ expression tree, and it does not call a library of kernels either - a call per
 operator per batch is cheap, but the calls are megamorphic and the JIT cannot
 see across them. Instead the compiler turns the Catalyst expressions of a
 projection into a small vector IR, and an emitter writes a Java class for that
-IR with JDK 25's Class-File API: one class per projection shape, holding one
-loop.
+IR with JDK 25's Class-File API: one class per projection shape.
+
+Inside that class the loop is not always a single method. Outputs that share
+work stay together, and outputs that share nothing are split into sibling
+methods, because C2's compile time grows steeply with the number of vector
+operations in a method and a wide method is both slower to compile and slower
+to run. Sibling methods, not longer methods, is the rule the emitter budgets
+against.
 
 ![From the plan node to an emitted class, and the trapdoor under the kernel](figures/svg/fig4-one-class-per-projection.svg)
 
@@ -177,9 +183,9 @@ one instruction, divides, and converts back: three vector operations. With AVX2
 there is no such conversion, so the lane reads the bits of the long as a double
 through an identity and back again: fourteen.*
 
-A double holds every integer below 2^53 exactly, and a correctly rounded
-quotient of two such integers is exact as an integer whenever the dividend is
-below 2^52, which every nanosecond-of-day is by a wide margin. So the
+A double holds every integer below 2^53 exactly, so this form's quotient is
+exact for every dividend below 2^53 - and a day is 8.64e13 nanoseconds, under
+2^47, with room to spare. So the
 conversion form is exact, and on a machine with AVX-512 it is a convert, a
 divide and a convert - three vector operations, because a 64-bit lane and a
 double lane are the same width, so there are no halves to split and rejoin the
@@ -211,11 +217,15 @@ cache key, so a jar moved between machines recompiles rather than misbehaves.
 The third change is the one that compounds. A projection usually has several
 outputs, and they usually share work: `hour(t + dt)` and
 `time_trunc('MINUTE', t + dt)` both need `t + dt`, and both need it guarded
-against leaving the day. A row engine computes the sum twice per row; a
-kernel-library engine computes it twice per batch and materialises it twice.
-Varka compiles the projection as one graph, finds the shared subtrees, and
-emits one loop in which the shared value is computed once per eight rows and
-stays in a register.
+against leaving the day. Spark's codegen already spots that: subexpression elimination is on by
+default, and the generated row loop computes the sum once per row into a local.
+A kernel-library engine has a harder time of it - each operator is a call over
+a whole batch, so the shared value is computed once per batch but materialised
+into memory and read back. Varka compiles the projection as one graph, finds
+the shared subtrees, and emits a loop in which the shared value is computed
+once per eight rows and stays in a register between its two uses. The saving
+is not that the work happens once; it is that it happens once for eight rows
+and never leaves the register file.
 
 ![Two outputs sharing a subtree, and the loop they become](figures/svg/fig6-fusion-shared-subtree.svg)
 
@@ -263,7 +273,7 @@ because it cannot be measured honestly on a runner at all: its lightest entries
 run at 0.8 nanoseconds a row, a cloud runner's per-iteration constant is about
 36 milliseconds, and keeping that constant under 5% means the work has to last
 at least 720 milliseconds - some nine hundred million rows, which at this
-table's 46 bytes a row is about 38 GiB of cache on a machine with 15 GiB of
+table's 49 bytes a row is about 41 GiB of cache on a machine with 15 GiB of
 memory. A surface row therefore says *what* fuses and roughly what it
 is worth on a developer's machine; a chain row is the claim.
 
@@ -272,9 +282,13 @@ is worth on a developer's machine; a chain row is the claim.
 *Figure 8. Six guards between a run and a committed file, each one the memory
 of a number that was wrong once.*
 
-**Six gates.** A run is refused unless the *canary* - three fixed loops -
-reads within a few percent of the host's committed baseline, so the machine is
-in its measured state; the *datapath probe* records how wide the vector unit
+**Six gates.** On a development machine a run is refused unless the *canary* -
+three fixed loops - reads within a few percent of that host's committed
+baseline, which is how a run knows the machine is in its measured state. It
+cannot run on a cloud runner, whose hostname is new every dispatch and which
+therefore has no baseline to compare against, so the runner files record
+`canary: OFF` and a reader can see exactly which of these guards was in force.
+The rest apply everywhere. The *datapath probe* records how wide the vector unit
 really is (the 512:256 ratio reads 1.14 on this laptop, 1.35 on the Intel Xeons
 of the CI pool and 2.01 on the EPYC 9V45, and only the last is full width);
 and the table stayed *resident*, because one that spills recomputes every
@@ -317,7 +331,7 @@ Twelve chained `TIME` expressions, three to five operations deep, over a
 hundred million cached rows on one core of an AMD EPYC 9V45 whose measuring job
 proved its own datapath at 1.97. Varka runs them at **3.7 to 5.5 nanoseconds a
 row** - 182 to 273 million rows a second - against stock Spark 4.2.0's 88 to
-197 on the same machine and the same rows.
+197 nanoseconds a row on the same machine and the same rows.
 
 ![What a chained TIME expression costs per row](figures/svg/fig10-the-chains.svg)
 
@@ -332,11 +346,12 @@ apart and Varka is 14.6x.*
 
 Read the executor column first. The job's fixed cost - scheduling a task,
 collecting its result - is about 36 milliseconds on a cloud runner, and Varka
-does only 0.42 seconds of work per iteration at this row count, so 7% to 9% of
-the wall time is the harness. That is over this project's own 5% ceiling, and
+does only 0.42 seconds of work per iteration at this row count, so 7.2% to
+10.5% of the wall time is the harness. That is over this project's own 5% ceiling, and
 the bound was lifted to 10% for this benchmark deliberately, because no row
-count both fits a runner's 15 GiB and satisfies 5%: a `TIME` row is 46 bytes,
-and the benchmark has simply been outrun by the engine it exists to measure.
+count both fits a runner's 15 GiB and satisfies 5%: this table is 49 bytes a
+row against the date table's 25, and the benchmark has simply been outrun by
+the engine it exists to measure.
 The direction matters and is the reason it is publishable: the constant
 inflates *every* arm alike, so it drags the ratio down. The wall figures above
 are the conservative ones.

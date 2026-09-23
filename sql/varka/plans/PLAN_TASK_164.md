@@ -18,9 +18,12 @@ another, and neither is guesswork. Worse: a `TIME` row is eight bytes rather
 than four, so a given entry moves twice the bytes per row and reaches the
 memory floor at half the arithmetic. Better: the `TIME` lowerings are
 divisions, and a division is the most expensive thing Varka emits - the
-conversion form is seven lane operations and the magic form fourteen, against
+conversion form is three lane operations and the magic form fourteen, against
 one for an add - so a `TIME` expression carries far more arithmetic per link
-than a date one does.
+than a date one does. *Correction, 23 September 2026: this read "seven", which
+is the int lane's conversion form. A 64-bit lane and a double lane are the same
+width, so the long lane's is `L2D`, divide, `D2L` (`PLAN_TASK_88.md` 9.2). The
+section's conclusion is unchanged and the gap it describes is wider.*
 
 Which of those wins is not known, and it decides the whole shape of the entry
 list. That is what this task settles before it quotes anything.

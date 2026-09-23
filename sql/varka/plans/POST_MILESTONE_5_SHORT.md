@@ -26,7 +26,7 @@ are unchanged; only the voice is.*
 > value. One object, per row.
 >
 > It is the right call for a row-at-a-time engine - `java.time` is the proper
-> library and `getHour()` is the proper method. It just costs four divisions
+> library and `getHour()` is the proper method. It just costs three divisions
 > and an allocation to get one number back out. On my laptop that is 16.3
 > nanoseconds a row.
 >
@@ -43,7 +43,7 @@ are unchanged; only the voice is.*
 > are written into the results file.
 >
 > I have written the whole thing up: how the loop is built, where every number
-> comes from, and a dozen hand-drawn diagrams (drawn, if I am honest, by a
+> comes from, and ten hand-drawn diagrams (drawn, if I am honest, by a
 > script that pretends to be hand-drawn). If this is your kind of thing, I
 > think you will enjoy it.
 >

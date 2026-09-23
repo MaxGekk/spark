@@ -245,7 +245,11 @@ driver, so the recipe above needs no extra flag), and `--benchmark timechains`
 the `TIME` chains over that table. The script refuses a run
 whose cached table did not stay in memory or whose per-row fixed cost exceeds 5%
 of wall time, so a result that survives is one worth reading; it records the
-datapath probe and the machine in every file it writes. Sizes are for a 16 GiB
+datapath probe and the machine in every file it writes. The one place that
+bound has been lifted is the `TIME` chains on a cloud runner, where the job's
+constant is about 36 ms and no row count both fits 15 GiB and keeps the
+constant under 5% - those files were taken at 11%, which the dispatch below
+passes explicitly so that a run records the bound it was held to. Sizes are for a 16 GiB
 machine - lower `--rows` if the table will not fit, and the script will tell you
 if it did not.
 
@@ -268,8 +272,13 @@ on GitHub-hosted runners, and anyone with a fork can dispatch it:
 gh workflow run varka-surface-benchmark.yml --repo <your-fork>/varka --ref master \
   -f stop-after=run -f require-datapath=512 -f benchmark=timechains \
   -f rows=100000000 -f partitions=1 -f driver-memory=12g \
-  -f max-fixed-share=10 -f create-commit=false
+  -f max-fixed-share=11 -f create-commit=false
 ```
+
+That is the `timechains` benchmark, which is what the `TIME` chain table
+above was measured with; swap `benchmark` and `rows` for the date chains
+(`chains` at 2e8) and drop `max-fixed-share`, which only the `TIME` chains
+need.
 
 Three things to know before spending runner minutes on it. The gate runs the
 datapath probe **inside the measuring job**, on the VM that will do the

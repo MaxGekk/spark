@@ -35,7 +35,7 @@ card's picture, which has to be a raster image - social sites do not render SVG 
 one figure first, for example:
 
     chromium --headless=new --window-size=900,600 \\
-      --screenshot=card.png figures/out/fig2-localtime-per-row.svg
+      --screenshot=card.png figures/svg/fig2-localtime-per-row.svg
 
 Requires the `markdown` package (`pip install markdown`).
 """
@@ -72,8 +72,12 @@ table{border-collapse:collapse;width:100%;font-size:.92rem;margin:0 0 1.2rem}
 th,td{border-bottom:1px solid var(--rule);padding:.4rem .5rem;text-align:left}
 td+td,th+th{text-align:right;font-variant-numeric:tabular-nums}
 .fig{margin:1.6rem 0 .6rem;background:var(--fig);border-radius:10px;padding:.6rem;
-border:1px solid var(--rule)}
-.fig svg{width:100%;height:auto;display:block}
+border:1px solid var(--rule);overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* A drawing authored at 900px shrinks to a third of that in a phone-width column, which
+   puts its smallest labels under 5px. Below the floor the figure scrolls sideways inside
+   its own box instead, and above 60rem it is allowed out past the text column. */
+.fig svg{width:100%;min-width:600px;height:auto;display:block}
+@media (min-width:60rem){.fig{width:52rem;margin-left:calc(50% - 26rem)}}
 .cap{color:var(--muted);font-size:.92rem;line-height:1.5;margin-bottom:1.6rem}
 a{color:var(--accent)}
 """
@@ -113,7 +117,11 @@ def inline_figures(html, source_dir):
 def summarise(html, title):
     """The link card's blurb: the post's opening prose, cut at a sentence end if there is one
     in reach and at a word boundary otherwise - never mid-word, which is what a card shows."""
+    # Tags become a space, then the spaces that landed before punctuation are taken back:
+    # an inline <code> otherwise leaves "hour , minute , second" in the card's own blurb.
     plain = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+    plain = re.sub(r"\s+([,.;:!?)])", r"\1", plain)
+    plain = re.sub(r"([(])\s+", r"\1", plain)
     if plain.startswith(title):
         plain = plain[len(title) :].strip()
     if len(plain) <= 220:
@@ -139,16 +147,32 @@ def render(source, out_dir, og_image=""):
     # Whatever italic block opens the file under the title is the post's note to its own
     # editors - when it was drafted, what it still owes - and not something a reader of the
     # published page needs. Keyed on that shape rather than on one post's words.
-    body = head + "\n" + re.sub(r"^\s*\*[^*].*?\*\s*$", "", rest, count=1, flags=re.S | re.M)
+    # Anchored at the top of `rest`: with re.S an unanchored pattern can start at the
+    # first emphasised line anywhere in the document and swallow everything up to the next
+    # asterisk, which would silently delete most of a post that opens without a note.
+    body = head + "\n" + re.sub(r"\A\s*\*[^*].*?\*[ \t]*$", "", rest, count=1, flags=re.S | re.M)
     html = markdown.markdown(body, extensions=["fenced_code", "tables"])
     # The blurb is taken before the figures go in: an inlined SVG carries a <style> block
     # whose base64 font would otherwise be stripped into the card's text.
     summary = summarise(html, title)
     html = inline_figures(html, source_dir)
+    # The substitution above matches one shape of Markdown's <img> output. Anything still
+    # pointing at a figure got past it - a quoted alt text, an attribute order this pattern
+    # does not know - and would ship as a broken image, so it fails here instead.
+    left = re.search(r'<img[^>]+src="[^"]*figures/[^"]*"', html)
+    if left:
+        raise SystemExit("a figure was not inlined: " + left.group(0))
     html = html.replace("<p><em>Figure", '<p class="cap"><em>Figure')
+    # A summary_large_image card with no image renders as a bare link, so the card kind
+    # follows what is actually there, and the canonical URL goes out with it.
     og = ""
+    card = "summary"
     if og_image:
         og = '<meta property="og:image" content="%s">' % og_image
+        card = "summary_large_image"
+        page_url = og_image.rsplit("/", 1)[0] + "/"
+        og += '<meta property="og:url" content="%s">' % page_url
+        og += '<link rel="canonical" href="%s">' % page_url
     page = (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -157,11 +181,11 @@ def render(source, out_dir, og_image=""):
         '<meta property="og:type" content="article">'
         '<meta property="og:title" content="%s">'
         '<meta property="og:description" content="%s">%s'
-        '<meta name="twitter:card" content="summary_large_image">'
+        '<meta name="twitter:card" content="%s">'
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
         '<link rel="stylesheet" href="%s">'
         "<style>%s</style></head><body><main>%s</main></body></html>"
-        % (title, summary, title, summary, og, FONTS, STYLE, html)
+        % (title, summary, title, summary, og, card, FONTS, STYLE, html)
     )
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, "index.html")
