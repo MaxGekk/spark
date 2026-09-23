@@ -69,6 +69,14 @@ object VarkaColumnarRule extends ColumnarRule {
           } else {
             project
           }
+        // A projection that only narrows a Varka filter's output. It fuses nothing, so the
+        // arm above declines it, and the node that performs it decides where the plan's row
+        // boundary sits: absorbed into the filter's to-row node it is a row node, and a
+        // consumer that wanted batches gets none. This is the pair `columnarSibling` already
+        // builds for the cache path, built here so the plain query path has it too.
+        case ProjectExec(projectList, filter: VarkaFilterExec)
+            if isForwardedNarrowing(projectList, filter.output) =>
+          VarkaProjectExec(projectList, filter)
         case filter @ FilterExec(condition, child)
             if child.supportsColumnar && arrowFriendly(child) =>
           rewriteFilter(condition, child, VarkaFilterExec(_, _)).getOrElse(filter)
@@ -81,6 +89,15 @@ object VarkaColumnarRule extends ColumnarRule {
   override def postColumnarTransitions: Rule[SparkPlan] = { plan =>
     if (SQLConf.get.varkaEnabled) {
       plan.transformUp {
+        // The pair the pre stage built for a narrowing projection, collapsed back into one
+        // node where a transition was inserted above it anyway. A row consumer then gets the
+        // plan it has always got - one node that reads the selection bitmap at the row
+        // boundary without compacting first - so the pre-stage case above adds a columnar
+        // route and changes no row-consumer plan. It runs before the general arm below,
+        // which would otherwise leave the compacting filter in the tree.
+        case ColumnarToRowExec(VarkaProjectExec(projectList, filter: VarkaFilterExec))
+            if isForwardedNarrowing(projectList, filter.output) =>
+          VarkaFilterColumnarToRowExec(filter.condition, filter.child, Some(projectList))
         case ColumnarToRowExec(varka: VarkaProjectExec) =>
           VarkaColumnarToRowExec(varka.projectList, varka.child)
         case ColumnarToRowExec(varka: VarkaFilterExec) =>

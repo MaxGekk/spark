@@ -352,6 +352,21 @@ private[sql] abstract class VarkaEvaluatorBase(
     batch
   }
 
+  /**
+   * The output batch for a projection that only forwards columns of its input: the input's own
+   * vectors, selected and reordered by `ordinals`, with nothing copied and no kernel run.
+   *
+   * It is tracked owning nothing, so [[release]] unregisters it and closes none of its columns -
+   * they belong to the input batch, exactly as a forwarded entry's column does on the kernel
+   * path. A batch built with `new ColumnarBatch(...)` and not tracked would instead reach
+   * `release`'s "not one of ours" arm and be closed whole, taking the input's vectors with it.
+   */
+  def forwardColumns(input: ColumnarBatch, ordinals: Array[Int]): ColumnarBatch = {
+    val batch = new ColumnarBatch(ordinals.map(input.column), input.numRows())
+    trackOwned(batch, Seq.empty)
+    batch
+  }
+
   protected def trackOwned(batch: ColumnarBatch, owned: Seq[ColumnVector]): Unit = {
     ensureCleanup()
     openBatches(batch) = owned
