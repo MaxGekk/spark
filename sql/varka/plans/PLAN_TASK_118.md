@@ -215,7 +215,76 @@ this task, and section 2 matches it on the day of the post.
 
 ## 6. Outcome
 
-*Written as the parts land: (A) here, (B) per file, (C) with the README.*
+*(A) landed with this plan, (B) per results file, (C) with the README and the
+published post. Written 23 September 2026, when the last of the three closed.*
+
+**(B) what was measured, and where.** The `TIME` surface's four arms and its
+twelve-run band are laptop files, because a third of its entries are fast
+enough that a cloud runner's 36 ms constant cannot be cleared inside 15 GiB -
+section 3 item 11's reasoning, unchanged. The `TIME` chains are the public
+number and were measured on GitHub Actions at both ends of the datapath: an
+AMD EPYC 9V45 at probe 1.97, reached by twenty-four gated dispatches, and an
+AMD EPYC 7763 at probe 1.00 for the width subtraction. Task 121's AVX2 arm is
+a laptop file under `-XX:UseAVX=2` at `MaxVectorSize` 32.
+
+**(C) the README and the post.** The README carries a `TIME` chains table and a
+`TIME` surface table beside the date ones, the datapath section carries both
+answers, and the reproduction section carries the dispatch recipe with
+`max-fixed-share=11`. The long read is `POST_MILESTONE_5.md`, published at
+<https://vecbricks.github.io/eight-rows-per-instruction/>; the trailer is
+`POST_MILESTONE_5_SHORT.md`, posted 23 September 2026.
+
+**The five predictions scored.**
+
+1. **Held, on all three of its parts.** The surface's projection rows read a
+   median of 16.2x against stock 4.2.0 on JDK 25, inside the predicted 14x to
+   17x; the extracts read 13.4x (`minute`) to 17.0x (`hour`), inside 13x to
+   17x; the truncations read 34.3x and 38.2x against a predicted 34x and 38x.
+2. **Half held, half was withdrawn rather than measured.** Every one of the
+   twelve chains is a `TIME` chain of three or more divisions and all but one
+   read above 20x - 19.6x to 46.9x - so the substance holds. The other half
+   asked whether the full-width runner's ratio falls inside the band of *the
+   laptop's* ratio, and no laptop chains file exists: the owner's instruction
+   of 22 September removed laptop runs from the critical path of any published
+   number, so the comparison this prediction wanted was replaced by the one
+   between two runners. The contrast it was reaching for is real and larger
+   than expected - the same twelve on the Zen 3 runner read 2.6x to 5.9x,
+   median 3.9x, *below* the surface rather than above it.
+3. **Wrong, and wrong by more than a factor of six.** It put the datapath at
+   under 1.3x and over 1.0x on the `TIME` chains. Measured, the kernel gains
+   8.3x between the two runners once the 1.76x machine generation is divided
+   out. The error is in what the prediction counted: it reasoned from task
+   156's store measurements, where width buys nothing past L3, and a `TIME`
+   chain is not a store - it is its divisions, and the wider machine does not
+   merely run them eight lanes at a time, it runs a different instruction
+   sequence for them. Lane count and lowering multiply, 2 x 4.7 = 9.4 predicted
+   against 8.3 measured, and prediction 3 counted neither factor.
+4. **Wrong on both halves, for the same reason as 3.** The AVX2 arm was put
+   between a third and two thirds of the full-width rate on the division rows
+   and above 5x against stock. On the laptop's own surface it reads **0.09 to
+   0.16** of the full-width rate on those rows, and 1.18x to 4.96x against
+   stock - `minute(t)` and `second(t)` barely clear parity at 1.18x and 1.19x.
+   The number the prediction should have carried is the one item 3 missed: at
+   `UseAVX=2` the lane count halves *and* the lowering falls back to the
+   fourteen-operation magic form, which is about 9x together and is what the
+   file shows.
+5. **Held.** The support claim was read from the coverage table and survived
+   the closing review without a change. What the review did correct was the
+   mechanism prose around it - the division's operation count, how
+   subexpression elimination shares a value, the dividend bound - and in every
+   case the correction moved the prose to the table and the code rather than
+   the other way round, which is what this prediction was for.
+
+**What the three wrong predictions have in common** is worth stating once,
+because it is the milestone's own lesson and not a scoring detail. Every one of
+them priced a 64-bit lane as *the same work, more lanes*, and on this type that
+is not what a wider machine buys. The division is lowered differently depending
+on what the machine can do, so the instruction count per row changes with the
+hardware, and a model that holds the lowering fixed will underestimate the
+width and overestimate the fallback by the same factor. The date chains, where
+the lowering does not change, are where the "more lanes" model is right - and
+milestone 4's numbers were built on it, which is why it was carried here
+unexamined.
 
 ## 7. Explicitly out of this task
 

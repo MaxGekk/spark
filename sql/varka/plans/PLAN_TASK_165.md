@@ -137,7 +137,79 @@ answer names the mechanism. The four refusing hosts appear in about one gate
 job in ten, so the answer arrives within a day of merges without anyone
 dispatching anything.
 
-## 6. Explicitly out of this task
+## 6. The answer, in a refusing runner's own words: 23 September 2026
+
+The instrument section 4 named worked as described: nobody dispatched
+anything. Two assembly-gate jobs on an **Intel Xeon Platinum 8370C at four
+processors** cancelled with the new message, at 19:46 on 22 September and
+08:15 on 23 September, and printed the `VectorSupport::loadWithMap` decisions
+that the refusals alone could not give:
+
+    @ 91  VectorSupport::loadWithMap (44 bytes)
+            failed to inline: callee is too large
+    @ 38  IntVector$$Lambda::loadWithMap (22 bytes)
+            inline (hot)  callee changed to
+            VectorSupport::loadWithMap (44 bytes)
+    @ 91  VectorSupport::loadWithMap (44 bytes)
+            failed to inline: failed to inline (intrinsic)
+            failed to inline: static call node changed: trying again
+            failed to inline: failed to inline (intrinsic)
+            failed to inline: static call node changed: trying again
+    @ 91  VectorSupport::loadWithMap (44 bytes)
+            (intrinsic)  late inline succeeded
+
+The laptop's four decisions at the same species read `late inline succeeded`
+throughout, with no failure line among them. **That is the discriminator, and
+the intrinsic refusals are not**: the refusing host prints the same three
+`missing constant` lines the laptop prints while packing, and no
+`not supported` line on either.
+
+**What it says.** C2 reaches `loadWithMap` twice - once directly and once
+through the lambda it inlines as hot - and its late-inline pass gives up on at
+least one of those sites, `failed to inline (intrinsic)` twice with a
+`static call node changed: trying again` between them. The body it settles on
+is 248 instructions with **zero calls**, so the site it gave up on did not
+stay a call: the Java implementation of `loadWithMap` was inlined as ordinary
+bytecode in the intrinsic's place, and that implementation is a scalar loop
+over the index map. A short scalar body with no call is exactly what that
+produces, and it is why the earlier reading of section 5 - that the call stays
+a call - was wrong.
+
+**The four predictions scored.**
+
+1. **Wrong.** The refusal is not the matcher's. There is no `not supported`
+   line on the refusing hosts, and the `missing constant` lines they do print
+   are printed by the laptop while it packs, so they are not a verdict about
+   this compile at all. The prediction's reasoning was sound - the body is
+   deterministic, so a compile-order effect was unlikely - and the conclusion
+   it drew from it was still the wrong one, because it assumed C2 had refused
+   something rather than attempted it and given up.
+2. **Held.** Recorded in section 5: the laptop under
+   `-XX:ActiveProcessorCount=4` packs.
+3. **Wrong, and the premise with it.** Zulu 25 on the laptop packs, which the
+   prediction expected, but it inferred from that a missing CPU feature. There
+   is no missing feature: the hosts that refuse and the host that packs agree
+   on every intrinsic line, and differ only in whether an inlining pass
+   completed. It is a compiler-heuristic outcome, not a capability.
+4. **Held.** No default-width assertion is affected, and the gate's cancel is
+   now keyed on the inlining signature rather than on "it came out scalar".
+
+**The decision, from that reading.** The precondition stays - a host whose own
+probe cannot gather at 128 bits still cannot judge the kernels at 128 bits -
+but it now cancels for one named reason and fails for anything else. A future
+host whose gather goes scalar without that signature is a finding this suite
+should make loud rather than absorb, and under `VARKA_HSDIS_REQUIRED`, which
+the gate job sets, `cancelOrFail` makes it a red job.
+
+**What this does not settle,** and deliberately: *why* C2's late inlining
+gives up on that site on a four-processor Xeon and not on a sixteen-core Zen 5.
+`callee is too large` on the first decision points at the inlining budget, and
+budgets do vary with the compiler's own tier and queue pressure, which a
+four-processor VM changes. Establishing that would take a controlled sweep of
+`-XX:MaxInlineSize` and `-XX:FreqInlineSize` on a runner, which is a JVM
+investigation rather than a Varka one; the gate no longer needs the answer.
+
+## 7. Explicitly out of this task
 
 The NEON question: the aarch64 runner refuses nothing at 128 bits
 (`PLAN_TASK_153.md` section 6) and is not part of this. Any change to the

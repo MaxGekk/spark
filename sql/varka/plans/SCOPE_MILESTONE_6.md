@@ -3213,6 +3213,79 @@ not the reason. **Done when** the field's subject is named - the shape that
 would distinguish its two values, added to the oracle's set, or the field
 removed with the tests that set it - so that the oracle's silence about it
 means something.
+### Item 49. The two band measurements milestone 5 did not take
+
+Milestone row 90 closed on its census and its decision, and left two
+measurements behind because both need a quiet machine rather than an argument.
+
+The first is the **arithmetic benchmark's band**. `VarkaArithmeticBenchmark`
+has committed results at both widths and no band file, so a regeneration of it
+is still read against a flat threshold rather than against its tiers.
+
+*Correction, 23 September 2026: an earlier draft of this item called it "the
+last family in that state", which was read off the census of the five families
+that had bands rather than off the benchmark directory. Counted properly there
+are eighteen Varka benchmark families and six now carry a band -
+`VarkaEmitterParityBenchmark` and `VarkaThroughputBenchmark` at two widths
+each, the date surface, the date chains, the `TIME` surface, and
+`VarkaFilterNarrowingBenchmark`, which task 145 measured because it needed one.
+Twelve do not, `TimeChain`, `VarkaArithmeticBenchmark`, `VarkaFilterBenchmark`,
+`VarkaNarrowingBenchmark`, `VarkaTimeBenchmark` and
+`VarkaLongLaneThroughputBenchmark` among them.*
+
+The arithmetic benchmark is still the one to take first, because it is the one
+whose regenerations get compared. The general shape of the work is what task
+145 did in passing: a family gets its band the first time someone needs to read
+a move in it, which is cheaper than banding eighteen families against a day
+that may never come.
+
+The second is **`PLAN_TASK_63.md` 9.7's 26.1% dead-local attribution**, taken
+from two *unpinned* regenerations at a time when the worst case on that file
+moved 75%. The mechanism is plausible - the emitted bytes did change, and a
+dead local does change register pressure - but 26.1% sits at the very top of
+the band later measured for the same file, so the magnitude is not evidence.
+Section 2.12 of milestone 5 narrowed task 82 to "a 128-bit task" on the
+strength of it, which is the concrete thing a wrong number would have cost.
+
+**Done when** the arithmetic band is committed beside its results, and 9.7's
+figure has been re-taken pinned and either confirmed, corrected, or withdrawn
+with task 82's scope re-read against whatever replaces it. The other eleven
+families are not part of this item: each gets its band when a move in it has to
+be read.
+### Item 50. `TIME +/- INTERVAL`: the semantics Varka's guard waits on
+
+*Moved from milestone 5 on 23 September 2026 (row 146, `PLAN_MILESTONE_5.md`
+2.82, text unchanged there).*
+
+Vanilla Spark's `timeAddInterval` adds exactly and throws when the result
+leaves `[0, 24h)`. A lane cannot throw, so `PLAN_TASK_102.md` 4.1 lowers
+`t + dt` as a range guard that fails the whole batch into the ghost fallback,
+where the row engine raises the identical error on the identical row. That is
+correct and it costs a compare per batch plus, on a batch that really crosses
+midnight, the whole batch on the row engine.
+
+[SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) asks whether
+ANSI's modulo-24 replaces the throw. If it does, Varka's lowering becomes a
+`floorMod` by `NANOS_PER_DAY` with no guard, no decline channel and no batch
+ever falling back - strictly cheaper and strictly simpler than what ships
+today.
+
+**What changed since the row was scoped.** It was scoped on the reading that
+the ticket carried no patch. It does: `apache/spark#57044`,
+"[SPARK-57853][SQL] Use ANSI modulo-24 semantics for TIME +/- INTERVAL", open
+since 6 July 2026, 153 lines added and 68 removed over eleven files -
+`DateTimeUtils.timeAddInterval`, `TryEval`, the error class,
+`TimeExpressionsSuite`, `DateTimeUtilsSuite` and the `TIME` golden files, which
+is the ticket's own acceptance list. Its author asked this repository's owner
+to review it on 20 July and nothing has moved since. The ticket itself is still
+Open and unassigned, last touched 14 July.
+
+So the work here is a review rather than a patch, and it is upstream work that
+happens to unblock a Varka simplification. **Done when** the ticket has a
+resolution Varka can lower against - a merged patch or a recorded decision to
+keep the throw - and `PLAN_TASK_102.md` 4.1 says which, with its guard deleted
+or kept accordingly. Size: small in Varka, and unbounded upstream, which is
+why nothing in Varka blocks on it; 102's guard is built to be easy to delete.
 
 ## 5. Ordering
 

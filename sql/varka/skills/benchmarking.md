@@ -425,6 +425,37 @@ an hour for one and seventeen hours for the other, which is why the surface's
 band has to be sharded, moved to a runner, or done at a scale nobody commits -
 and why "run it N times" is a plan for one benchmark and a project for another.
 
+**The census, once every family had a band** (23 September 2026, seven files
+across five families), settles what to do about the lottery in general, and the
+answer is: nothing more. The instability is concentrated in the microbenchmarks
+and is nearly absent from the files that carry public claims.
+
+| file | cases | tier 0 | tier 1 | tier 2 | tier 3 |
+|---|---:|---:|---:|---:|---:|
+| `VarkaEmitterParityBenchmark` 512-bit | 211 | 60 | 85 | 49 | 17 |
+| `VarkaEmitterParityBenchmark` 128-bit | 211 | 140 | 46 | 20 | 5 |
+| `VarkaThroughputBenchmark` 512-bit | 84 | 27 | 31 | 26 | 0 |
+| `VarkaThroughputBenchmark` 128-bit | 84 | 33 | 37 | 14 | 0 |
+| `DateSurface` | 126 | 107 | 9 | 8 | 2 |
+| `DateChain` | 24 | 24 | 0 | 0 | 0 |
+| `TimeSurface` | 86 | 38 | 38 | 10 | 0 |
+
+So **N forks per case with a median - what JMH does - is declined for this
+project.** It costs N times every regeneration, and it would buy cross-run
+comparability for the families that already have it while the family that needs
+it most, the parity benchmark at 512 bits, is a microbenchmark whose every claim
+is a within-run A/B anyway. The rule that replaces it, which is what the plans
+already did in practice: absolute rates from different runs are not compared, a
+number quoted across runs carries its band, a tier-3 case is not quoted at all,
+and the regeneration diff is a reading aid while `dev/varka_bench_gate.py`'s
+invariants are the gate.
+
+One number in that table is worth carrying separately: the parity benchmark is
+**quieter at 128 bits than at 512** - 140 cases in tier 0 against 60. Collapses
+have historically been found at the narrow width not because it is less stable
+but because it is stable enough for one to stand out, which is also why the two
+widths need separate band files rather than a shared one.
+
 ## A kernel ratio is not an end-to-end ratio, in either direction
 
 Task 142 measured what a 64-bit lane costs against a 32-bit one over memory

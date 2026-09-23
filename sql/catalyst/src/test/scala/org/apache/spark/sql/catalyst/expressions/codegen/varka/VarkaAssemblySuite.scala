@@ -628,25 +628,23 @@ class VarkaAssemblySuite extends SparkFunSuite {
 
   /**
    * Whether this JVM compiles the probe's own gather to a packed gather at a forced 128-bit
-   * species, read once. On this laptop it does. On the CI pool's runners it does not: the same
-   * probe, under the same `-XX:MaxVectorSize=16`, comes out as a scalar body of 248 instructions,
-   * deterministically, on an EPYC 9V45 and on Intel Xeons alike (`PLAN_TASK_150.md` section 6),
-   * with `-Xbatch` in place so it is not the compile that was missing. That is a fact about the
-   * JVM on that machine, not about Varka's kernels, and a machine whose own probe does not pack
-   * at 128 bits cannot say whether the kernels do. So the 128-bit assertions below take this as
-   * their precondition and cancel, naming the host, where it fails; the default-width
-   * assertions stay hard. Row 165 is the investigation of why, from the JVM's own output.
+   * species, read once. Some hosts do not, and a machine whose own probe does not pack at 128
+   * bits cannot say whether the kernels do, so the 128-bit assertions below take this as their
+   * precondition and cancel, naming the host, where it fails. The default-width assertions stay
+   * hard, because the property they rest on is Varka's rather than the JVM's.
+   *
+   * <p>The precondition holds for one known reason and cancels only for that reason: C2's late
+   * inlining of `VectorSupport::loadWithMap` gives up on at least one call site, the fallback
+   * is inlined in its place, and the loop comes out scalar with no call to show for it. A
+   * scalar body without that signature is something else, and fails rather than cancels so the
+   * job cannot go green over it. See `PLAN_TASK_165.md` section 6.
    */
   private lazy val narrowSpeciesRefusal: Option[String] = {
-    // -XX:+PrintIntrinsics makes C2 say why it refused an intrinsic, one `**` line per refusal
-    // (the width census reads the same lines), so a refusing machine names its reason in the
-    // cancel message and task 165 starts from the JVM's own words rather than a guess.
-    // -XX:+PrintInlining beside it, because the refusals alone did not decide task 165: the
-    // runners print the same three `missing constant` lines this laptop prints while packing,
-    // and no `not supported` line, so the gather's intrinsic is either not attempted or
-    // attempted and undone on those hosts. The `VectorSupport::loadWithMap` inlining lines say
-    // which - `(intrinsic) late inline succeeded` where it packs - and the calls left in the
-    // body say whether a scalar call to it remains.
+    // -XX:+PrintIntrinsics prints one `**` line per refused intrinsic and -XX:+PrintInlining
+    // one line per inlining decision. Both are quoted into the message below, but only the
+    // inlining decisions discriminate: a packing host and a refusing one print the same three
+    // `missing constant` lines and neither prints `not supported`, so the intrinsic is not
+    // being refused by the matcher on either.
     val run = runProbe("gatherLookup", s"$probeClass::gatherLookup",
       Seq("-XX:MaxVectorSize=16", "-XX:+PrintIntrinsics", "-XX:+PrintInlining"))
     requireHealthyChild(run)
@@ -664,11 +662,25 @@ class VarkaAssemblySuite extends SparkFunSuite {
       val how = if (inlining.isEmpty) "PrintInlining named no loadWithMap decision"
         else "the gather's inlining decisions:\n  " + inlining.mkString("\n  ")
       val calls = nmethod.insns.count(_.mnemonic == "call")
-      Some(s"on this machine ($host) C2 compiles the probe's own gather at a forced 128-bit " +
-        s"species to a scalar body of ${nmethod.insns.size} instructions with $calls calls, " +
-        "so the 128-bit assertions are not evidence here; the default-width ones still run. " +
-        s"$why. $how. PLAN_TASK_150.md section 6 records the finding, milestone row 165 " +
-        "investigates it.")
+      val body = s"on this machine ($host) C2 compiles the probe's own gather at a forced " +
+        s"128-bit species to a scalar body of ${nmethod.insns.size} instructions with " +
+        s"$calls calls. $why. $how."
+      // The precondition is keyed on the one cause row 165 established, not on "it came out
+      // scalar": a host whose gather goes scalar for some other reason is a finding, and a
+      // blanket cancel would hide it behind a green job. The discriminator is the inlining
+      // decisions, since the intrinsic refusals are printed by packing and refusing hosts
+      // alike; see PLAN_TASK_165.md section 6.
+      if (inlining.exists(_.contains("failed to inline"))) {
+        Some(s"$body C2's late inlining of VectorSupport::loadWithMap gives up on at least " +
+          "one call site here, so the fallback is inlined in its place and the loop comes " +
+          "out scalar with no call left to show for it. The 128-bit assertions are not " +
+          "evidence on such a host; the default-width ones still run. PLAN_TASK_165.md " +
+          "section 6 has the decisions this was read from.")
+      } else {
+        cancelOrFail(s"$body Every loadWithMap decision inlined, so row 165's cause does not " +
+          "explain this scalar body and something else does. PLAN_TASK_165.md section 6 is " +
+          "the reading it contradicts.")
+      }
     }
   }
 
