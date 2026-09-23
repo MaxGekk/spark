@@ -3200,6 +3200,19 @@ retrospective adds a third reason to take it first when the long lane's
 arithmetic re-enters: `time_from_seconds(i)` declines, `hour(t) + 1` declines,
 and the coverage differential had to change a row because of it.
 
+### Item 48. What `validityOrFirst` is for
+
+Task 167's option audit emitted the oracle's whole shape set - ninety-two
+coverage rows and the fuzz blocks, at both widths - under both values of every
+emit option, and `validityOrFirst` is the one field that moved no hash
+anywhere. Every other option moved something, including the two whose subject
+only one half of the set reaches. An option that changes no emitted byte over
+a corpus that size is either dead code or a switch guarding a shape the corpus
+does not contain, and the audit cannot tell those apart: it reports the count,
+not the reason. **Done when** the field's subject is named - the shape that
+would distinguish its two values, added to the oracle's set, or the field
+removed with the tests that set it - so that the oracle's silence about it
+means something.
 ### Item 49. The two band measurements milestone 5 did not take
 
 Milestone row 90 closed on its census and its decision, and left two

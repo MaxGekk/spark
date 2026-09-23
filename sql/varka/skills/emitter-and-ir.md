@@ -588,6 +588,35 @@ a lane-generic node moves both sequences' blocks, a calendar node only the
 first, and the two long block lists moving on an int-only change is the signal
 that the long grammar was touched when it should not have been.
 
+## The bytes oracle pins one point in the option space, so an option a session can set needs an arm of its own
+
+`emitted_bytes.json` hashes every emitted method body at
+`VarkaEmitOptions.DEFAULTS`. While every option was a test hook that was the
+whole story: a suite that wanted a variant asked for it and asserted on the
+result in the suite itself. Task 121 gave `useAVX` a session configuration, and
+from then on a user could select an emission no committed hash covered.
+
+The rule the file now carries, from task 167: a field that gains a
+configuration gains a pinned arm with it, recorded as one digest per arm per
+width in the oracle's `option_arms` section rather than a shape-by-shape block,
+because five arms of ten thousand shapes would multiply the file to say the
+same thing. The defaults keep the per-shape detail that says *which* shape
+moved; an arm's digest only has to say that the arm moved.
+
+Two things the audit that produced it is worth reusing for. It emits **both**
+values of every boolean, so the report names the default in its own numbers -
+the arm that moves nothing - instead of resting on a reader's memory of the
+`DEFAULTS` constructor. And it asserts only that it emitted something: a loop
+over an empty option list would otherwise report "no option moves anything",
+which is the one outcome that looks like success and is not. Run it with
+
+    VARKA_OPTION_AUDIT=true build/sbt \
+      'catalyst/testOnly *VarkaEmittedBytesSuite -- -z "option audit"'
+
+An option that moves no hash over the whole set is a finding, not a pass: it is
+either dead or guarding a shape the corpus does not contain, and the audit
+reports the count rather than telling those apart.
+
 ## A lane can change width at a root's store without the loop ever holding two widths
 
 Task 102's `hour(t)`, `minute(t)` and `second(t)` are 64-bit divisions whose
