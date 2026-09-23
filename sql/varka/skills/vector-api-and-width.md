@@ -940,6 +940,43 @@ host class it is about, which the workflow now does in about forty minutes per
 architecture. The one qualification still open is SVE: the runner's JDK enables
 it, and a NEON-only JVM has not been asked.
 
+## An intrinsic refusal line is not a verdict about this compile; the inlining decisions are
+
+Task 165 spent a day on the wrong instrument. The assembly gate's probe gathers
+at a forced 128-bit species, and on part of the runner pool it came out scalar -
+248 instructions, deterministically, with `-Xbatch` so it was not a missing
+compile. `-XX:+PrintIntrinsics` was the obvious tool and it pointed nowhere: the
+refusing hosts print three `missing constant` lines for unrelated shapes and no
+`not supported` line, and **so does the laptop while it packs**. A `**` line
+says that C2 declined one intrinsic somewhere in the run; it does not say that
+it declined the one being looked at, and a census that reads those lines as a
+verdict about a particular compile will find the same lines on both sides of the
+question.
+
+What separated the hosts was `-XX:+PrintInlining`, filtered to the intrinsic's
+own symbol. Where the gather packs, every `VectorSupport::loadWithMap` decision
+reads `(intrinsic) late inline succeeded`. Where it does not, the decisions
+carry `failed to inline (intrinsic)` with `static call node changed: trying
+again` between the attempts, and the first of them reads `callee is too large`.
+
+The reading that follows is worth carrying, because it is counter-intuitive and
+the body's own shape argues for it: the refusing body has **zero calls**. A
+failed intrinsic does not have to leave a call behind. C2 falls back to inlining
+the intrinsic's *Java* implementation as ordinary bytecode, and for a Vector API
+gather that implementation is a scalar loop over the index map - a short scalar
+body with nothing to grep for. So "no call in the body" is not evidence that the
+intrinsic was applied, and the absence of a matcher refusal is not evidence that
+it was attempted. Only the inlining decisions distinguish an intrinsic that ran
+from one that was given up on.
+
+Two consequences for how a gate is written. A precondition keyed on the symptom
+("it came out scalar") absorbs every future cause into a green job, so key it on
+the signature of the cause and make anything else loud - `PLAN_TASK_165.md`
+section 6 is the worked example. And the reason itself, an inlining budget
+running out, is a compiler-heuristic outcome rather than a capability: it varies
+with the host's processor count and compiler queue, which is why no CPU feature
+and no JDK build explained it.
+
 ## A masked store through two lanes costs the loop, not the mask; a half species keeps the loop
 
 Task 102's narrowed store writes an int column from long lanes: the kernel computes at the
