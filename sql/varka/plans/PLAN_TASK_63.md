@@ -286,7 +286,7 @@ unserved for `NULL` mode.
 | `VarkaExpressionCompiler.scala` (+ suite) | `intOperand`, the arms, the mode mapping, `compare`'s operand, `compileOffset`'s arithmetic arm, the reasons |
 | `VarkaSharedSessions.scala`, `VarkaDifferentialSuite.scala` | an overflow-dense fixture (`Int.MaxValue` neighbours beside ordinary ints and nulls); the differentials of section 5 |
 | `VarkaEmitterParityBenchmark.scala` + files, `VarkaThroughputBenchmark.scala` + files | section 6 |
-| `docs/sql-varka.md`, `SKILLS.md`, `SCOPE_MILESTONE_6.md` item 12 | the surface bullet and reasons; the lesson; item 12's "until task 30 lands" corrected to this task |
+| `docs/sql-varka.md`, `SKILLS.md`, `SCOPE_MILESTONE_7.md` item 12 | the surface bullet and reasons; the lesson; item 12's "until task 30 lands" corrected to this task |
 | `PLAN_MILESTONE_4.md`, this file | row 63, section 9 |
 
 ## 5. Tests, and what each is for

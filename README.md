@@ -599,7 +599,7 @@ The milestones:
   int64 forms; the int32 add, subtract, multiply and negate came back to
   milestone 4 as task 63), `date - date`, and civil-from-days in long lanes.
 * **Milestone 6**: *coverage* - the scope catalogue is in
-  [`sql/varka/plans/SCOPE_MILESTONE_6.md`](sql/varka/plans/SCOPE_MILESTONE_6.md),
+  [`sql/varka/plans/SCOPE_MILESTONE_7.md`](sql/varka/plans/SCOPE_MILESTONE_7.md),
   driven by a census of TPC-DS, TPC-H and the New York taxi benchmark. What that
   census says: `DateType`, the only type Varka has today, is 3.1% of the columns
   in TPC-DS and TPC-H; `DECIMAL` is the most-aggregated type and strings are 60%

@@ -7,7 +7,7 @@ test/benchmarks infra", and, for the ending: "we will write a blogpost about the
 issue that vanilla Spark cannot solve but Varka has fixed. This is huge win over
 Spark and other native boosters."*
 
-This is a task plan, not a scope catalogue. `SCOPE_MILESTONE_6.md` remains what
+This is a task plan, not a scope catalogue. `SCOPE_MILESTONE_7.md` remains what
 it is - the coverage survey, its fifty items and the TPC-DS/TPC-H census - and
 the coverage spine it argues for (decimal lanes, aggregate wiring, grouped
 aggregation, string keys, a first end-to-end TPC-H q6 number) **moves to
@@ -131,7 +131,7 @@ right; it is that Varka *can* get it right, because it can measure.
 
 ### 2.1 The epilogue past 64KB (task 87)
 
-*Moved here from `PLAN_MILESTONE_5.md` 2.18 and `SCOPE_MILESTONE_6.md` item 15,
+*Moved here from `PLAN_MILESTONE_5.md` 2.18 and `SCOPE_MILESTONE_7.md` item 15,
 text and task number unchanged; that section stays where it is and keeps the
 full observation, the reproducer and the analysis of why three caps missed it.*
 
@@ -195,7 +195,7 @@ for that written where the next reader will find it.
 
 ### 2.2a The weight the budget counts is wrong for a division (task 148)
 
-*Moved here from `PLAN_MILESTONE_5.md` 2.84 and `SCOPE_MILESTONE_6.md` item 39,
+*Moved here from `PLAN_MILESTONE_5.md` 2.84 and `SCOPE_MILESTONE_7.md` item 39,
 text and task number unchanged. It was recorded there as "an emitter budget
 finding on the int lane"; it is this milestone's subject rather than a stray
 note, and its own last clause says why - the ops it under-counts land "in the
@@ -310,7 +310,7 @@ expected, with what was searched.
 
 ### 2.7 Improve the compiler itself (tasks 173, 174, 175)
 
-Three items from `SCOPE_MILESTONE_6.md`, taken because the post brings readers
+Three items from `SCOPE_MILESTONE_7.md`, taken because the post brings readers
 who will open the source, and because a foundation milestone is the right time.
 
 * **Task 173, a disjointness test for the compiler's family chain** (item 41).
@@ -609,7 +609,7 @@ The milestone's own acceptance, beyond each task's admission check:
 
 * **The coverage spine.** Decimal lanes, decimal arithmetic, aggregate wiring,
   grouped aggregation, string keys and a first end-to-end TPC-H q6 number stay
-  in `SCOPE_MILESTONE_6.md` and move to milestone 7. The survey behind them is
+  in `SCOPE_MILESTONE_7.md` and move to milestone 7. The survey behind them is
   unchanged and still the best argument for what comes after this.
 * **Item 47, one place per node**, for the reason 2.7 gives.
 * **The Arrow-native Parquet reader**, which is the owner's work from milestone
