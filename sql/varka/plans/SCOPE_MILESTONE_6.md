@@ -3200,6 +3200,41 @@ retrospective adds a third reason to take it first when the long lane's
 arithmetic re-enters: `time_from_seconds(i)` declines, `hour(t) + 1` declines,
 and the coverage differential had to change a row because of it.
 
+### Item 50. `TIME +/- INTERVAL`: the semantics Varka's guard waits on
+
+*Moved from milestone 5 on 23 September 2026 (row 146, `PLAN_MILESTONE_5.md`
+2.82, text unchanged there).*
+
+Vanilla Spark's `timeAddInterval` adds exactly and throws when the result
+leaves `[0, 24h)`. A lane cannot throw, so `PLAN_TASK_102.md` 4.1 lowers
+`t + dt` as a range guard that fails the whole batch into the ghost fallback,
+where the row engine raises the identical error on the identical row. That is
+correct and it costs a compare per batch plus, on a batch that really crosses
+midnight, the whole batch on the row engine.
+
+[SPARK-57853](https://issues.apache.org/jira/browse/SPARK-57853) asks whether
+ANSI's modulo-24 replaces the throw. If it does, Varka's lowering becomes a
+`floorMod` by `NANOS_PER_DAY` with no guard, no decline channel and no batch
+ever falling back - strictly cheaper and strictly simpler than what ships
+today.
+
+**What changed since the row was scoped.** It was scoped on the reading that
+the ticket carried no patch. It does: `apache/spark#57044`,
+"[SPARK-57853][SQL] Use ANSI modulo-24 semantics for TIME +/- INTERVAL", open
+since 6 July 2026, 153 lines added and 68 removed over eleven files -
+`DateTimeUtils.timeAddInterval`, `TryEval`, the error class,
+`TimeExpressionsSuite`, `DateTimeUtilsSuite` and the `TIME` golden files, which
+is the ticket's own acceptance list. Its author asked this repository's owner
+to review it on 20 July and nothing has moved since. The ticket itself is still
+Open and unassigned, last touched 14 July.
+
+So the work here is a review rather than a patch, and it is upstream work that
+happens to unblock a Varka simplification. **Done when** the ticket has a
+resolution Varka can lower against - a merged patch or a recorded decision to
+keep the throw - and `PLAN_TASK_102.md` 4.1 says which, with its guard deleted
+or kept accordingly. Size: small in Varka, and unbounded upstream, which is
+why nothing in Varka blocks on it; 102's guard is built to be easy to delete.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
