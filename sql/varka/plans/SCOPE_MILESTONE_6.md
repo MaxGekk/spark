@@ -3220,8 +3220,24 @@ measurements behind because both need a quiet machine rather than an argument.
 
 The first is the **arithmetic benchmark's band**. `VarkaArithmeticBenchmark`
 has committed results at both widths and no band file, so a regeneration of it
-is still read against a flat threshold while every other family is read against
-its tiers. It is the last family in that state.
+is still read against a flat threshold rather than against its tiers.
+
+*Correction, 23 September 2026: an earlier draft of this item called it "the
+last family in that state", which was read off the census of the five families
+that had bands rather than off the benchmark directory. Counted properly there
+are eighteen Varka benchmark families and six now carry a band -
+`VarkaEmitterParityBenchmark` and `VarkaThroughputBenchmark` at two widths
+each, the date surface, the date chains, the `TIME` surface, and
+`VarkaFilterNarrowingBenchmark`, which task 145 measured because it needed one.
+Twelve do not, `TimeChain`, `VarkaArithmeticBenchmark`, `VarkaFilterBenchmark`,
+`VarkaNarrowingBenchmark`, `VarkaTimeBenchmark` and
+`VarkaLongLaneThroughputBenchmark` among them.*
+
+The arithmetic benchmark is still the one to take first, because it is the one
+whose regenerations get compared. The general shape of the work is what task
+145 did in passing: a family gets its band the first time someone needs to read
+a move in it, which is cheaper than banding eighteen families against a day
+that may never come.
 
 The second is **`PLAN_TASK_63.md` 9.7's 26.1% dead-local attribution**, taken
 from two *unpinned* regenerations at a time when the worst case on that file
@@ -3233,7 +3249,9 @@ strength of it, which is the concrete thing a wrong number would have cost.
 
 **Done when** the arithmetic band is committed beside its results, and 9.7's
 figure has been re-taken pinned and either confirmed, corrected, or withdrawn
-with task 82's scope re-read against whatever replaces it.
+with task 82's scope re-read against whatever replaces it. The other eleven
+families are not part of this item: each gets its band when a move in it has to
+be read.
 
 ## 5. Ordering
 
