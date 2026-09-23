@@ -1,0 +1,157 @@
+label:          spark-4.2.0-jdk25
+spark:          4.2.0
+commit:         3bd5ea5fbc7
+cores:          1
+datapath:       116.6 lane-ops/ns at 256 bits, 229.6 at 512 bits, ratio 1.97
+canary:         OFF
+host:           runnervmlun5p
+spark home:     /home/runner/stock-spark/spark-4.2.0-bin-hadoop3
+date:           2026-09-22T21:06:25Z
+jdk:            OpenJDK 64-Bit Server VM 25.0.4+7-LTS
+kernel:         6.17.0-1022-azure
+cpu:            AMD EPYC 9V45 96-Core Processor
+cpu flags:      avx avx2 avx512f avx512dq avx512ifma avx512cd avx512bw avx512vl avx_vnni avx512_bf16 avx512vbmi avx512_vbmi2 avx512_vnni avx512_bitalg avx512_vpopcntdq avx512_vp2intersect
+MaxVectorSize:  64
+power:          governor=n/a epp=n/a
+load at start:  1.20
+rows:           100000000
+partitions:     1
+cache:          1 of 1 partitions cached, 3.3 GiB in memory, 0.0 GiB on disk, Memory Deserialized 1x Replicated
+table columns:  times (6)
+benchmark:      timechains
+shard:          0/1
+entries:        12
+methodology:    5+ iterations over 2s windows after 2s warm-up; wall time by nanoTime, executor time as the sum of TaskMetrics.executorRunTime over the iteration
+
+CASE WHEN l < l2 THEN time_diff('MINUTE', time_trunc('HOUR', t + dt), time_trunc('MINUTE', t2) + dt2) ELSE time_diff('SECOND', time_trunc('MINUTE', t2), time_trunc('SECOND', t + dt) + dt2) END over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                                                                                 13490          13713         147          7.4         134.9       1.0X
+
+CASE WHEN l < l2 THEN time_diff('MINUTE', time_trunc('HOUR', t + dt), time_trunc('MINUTE', t2) + dt2) ELSE time_diff('SECOND', time_trunc('MINUTE', t2), time_trunc('SECOND', t + dt) + dt2) END over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                                                                                                13436          13655         147          7.4         134.4       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=94715169 fold=47178023811526578
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.4%
+
+time_diff('MILLISECOND', greatest(time_trunc('MINUTE', t + dt) + dt2, t2), least(time_trunc('SECOND', t2) + dt2, time_trunc('HOUR', t) + dt)) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                              19708          20036         225          5.1         197.1       1.0X
+
+time_diff('MILLISECOND', greatest(time_trunc('MINUTE', t + dt) + dt2, t2), least(time_trunc('SECOND', t2) + dt2, time_trunc('HOUR', t) + dt)) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                                             19666          19989         221          5.1         196.7       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=50309300437002330
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+hour(least(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2) + dt2, time_trunc('HOUR', t) + dt)) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                            17974          18286         306          5.6         179.7       1.0X
+
+hour(least(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2) + dt2, time_trunc('HOUR', t) + dt)) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                           17935          18243         303          5.6         179.4       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=57378717834479620
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+greatest(time_trunc('MINUTE', t + dt), time_trunc('MINUTE', t2) + dt2) - least(time_trunc('SECOND', t), time_trunc('SECOND', t2)) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                  16929          17189         237          5.9         169.3       1.0X
+
+greatest(time_trunc('MINUTE', t + dt), time_trunc('MINUTE', t2) + dt2) - least(time_trunc('SECOND', t), time_trunc('SECOND', t2)) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                                 16894          17151         234          5.9         168.9       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=49935062351003518
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+greatest(time_diff('SECOND', time_trunc('MINUTE', t + dt), time_trunc('SECOND', t2) + dt2), least(l, l2), time_diff('MINUTE', t, t2)) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                      15091          15360         205          6.6         150.9       1.0X
+
+greatest(time_diff('SECOND', time_trunc('MINUTE', t + dt), time_trunc('SECOND', t2) + dt2), least(l, l2), time_diff('MINUTE', t, t2)) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                                     15056          15324         205          6.6         150.6       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=50005719811730397
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+least(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2) + dt2, time_trunc('HOUR', t) + dt) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                      17458          17628         132          5.7         174.6       1.0X
+
+least(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2) + dt2, time_trunc('HOUR', t) + dt) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                     17425          17591         130          5.7         174.3       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=49855713233889676
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+if(l > l2, time_diff('MINUTE', time_trunc('HOUR', t) + dt, t2), time_diff('SECOND', t, time_trunc('MINUTE', t2) + dt2)) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                         8835           8934          90         11.3          88.4       1.0X
+
+if(l > l2, time_diff('MINUTE', time_trunc('HOUR', t) + dt, t2), time_diff('SECOND', t, time_trunc('MINUTE', t2) + dt2)) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                        8797           8899          92         11.4          88.0       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=94956026 fold=46864216641369096
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.4%
+
+minute(least(time_trunc('MINUTE', t + dt), time_trunc('SECOND', t2) + dt2)) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                            12503          12747         164          8.0         125.0       1.0X
+
+minute(least(time_trunc('MINUTE', t + dt), time_trunc('SECOND', t2) + dt2)) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                           12475          12713         161          8.0         124.7       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=54128051592894230
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+second(greatest(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2))) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                               12594          12769         150          7.9         125.9       1.0X
+
+second(greatest(time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', t2))) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                              12559          12733         151          8.0         125.6       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=55654893707846167
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.3%
+
+time_diff('HOUR', time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', time_trunc('MINUTE', t2) + dt2)) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                            17136          17360         242          5.8         171.4       1.0X
+
+time_diff('HOUR', time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', time_trunc('MINUTE', t2) + dt2)) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                           17094          17321         241          5.9         170.9       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=94715169 fold=54167091130086003
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.2%
+
+if(l IS NULL, time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', greatest(t2, time_trunc('MINUTE', t) + dt))) over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                    10468          10623         149          9.6         104.7       1.0X
+
+if(l IS NULL, time_trunc('MINUTE', t + dt) + dt2, time_trunc('SECOND', greatest(t2, time_trunc('MINUTE', t) + dt))) over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                   10430          10588         151          9.6         104.3       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=46032071377756069
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.4%
+
+CASE WHEN time_trunc('MINUTE', t + dt) < time_trunc('MINUTE', t2) + dt2 THEN time_diff('SECOND', t, t2) ELSE least(l, l2) END over 100000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                              13147          13342         186          7.6         131.5       1.0X
+
+CASE WHEN time_trunc('MINUTE', t + dt) < time_trunc('MINUTE', t2) + dt2 THEN time_diff('SECOND', t, t2) ELSE least(l, l2) END over 100000000 rows, executor time:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+projection, columnar consumer                                                                                                                                             13113          13309         186          7.6         131.1       1.0X
+# plan: projection, columnar consumer plain
+# checksum: projection rows=100000000 nonnull=100000000 fold=50234546286262794
+# fixed share (wall - executor) / wall: projection, columnar consumer 0.3%
+

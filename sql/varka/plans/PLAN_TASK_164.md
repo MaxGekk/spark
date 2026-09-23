@@ -200,8 +200,78 @@ be stated wherever it is. The laptop at 2e8 rows needs 1.8 ns/row against its
 18 ms constant, and every entry clears that. The dispatch decides the runner's
 bound, and the decision is recorded here when it is taken.
 
-Predictions 2, 3 and 5 wait for the runs: the laptop's four arms and the band
-first, then the runner.
+**The runs, 22 and 23 September 2026, both on GitHub Actions.** The row ladder
+of section 2.3 was dispatched ungated, because how many rows fit a runner and
+what the job constant costs are properties of its memory and cores rather than
+of its vector width, and gating a sizing question on the one-in-eighteen
+machine is the trap `PLAN_TASK_62.md` 11.8 records. It answered in three
+dispatches: 2e8 rows is refused outright (the table needs 9.1 GiB against a
+12g driver's 7.0 GiB store), 1.5e8 fails on the last arm, and **1e8 is
+resident at 4.6 GiB with a worst fixed share of 1.0%**. The first rung landed
+on an AMD EPYC 7763 - Zen 3, `avx avx2` only - which is the AVX2 arm in its
+natural habitat and the 256-bit end of the width subtraction, for free. The
+gated dispatches then took **twenty-four tickets to find an EPYC 9V45**, close
+to the census's one in eighteen, at a minute a miss.
+
+**Prediction 4 failed, and the way it failed is the finding.** The entries do
+not clear `--max-fixed-share` at 5% on the full-width runner: they read 7.2%
+to 9.1%. Nothing is broken - the table was resident, every entry fused with
+zero fallback batches - and the cause is the one 11.17 recorded for the date
+chains. The fast machine cut Varka's work to 0.42 s an iteration while the
+job's constant stayed near 36 ms. The date chains answered that by going from
+1e8 rows to 2e8; these cannot, because a `TIME` row is 46 bytes where a date
+row is 4, so **no row count both fits a 15 GiB runner and satisfies 5%**. The
+benchmark has been outrun by the engine it exists to measure. On the owner's
+decision the bound is lifted to 10% for this benchmark on runners, stated in
+the README's methodology as `PLAN_TASK_118.md` section 3 item 11 requires, and
+the workflow gained a `max-fixed-share` input so a run records the bound it was
+held to. Two things make that honest rather than convenient: the constant
+inflates every arm alike, so it *compresses* the ratio rather than flattering
+it, and the driver measures executor time independently, which is the figure
+the post leads with.
+
+**Prediction 2 held, and by a margin the plan did not expect.** On the EPYC
+9V45 the twelve chains run at 3.7 to 5.5 ns/row against stock 4.2.0's 82 to
+198, which is **19.6x to 46.9x, median 31.8x** by wall time and 21.0x to
+53.2x, median 34.9x by executor time; against the fork with the engine off,
+25.9x. The surface's projection rows read 13.4x to 38.2x, so the chains do
+exceed them - but on the Zen 3 runner the same twelve read only 2.6x to 5.9x,
+median 3.9x, which is *below* the surface. The prediction is right about the
+full-width machine and wrong about the lane in general, and section 2.1's
+model is what missed it: it priced an op and forgot that the machine chooses
+which ops there are.
+
+**Prediction 3 held.** Every entry fused on both machines, `fallback 0` on all
+twenty-four measured rows, checksums recorded.
+
+**Prediction 1's post-mortem, now that both machines have run.** `MIN_OPS` was
+derived from the laptop's surface at 0.05 ns per op, and the full-width runner
+does the same entries at about a tenth of that per row. The floor is not wrong
+- it still separates a memory-bound entry from a compute-bound one on the
+machine it was derived from - but it is a laptop constant, and a reader should
+not take 36 as a property of the lane.
+
+**What the two machines say about the datapath, which is the question row 164
+exists to answer.** Between the Zen 3 and the Zen 5, at the same row count and
+the same commit, the three scalar arms gain 1.64x, 1.76x and 1.80x - that is
+the machine generation, and it agrees with the 1.78x to 1.84x milestone 4
+measured on the date chains. Varka gains **14.6x**. Dividing the machine out
+leaves **8.3x for the kernel**, and it decomposes: two of it is the lane count,
+four 64-bit lanes against eight, and the rest is the lowering, because a
+machine without AVX-512 falls back to the fourteen-operation magic form where
+one with it emits the three-operation conversion form. Two times four-point-
+seven is 9.4 against 8.3 measured, which is as close as this kind of
+arithmetic gets.
+
+That is a different answer from the date chains', where the width was worth
+1.14x once the machine was divided out, and the two are consistent: a date
+chain is a dependency chain of cheap operations and is latency-bound, while a
+`TIME` chain is four to six constant divisions and its cost is the division's
+instruction count. **On this workload the lowering matters more than the
+width**, and neither number generalises to the other's shape.
+
+Prediction 5, the band, waits: a band for a runner-measured file needs repeated
+runs on the same pool and is a question for task 118 rather than this one.
 
 ## 6. Explicitly out of this task
 
