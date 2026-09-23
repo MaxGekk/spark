@@ -1214,3 +1214,4 @@ in the README - and are described from a user's side in that file's
 | `varka_datapath.sh` | Describes the machine and measures its vector datapath, exiting non-zero if it is not what the caller asked for. It reports *lanes per nanosecond* at three widths, because "has AVX-512" does not tell you whether 512-bit operations issue at full rate - some server parts read 1.33x where a full-width one reads 2x. Used as the gate on CI benchmark jobs and runnable on a laptop to see what it has. |
 | `varka_surface_shards.py` | Runs one sharded surface across CI runners and re-dispatches the shards that miss, for when the whole list does not fit one job's time limit. |
 | `varka_bench_merge.py` | Joins those shard files back into one file per distribution. |
+| `varka_post_page.py` | Renders a post's Markdown and the SVGs its figure scripts produce into the standalone page that gets published, inlining each figure so the page carries its own drawings and fonts. |
