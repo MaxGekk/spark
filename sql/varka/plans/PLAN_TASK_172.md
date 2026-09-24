@@ -291,3 +291,11 @@ is not what limits the claim.
 
 **Prediction 4 held for design B**: faster than vanilla at every rung, and by more than ten times
 past vanilla's crossing. Design A is still to build and to score.
+
+### Correction, 24 September 2026: the cliff is logged
+
+This plan says Spark does not report a method past HotSpot's 8000-byte limit. It does: since 2.4.0
+`CodeGenerator` logs "Generated method too long to be JIT compiled: <class>.<method> is N bytes" at
+INFO, which a `spark-submit` job's log shows and `spark-shell`, at WARN, hides. Spark notices the
+cliff, says so once at INFO, and runs the method uncompiled anyway. `PLAN_TASK_188.md` section 5
+has the evidence.
