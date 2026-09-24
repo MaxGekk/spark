@@ -69,8 +69,8 @@ the class got, with their bytecode size and how many Vector API lane
 operations each one runs:
 
     method              bytes IntVector LongVector DoubleVector convert VectorMask validity lines
-    epilogueDense         209         1          1            1       3          0        0     3
-    epilogueMasked        209         1          1            1       3          0        0     3
+    epilogueDense0        209         1          1            1       3          0        0     3
+    epilogueMasked0       209         1          1            1       3          0        0     3
     loopDense0            194         1          1            1       3          0        0     3
     loopMasked0           194         1          1            1       3          0        0     3
     run                    42         0          0            0       0          0        0     0

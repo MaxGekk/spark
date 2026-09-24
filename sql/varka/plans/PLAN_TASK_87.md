@@ -785,3 +785,73 @@ width, and on the null-free arm up to twelve outputs, so the default flips in
 step 6b: `methodByteBudget` is `HUGE_METHOD_LIMIT` unless a caller says
 otherwise, and the legacy form stays reachable at 0 as the reference the
 differential tests and the benchmark's first arm keep.
+
+### 9.6 Step 6b: the default, 24 September 2026
+
+`methodByteBudget` defaults to `HUGE_METHOD_LIMIT`. Every kernel is now in the
+form 9.2 to 9.4 built and 9.5 measured; the form before this task stays
+reachable at 0, as the reference `VarkaMethodSizeBenchmark`'s first arm and the
+differential tests measure against, and the fuzzer draws both.
+
+**What moved, and why all of it.** Section 5 expected the bytes oracle's moved
+rows at the flip to be exactly the shapes whose epilogue exceeded 8000 bytes.
+That was written before 3a: under the default a single-group kernel's
+epilogues are `epilogueDense0` and `epilogueMasked0`, a multi-group kernel's
+methods carry only their group's setup and one epilogue per group, and so
+every row of `emitted_bytes.json` moves, by name where not by bytes. The
+oracle is regenerated and the option inventory lists both values of the
+budget. The suites that name a single-group kernel's epilogue read the
+suffixed names; the tests that pin the earlier form's facts - where its single
+epilogue crossed 8000 bytes under prefix sharing, the legacy arms of 9.2 to
+9.4's ladders, the heavy single output it emitted into an uncompilable
+method - say `withMethodByteBudget(0)`, and `VarkaEmitterTestBase.epilogueSize`
+measures that form on purpose. `VarkaEmitterParityBenchmark`'s task-44
+section, which prices that crossing under sharing, pins both arms at 0: under
+the default neither arm crosses and the section would price nothing.
+
+**Committed benchmark files other than this task's are unchanged.** They
+reflect the default at their regeneration, as every emitter change before
+this one left them, and move when next regenerated; the parity file's
+crossing section is the one whose meaning the flip would have changed, and
+it is pinned instead.
+
+**What the task leaves.** Task 169: `VarkaLoopEmitter.emit` declines a shape
+no split can fit, and the compiler does not yet ask it, so such a shape is
+fused at plan time and falls back on the executor through the evaluator's
+existing catch (9.4). Task 170: whether a limit below 8000 - C1's, about
+1900 - earns the calls it adds. Task 189: 9.5's lead, that the per-group form
+did not enter the deoptimization cycle in the fork the single form did. Rows
+87 and 168 are done.
+
+### 9.7 What the review of step 6b corrected, 24 September 2026
+
+Seven findings, each fixed in the same pull request:
+
+1. **A test went vacuous under the default.** "With sharing off the decision
+   is per node" read `epilogueMasked0`, which under the per-group default holds
+   only `year(d)`: the unshared fields are two groups. It pins budget 0 now.
+2. **A declined shape was re-emitted on every task.** With the budget as the
+   default, a heavy single output reaches `VarkaShapeCache` from every task,
+   and the cache did not remember failures, so each task built and measured
+   the class again and logged a stack trace. The cache now remembers a
+   `VarkaEmitDeclined` per shape and rethrows it, and the evaluator logs each
+   reason once per JVM. The plan-time decline is still task 169's; this only
+   stops the executor path from costing an emission per task.
+3. **The fuzzer skipped the heaviest trees.** With 8000 the default, a shape
+   the budget declines returned early in most iterations; it is now run in
+   the single-epilogue form instead.
+4. **A missing method read as zero.** `VarkaEmitterTestSupport.codeSize` and
+   `invocationCount` returned 0 for a method the class does not have, so a
+   stale name compared across two emissions passed while asserting nothing.
+   Both fail now, naming the methods the class has.
+5. **Row 87 overstated the null-free arm.** "Within a few percent of its
+   even-batch rate at every rung" is the masked arm's; the null-free arm is
+   within 15%. The row says so.
+6. **The per-group driver stored and reloaded its last status**, four bytes in
+   every driver of every kernel for nothing. The last call's status is
+   returned directly; the oracle is regenerated again and the walkthrough's
+   drivers read their earlier sizes.
+7. **`VarkaEmitBudget` had been made public** only so a benchmark could name
+   8000; it is package-private again and the benchmark names
+   `CodeGenerator.DEFAULT_JVM_HUGE_METHOD_LIMIT`. `epilogueSize` is
+   `singleEpilogueSize`, saying at the call site which form it measures.

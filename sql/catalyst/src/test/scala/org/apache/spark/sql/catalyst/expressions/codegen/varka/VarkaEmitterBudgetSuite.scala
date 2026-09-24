@@ -322,9 +322,10 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
   test("sharing the prefix moves the epilogue's HugeMethodLimit crossing, and the bitmap " +
     "pass moves " +
       "it again: unshared 21 to 22, shared 44 to 49") {
-    // This is what step B1 is for, and the only thing it is for under today's grouping. The
-    // epilogue is one method over *every* output by task 24's deliberate decision, so its size
-    // grows with the whole projection rather than with a group. Four fields over one date
+    // This is what step B1 was for, measured in the single-epilogue form (budget 0) that task 24
+    // chose: one epilogue over *every* output, whose size grows with the whole projection rather
+    // than with a group. Task 87 split it per group; the crossing stays pinned here as the fact
+    // that split answers (singleEpilogueSize measures that form). Four fields over one date
     // repeat the decomposition four times; sharing it is most of the method.
     //
     // The outputs must be distinct nodes to count: the IR's records compare by value, so
@@ -354,13 +355,13 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
     // methods is dead, so epilogueMasked is epilogueDense's bytes and the crossing is the
     // dense epilogue's - unshared 21 fits (7563) and 22 crosses (8033); shared reaches
     // 49. The per-group arm keeps the old boundaries, asserted beside.
-    assert(epilogueSize(fields(6).take(21), 12, unshared) < limit)
-    assert(epilogueSize(fields(6).take(22), 12, unshared) > limit)
-    assert(epilogueSize(fields(12), 12, sharing) < limit,
+    assert(singleEpilogueSize(fields(6).take(21), 12, unshared) < limit)
+    assert(singleEpilogueSize(fields(6).take(22), 12, unshared) > limit)
+    assert(singleEpilogueSize(fields(12), 12, sharing) < limit,
       "forty-eight shared outputs fit under the pass; the boundary is further out")
-    assert(epilogueSize(fields((49 + 3) / 4).take(49 - 1), 13,
+    assert(singleEpilogueSize(fields((49 + 3) / 4).take(49 - 1), 13,
       sharing) < limit)
-    val past = epilogueSize(fields((49 + 3) / 4).take(49), 13,
+    val past = singleEpilogueSize(fields((49 + 3) / 4).take(49), 13,
       sharing)
     assert(past > limit,
       s"49 shared calendar outputs now fit in $past bytes - the pass reaches " +
@@ -368,10 +369,10 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
     // The reference variant: the boundaries task 54 left, 20/21 unshared and 44 shared.
     val perGroupUnshared = unshared.withValidityByBitmap(false)
     val perGroupShared = sharing.withValidityByBitmap(false)
-    assert(epilogueSize(fields(5), 12, perGroupUnshared) < limit)
-    assert(epilogueSize(fields(6).take(21), 12, perGroupUnshared) > limit)
-    assert(epilogueSize(fields(10), 12, perGroupShared) < limit)
-    assert(epilogueSize(fields(11), 12, perGroupShared) > limit)
+    assert(singleEpilogueSize(fields(5), 12, perGroupUnshared) < limit)
+    assert(singleEpilogueSize(fields(6).take(21), 12, perGroupUnshared) > limit)
+    assert(singleEpilogueSize(fields(10), 12, perGroupShared) < limit)
+    assert(singleEpilogueSize(fields(11), 12, perGroupShared) > limit)
   }
 
   test("the driver stays under HugeMethodLimit on the output ladder, with the pass " +
@@ -433,11 +434,13 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
       new MakeDate(new Year(col), new Month(col), new LiteralSlot(k), true)
     }
     val limit = VarkaEmitBudget.HUGE_METHOD_LIMIT
+    // The form before task 87, which is what crossed: the default splits the epilogue.
+    val single = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)
     def size(n: Int, method: String): Int =
-      VarkaEmitterTestSupport.codeSize(emitMulti(ladder(n), 1, n)._2, method)
+      VarkaEmitterTestSupport.codeSize(emitMulti(ladder(n), 1, n, single)._2, method)
     assert(size(12, "epilogueMasked") < limit && size(13, "epilogueMasked") > limit)
     assert(size(13, "epilogueDense") < limit && size(14, "epilogueDense") > limit)
-    val at16 = VarkaEmittedClass.measure(emitMulti(ladder(16), 1, 16)._2)
+    val at16 = VarkaEmittedClass.measure(emitMulti(ladder(16), 1, 16, single)._2)
     at16.codeLength.asScala.filter(_._1.startsWith("loop")).foreach { case (m, bytes) =>
       assert(bytes < limit, s"$m is $bytes bytes: a loop method over HugeMethodLimit")
     }
@@ -460,6 +463,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
       new MakeDate(new Year(col), new Month(col), new LiteralSlot(k), true)
     }
     val on = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(VarkaEmitBudget.HUGE_METHOD_LIMIT)
+    val legacy = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)
     def sizes(n: Int, options: VarkaEmitOptions): Map[String, Int] = {
       val bytes = emitMulti(ladder(n), 1, n, options)._2
       VarkaEmitterTestSupport.methodNames(bytes).asScala.filter(_ != "<init>")
@@ -469,10 +473,10 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
       VarkaEmitterTestSupport.invocationCount(
         emitMulti(ladder(n), 1, n, options)._2, method, "jdk.incubator.vector.IntVector")
 
-    val (off60, on60) = (sizes(60, VarkaEmitOptions.DEFAULTS), sizes(60, on))
+    val (off60, on60) = (sizes(60, legacy), sizes(60, on))
     for (m <- off60.keys if m.startsWith("loop")) {
       assert(on60(m) < off60(m), s"$m: ${off60(m)} -> ${on60(m)} bytes, expected smaller")
-      assert(ops(60, on, m) === ops(60, VarkaEmitOptions.DEFAULTS, m), s"$m: the op count moved")
+      assert(ops(60, on, m) === ops(60, legacy, m), s"$m: the op count moved")
     }
     // The driver sets up every output either way; what it gains is one call per epilogue the
     // switch splits off (step 4), a few bytes each, never a setup term.
@@ -483,7 +487,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
         s"$m: ${off60(m)} -> ${on60(m)} bytes for ${groups - 1} more epilogue calls")
     }
     val loopsAndDrivers = (m: Map[String, Int]) => m.filter(_._1.startsWith("loop"))
-    assert(loopsAndDrivers(sizes(4, on)) === loopsAndDrivers(sizes(4, VarkaEmitOptions.DEFAULTS)),
+    assert(loopsAndDrivers(sizes(4, on)) === loopsAndDrivers(sizes(4, legacy)),
       "one group: nothing to drop")
 
     // The same answers as the reference evaluator, on both bodies, at ragged and even lengths.
@@ -512,7 +516,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
     // than any group.
     val rungs = Seq(4, 8, 12, 13, 14, 16, 32, 60)
     for (lanes <- Seq(0, 4)) {
-      val off = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+      val off = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withMethodByteBudget(0)
       val on = off.withMethodByteBudget(VarkaEmitBudget.HUGE_METHOD_LIMIT)
       for (n <- rungs) {
         val roots = VarkaHugeMethodProbe.ladder(n)
@@ -607,7 +611,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
       if (lo == hi) new AddMonths(new ColumnRef(0), new LiteralSlot(lo - 1))
       else new Greatest(tree(lo, (lo + hi) / 2), tree((lo + hi) / 2 + 1, hi))
     val heavy = Seq(tree(1, 32))
-    val legacy = VarkaEmitterTestSupport.codeSize(emitMulti(heavy, 1, 32)._2, "loopMasked0")
+    val legacy = VarkaEmitterTestSupport.codeSize(
+      emitMulti(heavy, 1, 32, VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0))._2, "loopMasked0")
     assert(legacy > VarkaEmitBudget.HUGE_METHOD_LIMIT, s"the legacy loop method is $legacy bytes")
     val production =
       VarkaEmitOptions.DEFAULTS.withMethodByteBudget(VarkaEmitBudget.HUGE_METHOD_LIMIT)
