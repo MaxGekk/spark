@@ -107,7 +107,83 @@ constant and is not measured; if they differ by more, the cold-JVM run is one
 
 ## 5. Outcome
 
-*To be written from the results files. Each prediction above is scored.*
+### 5.1 The first quiet run measured vanilla twice, 26 September 2026
+
+The benchmark as merged gave each iteration fresh offsets of
+`10000 * (iteration + 1)`, and those offsets are also `add_months` month
+counts. The Varka kernel runs a batch only while a month count is within
+`VarkaChrono.MONTH_ARITH_MAX_MONTHS`, 24564; past it the batch goes to Spark's
+row path. The first-run case crossed that bound from its third iteration and
+the second-run case, at `100 + iteration`, on every iteration, so the Varka
+arm's timings were largely vanilla's own code, and they tracked the vanilla arm
+within a few percent at every rung. The fusion check at the top of each rung
+ran only the first iteration's query, which was in range, and it required only
+that some batch had run on the kernel. The results file this task merged with
+was measured the same way.
+
+The fix, in this commit: iterations are a hundred apart and the largest offset
+any case uses is checked against the kernel's bound when the benchmark starts;
+the fusion check runs at the largest offset of each executed case; and the
+ladder's shared check, `VarkaSizeLadder.varkaFused`, now also requires every
+fallback counter of the node - non-Arrow input, kernel failure, row path,
+declined - to be zero, so the size ladder is held to it as well.
+
+### 5.2 The corrected run, and what the JVM says
+
+`VarkaColdStartBenchmark-jdk25-results.txt` and its 128-bit companion, on the
+quiet laptop, canary passing. Times are the best of five, in milliseconds for
+a hundred thousand rows:
+
+| Entries | vanilla first | vanilla second | Varka plan only | Varka first | Varka second |
+| --: | --: | --: | --: | --: | --: |
+| 16 | 134 | 56 | 15 | 239 | 229 |
+| 48 | 235 | 154 | 16 | 624 | 605 |
+| 54 | 461 | 437 | 16 | 694 | 677 |
+| 100 | 872 | 829 | 27 | 1260 | 1233 |
+
+Varka is slower than vanilla at every rung, on the first run and on the
+second, and its second run is its first run minus the emission. Run under
+`-XX:+PrintCompilation` (a diagnostic run, not committed), the benchmark shows
+why: across the whole run not one of the kernels' `loopDense`, `loopMasked`,
+`epilogueDense` or `epilogueMasked` methods is compiled at any tier, while
+vanilla's generated `processNext` is compiled 506 times in the same log and the
+Varka compiler's own classes compile normally. Each iteration emits a new
+kernel class; its loop method is called once per batch, about 25 times for a
+hundred thousand rows, and loops about 256 times per call, short of both the
+invocation and the back-edge thresholds of the first compiler tier. So the
+whole query runs in the bytecode interpreter, where every Vector API operation
+is a library call that allocates, which is far slower than the interpreted
+scalar code of vanilla's uncompiled method. Vanilla escapes the same fate
+because its generated loop runs over all the rows in one invocation, and the
+JIT compiles it partway through that one call.
+
+**The predictions.**
+
+1. **Partly held.** Vanilla's first run below the cliff is 2.4 and 2.1 times
+   its second at 16 and 32 entries, but 1.5 and 1.8 at 48 and 52.
+2. **Held.** Past the cliff vanilla's first run is within 1.1 of its second.
+3. **Refuted.** Varka's first run is only about 1.03 times its second, because
+   the second run is not steady state either: the class is new and has not
+   been compiled.
+4. **Refuted.** At a hundred entries Varka's first run is 1.4 times slower than
+   vanilla's, not three times faster.
+5. **Held, the wrong way round.** At 16 entries the two first runs are within
+   a factor of two, Varka 1.8 times slower.
+6. **Refuted.** Planning is 10 to 27 ms and running a hundred thousand rows is
+   55 to 1260; the smoke run that suggested this ran ten thousand rows.
+
+**What it means.** The post's bound 4 stands and is sharper than written: a
+new shape's first query on Varka is slower than vanilla's until its kernel is
+compiled, and at a hundred thousand rows it never is. That makes the shape
+cache, which keys a kernel by its tree rather than its literals, the thing that
+carries Varka in practice: a dashboard that reruns a shape with new values
+reuses a class the JIT has already compiled. It also puts three design
+questions on the table for the next milestone, none of them this task's: run a
+new shape's first batches on Spark's row path until the kernel is compiled;
+emit one loop over all of a partition's batches, so that one invocation
+reaches the back-edge threshold as vanilla's does; and ahead-of-time or
+lowered-threshold compilation for emitted classes. The number the post quotes
+still comes from a runner; this laptop run decides what to measure there.
 
 ## 6. Explicitly out of this task
 

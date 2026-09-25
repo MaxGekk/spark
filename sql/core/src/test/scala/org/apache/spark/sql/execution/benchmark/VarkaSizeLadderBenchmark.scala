@@ -23,9 +23,10 @@ import scala.concurrent.duration._
 
 import org.apache.spark.benchmark.Benchmark
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodeGenerator, FusedOutput,
   VarkaExpressionCompiler}
-import org.apache.spark.sql.execution.{VarkaColumnarToRowExec, VarkaProjectExec}
+import org.apache.spark.sql.execution.{SparkPlan, VarkaColumnarToRowExec, VarkaProjectExec}
 
 /**
  * The size ladder's rungs, data and query, shared by [[VarkaSizeLadderBenchmark]] and
@@ -57,22 +58,29 @@ object VarkaSizeLadder {
     VarkaArrowSessions.cache(session, "ladder_dates")
   }
 
-  /** How many entries the Varka arm fused, after checking that it ran as a kernel. */
+  /**
+   * How many entries the Varka arm fused, after checking that it ran as a kernel and that no
+   * batch fell back: a kernel's guard hands a batch it cannot compute - a value outside the
+   * range it covers, say - to Spark's row path, and a timing of such batches is vanilla's.
+   */
   private[benchmark] def varkaFused(varka: SparkSession, query: String): Int = {
     val df = varka.sql(query)
     df.queryExecution.toRdd.count()
     val plan = df.queryExecution.executedPlan
     val options = VarkaColumnarToRowExec.emitOptions(varka.sessionState.conf.varkaEmitUseAVX)
-    val (fused, batches) = plan.collectFirst {
-      case v: VarkaProjectExec =>
-        (VarkaExpressionCompiler.compilePartial(v.projectList, v.child.output, options),
-          v.metrics("numVarkaBatches").value)
-      case v: VarkaColumnarToRowExec =>
-        (VarkaExpressionCompiler.compilePartial(v.projectList, v.child.output, options),
-          v.metrics("numVarkaBatches").value)
+    val fallbackMetrics = Seq("numFallbackBatchesNonArrow", "numFallbackBatchesKernel",
+      "numFallbackBatchesRowPath", "numFallbackBatchesDeclined")
+    def outcome(node: SparkPlan, projectList: Seq[NamedExpression]) =
+      (VarkaExpressionCompiler.compilePartial(projectList, node.children.head.output, options),
+        node.metrics("numVarkaBatches").value,
+        fallbackMetrics.flatMap(node.metrics.get).map(_.value).sum)
+    val (fused, batches, fallbacks) = plan.collectFirst {
+      case v: VarkaProjectExec => outcome(v, v.projectList)
+      case v: VarkaColumnarToRowExec => outcome(v, v.projectList)
     }.getOrElse(throw new IllegalStateException(
       s"the Varka arm did not fuse:\n${plan.treeString}"))
     require(batches > 0, s"the Varka arm fused but fell back at run time: $query")
+    require(fallbacks == 0, s"the Varka arm handed $fallbacks batches to the row path: $query")
     fused.map(_.specs.count(_.isInstanceOf[FusedOutput])).getOrElse(0)
   }
 
