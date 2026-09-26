@@ -42,9 +42,12 @@ import org.apache.spark.sql.types.DateType
  * Arguments: the output count, the form (`single` for one epilogue over every output, the
  * emission before task 87; `group` for the epilogue per group, the default since), the seconds
  * to run, optionally the batch length (1024, which every lane count divides), and optionally the
- * path to C2: `batches`, the batches from the first call, or `warmup`, the path task 212 gives a
+ * path to C2: `batches`, the batches from the first call; `warmup`, the path task 212 gives a
  * new kernel - C1 kept off the class by the same compiler directive, and twelve thousand calls
- * of 32 rows before the first batch, so that C2 compiles the loop from the warm-up's profile.
+ * of 32 rows before the first batch, so that C2 compiles the loop from the warm-up's profile;
+ * and the two halves of that path on their own, `c1off` and `shortcalls`, which tell which half
+ * changes what C2 does. `VARKA_DEOPT_DUMP=<dir>` in the environment writes the emitted class
+ * there, for `javap`.
  */
 object VarkaDeoptCycleProbe {
 
@@ -93,7 +96,10 @@ object VarkaDeoptCycleProbe {
 
   def main(args: Array[String]): Unit = {
     if (args.length < 3) {
-      System.err.println("usage: VarkaDeoptCycleProbe <outputs> <single|group> <seconds> [rows]")
+      // scalastyle:off println
+      System.err.println("usage: VarkaDeoptCycleProbe <outputs> <single|group> <seconds> " +
+        "[rows] [batches|warmup|c1off|shortcalls]")
+      // scalastyle:on println
       System.exit(2)
     }
     val outputs = args(0).toInt
@@ -101,7 +107,8 @@ object VarkaDeoptCycleProbe {
     val seconds = args(2).toInt
     val rows = if (args.length > 3) args(3).toInt else 1024
     val path = if (args.length > 4) args(4) else "batches"
-    require(path == "batches" || path == "warmup", s"path $path is not batches or warmup")
+    require(Set("batches", "warmup", "c1off", "shortcalls").contains(path),
+      s"path $path is not batches, warmup, c1off or shortcalls")
     val options = form match {
       case "single" => VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)
       case "group" =>
@@ -110,11 +117,14 @@ object VarkaDeoptCycleProbe {
     }
     val fused = shape(outputs)
     val name = className(outputs, form, path)
-    if (path == "warmup") {
+    if (path == "warmup" || path == "c1off") {
       excludeC1()
     }
     val bytes = VarkaLoopEmitter.emit(name, fused.outputs.asJava, fused.inputOrdinals.size,
       fused.numLiterals, null, null, options)
+    sys.env.get("VARKA_DEOPT_DUMP").foreach { dir =>
+      Files.write(java.nio.file.Paths.get(dir, name + ".class"), bytes)
+    }
     // scalastyle:off println
     println(METHODS_PREFIX + VarkaEmitterTestSupport.methodNames(bytes).asScala
       .filter(m => m.startsWith("loop") || m.startsWith("epilogue") || m.startsWith("run"))
@@ -136,7 +146,7 @@ object VarkaDeoptCycleProbe {
       val noValidity = Array(0L)
       val noNulls = Array(0)
       var status = 0
-      if (path == "warmup") {
+      if (path == "warmup" || path == "shortcalls") {
         var call = 0
         while (call < warmupCalls) {
           status |= kernel.run(src, noValidity, noNulls, dst, dstValidity, literals, warmupRows)
