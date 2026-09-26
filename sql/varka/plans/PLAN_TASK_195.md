@@ -148,9 +148,14 @@ why: across the whole run not one of the kernels' `loopDense`, `loopMasked`,
 `epilogueDense` or `epilogueMasked` methods is compiled at any tier, while
 vanilla's generated `processNext` is compiled 506 times in the same log and the
 Varka compiler's own classes compile normally. Each iteration emits a new
-kernel class; its loop method is called once per batch, about 25 times for a
-hundred thousand rows, and loops about 256 times per call, short of both the
-invocation and the back-edge thresholds of the first compiler tier. So the
+kernel class; its loop method is called once per batch - the cache's default
+batch is 10,000 rows, so ten calls for a hundred thousand rows - and loops
+about 625 times per call at sixteen lanes, some 6,250 iterations in all. The
+first compiler tier needs 200 calls, or 2,000 calls and iterations together
+with at least 100 calls, or 60,000 iterations inside one call
+(`Tier3InvocationThreshold`, `Tier3CompileThreshold`,
+`Tier3MinInvocationThreshold`, `Tier3BackEdgeThreshold` on this JDK), and the
+kernel meets none of them. So the
 whole query runs in the bytecode interpreter, where every Vector API operation
 is a library call that allocates, which is far slower than the interpreted
 scalar code of vanilla's uncompiled method. Vanilla escapes the same fate

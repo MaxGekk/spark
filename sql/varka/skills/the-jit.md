@@ -541,8 +541,10 @@ machinery and `sql/varka/width_audit.json` the census; three things to carry.
 
 Varka's loop and epilogue methods are called once per batch, and each call loops only a few
 hundred times, so a freshly emitted class reaches neither the first compiler tier's invocation
-threshold nor its back-edge threshold until many batches have passed. Over a hundred thousand
-rows - about 25 batches - the cold-start benchmark's kernels were never compiled at any tier:
+threshold (200 calls, or 100 calls with 2,000 calls and iterations together) nor its back-edge
+threshold (60,000 iterations in one call) until many batches have passed. Over a hundred
+thousand rows - ten batches of the cache's default 10,000 rows, about 625 iterations each at
+sixteen lanes - the cold-start benchmark's kernels were never compiled at any tier:
 `-XX:+PrintCompilation` shows no `loopDense` or `epilogueDense` event in the whole run, while
 vanilla's generated `processNext` compiles in the same log, because its one loop over every row
 runs in a single invocation and the JIT compiles it partway through (`PLAN_TASK_195.md` 5.2).
