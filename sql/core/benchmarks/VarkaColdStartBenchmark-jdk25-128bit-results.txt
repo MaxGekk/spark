@@ -1,856 +1,856 @@
 Narrow-width companion of VarkaColdStartBenchmark-jdk25-results.txt: the same benchmark under
 -XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
   benchmark:   org.apache.spark.sql.execution.benchmark.VarkaColdStartBenchmark
-  commit:      9c4bd484ad1 (working tree dirty)
-  date:        2026-09-26T06:45:42Z
+  commit:      41ee825baa8
+  date:        2026-09-26T12:58:57Z
   jdk:         OpenJDK Runtime Environment (build 25.0.4.1+1-1-26.04.4-Ubuntu)
   kernel:      7.0.0-31-generic
   cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
   power:       governor=performance epp=performance profile=performance
   pinned to:   taskset -c 0,12,13,14,15,1,2,3
-  load at start: 0.84
-  canary:      ok (compute +0.1% cache -1.6% memory -1.0% )
+  load at start: 0.21
+  canary:      ok (compute +0.1% cache +4.3% memory -0.4% )
   wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt sql/Test/runMain org.apache.spark.sql.execution.benchmark.VarkaColdStartBenchmark
   narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project sql" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.execution.benchmark.VarkaColdStartBenchmark"
 
 Running benchmark: 16 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 22100 microseconds
-Iteration 1 took 31091 microseconds
-Iteration 2 took 17401 microseconds
-Iteration 3 took 17033 microseconds
-Iteration 4 took 17068 microseconds
-  Stopped after 5 iterations, 104 ms
+Iteration 0 took 21456 microseconds
+Iteration 1 took 19242 microseconds
+Iteration 2 took 18110 microseconds
+Iteration 3 took 15939 microseconds
+Iteration 4 took 17098 microseconds
+  Stopped after 5 iterations, 91 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 197682 microseconds
-Iteration 1 took 122568 microseconds
-Iteration 2 took 125280 microseconds
-Iteration 3 took 113801 microseconds
-Iteration 4 took 114999 microseconds
-  Stopped after 5 iterations, 674 ms
+Iteration 0 took 181068 microseconds
+Iteration 1 took 127529 microseconds
+Iteration 2 took 128932 microseconds
+Iteration 3 took 108822 microseconds
+Iteration 4 took 114748 microseconds
+  Stopped after 5 iterations, 661 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 62965 microseconds
-Iteration 1 took 54391 microseconds
-Iteration 2 took 56843 microseconds
-Iteration 3 took 55631 microseconds
-Iteration 4 took 54860 microseconds
-  Stopped after 5 iterations, 284 ms
+Iteration 0 took 56533 microseconds
+Iteration 1 took 56680 microseconds
+Iteration 2 took 51859 microseconds
+Iteration 3 took 50897 microseconds
+Iteration 4 took 49853 microseconds
+  Stopped after 5 iterations, 265 ms
   Running case: Varka, plan only
-Iteration 0 took 24959 microseconds
-Iteration 1 took 20776 microseconds
-Iteration 2 took 22920 microseconds
-Iteration 3 took 18279 microseconds
-Iteration 4 took 18004 microseconds
-  Stopped after 5 iterations, 104 ms
+Iteration 0 took 19169 microseconds
+Iteration 1 took 17332 microseconds
+Iteration 2 took 17260 microseconds
+Iteration 3 took 16601 microseconds
+Iteration 4 took 16704 microseconds
+  Stopped after 5 iterations, 87 ms
   Running case: Varka, first run
-Iteration 0 took 803012 microseconds
-Iteration 1 took 744373 microseconds
-Iteration 2 took 735845 microseconds
-Iteration 3 took 736028 microseconds
-Iteration 4 took 739240 microseconds
-  Stopped after 5 iterations, 3758 ms
+Iteration 0 took 787059 microseconds
+Iteration 1 took 763649 microseconds
+Iteration 2 took 741184 microseconds
+Iteration 3 took 742140 microseconds
+Iteration 4 took 751484 microseconds
+  Stopped after 5 iterations, 3785 ms
   Running case: Varka, second run
-Iteration 0 took 734572 microseconds
-Iteration 1 took 726062 microseconds
-Iteration 2 took 779490 microseconds
-Iteration 3 took 724354 microseconds
-Iteration 4 took 730504 microseconds
-  Stopped after 5 iterations, 3694 ms
+Iteration 0 took 722994 microseconds
+Iteration 1 took 730067 microseconds
+Iteration 2 took 733098 microseconds
+Iteration 3 took 737312 microseconds
+Iteration 4 took 721950 microseconds
+  Stopped after 5 iterations, 3645 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 17878 microseconds
-Iteration 1 took 14566 microseconds
-Iteration 2 took 15085 microseconds
-Iteration 3 took 14651 microseconds
-Iteration 4 took 16192 microseconds
-  Stopped after 5 iterations, 78 ms
+Iteration 0 took 17639 microseconds
+Iteration 1 took 14070 microseconds
+Iteration 2 took 15117 microseconds
+Iteration 3 took 14823 microseconds
+Iteration 4 took 14181 microseconds
+  Stopped after 5 iterations, 75 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 247053 microseconds
-Iteration 1 took 156043 microseconds
-Iteration 2 took 151970 microseconds
-Iteration 3 took 142081 microseconds
-Iteration 4 took 163219 microseconds
-  Stopped after 5 iterations, 860 ms
+Iteration 0 took 267435 microseconds
+Iteration 1 took 210295 microseconds
+Iteration 2 took 193392 microseconds
+Iteration 3 took 165241 microseconds
+Iteration 4 took 215241 microseconds
+  Stopped after 5 iterations, 1051 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 100094 microseconds
-Iteration 1 took 97168 microseconds
-Iteration 2 took 98584 microseconds
-Iteration 3 took 102652 microseconds
-Iteration 4 took 112273 microseconds
-  Stopped after 5 iterations, 510 ms
+Iteration 0 took 88173 microseconds
+Iteration 1 took 101198 microseconds
+Iteration 2 took 111002 microseconds
+Iteration 3 took 125789 microseconds
+Iteration 4 took 107300 microseconds
+  Stopped after 5 iterations, 533 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 34422 microseconds
-Iteration 1 took 56197 microseconds
-Iteration 2 took 28526 microseconds
-Iteration 3 took 28452 microseconds
-Iteration 4 took 28117 microseconds
-  Stopped after 5 iterations, 175 ms
+Iteration 0 took 30150 microseconds
+Iteration 1 took 30112 microseconds
+Iteration 2 took 28983 microseconds
+Iteration 3 took 29296 microseconds
+Iteration 4 took 29714 microseconds
+  Stopped after 5 iterations, 148 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 16 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                             17             21           6          5.9         170.3       1.0X
-vanilla Spark, first run                            114            135          35          0.9        1138.0       0.1X
-vanilla Spark, second run                            54             57           3          1.8         543.9       0.3X
-Varka, plan only                                     18             21           3          5.6         180.0       0.9X
-Varka, first run                                    736            752          29          0.1        7358.5       0.0X
-Varka, second run                                   724            739          23          0.1        7243.5       0.0X
-Varka with warm-up, plan only                        15             16           1          6.9         145.7       1.2X
-Varka with warm-up, first run                       142            172          43          0.7        1420.8       0.1X
-Varka with warm-up, second run                       97            102           6          1.0         971.7       0.2X
-Varka with warm-up, once compiled                    28             35          12          3.6         281.2       0.6X
-rung 16: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 996 ms and 3680 calls; COMPILED after 958 ms and 4320 calls; COMPILED after 1291 ms and 6080 calls; COMPILED after 1274 ms and 6000 calls; COMPILED after 1279 ms and 6080 calls
-09:06:23.617 WARN org.apache.spark.util.SparkStringUtils: Truncated the string representation of a plan since it was too large. This behavior can be adjusted by setting 'spark.sql.debug.maxToStringFields'.
+vanilla Spark, plan only                             16             18           2          6.3         159.4       1.0X
+vanilla Spark, first run                            109            132          29          0.9        1088.2       0.1X
+vanilla Spark, second run                            50             53           3          2.0         498.5       0.3X
+Varka, plan only                                     17             17           1          6.0         166.0       1.0X
+Varka, first run                                    741            757          19          0.1        7411.8       0.0X
+Varka, second run                                   722            729           7          0.1        7219.5       0.0X
+Varka with warm-up, plan only                        14             15           1          7.1         140.7       1.1X
+Varka with warm-up, first run                       165            210          37          0.6        1652.4       0.1X
+Varka with warm-up, second run                       88            107          14          1.1         881.7       0.2X
+Varka with warm-up, once compiled                    29             30           1          3.5         289.8       0.5X
+rung 16: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 2008 ms and 8800 calls; COMPILED after 1940 ms and 8560 calls; COMPILED after 1964 ms and 9040 calls; COMPILED after 1785 ms and 8320 calls; COMPILED after 1969 ms and 8960 calls
+15:22:00.996 WARN org.apache.spark.util.SparkStringUtils: Truncated the string representation of a plan since it was too large. This behavior can be adjusted by setting 'spark.sql.debug.maxToStringFields'.
 Running benchmark: 32 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 13580 microseconds
-Iteration 1 took 11638 microseconds
-Iteration 2 took 11829 microseconds
-Iteration 3 took 11522 microseconds
-Iteration 4 took 11532 microseconds
-  Stopped after 5 iterations, 60 ms
+Iteration 0 took 14474 microseconds
+Iteration 1 took 11960 microseconds
+Iteration 2 took 12239 microseconds
+Iteration 3 took 13391 microseconds
+Iteration 4 took 11444 microseconds
+  Stopped after 5 iterations, 63 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 189715 microseconds
-Iteration 1 took 169724 microseconds
-Iteration 2 took 159573 microseconds
-Iteration 3 took 165491 microseconds
-Iteration 4 took 161512 microseconds
-  Stopped after 5 iterations, 846 ms
+Iteration 0 took 134141 microseconds
+Iteration 1 took 165552 microseconds
+Iteration 2 took 156487 microseconds
+Iteration 3 took 157335 microseconds
+Iteration 4 took 161585 microseconds
+  Stopped after 5 iterations, 775 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 76721 microseconds
-Iteration 1 took 71635 microseconds
-Iteration 2 took 70906 microseconds
-Iteration 3 took 67409 microseconds
-Iteration 4 took 68626 microseconds
-  Stopped after 5 iterations, 355 ms
+Iteration 0 took 73839 microseconds
+Iteration 1 took 69788 microseconds
+Iteration 2 took 68890 microseconds
+Iteration 3 took 70441 microseconds
+Iteration 4 took 76865 microseconds
+  Stopped after 5 iterations, 359 ms
   Running case: Varka, plan only
-Iteration 0 took 20175 microseconds
-Iteration 1 took 15977 microseconds
-Iteration 2 took 16179 microseconds
-Iteration 3 took 17439 microseconds
-Iteration 4 took 16045 microseconds
-  Stopped after 5 iterations, 85 ms
+Iteration 0 took 19675 microseconds
+Iteration 1 took 15919 microseconds
+Iteration 2 took 15786 microseconds
+Iteration 3 took 15762 microseconds
+Iteration 4 took 16258 microseconds
+  Stopped after 5 iterations, 83 ms
   Running case: Varka, first run
-Iteration 0 took 1446308 microseconds
-Iteration 1 took 1433934 microseconds
-Iteration 2 took 1446912 microseconds
-Iteration 3 took 1441832 microseconds
-Iteration 4 took 1471334 microseconds
-  Stopped after 5 iterations, 7240 ms
+Iteration 0 took 1435606 microseconds
+Iteration 1 took 1450946 microseconds
+Iteration 2 took 1478446 microseconds
+Iteration 3 took 1428293 microseconds
+Iteration 4 took 1439016 microseconds
+  Stopped after 5 iterations, 7232 ms
   Running case: Varka, second run
-Iteration 0 took 1430374 microseconds
-Iteration 1 took 1424685 microseconds
-Iteration 2 took 1429126 microseconds
-Iteration 3 took 1451145 microseconds
-Iteration 4 took 1422261 microseconds
-  Stopped after 5 iterations, 7157 ms
+Iteration 0 took 1431202 microseconds
+Iteration 1 took 1422763 microseconds
+Iteration 2 took 1430834 microseconds
+Iteration 3 took 1417474 microseconds
+Iteration 4 took 1449457 microseconds
+  Stopped after 5 iterations, 7151 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 21049 microseconds
-Iteration 1 took 16011 microseconds
-Iteration 2 took 15487 microseconds
-Iteration 3 took 16087 microseconds
-Iteration 4 took 16157 microseconds
-  Stopped after 5 iterations, 84 ms
+Iteration 0 took 18729 microseconds
+Iteration 1 took 15765 microseconds
+Iteration 2 took 15525 microseconds
+Iteration 3 took 15908 microseconds
+Iteration 4 took 16030 microseconds
+  Stopped after 5 iterations, 81 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 291687 microseconds
-Iteration 1 took 248166 microseconds
-Iteration 2 took 280767 microseconds
-Iteration 3 took 256232 microseconds
-Iteration 4 took 240030 microseconds
-  Stopped after 5 iterations, 1316 ms
+Iteration 0 took 254788 microseconds
+Iteration 1 took 249972 microseconds
+Iteration 2 took 244120 microseconds
+Iteration 3 took 224123 microseconds
+Iteration 4 took 222872 microseconds
+  Stopped after 5 iterations, 1195 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 173441 microseconds
-Iteration 1 took 165331 microseconds
-Iteration 2 took 147082 microseconds
-Iteration 3 took 177466 microseconds
-Iteration 4 took 154742 microseconds
-  Stopped after 5 iterations, 818 ms
+Iteration 0 took 146681 microseconds
+Iteration 1 took 184920 microseconds
+Iteration 2 took 155081 microseconds
+Iteration 3 took 161925 microseconds
+Iteration 4 took 166577 microseconds
+  Stopped after 5 iterations, 815 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 68251 microseconds
-Iteration 1 took 33804 microseconds
-Iteration 2 took 34986 microseconds
-Iteration 3 took 31938 microseconds
-Iteration 4 took 59713 microseconds
-  Stopped after 5 iterations, 228 ms
+Iteration 0 took 33187 microseconds
+Iteration 1 took 61890 microseconds
+Iteration 2 took 32013 microseconds
+Iteration 3 took 32567 microseconds
+Iteration 4 took 32535 microseconds
+  Stopped after 5 iterations, 192 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 32 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                             12             12           1          8.7         115.2       1.0X
-vanilla Spark, first run                            160            169          12          0.6        1595.7       0.1X
-vanilla Spark, second run                            67             71           4          1.5         674.1       0.2X
-Varka, plan only                                     16             17           2          6.3         159.8       0.7X
-Varka, first run                                   1434           1448          14          0.1       14339.3       0.0X
-Varka, second run                                  1422           1432          11          0.1       14222.6       0.0X
-Varka with warm-up, plan only                        15             17           2          6.5         154.9       0.7X
-Varka with warm-up, first run                       240            263          22          0.4        2400.3       0.0X
-Varka with warm-up, second run                      147            164          13          0.7        1470.8       0.1X
-Varka with warm-up, once compiled                    32             46          17          3.1         319.4       0.4X
-rung 32: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 2001 ms and 4480 calls; COMPILED after 2151 ms and 4800 calls; COMPILED after 1980 ms and 4560 calls; COMPILED after 1977 ms and 4560 calls; COMPILED after 1996 ms and 4560 calls
+vanilla Spark, plan only                             11             13           1          8.7         114.4       1.0X
+vanilla Spark, first run                            134            155          12          0.7        1341.4       0.1X
+vanilla Spark, second run                            69             72           3          1.5         688.9       0.2X
+Varka, plan only                                     16             17           2          6.3         157.6       0.7X
+Varka, first run                                   1428           1446          20          0.1       14282.9       0.0X
+Varka, second run                                  1417           1430          12          0.1       14174.7       0.0X
+Varka with warm-up, plan only                        16             16           1          6.4         155.3       0.7X
+Varka with warm-up, first run                       223            239          15          0.4        2228.7       0.1X
+Varka with warm-up, second run                      147            163          14          0.7        1466.8       0.1X
+Varka with warm-up, once compiled                    32             38          13          3.1         320.1       0.4X
+rung 32: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 3602 ms and 9120 calls; COMPILED after 3562 ms and 8960 calls; COMPILED after 3889 ms and 10640 calls; COMPILED after 3890 ms and 10960 calls; COMPILED after 3386 ms and 9440 calls
 Running benchmark: 48 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 14038 microseconds
-Iteration 1 took 11039 microseconds
-Iteration 2 took 11678 microseconds
-Iteration 3 took 12303 microseconds
-Iteration 4 took 12213 microseconds
+Iteration 0 took 14506 microseconds
+Iteration 1 took 12383 microseconds
+Iteration 2 took 11675 microseconds
+Iteration 3 took 11555 microseconds
+Iteration 4 took 11740 microseconds
   Stopped after 5 iterations, 61 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 249378 microseconds
-Iteration 1 took 225197 microseconds
-Iteration 2 took 222079 microseconds
-Iteration 3 took 223274 microseconds
-Iteration 4 took 223564 microseconds
-  Stopped after 5 iterations, 1143 ms
+Iteration 0 took 234279 microseconds
+Iteration 1 took 225861 microseconds
+Iteration 2 took 228094 microseconds
+Iteration 3 took 226735 microseconds
+Iteration 4 took 255183 microseconds
+  Stopped after 5 iterations, 1170 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 147170 microseconds
-Iteration 1 took 175759 microseconds
-Iteration 2 took 153652 microseconds
-Iteration 3 took 155273 microseconds
-Iteration 4 took 149021 microseconds
-  Stopped after 5 iterations, 780 ms
+Iteration 0 took 149282 microseconds
+Iteration 1 took 150475 microseconds
+Iteration 2 took 157971 microseconds
+Iteration 3 took 156337 microseconds
+Iteration 4 took 150778 microseconds
+  Stopped after 5 iterations, 764 ms
   Running case: Varka, plan only
-Iteration 0 took 21813 microseconds
-Iteration 1 took 20373 microseconds
-Iteration 2 took 18897 microseconds
-Iteration 3 took 19032 microseconds
-Iteration 4 took 18417 microseconds
-  Stopped after 5 iterations, 98 ms
+Iteration 0 took 21907 microseconds
+Iteration 1 took 18331 microseconds
+Iteration 2 took 18801 microseconds
+Iteration 3 took 18281 microseconds
+Iteration 4 took 18335 microseconds
+  Stopped after 5 iterations, 95 ms
   Running case: Varka, first run
-Iteration 0 took 2169282 microseconds
-Iteration 1 took 2193028 microseconds
-Iteration 2 took 2172061 microseconds
-Iteration 3 took 2155854 microseconds
-Iteration 4 took 2170928 microseconds
-  Stopped after 5 iterations, 10861 ms
+Iteration 0 took 2152312 microseconds
+Iteration 1 took 2162825 microseconds
+Iteration 2 took 2152147 microseconds
+Iteration 3 took 2142966 microseconds
+Iteration 4 took 2147078 microseconds
+  Stopped after 5 iterations, 10757 ms
   Running case: Varka, second run
-Iteration 0 took 2147053 microseconds
-Iteration 1 took 2134337 microseconds
-Iteration 2 took 2150139 microseconds
-Iteration 3 took 2150680 microseconds
-Iteration 4 took 2144005 microseconds
-  Stopped after 5 iterations, 10726 ms
+Iteration 0 took 2140450 microseconds
+Iteration 1 took 2131289 microseconds
+Iteration 2 took 2146008 microseconds
+Iteration 3 took 2134003 microseconds
+Iteration 4 took 2122458 microseconds
+  Stopped after 5 iterations, 10674 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 21627 microseconds
-Iteration 1 took 15002 microseconds
-Iteration 2 took 18100 microseconds
-Iteration 3 took 18267 microseconds
-Iteration 4 took 18072 microseconds
-  Stopped after 5 iterations, 91 ms
+Iteration 0 took 22284 microseconds
+Iteration 1 took 17946 microseconds
+Iteration 2 took 17929 microseconds
+Iteration 3 took 18009 microseconds
+Iteration 4 took 17934 microseconds
+  Stopped after 5 iterations, 94 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 369174 microseconds
-Iteration 1 took 313962 microseconds
-Iteration 2 took 316143 microseconds
-Iteration 3 took 352736 microseconds
-Iteration 4 took 356224 microseconds
-  Stopped after 5 iterations, 1708 ms
+Iteration 0 took 329124 microseconds
+Iteration 1 took 307266 microseconds
+Iteration 2 took 325792 microseconds
+Iteration 3 took 314304 microseconds
+Iteration 4 took 306190 microseconds
+  Stopped after 5 iterations, 1582 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 219731 microseconds
-Iteration 1 took 217269 microseconds
-Iteration 2 took 224549 microseconds
-Iteration 3 took 208450 microseconds
-Iteration 4 took 241187 microseconds
-  Stopped after 5 iterations, 1111 ms
+Iteration 0 took 218686 microseconds
+Iteration 1 took 255357 microseconds
+Iteration 2 took 245476 microseconds
+Iteration 3 took 207010 microseconds
+Iteration 4 took 233691 microseconds
+  Stopped after 5 iterations, 1160 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 72349 microseconds
-Iteration 1 took 72882 microseconds
-Iteration 2 took 69957 microseconds
-Iteration 3 took 36248 microseconds
-Iteration 4 took 36300 microseconds
-  Stopped after 5 iterations, 287 ms
+Iteration 0 took 38706 microseconds
+Iteration 1 took 37674 microseconds
+Iteration 2 took 37429 microseconds
+Iteration 3 took 37614 microseconds
+Iteration 4 took 36107 microseconds
+  Stopped after 5 iterations, 187 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 48 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                             11             12           1          9.1         110.4       1.0X
-vanilla Spark, first run                            222            229          12          0.5        2220.8       0.0X
-vanilla Spark, second run                           147            156          11          0.7        1471.7       0.1X
-Varka, plan only                                     18             20           1          5.4         184.2       0.6X
-Varka, first run                                   2156           2172          13          0.0       21558.5       0.0X
-Varka, second run                                  2134           2145           7          0.0       21343.4       0.0X
-Varka with warm-up, plan only                        15             18           2          6.7         150.0       0.7X
-Varka with warm-up, first run                       314            342          25          0.3        3139.6       0.0X
-Varka with warm-up, second run                      208            222          12          0.5        2084.5       0.1X
-Varka with warm-up, once compiled                    36             58          19          2.8         362.5       0.3X
-rung 48: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 3292 ms and 5760 calls; COMPILED after 3243 ms and 6080 calls; COMPILED after 3141 ms and 5520 calls; COMPILED after 3028 ms and 4800 calls; COMPILED after 3001 ms and 4880 calls
+vanilla Spark, plan only                             12             12           1          8.7         115.6       1.0X
+vanilla Spark, first run                            226            234          12          0.4        2258.6       0.1X
+vanilla Spark, second run                           149            153           4          0.7        1492.8       0.1X
+Varka, plan only                                     18             19           2          5.5         182.8       0.6X
+Varka, first run                                   2143           2151           7          0.0       21429.7       0.0X
+Varka, second run                                  2122           2135           9          0.0       21224.6       0.0X
+Varka with warm-up, plan only                        18             19           2          5.6         179.3       0.6X
+Varka with warm-up, first run                       306            317          11          0.3        3061.9       0.0X
+Varka with warm-up, second run                      207            232          20          0.5        2070.1       0.1X
+Varka with warm-up, once compiled                    36             38           1          2.8         361.1       0.3X
+rung 48: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 5904 ms and 11760 calls; COMPILED after 5882 ms and 10880 calls; COMPILED after 5914 ms and 10560 calls; COMPILED after 5585 ms and 10560 calls; COMPILED after 5635 ms and 10640 calls
 Running benchmark: 52 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 14420 microseconds
-Iteration 1 took 10874 microseconds
-Iteration 2 took 11587 microseconds
-Iteration 3 took 11228 microseconds
-Iteration 4 took 11335 microseconds
-  Stopped after 5 iterations, 59 ms
+Iteration 0 took 14214 microseconds
+Iteration 1 took 9004 microseconds
+Iteration 2 took 11576 microseconds
+Iteration 3 took 11211 microseconds
+Iteration 4 took 11578 microseconds
+  Stopped after 5 iterations, 57 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 180594 microseconds
-Iteration 1 took 248254 microseconds
-Iteration 2 took 240083 microseconds
-Iteration 3 took 240983 microseconds
-Iteration 4 took 240123 microseconds
-  Stopped after 5 iterations, 1150 ms
+Iteration 0 took 180170 microseconds
+Iteration 1 took 239742 microseconds
+Iteration 2 took 243634 microseconds
+Iteration 3 took 246836 microseconds
+Iteration 4 took 256851 microseconds
+  Stopped after 5 iterations, 1167 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 148520 microseconds
-Iteration 1 took 145043 microseconds
-Iteration 2 took 145108 microseconds
-Iteration 3 took 154204 microseconds
-Iteration 4 took 147288 microseconds
-  Stopped after 5 iterations, 740 ms
+Iteration 0 took 169387 microseconds
+Iteration 1 took 143475 microseconds
+Iteration 2 took 146370 microseconds
+Iteration 3 took 141909 microseconds
+Iteration 4 took 144581 microseconds
+  Stopped after 5 iterations, 745 ms
   Running case: Varka, plan only
-Iteration 0 took 22156 microseconds
-Iteration 1 took 18571 microseconds
-Iteration 2 took 18910 microseconds
-Iteration 3 took 18682 microseconds
-Iteration 4 took 18475 microseconds
-  Stopped after 5 iterations, 96 ms
+Iteration 0 took 22343 microseconds
+Iteration 1 took 19395 microseconds
+Iteration 2 took 18911 microseconds
+Iteration 3 took 18387 microseconds
+Iteration 4 took 20604 microseconds
+  Stopped after 5 iterations, 99 ms
   Running case: Varka, first run
-Iteration 0 took 2347965 microseconds
-Iteration 1 took 2356747 microseconds
-Iteration 2 took 2337419 microseconds
-Iteration 3 took 2335016 microseconds
-Iteration 4 took 2342917 microseconds
-  Stopped after 5 iterations, 11720 ms
+Iteration 0 took 2328072 microseconds
+Iteration 1 took 2335863 microseconds
+Iteration 2 took 2322451 microseconds
+Iteration 3 took 2329947 microseconds
+Iteration 4 took 2309976 microseconds
+  Stopped after 5 iterations, 11626 ms
   Running case: Varka, second run
-Iteration 0 took 2311920 microseconds
-Iteration 1 took 2312700 microseconds
-Iteration 2 took 2316043 microseconds
-Iteration 3 took 2303614 microseconds
-Iteration 4 took 2315020 microseconds
-  Stopped after 5 iterations, 11559 ms
+Iteration 0 took 2281361 microseconds
+Iteration 1 took 2331305 microseconds
+Iteration 2 took 2310919 microseconds
+Iteration 3 took 2311242 microseconds
+Iteration 4 took 2322173 microseconds
+  Stopped after 5 iterations, 11557 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 22191 microseconds
-Iteration 1 took 18480 microseconds
-Iteration 2 took 17922 microseconds
-Iteration 3 took 18317 microseconds
-Iteration 4 took 18007 microseconds
-  Stopped after 5 iterations, 94 ms
+Iteration 0 took 21835 microseconds
+Iteration 1 took 18813 microseconds
+Iteration 2 took 18555 microseconds
+Iteration 3 took 18716 microseconds
+Iteration 4 took 18559 microseconds
+  Stopped after 5 iterations, 96 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 412947 microseconds
-Iteration 1 took 403520 microseconds
-Iteration 2 took 391173 microseconds
-Iteration 3 took 382742 microseconds
-Iteration 4 took 362912 microseconds
-  Stopped after 5 iterations, 1953 ms
+Iteration 0 took 331112 microseconds
+Iteration 1 took 358320 microseconds
+Iteration 2 took 336337 microseconds
+Iteration 3 took 356743 microseconds
+Iteration 4 took 440227 microseconds
+  Stopped after 5 iterations, 1822 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 233600 microseconds
-Iteration 1 took 223853 microseconds
-Iteration 2 took 225104 microseconds
-Iteration 3 took 225428 microseconds
-Iteration 4 took 221100 microseconds
-  Stopped after 5 iterations, 1129 ms
+Iteration 0 took 248302 microseconds
+Iteration 1 took 211532 microseconds
+Iteration 2 took 219545 microseconds
+Iteration 3 took 211993 microseconds
+Iteration 4 took 231944 microseconds
+  Stopped after 5 iterations, 1123 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 39783 microseconds
-Iteration 1 took 37479 microseconds
-Iteration 2 took 66152 microseconds
-Iteration 3 took 38176 microseconds
-Iteration 4 took 36840 microseconds
-  Stopped after 5 iterations, 218 ms
+Iteration 0 took 37168 microseconds
+Iteration 1 took 39205 microseconds
+Iteration 2 took 37790 microseconds
+Iteration 3 took 38274 microseconds
+Iteration 4 took 39026 microseconds
+  Stopped after 5 iterations, 191 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 52 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                             11             12           1          9.2         108.7       1.0X
-vanilla Spark, first run                            181            230          28          0.6        1805.9       0.1X
-vanilla Spark, second run                           145            148           4          0.7        1450.4       0.1X
-Varka, plan only                                     18             19           2          5.4         184.8       0.6X
-Varka, first run                                   2335           2344           9          0.0       23350.2       0.0X
-Varka, second run                                  2304           2312           5          0.0       23036.1       0.0X
-Varka with warm-up, plan only                        18             19           2          5.6         179.2       0.6X
-Varka with warm-up, first run                       363            391          19          0.3        3629.1       0.0X
-Varka with warm-up, second run                      221            226           5          0.5        2211.0       0.0X
-Varka with warm-up, once compiled                    37             44          13          2.7         368.4       0.3X
-rung 52: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 3271 ms and 5600 calls; COMPILED after 4443 ms and 6880 calls; COMPILED after 3310 ms and 5440 calls; COMPILED after 3261 ms and 5600 calls; COMPILED after 3506 ms and 5280 calls
+vanilla Spark, plan only                              9             12           2         11.1          90.0       1.0X
+vanilla Spark, first run                            180            233          30          0.6        1801.7       0.0X
+vanilla Spark, second run                           142            149          11          0.7        1419.1       0.1X
+Varka, plan only                                     18             20           2          5.4         183.9       0.5X
+Varka, first run                                   2310           2325          10          0.0       23099.8       0.0X
+Varka, second run                                  2281           2311          19          0.0       22813.6       0.0X
+Varka with warm-up, plan only                        19             19           1          5.4         185.6       0.5X
+Varka with warm-up, first run                       331            365          44          0.3        3311.1       0.0X
+Varka with warm-up, second run                      212            225          16          0.5        2115.3       0.0X
+Varka with warm-up, once compiled                    37             38           1          2.7         371.7       0.2X
+rung 52: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 6441 ms and 11760 calls; COMPILED after 5797 ms and 10640 calls; COMPILED after 5817 ms and 10240 calls; COMPILED after 6427 ms and 11440 calls; COMPILED after 6264 ms and 10960 calls
 Running benchmark: 54 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 14558 microseconds
-Iteration 1 took 11022 microseconds
-Iteration 2 took 11183 microseconds
-Iteration 3 took 11074 microseconds
-Iteration 4 took 11610 microseconds
+Iteration 0 took 14180 microseconds
+Iteration 1 took 11391 microseconds
+Iteration 2 took 11416 microseconds
+Iteration 3 took 11361 microseconds
+Iteration 4 took 10778 microseconds
   Stopped after 5 iterations, 59 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 474259 microseconds
-Iteration 1 took 456137 microseconds
-Iteration 2 took 460753 microseconds
-Iteration 3 took 468386 microseconds
-Iteration 4 took 448354 microseconds
-  Stopped after 5 iterations, 2307 ms
+Iteration 0 took 473381 microseconds
+Iteration 1 took 460012 microseconds
+Iteration 2 took 458431 microseconds
+Iteration 3 took 460898 microseconds
+Iteration 4 took 455653 microseconds
+  Stopped after 5 iterations, 2308 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 430340 microseconds
-Iteration 1 took 437808 microseconds
-Iteration 2 took 435795 microseconds
-Iteration 3 took 426170 microseconds
-Iteration 4 took 434478 microseconds
-  Stopped after 5 iterations, 2164 ms
+Iteration 0 took 430309 microseconds
+Iteration 1 took 419290 microseconds
+Iteration 2 took 440269 microseconds
+Iteration 3 took 435251 microseconds
+Iteration 4 took 434297 microseconds
+  Stopped after 5 iterations, 2159 ms
   Running case: Varka, plan only
-Iteration 0 took 21975 microseconds
-Iteration 1 took 18429 microseconds
-Iteration 2 took 16582 microseconds
-Iteration 3 took 20548 microseconds
-Iteration 4 took 18706 microseconds
-  Stopped after 5 iterations, 96 ms
+Iteration 0 took 22418 microseconds
+Iteration 1 took 18993 microseconds
+Iteration 2 took 18922 microseconds
+Iteration 3 took 18619 microseconds
+Iteration 4 took 19062 microseconds
+  Stopped after 5 iterations, 98 ms
   Running case: Varka, first run
-Iteration 0 took 2432569 microseconds
-Iteration 1 took 2438783 microseconds
-Iteration 2 took 2431245 microseconds
-Iteration 3 took 2434516 microseconds
-Iteration 4 took 2429278 microseconds
-  Stopped after 5 iterations, 12166 ms
+Iteration 0 took 2443902 microseconds
+Iteration 1 took 2427380 microseconds
+Iteration 2 took 2422576 microseconds
+Iteration 3 took 2422112 microseconds
+Iteration 4 took 2427543 microseconds
+  Stopped after 5 iterations, 12143 ms
   Running case: Varka, second run
-Iteration 0 took 2420629 microseconds
-Iteration 1 took 2423351 microseconds
-Iteration 2 took 2421848 microseconds
-Iteration 3 took 2425825 microseconds
-Iteration 4 took 2419022 microseconds
-  Stopped after 5 iterations, 12110 ms
+Iteration 0 took 2399379 microseconds
+Iteration 1 took 2398291 microseconds
+Iteration 2 took 2422974 microseconds
+Iteration 3 took 2401697 microseconds
+Iteration 4 took 2401800 microseconds
+  Stopped after 5 iterations, 12024 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 22882 microseconds
-Iteration 1 took 18868 microseconds
-Iteration 2 took 19540 microseconds
-Iteration 3 took 18945 microseconds
-Iteration 4 took 18943 microseconds
-  Stopped after 5 iterations, 99 ms
+Iteration 0 took 22315 microseconds
+Iteration 1 took 18422 microseconds
+Iteration 2 took 18737 microseconds
+Iteration 3 took 18941 microseconds
+Iteration 4 took 19024 microseconds
+  Stopped after 5 iterations, 97 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 406867 microseconds
-Iteration 1 took 373369 microseconds
-Iteration 2 took 368924 microseconds
-Iteration 3 took 364537 microseconds
-Iteration 4 took 347039 microseconds
-  Stopped after 5 iterations, 1860 ms
+Iteration 0 took 344495 microseconds
+Iteration 1 took 364578 microseconds
+Iteration 2 took 339121 microseconds
+Iteration 3 took 389055 microseconds
+Iteration 4 took 341398 microseconds
+  Stopped after 5 iterations, 1778 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 232430 microseconds
-Iteration 1 took 238149 microseconds
-Iteration 2 took 243759 microseconds
-Iteration 3 took 269912 microseconds
-Iteration 4 took 225296 microseconds
-  Stopped after 5 iterations, 1209 ms
+Iteration 0 took 240337 microseconds
+Iteration 1 took 232973 microseconds
+Iteration 2 took 237989 microseconds
+Iteration 3 took 264895 microseconds
+Iteration 4 took 243229 microseconds
+  Stopped after 5 iterations, 1219 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 37267 microseconds
-Iteration 1 took 37965 microseconds
-Iteration 2 took 39525 microseconds
-Iteration 3 took 37418 microseconds
-Iteration 4 took 40696 microseconds
-  Stopped after 5 iterations, 192 ms
+Iteration 0 took 38117 microseconds
+Iteration 1 took 37921 microseconds
+Iteration 2 took 36767 microseconds
+Iteration 3 took 37518 microseconds
+Iteration 4 took 37331 microseconds
+  Stopped after 5 iterations, 187 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 54 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                             11             12           2          9.1         110.2       1.0X
-vanilla Spark, first run                            448            462          10          0.2        4483.5       0.0X
-vanilla Spark, second run                           426            433           5          0.2        4261.7       0.0X
-Varka, plan only                                     17             19           2          6.0         165.8       0.7X
-Varka, first run                                   2429           2433           4          0.0       24292.8       0.0X
-Varka, second run                                  2419           2422           3          0.0       24190.2       0.0X
-Varka with warm-up, plan only                        19             20           2          5.3         188.7       0.6X
-Varka with warm-up, first run                       347            372          22          0.3        3470.4       0.0X
-Varka with warm-up, second run                      225            242          17          0.4        2253.0       0.0X
-Varka with warm-up, once compiled                    37             39           1          2.7         372.7       0.3X
-rung 54: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 3378 ms and 4960 calls; COMPILED after 3410 ms and 4720 calls; COMPILED after 3575 ms and 4800 calls; COMPILED after 3354 ms and 4640 calls; COMPILED after 3356 ms and 4640 calls
+vanilla Spark, plan only                             11             12           1          9.3         107.8       1.0X
+vanilla Spark, first run                            456            462           7          0.2        4556.5       0.0X
+vanilla Spark, second run                           419            432           8          0.2        4192.9       0.0X
+Varka, plan only                                     19             20           2          5.4         186.2       0.6X
+Varka, first run                                   2422           2429           9          0.0       24221.1       0.0X
+Varka, second run                                  2398           2405          10          0.0       23982.9       0.0X
+Varka with warm-up, plan only                        18             19           2          5.4         184.2       0.6X
+Varka with warm-up, first run                       339            356          21          0.3        3391.2       0.0X
+Varka with warm-up, second run                      233            244          12          0.4        2329.7       0.0X
+Varka with warm-up, once compiled                    37             38           1          2.7         367.7       0.3X
+rung 54: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 6296 ms and 9760 calls; COMPILED after 6286 ms and 10080 calls; COMPILED after 6264 ms and 10080 calls; COMPILED after 6732 ms and 10960 calls; COMPILED after 6750 ms and 11200 calls
 Running benchmark: 56 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 14669 microseconds
-Iteration 1 took 12007 microseconds
-Iteration 2 took 11446 microseconds
-Iteration 3 took 11119 microseconds
-Iteration 4 took 11378 microseconds
-  Stopped after 5 iterations, 60 ms
+Iteration 0 took 14027 microseconds
+Iteration 1 took 11320 microseconds
+Iteration 2 took 8649 microseconds
+Iteration 3 took 11275 microseconds
+Iteration 4 took 11156 microseconds
+  Stopped after 5 iterations, 56 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 496838 microseconds
-Iteration 1 took 486064 microseconds
-Iteration 2 took 477467 microseconds
-Iteration 3 took 472131 microseconds
-Iteration 4 took 471972 microseconds
-  Stopped after 5 iterations, 2404 ms
+Iteration 0 took 484188 microseconds
+Iteration 1 took 471342 microseconds
+Iteration 2 took 475203 microseconds
+Iteration 3 took 472941 microseconds
+Iteration 4 took 468693 microseconds
+  Stopped after 5 iterations, 2372 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 454060 microseconds
-Iteration 1 took 475168 microseconds
-Iteration 2 took 456434 microseconds
-Iteration 3 took 455494 microseconds
-Iteration 4 took 455568 microseconds
-  Stopped after 5 iterations, 2296 ms
+Iteration 0 took 445627 microseconds
+Iteration 1 took 460032 microseconds
+Iteration 2 took 457458 microseconds
+Iteration 3 took 449743 microseconds
+Iteration 4 took 452596 microseconds
+  Stopped after 5 iterations, 2265 ms
   Running case: Varka, plan only
-Iteration 0 took 23324 microseconds
-Iteration 1 took 20076 microseconds
-Iteration 2 took 18872 microseconds
-Iteration 3 took 18823 microseconds
-Iteration 4 took 19010 microseconds
-  Stopped after 5 iterations, 100 ms
+Iteration 0 took 23914 microseconds
+Iteration 1 took 18850 microseconds
+Iteration 2 took 17436 microseconds
+Iteration 3 took 20667 microseconds
+Iteration 4 took 18539 microseconds
+  Stopped after 5 iterations, 99 ms
   Running case: Varka, first run
-Iteration 0 took 2522004 microseconds
-Iteration 1 took 2505939 microseconds
-Iteration 2 took 2513940 microseconds
-Iteration 3 took 2498361 microseconds
-Iteration 4 took 2503608 microseconds
-  Stopped after 5 iterations, 12543 ms
+Iteration 0 took 2507015 microseconds
+Iteration 1 took 2521452 microseconds
+Iteration 2 took 2514604 microseconds
+Iteration 3 took 2516031 microseconds
+Iteration 4 took 2512050 microseconds
+  Stopped after 5 iterations, 12571 ms
   Running case: Varka, second run
-Iteration 0 took 2479050 microseconds
-Iteration 1 took 2496677 microseconds
-Iteration 2 took 2487857 microseconds
-Iteration 3 took 2494128 microseconds
-Iteration 4 took 2501186 microseconds
-  Stopped after 5 iterations, 12458 ms
+Iteration 0 took 2487853 microseconds
+Iteration 1 took 2463621 microseconds
+Iteration 2 took 2484374 microseconds
+Iteration 3 took 2503036 microseconds
+Iteration 4 took 2488877 microseconds
+  Stopped after 5 iterations, 12427 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 22369 microseconds
-Iteration 1 took 18996 microseconds
-Iteration 2 took 18913 microseconds
-Iteration 3 took 19169 microseconds
-Iteration 4 took 18910 microseconds
+Iteration 0 took 22530 microseconds
+Iteration 1 took 19283 microseconds
+Iteration 2 took 18649 microseconds
+Iteration 3 took 19210 microseconds
+Iteration 4 took 18827 microseconds
   Stopped after 5 iterations, 98 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 350407 microseconds
-Iteration 1 took 346050 microseconds
-Iteration 2 took 419214 microseconds
-Iteration 3 took 415396 microseconds
-Iteration 4 took 424076 microseconds
-  Stopped after 5 iterations, 1955 ms
+Iteration 0 took 416853 microseconds
+Iteration 1 took 348558 microseconds
+Iteration 2 took 376083 microseconds
+Iteration 3 took 350928 microseconds
+Iteration 4 took 410687 microseconds
+  Stopped after 5 iterations, 1903 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 234378 microseconds
-Iteration 1 took 238988 microseconds
-Iteration 2 took 239718 microseconds
-Iteration 3 took 262614 microseconds
-Iteration 4 took 298022 microseconds
-  Stopped after 5 iterations, 1273 ms
+Iteration 0 took 254491 microseconds
+Iteration 1 took 250189 microseconds
+Iteration 2 took 360754 microseconds
+Iteration 3 took 250617 microseconds
+Iteration 4 took 260645 microseconds
+  Stopped after 5 iterations, 1376 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 42568 microseconds
-Iteration 1 took 37831 microseconds
-Iteration 2 took 37228 microseconds
-Iteration 3 took 41969 microseconds
-Iteration 4 took 37663 microseconds
-  Stopped after 5 iterations, 197 ms
+Iteration 0 took 38187 microseconds
+Iteration 1 took 40437 microseconds
+Iteration 2 took 34916 microseconds
+Iteration 3 took 37359 microseconds
+Iteration 4 took 38732 microseconds
+  Stopped after 5 iterations, 189 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 56 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                             11             12           1          9.0         111.2       1.0X
-vanilla Spark, first run                            472            481          11          0.2        4719.7       0.0X
-vanilla Spark, second run                           454            459           9          0.2        4540.6       0.0X
-Varka, plan only                                     19             20           2          5.3         188.2       0.6X
-Varka, first run                                   2498           2509           9          0.0       24983.6       0.0X
-Varka, second run                                  2479           2492           9          0.0       24790.5       0.0X
-Varka with warm-up, plan only                        19             20           2          5.3         189.1       0.6X
-Varka with warm-up, first run                       346            391          39          0.3        3460.5       0.0X
-Varka with warm-up, second run                      234            255          27          0.4        2343.8       0.0X
-Varka with warm-up, once compiled                    37             39           3          2.7         372.3       0.3X
-rung 56: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 3502 ms and 4800 calls; COMPILED after 3615 ms and 4560 calls; COMPILED after 3359 ms and 4720 calls; COMPILED after 3628 ms and 4640 calls; COMPILED after 3676 ms and 4720 calls
+vanilla Spark, plan only                              9             11           2         11.6          86.5       1.0X
+vanilla Spark, first run                            469            474           6          0.2        4686.9       0.0X
+vanilla Spark, second run                           446            453           6          0.2        4456.3       0.0X
+Varka, plan only                                     17             20           3          5.7         174.4       0.5X
+Varka, first run                                   2507           2514           5          0.0       25070.2       0.0X
+Varka, second run                                  2464           2486          14          0.0       24636.2       0.0X
+Varka with warm-up, plan only                        19             20           2          5.4         186.5       0.5X
+Varka with warm-up, first run                       349            381          32          0.3        3485.6       0.0X
+Varka with warm-up, second run                      250            275          48          0.4        2501.9       0.0X
+Varka with warm-up, once compiled                    35             38           2          2.9         349.2       0.2X
+rung 56: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 6640 ms and 11840 calls; COMPILED after 7028 ms and 10080 calls; COMPILED after 7006 ms and 10880 calls; COMPILED after 6267 ms and 11360 calls; COMPILED after 7026 ms and 11040 calls
 Running benchmark: 64 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 12008 microseconds
-Iteration 1 took 8811 microseconds
-Iteration 2 took 11437 microseconds
-Iteration 3 took 11691 microseconds
-Iteration 4 took 11853 microseconds
-  Stopped after 5 iterations, 55 ms
+Iteration 0 took 14694 microseconds
+Iteration 1 took 11331 microseconds
+Iteration 2 took 11671 microseconds
+Iteration 3 took 11562 microseconds
+Iteration 4 took 12216 microseconds
+  Stopped after 5 iterations, 61 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 562055 microseconds
-Iteration 1 took 553889 microseconds
-Iteration 2 took 550214 microseconds
-Iteration 3 took 582508 microseconds
-Iteration 4 took 558465 microseconds
-  Stopped after 5 iterations, 2807 ms
+Iteration 0 took 559275 microseconds
+Iteration 1 took 551015 microseconds
+Iteration 2 took 542713 microseconds
+Iteration 3 took 571009 microseconds
+Iteration 4 took 546952 microseconds
+  Stopped after 5 iterations, 2770 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 527404 microseconds
-Iteration 1 took 523574 microseconds
-Iteration 2 took 524150 microseconds
-Iteration 3 took 516760 microseconds
-Iteration 4 took 518716 microseconds
-  Stopped after 5 iterations, 2610 ms
+Iteration 0 took 516925 microseconds
+Iteration 1 took 521397 microseconds
+Iteration 2 took 529187 microseconds
+Iteration 3 took 520113 microseconds
+Iteration 4 took 518873 microseconds
+  Stopped after 5 iterations, 2606 ms
   Running case: Varka, plan only
-Iteration 0 took 23913 microseconds
-Iteration 1 took 20591 microseconds
-Iteration 2 took 21283 microseconds
-Iteration 3 took 20523 microseconds
-Iteration 4 took 21017 microseconds
+Iteration 0 took 24020 microseconds
+Iteration 1 took 21126 microseconds
+Iteration 2 took 20714 microseconds
+Iteration 3 took 20468 microseconds
+Iteration 4 took 21346 microseconds
   Stopped after 5 iterations, 107 ms
   Running case: Varka, first run
-Iteration 0 took 2861753 microseconds
-Iteration 1 took 2861605 microseconds
-Iteration 2 took 2854427 microseconds
-Iteration 3 took 2848443 microseconds
-Iteration 4 took 2867141 microseconds
-  Stopped after 5 iterations, 14293 ms
+Iteration 0 took 2869971 microseconds
+Iteration 1 took 2863893 microseconds
+Iteration 2 took 2842939 microseconds
+Iteration 3 took 2845731 microseconds
+Iteration 4 took 2863690 microseconds
+  Stopped after 5 iterations, 14286 ms
   Running case: Varka, second run
-Iteration 0 took 2833940 microseconds
-Iteration 1 took 2859773 microseconds
-Iteration 2 took 2846270 microseconds
-Iteration 3 took 2854242 microseconds
-Iteration 4 took 2833408 microseconds
-  Stopped after 5 iterations, 14227 ms
+Iteration 0 took 2819962 microseconds
+Iteration 1 took 2833564 microseconds
+Iteration 2 took 2846163 microseconds
+Iteration 3 took 2861568 microseconds
+Iteration 4 took 2853970 microseconds
+  Stopped after 5 iterations, 14215 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 24186 microseconds
-Iteration 1 took 20317 microseconds
-Iteration 2 took 20939 microseconds
-Iteration 3 took 21067 microseconds
-Iteration 4 took 20529 microseconds
-  Stopped after 5 iterations, 107 ms
+Iteration 0 took 24328 microseconds
+Iteration 1 took 20546 microseconds
+Iteration 2 took 20601 microseconds
+Iteration 3 took 20589 microseconds
+Iteration 4 took 20610 microseconds
+  Stopped after 5 iterations, 106 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 401568 microseconds
-Iteration 1 took 474911 microseconds
-Iteration 2 took 439327 microseconds
-Iteration 3 took 498451 microseconds
-Iteration 4 took 389958 microseconds
-  Stopped after 5 iterations, 2204 ms
+Iteration 0 took 390112 microseconds
+Iteration 1 took 456686 microseconds
+Iteration 2 took 388545 microseconds
+Iteration 3 took 426701 microseconds
+Iteration 4 took 473168 microseconds
+  Stopped after 5 iterations, 2135 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 289161 microseconds
-Iteration 1 took 300118 microseconds
-Iteration 2 took 255010 microseconds
-Iteration 3 took 268303 microseconds
-Iteration 4 took 269338 microseconds
-  Stopped after 5 iterations, 1381 ms
+Iteration 0 took 269031 microseconds
+Iteration 1 took 266743 microseconds
+Iteration 2 took 295156 microseconds
+Iteration 3 took 264908 microseconds
+Iteration 4 took 303268 microseconds
+  Stopped after 5 iterations, 1399 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 45324 microseconds
-Iteration 1 took 41967 microseconds
-Iteration 2 took 40620 microseconds
-Iteration 3 took 41994 microseconds
-Iteration 4 took 40685 microseconds
-  Stopped after 5 iterations, 210 ms
+Iteration 0 took 40442 microseconds
+Iteration 1 took 69886 microseconds
+Iteration 2 took 41036 microseconds
+Iteration 3 took 43431 microseconds
+Iteration 4 took 40868 microseconds
+  Stopped after 5 iterations, 235 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 64 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                              9             11           1         11.3          88.1       1.0X
-vanilla Spark, first run                            550            561          13          0.2        5502.1       0.0X
-vanilla Spark, second run                           517            522           4          0.2        5167.6       0.0X
-Varka, plan only                                     21             21           1          4.9         205.2       0.4X
-Varka, first run                                   2848           2859           7          0.0       28484.4       0.0X
-Varka, second run                                  2833           2846          12          0.0       28334.1       0.0X
-Varka with warm-up, plan only                        20             21           2          4.9         203.2       0.4X
-Varka with warm-up, first run                       390            441          46          0.3        3899.6       0.0X
-Varka with warm-up, second run                      255            276          18          0.4        2550.1       0.0X
-Varka with warm-up, once compiled                    41             42           2          2.5         406.2       0.2X
-rung 64: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 3903 ms and 5760 calls; COMPILED after 4074 ms and 5040 calls; COMPILED after 4085 ms and 5200 calls; COMPILED after 4055 ms and 5200 calls; COMPILED after 4038 ms and 5040 calls
+vanilla Spark, plan only                             11             12           1          8.8         113.3       1.0X
+vanilla Spark, first run                            543            554          11          0.2        5427.1       0.0X
+vanilla Spark, second run                           517            521           5          0.2        5169.3       0.0X
+Varka, plan only                                     20             22           1          4.9         204.7       0.6X
+Varka, first run                                   2843           2857          12          0.0       28429.4       0.0X
+Varka, second run                                  2820           2843          17          0.0       28199.6       0.0X
+Varka with warm-up, plan only                        21             21           2          4.9         205.5       0.6X
+Varka with warm-up, first run                       389            427          38          0.3        3885.5       0.0X
+Varka with warm-up, second run                      265            280          18          0.4        2649.1       0.0X
+Varka with warm-up, once compiled                    40             47          13          2.5         404.4       0.3X
+rung 64: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 7653 ms and 10480 calls; COMPILED after 7718 ms and 11120 calls; COMPILED after 7669 ms and 10480 calls; COMPILED after 8124 ms and 11760 calls; COMPILED after 8215 ms and 11680 calls
 Running benchmark: 80 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 15796 microseconds
-Iteration 1 took 12510 microseconds
-Iteration 2 took 13722 microseconds
-Iteration 3 took 12101 microseconds
-Iteration 4 took 12303 microseconds
-  Stopped after 5 iterations, 66 ms
+Iteration 0 took 15310 microseconds
+Iteration 1 took 12216 microseconds
+Iteration 2 took 12421 microseconds
+Iteration 3 took 12370 microseconds
+Iteration 4 took 12322 microseconds
+  Stopped after 5 iterations, 64 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 705938 microseconds
-Iteration 1 took 689402 microseconds
-Iteration 2 took 699064 microseconds
-Iteration 3 took 719250 microseconds
-Iteration 4 took 693697 microseconds
-  Stopped after 5 iterations, 3507 ms
+Iteration 0 took 707599 microseconds
+Iteration 1 took 691060 microseconds
+Iteration 2 took 686982 microseconds
+Iteration 3 took 717889 microseconds
+Iteration 4 took 688009 microseconds
+  Stopped after 5 iterations, 3491 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 654257 microseconds
-Iteration 1 took 662838 microseconds
-Iteration 2 took 664380 microseconds
-Iteration 3 took 660185 microseconds
-Iteration 4 took 664812 microseconds
-  Stopped after 5 iterations, 3306 ms
+Iteration 0 took 658445 microseconds
+Iteration 1 took 658514 microseconds
+Iteration 2 took 647045 microseconds
+Iteration 3 took 650209 microseconds
+Iteration 4 took 645755 microseconds
+  Stopped after 5 iterations, 3259 ms
   Running case: Varka, plan only
-Iteration 0 took 28521 microseconds
-Iteration 1 took 24171 microseconds
-Iteration 2 took 24172 microseconds
-Iteration 3 took 24996 microseconds
-Iteration 4 took 24145 microseconds
+Iteration 0 took 28108 microseconds
+Iteration 1 took 25108 microseconds
+Iteration 2 took 24290 microseconds
+Iteration 3 took 24253 microseconds
+Iteration 4 took 24844 microseconds
   Stopped after 5 iterations, 126 ms
   Running case: Varka, first run
-Iteration 0 took 3590855 microseconds
-Iteration 1 took 3569457 microseconds
-Iteration 2 took 3603985 microseconds
-Iteration 3 took 3587045 microseconds
-Iteration 4 took 3622707 microseconds
-  Stopped after 5 iterations, 17974 ms
+Iteration 0 took 3565282 microseconds
+Iteration 1 took 3576947 microseconds
+Iteration 2 took 3589862 microseconds
+Iteration 3 took 3613507 microseconds
+Iteration 4 took 3566933 microseconds
+  Stopped after 5 iterations, 17912 ms
   Running case: Varka, second run
-Iteration 0 took 3575772 microseconds
-Iteration 1 took 3568734 microseconds
-Iteration 2 took 3564492 microseconds
-Iteration 3 took 3566172 microseconds
-Iteration 4 took 3586192 microseconds
-  Stopped after 5 iterations, 17861 ms
+Iteration 0 took 3511111 microseconds
+Iteration 1 took 3555947 microseconds
+Iteration 2 took 3554861 microseconds
+Iteration 3 took 3548286 microseconds
+Iteration 4 took 3557144 microseconds
+  Stopped after 5 iterations, 17727 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 28398 microseconds
-Iteration 1 took 23985 microseconds
-Iteration 2 took 25633 microseconds
-Iteration 3 took 24440 microseconds
-Iteration 4 took 25339 microseconds
-  Stopped after 5 iterations, 127 ms
+Iteration 0 took 27961 microseconds
+Iteration 1 took 23565 microseconds
+Iteration 2 took 21868 microseconds
+Iteration 3 took 25306 microseconds
+Iteration 4 took 25014 microseconds
+  Stopped after 5 iterations, 123 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 491497 microseconds
-Iteration 1 took 516758 microseconds
-Iteration 2 took 509876 microseconds
-Iteration 3 took 493131 microseconds
-Iteration 4 took 491279 microseconds
-  Stopped after 5 iterations, 2502 ms
+Iteration 0 took 498895 microseconds
+Iteration 1 took 596044 microseconds
+Iteration 2 took 499455 microseconds
+Iteration 3 took 517380 microseconds
+Iteration 4 took 534112 microseconds
+  Stopped after 5 iterations, 2645 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 326789 microseconds
-Iteration 1 took 337542 microseconds
-Iteration 2 took 317455 microseconds
-Iteration 3 took 314721 microseconds
-Iteration 4 took 329611 microseconds
-  Stopped after 5 iterations, 1626 ms
+Iteration 0 took 344685 microseconds
+Iteration 1 took 361437 microseconds
+Iteration 2 took 314663 microseconds
+Iteration 3 took 314278 microseconds
+Iteration 4 took 371658 microseconds
+  Stopped after 5 iterations, 1706 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 51752 microseconds
-Iteration 1 took 50081 microseconds
-Iteration 2 took 47463 microseconds
-Iteration 3 took 49252 microseconds
-Iteration 4 took 48597 microseconds
-  Stopped after 5 iterations, 247 ms
+Iteration 0 took 48360 microseconds
+Iteration 1 took 47304 microseconds
+Iteration 2 took 47732 microseconds
+Iteration 3 took 48368 microseconds
+Iteration 4 took 49230 microseconds
+  Stopped after 5 iterations, 240 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 80 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                             12             13           2          8.3         121.0       1.0X
-vanilla Spark, first run                            689            701          12          0.1        6894.0       0.0X
-vanilla Spark, second run                           654            661           4          0.2        6542.6       0.0X
-Varka, plan only                                     24             25           2          4.1         241.5       0.5X
-Varka, first run                                   3569           3595          20          0.0       35694.6       0.0X
-Varka, second run                                  3564           3572           9          0.0       35644.9       0.0X
-Varka with warm-up, plan only                        24             26           2          4.2         239.9       0.5X
-Varka with warm-up, first run                       491            501          12          0.2        4912.8       0.0X
-Varka with warm-up, second run                      315            325           9          0.3        3147.2       0.0X
-Varka with warm-up, once compiled                    47             49           2          2.1         474.6       0.3X
-rung 80: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 5129 ms and 5760 calls; COMPILED after 5451 ms and 5680 calls; COMPILED after 5254 ms and 6240 calls; COMPILED after 5597 ms and 6080 calls; COMPILED after 5263 ms and 5920 calls
+vanilla Spark, plan only                             12             13           1          8.2         122.2       1.0X
+vanilla Spark, first run                            687            698          14          0.1        6869.8       0.0X
+vanilla Spark, second run                           646            652           6          0.2        6457.6       0.0X
+Varka, plan only                                     24             25           2          4.1         242.5       0.5X
+Varka, first run                                   3565           3583          20          0.0       35652.8       0.0X
+Varka, second run                                  3511           3545          20          0.0       35111.1       0.0X
+Varka with warm-up, plan only                        22             25           2          4.6         218.7       0.6X
+Varka with warm-up, first run                       499            529          40          0.2        4989.0       0.0X
+Varka with warm-up, second run                      314            341          26          0.3        3142.8       0.0X
+Varka with warm-up, once compiled                    47             48           1          2.1         473.0       0.3X
+rung 80: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 9552 ms and 12240 calls; COMPILED after 10119 ms and 12480 calls; COMPILED after 10130 ms and 12560 calls; COMPILED after 9617 ms and 11520 calls; COMPILED after 10682 ms and 13520 calls
 Running benchmark: 100 entries over 100000 Arrow-cached rows
   Running case: vanilla Spark, plan only
-Iteration 0 took 17198 microseconds
-Iteration 1 took 12911 microseconds
-Iteration 2 took 14000 microseconds
-Iteration 3 took 13293 microseconds
-Iteration 4 took 13010 microseconds
+Iteration 0 took 17149 microseconds
+Iteration 1 took 13235 microseconds
+Iteration 2 took 13247 microseconds
+Iteration 3 took 13234 microseconds
+Iteration 4 took 13592 microseconds
   Stopped after 5 iterations, 70 ms
   Running case: vanilla Spark, first run
-Iteration 0 took 912341 microseconds
-Iteration 1 took 876046 microseconds
-Iteration 2 took 881528 microseconds
-Iteration 3 took 886819 microseconds
-Iteration 4 took 917723 microseconds
-  Stopped after 5 iterations, 4474 ms
+Iteration 0 took 881150 microseconds
+Iteration 1 took 865855 microseconds
+Iteration 2 took 879734 microseconds
+Iteration 3 took 897897 microseconds
+Iteration 4 took 884979 microseconds
+  Stopped after 5 iterations, 4409 ms
   Running case: vanilla Spark, second run
-Iteration 0 took 839045 microseconds
-Iteration 1 took 824445 microseconds
-Iteration 2 took 827212 microseconds
-Iteration 3 took 828032 microseconds
-Iteration 4 took 842914 microseconds
-  Stopped after 5 iterations, 4161 ms
+Iteration 0 took 847214 microseconds
+Iteration 1 took 819805 microseconds
+Iteration 2 took 851725 microseconds
+Iteration 3 took 819260 microseconds
+Iteration 4 took 821656 microseconds
+  Stopped after 5 iterations, 4159 ms
   Running case: Varka, plan only
-Iteration 0 took 32805 microseconds
-Iteration 1 took 29462 microseconds
-Iteration 2 took 29681 microseconds
-Iteration 3 took 29540 microseconds
-Iteration 4 took 28861 microseconds
-  Stopped after 5 iterations, 150 ms
+Iteration 0 took 32883 microseconds
+Iteration 1 took 28962 microseconds
+Iteration 2 took 29875 microseconds
+Iteration 3 took 29032 microseconds
+Iteration 4 took 28927 microseconds
+  Stopped after 5 iterations, 149 ms
   Running case: Varka, first run
-Iteration 0 took 4469092 microseconds
-Iteration 1 took 4457068 microseconds
-Iteration 2 took 4508407 microseconds
-Iteration 3 took 4535406 microseconds
-Iteration 4 took 4521516 microseconds
-  Stopped after 5 iterations, 22491 ms
+Iteration 0 took 4485244 microseconds
+Iteration 1 took 4422482 microseconds
+Iteration 2 took 4469245 microseconds
+Iteration 3 took 4485591 microseconds
+Iteration 4 took 4478409 microseconds
+  Stopped after 5 iterations, 22340 ms
   Running case: Varka, second run
-Iteration 0 took 4517464 microseconds
-Iteration 1 took 4471372 microseconds
-Iteration 2 took 4442947 microseconds
-Iteration 3 took 4457928 microseconds
-Iteration 4 took 4454232 microseconds
-  Stopped after 5 iterations, 22343 ms
+Iteration 0 took 4433738 microseconds
+Iteration 1 took 4423198 microseconds
+Iteration 2 took 4467084 microseconds
+Iteration 3 took 4437468 microseconds
+Iteration 4 took 4476460 microseconds
+  Stopped after 5 iterations, 22237 ms
   Running case: Varka with warm-up, plan only
-Iteration 0 took 33832 microseconds
-Iteration 1 took 30461 microseconds
-Iteration 2 took 29404 microseconds
-Iteration 3 took 29320 microseconds
-Iteration 4 took 31279 microseconds
-  Stopped after 5 iterations, 154 ms
+Iteration 0 took 33726 microseconds
+Iteration 1 took 29104 microseconds
+Iteration 2 took 29239 microseconds
+Iteration 3 took 28944 microseconds
+Iteration 4 took 30996 microseconds
+  Stopped after 5 iterations, 152 ms
   Running case: Varka with warm-up, first run
-Iteration 0 took 679668 microseconds
-Iteration 1 took 646963 microseconds
-Iteration 2 took 715799 microseconds
-Iteration 3 took 620528 microseconds
-Iteration 4 took 626262 microseconds
-  Stopped after 5 iterations, 3289 ms
+Iteration 0 took 630774 microseconds
+Iteration 1 took 648477 microseconds
+Iteration 2 took 608709 microseconds
+Iteration 3 took 588265 microseconds
+Iteration 4 took 677497 microseconds
+  Stopped after 5 iterations, 3153 ms
   Running case: Varka with warm-up, second run
-Iteration 0 took 428964 microseconds
-Iteration 1 took 429525 microseconds
-Iteration 2 took 435222 microseconds
-Iteration 3 took 426409 microseconds
-Iteration 4 took 417546 microseconds
-  Stopped after 5 iterations, 2137 ms
+Iteration 0 took 435802 microseconds
+Iteration 1 took 411359 microseconds
+Iteration 2 took 385163 microseconds
+Iteration 3 took 445707 microseconds
+Iteration 4 took 419496 microseconds
+  Stopped after 5 iterations, 2097 ms
   Running case: Varka with warm-up, once compiled
-Iteration 0 took 55622 microseconds
-Iteration 1 took 57665 microseconds
-Iteration 2 took 59120 microseconds
-Iteration 3 took 58907 microseconds
-Iteration 4 took 58154 microseconds
-  Stopped after 5 iterations, 289 ms
+Iteration 0 took 89088 microseconds
+Iteration 1 took 56236 microseconds
+Iteration 2 took 57206 microseconds
+Iteration 3 took 55381 microseconds
+Iteration 4 took 55527 microseconds
+  Stopped after 5 iterations, 313 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 100 entries over 100000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------
-vanilla Spark, plan only                              13             14           2          7.7         129.1       1.0X
-vanilla Spark, first run                             876            895          19          0.1        8760.5       0.0X
-vanilla Spark, second run                            824            832           8          0.1        8244.5       0.0X
-Varka, plan only                                      29             30           2          3.5         288.6       0.4X
-Varka, first run                                    4457           4498          34          0.0       44570.7       0.0X
-Varka, second run                                   4443           4469          29          0.0       44429.5       0.0X
-Varka with warm-up, plan only                         29             31           2          3.4         293.2       0.4X
-Varka with warm-up, first run                        621            658          40          0.2        6205.3       0.0X
-Varka with warm-up, second run                       418            428           6          0.2        4175.5       0.0X
-Varka with warm-up, once compiled                     56             58           1          1.8         556.2       0.2X
-rung 100: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 7423 ms and 7680 calls; COMPILED after 7003 ms and 7840 calls; COMPILED after 7432 ms and 8480 calls; COMPILED after 6579 ms and 5920 calls; COMPILED after 7433 ms and 7440 calls
+vanilla Spark, plan only                              13             14           2          7.6         132.3       1.0X
+vanilla Spark, first run                             866            882          11          0.1        8658.6       0.0X
+vanilla Spark, second run                            819            832          16          0.1        8192.6       0.0X
+Varka, plan only                                      29             30           2          3.5         289.3       0.5X
+Varka, first run                                    4422           4468          26          0.0       44224.8       0.0X
+Varka, second run                                   4423           4448          23          0.0       44232.0       0.0X
+Varka with warm-up, plan only                         29             30           2          3.5         289.4       0.5X
+Varka with warm-up, first run                        588            631          35          0.2        5882.7       0.0X
+Varka with warm-up, second run                       385            420          23          0.3        3851.6       0.0X
+Varka with warm-up, once compiled                     55             63          15          1.8         553.8       0.2X
+rung 100: the warm-up's verdicts, one per once-compiled iteration: COMPILED after 13149 ms and 13440 calls; COMPILED after 13731 ms and 14480 calls; COMPILED after 13635 ms and 13760 calls; COMPILED after 13690 ms and 14400 calls; COMPILED after 13687 ms and 14000 calls
 16 entries over 100000 Arrow-cached rows, 15 queries of one shape back to back, in ms:
-  vanilla Spark        87 38 38 44 41 38 41 40 38 42 42 38 43 48 37
-  Varka                749 721 719 712 718 739 724 432 202 103 27 17 21 20 18
-  Varka with warm-up   124 85 80 79 77 77 79 80 81 81 80 100 92 81 85
-  the warm-up's verdict: COMPILED after 1393 ms and 6240 calls
+  vanilla Spark        84 38 38 39 38 39 37 36 38 40 38 38 37 75 41
+  Varka                750 723 732 731 611 365 234 161 99 82 17 16 17 16 20
+  Varka with warm-up   125 110 79 78 75 74 76 77 75 76 76 74 75 78 83
+  the warm-up's verdict: COMPILED after 1886 ms and 8080 calls
 54 entries over 100000 Arrow-cached rows, 15 queries of one shape back to back, in ms:
-  vanilla Spark        479 423 434 432 429 437 437 417 438 435 425 423 460 434 440
-  Varka                2444 2421 2419 2413 2444 2487 2341 1561 703 250 115 42 33 34 31
-  Varka with warm-up   361 250 205 208 211 208 209 210 227 255 297 328 247 270 104
-  the warm-up's verdict: COMPILED after 3515 ms and 4400 calls
+  vanilla Spark        453 431 431 432 432 431 436 436 431 434 434 438 431 428 433
+  Varka                2440 2407 2492 2495 2090 1154 465 205 32 32 32 34 37 33 32
+  Varka with warm-up   500 367 253 228 227 228 230 227 227 226 224 228 227 229 229
+  the warm-up's verdict: COMPILED after 8846 ms and 13920 calls
 100 entries over 100000 Arrow-cached rows, 15 queries of one shape back to back, in ms:
-  vanilla Spark        875 818 831 842 832 829 864 862 827 848 852 849 850 840 850
-  Varka                4443 4414 4427 4439 4450 4552 4325 3141 1591 785 368 160 96 52 53
-  Varka with warm-up   669 431 378 385 381 382 383 381 386 411 408 420 439 467 640
-  the warm-up's verdict: COMPILED after 8017 ms and 7920 calls
+  vanilla Spark        872 830 843 825 855 828 831 825 826 828 815 847 826 815 819
+  Varka                4467 4448 4489 4538 4082 2570 1273 601 272 112 54 60 58 53 57
+  Varka with warm-up   758 418 391 396 391 391 393 423 389 397 393 395 395 392 397
+  the warm-up's verdict: COMPILED after 13981 ms and 14400 calls
 Running benchmark: 16 entries over 2000000 Arrow-cached rows, compiled from its batches
   Running case: Varka, after two seconds of its own batches
-  Stopped after 19 iterations, 2088 ms
+  Stopped after 19 iterations, 2081 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 16 entries over 2000000 Arrow-cached rows, compiled from its batches:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ----------------------------------------------------------------------------------------------------------------------------------------------------
-Varka, after two seconds of its own batches                                     105            110           3         19.1          52.5       1.0X
+Varka, after two seconds of its own batches                                     105            110           2         19.1          52.3       1.0X
 Running benchmark: 16 entries over 2000000 Arrow-cached rows, compiled from the warm-up
   Running case: Varka with warm-up, straight after its verdict
-  Stopped after 5 iterations, 561 ms
+  Stopped after 5 iterations, 536 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 16 entries over 2000000 Arrow-cached rows, compiled from the warm-up:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ----------------------------------------------------------------------------------------------------------------------------------------------------
-Varka with warm-up, straight after its verdict                                  102            112          16         19.5          51.2       1.0X
-rung 16: the warm-up's verdict: COMPILED after 1048 ms and 3600 calls
+Varka with warm-up, straight after its verdict                                  105            107           3         19.1          52.4       1.0X
+rung 16: the warm-up's verdict: COMPILED after 2017 ms and 8320 calls
 Running benchmark: 54 entries over 2000000 Arrow-cached rows, compiled from its batches
   Running case: Varka, after two seconds of its own batches
-  Stopped after 7 iterations, 2252 ms
+  Stopped after 7 iterations, 2263 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 54 entries over 2000000 Arrow-cached rows, compiled from its batches:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ----------------------------------------------------------------------------------------------------------------------------------------------------
-Varka, after two seconds of its own batches                                     320            322           1          6.2         160.1       1.0X
+Varka, after two seconds of its own batches                                     321            323           2          6.2         160.5       1.0X
 Running benchmark: 54 entries over 2000000 Arrow-cached rows, compiled from the warm-up
   Running case: Varka with warm-up, straight after its verdict
-  Stopped after 5 iterations, 1638 ms
+  Stopped after 5 iterations, 1659 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 54 entries over 2000000 Arrow-cached rows, compiled from the warm-up:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ----------------------------------------------------------------------------------------------------------------------------------------------------
-Varka with warm-up, straight after its verdict                                  317            328          12          6.3         158.7       1.0X
-rung 54: the warm-up's verdict: COMPILED after 3762 ms and 5600 calls
+Varka with warm-up, straight after its verdict                                  322            332          11          6.2         160.8       1.0X
+rung 54: the warm-up's verdict: COMPILED after 6551 ms and 10080 calls
 Running benchmark: 100 entries over 2000000 Arrow-cached rows, compiled from its batches
   Running case: Varka, after two seconds of its own batches
-  Stopped after 5 iterations, 2914 ms
+  Stopped after 5 iterations, 2956 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 100 entries over 2000000 Arrow-cached rows, compiled from its batches:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -----------------------------------------------------------------------------------------------------------------------------------------------------
-Varka, after two seconds of its own batches                                      580            583           3          3.5         289.8       1.0X
+Varka, after two seconds of its own batches                                      581            591           7          3.4         290.4       1.0X
 Running benchmark: 100 entries over 2000000 Arrow-cached rows, compiled from the warm-up
   Running case: Varka with warm-up, straight after its verdict
-  Stopped after 5 iterations, 2956 ms
+  Stopped after 5 iterations, 3020 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 100 entries over 2000000 Arrow-cached rows, compiled from the warm-up:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -----------------------------------------------------------------------------------------------------------------------------------------------------
-Varka with warm-up, straight after its verdict                                   578            591          22          3.5         289.2       1.0X
-rung 100: the warm-up's verdict: COMPILED after 7255 ms and 6320 calls
+Varka with warm-up, straight after its verdict                                   583            604          19          3.4         291.4       1.0X
+rung 100: the warm-up's verdict: COMPILED after 13970 ms and 14000 calls

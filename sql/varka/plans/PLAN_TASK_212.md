@@ -485,3 +485,42 @@ quoted above.
 4. Once compiled, and over two million rows, the times move by less than 5%.
 5. The directive A/B is unchanged: without it every kernel strands, with it
    every kernel compiles.
+
+### 10.8 The re-run, 26 September 2026
+
+`VarkaColdStartBenchmark` at both widths and `VarkaWarmupDirectiveBenchmark`,
+on the quiet laptop with the canary passing, at the commit of 10.7; the
+committed files replace those of 10.5.
+
+1. **Held at 16 entries, not at 54 and 100.** The per-batch arm's
+   steady-state averages at 512 bits fell from 429, 1726 and 3416 ms to 68,
+   471 and 1152, 1.45, 3.5 and 4.8 times their best times. The directive's
+   price is gone; what remains at the wide rungs is the per-batch path's own
+   warm-up, which two seconds of batches before the timing do not cover at
+   512 bits. At 128 bits the averages were within 2% of the best before, and
+   are now.
+2. **Held, at the top of the range.** Every verdict at every rung and both
+   widths is 1.6 to 2.0 times later, and every one is a compile: 5.3 to 6.0 s
+   at 54 entries and 11.1 to 12.2 s at 100 at 512 bits, against 2.9 to 3.3
+   and 6.3 to 6.8.
+3. **Half held.** The warm-up arm's first run moved by 3% at most at
+   512 bits, and by 5% at most at 128 bits but for one cell, 16 entries,
+   142 to 165 ms. The second runs did not rise: they ran before the verdict
+   in the old files too, at every rung, so a later verdict changes nothing
+   they see. The prediction's reason was wrong.
+4. **Held but for one cell.** Once compiled, within 5% except 100 entries at
+   512 bits, 40 to 37 ms; over two million rows, the kernel compiled from the
+   warm-up within 3%.
+5. **Held.** Without the directive all six kernels stranded to the deadline;
+   with it all six compiled, in 1.9 to 2.0 s at 16 entries and 5.8 to 6.2 s
+   at 54.
+
+So the first query is where it was - past the cliff the warm-up arm's first
+run is 0.71 to 0.76 times vanilla's, below it 1.40 to 1.82 times - and what
+roughly doubled is the time until the kernel takes over: 1.4 to 12.2 s after
+the shape is first seen, where it was 0.8 to 6.8. The back-to-back section
+shows it: no rung now switches within its fifteen queries. The benchmark's
+column has a null in every batch, so the dense driver the warm-up now
+compiles as well serves none of its batches. That is the case row 213 is
+for: the Arrow cache's per-batch null counts would have said so, and the
+verdict would come as early as before.
