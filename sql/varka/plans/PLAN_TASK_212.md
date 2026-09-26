@@ -93,7 +93,7 @@ emitter's byte budget and grouping, and every benchmark's steady state.
 |---|---|
 | `sql/varka/plans/PLAN_TASK_212.md` | this plan |
 | `sql/core/benchmarks/VarkaColdStartBenchmark-jdk25-threshold-*-results.txt` | the admission check's runs |
-| to be named after the admission check | variants A and B |
+| to be named after the admission check | variants A and B; *26 September 2026: B was built as `VarkaKernelWarmth`, `VarkaKernelWarmup` and `VarkaKernelCompileDirective` (10.1, 10.2), A was not (9.2)* |
 
 ## 5. Tests, and what each is for
 
@@ -321,3 +321,55 @@ design above and one is not:
   shared between repeated entries, which the ladder's identical entries would
   compile once instead of fourteen times - are follow-up rows, if the numbers
   say the verdict is what a user waits for.
+
+### 10.5 Outcome, 26 September 2026
+
+The committed run: `VarkaColdStartBenchmark-jdk25-results.txt` (512-bit),
+`-128bit-results.txt` and `VarkaWarmupDirectiveBenchmark-jdk25-results.txt`,
+on the quiet laptop with the canary passing. Best of five, milliseconds for a
+hundred thousand rows, 512-bit lanes:
+
+| Entries | vanilla first | vanilla second | Varka first | warm-up first | warm-up second | once compiled | verdict after |
+| --: | --: | --: | --: | --: | --: | --: | --: |
+| 16 | 115 | 54 | 244 | 164 | 92 | 25 | 0.8 to 1.1 s |
+| 32 | 158 | 70 | 420 | 221 | 150 | 26 | 1.6 to 2.0 s |
+| 48 | 217 | 149 | 622 | 339 | 222 | 28 | 2.5 to 3.0 s |
+| 52 | 201 | 146 | 669 | 339 | 226 | 28 | 2.8 to 3.1 s |
+| 54 | 461 | 436 | 699 | 346 | 232 | 27 | 2.9 to 3.3 s |
+| 56 | 467 | 430 | 716 | 350 | 248 | 27 | 3.0 to 3.3 s |
+| 64 | 545 | 513 | 808 | 428 | 268 | 29 | 3.5 to 3.8 s |
+| 80 | 685 | 641 | 1026 | 489 | 336 | 33 | 4.5 to 4.9 s |
+| 100 | 874 | 826 | 1268 | 639 | 409 | 40 | 6.3 to 6.8 s |
+
+At 128-bit lanes the per-batch arm's interpreted kernel is four times the
+calls, so the warm-up's first run gains more: 142 against 736 at 16 entries,
+621 against 4457 at 100; once compiled, 28 to 56.
+
+1. **Held.** From 54 entries up the warm-up arm's first run is 0.73 to 0.79
+   times vanilla's first run, and 1.9 to 2.1 times faster than the per-batch
+   arm's.
+2. **Partly refuted.** Within 1.5 times vanilla's first run at 16 and 32
+   entries (1.43, 1.40), not at 48 and 52 (1.56, 1.69): the row path below
+   the cliff is the per-row projection, slower than vanilla's whole-stage
+   loop. Never slower than the per-batch arm.
+3. **Held.** Every verdict at both widths is a compile, none released:
+   under 1.1 seconds at 16 entries, 3.3 at 54, 6.8 at 100.
+4. **Held, and past it.** Once compiled the query is faster than vanilla's
+   second run at every rung, 16 included (25 against 54), and 16 times faster
+   at 54.
+5. **Held.** Over two million rows the kernel compiled from the warm-up runs
+   at 25.0, 65.4 and 117.0 ns a row at 16, 54 and 100 entries, against 24.7,
+   66.8 and 118.8 for the kernel compiled from its own batches.
+6. **Partly refuted.** Back to back, the 16-entry shape switched at its
+   thirteenth query (62 to 13 ms); the 54-entry kernel landed during the
+   fifteenth (115 ms), one query short. The per-batch arm never improved.
+7. **Held, more strongly than predicted.** Without the directive all six
+   kernels in three fresh JVMs were stranded, the 16-entry one included, still
+   boxing at the sixty-second deadline; with it all six compiled, in 1.3
+   seconds at 16 entries and 3.3 to 3.6 at 54.
+
+What it means for the second post's bound 4: a new shape's first query is
+now faster than vanilla's past the cliff and within 1.7 times of it below,
+and the kernel takes over one to seven seconds after the shape is first seen,
+depending on its width. The follow-up candidates are the row path below the
+cliff (2) and the time to the verdict at wide shapes (6, 10.4).
