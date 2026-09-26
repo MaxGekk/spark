@@ -166,8 +166,8 @@ Varka.
 
 | Owed | For | State on 25 September | Needed? |
 | :-- | :-- | :-- | :-- |
-| A committed vanilla benchmark of the large `CASE WHEN`: inside a stage, outside one, and outside one with the calls grouped | 3.5 | not started | **Yes.** The trap is a claim without it |
-| `factoryMode=NO_CODEGEN` against the default on the same shape | 3.4 | **laptop check done, section 7.2**: the interpreter loses by more than fifty times, and quadratically in the branch count; the runner benchmark carries the arm | **Yes**, as an arm of the benchmark |
+| A committed vanilla benchmark of the large `CASE WHEN`: inside a stage, outside one, and outside one with the calls grouped | 3.5 | **done for the first two arms, section 9.2**: `CaseWhenCodegenBenchmark-jdk25-results.txt` on the 9V74; the grouped arm waits for SPARK-59783 | The grouped arm, when the fork carries it |
+| `factoryMode=NO_CODEGEN` against the default on the same shape | 3.4 | **done, sections 7.2 and 9.2**: the runner's file carries the arm; 52.6 times the outside-a-stage cost at 1000 branches | No longer owed |
 | The field count: JIRAs carrying "grows beyond 64 KB", by year | 3.1 | **done, section 7.1**: 44 tickets, peaking in 2016 and 2017, four open | No longer owed |
 | The wide-cache trap measured on vanilla: a one-column query over a 101-column cached table, rows against batches; and the upstream ticket if none exists | 3.5 | not started; the mechanism is pinned on Varka's side (`VarkaSchemaWidthSuite`) | **Yes.** A trap without a number is an anecdote |
 | The upstream tickets' state | 3.6 | read on the day of publication | **Yes**, and only then |
@@ -286,3 +286,277 @@ and its point sharpens. The one setting that avoids generated code altogether
 makes the wide `CASE WHEN` fifty times slower still, for a reason no user
 would guess, so the knob is not a way out of the cliff. The runner benchmark of
 section 4 carries the `NO_CODEGEN` arm at a row count it can finish.
+
+## 8. The benchmarks, as built, 25 September 2026
+
+Two Spark-style classes under `sql/core/src/test/scala/org/apache/spark/sql/execution/benchmark/`,
+each with a results file under `sql/core/benchmarks/` written by the runners
+through `.github/workflows/benchmark.yml` (`jdk=25`, `create-commit=false`, the
+artifact committed by hand beside a `-runner-provenance.txt`, as
+`VarkaSizeLadderBenchmark`'s was). Neither mentions Varka, so either can go
+upstream as it is.
+
+**`CaseWhenCodegenBenchmark`.** The `CASE WHEN` of section 7.2 at 30, 60, 100,
+300 and 1000 branches over 200,000 rows, three cases per rung - whole-stage
+codegen on, off, and `factoryMode=NO_CODEGEN` - and, above each rung's table,
+the stage's largest method from Spark's own compile of it, or "fails to
+compile, past 64 KB". The row count is what the interpreted case at 1000
+branches can finish: about a minute per iteration on the laptop (7.2). The
+first laptop run, at 20,000 rows and so not a timing, placed the rungs: 30
+branches is a 2853-byte stage method and 100 branches is already 9433 bytes,
+past the JIT limit, which is why 60 is a rung. The fourth case, the calls
+grouped, arrives with SPARK-59783 when the fork carries it.
+
+**`CachedTableWidthBenchmark`.** A cached table of 100 and of 101 int columns
+over two million rows, and two queries over each: `sum(c1)`, and every column
+through the noop sink. Three cases per query - 100 columns, 101 columns, and
+101 columns with `maxFields` raised to 101 - with a line above the table
+saying whether the scan was columnar. The laptop's run, two million rows,
+JDK 25, before the runner's:
+
+| Query | 100 columns (columnar) | 101 columns (row-based) | 101, limit raised (columnar) |
+| :-- | --: | --: | --: |
+| `sum(c1)` | 18.9 ns/row | 18.1 | 17.0 |
+| all columns | 115.5 ns/row | 423.1 | 111.9 |
+
+So the outline's section 3.5 was half right. For a one-column aggregate the
+row path costs nothing extra: vanilla turns the batches back into rows before
+the aggregate anyway (`ColumnarToRowExec`), and Spark's own
+`InMemoryColumnarBenchmark` already shows the two deserializers within 1.2 of
+each other. Reading the whole table is where the trap is, at 3.7 times, and
+the post's example is that one - `df.cache()` followed by a read of every
+column, the shape a cached table is usually made for. The one-column case
+stays in the benchmark as the bound on the claim. A first version of the
+probe reported the plan of the first case for the third, because a Dataset
+keeps the physical plan it was first given; the query is now a fresh
+`select("*")`.
+
+Both classes print their verdict lines through the benchmark's own output
+stream, so they are in the results file and a reader of the file sees which
+path each timing measured without opening the plan.
+
+**The first runner dispatch of `CaseWhenCodegenBenchmark` failed, and the
+reason is a finding.** `BenchmarkBase.main` sets `spark.testing` "so the
+behavior between running benchmark via spark-submit or SBT will be
+consistent", and under that flag `WholeStageCodegenExec` rethrows a compile
+failure instead of falling back to its row-by-row operators. So Spark's own
+benchmarks never measure the fallback past 64 KB; at 1000 branches the stage
+case threw and the run ended with no results file. The class now clears the
+property at the start of its suite, since the fallback is what it measures,
+and the run is dispatched again. The 300-branch rung, which did complete on
+the EPYC 9V45, already shows the shape in the run's log: the stage's method is
+past 8000 bytes and never compiled, and the same branches with whole-stage
+codegen off, split into methods HotSpot compiles, run about eight times faster
+per row; the interpreted case is about four times slower again than the stage.
+The numbers themselves wait for the committed file, which the quote checker
+holds this plan to.
+
+The cached-table run completed on the same machine
+(`CachedTableWidthBenchmark-jdk25-results.txt`): the one-column sum is 17 to
+19 ns a row on either path; reading every column is 454.9 ns a row for the
+101-column table against 100.6 for the 100-column one and 88.0 with
+`maxFields` raised, so the trap is 4.5 times on a whole-table read.
+
+## 9. The first draft, 25 September 2026
+
+`POST_MILESTONE_6_SPARK.md`, written from the outline of section 3 in the
+shape of `POST_MILESTONE_5.md`, about 3300 words against that post's 4400.
+Every number in it is from a committed results file and the quote checker
+reads it at zero orphans: the demo's three JDK outputs, the size ladder's
+runner file, the tuning files on the 9V45 and, with the JVM flag off, on the
+7763, the range filter's 9V74 file, the cached-table file of section 8, and
+the tracker count of 7.1. Every claim about Spark's behaviour names the log
+line, the setting text or the plan section that pins it; the census's entry
+numbers are not in the body. Each of the six sections ends with a command and
+what it prints, and the JVM flag's output and the `EXPLAIN CODEGEN` header
+were taken from a run rather than typed.
+
+**What the draft still owes**, marked `[[...]]` in the text:
+
+| Owed | Where | Comes from |
+| :-- | :-- | :-- |
+| The `CASE WHEN` ladder's numbers: whole-stage on and off at 100, 300 and 1000 branches, and the interpreted case at 300 and 1000 | 4, 5 | `CaseWhenCodegenBenchmark`'s runner file, dispatched 25 September after the `spark.testing` fix (section 8) |
+| The link to the second post | closing | task 181 |
+| Three figures: the step on three JDKs, the tracker's years, the cached table's six bars | 1, 5 | scripts under `figures/`, in `POST_MILESTONE_5.md`'s form |
+| The trailer | a `_SHORT` file, as milestone 5's | written last |
+| The tickets' states | 6 | reread on the day of publication |
+
+Two things the draft settled on the way. The `CASE WHEN` sizes inside a stage
+quoted in section 5 (2853 bytes at 30 branches to past 64 KB at 1000) are the
+lines the benchmark prints above each rung, from the first runner run's log;
+the results file will carry the same lines. And the second witness for the
+step, the size ladder's runner file, is this fork's vanilla arm on a master
+build; the post calls it a September 2026 build of master and names its
+crossing separately from 4.2.0's, since they differ by two entries.
+
+### 9.1 The `CASE WHEN` ladder, predicted before its file, 25 September 2026
+
+The owner asked for the draft to carry expected numbers rather than blanks, so
+these are registered here first and scored against the runner's file when it
+lands. They are for an AMD EPYC 9V45, the machine the first dispatch drew; a
+dispatch that lands on an EPYC 7763 reads about twice these throughout (the
+tuning files put the two machines at 1747.3 against 892.1 ns a row on the same
+rung), and the ratios are the machine-independent part of the prediction.
+
+The basis. The first dispatch's 300-branch rung completed before the run died
+at 1000 (section 8): inside a stage, a 32605-byte method that HotSpot never
+compiles, about 7000 ns a row; outside a stage, the branches split into
+methods HotSpot compiles, about 900; interpreted, about 30700. A row evaluates
+half the branches on average, since `v` is uniform over them, so those are
+about 47 ns per evaluated branch interpreted and 6 compiled. The stock 4.2.0
+check of 7.2 gave the outside-a-stage cost at 1000 branches on the laptop, and
+its sweep gave the interpreted case's growth.
+
+| Branches | Stage method | Whole-stage on | Whole-stage off | Interpreted | Why |
+| --: | --: | --: | --: | --: | :-- |
+| 30 | 2853 bytes, compiled | about 150 | about 200 | about 600 | 15 evaluated branches at 6 ns plus the row's fixed cost; off pays an operator boundary; interpreted is the square of a small number |
+| 60 | 5673 bytes, compiled | about 250 | about 300 | about 1800 | 30 evaluated branches; the interpreted case scales with the square from the laptop's 125-branch rung |
+| 100 | 9433 bytes, never compiled | about 2400 | about 400 | about 5000 | 50 evaluated branches at 47 ns interpreted against 6 compiled |
+| 300 | 32605 bytes, never compiled | about 7000 | about 900 | about 30000 | the rung the first dispatch measured |
+| 1000 | fails to compile, past 64 KB | about 10000 | about 6500 | about 300000 | outside a stage: 500 compiled branches plus about 85 calls from an 8060-byte caller that runs interpreted; inside: the same path after a failed compile of a 23000-line class, paid on every run, which at 200,000 rows is about a third of the time; interpreted: the square, from 30700 at 300 |
+
+The ratios, which are what the post's sentences rest on: inside against
+outside a stage about six at 100 branches and eight at 300, where the stage's
+method runs interpreted; about one and a half at 1000, where both run the
+same split code and the difference is the failed compile; the interpreted
+case about forty-five times the outside-a-stage cost at 1000 branches, and
+about ten times its own cost at 300 for three and a third times the branches.
+Scoring: an absolute number is right within a factor of 1.5 on the 9V45, a
+ratio within a third.
+
+### 9.2 The ladder's file, and the predictions scored, 25 September 2026
+
+The rerun after the `spark.testing` fix completed
+(`CaseWhenCodegenBenchmark-jdk25-results.txt`, with its provenance file), on an
+AMD EPYC 9V74, not the 9V45 the predictions were written for. The one rung both
+machines measured, 300 branches, says how the two compare: inside and outside
+a stage they agree within a tenth (7439.8 and 893.7 ns a row on the 9V74
+against about 7000 and 900 in the 9V45's log), and the interpreted case is
+about 1.65 times slower on the 9V74 (50734.4 against about 30700), the
+pointer-chasing path being the one that feels the older core. Measured, in ns
+a row:
+
+| Branches | Stage method | Whole-stage on | Whole-stage off | Interpreted |
+| --: | --: | --: | --: | --: |
+| 30 | 2853 bytes | 350.4 | 262.1 | 861.6 |
+| 60 | 5673 bytes | 193.2 | 257.3 | 2350.6 |
+| 100 | 9433 bytes | 2154.7 | 334.3 | 5678.6 |
+| 300 | 32605 bytes | 7439.8 | 893.7 | 50734.4 |
+| 1000 | past 64 KB | 16439.8 | 13655.9 | 717953.5 |
+
+**The scoring**, against 9.1's rule of a factor of 1.5 for an absolute number
+on the 9V45 and a third for a ratio.
+
+* The ratios held where they were the point. Inside against outside a stage:
+  6.4 at 100 branches (predicted about six), 8.3 at 300 (eight), 1.2 at 1000
+  (one and a half). The interpreted case against the outside-a-stage cost at
+  1000: 52.6 (forty-five). All four within a third.
+* The absolutes at 60, 100 and 300 held on all three paths, before any
+  machine adjustment: the largest miss is the interpreted case at 300, 1.69
+  times the prediction, which the 9V74's 1.65 accounts for.
+* **Two misses.** The 1000-branch absolutes on every path: 16439.8 against
+  10000 predicted, 13655.9 against 6500, 717953.5 against 300000, misses of
+  1.6, 2.1 and 2.4, of which the machine explains 1.65 of the interpreted one
+  and none of the other two. And the interpreted case's growth from 300 to
+  1000 branches, 14.2 times against the tenfold predicted.
+* **The 30-branch rung carries warm-up**, not a measurement: the stage case
+  at 30 branches (350.4) is slower than at 60 (193.2), and it is the first
+  case the JVM runs. The post does not quote it.
+
+**What the misses say.** The prediction for 1000 branches outside a stage was
+built on the stock 4.2.0 laptop check (7.2): 500 compiled branch evaluations
+plus about 85 calls from the 8060-byte caller that runs interpreted, at about
+40 ns a call. The runner puts the calls at about 125 ns each: an invocation
+from an interpreted frame into compiled code, with the fold's state tests in
+interpreted bytecode between them, costs three times what was assumed. That
+makes the finding of section 5 sharper than the outline had it: outside a
+stage the cost per row goes from 893.7 at 300 branches to 13655.9 at 1000,
+fifteen times for three and a third times the branches, because between the
+two the method holding the calls crosses 8000 bytes itself. That is the second
+cliff, and it is exactly what SPARK-59783 removes. The failed compile inside a
+stage at 1000 branches costs the difference of the two best times, about
+560 ms a run, or 2800 ns a row at this row count: a sixth of the time rather
+than the third predicted, because the per-row cost under it was twice the
+prediction.
+
+The post's `[[expected]]` marks are replaced by the file's numbers, quoted for
+the 9V74, and 9.1 stands as written, since a prediction is scored, not edited.
+
+### 9.3 The review of 25 September, and what it changed
+
+A review of the pull request raised ten findings; each is answered here or in
+the commit that fixed it. Four were about claims in the post and are fixed in
+its text: the one-column sum is flat because both cache paths decode only the
+requested column (`convertCachedBatchToInternalRow` and
+`convertCachedBatchToColumnarBatch` both take the selected attributes), not
+because batches are turned back into rows, which section 8 said and which is
+corrected here rather than there; the columnar cache scan needs the vectorized
+reader and primitive columns as well as a schema within `maxFields`; section
+4 of the post names the three sources its numbers come from; and the caller's
+8060 bytes outside a stage is printed by the benchmark itself now, instead of
+quoted from the stock laptop check. The size of the failed class is no longer
+quoted at all.
+
+Two findings were measurement rules. The claims under 1.3x were run again:
+the cached-table benchmark ran twice, on the 9V45
+(`CachedTableWidthBenchmark-jdk25-results.txt`, replacing the first run's
+file) and on a Xeon Platinum 8370C (`-xeon8370c-results.txt`). By minimums the
+one-column sum over the 101-column table was faster than over the 100-column
+one in both runs, so "costs nothing" stands and "nothing you can measure" is
+dropped; the whole-table read costs 5.2 times on the 9V45 and 2.5 on the Xeon,
+so the post quotes the range. The interpreted case now runs five iterations.
+
+The 30-branch rung was not left out on evidence the first time; now it has
+some. Run as the first rung, then again after the 60-branch rung in the same
+JVM, the stage case at 30 branches took about half as long the second time and
+was then faster than no stage. So the benchmark warms the JVM with the
+smallest rung, unrecorded, and the figure shows every rung. The remaining
+three findings were code: a failed compile is labelled from its own error, the
+sbt path names the whole-stage case it leaves out, and the figures derive their
+labels from their data.
+
+### 9.4 The second version: shorter, rounder, drawn, 25 September 2026
+
+The owner asked how to make the post more readable and attractive, and then
+to improve it as I saw fit. The first version was right in content and read
+like a lab report: the fix arrived after 1,931 of its 3,820 words, the prose
+carried 58 exact decimals and 14 machine names, and every picture was a chart,
+so nothing showed what happens inside Spark. The second version:
+
+* **Leads with the fix.** A three-step box under the opening says how to check
+  (`maxMethodCodeSize` in `EXPLAIN CODEGEN`), what to set
+  (`hugeMethodLimit=8000`) and which release warns. The rest is the why.
+* **Is 2,839 words with its tables, code and captions**, from 3,820. The two
+  tables that repeated figures are gone, section 4's four number-heavy
+  paragraphs became a four-row table with three short paragraphs under it, and
+  section 2's history is two sentences and two links.
+* **Rounds in the prose.** A style decision, made here and not in milestone
+  5's post: the text says "about 1,500 to about 9,200 nanoseconds", gives one
+  wall-clock translation (a hundred million rows on one core go from about two
+  and a half minutes to fifteen), and uses ratios; the exact values stay in the
+  figures, which read them from the committed files, and in the files. The
+  quote checker matches numbers with at least two integer digits and a decimal
+  part, so rounded integers and single-digit ratios pass it, and each still
+  comes from a file behind the word "about".
+* **Names the machines once**, in a closing note on how it was measured; in
+  the text a number is "on the runner of Figure 6" or "in the same run".
+* **Has nine figures, five of them new**, in milestone 5's hand-drawn style
+  and at lettering large enough for a phone: the ruler of the two limits as
+  the hero and the link card (`fig16.py`), what whole-stage codegen does with
+  a query (`fig17.py`), a step or a slope from the tuning runner file
+  (`fig18.py`), a decision chart for "is my query on the cliff?" (`fig19.py`),
+  and the second cliff of a large `CASE WHEN`, the method holding the calls at
+  300 and 1000 branches (`fig20.py`). The line charts draw a monotone spline,
+  added to `rough.py`, so a curve never rises above or dips below the points
+  it joins.
+* **Uses the reruns of the review** (9.3): the `CASE WHEN` numbers are from
+  the EPYC 7763 file with five interpreted iterations and the caller's size,
+  and the cache numbers from the 9V45 and Xeon 8370C pair.
+
+Two builder changes came with it: `dev/varka_post_page.py` styles a
+blockquote as a quiet box, and lets each table's own `--:` markers decide
+alignment instead of right-aligning every column after the first, which read
+badly for text columns; the milestone 5 post's one table gained the markers,
+so its page renders as before. The italic subtitle the draft had under the
+title was dropped: the builder removes the first italic block as the post's
+note to its editors, by design.
