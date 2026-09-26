@@ -373,3 +373,32 @@ now faster than vanilla's past the cliff and within 1.7 times of it below,
 and the kernel takes over one to seven seconds after the shape is first seen,
 depending on its width. The follow-up candidates are the row path below the
 cliff (2) and the time to the verdict at wide shapes (6, 10.4).
+
+### 10.6 What the directive cost, and where it is installed now, 26 September 2026
+
+10.2 said nothing is lost by keeping C1 off the kernel classes. That was wrong
+for a kernel with no warm-up. A steady-state check of this change on the quiet
+laptop - `VarkaSizeLadderBenchmark` and `VarkaThroughputBenchmark` at 512 bits
+against their committed files, not committed themselves - found the ladder's
+best times unchanged at 48 entries and up (within 4%) but its average times
+three to seven times higher at every rung, and the throughput benchmark's 46
+Varka cases unchanged in both (median ratio 1.00). A timing of the ladder's
+54-entry query over two million rows, per batch, twice each way, put the
+difference in one query: the second query took 7.2 and 7.0 s with the
+directive against 0.86 and 0.75 s without, and the rest were the same.
+
+The failed tier-3 request is what creates a method's profile. With C1
+excluded there is no such request, and the interpreter creates the profile
+only at twice the tier-3 threshold, so a kernel fed by 625-iteration batches
+starts counting toward C2 about a hundred batches later. The throughput
+benchmark's kernels are small and each query is long, so they reach C2 in the
+first query either way; the ladder's wide kernels do not.
+
+So the directive is installed when the first warm-up starts, before its first
+call, rather than at the first emission. A JVM that never warms a kernel -
+every session with the warm-up off - compiles its kernels as before, and the
+tier-2 strand stays possible there, as it always was. With the warm-up on, the
+default, every warmed kernel is covered. The committed runs of 10.5 are
+unaffected: the cold-start benchmark's warm-up arm installs the directive
+before its first warm-up as it did at its first emission, and its per-batch
+arm's kernels are never compiled within a hundred thousand rows either way.

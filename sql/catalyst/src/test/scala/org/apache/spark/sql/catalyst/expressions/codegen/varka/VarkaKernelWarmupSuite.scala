@@ -144,8 +144,10 @@ class VarkaKernelWarmupSuite extends SparkFunSuite {
     assert(warmth.state() === State.RELEASED, "a released shape does not go back to cold")
   }
 
-  test("emitting a kernel installs the directive that keeps C1 off the kernel classes") {
-    new VarkaShapeCacheImpl(8).getOrEmit(Utils.getContextOrSparkClassLoader, shape, "directive")
+  test("starting a warm-up installs the directive that keeps C1 off the kernel classes") {
+    assume(VarkaAllocationSampler.supported(), "thread allocation accounting unavailable")
+    warm(new VarkaShapeCacheImpl(8), 100)
+    assert(VarkaKernelWarmup.awaitIdle(120000))
     assume(VarkaKernelCompileDirective.installed(), "C2 is not this JVM's top tier")
     val directives = ManagementFactory.getPlatformMBeanServer.invoke(
       new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerDirectivesPrint",

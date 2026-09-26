@@ -179,6 +179,8 @@ public final class VarkaKernelWarmup {
       warmth.release();
       return false;
     }
+    // Before the warm-up's first call, so no warmed kernel method can be compiled by C1.
+    VarkaKernelCompileDirective.ensureInstalled();
     Job job = new Job(warmth, shapeHash, kernel, longLane, srcData, srcValidity, srcNullCount,
         srcWidths, length, numOutputs, scalarArgs, longArgs);
     ensureWorker();

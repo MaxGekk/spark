@@ -417,8 +417,6 @@ public final class VarkaShapeCacheImpl {
     // cost minus the lookup - identified by shape only (the class is shared).
     VarkaEmissionEvent emissionEvent = new VarkaEmissionEvent();
     emissionEvent.begin();
-    // Before any kernel class exists, so that no kernel method is ever compiled by C1.
-    VarkaKernelCompileDirective.ensureInstalled();
     byte[] bytes = VarkaLoopEmitter.emit(className, key.outputs(), key.numInputs(),
         key.numLiterals(), sourceFile, "shape " + hash, key.options());
     VarkaGeneratedClassLoader loader = new VarkaGeneratedClassLoader(loaderKey.parent());

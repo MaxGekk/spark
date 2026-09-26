@@ -696,12 +696,14 @@ cache entry, and the batches served on the row path meanwhile are counted in
 `numWarmupBatches`. The warm-up is per cache entry, so a session with its own
 artifact class loader warms its own class.
 
-C1 is kept off the kernel classes altogether, by one compiler directive added
-before the first class is defined (`VarkaKernelCompileDirective`). A kernel's
-loop methods are too large for C1's fully profiled tier, and a method that C1
-compiled at the limited-profile tier instead - which HotSpot chooses while
-C2's queue is long - would never be recompiled by C2. Without C1 every kernel
-method goes from the interpreter to C2.
+Once a warm-up has started, C1 is kept off the kernel classes altogether, by
+one compiler directive added before its first call
+(`VarkaKernelCompileDirective`). A kernel's loop methods are too large for C1's
+fully profiled tier, and a method that C1 compiled at the limited-profile tier
+instead - which HotSpot chooses while C2's queue is long - would never be
+recompiled by C2. Without C1 every kernel method goes from the interpreter to
+C2. The directive waits for the warm-up because it also makes the interpreter
+start profiling later, which delays a kernel fed only by its own batches.
 
 ### Null semantics and predication
 

@@ -32,7 +32,7 @@ import org.apache.spark.internal.SparkLoggerFactory;
 /**
  * Keeps HotSpot's first-tier compiler, C1, away from the emitted kernel classes, so that their
  * methods go from the interpreter to C2 and to nothing in between. One compiler directive,
- * added once per JVM before the first kernel class is defined.
+ * added once per JVM when the first kernel warm-up starts ({@link VarkaKernelWarmup}).
  *
  * <p><b>Why.</b> A kernel's loop and epilogue methods are too large for C1 to compile with full
  * profiling, tier 3: its LIR generator runs out of virtual registers, the compile is skipped with
@@ -47,8 +47,14 @@ import org.apache.spark.internal.SparkLoggerFactory;
  *
  * <p>With C1 excluded, the first C1 request for a kernel method is refused and marks the method
  * not C1-compilable - where a tier-3 failure leaves it anyway - so the interpreter profiles it and
- * C2 compiles it, whatever the queues were doing. Nothing is lost: C1 code for these methods boxes
- * every vector operation just as the interpreter does.
+ * C2 compiles it, whatever the queues were doing. C1 code for these methods boxes every vector
+ * operation just as the interpreter does, so the tiers lose nothing - but the profiling starts
+ * later: the failed tier-3 request is what creates a method's profile, and without it the
+ * interpreter creates one only at twice the tier-3 threshold. A kernel fed by its own batches, with
+ * no warm-up, then reaches C2 about a hundred batches later - one more slow query of two million
+ * rows at 54 entries (`PLAN_TASK_212.md` 10.6). That is why the directive comes with the warm-up,
+ * where C2 is busiest and a stranded method would never be warm, rather than with the first
+ * kernel: a JVM that never warms a kernel compiles its kernels as it did before.
  *
  * <p><b>How.</b> The DiagnosticCommand MBean's {@code compilerDirectivesAdd}, the in-process form
  * of {@code jcmd Compiler.directives_add}, reads the directive from a file. It matches the shape

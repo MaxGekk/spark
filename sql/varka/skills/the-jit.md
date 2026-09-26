@@ -586,10 +586,18 @@ from inside.)
 
 The fix keeps C1 off the kernel classes: one compiler directive,
 `c1: { Exclude: true }` for the shape cache's class names, added through the DiagnosticCommand
-MBean's `compilerDirectivesAdd` before the first kernel class is defined
+MBean's `compilerDirectivesAdd` when the first kernel warm-up starts
 (`VarkaKernelCompileDirective`). The first C1 request is refused and marks the method not
 C1-compilable, which is where the tier-3 failure leaves it anyway, so every kernel method
 goes from the interpreter to C2. `VarkaWarmupDirectiveBenchmark` is the A/B, in fresh JVMs.
+
+It has a price, which is why it waits for a warm-up. The failed tier-3 request is also what
+creates a method's profile; with C1 excluded the interpreter creates it only at twice the
+tier-3 threshold, so a kernel fed by 625-iteration batches reaches C2 about a hundred batches
+later. On the size ladder's 54-entry kernel over two million rows, the second query took 7.1 s
+against 0.8 s, and the steady state was the same (`PLAN_TASK_212.md` 10.6). A benchmark's
+best time hides this and its average does not: the ladder's averages rose three to seven
+times while its best times did not move.
 The general rule: for generated code too large for C1's tier 3, exclude C1 outright rather
 than rely on tier 2 never happening, and check that C2 is the top tier first - excluding C1
 under `TieredStopAtLevel=1` would leave the methods interpreted for good.
