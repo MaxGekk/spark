@@ -36,15 +36,16 @@ import re
 import sys
 from collections import defaultdict
 
-CLASS = re.compile(r"(VarkaDeoptProbe_\d+_[a-z]+(?:_[a-z]+)?)")
+CLASS = re.compile(r"(VarkaDeoptProbe_\d+_[a-z]+(?:_[a-z0-9]+)?)")
 # PrintCompilation: <ms> <cid> <flags> <tier> Class::method (bytes) [note]
 COMPILE = re.compile(
-    r"^\s*(\d+)\s+(\d+)\s+([%sbn! ]*?)\s*(\d)\s+\S*(VarkaDeoptProbe_\d+_[a-z]+(?:_[a-z]+)?)::(\w+)"
+    r"^\s*(\d+)\s+(\d+)\s+([%sbn! ]*?)\s*(\d)\s+"
+    r"\S*(VarkaDeoptProbe_\d+_[a-z]+(?:_[a-z0-9]+)?)::(\w+)"
     r"(?: @ \d+)? \((\d+) bytes\)(.*)$"
 )
 DEOPT = re.compile(
     r"\[deoptimization\] cid=(\d+)\s+level=(\d)\s+"
-    r"\S*(VarkaDeoptProbe_\d+_[a-z]+(?:_[a-z]+)?)\.(\w+)\("
+    r"\S*(VarkaDeoptProbe_\d+_[a-z]+(?:_[a-z0-9]+)?)\.(\w+)\("
     r"[^)]*\)\S*\s+trap_bci=(\d+)\s+(\S+)\s+(\S+)"
 )
 

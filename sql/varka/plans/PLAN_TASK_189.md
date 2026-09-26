@@ -278,6 +278,42 @@ without the trap it keeps taking, and the result is the code the clean forks
 get from their first compile. That makes the cost of the cycle a fixed
 minute per kernel class per JVM rather than the life of the executor.
 
+### 2.5 Which half of task 212's path is the cure, 26 September 2026
+
+Twenty forks per case, single form, twelve outputs, both widths
+(`target/varka-deopt-cycle/20260926-130047`, appended to the census file):
+
+| path | 512 bits | 128 bits | traps per fork | rate, M rows/s |
+| :-- | --: | --: | :-- | :-- |
+| `c1off`: the directive, then the batches | 20 of 20 | 20 of 20 | 23 to 26 | 2.1 to 2.5 at 512; 0.7 at 128 |
+| `shortcalls`: 12000 calls of 32 rows, C1 left on | 0 of 20 | 0 of 20 | 0 | 157 to 169 at 512; 53 to 58 at 128 |
+
+8. **Held.** The short calls are the cure and the directive is not: with C1
+   kept off and the batches from the first call, every fork cycles, more
+   surely than on the plain `batches` path (40 of 40 against 39 of 40); with
+   the short calls and C1 left on, not one method traps, not even at its
+   loop head.
+
+The parser first printed this census as 0 of 20 for a path it called `c`: its
+class-name pattern took letters only, so `c1off` lost its digit and its forks
+matched no method at all. Reading the pattern with digits changes nothing in
+2.1 to 2.4, whose path names have none.
+
+So what arms the predicate is what the interpreter counted at the loop's
+branches before C2 compiled it, and the count the short calls leave -
+two vector iterations a call at 512 bits, eight at 128, against 64 and 256 a
+1024-row batch - builds a loop C2 does not guard with the predicate that
+traps. That turns 3.1 from an assembly hunt into a ladder first: the warm-up's
+rows at 32, 64, 128, 256, 512 and 1024 on the single form, which finds the
+trip count at which the cycle returns, and only then the trap's `relative_pc`
+in the assembly, now that the question is narrow.
+
+For production the reading is the same as 2.2's, with a reason attached: the
+default form does not cycle, and the path every new kernel takes since task
+212 would keep even the old form out of it, because of its short calls - so a
+change to the warm-up's row count is the one place this task's finding binds
+future work, and 3.3's guard is where to catch it.
+
 ## 3. The design
 
 ### 3.1 The mechanism hunt, in the order the evidence allows
