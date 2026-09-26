@@ -21,7 +21,7 @@ import scala.concurrent.duration._
 
 import org.apache.spark.benchmark.Benchmark
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaShapeCache}
 
 /**
  * What the first query costs (task 195): a query's first run against its steady state, on stock
@@ -78,11 +78,22 @@ object VarkaColdStartBenchmark extends SqlBasedBenchmark {
   private val repetitions = if (smoke) 2 else 5
   private val rungs = if (smoke) Seq(16) else VarkaSizeLadder.rungs
 
-  /** The rung's query with offsets no earlier iteration used, so nothing about it is cached. */
+  /**
+   * The rung's query with offsets no earlier iteration used, so nothing about it is cached. The
+   * offsets are the `add_months` month counts too, and the Varka kernel runs a batch only while
+   * a month count is within `VarkaChrono.MONTH_ARITH_MAX_MONTHS`: past it the batch is handed to
+   * Spark's row path, and the Varka arm would time vanilla's code. So consecutive iterations are
+   * a hundred apart - more than any rung's width - and the largest one stays under the bound.
+   */
   private def query(n: Int, iteration: Int): String = {
-    val base = 10000 * (iteration + 1)
+    val base = 100 * (iteration + 1)
     s"SELECT ${(1 to n).map(k => entry(base + k)).mkString(", ")} FROM ladder_dates"
   }
+
+  /** The iteration offsets the three cases use: `firstRun + t`, `secondRun + t`, `planOnly + t`. */
+  private val firstRun = 0
+  private val secondRun = 100
+  private val planOnly = 200
 
   override def runBenchmarkSuite(mainArgs: Array[String]): Unit = {
     // The inherited session uses the default cache serializer; these arms own their
@@ -97,51 +108,58 @@ object VarkaColdStartBenchmark extends SqlBasedBenchmark {
     SparkSession.clearActiveSession()
     SparkSession.clearDefaultSession()
     require(baseline ne varka, "the two sessions must be distinct or there is no baseline")
+    val largest = 100 * (planOnly + repetitions) + rungs.max
+    require(largest <= VarkaChrono.MONTH_ARITH_MAX_MONTHS,
+      s"offsets up to $largest pass the kernel's month bound ${VarkaChrono.MONTH_ARITH_MAX_MONTHS}")
     try {
       cacheDates(baseline, numRows)
       cacheDates(varka, numRows)
       runBenchmark("the first query: greatest(add_months(d, k), date_add(d, k), last_day(d))") {
         for (n <- rungs) {
-          val fused = varkaFused(varka, query(n, 0))
-          require(fused == n, s"the Varka arm fused $fused of $n entries")
+          // Every entry fuses and the kernel runs, at the largest offset each executed case uses:
+          // the offsets grow with the iteration, so the last one is the one that could fall back.
+          for (last <- Seq(firstRun, secondRun).map(_ + repetitions - 1)) {
+            val fused = varkaFused(varka, query(n, last))
+            require(fused == n, s"the Varka arm fused $fused of $n entries at iteration $last")
+          }
           val benchmark = new Benchmark(s"$n entries over $numRows Arrow-cached rows", numRows,
             minNumIters = repetitions, warmupTime = 0.seconds, minTime = 0.seconds,
             outputPerIteration = true, output = output)
           benchmark.addTimerCase("vanilla Spark, plan only") { timer =>
-            val q = query(n, 200 + timer.iteration)
+            val q = query(n, planOnly + timer.iteration)
             timer.startTiming()
             baseline.sql(q).queryExecution.executedPlan
             timer.stopTiming()
           }
           benchmark.addTimerCase("vanilla Spark, first run") { timer =>
-            val q = query(n, timer.iteration)
+            val q = query(n, firstRun + timer.iteration)
             timer.startTiming()
             baseline.sql(q).noop()
             timer.stopTiming()
           }
           benchmark.addTimerCase("vanilla Spark, second run") { timer =>
-            val q = query(n, 100 + timer.iteration)
+            val q = query(n, secondRun + timer.iteration)
             baseline.sql(q).noop()
             timer.startTiming()
             baseline.sql(q).noop()
             timer.stopTiming()
           }
           benchmark.addTimerCase("Varka, plan only") { timer =>
-            val q = query(n, 200 + timer.iteration)
+            val q = query(n, planOnly + timer.iteration)
             VarkaShapeCache.invalidateAll()
             timer.startTiming()
             varka.sql(q).queryExecution.executedPlan
             timer.stopTiming()
           }
           benchmark.addTimerCase("Varka, first run") { timer =>
-            val q = query(n, timer.iteration)
+            val q = query(n, firstRun + timer.iteration)
             VarkaShapeCache.invalidateAll()
             timer.startTiming()
             varka.sql(q).noop()
             timer.stopTiming()
           }
           benchmark.addTimerCase("Varka, second run") { timer =>
-            val q = query(n, 100 + timer.iteration)
+            val q = query(n, secondRun + timer.iteration)
             VarkaShapeCache.invalidateAll()
             varka.sql(q).noop()
             timer.startTiming()

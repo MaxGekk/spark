@@ -536,3 +536,24 @@ machinery and `sql/varka/width_audit.json` the census; three things to carry.
   on this JVM a two-lane species - NEON's - runs them per lane. The unmasked
   arithmetic and the conversion-form division vectorise. Design a 64-bit
   construction for the narrow species without a mask, or decline it there.
+
+## A new kernel class runs interpreted until enough batches have gone through it
+
+Varka's loop and epilogue methods are called once per batch, and each call loops only a few
+hundred times, so a freshly emitted class reaches neither the first compiler tier's invocation
+threshold (200 calls, or 100 calls with 2,000 calls and iterations together) nor its back-edge
+threshold (60,000 iterations in one call) until many batches have passed. Over a hundred
+thousand rows - ten batches of the cache's default 10,000 rows, about 625 iterations each at
+sixteen lanes - the cold-start benchmark's kernels were never compiled at any tier:
+`-XX:+PrintCompilation` shows no `loopDense` or `epilogueDense` event in the whole run, while
+vanilla's generated `processNext` compiles in the same log, because its one loop over every row
+runs in a single invocation and the JIT compiles it partway through (`PLAN_TASK_195.md` 5.2).
+Interpreted Vector API code is a library call per operation, so such a query is slower on Varka
+than on vanilla. Two things follow for anyone measuring: a "second run" of a newly emitted class
+is not steady state, and a benchmark that wants steady state has to push enough batches through
+the class first, as the size ladder's two-second warmup does.
+
+The same investigation turned up a benchmarking trap worth its own line: fresh literals chosen
+to defeat a cache can push a value past a kernel's covered range - `add_months`' month bound
+here - and the kernel's guard then hands every batch to Spark's row path, so the Varka arm times
+vanilla. `VarkaSizeLadder.varkaFused` now fails a run that has any fallback batch.

@@ -106,6 +106,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A hand-written comparison kernel needs every fast path the real one has](sql/varka/skills/the-jit.md#a-hand-written-comparison-kernel-needs-every-fast-path-the-real-one-has)
 * [A kernel clean at 512 bits can be a per-lane loop at 128, and only the narrow companion shows it](sql/varka/skills/the-jit.md#a-kernel-clean-at-512-bits-can-be-a-per-lane-loop-at-128-and-only-the-narrow-companion-shows-it)
 * [Ask C2 which vector calls it refused, per shape, and know which of its three answers is a verdict](sql/varka/skills/the-jit.md#ask-c2-which-vector-calls-it-refused-per-shape-and-know-which-of-its-three-answers-is-a-verdict)
+* [A new kernel class runs interpreted until enough batches have gone through it](sql/varka/skills/the-jit.md#a-new-kernel-class-runs-interpreted-until-enough-batches-have-gone-through-it)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
