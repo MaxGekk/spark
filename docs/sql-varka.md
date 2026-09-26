@@ -679,6 +679,30 @@ by churn (Spark's codegen cache never releases a loader) or by task lifetime
 (the pre-task-18 contract, still available at capacity 0). A registry +
 `findClass` mirror Spark's `InMemoryClassLoader`.
 
+### A new shape's first batches
+
+A newly emitted class runs interpreted until HotSpot compiles it, and
+interpreted Vector API code is a library call and an allocation per
+operation - slower than Spark's own row code. A kernel's methods are called
+once per batch, so over a query of ten batches they reach none of HotSpot's
+compile thresholds. With `spark.sql.codegen.varka.warmup.enabled` (the
+default), a shape's batches therefore take the node's per-row path until its
+kernel is compiled: the first task to meet the new class copies its batch's
+kernel inputs and queues a warm-up (`VarkaKernelWarmup`, one daemon thread per
+JVM), which runs the kernel on that copy in short calls until it no longer
+allocates, which it does only as C2's code. From then on every task of the
+shape runs the kernel. The per-shape state is `VarkaKernelWarmth`, kept on the
+cache entry, and the batches served on the row path meanwhile are counted in
+`numWarmupBatches`. The warm-up is per cache entry, so a session with its own
+artifact class loader warms its own class.
+
+C1 is kept off the kernel classes altogether, by one compiler directive added
+before the first class is defined (`VarkaKernelCompileDirective`). A kernel's
+loop methods are too large for C1's fully profiled tier, and a method that C1
+compiled at the limited-profile tier instead - which HotSpot chooses while
+C2's queue is long - would never be recompiled by C2. Without C1 every kernel
+method goes from the interpreter to C2.
+
 ### Null semantics and predication
 
 The vector loop cannot branch per row, so SQL's null and conditional
@@ -889,6 +913,9 @@ Per task and Arrow-supported batch:
    every batch of every task of the shape.
 3. Guard per batch that every referenced column is an `ArrowColumnVector`
    backed by a `DateDayVector`; otherwise the batch takes the per-row path.
+   While the shape's class is new and not yet compiled by C2, the batch
+   takes the per-row path too, and a background thread gets the kernel
+   compiled (see "A new shape's first batches" below).
 4. Run the kernel: one vector loop writes every fused output into freshly
    allocated Arrow vectors. Forwarded columns are re-wrapped, not copied.
    Residual entries are evaluated per row and merged - at-row on the
@@ -940,8 +967,8 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
   away by overflowing.
 * **No unused configuration.** Every `spark.sql.codegen.varka.*` entry must be
   consumed. Today `enabled`, `classDumpDirectory`, `cache.maxEntries`,
-  `compilationWatch.enabled` and `emit.useAVX` exist, and each is read on the
-  execution path that documents it.
+  `compilationWatch.enabled`, `emit.useAVX` and `warmup.enabled` exist, and
+  each is read on the execution path that documents it.
 
 ## Module and file layout
 
@@ -962,6 +989,7 @@ All Varka configurations are internal:
 | `spark.sql.codegen.varka.classDumpDirectory` | (none) | Diagnostics (task 16). When set, every emitted kernel class is written to this directory under its `SourceFile` name, for `javap`. A failed write is logged and never fails the query; every task of a shape holds identical bytes and overwrites one file. |
 | `spark.sql.codegen.varka.emit.useAVX` | `-1` | The `-XX:UseAVX` level the emitter lowers for where a lowering depends on it (task 121): `3` or above takes a 64-bit division through double lanes, `2` the magic-number form, because the converts do not become instructions below AVX-512; `-1` leaves the emitter's own default, which is deliberately not the host's level so the shape hashes and the committed bytes describe no one machine. The level is part of the shape hash, so a session that sets it emits and caches its own classes. For benchmarks and A/Bs. |
 | `spark.sql.codegen.varka.cache.maxEntries` | `100` | Static (task 18). Capacity of the JVM-wide cache of loaded fused-kernel classes, keyed on the kernel's structural shape; the least recently used class is released on eviction, bounding Metaspace by this size. `0` restores the per-task emit-and-unload lifecycle. |
+| `spark.sql.codegen.varka.warmup.enabled` | `true` | Task 212. When true, a newly emitted kernel serves no batch until C2 has compiled it: the shape's batches take the per-row path while a background thread runs the kernel on a copy of the first batch, and every task of the shape switches to the kernel once it runs without allocating. When false, a new kernel serves batches from the first and runs interpreted until enough batches have gone through it. |
 
 The rule is registered on every `SparkSession` but does nothing while the
 config is off, so enabling the config is all that is needed:

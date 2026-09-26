@@ -300,3 +300,24 @@ new arms:
    arm's do not at 54.
 7. **The directive A/B.** Without the directive at least one of three fresh
    JVMs strands the 54-entry kernel; with it all three compile.
+
+### 10.4 What happened to the compile-time lever
+
+9.2 proposed a second lever, C2's time per kernel. Two pieces of it are in the
+design above and one is not:
+
+* **The epilogues cost the warm-up no C2 time.** An early version ran every
+  other call with a seven-row tail, so every epilogue ran its body and C2
+  compiled all fourteen of them at full size - as much C2 work again as the
+  loops, for rows real 10,000-row batches never have. Mirroring the batch's
+  own remainder leaves them the empty calls real batches give them.
+* **C1 does no work on a kernel.** Its tier-3 compiles of these methods all
+  fail, and before the directive each attempt cost a C1 thread tens of
+  milliseconds on the way to failing.
+* **Not built: fewer or cheaper C2 compiles per kernel.** C2 still compiles
+  every loop method the warm-up runs. The measured costs of what the warm-up
+  waits for are in 10.5; the options - more than one warm-up thread for the
+  interpreted phase, which is serial in one thread today, or loop methods
+  shared between repeated entries, which the ladder's identical entries would
+  compile once instead of fourteen times - are follow-up rows, if the numbers
+  say the verdict is what a user waits for.

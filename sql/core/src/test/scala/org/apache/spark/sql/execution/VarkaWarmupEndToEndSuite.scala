@@ -23,6 +23,7 @@ import org.apache.spark.sql.{DataFrame, QueryTest, Row}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmth,
   VarkaKernelWarmup, VarkaShapeCache}
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.util.QueryExecutionListener
 
 /**
  * The kernel warm-up end to end (`spark.sql.codegen.varka.warmup.enabled`, `PLAN_TASK_212.md`
@@ -55,10 +56,33 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions {
   }
 
   /** A metric of the query's Varka node, after running it. */
-  private def varkaMetric(df: DataFrame, name: String): Long = {
-    val node = collectFirst(df.queryExecution.executedPlan) { case v if isVarkaNode(v) => v }
-      .getOrElse(fail(s"no Varka node in:\n${df.queryExecution.executedPlan.treeString}"))
+  private def varkaMetric(df: DataFrame, name: String): Long =
+    varkaMetric(df.queryExecution.executedPlan, name)
+
+  private def varkaMetric(plan: SparkPlan, name: String): Long = {
+    val node = collectFirst(plan) { case v if isVarkaNode(v) => v }
+      .getOrElse(fail(s"no Varka node in:\n${plan.treeString}"))
     node.metrics(name).value
+  }
+
+  /** Writes the query to `noop` - a columnar sink - and returns the plan the write executed. */
+  private def writeToNoop(sql: String): SparkPlan = {
+    @volatile var executed: SparkPlan = null
+    val listener = new QueryExecutionListener {
+      override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
+        executed = qe.executedPlan
+      }
+      override def onFailure(funcName: String, qe: QueryExecution, e: Exception): Unit = {}
+    }
+    varkaSpark.listenerManager.register(listener)
+    try {
+      varkaSpark.sql(sql).write.format("noop").mode("append").save()
+      varkaSpark.sparkContext.listenerBus.waitUntilEmpty()
+    } finally {
+      varkaSpark.listenerManager.unregister(listener)
+    }
+    assert(executed != null, "the write did not report a query execution")
+    executed
   }
 
   /**
@@ -103,5 +127,28 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions {
 
   test("a filter's first query takes the row path and its next one the compiled kernel") {
     checkWarmup("SELECT i FROM varka_dates_big WHERE date_add(d, 30) > DATE'2020-07-01'")
+  }
+
+  test("a columnar consumer's first write takes the row path and its next one the kernel") {
+    // The columnar node's row path projects each row and converts it back into vectors, so the
+    // sink still receives batches; only the metrics tell the two paths apart.
+    cacheDatesBig(varkaSpark, numRows)
+    val query = "SELECT date_add(d, 3) AS a, last_day(d) AS b FROM varka_dates_big"
+    withWarmup {
+      VarkaShapeCache.invalidateAll()
+      val first = writeToNoop(query)
+      assert(first.find(_.isInstanceOf[VarkaProjectExec]).isDefined,
+        s"the write does not consume the columnar Varka node:\n${first.treeString}")
+      assert(varkaMetric(first, "numWarmupBatches") === numBatches)
+      assert(varkaMetric(first, "numVarkaBatches") === 0L)
+      assert(varkaMetric(first, "numOutputRows") === numRows.toLong)
+      assert(VarkaKernelWarmup.awaitIdle(120000), "the warm-up did not finish in two minutes")
+      assert(VarkaKernelWarmup.recentOutcomes().asScala.last.state() ===
+        VarkaKernelWarmth.State.COMPILED)
+      val second = writeToNoop(query)
+      assert(varkaMetric(second, "numVarkaBatches") === numBatches)
+      assert(varkaMetric(second, "numWarmupBatches") === 0L)
+      assert(varkaMetric(second, "numOutputRows") === numRows.toLong)
+    }
   }
 }

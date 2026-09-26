@@ -50,13 +50,14 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth
  * bytes per column per call on a wide kernel, where C2 does not inline every call they are
  * passed to. The warm-up measures its own thread's allocation over a probe block of calls, and a
  * block is clean when it is within {@link #SEGMENT_BYTES_PER_COLUMN} per column per call over the
- * species-pollution check's allowance ({@link VarkaAllocationSampler}) and at most a
- * {@link #COMPILED_DROP}th of what the first block allocated; {@link #CLEAN_PROBES} clean blocks in
- * a row are the verdict. The per-column term keeps a wide kernel's segments from reading as
+ * species-pollution check's allowance ({@link VarkaAllocationSampler}) and allocates at most a
+ * quarter ({@link #COMPILED_DROP}) of what the first block did; {@link #CLEAN_PROBES} clean blocks
+ * in a row are the verdict. The per-column term keeps a wide kernel's segments from reading as
  * boxing, and the drop keeps a narrow kernel's boxing from reading as segments. A count cannot
  * say any of this: crossing a threshold only queues a compile, which lands whenever a compiler
  * thread reaches it. A kernel whose first block is already clean has nothing to wait for - its
- * batches are declined before they reach a loop - and is released at once.
+ * driver returns before any loop runs, as it does over an all-null input - and is released at
+ * once.
  *
  * <p><b>What it runs on.</b> A copy of a real batch of the shape, taken on the task thread before
  * that batch is released: its kernel inputs, tiled to {@link #SNAPSHOT_ROWS} rows. C2 then
