@@ -26,12 +26,12 @@
 # for the class's loopDense methods, the tier-4 compiles (standard and OSR), the "made not
 # entrant" lines and the profile_predicate deoptimizations, and reads the last per-second rate
 # the child printed. The verdict is from the JVM's words, never from the rate: a fork is in the
-# cycle when a loopDense method was compiled at tier 4 as a standard (non-OSR) compilation three
-# or more times and trapped at profile_predicate. A fork that compiles once may still see one
-# OSR compile beside the standard one; a fork that traps four times at the loop head (bci 426 in
-# the twelve-output kernel, PerBytecodeTrapLimit) and stops sees two standard compiles; only the
-# cycle sees a third and then one every C2 compile time. The trap bcis are printed so the head
-# and the back-edge can be told apart, and the rate beside them so a reader sees the two agree.
+# cycle when a loopDense method was made not entrant three or more times and trapped at
+# profile_predicate more than four times. A method that settles traps at most four times at its
+# loop head (PerBytecodeTrapLimit), is made not entrant once and recompiled, and may see a third
+# standard compile beside an OSR one while its callers warm up; the cycle traps again at the back
+# edge on every version and is made not entrant every C2 compile time. The trap bcis are printed
+# so the head and the back edge can be told apart, and the rate beside them.
 import re
 import sys
 from collections import defaultdict
@@ -98,7 +98,7 @@ def judge(name, lines):
         if "VARKA_DEOPT_RATE=" in line:
             rates.append(float(line.split("VARKA_DEOPT_RATE=")[1].split()[1]))
     methods = sorted(set(tier4) | set(traps) | set(not_entrant))
-    cycling = [m for m in methods if tier4[m] - osr[m] >= 3 and traps[m] > 0]
+    cycling = [m for m in methods if not_entrant[m] >= 3 and traps[m] > 4]
     return {
         "cycle": bool(cycling),
         "methods": methods,

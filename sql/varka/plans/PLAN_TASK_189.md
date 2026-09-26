@@ -158,8 +158,8 @@ was none.
    (the third at 512 bits) saw none either, so the OSR compile is company,
    not cause.
 
-*The warm-up path of prediction 6 and the sweep of prediction 5 are running
-as this is committed; their numbers follow in 2.2.*
+*The warm-up path of prediction 6 is in 2.2 and the sweep of prediction 5 in
+2.3.*
 
 So the admission check admits the task as the row wrote it only in part. The
 form the default emits - every kernel a query runs since task 87 - reached
@@ -211,6 +211,44 @@ calls with C1 left on.
 If 8 holds, the loop's profiled trip count is what arms the predicate, and
 3.1 gains a ladder that no assembly is needed for: the warm-up rows at 32, 64,
 256 and 1024, which is the trip count at which the cycle returns.
+
+### 2.3 The default form's other rungs, 26 September 2026
+
+Ten forks per case of the default form, `batches` path, at 13, 14, 16, 32 and
+60 outputs, both widths (`target/varka-deopt-cycle/20260926-123504`, appended
+to the census file). **No fork of the hundred cycled.**
+
+That is the tightened reading, and the first one said otherwise, so both are
+recorded. As first written the parser counted a fork in the cycle when one
+loop method had three standard tier-4 compiles and any `profile_predicate`
+trap, and by that rule half the 60-output forks cycled, five of ten at each
+width. Every one of those ten was a single method with four traps, all at its
+own loop head, made not entrant once and compiled twice more - the head-trap
+opening every fork shows, with a third compile because sixty outputs give a
+method's callers longer to warm up. None trapped at a back edge, and none was
+made not entrant twice. The rule was written against twelve outputs, where
+the settled method never saw a third compile, and it confused the two at
+sixty. It now asks for what the cycle is and the opening is not - three or
+more "made not entrant" and more than four traps - and read over every log of
+2.1 to 2.3 it changes no other verdict: 19 and 20 of 20 for the single form,
+0 of 20 for the group form, 0 of 80 on the warm-up path, and the one-fork
+calibration still in the cycle.
+
+5. **Held**, on the tightened rule; refuted on the first, by a misreading the
+   per-fork counts make visible, which is why the parser prints them.
+
+Two further readings, for the record, and neither is task 189's:
+
+* The rate falls with the output count as the work grows - about 170, 165,
+  128 and 66 M rows/s at 13, 14, 16 and 32 outputs at 512 bits, 55, 50, 41
+  and 21 at 128 - and then drops to 0.2 and below 0.05 at sixty, in every
+  fork alike. That is not a mode one fork draws and the next does not. The
+  sixty-output kernel's epilogue methods are 3 to 4 KB each, their tier-3
+  compiles fail with "out of virtual registers" in every fork, and in eight
+  seconds of 1024-row batches the probe never saw them compiled at tier 4:
+  the strand task 212 exists for, reached here by the probe's own path.
+* The one-fork calibration of section 2 is still in the cycle on the new rule,
+  so the instrument's positive control is unchanged.
 
 ## 3. The design
 
