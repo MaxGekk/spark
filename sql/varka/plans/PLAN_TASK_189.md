@@ -170,6 +170,48 @@ the mechanism is reproducible on demand, which the row did not have: the hunt
 of 3.1 has a fork to read whenever it wants one, and the lifetime question of
 3.4 can be answered on it.
 
+### 2.2 Task 212's path, 26 September 2026
+
+Twenty forks per case again, twelve outputs, both forms, both widths, with
+the probe on the `warmup` path (`target/varka-deopt-cycle/20260926-121907`,
+appended to the census file). **Not one fork of eighty cycled, and not one of
+their two hundred and forty loop methods trapped at all** - not the cycle,
+and not the four head traps every fork of the `batches` path shows in both
+forms. Each method compiled once, at tier 4, after the twelve thousand short
+calls, and the batches then ran at the clean forks' rate: the single form at
+150.6 to 167.9 M rows/s at 512 bits and 50.2 to 59.4 at 128, the group form
+at 167.3 to 174.7 and 53.7 to 55.5.
+
+6. **Refuted on the single side, held on the group side.** #433's path
+   removes the cycle from the old form entirely, and the default form stays
+   clean. So #433 does not bring the cycle back; it takes away the one
+   reproducible way of reaching it, which for the mechanism hunt is the more
+   interesting result.
+
+The path changes two things at once, and the prediction assumed the profile
+was not one of them. The next census takes them apart, on the single form at
+twelve outputs, both widths, twenty forks: `c1off`, the directive and then
+the batches from the first call, and `shortcalls`, the twelve thousand 32-row
+calls with C1 left on.
+
+*Registered before that census runs:*
+
+8. **The short calls are the cure, not the directive.** `shortcalls` cycles in
+   no fork and shows no `profile_predicate` trap at either width; `c1off`
+   cycles as the `batches` path does, in at least ten of twenty at each width,
+   with the four head traps in every fork. The reason: the trap is a
+   *profiled* loop predicate, built from what the interpreter counted at the
+   loop's branches, and the short calls change that count - two iterations
+   per call at 512 bits and eight at 128, against 64 and 256 from the batches
+   - where excluding C1 changes only when the counting starts, and for the
+   two 3 KB loop methods C1 never produced code in the `batches` path either
+   (its tier-3 compiles fail on virtual registers, `VarkaDeoptCycleProbe`'s
+   logs say so in every fork).
+
+If 8 holds, the loop's profiled trip count is what arms the predicate, and
+3.1 gains a ladder that no assembly is needed for: the warm-up rows at 32, 64,
+256 and 1024, which is the trip count at which the cycle returns.
+
 ## 3. The design
 
 ### 3.1 The mechanism hunt, in the order the evidence allows
