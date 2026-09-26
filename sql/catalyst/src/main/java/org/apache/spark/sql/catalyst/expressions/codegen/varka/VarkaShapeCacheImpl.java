@@ -186,8 +186,14 @@ public final class VarkaShapeCacheImpl {
     Cache<LoaderShapeKey, VarkaShapeEntry> classes = CacheBuilder.newBuilder()
         .maximumSize(maxEntries)
         // Guava swallows a throwing listener; release() cannot throw, and must not be more
-        // than "stop retaining": running tasks still hold the class until they complete.
-        .<LoaderShapeKey, VarkaShapeEntry>removalListener(n -> n.getValue().loader().release())
+        // than "stop retaining": running tasks still hold the class until they complete. A
+        // warm-up of a shape that left stops too - new tasks emit the shape into a new class,
+        // so compiling this one would serve only the tasks already running it, which take
+        // the kernel as soon as the warmth is released.
+        .<LoaderShapeKey, VarkaShapeEntry>removalListener(n -> {
+          n.getValue().loader().release();
+          n.getValue().warmth().release();
+        })
         .build();
     this.cache = classes;
     this.executions = CacheBuilder.newBuilder()
@@ -411,6 +417,8 @@ public final class VarkaShapeCacheImpl {
     // cost minus the lookup - identified by shape only (the class is shared).
     VarkaEmissionEvent emissionEvent = new VarkaEmissionEvent();
     emissionEvent.begin();
+    // Before any kernel class exists, so that no kernel method is ever compiled by C1.
+    VarkaKernelCompileDirective.ensureInstalled();
     byte[] bytes = VarkaLoopEmitter.emit(className, key.outputs(), key.numInputs(),
         key.numLiterals(), sourceFile, "shape " + hash, key.options());
     VarkaGeneratedClassLoader loader = new VarkaGeneratedClassLoader(loaderKey.parent());
@@ -433,7 +441,7 @@ public final class VarkaShapeCacheImpl {
     } catch (NoSuchMethodException e) {
       throw sneakyThrow(e);
     }
-    return new VarkaShapeEntry(loader, klass, bytes, hash, constructor);
+    return new VarkaShapeEntry(loader, klass, bytes, hash, constructor, new VarkaKernelWarmth());
   }
 
   /**

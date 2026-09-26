@@ -178,3 +178,125 @@ applies to the task as designed. What the cause is instead, the JVM says:
 
 The owner decides whether the task continues as B plus the compile-time lever,
 before any of it is built.
+
+## 10. The design as built, 26 September 2026
+
+The owner asked on 26 September 2026 for the task to be done and a solution
+found, which settles 9.2: the task continues as the reshaped variant B. What
+was built, what the JVM said on the way, and what the committed run is
+predicted to show.
+
+### 10.1 The mechanism
+
+* **A cold shape's batches take the row path.** Each cached shape carries its
+  warm state (`VarkaKernelWarmth`: cold, warming, compiled, released), shared
+  by every task that runs the shape. `VarkaEvaluatorBase.serveBatch` sends a
+  batch the kernel could serve to the node's own row path while the shape is
+  not ready, and counts it in `numWarmupBatches`, apart from the fallbacks:
+  nothing failed, the row path is simply the faster of the two until C2 has
+  the kernel.
+* **The first task to meet a cold shape queues its warm-up.**
+  `VarkaKernelWarmup` is one daemon thread per JVM. The claiming task copies
+  its batch's kernel inputs - after the evaluator has filled them, derived
+  inputs included - tiled to 1024 rows, and the thread runs a fresh instance
+  of the kernel on that copy. Each call runs 32 rows plus the batch's length
+  modulo 32, which keeps the batch's remainder past its last whole lane group
+  at every lane count that divides 32, so the epilogues see what the real
+  batches give them. Short calls advance the invocation counters HotSpot's
+  thresholds read hundreds of times faster per row than 625-iteration calls
+  on real batches do.
+* **The verdict is the JVM's, by allocation.** A kernel that is not compiled
+  boxes a vector per operation; a compiled one allocates only the memory
+  segments its driver makes per column. A probe block of sixteen calls is
+  clean when it allocates no more than the species-pollution check's
+  allowance plus 256 bytes per column per call, and at most a quarter of the
+  first block; two clean blocks in a row are the verdict. A warm-up without
+  one after sixty seconds, a full queue (sixteen), a shape that leaves the
+  cache and a failing kernel all release the shape, whose tasks then run the
+  kernel as they would have without the warm-up.
+* **Configuration.** `spark.sql.codegen.varka.warmup.enabled`, on by default.
+  The test sessions and every benchmark session except the cold-start
+  benchmark's warm-up arm pin it off, because they check that the kernel
+  served a shape's first batch.
+
+### 10.2 What the JVM said on the way
+
+**A wide kernel's compiled calls allocate.** The first verdict used the
+species-pollution check's allowance alone, 4096 bytes plus one a row. On a
+54-entry kernel the warm-up's last probes allocated about 7 KB a call - three
+orders of magnitude under the first probe's rate, so compiled - and never met
+it: the driver makes a memory segment per column it reads or writes, and on a
+wide kernel C2 leaves some of the calls they are passed to out of line, so
+they escape. Hence the per-column term.
+
+**Then a stall, three runs in three: a kernel stranded at tier 2.** With the
+allowance fixed, a 54-entry warm-up that followed a 16-entry one never reached
+its verdict in sixty seconds, its probes still allocating at a boxing rate.
+`-XX:+PrintTieredEvents` showed why. The first C1 request for four of the
+fourteen loop methods and for every epilogue came while C2's queue held 45
+tasks - the concurrent queries' own compiles - past `Tier3DelayOn` times the
+compiler count, so HotSpot asked C1 for tier 2, limited profiling, instead of
+tier 3, and C1 compiled it. Its later tier-3 request failed with "out of
+virtual registers in LIR generator (retry at different tier)", as every
+tier-3 compile of these methods does, which marks the method not
+C1-compilable. From tier 2 the policy climbs only to tier 3, and tier-2 code
+does not update the profile a direct climb to C2 would read, so the method
+stayed on C1 code, boxing every vector operation, for the life of its class;
+a dump of the compile queues twenty seconds in showed both empty and nothing
+compiling. The methods whose first request found the queue short went
+interpreter to C2 and compiled. The trap is not the warm-up's: any kernel on
+the per-batch path whose methods cross their first threshold while C2 is
+busy meets it the same way.
+
+**The fix keeps C1 off the kernel classes.** `VarkaKernelCompileDirective`
+adds one compiler directive per JVM, before the first kernel class is
+defined: `c1: { Exclude: true }` for the shape cache's class names, through
+the DiagnosticCommand MBean's `compilerDirectivesAdd`, the in-process form of
+`jcmd Compiler.directives_add`. A kernel method's first C1 request is refused
+and marks it not C1-compilable - where the tier-3 failure leaves it anyway -
+so the interpreter profiles it and C2 compiles it, whatever the queues are
+doing. C1 code for these methods boxes as the interpreter does, so nothing is
+lost. It is skipped where C2 is not the top tier. The A/B is committed as
+`VarkaWarmupDirectiveBenchmark`, which runs the sequence in fresh JVMs with
+the directive and with an override that enables C1 again.
+
+**The shape cache keys on the class loader, and so does the warm-up.** A
+query run as an SQL execution - `noop()`, `collect()` - runs its tasks under
+the session's own artifact class loader; `queryExecution.toRdd` run outside
+one uses the default loader, and so meets a different entry of the cache,
+with its own warm state. The cold-start benchmark's check that the compiled
+kernel served every batch therefore runs its query as an SQL execution, as
+the timed ones do; the ladder's `varkaFused` check does not need to, because
+with the warm-up off every entry serves its first batch.
+
+### 10.3 Predictions, registered before the committed run
+
+The cold-start benchmark gains the warm-up arm (first run, second run, and
+once compiled - the second run started only after the verdict), a line per
+rung with each verdict, a back-to-back section at 16, 54 and 100 entries, and
+a steady-state section over the ladder's two million rows. Every timed
+iteration starts with the JIT quiet. Against the committed run of #429 and the
+new arms:
+
+1. **Past the cliff the warm-up arm's first run beats vanilla's.** From 54
+   entries up its first run is faster than vanilla's first run and at least
+   1.5 times faster than the per-batch arm's: the row path's projection is
+   split into methods the JIT compiles, where vanilla's consume method is not
+   compiled at all.
+2. **Below the cliff it is close to vanilla's.** From 16 to 52 entries its
+   first run is within 1.5 times vanilla's first run, and no slower than the
+   per-batch arm's.
+3. **Every verdict is a compile.** Every once-compiled iteration at every
+   rung ends COMPILED, none released; the verdict takes under 2 seconds at 16
+   entries, under 5 at 54 and under 10 at 100.
+4. **Once compiled, the kernel is the fast one.** The once-compiled query is
+   faster than vanilla's second run at every rung from 32 entries up, and at
+   least five times faster from 54 up.
+5. **The warm-up's profile costs nothing.** Per row over two million rows,
+   the kernel compiled from the warm-up's short calls is within 10% of the
+   kernel compiled from its own batches, at 16, 54 and 100 entries.
+6. **Back to back, the switch shows.** At 16 and 54 entries the warm-up arm's
+   queries fall to the once-compiled level within fifteen; the per-batch
+   arm's do not at 54.
+7. **The directive A/B.** Without the directive at least one of three fresh
+   JVMs strands the 54-entry kernel; with it all three compile.

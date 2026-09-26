@@ -96,9 +96,10 @@ private[sql] class VarkaKernelEvaluator(
     operatorName: String,
     classDumpDirectory: Option[String] = None,
     metrics: VarkaExecMetrics = VarkaExecMetrics(),
-    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN)
+    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
+    warmupEnabled: Boolean = false)
     extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics,
-      emitUseAVX) {
+      emitUseAVX, warmupEnabled) {
 
   // The projection classified entry by entry and its fused sub-projection compiled to vector
   // IR; None when no entry is Varka-eligible (should not happen given [[VarkaColumnarRule]],
