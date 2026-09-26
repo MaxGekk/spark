@@ -250,6 +250,34 @@ Two further readings, for the record, and neither is task 189's:
 * The one-fork calibration of section 2 is still in the cycle on the new rule,
   so the instrument's positive control is unchanged.
 
+### 2.4 The lifetime, 26 September 2026
+
+Three forks of the single form at 128 bits, ninety seconds each, `batches`
+path (`target/varka-deopt-cycle/20260926-125359`, appended to the census
+file). All three entered the cycle and all three left it by themselves:
+
+| fork | tier-4 compiles of `loopDense1` | made not entrant | traps | last compile, ms | rate before / after, M rows/s |
+| --: | --: | --: | --: | --: | :-- |
+| 1 | 98 (1 OSR) | 96 | 100 | 54296 | 0.6 to 0.7 / 51 to 53 |
+| 2 | 98 (1 OSR) | 96 | 100 | 51282 | 0.6 to 0.7 / 53 |
+| 3 | 98 (1 OSR) | 96 | 100 | 49782 | 0.7 / 53 |
+
+7. **Held.** The traps stop at exactly one hundred in every fork, the
+   `PerMethodTrapLimit` default, and the compile after the hundredth is the
+   last: the method then runs at the clean rate for 128 bits (compare 55 in
+   2.1's group form), and the 400 recompile cutoff is never approached. The
+   cycle lasted 50 to 54 seconds of the JVM's life, inside the 40 to 60 the
+   prediction gave, at a new version every 480 to 570 ms here against 265 in
+   the eight-second forks, the compile queue being longer when the
+   recompiles do not stop.
+
+So the cycle is bounded, and the bound is a counter per method, not per
+bytecode: a hundred traps, at about four per compile, which is why it takes
+some ninety versions. Once the method has trapped that often C2 compiles it
+without the trap it keeps taking, and the result is the code the clean forks
+get from their first compile. That makes the cost of the cycle a fixed
+minute per kernel class per JVM rather than the life of the executor.
+
 ## 3. The design
 
 ### 3.1 The mechanism hunt, in the order the evidence allows
