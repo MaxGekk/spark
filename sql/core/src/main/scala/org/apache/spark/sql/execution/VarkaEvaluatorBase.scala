@@ -188,7 +188,16 @@ private[sql] abstract class VarkaEvaluatorBase(
    * both, and it is left alone at the default so that the hook's own level survives.
    */
   protected def shapeKey(plan: CompiledVarkaProjection): VarkaShapeKey =
-    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.numLiterals, emitOptions)
+    new VarkaShapeKey(plan.outputs.asJava, plan.inputOrdinals.size, plan.numLiterals, emitOptions,
+      warmed)
+
+  /**
+   * Whether this evaluator's kernels are warmed before they serve batches: the warm-up is on and
+   * this JVM can warm ([[VarkaKernelWarmup.canWarm]]). A warmed kernel is its own class, under the
+   * name the C1-exclusion directive matches, so a session with the warm-up off - or a JVM that
+   * cannot warm - emits and compiles its kernels exactly as it would without the warm-up.
+   */
+  private lazy val warmed: Boolean = VarkaKernelWarmup.warms(warmupEnabled)
 
   /** The options this evaluator emits with, which its compiler call must use too. */
   protected def emitOptions: VarkaEmitOptions = VarkaColumnarToRowExec.emitOptions(emitUseAVX)
@@ -253,47 +262,63 @@ private[sql] abstract class VarkaEvaluatorBase(
    *
    * With the warm-up on, a batch the kernel could serve still takes the row path while the
    * shape's kernel is not compiled yet ([[kernelReady]]). That is not a fallback and is counted
-   * apart from them: the row path is the faster of the two until C2 has the kernel.
+   * apart from them: the row path is the faster of the two until C2 has the kernel. A batch the
+   * evaluator declines while it is copied for the warm-up is counted as the declined batch it
+   * is, as it would be on the kernel path. A batch that is not Arrow because a Varka node below
+   * sent it down its own row path while its kernel warmed is a warm-up batch here too, and so is
+   * this node's output for it, for the node above.
    */
   private[execution] def serveBatch[T](input: ColumnarBatch)(kernelPath: => T)(
       fallbackPath: => T): T = {
     if (canRun(input)) {
-      if (!kernelReady(input)) {
-        metrics.warmupBatches.foreach(_ += 1)
-        fallbackPath
-      } else {
+      val ready =
         try {
-          kernelPath
+          Right(kernelReady(input))
         } catch {
-          // Not a failure: the kernel ran and said it could not answer for this batch.
-          case e: VarkaBatchDeclined =>
-            recordDeclinedBatch(e.status)
-            fallbackPath
-          // A genuine kernel error is told apart from a failure in the per-row machinery
-          // sharing the try by the marker invokeFused wraps it in.
-          case e: VarkaKernelFailure =>
-            recordKernelFailure(e.getCause)
-            fallbackPath
-          case e if isCatchable(e) =>
-            recordRowPathFailure(e)
-            fallbackPath
+          case e: VarkaBatchDeclined => Left(e)
         }
+      ready match {
+        case Left(declined) =>
+          recordDeclinedBatch(declined.status)
+          fallbackPath
+        case Right(false) =>
+          metrics.warmupBatches.foreach(_ += 1)
+          VarkaKernelEvaluator.markWarmupBatch(fallbackPath)
+        case Right(true) =>
+          try {
+            kernelPath
+          } catch {
+            // Not a failure: the kernel ran and said it could not answer for this batch.
+            case e: VarkaBatchDeclined =>
+              recordDeclinedBatch(e.status)
+              fallbackPath
+            // A genuine kernel error is told apart from a failure in the per-row machinery
+            // sharing the try by the marker invokeFused wraps it in.
+            case e: VarkaKernelFailure =>
+              recordKernelFailure(e.getCause)
+              fallbackPath
+            case e if isCatchable(e) =>
+              recordRowPathFailure(e)
+              fallbackPath
+          }
       }
+    } else if (recordRefusedBatch(input)) {
+      VarkaKernelEvaluator.markWarmupBatch(fallbackPath)
     } else {
-      recordRefusedBatch(input)
       fallbackPath
     }
   }
 
   /**
-   * Whether this batch goes to the kernel: always with the warm-up off, and with it on once the
-   * shape's kernel is compiled or nothing is warming it any more ([[VarkaKernelWarmth]]). The
-   * first task to meet a cold shape claims it and queues the warm-up on a copy of this batch;
-   * until the verdict, every batch of the shape in every task takes the row path. A volatile
-   * read per batch once the shape is ready.
+   * Whether this batch goes to the kernel: always when the kernel is not warmed, and otherwise
+   * once the shape's kernel is compiled or nothing is warming it any more
+   * ([[VarkaKernelWarmth]]). The first task to meet a cold shape claims it and queues the warm-up
+   * on a copy of this batch; until the verdict, every batch of the shape in every task takes the
+   * row path. A volatile read per batch once the shape is ready. Throws the
+   * [[VarkaBatchDeclined]] the copy met, having handed the claim back.
    */
   private def kernelReady(input: ColumnarBatch): Boolean = {
-    if (!warmupEnabled) {
+    if (!warmed) {
       true
     } else {
       val runner = fusedRunner.get
@@ -309,9 +334,9 @@ private[sql] abstract class VarkaEvaluatorBase(
    * Copies this batch's kernel inputs and queues the shape's warm-up on them
    * ([[VarkaKernelWarmup.start]], which copies before it returns, so the batch is free to go).
    * A batch the evaluator declines before the kernel would run cannot be copied, so the claim
-   * goes back for a later batch. Every other way out without a queued warm-up releases the
-   * shape - its batches then run the kernel, as with the warm-up off - because a claim left
-   * behind would keep them on the row path with nothing warming the kernel.
+   * goes back for a later batch and the decline goes on to the caller. Every other way out
+   * without a queued warm-up releases the shape - its batches then run the kernel - because a
+   * claim left behind would keep them on the row path with nothing warming the kernel.
    */
   private def startWarmup(runner: FusedRunner, input: ColumnarBatch): Unit = {
     val len = input.numRows()
@@ -320,12 +345,14 @@ private[sql] abstract class VarkaEvaluatorBase(
       fillSources(runner, input, len)
       VarkaKernelWarmup.start(runner.warmth, runner.shapeHash, runner.newKernel(),
         runner.lane == LaneType.LONG, runner.srcData, runner.srcValidity, runner.srcNullCount,
-        inputWidths(input), len, runner.dstData.length, runner.scalarArgs, runner.longArgs)
+        inputWidths(input), anyNullableInput, len, runner.dstData.length, runner.scalarArgs,
+        runner.longArgs)
       settled = true
     } catch {
-      case _: VarkaBatchDeclined =>
+      case e: VarkaBatchDeclined =>
         runner.warmth.unclaim()
         settled = true
+        throw e
       case e if isCatchable(e) =>
         logWarning(s"Could not start the warm-up of the Varka SIMD kernels $kernelIdentity; " +
           "its batches run the kernel from now on.", e)
@@ -333,6 +360,18 @@ private[sql] abstract class VarkaEvaluatorBase(
       if (!settled) {
         runner.warmth.release()
       }
+    }
+  }
+
+  /**
+   * Whether any kernel input can hold a null, so that a batch can reach the kernel's masked
+   * driver: a column the child declares nullable, or a derived input, whose derivation may
+   * produce one. The warm-up compiles the masked driver only then.
+   */
+  private def anyNullableInput: Boolean = {
+    val plan = fusedPlan.get
+    plan.inputOrdinals.indices.exists { i =>
+      plan.derivedAt(i).isDefined || childOutput(plan.inputOrdinals(i)).nullable
     }
   }
 
@@ -425,13 +464,23 @@ private[sql] abstract class VarkaEvaluatorBase(
    * counted once per task by the emission catch; an empty batch is served trivially and is
    * no fallback at all; an ineligible plan (defensive - the rule should not have fused it)
    * is not a data-format property. Only a non-empty batch whose referenced columns fail the
-   * Arrow check is the non-Arrow cause the metric names.
+   * Arrow check is the non-Arrow cause the metric names - unless a Varka node below produced it
+   * on its row path while its kernel warmed, which is a warm-up batch here as well. Returns
+   * whether it was that.
    */
-  private def recordRefusedBatch(input: ColumnarBatch): Unit = {
+  private def recordRefusedBatch(input: ColumnarBatch): Boolean = {
     if (!emissionFailed && fusedPlan.nonEmpty && input.numRows() > 0) {
-      metrics.fallbackBatchesNonArrow.foreach(_ += 1)
-      VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.NON_ARROW_BATCH,
-        kernelIdentity, "")
+      if (VarkaKernelEvaluator.isWarmupBatch(input)) {
+        metrics.warmupBatches.foreach(_ += 1)
+        true
+      } else {
+        metrics.fallbackBatchesNonArrow.foreach(_ += 1)
+        VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.NON_ARROW_BATCH,
+          kernelIdentity, "")
+        false
+      }
+    } else {
+      false
     }
   }
 

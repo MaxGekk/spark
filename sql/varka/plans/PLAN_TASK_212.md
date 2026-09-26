@@ -402,3 +402,86 @@ default, every warmed kernel is covered. The committed runs of 10.5 are
 unaffected: the cold-start benchmark's warm-up arm installs the directive
 before its first warm-up as it did at its first emission, and its per-batch
 arm's kernels are never compiled within a hundred thousand rows either way.
+
+### 10.7 The review, and what changed, 26 September 2026
+
+A `/code-review max` of the branch found no wrong answer and fifteen defects
+that cost speed, metrics, CI or tests. Two of them undercut this plan as
+written.
+
+**The directive reached kernels nobody warmed.** 10.6 installed it at the
+first warm-up and concluded that a JVM which never warms a kernel compiles as
+before. True, and not enough: a directive matches by class name for the rest
+of the JVM's life, so once any session had warmed a kernel, every kernel class
+emitted afterwards paid 10.6's price - a session with the warm-up off, and a
+shape released because the queue was full. The committed cold-start run shows
+it in its steady-state section: the per-batch arm, run after earlier rungs'
+warm-ups in the same JVM, averages 429, 1726 and 3416 ms at 16, 54 and 100
+entries against best times of 49, 134 and 238. Now the decision to warm is
+made when the kernel is emitted (`VarkaKernelWarmup.warms`: the session's
+flag, and a JVM that can warm), it is a component of the shape key, and a
+warmed kernel's hash starts with `w`, which no hex digit is; the directive
+matches `VarkaFusedProjection_w*` and nothing else. The planner's size
+admission builds the same key, so a shape is still emitted once. A full queue
+hands the claim back instead of releasing the shape, so every warmed class
+gets the warm-up calls that create its profile.
+
+**The warm-up compiled one of the kernel's two drivers.** It ran the claiming
+batch's null class, dense or masked, and its verdict then sent batches of the
+other class to methods that had never run. The calls now alternate between the
+drivers and the verdict waits for both, unless no kernel input is nullable
+(derived inputs count as nullable), when the masked driver cannot be reached.
+The masked calls pass each input with and without validity, so every per-input
+null test is profiled both ways; the dense calls read the values under a
+batch's nulls, which are replaced with the input's first valid value. An
+all-null claiming batch no longer takes the all-null shortcut in every call,
+so it no longer releases the shape unwarmed. Which drivers a shape will need
+could be predicted from statistics - the Arrow cache's per-batch null counts,
+file and table statistics - which is a follow-up row, not this task.
+
+The rest, each with a test where one could be written:
+
+* A JVM that cannot warm - C1 alone (`TieredStopAtLevel` below 4,
+  `CompilationMode=quick-only`, `NeverActAsServerClassMachine`), a JVMCI
+  compiler, the interpreter, no allocation accounting, or a directive it did
+  not accept - emits its kernels unwarmed instead of warming into the tier-2
+  strand. A JVM with C2 alone warms without a directive. The directive file's
+  path is passed in quotes, because the MBean splits its command line at
+  spaces and `=`.
+* The sixty-second deadline counts from the queueing, not from when the
+  worker takes the job. A dead worker is replaced, and a job whose start
+  failed frees its copy. The worker takes no thread-locals or context class
+  loader from the task that first claims a shape.
+* A Varka node above another counts the batches the node below sends from its
+  row path while its kernel warms as warm-up batches, not non-Arrow
+  fallbacks. The order of the two warm-ups costs no query: one worker runs
+  them one after another either way.
+* A batch the evaluator declines while copying it for a warm-up is counted as
+  declined, as on the kernel path.
+* `VarkaWarmupDirectiveBenchmark`'s child JVM gets the class path the
+  benchmark workflow's `spark-submit` adds through `--jars`, and its output
+  goes to a file, so its timeout can fire.
+* The README's quick start runs its query again after the warm-up and names
+  `numWarmupBatches`.
+
+Two corrections to the sections above, which stay as written. 10.5's
+prediction 1 range is 0.71 to 0.79, not 0.73 to 0.79: the 80-entry rung is
+489 against 685. Prediction 3's verdict times are the 512-bit file's; at
+128 bits the committed verdicts reach 1.29, 3.58 and 7.43 s at 16, 54 and 100
+entries, every one of them a compile. And 10.6's timings - the ladder's
+averages and the 7.2 and 0.8 s queries - come from runs that were not
+committed; the numbers a reader can check are the steady-state averages
+quoted above.
+
+*Registered before the cold-start and directive benchmarks are run again:*
+
+1. The per-batch arm's steady-state averages fall to within 1.5 times their
+   best times at 16, 54 and 100 entries, from 8.8, 12.9 and 14.4 times.
+2. The benchmark's column is nullable and has nulls in every batch, so the
+   warm-up now compiles the dense driver as well: the verdict comes 1.2 to 2.0
+   times later at 54 and 100 entries.
+3. The warm-up arm's first run moves by less than 10%: its batches take the
+   row path either way. Its second run rises, but stays below its first run.
+4. Once compiled, and over two million rows, the times move by less than 5%.
+5. The directive A/B is unchanged: without it every kernel strands, with it
+   every kernel compiles.

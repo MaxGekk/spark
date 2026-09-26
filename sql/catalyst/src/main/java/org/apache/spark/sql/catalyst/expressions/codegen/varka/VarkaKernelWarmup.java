@@ -60,12 +60,20 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth
  * once.
  *
  * <p><b>What it runs on.</b> A copy of a real batch of the shape, taken on the task thread before
- * that batch is released: its kernel inputs, tiled to {@link #SNAPSHOT_ROWS} rows. C2 then
- * compiles from the real profile - the same dense or masked driver, the same values, the same
- * guard outcomes - rather than a synthetic batch's. A slice passes its input's null class rather
- * than its own count: an input with some nulls passes one, which keeps the masked driver the real
- * batches take even for a slice whose rows are all valid. That is sound because the kernel tests
- * the count only against zero and the length and otherwise reads the slice's real validity bits.
+ * that batch is released: its kernel inputs, tiled to {@link #SNAPSHOT_ROWS} rows, so that C2
+ * compiles from real values and real guard outcomes rather than a synthetic batch's. The kernel
+ * has two drivers, one for batches whose inputs are all null-free and one for batches with nulls
+ * (`PLAN_TASK_10.md` 2.5), and the batch that claims the warm-up says nothing about which of the
+ * two the shape's later batches will need, so the calls alternate between them and the verdict
+ * waits for both - unless no input of the shape is nullable, when no batch can reach the masked
+ * driver and only the dense one is warmed. A call to the dense driver passes every input as
+ * null-free; the values under the batch's nulls are replaced with a valid value of the same input
+ * first, so that it computes on the input's own domain. A call to the masked driver passes each
+ * input, in turn, with and without validity - the batch's own bits where it has nulls, all bits
+ * set where it has none, and for an input that is all null its own count, so that the driver's
+ * all-null shortcut is taken too - so that C2 sees every input's null test go both ways. That is
+ * sound because the kernel tests a count only against zero and the length and otherwise reads
+ * the validity bits.
  * A call runs {@link #SLICE_ROWS} rows plus the batch's own length modulo that, which leaves the
  * batch's remainder past the last whole lane group at every lane count that divides it: the
  * epilogues then run, or return at once, as they do on the real batches, and C2 compiles them
@@ -74,8 +82,14 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth
  * <p><b>What it costs.</b> One thread's CPU while a kernel warms, plus the C2 compiles the kernel
  * needs in any case before it can run fast. After {@link #SPIN_CALLS} calls, past every threshold
  * at its default, the warm-up only probes, every {@link #PACE_MILLIS} milliseconds, while the
- * compile queue works. A warm-up without a verdict after {@link #DEADLINE_SECONDS} seconds
- * releases the shape, and its tasks run the kernel as they would with no warm-up at all.
+ * compile queue works. A shape without a verdict {@link #DEADLINE_SECONDS} seconds after its
+ * warm-up was queued is released, waiting included, and its tasks then run the kernel, which the
+ * warm-up's calls have already profiled.
+ *
+ * <p><b>Who gets one.</b> Only a kernel emitted to be warmed ({@link VarkaShapeKey#warmed}), which
+ * a session asks for when its warm-up is on and {@link #canWarm} says this JVM can: that name is
+ * what the compiler directive keeping C1 off the warm-up's methods matches
+ * ({@link VarkaKernelCompileDirective}).
  */
 public final class VarkaKernelWarmup {
 
@@ -98,6 +112,9 @@ public final class VarkaKernelWarmup {
 
   private static final int NUM_SLICES = (SNAPSHOT_ROWS - MAX_CALL_ROWS) / SLICE_STRIDE + 1;
 
+  /** The argument sets: each slice once for the dense driver and once for the masked one. */
+  private static final int NUM_CALLS = 2 * NUM_SLICES;
+
   /** Calls between probes while the warm-up spins. */
   private static final int BLOCK_CALLS = 64;
 
@@ -118,23 +135,27 @@ public final class VarkaKernelWarmup {
   static final int COMPILED_DROP = 4;
 
   /**
-   * Calls after which the warm-up stops spinning: well past JDK 25's tier-4 invocation threshold
-   * (5000 calls) at its default scale, so the compile has been requested and only a busy compile
-   * queue stands between the kernel and its verdict.
+   * Calls after which the warm-up stops spinning: 8000 per driver, well past JDK 25's tier-4
+   * invocation threshold (5000 calls) at its default scale, so both drivers' compiles have been
+   * requested and only a busy compile queue stands between the kernel and its verdict.
    */
-  static final int SPIN_CALLS = 12000;
+  static final int SPIN_CALLS = 16000;
 
   /** The pause between probes once the warm-up has stopped spinning. */
   static final int PACE_MILLIS = 5;
 
   /**
-   * How long a warm-up waits for its verdict before it releases the shape. A hundred-entry
-   * kernel is some fifty methods that C2 compiles one after another on a four-core machine's two
-   * compiler threads, which takes seconds; the deadline is for a compile that never comes.
+   * How long after its warm-up was queued a shape waits for the verdict before it is released,
+   * time in the queue included. A hundred-entry kernel is some fifty methods per driver that C2
+   * compiles one after another on a four-core machine's two compiler threads, which takes
+   * seconds; the deadline is for a compile that never comes.
    */
   static final int DEADLINE_SECONDS = 60;
 
-  /** Warm-ups queued or running at most; a shape arriving past it is released at once. */
+  /**
+   * Warm-ups waiting for the worker at most, besides the one it runs. A shape that finds the
+   * queue full hands its claim back, and a later batch of it claims the shape again.
+   */
   static final int QUEUE_CAPACITY = 16;
 
   private static final int RECENT_OUTCOMES = 64;
@@ -147,6 +168,7 @@ public final class VarkaKernelWarmup {
 
   private static final ArrayDeque<Outcome> OUTCOMES = new ArrayDeque<>();
 
+  // Replaced when it has died; see ensureWorker.
   private static Thread worker;
 
   private VarkaKernelWarmup() {
@@ -162,38 +184,68 @@ public final class VarkaKernelWarmup {
   }
 
   /**
+   * Whether this JVM can warm kernels: it measures a thread's allocation, and a warm-up can end in
+   * C2 code ({@link VarkaKernelCompileDirective#readyForWarmup}, which adds the directive the first
+   * time it is asked). A session emits its kernels to be warmed only when this is true, and the
+   * answer does not change once it has been given.
+   */
+  public static boolean canWarm() {
+    return VarkaAllocationSampler.supported() && VarkaKernelCompileDirective.readyForWarmup();
+  }
+
+  /**
+   * Whether a session with the warm-up set as {@code warmupEnabled} warms its kernels in this
+   * JVM, and so emits them warmed ({@link VarkaShapeKey#warmed}). The one place that decides:
+   * the evaluator's key and the planner's size admission must agree on it, or a shape is emitted
+   * twice, once under each name.
+   */
+  public static boolean warms(boolean warmupEnabled) {
+    return warmupEnabled && canWarm();
+  }
+
+  /**
    * Copies one batch's kernel inputs and queues a warm-up of {@code kernel} on the copy. Called on
    * the task thread, which must keep the batch alive until this returns; the arrays are the
    * evaluator's argument arrays, already filled for the batch, and are copied rather than kept.
-   * Returns false, having released {@code warmth}, when this JVM cannot measure a thread's
-   * allocation or the queue is full. A throw leaves {@code warmth} to the caller.
+   * Returns false when no warm-up was queued: having handed the claim back when the queue is
+   * full, so that a later batch can claim the shape, and having released {@code warmth} when the
+   * batch is empty or this JVM cannot warm at all. A throw leaves {@code warmth} to the caller.
    *
    * @param srcWidths the bytes per row of each input's data, four or eight.
+   * @param nullable whether any input of the shape is nullable, so that a batch can reach the
+   *        kernel's masked driver and the warm-up must compile it too.
    * @param kernel an instance of the shape's class for the warm-up's own use; kernels keep no
    *        state between calls, so it only has to be a different object from the tasks' ones.
    */
   public static boolean start(VarkaKernelWarmth warmth, String shapeHash, VarkaFusedKernel kernel,
       boolean longLane, long[] srcData, long[] srcValidity, int[] srcNullCount, int[] srcWidths,
-      int length, int numOutputs, int[] scalarArgs, long[] longArgs) {
-    if (!VarkaAllocationSampler.supported() || length <= 0) {
+      boolean nullable, int length, int numOutputs, int[] scalarArgs, long[] longArgs) {
+    if (!canWarm() || length <= 0) {
       warmth.release();
       return false;
     }
-    // Before the warm-up's first call, so no warmed kernel method can be compiled by C1.
-    VarkaKernelCompileDirective.ensureInstalled();
+    if (QUEUE.remainingCapacity() == 0) {
+      // Checked before the copy, so that a burst of new shapes does not copy a batch per claim.
+      warmth.unclaim();
+      return false;
+    }
     Job job = new Job(warmth, shapeHash, kernel, longLane, srcData, srcValidity, srcNullCount,
-        srcWidths, length, numOutputs, scalarArgs, longArgs);
-    ensureWorker();
-    PENDING.incrementAndGet();
-    if (!QUEUE.offer(job)) {
-      PENDING.decrementAndGet();
-      job.close();
-      warmth.release();
-      LOG.info("Varka kernel warm-up queue is full; " + VarkaShapeCacheImpl.sourceFileFor(shapeHash)
-          + " serves batches without one.");
-      return false;
+        srcWidths, nullable, length, numOutputs, scalarArgs, longArgs);
+    boolean queued = false;
+    try {
+      ensureWorker();
+      PENDING.incrementAndGet();
+      queued = QUEUE.offer(job);
+      if (!queued) {
+        PENDING.decrementAndGet();
+        warmth.unclaim();
+      }
+      return queued;
+    } finally {
+      if (!queued) {
+        job.close();
+      }
     }
-    return true;
   }
 
   /**
@@ -218,11 +270,18 @@ public final class VarkaKernelWarmup {
     }
   }
 
+  /**
+   * Starts the worker if there is none or it has died. It is a daemon that lives as long as the
+   * JVM, so it takes none of the claiming task's context: not its thread-locals, and not its
+   * context class loader, which may be a session's that would otherwise never be unloaded.
+   */
   private static synchronized void ensureWorker() {
-    if (worker == null) {
-      worker = Thread.ofPlatform().daemon().name("varka-kernel-warmup")
-          .unstarted(VarkaKernelWarmup::work);
-      worker.start();
+    if (worker == null || !worker.isAlive()) {
+      Thread t = Thread.ofPlatform().daemon().name("varka-kernel-warmup")
+          .inheritInheritableThreadLocals(false).unstarted(VarkaKernelWarmup::work);
+      t.setContextClassLoader(VarkaKernelWarmup.class.getClassLoader());
+      t.start();
+      worker = t;
     }
   }
 
@@ -269,8 +328,9 @@ public final class VarkaKernelWarmup {
     private final Arena arena;
     private final long queuedAt = System.nanoTime();
 
-    // One set of source arguments per slice, built once, so a call does nothing but invoke the
-    // kernel; every call runs the same number of rows.
+    // One set of source arguments per slice and driver, built once, so a call does nothing but
+    // invoke the kernel; every call runs the same number of rows. Even sets call the dense
+    // driver, odd ones the masked driver.
     private final long[][] srcData;
     private final long[][] srcValidity;
     private final int[][] srcNullCount;
@@ -282,8 +342,8 @@ public final class VarkaKernelWarmup {
     private final int columns;
 
     Job(VarkaKernelWarmth warmth, String shapeHash, VarkaFusedKernel kernel, boolean longLane,
-        long[] batchData, long[] batchValidity, int[] batchNullCount, int[] widths, int length,
-        int numOutputs, int[] scalarArgs, long[] longArgs) {
+        long[] batchData, long[] batchValidity, int[] batchNullCount, int[] widths,
+        boolean nullable, int length, int numOutputs, int[] scalarArgs, long[] longArgs) {
       this.warmth = warmth;
       this.shapeHash = shapeHash;
       this.kernel = kernel;
@@ -299,29 +359,37 @@ public final class VarkaKernelWarmup {
         for (int i = 0; i < numInputs; i++) {
           MemorySegment data =
               arena.allocate((long) (SNAPSHOT_ROWS + SLICE_STRIDE) * widths[i], SLICE_STRIDE);
-          tileData(batchData[i], widths[i], length, data);
-          dataBase[i] = data.address();
-          if (partlyNull(batchNullCount[i], length)) {
-            MemorySegment validity = arena.allocate(validityBytes(SNAPSHOT_ROWS), SLICE_STRIDE);
+          MemorySegment validity = arena.allocate(validityBytes(SNAPSHOT_ROWS), SLICE_STRIDE);
+          if (batchNullCount[i] == 0) {
+            tileData(batchData[i], widths[i], length, data);
+            validity.fill((byte) -1);
+          } else if (partlyNull(batchNullCount[i], length)) {
+            tileData(batchData[i], widths[i], length, data);
             tileValidity(batchValidity[i], length, validity);
-            validityBase[i] = validity.address();
+            fillNullRows(data, widths[i], validity);
           }
+          // An input that is all null keeps zeroed values and bits: it has no valid value.
+          dataBase[i] = data.address();
+          validityBase[i] = validity.address();
         }
         this.rows = SLICE_ROWS + length % SLICE_ROWS;
-        this.srcData = new long[NUM_SLICES][numInputs];
-        this.srcValidity = new long[NUM_SLICES][numInputs];
-        this.srcNullCount = new int[NUM_SLICES][numInputs];
-        for (int v = 0; v < NUM_SLICES; v++) {
-          int start = v * SLICE_STRIDE;
+        this.srcData = new long[NUM_CALLS][numInputs];
+        this.srcValidity = new long[NUM_CALLS][numInputs];
+        this.srcNullCount = new int[NUM_CALLS][numInputs];
+        for (int v = 0; v < NUM_CALLS; v++) {
+          int slice = v / 2;
+          int start = slice * SLICE_STRIDE;
           for (int i = 0; i < numInputs; i++) {
             srcData[v][i] = dataBase[i] + (long) start * widths[i];
-            if (batchNullCount[i] == 0) {
-              srcNullCount[v][i] = 0;
-            } else if (batchNullCount[i] >= length) {
-              srcNullCount[v][i] = rows;
-            } else {
+            // The dense driver's calls leave every count at zero. The masked driver's pass each
+            // input with validity on every other slice, alternating between inputs, so that
+            // every slice has one input with nulls and every input is seen both ways.
+            boolean withNulls =
+                nullable && v % 2 == 1 && (numInputs == 1 || (slice + i) % 2 == 0);
+            if (withNulls) {
               srcValidity[v][i] = validityBase[i] + start / 8;
-              srcNullCount[v][i] = 1;
+              boolean allNull = batchNullCount[i] >= length;
+              srcNullCount[v][i] = allNull && slice % 4 < 2 ? rows : 1;
             }
           }
         }
@@ -341,7 +409,7 @@ public final class VarkaKernelWarmup {
     /** Runs the warm-up to its verdict; see the class doc. */
     void run() {
       long started = System.nanoTime();
-      long deadline = started + TimeUnit.SECONDS.toNanos(DEADLINE_SECONDS);
+      long deadline = queuedAt + TimeUnit.SECONDS.toNanos(DEADLINE_SECONDS);
       VarkaKernelWarmupEvent event = new VarkaKernelWarmupEvent();
       event.begin();
       int calls = 0;
@@ -431,7 +499,7 @@ public final class VarkaKernelWarmup {
     }
 
     private int call(int n) {
-      int v = n % NUM_SLICES;
+      int v = n % NUM_CALLS;
       if (longLane) {
         kernel.run(srcData[v], srcValidity[v], srcNullCount[v], dstData, dstValidity, scalarArgs,
             longArgs, rows);
@@ -449,6 +517,32 @@ public final class VarkaKernelWarmup {
 
   private static boolean partlyNull(int nullCount, int length) {
     return nullCount > 0 && nullCount < length;
+  }
+
+  /**
+   * Gives every null row of a copied input the value of its first valid row, so that a call which
+   * reads the input as null-free computes on values of the input's own domain rather than on
+   * whatever the batch held under its nulls.
+   */
+  static void fillNullRows(MemorySegment data, int width, MemorySegment validity) {
+    int first = -1;
+    for (int r = 0; r < SNAPSHOT_ROWS && first < 0; r++) {
+      if (valid(validity, r)) {
+        first = r;
+      }
+    }
+    if (first < 0) {
+      return;
+    }
+    for (int r = 0; r < SNAPSHOT_ROWS; r++) {
+      if (!valid(validity, r)) {
+        MemorySegment.copy(data, (long) first * width, data, (long) r * width, width);
+      }
+    }
+  }
+
+  private static boolean valid(MemorySegment validity, int r) {
+    return ((validity.get(ValueLayout.JAVA_BYTE, r >>> 3) >>> (r & 7)) & 1) != 0;
   }
 
   /** Whole 64-bit words covering {@code rows} bits, plus one spare word. */

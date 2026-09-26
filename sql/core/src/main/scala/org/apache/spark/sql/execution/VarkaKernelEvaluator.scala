@@ -310,6 +310,31 @@ private[execution] class VarkaOwnedArrowColumnVector(vector: ValueVector)
 
 private[execution] object VarkaKernelEvaluator {
 
+  // The batches Varka nodes sent down their row path while a kernel warmed, held weakly by
+  // identity; see markWarmupBatch.
+  private val warmupBatches = java.util.Collections.synchronizedMap(
+    new java.util.WeakHashMap[ColumnarBatch, java.lang.Boolean]())
+
+  /**
+   * Remembers that `result` - a Varka node's row-path output - is on the row path because a
+   * kernel is warming, and returns it. A Varka node that consumes such a batch cannot run its
+   * kernel on it, which is not Arrow, and counts it as a warm-up batch rather than a non-Arrow
+   * fallback ([[VarkaEvaluatorBase.serveBatch]]): the format follows from the warm-up above it,
+   * not from the data. Only columnar results are remembered; a row iterator has no consumer that
+   * asks.
+   */
+  private[execution] def markWarmupBatch[T](result: T): T = {
+    result match {
+      case batch: ColumnarBatch => warmupBatches.put(batch, java.lang.Boolean.TRUE)
+      case _ =>
+    }
+    result
+  }
+
+  /** Whether `batch` came down a Varka node's row path while a kernel warmed. */
+  private[execution] def isWarmupBatch(batch: ColumnarBatch): Boolean =
+    warmupBatches.containsKey(batch)
+
   /**
    * Emits the task-22 fallback JFR event; shared by the evaluator's emission-failure path and
    * the per-batch fallback accounting. Populates only while a recording has the event

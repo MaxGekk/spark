@@ -584,28 +584,39 @@ empty with nothing compiling. No compile is pending, so none is ever going to la
 could not attach to the forked benchmark JVM from this sandbox; the MBean is the same command,
 from inside.)
 
-The fix keeps C1 off the kernel classes: one compiler directive,
-`c1: { Exclude: true }` for the shape cache's class names, added through the DiagnosticCommand
-MBean's `compilerDirectivesAdd` when the first kernel warm-up starts
-(`VarkaKernelCompileDirective`). The first C1 request is refused and marks the method not
-C1-compilable, which is where the tier-3 failure leaves it anyway, so every kernel method
-goes from the interpreter to C2. `VarkaWarmupDirectiveBenchmark` is the A/B, in fresh JVMs.
+The fix keeps C1 off the warmed kernel classes: one compiler directive,
+`c1: { Exclude: true }`, added through the DiagnosticCommand MBean's `compilerDirectivesAdd`
+the first time a session decides to warm its kernels (`VarkaKernelCompileDirective`). The
+first C1 request is refused and marks the method not C1-compilable, which is where the tier-3
+failure leaves it anyway, so every warmed kernel method goes from the interpreter to C2.
+`VarkaWarmupDirectiveBenchmark` is the A/B, in fresh JVMs.
 
-It has a price, which is why it waits for a warm-up. The failed tier-3 request is also what
-creates a method's profile; with C1 excluded the interpreter creates it only at twice the
-tier-3 threshold, so a kernel fed by 625-iteration batches reaches C2 about a hundred batches
-later. On the size ladder's 54-entry kernel over two million rows, the second query took 7.1 s
-against 0.8 s, and the steady state was the same (`PLAN_TASK_212.md` 10.6). A benchmark's
-best time hides this and its average does not: the ladder's averages rose three to seven
-times while its best times did not move.
-The general rule: for generated code too large for C1's tier 3, exclude C1 outright rather
-than rely on tier 2 never happening, and check that C2 is the top tier first - excluding C1
-under `TieredStopAtLevel=1` would leave the methods interpreted for good.
+It has a price. The failed tier-3 request is also what creates a method's profile; with C1
+excluded the interpreter creates it only at twice the tier-3 threshold, so a kernel fed by
+625-iteration batches reaches C2 about a hundred batches later (`PLAN_TASK_212.md` 10.6). A
+warm-up does not pay it, because its thousands of short calls create the profile at once; a
+kernel fed by its own batches does. And a directive matches by class name, so it reaches
+every class of that name from the moment it is added, whoever emitted it: installed at the
+first warm-up, it went on to reach the kernels of sessions with the warm-up off, in the same
+JVM. So the decision to warm is made when the kernel is emitted, and a warmed kernel gets a
+name of its own (`VarkaFusedProjection_w...`, a letter no hex hash contains) that the
+directive matches and no other kernel has (`PLAN_TASK_212.md` 10.7). A benchmark's best time
+hides a price like this and its average does not.
+
+The general rules: for generated code too large for C1's tier 3, exclude C1 outright rather
+than rely on tier 2 never happening; scope the exclusion to exactly the classes that get the
+treatment it assumes; and read the compilers the JVM runs first. Where C1 is the top tier -
+`TieredStopAtLevel` below 4, `-XX:CompilationMode=quick-only`,
+`-XX:+NeverActAsServerClassMachine` - excluding it leaves the methods interpreted for good;
+where C2 is the only compiler, as with `-XX:-TieredCompilation`, there is nothing to exclude.
+One practical detail: the MBean joins its string arguments into a command line and splits it
+at spaces and `=`, so the directive file's path must be passed in double quotes, or a
+temporary directory with a space in its name makes the command fail.
 
 ## Warming a kernel off the critical path
 
 `VarkaKernelWarmup` runs a new kernel on a copy of its shape's first batch until it is
-compiled, while the shape's batches take the row path. Four things it took to make that
+compiled, while the shape's batches take the row path. Five things it took to make that
 reliable (`PLAN_TASK_212.md` 10).
 
 * **Short calls, not long ones.** HotSpot's thresholds count invocations and back edges.
@@ -624,6 +635,14 @@ reliable (`PLAN_TASK_212.md` 10).
 * **A count is not a verdict.** Crossing a threshold queues a compile; it lands when a compiler
   thread reaches it, and under the tier-2 trap above it never does. Measure the kernel, then
   switch.
+* **Warm both drivers.** A kernel has one driver for batches whose inputs have no nulls and one
+  for batches with them, and the batch that claims the warm-up says nothing about which the
+  later batches need. Warmed on one alone, the verdict sent every batch of the other kind to
+  methods that had never run, boxing at about three times the row path's cost, and - under the
+  C1 exclusion - profiled late. The calls now alternate between the drivers, and the masked
+  driver's calls pass each input with and without nulls so that every per-input null test is
+  profiled both ways; the dense driver's calls read the values under a batch's nulls, so those
+  are replaced with a valid value of the same input first.
 * **The shape cache keys on the context class loader, so the warm state does too.** A query
   run as an SQL execution runs its tasks under the session's artifact loader; one run through
   `queryExecution.toRdd` outside an SQL execution uses the default loader and meets a

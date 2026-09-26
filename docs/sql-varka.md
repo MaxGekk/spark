@@ -690,20 +690,30 @@ default), a shape's batches therefore take the node's per-row path until its
 kernel is compiled: the first task to meet the new class copies its batch's
 kernel inputs and queues a warm-up (`VarkaKernelWarmup`, one daemon thread per
 JVM), which runs the kernel on that copy in short calls until it no longer
-allocates, which it does only as C2's code. From then on every task of the
-shape runs the kernel. The per-shape state is `VarkaKernelWarmth`, kept on the
-cache entry, and the batches served on the row path meanwhile are counted in
-`numWarmupBatches`. The warm-up is per cache entry, so a session with its own
-artifact class loader warms its own class.
+allocates, which it does only as C2's code. The calls alternate between the
+kernel's two drivers - one for batches whose inputs have no nulls, one for
+batches with them - so the verdict covers whichever the later batches need;
+the second is left out only when no kernel input is nullable. From then on
+every task of the shape runs the kernel. The per-shape state is
+`VarkaKernelWarmth`, kept on the cache entry, and the batches served on the
+row path meanwhile are counted in `numWarmupBatches` - on a Varka node above
+another, that includes the batches the node below sends from its own row path
+while its kernel warms. The warm-up is per cache entry, so a session with its
+own artifact class loader warms its own class. A shape without a verdict a
+minute after its warm-up was queued is released and runs its kernel as it is.
 
-Once a warm-up has started, C1 is kept off the kernel classes altogether, by
-one compiler directive added before its first call
-(`VarkaKernelCompileDirective`). A kernel's loop methods are too large for C1's
-fully profiled tier, and a method that C1 compiled at the limited-profile tier
-instead - which HotSpot chooses while C2's queue is long - would never be
-recompiled by C2. Without C1 every kernel method goes from the interpreter to
-C2. The directive waits for the warm-up because it also makes the interpreter
-start profiling later, which delays a kernel fed only by its own batches.
+A warmed kernel is emitted under a class name of its own
+(`VarkaFusedProjection_w...`), and C1 is kept off those classes by one
+compiler directive (`VarkaKernelCompileDirective`). A kernel's loop methods
+are too large for C1's fully profiled tier, and a method that C1 compiled at
+the limited-profile tier instead - which HotSpot chooses while C2's queue is
+long - would never be recompiled by C2; without C1 every warmed kernel method
+goes from the interpreter to C2. The directive reaches warmed classes only,
+because it also makes the interpreter start profiling later, which would
+delay a kernel fed by its own batches alone: a session with the warm-up off,
+or a JVM that cannot warm - no allocation accounting, no C2, or a directive
+it did not accept - emits its kernels under the plain name and compiles them
+as it did before the warm-up existed.
 
 ### Null semantics and predication
 

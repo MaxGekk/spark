@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.execution
 
+import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.{DataFrame, QueryTest, Row}
@@ -33,6 +34,10 @@ import org.apache.spark.sql.util.QueryExecutionListener
  * served each batch, read from the node's metrics.
  *
  * The shared sessions pin the warm-up off, so every test here turns it on for its own queries.
+ * Besides the path each batch took, they pin how the batches that did not reach a kernel are
+ * counted: a batch waiting on a warm-up - this node's, or that of a Varka node below it - is a
+ * warm-up batch, and a batch the evaluator declines while it copies it for a warm-up is the
+ * declined batch it would have been on the kernel path.
  */
 class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions {
 
@@ -149,6 +154,65 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions {
       assert(varkaMetric(second, "numVarkaBatches") === numBatches)
       assert(varkaMetric(second, "numWarmupBatches") === 0L)
       assert(varkaMetric(second, "numOutputRows") === numRows.toLong)
+    }
+  }
+
+  test("a projection over a filter counts the batches the filter's warm-up sends as warm-up") {
+    // The filter's row path emits on-heap batches, which the projection above cannot run its
+    // kernel on: while the filter warms, those are warm-up batches for the projection too, not
+    // non-Arrow fallbacks. The projection claims its own warm-up at its first Arrow batch.
+    cacheDatesBig(varkaSpark, numRows)
+    val query = "SELECT date_add(d, 3) AS a FROM varka_dates_big " +
+      "WHERE date_add(d, 30) > DATE'2020-07-01'"
+    def projection(plan: SparkPlan): SparkPlan =
+      collectFirst(plan) { case p: VarkaProjectExec => p }
+        .getOrElse(fail(s"no Varka projection in:\n${plan.treeString}"))
+    def filter(plan: SparkPlan): SparkPlan =
+      collectFirst(plan) { case f: VarkaFilterExec => f }
+        .getOrElse(fail(s"no Varka filter in:\n${plan.treeString}"))
+    def metric(node: SparkPlan, name: String): Long = node.metrics(name).value
+    withWarmup {
+      VarkaShapeCache.invalidateAll()
+      val runs = mutable.ArrayBuffer(writeToNoop(query))
+      assert(metric(projection(runs.head), "numWarmupBatches") === numBatches,
+        "the projection cannot have its kernel before the filter below it serves Arrow batches")
+      // The filter's warm-up, then the projection's: one run each, and one more that both serve.
+      while (runs.size < 4 && Seq(filter(runs.last), projection(runs.last))
+          .exists(metric(_, "numVarkaBatches") < numBatches)) {
+        assert(VarkaKernelWarmup.awaitIdle(120000), "a warm-up did not finish in two minutes")
+        runs += writeToNoop(query)
+      }
+      Seq(filter(runs.last), projection(runs.last)).foreach { node =>
+        assert(metric(node, "numVarkaBatches") === numBatches, node.nodeName)
+      }
+      for (run <- runs; node <- Seq(filter(run), projection(run))) {
+        assert(metric(node, "numVarkaBatches") + metric(node, "numWarmupBatches") === numBatches,
+          node.nodeName)
+        Seq("numFallbackBatchesNonArrow", "numFallbackBatchesKernel",
+          "numFallbackBatchesRowPath", "numFallbackBatchesDeclined").foreach { m =>
+          assert(metric(node, m) === 0L, s"${node.nodeName} $m")
+        }
+      }
+    }
+  }
+
+  test("a batch declined while it is copied for a warm-up is counted as declined") {
+    // Under ANSI a string that is not a weekday name, beside a null date, declines the batch in
+    // the evaluator before the kernel would run; the row engine answers NULL for that row. The
+    // claim goes back each time, so no warm-up starts and no batch is a warm-up batch.
+    cacheDatesWeekdayBadOnNulls(spark)
+    cacheDatesWeekdayBadOnNulls(varkaSpark)
+    val query = "SELECT next_day(d, s) AS a FROM varka_dates_weekday_bad_on_nulls ORDER BY a"
+    withAnsi(true) {
+      val expected = spark.sql(query).collect().toSeq
+      withWarmup {
+        VarkaShapeCache.invalidateAll()
+        val df = varkaSpark.sql(query)
+        runAndCheck(df, expected)
+        assert(varkaMetric(df, "numFallbackBatchesDeclined") > 0L)
+        assert(varkaMetric(df, "numWarmupBatches") === 0L)
+        assert(varkaMetric(df, "numVarkaBatches") === 0L)
+      }
     }
   }
 }

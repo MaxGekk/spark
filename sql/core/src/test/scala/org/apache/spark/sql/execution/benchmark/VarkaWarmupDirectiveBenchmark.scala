@@ -17,8 +17,9 @@
 
 package org.apache.spark.sql.execution.benchmark
 
-import java.io.{BufferedReader, File, InputStreamReader}
+import java.io.File
 import java.lang.management.ManagementFactory
+import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
@@ -78,7 +79,10 @@ object VarkaWarmupDirectiveBenchmark extends SqlBasedBenchmark {
     output.foreach(_.write((line + "\n").getBytes(StandardCharsets.UTF_8)))
   }
 
-  /** Runs one child JVM in `mode` and returns its result lines. */
+  /**
+   * Runs one child JVM in `mode` and returns its result lines. Its output goes to a file rather
+   * than a pipe, so that a child which stalls cannot hold the parent past the timeout.
+   */
   private def child(mode: String): Seq[String] = {
     val javaBin = new File(new File(System.getProperty("java.home"), "bin"), "java")
     val command = new java.util.ArrayList[String]()
@@ -88,34 +92,54 @@ object VarkaWarmupDirectiveBenchmark extends SqlBasedBenchmark {
     ManagementFactory.getRuntimeMXBean.getInputArguments.asScala
       .filterNot(_.startsWith("-agentlib")).foreach(command.add)
     command.add("-cp")
-    command.add(System.getProperty("java.class.path"))
+    command.add(childClassPath())
     command.add(VarkaWarmupDirectiveChild.getClass.getName.stripSuffix("$"))
     command.add(mode)
-    val process = new ProcessBuilder(command).redirectErrorStream(true).start()
-    val reader = new BufferedReader(
-      new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
-    val results = mutable.ArrayBuffer.empty[String]
-    val tail = mutable.Queue.empty[String]
+    val log = Files.createTempFile("varka-directive-child", ".log")
     try {
-      var line = reader.readLine()
-      while (line != null) {
-        tail.enqueue(line)
-        if (tail.size > 40) tail.dequeue()
-        if (line.startsWith(VarkaWarmupDirectiveChild.RESULT)) {
-          results += line.stripPrefix(VarkaWarmupDirectiveChild.RESULT)
-        }
-        line = reader.readLine()
+      val process = new ProcessBuilder(command).redirectErrorStream(true)
+        .redirectOutput(log.toFile).start()
+      val finished = process.waitFor(childTimeoutSeconds, TimeUnit.SECONDS)
+      if (!finished) {
+        process.destroyForcibly()
+        process.waitFor(30, TimeUnit.SECONDS)
       }
+      val lines = Files.readAllLines(log, StandardCharsets.UTF_8).asScala.toSeq
+      def tail: String = lines.takeRight(40).mkString("\n")
+      if (!finished) {
+        throw new IllegalStateException(
+          s"the child did not finish in $childTimeoutSeconds s; its last lines:\n$tail")
+      }
+      val results = lines.filter(_.startsWith(VarkaWarmupDirectiveChild.RESULT))
+        .map(_.stripPrefix(VarkaWarmupDirectiveChild.RESULT))
+      require(process.exitValue() == 0 && results.nonEmpty,
+        s"the child failed (exit ${process.exitValue()}); its last lines:\n$tail")
+      results
     } finally {
-      reader.close()
+      Files.deleteIfExists(log)
     }
-    if (!process.waitFor(childTimeoutSeconds, TimeUnit.SECONDS)) {
-      process.destroyForcibly()
-      throw new IllegalStateException(s"the child did not finish in $childTimeoutSeconds s")
+  }
+
+  /**
+   * The child's class path: this JVM's own, plus every local jar and directory its context
+   * class loaders were given. Under `spark-submit`, which is how the benchmark workflow runs
+   * benchmarks, the test jars that hold the child come in through `--jars` and are only there.
+   */
+  private def childClassPath(): String = {
+    val entries = mutable.LinkedHashSet.empty[String]
+    entries ++= System.getProperty("java.class.path").split(File.pathSeparator).filter(_.nonEmpty)
+    var loader = Thread.currentThread().getContextClassLoader
+    while (loader != null) {
+      loader match {
+        case urls: URLClassLoader =>
+          urls.getURLs.filter(_.getProtocol == "file").foreach { url =>
+            entries += new File(url.toURI).getPath
+          }
+        case _ =>
+      }
+      loader = loader.getParent
     }
-    require(process.exitValue() == 0 && results.nonEmpty,
-      s"the child failed (exit ${process.exitValue()}); its last lines:\n" + tail.mkString("\n"))
-    results.toSeq
+    entries.mkString(File.pathSeparator)
   }
 }
 
@@ -126,8 +150,8 @@ object VarkaWarmupDirectiveChild {
 
   def main(args: Array[String]): Unit = {
     val mode = args(0)
-    VarkaKernelCompileDirective.ensureInstalled()
-    require(VarkaKernelCompileDirective.installed(), "this JVM refused the directive")
+    require(VarkaKernelCompileDirective.readyForWarmup() && VarkaKernelCompileDirective.installed(),
+      "this JVM did not add the directive")
     if (mode == "without") {
       // A directive pushed later is matched first, so this one wins for the kernel classes.
       val file = Files.createTempFile("varka-c1-enabled", ".json")
@@ -149,9 +173,11 @@ object VarkaWarmupDirectiveChild {
         VarkaShapeCache.invalidateAll()
         val q = s"SELECT ${(1 to n).map(k => VarkaSizeLadder.entry(100 + k)).mkString(", ")} " +
           "FROM ladder_dates"
+        val previous = VarkaKernelWarmup.recentOutcomes().asScala.lastOption
         (1 to 12).foreach(_ => session.sql(q).write.format("noop").mode("overwrite").save())
-        VarkaKernelWarmup.awaitIdle(300000)
+        require(VarkaKernelWarmup.awaitIdle(300000), s"the $n-entry warm-up did not finish")
         val o = VarkaKernelWarmup.recentOutcomes().asScala.last
+        require(!previous.exists(_ eq o), s"the $n-entry shape had no warm-up of its own")
         // scalastyle:off println
         println(s"$RESULT$n entries: ${o.state()} after ${o.runNanos() / 1000000} ms and " +
           s"${o.calls()} calls; the first probe allocated ${o.firstProbeBytes()} bytes, the " +

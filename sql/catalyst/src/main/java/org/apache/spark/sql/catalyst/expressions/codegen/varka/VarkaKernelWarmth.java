@@ -33,13 +33,13 @@ import java.util.concurrent.atomic.AtomicReference;
  *   every other task of the shape takes the row path meanwhile;</li>
  *   <li>{@code COMPILED} - the warm-up saw the kernel run without allocating, which it does only
  *   once C2's code, with the Vector API intrinsics, is in place;</li>
- *   <li>{@code RELEASED} - the warm-up stopped without that verdict: it ran out of time, the queue
- *   was full, the shape left the cache, or the kernel failed. Tasks run the kernel from here on,
- *   as they would with no warm-up at all, and it compiles as their batches pass through it.</li>
+ *   <li>{@code RELEASED} - the warm-up stopped without that verdict: it ran out of time, the shape
+ *   left the cache, or the kernel failed. Tasks run the kernel from here on, and it compiles from
+ *   the profile the warm-up's calls began and their batches continue.</li>
  * </ul>
  * The one step back is {@code WARMING} to {@code COLD}, taken when the claiming task could not
- * copy its batch (the batch was declined before the kernel would have run), so that a later batch
- * can claim the shape instead.
+ * queue a warm-up for its batch - the batch was declined before the kernel would have run, or
+ * the queue was full - so that a later batch can claim the shape instead.
  */
 public final class VarkaKernelWarmth {
 
