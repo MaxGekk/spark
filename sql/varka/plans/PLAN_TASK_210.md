@@ -560,3 +560,28 @@ badly for text columns; the milestone 5 post's one table gained the markers,
 so its page renders as before. The italic subtitle the draft had under the
 title was dropped: the builder removes the first italic block as the post's
 note to its editors, by design.
+
+### 9.5 The grouped case, predicted before its file, 26 September 2026
+
+SPARK-59783 merged on 26 September 2026 (apache/spark#59042, master and
+branch-4.x, fixed in 4.4.0), and the fork now carries it. It has no switch:
+past the JIT limit it groups the calls to the split functions, and below it
+leaves the code as it was. So the fourth case of section 4 is the same
+benchmark rerun on the fork with the fix, compared with its committed file
+without it (`CaseWhenCodegenBenchmark-jdk25-results.txt`, the EPYC 7763), and
+the grouped file is committed under its own name beside it. Predictions for a
+runner run, in ns a row, against the 7763's file, a factor of 1.5 on a runner
+of another CPU:
+
+1. **Outside a stage at 1000 branches the second cliff is gone.** The
+   projection's largest method falls from 8060 bytes to under 8000, and the
+   cost falls from 12935.8 to about the 300-branch rate scaled by the
+   branches, 971.6 times 1000/300, about 3200; at most 4500.
+2. **The stage at 1000 branches falls with it.** Its compile fails past
+   64 KB and it runs the row-by-row operators, whose projection is the one of
+   prediction 1; the cost falls from 15409.3 to about that projection's plus
+   the failed compile, about 2500 a row from 9.2, so about 6000; at most 8000.
+3. **Nothing below the limit moves.** At 30 to 300 branches, where the
+   projection's largest method is 2141 bytes or less, every case is within 15%
+   of the 7763's file, and so is the interpreted case at every rung, which the
+   fix does not touch.
