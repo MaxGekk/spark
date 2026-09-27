@@ -3466,6 +3466,242 @@ either way. **Done when** the three results files are committed with the JDK
 in their provenance and this section records what the flagged run did to the
 parity file's refused-call rows. Size: small, measured.
 
+### Item 57. Supercompilation, read against the engine
+
+*Added on 27 September 2026, from the owner's question after task 219, which
+had just fixed an emitter that unfolded forty copies of one node into a method
+the JVM refused.*
+
+**What it is.** Turchin's supercompiler (Refal, the 1970s and 80s; the
+positive form of Sorensen, Gluck and Jones is what has been implemented since)
+*drives* a program on partially unknown input: it unfolds calls symbolically,
+and at every branch it propagates what the branch now knows about the data
+into the branch's body. That builds a process tree of configurations, kept
+finite by two mechanisms: *folding*, when a configuration is an instance of
+one already seen, which becomes a call to a shared residual function; and the
+*whistle* (homeomorphic embedding) with *generalization*, when the unfolding
+grows without repeating. The residual program has fused traversals, no
+intermediate structures and specialized branches; partial evaluation and
+deforestation fall out of it, and Klyuchnikov and Romanenko later used the
+same machinery to prove program equivalences by supercompiling both sides to
+one residual. Slesarenko's paper in item 11 comes from the same school.
+
+**How much of it Varka already is, under other names.**
+
+| supercompilation | Varka |
+|---|---|
+| deforestation: no intermediate structures | the fused kernel, a projection in one loop with no column materialized per node; the architecture, not a transformation |
+| driving with positive information | `VarkaRangeAnalysis`, `GuardedRange`, `dayRange` as an interval lattice, `guardUnderArm` qualifying a guard by its arm's condition |
+| folding a repeated configuration into a shared function | CSE, `shareChronoPrefix`, `shareWholeNodes`, the shape cache keyed on structure |
+| the whistle: stop unfolding, generalize | the byte budget and its regroup, the declines, and since task 219 the class-file cap |
+| specialization on known values | constant divisions by magic number; literals otherwise are deliberately slots, not values |
+
+Task 219 was, in these terms, a supercompiler with folding switched off and no
+whistle: the fuzzer drew `cse` and `shareChronoPrefix` off, forty copies of one
+configuration unfolded to 67426 bytes, and the check that should have
+generalized never ran (`PLAN_TASK_219.md` 2.3).
+
+**Where the fit ends.** Supercompilation earns its keep on recursive programs
+over inductive data, where unfolding reveals what a fixed pass cannot. Varka's
+kernels are non-recursive DAGs over batches, and the loop is the runtime's,
+not the program's: there is nothing to unfold, and every interesting decision
+is which of several equal forms to emit, which is extraction under a cost
+model, not driving. Its value specialization runs against the measured cost
+structure: the JIT compile is the cliff (`the-jit.md`), the shape cache exists
+so that one compiled class serves every literal value, and a Futamura-style
+specializer would multiply shapes, each a C2 compile. And its output is
+unpredictable in size and compile time, the opposite of what a byte-budgeted
+emitter wants; GHC, where it was studied most (Supero; supercompilation by
+evaluation), kept rewrite rules and stream fusion for the same reason.
+
+**What to take from it.** Two design principles for the compiler's foundation,
+recorded here so that item 11's design input carries them, and one research
+question.
+
+* *Driving as a discipline.* Varka propagates facts in several places, each
+  written for its case; a supercompiler propagates them everywhere, always.
+  One semilattice of facts per node - range, nullability, encoding, the shape
+  item 11 already asks analyses to take - driven through arms and guards is
+  what would let the emitter prove guards dead: `year(d)` is bounded for every
+  date, so an overflow guard on `year(d) + 1` can never condemn a batch. Fewer
+  guards, fewer declines, and the direction of `SCOPE_STANDARD_MODE.md`.
+* *Folding as a first-class step*, decided while the code is built rather
+  than measured after it. Today growth is controlled by measuring bytes after
+  the build; a supercompiler recognizes the repeat during construction. Row
+  199 (bytes predicted before emission) is that idea in the emitter's
+  vocabulary, and item 11's hash-consed DAG is its natural home.
+* *The proving use*, as research: an equivalence between a lowering and
+  Spark's row semantics over a whole domain, shown by driving both to one
+  residual, where the sweeps show it by exhaustion and the fuzzer by sampling.
+  Not a task; a question for whoever builds the analyses above.
+
+**What it settles.** The right relative of supercompilation for this engine is
+equality saturation, and item 11 reached that conclusion for the right reason:
+today the rewrite arms are few and never conflict, so saturation adds nothing,
+and it becomes the engine once representation choice has to be decided per
+projection. An e-graph gives what supercompilation gives for straight-line
+programs - every equal form - while replacing the whistle with a cost-based
+extraction the emitter can budget. So: the ideas apply, the two that matter
+are above, and the machinery does not.
+
+### Item 58. Formal verification, read against the engine
+
+*Added on 27 September 2026, from the owner's question after item 57. The
+record has no earlier consideration of solvers or proofs; "SMT" in the plans
+means simultaneous multithreading.*
+
+**The question, framed so that it has an answer.** Varka's contract is the
+same answer as vanilla Spark, or a decline. Spark has no formal specification
+- its date semantics are its implementation, the Julian mapping included - so
+"verify Varka against Spark" is not a well-posed goal, and the differential
+machinery the project already runs (the coverage oracle, the sweeps against
+`java.time` and `DateTimeUtils`, the fuzzer against the reference evaluator)
+is the only sound method at that level. The engine is layered, though, and
+the layers answer differently.
+
+| layer | what correct means | verdict |
+|---|---|---|
+| the arithmetic lowerings over bounded integers: the multiply-high division and its magic numbers (task 149), `floorMod7`, the civil-from-days decomposition, the range checks, the bounds an overflow guard delivers | for every lane value in the guarded domain, the lowering equals the reference formula | **yes.** Bit-vector SMT decides these in seconds. The int32 cases are proven by exhaustion today - the multiply-high form over every dividend and every divisor in use, thirteen and a half minutes of every nightly - and the 64-bit lane cannot be exhausted: row 166 checks its two division forms with a Python model and a suite case over sampled regions near 2^52, and the long-lane fuzzer stops at task 147's bound. A solver proves the same statement over all 2^64 values, and *finds* the largest bound under which a cheaper lowering is exact, which is the number `BoundedDivide` (`PLAN_TASK_102.md` 8.4) and `SCOPE_STANDARD_MODE.md` want |
+| the IR's semantics against the reference evaluator | per node type, the two agree on every input | yes, and cheap; of medium value, since the sweeps check the evaluator against `java.time` already |
+| the emitter: masks, validity words, lane groups, epilogues, guards, batch edges | the bytecode computes the IR, lane by lane | **mostly no.** This is where the record's real bugs were - a byte-per-lane read of a bit-packed validity buffer, two guarded shifts that did not compose until the guard was re-armed, the all-null forced batch of length one - and a proof here would be relative to a model of the Vector API and the memory layout, which is where the risk lives. The bounded model checkers for Java do not see the incubator API or `MemorySegment`. The fuzzer's poisoned nulls and edge lengths stay the method; the validity and guard word algebra is the one finite piece a model could cover |
+| the plan-level logic: shape keys, declines, budgets, the regroup's termination | invariants | properties, not machinery: the fuzzer's reflective option draw already covers the key's completeness, and termination is a two-line argument in each plan |
+| HotSpot | - | the trusted base; reading the JVM's own output is the method, and no proof reaches it |
+
+**Why the narrow version pays.** Three reasons, none of them about assurance
+for its own sake.
+
+* It is the only route to the same confidence on 64-bit lanes that
+  exhaustion gives on 32-bit ones, and the long lane is milestone 5's whole
+  subject: `TIME`, the day-time intervals, the timestamps of item 31.
+* It trades CPU for a proof. A solver run of seconds in CI stands where a
+  quarter of an hour of the nightly stands now; the sweep stays for one cycle
+  beside the proof, because the SMT encoding of a lowering is a second
+  implementation of it and agreement between the two is worth more than
+  either - the same reason task 149 turned its script into a test "because
+  the arithmetic under proof is Java's".
+* It is publishable in the sense the promotion track wants. "Every
+  arithmetic lowering carries a machine-checked proof over its guarded
+  domain" is a sentence for the readers of the code. The closest analogue is
+  Alive2, which proves LLVM's peephole rewrites with their preconditions;
+  Varka's lowerings are peepholes whose precondition is the guard's bound,
+  and its `VarkaInputBound` check is what makes a bounded proof safe to rely
+  on per batch.
+
+**What to build, and done when.** One small row, in this order:
+
+1. The multiply-high divide's exactness bound per divisor, int32, as SMT-LIB
+   under `sql/varka/proofs/`, one file per lowering with the Java it encodes
+   named in its header, run by a `dev/varka_prove.sh` that fails on any
+   `sat` and on any solver absent. Compared against task 149's sweep for one
+   nightly cycle, then the sweep's opt-in test cites the proof.
+2. The long-lane division forms at row 166's regions and at 2^52 - 1, which
+   no sweep can reach, and the solver asked for the exact bound rather than
+   handed one.
+3. The other bounded lowerings as they are met: `floorMod7`'s forms, the
+   decomposition's constants over the covered years, `(v - lo)` compared
+   unsigned against `(hi - lo)` (row 208).
+
+**Done when** the three proofs exist, `dev/varka_prove.sh` runs them in the
+linters' CI job in under a minute, the 149 sweep names the proof it
+duplicates, and `sql/varka/AGENTS.md` says that a new bounded lowering comes
+with its proof file. Neither Z3 nor cvc5 is on the laptop today; SMT-LIB is
+independent of which one CI installs. Item 59 gives these proofs a better
+specification to be stated against; the tooling here comes first.
+
+**What it does not do.** No Java-level deductive verification of the emitter
+(KeY, OpenJML): the Vector API and the generated bytecode are outside their
+reach and the bugs are in the plumbing the tools cannot model. No formal
+specification of Spark's date semantics: it would be a transcription of
+Spark's code, as trustworthy as the transcription, and the differential tests
+already are that transcription, executed. No verified emitter in the
+CompCert sense: out of proportion for a research fork, and it would not reach
+the parts that fail.
+
+### Item 59. Verification against the SQL standard, with Spark as named deltas
+
+*Added on 27 September 2026, from the owner's question after item 58: not
+whether to prove the lowerings, which item 58 answers, but what to prove them
+against.*
+
+**The idea.** Item 58's proofs would show a lowering equal to "the reference
+formula", which in this record means Java's `/` or `java.time`. The SQL
+standard is a better specification source for the part of the vocabulary it
+defines, because it is a definition someone outside the project wrote down,
+and because a formal fragment of it is exactly the document the standard mode
+of `SCOPE_STANDARD_MODE.md` would be implemented against. The work pays twice
+or not at all.
+
+**What the standard fixes, and what it does not.** ISO 9075-2 defines the
+arithmetic core Varka lowers with guards: the datetime types on the Gregorian
+calendar over years 0001 to 9999, `EXTRACT`, a datetime plus or minus an
+interval in the year-month and day-time classes, comparison, `CASE`,
+`COALESCE` and `NULLIF`, the three-valued truth tables, and exact-numeric
+arithmetic whose overflow is an exception rather than a value (numeric value
+out of range, SQLSTATE 22003; datetime field overflow, 22008; division by
+zero, 22012). It does not define most of the coverage table, which is Spark's
+function vocabulary: `date_add` with an integer, `datediff`,
+`months_between`, `trunc`, `next_day`, `last_day`, `dayofweek`, `unix_date`,
+`make_date`. For those the specification comes from elsewhere - ISO 8601 for
+the week rules, which task 37 already reads - or is Spark's behaviour written
+down, which is the differential tests' knowledge made explicit.
+
+**Spark as the standard plus named deltas.** Varka's row answers follow
+vanilla Spark, always (`SCOPE_STANDARD_MODE.md` 1), and Spark departs from the
+standard in a short list of places: as the datetime arithmetic rules read,
+`DATE '2024-01-31' + INTERVAL '1' MONTH` is a datetime field overflow, where
+`add_months` clamps to the month's end; non-ANSI Spark wraps or nulls where
+the standard raises, and ANSI mode raises, which is why it is called that;
+Spark's calendar is proleptic on int32 days, far past 0001-9999. So the spec
+is the standard's definition with the deltas as explicit definitional patches
+- `clamp_to_month_end`, `overflow_yields_null`, `proleptic_range` - and a
+kernel is verified against the patched definition in Spark mode and the
+unpatched one in standard mode. The register's ranges (3.1 to 3.3) become
+theorems in the same objects.
+
+**Why vector ops reduce to lane values.** A Vector API lanewise op is
+lane-independent by definition, and everything the emitter produces today is
+element-wise (item 51 is about the day that stops being true). So "the vector
+op refines the SQL op" is a statement about one lane, with two obligations
+per lowering: *soundness* - for every lane value where the SQL op is defined,
+the emitted arithmetic gives its result - and *guard completeness* - a
+decline only where the SQL op raises or the lowering's registered bound is
+passed. Both are bit-vector statements over int32 or int64, decidable by the
+solver item 58 brings. The calendar is its own layer beneath: the standard
+defines it by rules (month lengths, the leap rule), the closed formulas
+(Neri-Schneider, `sql/varka/papers/`) are proven against the rules in the
+paper and are checked exhaustively over the standard's 3.65 million dates in
+seconds, and the lowerings are proven against the formulas over the guarded
+range. Rules to formula by exhaustion, formula to lowering by solver.
+
+**What it does not cover** is item 58's boundary again: masks, validity
+words, lane groups, batch edges and memory, where the record's real bugs
+were. No SQL semantics reaches them; the proof says "per lane, the arithmetic
+and the guard are right", and the fuzzer's job stays "the kernel applies that
+arithmetic to every lane of every batch".
+
+**What to build.** After item 58's tooling row, in this order:
+
+1. `sql/varka/proofs/spec/`: one definition per operation the standard fixes,
+   over the coverage table's operations first, with every interpretation
+   choice recorded where the text leaves one (the calendar before 1582, leap
+   seconds, implementation-defined precisions).
+2. The deltas, each named, each with a test that shows Spark doing it, and
+   the extensions' definitions marked as Spark's own or ISO 8601's.
+3. Item 58's proofs re-stated as refinements of the spec, soundness and guard
+   completeness, in Spark mode and in standard mode; the standard-mode
+   register cites the standard-mode theorems as its bounds.
+
+**Done when** the spec fragment covers every operation the coverage table
+lowers, every departure of Spark's from it is a named delta with its test,
+each proof under `proofs/` states its refinement against the spec rather than
+against a Java formula, `SCOPE_STANDARD_MODE.md` cites the theorems, and the
+README can say, truthfully, that each kernel is a verified refinement of ISO
+9075 datetime and numeric semantics with Spark's departures named. Not a
+formal semantics of SQL *queries* - bags, grouping, the null semantics of
+predicates over rows - which is a literature of its own and not the
+expression layer's problem; and not a mechanized proof of the calendar
+theorems themselves, unless someone wants one.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
