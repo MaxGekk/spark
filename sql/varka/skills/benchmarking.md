@@ -571,3 +571,27 @@ zero. `dev/varka_bench_band.py` and `dev/varka_bench_diff.py` read each case fro
 figure has more digits. The difference is not cosmetic: measured on the rate, three runs of
 `VarkaColdStartBenchmark` put 56 of 96 cases in the quiet tier, many of them because the rounded
 rate did not move at all; measured on the time a row, 36.
+
+## Spark's codegen histograms are samples, and its TPC suites compile nothing under AQE
+
+Two instruments that look like they answer "how large is the code Spark generates" do not,
+as they stand.
+
+* **`CodegenMetrics`' histograms keep a decaying sample.** `generatedMethodSize` and its
+  siblings are Dropwizard histograms with the default reservoir: about a thousand values,
+  weighted towards the last few minutes. Their counts are exact, their distribution is not, and
+  after an hour of queries it describes the end of the run. For a distribution, count every
+  value: `VarkaMethodSizeCensus` swaps the reservoir for an exact counter by reflection and
+  keeps the counts per suite.
+* **`BenchmarkQueryTest.checkGeneratedCode` finds no stage under adaptive execution** unless the
+  suite carries SPARK-59764: it walks the plan with `foreach`, which stops at
+  `AdaptiveSparkPlanExec`, so the TPC-DS, TPC-H and SSB suites passed while compiling nothing.
+  "Total compile time: 0.0 seconds" in the suite's log is the tell. With AQE off, broadcast
+  joins over the suites' empty tables generate a stub unless SPARK-59765 is there too.
+* **sbt runs a suite's nested suites as separate tasks after it**, so a wrapper cannot count
+  around `Suites(...)`; run the suites from inside one test instead. And `@DoNotDiscover` keeps
+  a suite out of `testOnly` even by its full name; gate it on an environment variable, which
+  the forked test JVM inherits where the sbt JVM's system properties do not reach.
+
+See `PLAN_TASK_181.md` 11.
+
