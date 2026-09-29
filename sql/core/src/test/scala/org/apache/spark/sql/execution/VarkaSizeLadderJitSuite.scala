@@ -26,7 +26,7 @@ import scala.collection.mutable
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.launcher.JavaModuleOptions
 import org.apache.spark.sql.catalyst.expressions.codegen.CodeGenerator
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaProbeOutput
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaProbeOutput, VarkaTestWatchdog}
 import org.apache.spark.sql.execution.VarkaSizeLadderJitProbe._
 
 /**
@@ -48,7 +48,7 @@ import org.apache.spark.sql.execution.VarkaSizeLadderJitProbe._
  * generation that moved the rung across the limit fails here by name rather than by a flipped
  * verdict. The same shape as `VarkaHugeMethodSuite`, which pins the limit on Varka's side.
  */
-class VarkaSizeLadderJitSuite extends SparkFunSuite {
+class VarkaSizeLadderJitSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   private val childTimeoutSeconds = 600L
 

@@ -572,3 +572,24 @@ runs of `VarkaSizeLadderJitSuite` on the fork CI (#473, 27 September 2026).
   use `in` and `split(MARKER, 1)`); the Scala suites had each written their own stricter loop.
   `VarkaProbeOutputSuite` is the parser test to extend when a new marker shape appears.
 
+## `failAfter` without a signaler cannot stop a test, so a hang holds the CI slot
+
+`SparkFunSuite` wraps every test in ScalaTest's `failAfter(20 minutes)`, and it reads as a cap.
+It is not one: without a `Signaler`, `failAfter` only checks the clock after the body returns,
+and a body that never returns is never reported. A compiler loop that did not terminate (task
+219's demotion loop, on #456) held the fork's one Build slot for the job's whole limit, printing
+only ScalaTest's slowpoke "still running", and named no test. Interrupting the test thread would
+not have ended it either: a CPU-bound loop checks no interrupt.
+
+* **`VarkaTestWatchdog`**, mixed into every Varka suite, runs each test beside a watchdog thread.
+  At the cap (`varka.test.watchdog.minutes`, ten) it interrupts the test thread, which ends a body
+  that blocks or checks interrupts; thirty seconds later, if the test still runs, it writes every
+  thread's stack under the test's name and halts the JVM, so sbt reports the suite aborted and
+  the log's last lines say which test and what it was doing. `Thread.stop` is gone since JDK 20,
+  so a halt is what remains for a loop that will not stop.
+* **Size the cap from the slowest test on record**, not the job's limit: the width audit's census
+  takes about two minutes, and the suites' CI jobs finish in eleven to seventeen minutes whole,
+  so a single test past ten is a hang. A suite meant to run longer overrides `watchdogMinutes`.
+* **Test the mechanism with its effects as parameters.** `VarkaTestWatchdogSuite` passes a
+  report sink and a halt stub, so the three outcomes take under a second each and the JVM stays.
+
