@@ -576,3 +576,118 @@ runners' included, so it is not the 9V45's; this task reads best times, and the 
 
 The 9V45 figure the post needs is this file. What is left of this task is the decision on B
 that task 195's first-query cost was to inform.
+
+### 9.11 The first query of the two designs, planned, 28 September 2026
+
+The decision 9.9 left open - whether design B, the range set, stays beside design A, the
+split conditions, which is faster or equal at steady state - was to be informed by task 195's
+first-query cost. Task 195's benchmark prices the ladder's projections, not this filter, so the
+number does not exist. `VarkaColdStartBenchmark` gains a section for it: the same cases as its
+projection section (plan only, first run, second run; and once compiled on the warm-up arm) for
+each design on each Varka arm, at 48 ranges and at the query's 200, over its hundred thousand
+rows, with every bound shifted by a day per iteration so no iteration's source is one Janino
+has compiled. Vanilla's arm is the baseline, as in the range filter benchmark.
+
+**Predictions, registered before the run.**
+
+1. *Plan only* holds the emission. A emits several methods of several thousand bytes where B
+   emits one under 2000, so A's plan-only case is slower than B's at 200 ranges, by more than
+   the noise; both are tens of milliseconds.
+2. *First run without the warm-up*: both designs' kernels run interpreted until compiled, and A
+   has more code to interpret and more methods for C2 to compile, so A's first run is slower
+   than B's at 200 ranges. At 48 ranges the two are within the noise.
+3. *With the warm-up*, A's verdict comes later than B's at 200 ranges (more methods to compile),
+   and its once-compiled case equals B's within the noise, as the steady state does.
+4. *Vanilla* at 200 ranges pays a Janino compile of a method past 8000 bytes and then runs it
+   interpreted, so its first run is slower than either design's, and its second run is not
+   faster than its first by much: it never leaves the interpreter.
+
+**The rule for the decision.** If A's first-run and plan-only costs at 200 ranges are within
+about a fifth of B's on the runner's file, B has no case left and goes, with rows 207 and 208;
+if A pays clearly more, both stay and the post says when each applies. The figure the post
+quotes comes from a GitHub runner, as every headline number does; the laptop's run checks the
+benchmark and gives the first reading.
+
+### 9.12 The first query of the two designs, measured: B stays, 28 September 2026
+
+The runner's run of `VarkaColdStartBenchmark` with the section 9.11 added, on an
+EPYC 9V74 with four cores (`VarkaColdStartBenchmark-jdk25-runner-9v74-results.txt`,
+with its provenance), at 48 and 200 ranges over a hundred thousand rows, best of
+five iterations. Milliseconds a query; B is the range set, A the split conditions:
+
+| case | 48: vanilla | B | A | 200: vanilla | B | A |
+|:--|--:|--:|--:|--:|--:|--:|
+| plan only | 13 | 12 | 14 | 27 | 28 | 61 |
+| first run | 175 | 73 | 110 | 1748 | 142 | 420 |
+| second run | 41 | 24 | 97 | 1634 | 52 | 350 |
+| with the warm-up, first run | | 418 | 159 | | 302 | 1503 |
+| with the warm-up, second run | | 283 | 148 | | 55 | 1005 |
+| once compiled | | 23 | 24 | | 53 | 55 |
+| the warm-up's verdict | | 0.72-0.86 s | 0.62-0.66 s | | 0.10-0.13 s | 3.1-3.6 s |
+
+**Prediction by prediction (9.11).**
+
+1. **Held at 200, within the noise at 48.** Plan only is 61 against 28 ms at
+   200 ranges, 2.2 times: A's emission of several methods against B's one loop
+   over a table. At 48 ranges, 14 against 12.
+2. **Held, and at 48 ranges too.** A's first run without the warm-up is 420
+   against 142 ms at 200 ranges and 110 against 73 at 48, where the prediction
+   had the two within the noise. And A's second run is 350 ms at 200 ranges
+   against B's 52: A's methods are not compiled by the second query either,
+   where B's loop is.
+3. **Held.** The warm-up's verdict on A takes 3.1 to 3.6 seconds at 200 ranges
+   against 0.10 to 0.13 on B, some thirty times; once compiled the two are 55
+   and 53 ms, equal as at steady state. At 48 ranges the verdicts are alike.
+4. **Held.** Vanilla at 200 ranges takes 1748 ms on the first run and 1634 on
+   the second: its method is past 8000 bytes and never leaves the interpreter,
+   so it is slower than either design on every run.
+
+**The decision.** By 9.11's rule A would have to be within about a fifth of B
+on the first run and plan only at 200 ranges; it is three times B on the one
+and twice on the other. **B stays**, as 9.9 configured it: `rangeSets` on, so
+a disjunction of ranges over one column compiles to the range set, and
+`splitConditions` on for every other predicate too large for one method, where
+A is the only design there is. Rows 207 and 208, B's loop improvements, keep
+their point. The post says which shape each serves.
+
+**A finding for the warm-up (rows 212 and 213, task 221).** With the warm-up
+on, which is the default, A's first two queries at 200 ranges take 1503 and
+1005 ms, against 420 and 350 without it: while the warm-up compiles A's methods
+for three seconds the queries run on the row path, and the row path over two
+hundred ranges is the interpreted stage vanilla runs, about 1.7 seconds a
+query. For a kernel whose verdict is slow and whose row path is this slow, the
+warm-up costs more than it saves; B, whose verdict comes in a tenth of a
+second, shows the policy at its best (302 then 55 ms). The verdict's cost
+against the row path's is a per-shape question the warm-up does not ask today.
+
+The laptop's regeneration of the committed file, with this section, is queued
+for the night of 28 September and lands beside this run's file; the decision
+is read from the runner's, as every headline number is.
+
+**The laptop's companion files**, regenerated on the night of 28 to 29 September 2026 with the
+section in (`VarkaColdStartBenchmark-jdk25-results.txt`, its 128-bit companion and
+provenance), read the same ordering at 200 ranges: plan only 25 against 43 ms, first run 107
+against 285, second run 41 against 241, and with the warm-up 171 and 47 against 535 and 406.
+The rows the section did not touch moved within the band, the sub-second ones by a few
+milliseconds either way.
+
+### 9.13 Corrections from the review of the pull request, 29 September 2026
+
+* **What design A is at 48 ranges.** The split begins at 49 ranges (section 3.1's table: 48
+  fit one method, 49 would be 8142 bytes), so at the 48 rung the "split conditions" arm is the
+  plain comparison tree in one method, the range set merely off. 9.12's prediction 2 stands at
+  200 ranges, where A splits; at 48 its 110 against 73 ms is the one-method tree against the
+  range set's loop, not a split kernel, and the table's "48: A" column reads that way. The
+  smoke run takes 49 now, so it reaches a split emission.
+* **The designs are emitted exclusively.** B was the defaults, which have the split on too, so
+  a B that failed to lower to the range set would have run as A without a word; B is now the
+  defaults with the split off, and a design that does not lower declines, which the rung's
+  check catches. B's kernel is the same either way, so the committed numbers stand.
+* **The section runs second** in the file, after the projection's first-query section and
+  before the back-to-back and steady-state sections, which start from the JVM it leaves; the
+  class doc said fourth. The plan's note that the untouched rows moved within the band is the
+  measure of that.
+* **The warm-up finding has a row**: `SCOPE_MILESTONE_7.md` item 60, the verdict's cost against
+  the row path's as a per-shape question.
+* The two benchmarks over the range keys share their helpers through `VarkaArrowSessions`, and
+  this benchmark's two first-query sections register their cases through one helper.
