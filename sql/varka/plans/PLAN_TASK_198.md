@@ -606,3 +606,154 @@ and the tests that read the recomputing arm name it. Two things the flip found:
 
 The ladders regenerated at both widths on the laptop and the size ladder on a 9V45 runner
 follow below, with predictions 3 and 5 scored.
+
+## 12. The flip's cycle, and one segment for the scratch, 29 September 2026
+
+The flip (#507, section 11) went in with two of its measurements unread: the laptop's ladders,
+and the deopt-cycle census the nightly guard runs. Read the same morning, on the laptop:
+
+* **The method-size ladder** improved at every rung from eight outputs up, 12% to 37% per row
+  at 256 bits and 15% to 43% at 128, except the eight-output rung at 128 bits, whose null-free
+  cases ran at 1450 ns per row, a hundred and thirty times slower.
+* **The deopt-cycle probe** (`dev/varka_deopt_cycle.sh`, task 189's) said why: on the
+  batches path - the kernel called on its batches from the first call, which is the probes,
+  the benchmarks and a deployment with the warm-up off - the producer's dense loop enters
+  C2's deoptimization cycle at 8 outputs at 128 bits and at 12, 16 and 60 outputs at both
+  widths, 21 of 24 forks, where the commit before the flip cycles in none of 15. On the
+  warm-up path, task 212's short calls, no fork cycles at any of those sizes: production is
+  not exposed, and the nightly guard, which reads the batches path at twelve outputs, would
+  have failed.
+* **The size ladder at 256 bits** regressed 46% to 50% at 52, 54 and 56 entries in one run
+  and improved 14% to 17% at the same rungs in the next, with the other rungs improving 5%
+  to 13% in both; the JVM's log of the second run shows no cycle at those rungs. A per-run
+  outcome of the kind row 209 records, on kernels the flip regrouped, to be read with the band
+  tooling once the fix below is in.
+
+**The mechanism, from the JVM's output.** One cycling fork of the eight-output kernel at 128
+bits, its class dumped (`VARKA_DEOPT_DUMP`) and `loopDense0` printed at every C2 compile
+(`-XX:CompileCommand=print`, `dev/varka_emit.sh`'s form), against the same fork of the
+commit before the flip:
+
+* The traps are `profile_predicate`, four at the loop head (`if_icmpge`, bci 304, then the
+  per-bytecode limit) and one per C2 version at the back edge (`goto`, bci 3104) until the
+  per-method limit, as task 189 described.
+* Before the loop, C2 hoists, per `MemorySegment` the loop touches, the checks the Vector
+  API's `intoMemorySegment` and `fromMemorySegment` carry: the segment's class, its read-only
+  flag, its length against the vector's bytes, its session's state, and an identity check that
+  reads a field of the session against a value taken from the current thread - the
+  confined-owner test of `MemorySessionImpl.checkValidState`, hoisted on a profile the whole
+  JVM shares. The flip's producer loop keeps twelve segments live (one input, five outputs, six
+  scratch, one per prefix vector) and its OSR compile hoists all twelve sets; the pre-flip loop
+  keeps six and hoists six in its OSR compile and one in its steady compile. Which of the
+  hoisted checks fails at run time, and why the pre-flip loop's one does not, is row 218's
+  question and stays open here; what this fork settles is that the count of live segment
+  objects decides whether the loop crosses into the cycle.
+* **One segment for the scratch.** The body takes one `MemorySegment` over the whole scratch,
+  regions times six times `dataBytes`, and addresses region `r`'s vector `k` at
+  `byteOffset + (r * 6 + k) * dataBytes`, so the producer's loop keeps seven segments live
+  rather than twelve. The same fork compiles once and runs at 91 to 101 M rows/s, the
+  pre-flip fork's 85 to 89. The cycle map over 8, 12, 16 and 60 outputs at both widths on the
+  batches path, two forks each: 0 of 16 in the cycle, against 21 of 24 for the flip's six
+  segments per region. Every Varka suite of both modules passes on it.
+
+**The benchmarks under the fix**, regenerated on the laptop the same day; against the
+committed files, which are the ones from before the flip (the flip's laptop files were never
+committed, see above). Per row, nanoseconds, the null-free even-chunk case of the method-size
+ladder's per-group arm:
+
+| outputs | 256-bit before | 256-bit fix | 128-bit before | 128-bit fix |
+|---:|---:|---:|---:|---:|
+| 4 | 1.7 | 1.6 | 6.2 | 6.2 |
+| 8 | 3.6 | 3.2 | 11.2 | 10.3 |
+| 12 | 4.9 | 4.4 | 18.0 | 13.4 |
+| 16 | 7.7 | 5.0 | 24.6 | 14.6 |
+| 32 | 14.8 | 9.4 | 47.1 | 27.9 |
+| 60 | 27.0 | 17.0 | 85.2 | 49.5 |
+
+The same gains the flip measured, 11% to 37% at 256 bits and 8% to 42% at 128 from eight
+outputs up, with the mixed-null arm 4% to 29% behind them, and the eight-output rung at 128
+bits, the cycle's, at 10.3 against the flip's 1450.
+
+**The size ladder on the 9V45 under the fix**, four runs from thirty-six pinned dispatches
+that landed on one the same hour (runs 36549685302, 36549679288, 36549672688 and 36549669123;
+the first, nearest the median at a hundred entries, is the committed file). Varka's nanoseconds
+per row across the four, against the flip's six-segment run and the file before the flip:
+
+| entries | fix, four runs | flip (six segments) | before the flip |
+|---:|---:|---:|---:|
+| 16 | 25.9 to 28.3 | 27.7 | 33.2 |
+| 32 | 36.2 to 43.9 | 40.5 | 52.2 |
+| 48 | 52.4 to 58.8 | 54.1 | 68.5 |
+| 52 | 55.5 to 58.2 | 55.5 | 66.9 |
+| 54 | 57.0 to 66.2 | 54.0 | 69.6 |
+| 56 | 54.5 to 59.8 | 55.7 | 65.4 |
+| 64 | 63.0 to 67.2 | 60.7 | 72.8 |
+| 80 | 72.1 to 79.2 | 79.2 | 91.1 |
+| 100 | 87.3 to 98.9 | 97.9 | 111.4 |
+
+The one segment costs nothing the runner can see against the six: the flip's run sits inside
+the fix's spread at every rung. Against the file before the flip, a hundred entries is 11% to
+22% faster across the four runs, prediction 3's 10% held on the runner in every one; the
+four runs' spread, 5% to 21% per rung, is the shared VMs' own, and vanilla's rows spread 5% to
+25% across the same four.
+
+**The laptop's size ladder under the fix**, both widths, against the file before the flip;
+Varka's nanoseconds per row, vanilla within 1% at 256 bits and 11% to 13% faster at 128 bits
+below the cliff (a day's drift of the laptop, the same in both arms' direction):
+
+| entries | 256-bit before | 256-bit fix | 128-bit before | 128-bit fix |
+|---:|---:|---:|---:|---:|
+| 16 | 30.2 | 27.5 | 57.4 | 47.8 |
+| 32 | 46.7 | 41.4 | 102.6 | 78.6 |
+| 48 | 64.9 | 54.9 | 148.0 | 109.2 |
+| 52 | 71.0 | 57.9 | 156.2 | 117.0 |
+| 54 | 70.6 | 61.4 | 163.0 | 120.0 |
+| 56 | 71.9 | 61.2 | 167.3 | 123.7 |
+| 64 | 79.5 | 68.4 | 190.3 | 143.8 |
+| 80 | 99.6 | 84.4 | 235.0 | 171.7 |
+| 100 | 122.8 | 106.1 | 292.9 | 216.2 |
+
+Faster at every rung: 9% to 18% at 256 bits and 17% to 27% at 128, with 52 to 56 entries at
+13% to 18% where the flip's first run had them 46% to 50% slower and its second 14% to 17%
+faster. **Prediction 3 holds** on the laptop as on the runner: a hundred entries is 14% faster
+at 256 bits and 26% at 128, against at least 10%. The band runs of section 13 say how much of
+the 52-to-56 swing was the day and how much the kernels.
+
+**The emission benchmark** moved nothing past its band: the plan of the materialized keys and
+the one segment cost the emitter nothing it can measure.
+
+**The shared-prefix benchmark under the fix**, against #502's arms (six segments per region),
+per row: at the default grouping the arms are the same, 17.0 against 17.0 ns at 256 bits and
+46.6 against 48.4 at 128, so the fix costs nothing where a kernel runs. At sixty groups, the
+load-heavy arm this benchmark keeps to price recomputation, the one segment is slower than the
+six: 39.1 against 34.5 at 256 bits and 113.1 against 90.9 at 128, which moves prediction 2's
+ratio to 1.55 at 256 bits (over the 1.5) and 1.31 at 128. Six loads a lane group through one
+segment at `byteOffset + k * dataBytes` pay something the six segments at `byteOffset` did
+not, most likely a bounds check per load that C2 no longer hoists; a layout that interleaves
+the six vectors per lane group would give constant addends but needs the region padded by a
+lane group, which the per-row contract does not give it. Left as it is: the cost shows only
+where every output is its own group, which no grouping of the default produces, and the six
+segments' price is the cycle.
+
+## 13. The size ladder's band under the default, 29 September 2026
+
+Two runs of the 256-bit ladder through `dev/varka_bench_repeat.sh`, on the quiet laptop,
+pinned as the regeneration pins, writing `VarkaSizeLadderBenchmark-jdk25-band.txt` in place of
+the band of 24 September, which was the old kernels': eighteen cases, a median spread of 0.55%,
+a 90th percentile of 1.35% and a worst of 2.2%, none over 3%. The 52, 54 and 56 entry rungs
+read 58.2 to 58.5, 60.4 to 60.5 and 62.0 to 62.4 ns per row in the two runs, the
+regeneration's 57.9, 61.4 and 61.2 beside them: the flip's 105 at those rungs was one run's
+outcome, not the kernels'.
+
+**What the two runs did not see.** At sixteen entries both read 36.2 and 37.0 ns per row where
+the regeneration of the same hour read 27.5, the flip's 28.7 and the file before it 30.2: a
+two-mode outcome, a third apart, that a band of two runs in one mode records as a 2.2% spread.
+Row 209's per-run cliff at a small rung, in the JVM run's hands rather than the kernel's.
+
+**Three fresh runs**, the band file rewritten from them: a median spread of 1.48%, a 90th
+percentile of 4.4% and a worst of 6.8% (32 entries, 39.7 to 42.4), four cases over 3% and none
+over 10%; 52 to 56 entries at 58.4 to 63.5 in all three. Sixteen entries read 36.7 to 37.6 in
+all three, so of the day's six runs of this ladder one, the regeneration, took the fast mode at
+that rung and five the slow; the committed results file carries the fast one, the band the
+slow ones' agreement. A reader of the sixteen-entry rung takes the range, 27.5 to 37.6, not
+either number, and the question of what decides the mode is row 209's.
