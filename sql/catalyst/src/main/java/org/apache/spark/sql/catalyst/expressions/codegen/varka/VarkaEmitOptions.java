@@ -315,6 +315,22 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        frames of their own to plan, so with {@link #methodByteBudget} 0 it changes nothing. On
  *        by default since measured: a four-hundred-output emission in 30.5 ms where it took 107
  *        ({@code PLAN_TASK_191.md} 9); off is the form before it, kept as the reference variant.
+ * @param callSiteBudget the most Vector API call sites one emitted group method - a loop
+ *        method or its epilogue - may carry, by default {@code VarkaEmitBudget.CALL_SITE_BUDGET},
+ *        the count past which C1 refuses such a method and it runs interpreted until C2
+ *        compiles it ({@code PLAN_TASK_209.md} 10.1). Read off the built class beside the bytes,
+ *        under the byte budget only: a wide group with a method over it is split as one over
+ *        the byte budget is, a narrow group over it stands, and the budget is dropped for a
+ *        class its splits would make decline, so it never costs a kernel. {@code 0} is off, the
+ *        arm the cliff's probe and the ladders measure the budget against; a small value is how
+ *        a test sees the split on a shape of a few outputs.
+ * @param heavyGroupOutputs the most outputs a group may hold and still keep a method over
+ *        {@link #callSiteBudget}, by default {@code VarkaEmitBudget.HEAVY_GROUP_OUTPUTS}:
+ *        the budget splits a group only while it holds more outputs than this, since a group of
+ *        fewer is one of heavy outputs that no split brings under C1 and that pays a method per
+ *        output for good if split (see the constant). {@code 0} and {@code 1} alike split every
+ *        group over the budget down to single outputs, the arm the exemption is measured
+ *        against.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -346,7 +362,9 @@ public record VarkaEmitOptions(
     boolean rangeSets,
     boolean splitConditions,
     boolean groupLocalSlots,
-    boolean materializeChronoPrefix) {
+    boolean materializeChronoPrefix,
+    int callSiteBudget,
+    int heavyGroupOutputs) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -452,7 +470,8 @@ public record VarkaEmitOptions(
           TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, USE_AVX_UNKNOWN,
           false, false, true, true, false, true, false,
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
-          true, true, true, true);
+          true, true, true, true,
+          VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -474,6 +493,14 @@ public record VarkaEmitOptions(
     if (methodByteBudget < 0) {
       throw new IllegalArgumentException("methodByteBudget must be 0 (off) or a positive byte "
           + "count: " + methodByteBudget);
+    }
+    if (callSiteBudget < 0) {
+      throw new IllegalArgumentException("callSiteBudget must be 0 (off) or a positive "
+          + "call-site count: " + callSiteBudget);
+    }
+    if (heavyGroupOutputs < 0) {
+      throw new IllegalArgumentException("heavyGroupOutputs must be 0 (every group over the "
+          + "call-site budget splits) or a positive output count: " + heavyGroupOutputs);
     }
     if (division == null) {
       throw new IllegalArgumentException("division must not be null");
@@ -521,6 +548,8 @@ public record VarkaEmitOptions(
       b.splitConditions = splitConditions;
       b.groupLocalSlots = groupLocalSlots;
       b.materializeChronoPrefix = materializeChronoPrefix;
+      b.callSiteBudget = callSiteBudget;
+      b.heavyGroupOutputs = heavyGroupOutputs;
     return b;
   }
 
@@ -556,6 +585,8 @@ public record VarkaEmitOptions(
     private boolean splitConditions;
     private boolean groupLocalSlots;
     private boolean materializeChronoPrefix;
+    private int callSiteBudget;
+    private int heavyGroupOutputs;
 
     private Builder() {
     }
@@ -710,6 +741,16 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder callSiteBudget(int callSiteBudget) {
+      this.callSiteBudget = callSiteBudget;
+      return this;
+    }
+
+    public Builder heavyGroupOutputs(int heavyGroupOutputs) {
+      this.heavyGroupOutputs = heavyGroupOutputs;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -718,7 +759,7 @@ public record VarkaEmitOptions(
           lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
           misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
           mulHiDivide, narrowHalfSpecies, methodByteBudget, rangeSets, splitConditions,
-          groupLocalSlots, materializeChronoPrefix);
+          groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs);
     }
   }
 
@@ -733,6 +774,14 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withMethodByteBudget(int bytes) {
     return toBuilder().methodByteBudget(bytes).build();
+  }
+
+  public VarkaEmitOptions withCallSiteBudget(int callSites) {
+    return toBuilder().callSiteBudget(callSites).build();
+  }
+
+  public VarkaEmitOptions withHeavyGroupOutputs(int outputs) {
+    return toBuilder().heavyGroupOutputs(outputs).build();
   }
 
   public VarkaEmitOptions withRangeSets(boolean enabled) {
@@ -884,7 +933,8 @@ public record VarkaEmitOptions(
    *
    * <p>The two compiler options, {@code rangeSets} and {@code splitConditions}, render only when
    * they differ from their defaults, so every variant's rendering from before they existed is
-   * unchanged.
+   * unchanged; so do the fields added since ({@code groupLocalSlots},
+   * {@code materializeChronoPrefix}, {@code callSiteBudget}, {@code heavyGroupOutputs}).
    */
   public String canonical() {
     if (isDefault()) {
@@ -900,6 +950,10 @@ public record VarkaEmitOptions(
         + '|' + narrowHalfSpecies + '|' + methodByteBudget
         + (rangeSets ? "" : "|noRangeSets") + (splitConditions ? "" : "|noSplitConditions")
         + (groupLocalSlots ? "" : "|kernelWideSlots")
-        + (materializeChronoPrefix ? "" : "|recomputePrefix") + ')';
+        + (materializeChronoPrefix ? "" : "|recomputePrefix")
+        + (callSiteBudget == VarkaEmitBudget.CALL_SITE_BUDGET
+            ? "" : "|callSites=" + callSiteBudget)
+        + (heavyGroupOutputs == VarkaEmitBudget.HEAVY_GROUP_OUTPUTS
+            ? "" : "|heavy=" + heavyGroupOutputs) + ')';
   }
 }

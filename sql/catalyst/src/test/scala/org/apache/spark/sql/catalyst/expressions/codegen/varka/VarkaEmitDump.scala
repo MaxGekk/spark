@@ -220,6 +220,25 @@ object VarkaEmitDump {
     } else {
       over.foreach(finding => report(s"OVER LIMIT: $finding"))
     }
+    // C1's limit rather than the JVM's: a group method over the call-site budget belongs to a
+    // narrow group of heavy outputs the emitter leaves on purpose, or to a group whose split
+    // would have declined the class, or the budget was off (task 209). Not an error, but worth
+    // seeing: the method runs interpreted until C2 compiles it. A heavy kernel has one such
+    // method per group and side, so the list is cut after the first few.
+    val budget = options.callSiteBudget()
+    if (budget > 0) {
+      val overSites = VarkaEmitBudget.overCallSiteBudget(measured, budget).asScala
+      if (overSites.isEmpty) {
+        report(s"every group method is under the call-site budget ($budget vector call sites)")
+      } else {
+        overSites.take(4).foreach(finding => report(s"PAST C1: $finding"))
+        if (overSites.size > 4) {
+          report(s"PAST C1: and ${overSites.size - 4} more group methods over the budget")
+        }
+      }
+    } else {
+      report("the call-site budget is off")
+    }
     VarkaDebugInfo.read(bytes).ifPresent { info =>
       report("")
       report("line map (line=node):")
