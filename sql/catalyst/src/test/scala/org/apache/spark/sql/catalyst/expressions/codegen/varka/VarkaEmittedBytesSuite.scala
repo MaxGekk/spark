@@ -479,6 +479,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
       "validityByWord" -> (_.withValidityByWord(_)),
       "mulHiDivide" -> (_.withMulHiDivide(_)),
       "narrowHalfSpecies" -> (_.withNarrowHalfSpecies(_)),
+      "predictGrouping" -> (_.withPredictGrouping(_)),
       "misdescribeAdd" -> (_.withMisdescribeAdd(_)),
       "misdescribeWordLiveness" -> (_.withMisdescribeWordLiveness(_)))
     val flags = booleans.flatMap { case (name, set) =>
