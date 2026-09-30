@@ -206,3 +206,126 @@ addressed, and the answer to the fourth changed the verdict.
 9. The probe was deleted after the run. It is `VarkaGroupingBoundSuite`, which holds greedy to
    the best partition's ops on every family and will hold it to the methods once the switch
    ships.
+
+## 8. Outcome
+
+### 8.1 Built, 30 September 2026
+
+`VarkaEmitOptions.exactGrouping`, off by default. Under it `groupOutputs` first asks
+`bestPartitionStarts` where each group of the best partition starts, then runs its greedy walk
+with those starts forced: every group of the best partition is a run the rule admits, so the walk
+closes a group at each of its starts and nowhere else, and forms exactly that partition through
+the code that has always formed partitions. A start the measurement's regroup forces is one the
+best partition must begin a group at, so the halving works as before. The walk checks that it
+formed as many groups as the best partition has, and throws if not: a difference would mean the
+two judged a step apart, and it is cheaper to find that in a suite than as a slower kernel.
+
+`bestPartitionStarts` is the dynamic program of 3.1. From each start it grows one group, output
+by output, through `admit` - the one place the rule is written, which now adds the output in
+place and leaves copying to the greedy walk, the one caller that keeps the group as it was - and
+records the ops of every run the rule admits, stopping at the first output it refuses; the runs
+are priced with the walk's own prices. The dates a group finds computed earlier are those of
+every output before its start, whatever the partition there, so the runs from a start are the
+same in every partition and each is priced once - once per emission, too, since the regroups of
+one emission change only the forced starts, and a forced start cuts runs rather than changes
+them. The partition is then chosen from the end backward: the
+fewest ops, then the fewest groups, then the longest first group, the longest second group and
+so on. The last criterion is the greedy walk's own, and it makes the exact grouping the greedy
+partition itself wherever that is already the best, so the switch moves only the shapes it
+improves - a property the suite tests byte for byte on the ladders.
+
+**Two departures from sections 3 and 4.**
+
+* **A fallback.** 3.1 did not give the switch one. The exact grouping may take a group more than
+  the greedy walk where that saves ops, and a group more is a call more in the driver, so like
+  `predictGrouping` it could in principle make a class decline that the greedy walk emits. A
+  class the exact grouping would make decline is built again without it, keeping the
+  prediction, and one the prediction would make decline is built again with both off. No shape
+  of the check takes the fallback, and the suite holds that, not only that nothing declines.
+* **The emission timing moved.** Section 4 put the partition's cost at plan time in
+  `VarkaEmissionBenchmark`. It is a section of `VarkaWideKernelBenchmark` instead, beside the
+  run-time sections, so that every number of this task comes from one runner's file:
+  `VarkaEmissionBenchmark`'s committed results are the laptop's, with a 128-bit companion, and
+  regenerating it on a runner would split that file across two machines.
+
+**Found on the way.** `VarkaWideKernelBenchmark`'s section for task 190 named
+`VarkaEmitOptions.DEFAULTS` the unrolled driver; since the table driver became the default, that
+arm was the table as well. Its committed results predate the switch and are right; the arms now
+name their forms, and `PLAN_TASK_190.md` 10.4 records the correction.
+
+**Tests.** `VarkaGroupingBoundSuite` gains the arms of section 4: on every shape of the check,
+with the prediction and without, the exact grouping has the best partition's ops and groups,
+every group it forms is a run the rule admits, and where the greedy walk is already at the best
+it is the greedy partition exactly; and no shape declines under it, or falls back from it, that
+the greedy walk emits.
+`VarkaExactGroupingSuite` holds the emitter to it on the mixed family - 20 loop methods at forty
+entries against 11, at the same ops - checks that the ladders, where greedy is at the best, emit
+byte for byte the same class, runs the mixed family at forty and two hundred entries against the
+reference evaluator on both bodies, holds a forced start to begin a group, and runs forty mixed
+entries under a 2000-byte budget, which their best partition's masked groups exceed: the
+measurement regroups the exact grouping until every method fits, without falling back to the
+greedy one, and the kernel answers. The composition fuzzer draws the switch on and off, from a random stream of its own so that
+every composition it drew before is drawn again; the IR
+fuzzer draws it like every boolean; the option audit's inventory lists it.
+
+The check's table, with the exact grouping as its last column, and the loop methods as shipped
+after the measurement's regroup:
+
+| family | groups: greedy, predicted, best, exact | loop methods as shipped: greedy, exact |
+|---|---:|---:|
+| fuzz int | 3296, 3296, 3296, 3296 | 3296, 3296 |
+| fuzz long | 2735, 2735, 2735, 2735 | 2735, 2735 |
+| wide int | 17856, 17862, 17851, 17851 | 17865, 17854 |
+| wide long | 12750, 12971, 12865, 12865 | 13028, 12927 |
+| size, `make_date` and cheap-tail ladders | as greedy | 213, 213 |
+| mixed families over one date | 170, 170, 88, 88 | 170, 88 |
+| the interleaved-date families | as greedy | 264, 264 |
+| coverage compositions | 2298, 2306, 2287, 2287 | 2313, 2295 |
+
+The time is 8.2's.
+
+### 8.2 Measured, and the default, 30 September 2026
+
+`VarkaWideKernelBenchmark` on a GitHub runner, an AMD EPYC 7763, JDK 25, a million rows in
+4096-row batches; the best of at least five iterations, in nanoseconds a row. The runs' averages
+sit far above their bests, as every section of this file does on a runner, so the bests are the
+reading. The two sections are added to the committed file beside task 190's, which keep their
+EPYC 9V45 numbers; each section names its machine.
+
+| shape | body | greedy | exact | change |
+|---|---|---:|---:|---:|
+| 100 mixed entries, 50 against 26 loop methods | null-free | 115.8 | 107.6 | -7.1% |
+| | every seventh row null | 145.9 | 127.9 | -12.3% |
+| 200 mixed entries, 100 against 51 loop methods | null-free | 225.6 | 214.3 | -5.0% |
+| | every seventh row null | 282.9 | 244.9 | -13.4% |
+| 400 ladder entries, 100 loop methods each | null-free | 821.0 | 827.4 | +0.8% |
+| | every seventh row null | 951.8 | 949.5 | -0.2% |
+
+One emission of the mixed family at two hundred entries took 83 ms greedily and 24 ms exactly.
+
+The predictions of 4.1, scored:
+
+1. **Holds.** The mixed family runs 5.0 to 13.4% faster a row, on both bodies, against the 3%
+   predicted, and more with nulls than without.
+2. **Holds.** The size ladder moves by +0.8% and -0.2%, within the run's noise, and its classes
+   are byte for byte the same.
+3. **Holds, the other way round.** The exact grouping emits faster, not up to 10% slower: both
+   switches build the class once, and the exact one builds 51 loop methods and their epilogues
+   where the greedy walk builds 100, which costs more than the dynamic program saves. The runner's
+   ratio of 3.5 overstates it - the greedy case runs first and carries more of the emitter's
+   warm-up - and on the laptop, over fifteen emissions each, it is between 1.5 and 2.
+4. **Holds.** Eight IR fuzz seeds at twenty thousand iterations and two thousand compositions
+   answer as the reference does with the switch drawn on and off, and the formability test finds
+   no group the rule would not form.
+
+**The default.** 1 to 3 hold, so `exactGrouping` is on by default and `canonical()` renders only
+its off state, `greedyGrouping`. The oracle moves where the grouping does: one block of fuzz shapes
+at each lane count, and the `useAVX` arms. The cost audit's grouping section loses
+eight loop methods on the wide int shapes and fifty on the wide long ones, and one wide long
+shape, which built once under the greedy walk, now takes a regroup under the weights and under
+the prediction alike; the prediction no longer gains a loop method on one of them. The price
+tables stay task 199's: the fit samples the greedy walk's groups, since a model of a method's bytes
+from its features does not change with which groups are chosen, so its accuracy section is as it
+was. The suites that compare the two name the greedy walk explicitly, as does task 199's list of
+wide shapes the prediction gives a loop method more, and the check's greedy and predicted columns
+ignore the switch.

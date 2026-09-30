@@ -39,7 +39,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.{FusedOutput, VarkaExpr
  * milestone's (`PLAN_MILESTONE_6.md` 1.3): every entry is fused or declined with a reason, the
  * compiler throws nothing, and a decline of an entry the table says fuses alone is one of the
  * two the record knows, a size decline naming the budget or the one-lane rule. Emit options
- * alternate between the default width and four lanes, the two the emitted-bytes oracle pins.
+ * alternate between the default width and four lanes, the two the emitted-bytes oracle pins,
+ * and the exact grouping (`PLAN_TASK_200.md`) is on or off at random, since the wide projections
+ * drawn here are where it changes the partition.
  *
  * Budget: `-Dvarka.fuzz.compositions` (default 40, under a minute); `-Dvarka.fuzz.seed` (default
  * fixed, shared with the IR fuzzer so a nightly varies both with one property). A failure names
@@ -64,9 +66,16 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite {
   private def width(rnd: Random, max: Int): Int =
     math.max(1, math.exp(rnd.nextDouble() * math.log(max)).toInt)
 
-  private def options(rnd: Random): VarkaEmitOptions =
-    if (rnd.nextBoolean()) VarkaEmitOptions.DEFAULTS
-    else VarkaEmitOptions.DEFAULTS.withLanesOverride(4)
+  /**
+   * The emit options of an iteration. The exact grouping is drawn from a stream of its own, so
+   * adding it left every composition the main stream draws, and the seeds that found past bugs,
+   * as they were.
+   */
+  private def options(rnd: Random, iteration: Int): VarkaEmitOptions = {
+    val lanes = if (rnd.nextBoolean()) VarkaEmitOptions.DEFAULTS
+      else VarkaEmitOptions.DEFAULTS.withLanesOverride(4)
+    lanes.withExactGrouping(new Random(~(seed * 1000003L + iteration)).nextBoolean())
+  }
 
   /**
    * The two reasons a composition may decline an entry that fuses alone: a size decline, whose
@@ -84,7 +93,7 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite {
     val list: Seq[NamedExpression] = picked.zipWithIndex.map { case (row, i) =>
       Alias(resolve(row.executable), s"c$i")()
     }
-    val opts = options(rnd)
+    val opts = options(rnd, iteration)
     val where = s"seed $seed iteration $iteration, ${picked.size} entries, options " +
       s"${opts.canonical}:\n  ${picked.map(_.executable).mkString("\n  ")}"
     val (fused, declined) = try {
@@ -108,7 +117,7 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite {
     val rnd = new Random(seed * 1000003L + 500000L + iteration)
     val picked = Seq.fill(width(rnd, 64))(predicates(rnd.nextInt(predicates.size)))
     val condition = picked.map(row => resolve(row.executable)).reduceLeft(And)
-    val opts = options(rnd)
+    val opts = options(rnd, iteration)
     val where = s"seed $seed iteration $iteration, ${picked.size} conjuncts, options " +
       s"${opts.canonical}:\n  ${picked.map(_.executable).mkString("\n  ")}"
     val specs = try {
