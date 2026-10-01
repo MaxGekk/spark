@@ -38,6 +38,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{IntRangeOps, Tru
   VarkaFusedKernel, VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache, VarkaShapeKey,
   VarkaVectorIR, WeekdayLeaf}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
+import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
 
@@ -47,7 +48,8 @@ import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, Column
  * machinery running beside the kernel - a residual or merge projection's compile or
  * evaluation - is not metered as a kernel failure.
  */
-private[execution] class VarkaKernelFailure(cause: Throwable) extends Exception(cause)
+private[execution] class VarkaKernelFailure(cause: Throwable, val kernel: String = null)
+  extends Exception(cause)
 
 /**
  * The batch was declined to the row engine: the kernel ran and returned a non-zero status,
@@ -57,7 +59,7 @@ private[execution] class VarkaKernelFailure(cause: Throwable) extends Exception(
  * and no stack trace, because it is control flow on a designed path, and [[serveBatch]] turns
  * it into the row-engine fallback.
  */
-private[execution] class VarkaBatchDeclined(val status: Int)
+private[execution] class VarkaBatchDeclined(val status: Int, val kernel: String = null)
   extends Exception(null, null, false, false)
 
 /**
@@ -236,6 +238,41 @@ private[sql] abstract class VarkaEvaluatorBase(
   private[execution] def emittedClassBytes: Option[Array[Byte]] = fusedRunner.map(_.classBytes)
 
   /**
+   * Runs this evaluator's kernel over the input batch into vectors `allocate` makes from
+   * `allocator`, appending each to `owned` as it is created (the caller closes `owned` on
+   * failure), and returns them by the kernel's output index. The projection evaluator calls it
+   * on itself and on each further kernel of a projection several kernels serve
+   * (`VarkaEmitOptions.severalKernels`), so every kernel's columns come from the one allocator
+   * and join the one output batch. Callers must have asked [[canRun]] first.
+   */
+  private[execution] def runKernel(
+      input: ColumnarBatch,
+      len: Int,
+      owned: mutable.ArrayBuffer[ColumnVector],
+      allocator: BufferAllocator,
+      allocate: (DataType, Int, Int, BufferAllocator) => BaseFixedWidthVector)
+      : Array[ColumnVector] = {
+    val plan = fusedPlan.get
+    val runner = fusedRunner.get
+    fillSources(runner, input, len)
+    val fixed = new Array[BaseFixedWidthVector](plan.outputs.size)
+    val columns = new Array[ColumnVector](plan.outputs.size)
+    var o = 0
+    plan.outputTypes.foreach { dataType =>
+      val vector = allocate(dataType, o, len, allocator)
+      fixed(o) = vector
+      columns(o) = new VarkaOwnedArrowColumnVector(vector)
+      owned += columns(o)
+      runner.dstData(o) = vector.getDataBuffer().memoryAddress()
+      runner.dstValidity(o) = vector.getValidityBuffer().memoryAddress()
+      o += 1
+    }
+    invokeFused(runner, len)
+    fixed.foreach(_.setValueCount(len))
+    columns
+  }
+
+  /**
    * Whether the kernel can serve this batch, or the caller has to fall back. The Arrow check
    * covers only the columns the fused sub-plan references: other entries put no constraint on
    * the input format beyond what `rowIterator` needs.
@@ -279,7 +316,7 @@ private[sql] abstract class VarkaEvaluatorBase(
         }
       ready match {
         case Left(declined) =>
-          recordDeclinedBatch(declined.status)
+          recordDeclinedBatch(declined.status, declined.kernel)
           fallbackPath
         case Right(false) =>
           metrics.warmupBatches.foreach(_ += 1)
@@ -290,12 +327,12 @@ private[sql] abstract class VarkaEvaluatorBase(
           } catch {
             // Not a failure: the kernel ran and said it could not answer for this batch.
             case e: VarkaBatchDeclined =>
-              recordDeclinedBatch(e.status)
+              recordDeclinedBatch(e.status, e.kernel)
               fallbackPath
             // A genuine kernel error is told apart from a failure in the per-row machinery
             // sharing the try by the marker invokeFused wraps it in.
             case e: VarkaKernelFailure =>
-              recordKernelFailure(e.getCause)
+              recordKernelFailure(e.getCause, e.kernel)
               fallbackPath
             case e if isCatchable(e) =>
               recordRowPathFailure(e)
@@ -317,7 +354,7 @@ private[sql] abstract class VarkaEvaluatorBase(
    * row path. A volatile read per batch once the shape is ready. Throws the
    * [[VarkaBatchDeclined]] the copy met, having handed the claim back.
    */
-  private def kernelReady(input: ColumnarBatch): Boolean = {
+  private[execution] def kernelReady(input: ColumnarBatch): Boolean = {
     if (!warmed) {
       true
     } else {
@@ -416,12 +453,17 @@ private[sql] abstract class VarkaEvaluatorBase(
     }
   }
 
-  /** The ghost fallback's bookkeeping: an error from the emitted kernel itself. */
-  private def recordKernelFailure(e: Throwable): Unit = {
-    logWarning(s"The Varka SIMD kernels $kernelIdentity failed on this batch; falling back " +
+  /**
+   * The ghost fallback's bookkeeping: an error from the emitted kernel itself. `kernel` names a
+   * further kernel of the projection when that is the one that failed, and is null for this
+   * evaluator's own.
+   */
+  private def recordKernelFailure(e: Throwable, kernel: String): Unit = {
+    val identity = Option(kernel).getOrElse(kernelIdentity)
+    logWarning(s"The Varka SIMD kernels $identity failed on this batch; falling back " +
       "to the per-row path.", e)
     metrics.fallbackBatchesKernel.foreach(_ += 1)
-    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.KERNEL_FAILURE, kernelIdentity,
+    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.KERNEL_FAILURE, identity,
       e.getClass.getName)
   }
 
@@ -448,14 +490,15 @@ private[sql] abstract class VarkaEvaluatorBase(
    * rather than warning: unlike the ghost fallback this is a designed outcome, not a defect,
    * and a batch of far-future dates would otherwise fill the log.
    */
-  private def recordDeclinedBatch(status: Int): Unit = {
-    logDebug(s"The Varka SIMD kernels $kernelIdentity declined this batch (status $status); " +
+  private def recordDeclinedBatch(status: Int, kernel: String): Unit = {
+    val identity = Option(kernel).getOrElse(kernelIdentity)
+    logDebug(s"The Varka SIMD kernels $identity declined this batch (status $status); " +
       "falling back to the per-row path.")
     metrics.fallbackBatchesDeclined.foreach(_ += 1)
     // The third field is the event's exceptionClass, and a declined batch has no exception:
     // passing the status there would put "1" in a JFR column a dashboard groups by class
     // name. The status is in the log line above, where it belongs.
-    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernelIdentity, "")
+    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, identity, "")
   }
 
   /**
@@ -602,6 +645,17 @@ private[sql] abstract class VarkaEvaluatorBase(
   /** A subclass's extra cleanup, run by the task-completion listener before the allocator
    * closes - the filter evaluator releases its selection buffer here. */
   protected def onTaskCleanup(): Unit = {}
+
+  /**
+   * Releases this evaluator's task-lifetime scratch - the derived inputs' buffers and the
+   * kernel's prefix scratch - for an owner whose cleanup does it: a further kernel of a
+   * projection allocates from the projection's allocator and registers no listener of its own,
+   * so the projection's evaluator releases its scratch before it closes that allocator.
+   */
+  private[execution] def releaseTaskScratch(): Unit = {
+    releaseDerivedScratch()
+    releaseKernelScratch()
+  }
 
   // The derived inputs' scratch buffers, one data and one validity buffer per kernel
   // input the evaluator derives, reused across batches and grown on demand under the filter's
