@@ -130,7 +130,7 @@ final class Slots {
   final Set<VarkaVectorIR> ownCond = new HashSet<>();
   /** Per condition node, dense body: the single mask local. */
   final Map<VarkaVectorIR, Integer> condMask = new HashMap<>();
-  /** Per node used more than once: the local its first vector lands in (DAG-CSE). */
+  /** Per node this body uses more than once: the local its first vector lands in (DAG-CSE). */
   final Map<VarkaVectorIR, Integer> sharedSlot = new HashMap<>();
   /** Per Greatest/Least (masked): the two operand temporaries the substitution needs. */
   final Map<VarkaVectorIR, int[]> pairTmp = new HashMap<>();
@@ -280,6 +280,18 @@ final class Slots {
    * does not read.
    */
   long skippedColumns;
+  /**
+   * The words this body still reads, or null for all of them ({@link #liveWords}): what
+   * {@link #fragmentKey} tells a dead word by, so that a fragment's key is known before any word
+   * slot is numbered and the use count of {@link #bodyUses} asks it as the lowering does.
+   */
+  Set<WordOwner> liveWordOwners;
+  /**
+   * The nodes without a shared slot this lane group has emitted, cleared with the walk's
+   * {@code computed} set: a second visit of one means {@link #bodyUses} counted it too low, which
+   * {@code VarkaVectorWalk.emitValue} refuses rather than recompute the node's subtree.
+   */
+  final Set<VarkaVectorIR> emittedUnshared = new HashSet<>();
 
   Slots(int numInputs, int numOutputs) {
     srcSeg = new int[numInputs];
@@ -370,6 +382,15 @@ final class Slots {
       }
     }
     final Set<VarkaVectorIR> body = emitted;
+    s.liveWordOwners = live;
+    // How often this body visits each node, which decides its shared slots (task 223); see
+    // bodyUses. Only a loop or epilogue body walks vectors, and only under CSE does the count
+    // decide anything, so no other plan pays for it.
+    final Map<VarkaVectorIR, Integer> bodyUses =
+        (mode == BodyMode.LOOP || mode == BodyMode.EPILOGUE) && analysis.options.cse()
+            ? analysis.bodyUses.computeIfAbsent(List.of(List.copyOf(outputIdx), group, dense),
+                k -> bodyUses(body, outputs, outputIdx, analysis, group, dense, s))
+            : Map.of();
     long treeColumns = 0L;
     long bodyColumns = 0L;
     for (VarkaVectorIR node : tree) {
@@ -567,7 +588,7 @@ final class Slots {
           if (tree.contains(node) && !body.contains(node)) {
             continue;
           }
-          if (cse && analysis.useCount.get(node) > 1 && !(node instanceof LiteralSlot)) {
+          if (cse && bodyUses.getOrDefault(node, 0) > 1 && !(node instanceof LiteralSlot)) {
             s.sharedSlot.put(node, slot++);
           }
           if (!dense && (node instanceof Greatest || node instanceof Least)) {
@@ -641,7 +662,7 @@ final class Slots {
                 : node instanceof TruncDateDynamic ? TRUNC_DYNAMIC_TMP_COUNT
                 : node instanceof DayOfYear || node instanceof WeekOfYear ? CHRONO_PREFIX_SLOTS + 1
                 : CHRONO_PREFIX_SLOTS;
-            FragmentKey key = fragmentKey(node, dense, s);
+            FragmentKey key = fragmentKey(node, dense, s, analysis);
             int[] prefix = shareChronoPrefix ? s.chronoPrefixTmp.get(key) : null;
             if (prefix == null) {
               prefix = new int[CHRONO_PREFIX_SLOTS];
@@ -910,6 +931,62 @@ final class Slots {
       }
     }
     return live;
+  }
+
+  /**
+   * How often a body visits each node it emits, which decides the node's shared slot (task 223):
+   * a node visited twice is computed once into its slot and loaded after, and a node visited once
+   * is computed in place, where a slot would cost a {@code dup} and a store nothing reads. Once per
+   * output root the body serves, and once per edge from a node it emits: a node is emitted once,
+   * into its slot when it has one, so each of its edges is followed once. Three kinds of edge
+   * are not followed. An {@link IsNotNull} reads its column's validity word and never its vector
+   * ({@code VarkaVectorWalk}'s condition lowering). And by the rule
+   * {@code VarkaChronoLowering.emitChronoPrefixOnce} emits by, only the first calendar node of a
+   * prefix fragment visits the date, since the others find the prefix in the fragment's locals,
+   * and none visits a date whose materialized prefix the body loads, unless
+   * {@link #visitsLoadedDate} says the body visits it all the same.
+   */
+  private static Map<VarkaVectorIR, Integer> bodyUses(Set<VarkaVectorIR> body,
+      List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, int group,
+      boolean dense, Slots s) {
+    Map<VarkaVectorIR, Integer> uses = new HashMap<>();
+    boolean share = analysis.options.shareChronoPrefix();
+    Set<FragmentKey> fragments = new HashSet<>();
+    for (VarkaVectorIR node : body) {
+      // The one edge of this node the emission does not follow, or null.
+      VarkaVectorIR skipped = null;
+      if (node instanceof IsNotNull isNotNull) {
+        skipped = isNotNull.child();
+      } else if (isChrono(node)) {
+        VarkaVectorIR date = chronoChild(node);
+        boolean first = !share || fragments.add(fragmentKey(node, dense, s, analysis));
+        boolean loaded = loadedPrefixDate(analysis, group, node) != null;
+        if (!first || (loaded && !visitsLoadedDate(dense, s, date))) {
+          skipped = date;
+        }
+      }
+      for (VarkaVectorIR child : childrenOf(node)) {
+        if (child == skipped) {
+          skipped = null;
+        } else {
+          uses.merge(child, 1, Integer::sum);
+        }
+      }
+    }
+    for (int o : outputIdx) {
+      uses.merge(outputs.get(o), 1, Integer::sum);
+    }
+    return uses;
+  }
+
+  /**
+   * Whether a body that loads {@code date}'s materialized prefix visits the date all the same: in
+   * a masked body, for a validity word that is the date's own and read by something the body
+   * emits ({@link #visitedMaterializedDates}). Asked by {@link #bodyUses} and by
+   * {@code VarkaChronoLowering.emitChronoPrefixOnce}, so that the count and the emission agree.
+   */
+  static boolean visitsLoadedDate(boolean dense, Slots s, VarkaVectorIR date) {
+    return !dense && s.visitedMaterializedDates.contains(date);
   }
 
   /**
@@ -1206,7 +1283,11 @@ final class Slots {
 
   /**
    * What makes two emissions of a fragment interchangeable: the kind, the child they decompose,
-   * and the reference the node's validity word resolves to.
+   * and the validity word the node's resolves to - its owner in the kernel's word algebra, or
+   * {@link #DEAD_WORD} for every word this body does not read. That is the word slot the node is
+   * planned, told apart the way the slots tell words apart ({@code assertWordAlgebraAgrees} holds
+   * them to it), but known before any slot is numbered, which is what lets {@link #bodyUses} count
+   * a fragment's visits with the key the lowering shares it by.
    *
    * <p>The word's presence in the key is now conservative rather than load-bearing, and the reason
    * recorded here no longer applies: {@code emitChronoPrefix} once carried the narrow-range guard,
@@ -1223,9 +1304,12 @@ final class Slots {
    * {@code word} from the key would recover the share, and is safe as far as this analysis goes,
    * but it changes emitted bytes and so wants its own measurement.
    *
-   * @param word the node's validity-word reference, or null in a dense body.
+   * @param word the node's word owner, {@link #DEAD_WORD}, or null in a dense body.
    */
-  record FragmentKey(FragmentKind kind, VarkaVectorIR child, Integer word) {}
+  record FragmentKey(FragmentKind kind, VarkaVectorIR child, Object word) {}
+
+  /** The word of a {@link FragmentKey} whose node's validity word this body never reads. */
+  private static final Object DEAD_WORD = new Object();
 
   /**
    * Which of this lane group's prefix fragments a tail in it reads the March-based month out
@@ -1235,7 +1319,7 @@ final class Slots {
    * so no sibling's order can change what it decides.
    */
   static void planFragmentsReadingMonth(List<VarkaVectorIR> outputs,
-      List<Integer> outputIdx, boolean dense, Slots s) {
+      List<Integer> outputIdx, boolean dense, Slots s, Analysis analysis) {
     s.fragmentsReadingMonth.clear();
     Set<VarkaVectorIR> seen = new HashSet<>();
     List<VarkaVectorIR> pending = new ArrayList<>();
@@ -1248,7 +1332,7 @@ final class Slots {
         continue;
       }
       if (isChrono(node) && tailReadsMarchMonth(node)) {
-        s.fragmentsReadingMonth.add(fragmentKey(node, dense, s));
+        s.fragmentsReadingMonth.add(fragmentKey(node, dense, s, analysis));
       }
       for (VarkaVectorIR child : childrenOf(node)) {
         pending.add(child);
@@ -1257,8 +1341,14 @@ final class Slots {
   }
 
   /** {@link FragmentKey} for {@code node}'s civil-from-days prefix; see that record's doc. */
-  static FragmentKey fragmentKey(VarkaVectorIR node, boolean dense, Slots s) {
-    return new FragmentKey(FragmentKind.CHRONO_PREFIX, chronoChild(node),
-        dense ? null : s.wordRef.get(node));
+  static FragmentKey fragmentKey(VarkaVectorIR node, boolean dense, Slots s,
+      Analysis analysis) {
+    Object word = null;
+    if (!dense) {
+      WordOwner owner = analysis.wordOwner.get(node);
+      word = owner instanceof WordOwner.Own own && s.liveWordOwners != null
+          && !s.liveWordOwners.contains(own) ? DEAD_WORD : owner;
+    }
+    return new FragmentKey(FragmentKind.CHRONO_PREFIX, chronoChild(node), word);
   }
 }

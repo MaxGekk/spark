@@ -19,6 +19,8 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 
+import scala.jdk.CollectionConverters._
+
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.varka.vector.DateVectorOps
 
@@ -295,6 +297,30 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
       loaderCse.release()
       loaderNoCse.release()
     }
+  }
+
+  test("a node shared across groups gets no slot in a body that uses it once") {
+    // Task 223: a shared slot is decided by the body's own use count, not the kernel's. Two
+    // outputs over one column, each a chain of 12 ops - two would pass the group budget of 16,
+    // and the chain depth stays under its limit - take a group each, and use the
+    // column twice in the kernel and once in each body, so no body parks it in a local that
+    // nothing reads. Two light outputs over the column in one group use it twice in that body,
+    // where its slot is stored and read - the control that the memo is still at work.
+    def chain(length: Int, literal: Int): VarkaVectorIR =
+      (0 until length).foldLeft[VarkaVectorIR](new ColumnRef(0)) { (acc, k) =>
+        new IntArith(if (k % 2 == 0) IntOp.ADD else IntOp.SUB, Overflow.WRAP, acc,
+          new LiteralSlot(literal))
+      }
+    // Per loop or epilogue method: the slots a `DUP; ASTORE` pair parks a value in, split into
+    // those the method reads back and those it never does.
+    val heavy = emitMulti(Seq(chain(12, 0), chain(12, 1)), 1, 2)
+    assert(methodNames(heavy).count(_.startsWith("loopDense")) >= 2,
+      "the two chains share a group, so the case is not exercised")
+    val unread = VarkaUnreadLocals.unreadSharedSlots(heavy._2).asScala
+    assert(unread.isEmpty, s"a value parked and never read: ${unread.mkString(", ")}")
+    val light = emitMulti(Seq(chain(1, 0), chain(1, 1)), 1, 2)
+    assert(!VarkaUnreadLocals.readSharedSlots(light._2).isEmpty,
+      "the column used twice in one body was not shared")
   }
 
   test("IfElse over every comparison matches the reference across per-column null patterns") {
