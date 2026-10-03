@@ -391,6 +391,21 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        at 400 entries runs 7.4% faster, and nothing slower ({@code PLAN_TASK_239.md} 9.2).
  *        Off is the body that builds them all, kept as the reference the suites and the
  *        benchmark compare against.
+ * @param planSize whether a kernel's size is planned before its first build (task 239's
+ *        successor, task 236): the driver is built alone first, so a driver past the byte budget
+ *        is split into stages in the first build under {@link #splitDriver}, or declines before
+ *        any build without it, naming the largest prefix of the outputs one class serves for the
+ *        compiler to cut at; and the prediction closes a group at the budgets less the fit's
+ *        margins ({@code VarkaEmitCostTable}), so that the class the first build makes is the one
+ *        kept. The measurement still has the last word: a method measured over a limit is
+ *        corrected by today's reaction, and anything left runs the size loop as the last resort.
+ *        Off by default until the runner measures it ({@code PLAN_TASK_236.md} 8); off is the
+ *        loop that reacts to each measurement in turn, kept as the reference.
+ * @param misdescribeDriverBytes a fault injector for the plan, like the two {@code misdescribe}
+ *        switches: bytes taken off what the drivers built alone measure, so a test can make the
+ *        plan admit a driver the build then finds over, and watch the correction. Zero in
+ *        production; rides the shape key like every option, so a mispredicted plan's classes and
+ *        declines are never served to an emission that did not ask for it.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -430,7 +445,9 @@ public record VarkaEmitOptions(
     boolean exactGrouping,
     boolean splitDriver,
     boolean severalKernels,
-    boolean elideUnreadLocals) {
+    boolean elideUnreadLocals,
+    boolean planSize,
+    int misdescribeDriverBytes) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -538,7 +555,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          false, true, true, true, true, true);
+          false, true, true, true, true, true, false, 0);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -623,6 +640,8 @@ public record VarkaEmitOptions(
       b.splitDriver = splitDriver;
       b.severalKernels = severalKernels;
       b.elideUnreadLocals = elideUnreadLocals;
+      b.planSize = planSize;
+      b.misdescribeDriverBytes = misdescribeDriverBytes;
     return b;
   }
 
@@ -666,6 +685,8 @@ public record VarkaEmitOptions(
     private boolean splitDriver;
     private boolean severalKernels;
     private boolean elideUnreadLocals;
+    private boolean planSize;
+    private int misdescribeDriverBytes;
 
     private Builder() {
     }
@@ -860,6 +881,16 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder planSize(boolean planSize) {
+      this.planSize = planSize;
+      return this;
+    }
+
+    public Builder misdescribeDriverBytes(int bytes) {
+      this.misdescribeDriverBytes = bytes;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -870,7 +901,7 @@ public record VarkaEmitOptions(
           mulHiDivide, narrowHalfSpecies, methodByteBudget, rangeSets, splitConditions,
           groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs,
           predictGrouping, driverOutputTable, exactGrouping, splitDriver, severalKernels,
-          elideUnreadLocals);
+          elideUnreadLocals, planSize, misdescribeDriverBytes);
     }
   }
 
@@ -917,6 +948,14 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withElideUnreadLocals(boolean enabled) {
     return toBuilder().elideUnreadLocals(enabled).build();
+  }
+
+  public VarkaEmitOptions withPlanSize(boolean enabled) {
+    return toBuilder().planSize(enabled).build();
+  }
+
+  public VarkaEmitOptions withMisdescribeDriverBytes(int bytes) {
+    return toBuilder().misdescribeDriverBytes(bytes).build();
   }
 
   public VarkaEmitOptions withRangeSets(boolean enabled) {
@@ -1071,7 +1110,8 @@ public record VarkaEmitOptions(
    * unchanged; so do the fields added since ({@code groupLocalSlots},
    * {@code materializeChronoPrefix}, {@code callSiteBudget}, {@code heavyGroupOutputs},
    * {@code predictGrouping}, {@code driverOutputTable}, {@code exactGrouping},
-   * {@code splitDriver}, {@code severalKernels}, {@code elideUnreadLocals}).
+   * {@code splitDriver}, {@code severalKernels}, {@code elideUnreadLocals}, {@code planSize},
+   * {@code misdescribeDriverBytes}).
    */
   public String canonical() {
     if (isDefault()) {
@@ -1097,6 +1137,9 @@ public record VarkaEmitOptions(
         + (exactGrouping ? "" : "|greedyGrouping")
         + (splitDriver ? "" : "|wholeDriver")
         + (severalKernels ? "" : "|oneKernel")
-        + (elideUnreadLocals ? "|elideUnreadLocals" : "") + ')';
+        + (elideUnreadLocals ? "|elideUnreadLocals" : "")
+        + (planSize ? "|planSize" : "")
+        + (misdescribeDriverBytes == 0 ? "" : "|misdescribeDriverBytes=" + misdescribeDriverBytes)
+        + ')';
   }
 }
