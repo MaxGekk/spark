@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.{CodeAndComment, CodeCo
   CodeFormatter, CodegenContext, CodeGenerator, CodegenFallback, EmptyBlock, ExprCode, FusedOutput,
   GenerateUnsafeProjection, JaninoCodeCompiler, JavaCode, JdkCodeCompiler, VarkaCensusCodegenAccess,
   VarkaDecline, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.plans.logical.{MergeRows, Project}
 import org.apache.spark.sql.catalyst.plans.logical.MergeRows.{Keep, Update}
@@ -413,7 +413,7 @@ class VarkaCodegenGiveUpSuite extends QueryTest with VarkaSharedSessions with Va
     // Varka's answer: the budget every emitted method is held to is in the JVM's unit and is
     // the JIT's own limit, measured on the class after it is built and regrouped until it holds
     // (`VarkaEmitterBudgetSuite`, "regroup before decline"; `VarkaHugeMethodSuite`).
-    assert(VarkaEmitOptions.DEFAULTS.methodByteBudget() ==
+    assert(VarkaMatrix.base.methodByteBudget() ==
       CodeGenerator.DEFAULT_JVM_HUGE_METHOD_LIMIT)
   }
 

@@ -92,44 +92,62 @@ base does not reach, and each is closed or listed.
 
 **3.2.3 What stays out, and why.** Whole suites whose subject is the defaults or the machine, not
 an answer: the bytes oracle and the cost audit (they compare with committed output of the
-defaults), `VarkaEmitOptionSuite` and the shape-hash pins, `VarkaAssemblySuite` (it reads the
-JIT's output) and the benchmarks. The list is in the runner with a reason per suite.
+defaults), `VarkaEmitOptionSuite`, `VarkaMatrixSuite`, `VarkaAssemblySuite` (it reads the JIT's
+output) and `VarkaWarmupEndToEndSuite` (it times a kernel's compilation, which a loaded machine
+moves). The list is in the runner with a reason per suite.
 
-**3.2.4 The skip list.** `sql/varka/matrix/skips.tsv`, one line per test a configuration is
-expected to break: the configuration, the suite, the test, the kind and the reason. Kind `fails`:
-the test is expected to fail, as every ANSI overflow test does under `checkIntOverflow=false`.
-`VarkaTestWatchdog`'s test wrapper, which 63 of the 68 Varka suites already run through (the
-other five mix it in), runs a listed test, cancels it with the reason if it fails, and fails it
-as a stale entry if it passes. Each entry names the smallest configuration that breaks the test,
-one option, since every configuration changes one.
+Within the suites that run, a test whose subject is the defaults' emitted structure - registered
+op counts, a `HugeMethodLimit` crossing, a loop-method count, bytes compared byte for byte, the
+size at which a shape declines - carries the tag `PinsDefaults`, and the matrix cancels it under
+any configuration: run there, it measures nothing new, and its failure would say only that a
+configuration changed what it pins. The first laptop run (4 October 2026, 14 configurations)
+showed such tests to be almost every failure.
+
+**3.2.4 The skip list.** `sql/varka/matrix/skips.tsv`, one line per answer test a configuration
+breaks by design: the configuration, the suite, the test, the kind and the reason. Kind `fails`:
+the test is expected to fail, as a guard test does under `guardDayProducers=false` and an ANSI
+overflow test under `checkIntOverflow=false`. `VarkaMatrixTests`, which `VarkaTestWatchdog`
+extends and the suites without the watchdog mix in, runs a listed test, cancels it with the
+reason if it fails, and fails it as a stale line if it passes.
 
 **3.2.5 The declining marker.** A configuration that makes the emitter decline everything would
-pass every SQL test vacuously: the row path answers instead. So the wrapper reads the shape
-cache's build and decline counts before and after each test, and the run records them per test;
-the defaults run is configuration zero. A test that fused under the defaults and fuses nothing
+pass every SQL test vacuously: the row path answers instead. So the SQL sessions register a
+query listener that sums each query's `numVarkaBatches` over its plan, the wrapper reads the sum
+before and after each test, and the run records each test's fused batches; the defaults run is
+configuration zero. (The shape cache's build count cannot serve: a shape built in an earlier
+test is a cache hit in a later one.) A test that fused under the defaults and fuses nothing
 under a configuration fails, unless the skip list marks it kind `declines` with a reason - a
 single output over a small `methodByteBudget` declines by design (VARKA-87) - and a `declines`
 entry whose test fuses fails as stale. VARKA-275, the guard on hidden kernel-failure fallbacks,
 is the per-test half of the same concern and lands independently.
 
 **3.2.6 Running it.** `dev/varka_matrix.sh [--config <name=value>]... [--all] [-j N]` builds once,
-then runs each configuration as its own ScalaTest runner JVM on the test classpath sbt exports,
-N at a time, so parallel runs share no sbt lock or target directory. Each writes a JUnit report
-and the per-test counts; the script prints one line per configuration and exits non-zero on any
-failure. On the laptop, `-j 8` keeps within memory (83 GB) and within what the 100 W charger
-supplies (3 October 2026: twenty JVMs drained the battery and flipped the power profile); a
-PR touching an option's code path runs its configurations this way in about one suite run's time.
+then runs each configuration's catalyst and SQL suites as two ScalaTest runner JVMs on the test
+classpath sbt exports, N JVMs at a time, each in its own directory, so parallel runs share no sbt
+lock, warehouse or temporary directory, and a shape a catalyst suite compiled is not warm when a
+SQL suite asks for its first query. Each JVM writes a JUnit report and its tests' fused batches;
+`dev/varka_matrix_report.py` prints one line per configuration and exits non-zero on any failure.
 
-The full matrix runs nightly on GitHub Actions, `varka-option-matrix.yml` on vecbricks/varka
-beside the fuzz nightly: one build job, then shards of configurations, each shard running the
-script with `-j 2` on a four-core runner; at about 14 minutes per configuration, 45
-configurations are roughly 11 runner-hours. PR CI is unchanged. The first nightly's times set
-the shard size.
+Measured on the laptop at ten JVMs, a configuration takes 15 to 18 minutes for catalyst and 22
+to 27 for SQL, about 40 JVM-minutes, so the 45 are about 31 JVM-hours: three hours at ten at a
+time, which the 60 W the laptop's USB-C supply negotiated does not quite cover (the battery fell
+3.6 W net). Three places run it:
 
-**3.2.7 Done when.** The nightly runs all 45 configurations green, every red test either fixed
-or listed with its reason; the first run's reach counts are closed or listed; the script runs a
-single configuration on the laptop; `sql/varka/AGENTS.md` says a new option gets its matrix arms
-from its table entry and a broken test a skip line with its reason.
+* **PR CI**, one configuration per pull request: the option the PR's files touch if there is one,
+  otherwise `configurations[PR number mod 45]`, so a rerun draws the same one and consecutive PRs
+  walk the list. A configuration that fails is rerun on the merge base; failing there too, the
+  job reports it pre-existing rather than blaming the PR. Two jobs, catalyst and SQL, about 25
+  minutes beside the existing ones.
+* **Weekly**, every configuration: `varka-option-matrix.yml` on Sunday beside the weekly full
+  Spark matrix, about 30 runner-hours on four-core runners, two configurations per job.
+* **The laptop**, by hand: a PR that changes an option's code path runs its configurations with
+  `--config`, in about one configuration's time.
+
+**3.2.7 Done when.** All 45 configurations pass on the laptop, every red test either tagged
+`PinsDefaults`, fixed, or listed with its reason; the PR job runs one configuration with the
+merge-base check; the weekly workflow runs all of them; `sql/varka/AGENTS.md` says a new option
+gets its matrix arms from its table entry, a structure test its tag, and a broken answer test a
+skip line with its reason.
 
 ### 3.3 What is deliberately unchanged
 
@@ -179,9 +197,9 @@ None.
 
 ## 8. Sequencing
 
-Step 1, one pull request. Step 2 in two: the base value, the wrapper's skip list and counts, the
-runner script and the first laptop run with its skip entries; then the nightly workflow, once the
-first PR has measured a configuration's time on the laptop.
+Step 1, one pull request. Step 2 in two: the base value, the wrapper's tag, skip list and counts,
+the runner script and a green laptop run of all 45 configurations; then the PR job and the weekly
+workflow.
 
 ## 9. Outcome
 

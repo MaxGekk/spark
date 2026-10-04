@@ -221,7 +221,7 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase {
     // count the option selects; the values and the validity must not depend on the choice.
     for (lanes <- Seq(2, 8); half <- Seq(false, true)) {
       val (name, bytes) = emitMulti(roots, 1, 1,
-        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withNarrowHalfSpecies(half))
+        VarkaMatrix.base.withLanesOverride(lanes).withNarrowHalfSpecies(half))
       // The store, counted from the bytes: one int store per narrowed root across the dense
       // bodies, the same across the masked epilogues (one per group, like the loop methods),
       // and nothing else on the int species - no int arithmetic, so the narrowing is the store
@@ -285,7 +285,7 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase {
       86399999999999L))
     for (lanes <- Seq(2, 8)) {
       val (kernel, loader) = load(emitMulti(root, 1, 0,
-        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)))
+        VarkaMatrix.base.withLanesOverride(lanes)))
       try {
         def status(length: Int, value: Int => Long, isNull: Int => Boolean): Int = {
           val arena = Arena.ofConfined()
@@ -334,8 +334,8 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase {
       new ConstDivide(new GuardedRange(new ColumnRef(0, LaneType.LONG), -(bound - 1), bound - 1),
         1000L, bound))
     val lowerings = Seq(
-      ("conversion", VarkaEmitOptions.DEFAULTS),
-      ("magic", VarkaEmitOptions.DEFAULTS.withUseAVX(2)))
+      ("conversion", VarkaMatrix.base),
+      ("magic", VarkaMatrix.base.withUseAVX(2)))
     for ((name, options) <- lowerings; lanes <- Seq(2, 8)) {
       val (kernel, loader) = load(emitMulti(root, 1, 0, options.withLanesOverride(lanes)))
       try {

@@ -21,7 +21,7 @@ import scala.jdk.CollectionConverters._
 
 import org.apache.spark.{SparkArithmeticException, SparkDateTimeException, SparkIllegalArgumentException}
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaEmitOptions, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaMatrix, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.internal.SQLConf
 
@@ -528,7 +528,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
     cacheDatesFarOffset(spark)
     cacheDatesFarOffset(varkaSpark)
     VarkaColumnarToRowExec.setEmitOptionsForTesting(
-      VarkaEmitOptions.DEFAULTS.withGuardDayProducers(false))
+      VarkaMatrix.base.withGuardDayProducers(false))
     try {
       val q = "SELECT year(date_add(d, off)) AS y FROM varka_dates_far_offset ORDER BY y"
       val df = varkaSpark.sql(q)
@@ -538,7 +538,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
       assert(varkaMetric(plan, "numVarkaBatches") > 0L)
     } finally {
-      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
     }
   }
 
@@ -559,13 +559,13 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       checkDifferential(spark, varkaSpark, query, expectFused = true)
     }
     VarkaColumnarToRowExec.setEmitOptionsForTesting(
-      VarkaEmitOptions.DEFAULTS.withValidityByWidth(false))
+      VarkaMatrix.base.withValidityByWidth(false))
     try {
       for (query <- queries) {
         checkDifferential(spark, varkaSpark, query, expectFused = true)
       }
     } finally {
-      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
     }
   }
 
@@ -606,13 +606,13 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
         "SELECT year(d) AS y, month(d) AS m FROM varka_dates_big ORDER BY y, m")
       for (byWord <- Seq(false, true)) {
         VarkaColumnarToRowExec.setEmitOptionsForTesting(
-          VarkaEmitOptions.DEFAULTS.withValidityByWord(byWord))
+          VarkaMatrix.base.withValidityByWord(byWord))
         try {
           for (query <- queries) {
             checkDifferential(spark, varkaSpark, query, expectFused = true)
           }
         } finally {
-          VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+          VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
         }
       }
     } finally {
@@ -650,13 +650,13 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       "SELECT greatest(d, d2) AS g, least(d, d2) AS l FROM varka_date_pairs ORDER BY g, l")
     for (on <- Seq(true, false)) {
       VarkaColumnarToRowExec.setEmitOptionsForTesting(
-        VarkaEmitOptions.DEFAULTS.withValidityByBitmap(on))
+        VarkaMatrix.base.withValidityByBitmap(on))
       try {
         for (query <- queries) {
           checkDifferential(spark, varkaSpark, query, expectFused = true)
         }
       } finally {
-        VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+        VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
       }
     }
   }

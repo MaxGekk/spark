@@ -18,7 +18,7 @@
 package org.apache.spark.sql.execution
 
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 
 /**
@@ -53,7 +53,7 @@ class VarkaSplitConditionSuite extends QueryTest with VarkaSharedSessions with V
 
   private def withKeys(body: => Unit): Unit = {
     VarkaColumnarToRowExec.setEmitOptionsForTesting(
-      VarkaEmitOptions.DEFAULTS.withRangeSets(false).withSplitConditions(true))
+      VarkaMatrix.base.withRangeSets(false).withSplitConditions(true))
     try {
       cacheKeys(spark)
       cacheKeys(varkaSpark)
@@ -61,7 +61,7 @@ class VarkaSplitConditionSuite extends QueryTest with VarkaSharedSessions with V
         Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_split_keys"))
       }
     } finally {
-      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
     }
   }
 

@@ -20,7 +20,8 @@ package org.apache.spark.sql.execution
 import java.time.LocalDate
 
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaMatrix}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 
 /**
  * The evaluator's side of several kernels per projection (`VarkaEmitOptions.severalKernels`,
@@ -63,7 +64,7 @@ class VarkaSeveralKernelsSuite extends QueryTest with VarkaSharedSessions {
       checkAnswer(actual, spark.sql(query))
       assertKernelsRan(plan)
     } finally {
-      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
     }
   }
 
@@ -77,7 +78,7 @@ class VarkaSeveralKernelsSuite extends QueryTest with VarkaSharedSessions {
     withWideDates {
       val outputs = (0 until columns).map(c => s"date_add(c$c, ${c % 9 - 4}) AS a$c") :+
         "c3" :+ "i" :+ "concat(cast(i AS STRING), 'x') AS s"
-      check(VarkaEmitOptions.DEFAULTS.withSeveralKernels(true),
+      check(VarkaMatrix.base.withSeveralKernels(true),
         s"SELECT ${outputs.mkString(", ")} FROM $view")
     }
   }
@@ -90,28 +91,29 @@ class VarkaSeveralKernelsSuite extends QueryTest with VarkaSharedSessions {
       val outputs = (1 to 800).map { k =>
         s"greatest(add_months(c0, $k), date_add(c0, $k), last_day(c0)) AS g$k"
       } ++ (1 until columns).map(c => s"date_add(c$c, 1) AS a$c") :+ "i"
-      check(VarkaEmitOptions.DEFAULTS, s"SELECT ${outputs.mkString(", ")} FROM $view")
+      check(VarkaMatrix.base, s"SELECT ${outputs.mkString(", ")} FROM $view")
     }
   }
 
   test("under planSize eight hundred greatest entries, past the driver's ceiling with the split " +
-      "driver off, answer from two kernels the plan cut without a search (VARKA-236)") {
+      "driver off, answer from two kernels the plan cut without a search (VARKA-236)",
+      PinsDefaults) {
     withWideDates {
       val outputs = (1 to 800).map { k =>
         s"greatest(add_months(c0, $k), date_add(c0, $k), last_day(c0)) AS g$k"
       } :+ "i"
-      check(VarkaEmitOptions.DEFAULTS.withSplitDriver(false).withSeveralKernels(true)
+      check(VarkaMatrix.base.withSplitDriver(false).withSeveralKernels(true)
         .withPlanSize(true), s"SELECT ${outputs.mkString(", ")} FROM $view")
     }
   }
 
   test("two hundred greatest entries, past the unrolled driver's ceiling, answer from two " +
-      "kernels") {
+      "kernels", PinsDefaults) {
     withWideDates {
       val outputs = (1 to 200).map { k =>
         s"greatest(add_months(c0, $k), date_add(c0, $k), last_day(c0)) AS g$k"
       } :+ "i"
-      check(VarkaEmitOptions.DEFAULTS.withDriverOutputTable(false).withSeveralKernels(true),
+      check(VarkaMatrix.base.withDriverOutputTable(false).withSeveralKernels(true),
         s"SELECT ${outputs.mkString(", ")} FROM $view")
     }
   }

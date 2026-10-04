@@ -21,6 +21,7 @@ import java.lang.foreign.{Arena, ValueLayout}
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isLoop
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
@@ -93,9 +94,9 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
   // VARKA-70: validity as bitmap algebra in the driver.
   // ---------------------------------------------------------------------------------------------
 
-  private val bitmapOn = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(true)
+  private val bitmapOn = VarkaMatrix.base.withValidityByBitmap(true)
 
-  private val bitmapOff = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
+  private val bitmapOff = VarkaMatrix.base.withValidityByBitmap(false)
 
   private val supportClass = "org.apache.spark.sql.varka.vector.VarkaVectorSupport"
 
@@ -163,31 +164,31 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
   }
 
   test("the validity work per masked loop method, as VARKA-70.md 3.3 registered " +
-      "it, and no IntVector op moves") {
+      "it, and no IntVector op moves", PinsDefaults) {
     val d = new ColumnRef(0)
     val d2 = new ColumnRef(1)
     val lit = new LiteralSlot(0)
     // The Cond pair needs one method to be the mixed method the table describes: a Year weighs
     // 38 against GROUP_BUDGET's 16, so at the default budget the two outputs split.
-    val oneMethod = VarkaEmitOptions.DEFAULTS.withGroupBudget(200)
+    val oneMethod = VarkaMatrix.base.withGroupBudget(200)
     val rows: Seq[(String, Seq[VarkaVectorIR], Int, VarkaEmitOptions, Int, Int)] = Seq(
-      ("year(d)", Seq(new Year(d)), 1, VarkaEmitOptions.DEFAULTS, 2, 0),
+      ("year(d)", Seq(new Year(d)), 1, VarkaMatrix.base, 2, 0),
       ("year, month, dayofmonth, quarter over d",
         Seq(new Year(d), new Month(d), new DayOfMonth(d), new Quarter(d)), 1,
-        VarkaEmitOptions.DEFAULTS, 5, 0),
-      ("next_day(d, k), column kernel", Seq(new NextDay(d, d2)), 2, VarkaEmitOptions.DEFAULTS,
+        VarkaMatrix.base, 5, 0),
+      ("next_day(d, k), column kernel", Seq(new NextDay(d, d2)), 2, VarkaMatrix.base,
         3, 0),
       // The pick's null substitution reads both operand words for the value, whether or not
       // its own word is wanted - the consumer VARKA-70.md 2.2 did not list - so its two
       // reads stay and only the write goes. The plan's 3.3 registered 0 here off 2.2's
       // inventory; this assertion is what corrected it.
-      ("greatest(d, d2)", Seq(new Greatest(d, d2)), 2, VarkaEmitOptions.DEFAULTS, 3, 2),
+      ("greatest(d, d2)", Seq(new Greatest(d, d2)), 2, VarkaMatrix.base, 3, 2),
       ("year(date_add(d, off)), guarded", Seq(new Year(new AddDays(d, d2))), 2,
-        VarkaEmitOptions.DEFAULTS, 3, 2),
+        VarkaMatrix.base, 3, 2),
       ("year(d) beside d < lit, one method",
         Seq(new Year(d), new Compare(CompareOp.LT, d, lit)), 1, oneMethod, 3, 2),
       ("if(d < d2, d, d2)", Seq(new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)), 2,
-        VarkaEmitOptions.DEFAULTS, 3, 3))
+        VarkaMatrix.base, 3, 3))
     for ((name, roots, n, base, today, after) <- rows) {
       val off = emitMulti(roots, n, 1, base.withValidityByBitmap(false))._2
       val on = emitMulti(roots, n, 1, base.withValidityByBitmap(true))._2
@@ -264,7 +265,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     assert(counts(Seq(new Compare(CompareOp.LT, d, d2)), 2) === (0, 0))
     // With the option off nothing is served and nothing is declined - the pass does not run,
     // so a shape that would have been declined is not counted as one.
-    val off = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
+    val off = VarkaMatrix.base.withValidityByBitmap(false)
     assert(counts(Seq(new Year(d)), 1, 0, off) === (0, 0))
     assert(counts(Seq(new DateDiff(new Greatest(d, d2), new Greatest(d3, d4))), 4, 0, off)
       === (0, 0))
@@ -305,7 +306,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
       bitmapOff.withMisdescribeWordLiveness(true))._2.nonEmpty)
   }
 
-  test("a group that loads a materialized prefix keeps no word for a guard it does not emit") {
+  test("a group that loads a materialized prefix keeps no word for a guard it does not emit",
+      PinsDefaults) {
     // Two outputs that decompose one guarded date in different loop-method groups: the first
     // computes the prefix and stores it for the second, which loads it and emits neither the date
     // nor the range check of the guard over it - the first group ran that check over the same
@@ -321,7 +323,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     val sum = new GuardedDay(new AddDays(c1, new ColumnRef(2)))
     // Set rather than inherited, so that a change of the default cannot leave this test passing
     // without a loaded prefix to test.
-    val defaults = VarkaEmitOptions.DEFAULTS.withMaterializeChronoPrefix(true)
+    val defaults = VarkaMatrix.base.withMaterializeChronoPrefix(true)
     val shapes = Seq(
       // Under every default: last_day(c0) between the two keeps them in different groups.
       ("year, last_day and month of a guarded column",
@@ -360,7 +362,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
   }
 
   test("a masked method whose every word is dead is its dense twin's bytes - one " +
-      "body, not two") {
+      "body, not two", PinsDefaults) {
     // No per-group read, no per-group write, no null-state prologue, no own-word slot: what is
     // left is the dense method. Asserted on size rather than on the byte string because the
     // two methods differ in name inside the constant pool, not in code; a size match on both
@@ -400,7 +402,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     for (once <- Seq(true, false)) {
       checkMatrix(roots, 1, Array.empty[Int], lengths, nullFree, data = inRangeDays,
         ctx = s"denseValidityOnce=$once",
-        options = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(once))
+        options = VarkaMatrix.base.withDenseValidityOnce(once))
     }
   }
 
@@ -413,7 +415,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     for (once <- Seq(true, false)) {
       checkMatrix(Seq(root), 2, Array.empty[Int], Seq(17, 64, 65, 1000),
         nullPatterns.map(p => Seq(p._2, p._2)), ctx = s"cond, denseValidityOnce=$once",
-        options = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(once))
+        options = VarkaMatrix.base.withDenseValidityOnce(once))
     }
   }
 
@@ -426,8 +428,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
         (Seq[VarkaVectorIR](new Year(col)), "year"),
         (Seq[VarkaVectorIR](new Year(col), new Month(col)), "year+month"),
         (Seq[VarkaVectorIR](chain(4)), "chain4"))) {
-      val off = emitMulti(roots, 1, 4, VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false))._2
-      val on = emitMulti(roots, 1, 4, VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(true))._2
+      val off = emitMulti(roots, 1, 4, VarkaMatrix.base.withDenseValidityOnce(false))._2
+      val on = emitMulti(roots, 1, 4, VarkaMatrix.base.withDenseValidityOnce(true))._2
       for (body <- Seq("loopMasked0", "epilogueMasked0")) {
         assert(VarkaEmitterTestSupport.codeSize(off, body) ===
           VarkaEmitterTestSupport.codeSize(on, body),
@@ -446,7 +448,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
 
   private val intVector = "jdk.incubator.vector.IntVector"
 
-  test("a whole lane group calls the helper named for the emitted width") {
+  test("a whole lane group calls the helper named for the emitted width", PinsDefaults) {
     // The emitter knows the lane count when it writes the bytes, so the callee can carry it and
     // the four-arm switch on the width disappears from the call. Asserted on the names in the
     // class rather than on a timing, and by exact match: "orValidityBitsAt" is a prefix of
@@ -457,7 +459,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
       // bitmap is copied once by the driver - so the helpers this test names are reached
       // through the per-group reference variant, which is what the naming is pinned on.
       val bytes = emitMulti(roots, 1, 0,
-        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withValidityByBitmap(false))._2
+        VarkaMatrix.base.withLanesOverride(lanes).withValidityByBitmap(false))._2
       val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
       assert(called.contains(s"validityBitsAt$lanes"), s"$lanes lanes: $called")
       assert(called.contains(s"orValidityBitsAt$lanes"), s"$lanes lanes: $called")
@@ -481,7 +483,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     // The per-group reference arm since VARKA-70: the shipped year(d) makes no per-group
     // validity call, and it is the general pair's naming this test pins.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
-      VarkaEmitOptions.DEFAULTS.withLanesOverride(32).withValidityByBitmap(false))._2
+      VarkaMatrix.base.withLanesOverride(32).withValidityByBitmap(false))._2
     val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
     assert(called.contains("validityBitsAt") && called.contains("orValidityBitsAt"), s"$called")
     assert(!called.exists(_.matches("(or)?ValidityBitsAt\\d+")), s"$called")
@@ -489,12 +491,12 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
       .contains("SPECIES_PREFERRED"))
   }
 
-  test("with the option off the emission is the pre-task form") {
+  test("with the option off the emission is the pre-task form", PinsDefaults) {
     // The A/B's other arm, and the reference variant: no width anywhere - not in a callee name
     // and not in the species - so what the benchmark compares against is what shipped before.
     // Both of VARKA-46's arms are reached through VARKA-70's per-group reference arm now.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
-      VarkaEmitOptions.DEFAULTS.withValidityByWidth(false).withValidityByBitmap(false))._2
+      VarkaMatrix.base.withValidityByWidth(false).withValidityByBitmap(false))._2
     val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
     assert(called.contains("validityBitsAt") && called.contains("orValidityBitsAt"), s"$called")
     assert(!called.exists(_.matches("(or)?ValidityBitsAt\\d+")), s"$called")
@@ -533,7 +535,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     val filter: VarkaVectorIR = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
     val lits = Array(3)
     for (lanes <- Seq(4, 8, 16)) {
-      val perGroup = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+      val perGroup = VarkaMatrix.base.withLanesOverride(lanes)
       val byWord = perGroup.withValidityByWord(true)
       for ((roots, shape) <- Seq(
           Seq(blend) -> "one blend",
@@ -604,14 +606,14 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
       .map(VarkaEmitterTestSupport.codeSize(named._2, _))
 
   test("the word writer reaches the outputs that keep a per-group write, and only " +
-      "those") {
+      "those", PinsDefaults) {
     // The blast radius, asserted rather than described. An output VARKA-45 fills once, and one
     // VARKA-70's pass writes whole, must emit the same bytes under both arms - the word writer
     // has nothing to do for them - while an output that still writes per lane group must not.
     // This is also what stops the two arms collapsing into one kernel, which is exactly how
     // VARKA-46's A/B silently began timing itself (see the VARKA-76 test below).
     val lanes = 16
-    val perGroup = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+    val perGroup = VarkaMatrix.base.withLanesOverride(lanes)
     val byWord = perGroup.withValidityByWord(true)
     // `year(d)` on a dense batch is VARKA-45's fill; on a masked batch with the bitmap pass on
     // it is VARKA-70's whole-bitmap write. Neither keeps a per-group write, so both arms agree.
@@ -638,13 +640,14 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     // mask `(1L << lanes) - 1` is zero, because Java shifts modulo 64 - the arm would write
     // nothing but zeros. No int lane count this JVM offers reaches it, which is exactly why it
     // is worth an assertion: the guard is unreachable today and has to survive a wider one.
-    val wide = VarkaEmitOptions.DEFAULTS.withLanesOverride(64)
+    val wide = VarkaMatrix.base.withLanesOverride(64)
     assert(bodySizes(emitMulti(Seq(blend), 1, 1, wide)) ===
       bodySizes(emitMulti(Seq(blend), 1, 1, wide.withValidityByWord(true))),
       "a 64-lane group must not word-write, since its lane mask would be zero")
   }
 
-  test("the write-count ladder really is one shape family, so its steps are runtime") {
+  test("the write-count ladder really is one shape family, so its steps are runtime",
+      PinsDefaults) {
     // Read the ladder's own emissions before reading its numbers. VARKA-76.md 3.2 built
     // these four rungs to "hold the shape family constant and vary only the count", and VARKA-47
     // measured a step at k=3 that neither task's model predicts: both arms that write per lane
@@ -668,19 +671,20 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
         new SubDays(new ColumnRef(0), new LiteralSlot(j)))
     }
     def loopMethods(k: Int): Int =
-      methodNames(emitMulti(rung(k), 1, 4, VarkaEmitOptions.DEFAULTS))
+      methodNames(emitMulti(rung(k), 1, 4, VarkaMatrix.base))
         .count(isLoop(_, false))
     assert((1 to 4).map(loopMethods) === Seq(1, 1, 1, 1),
       "a rung emitting two loop methods would pay every per-method cost twice")
     val bytes = (1 to 4).map(k =>
       VarkaEmitterTestSupport.codeSize(
-        emitMulti(rung(k), 1, 4, VarkaEmitOptions.DEFAULTS)._2, "loopMasked0"))
+        emitMulti(rung(k), 1, 4, VarkaMatrix.base)._2, "loopMasked0"))
     val steps = bytes.sliding(2).map(p => p(1) - p(0)).toSeq
     assert(steps.forall(step => step > 100 && step < 160),
       s"the rungs should grow by one write's worth of bytes each: $bytes (steps $steps)")
   }
 
-  test("every arm of the width-specialisation A/B still emits two different kernels") {
+  test("every arm of the width-specialisation A/B still emits two different kernels",
+      PinsDefaults) {
     // The failure this task is downstream of, made loud. VARKA-70's pass removed the per-group
     // validity call for a served root, which left both of VARKA-46's arms emitting the same
     // bytes - each pair timed one kernel against itself, and the committed numbers said so for
@@ -690,7 +694,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     // Asserted on the loop methods rather than the whole class, since `emitMulti` gives each
     // class a fresh name and the name is in the bytes.
     val col = new ColumnRef(0)
-    val perGroup = VarkaEmitOptions.DEFAULTS.withValidityByBitmap(false)
+    val perGroup = VarkaMatrix.base.withValidityByBitmap(false)
     val general = perGroup.withValidityByWidth(false)
     def layout(bytes: (String, Array[Byte])): Seq[(String, Int)] =
       methodNames(bytes).filter(n => isLoop(n))
@@ -707,7 +711,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
         1, 0, perGroup, general),
       ("filter d < literal",
         Seq[VarkaVectorIR](new Compare(CompareOp.LT, col, new LiteralSlot(0))), 1, 1,
-        VarkaEmitOptions.DEFAULTS, general))
+        VarkaMatrix.base, general))
     for ((name, roots, inputs, lits, specialised, other) <- pairs) {
       assert(layout(emitMulti(roots, inputs, lits, specialised))
         !== layout(emitMulti(roots, inputs, lits, other)),
@@ -720,7 +724,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     // for a `Cond` root, since the bitmap pass never serves one - asserted here rather than
     // assumed, because if it is not inert that pair measures two changes at once.
     val cond = Seq[VarkaVectorIR](new Compare(CompareOp.LT, col, new LiteralSlot(0)))
-    assert(layout(emitMulti(cond, 1, 1, VarkaEmitOptions.DEFAULTS))
+    assert(layout(emitMulti(cond, 1, 1, VarkaMatrix.base))
       === layout(emitMulti(cond, 1, 1, perGroup)),
       "validityByBitmap is not inert for a Cond root, so the filter A/B varies two things")
   }
@@ -742,12 +746,12 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     for (byWidth <- Seq(true, false)) {
       checkMatrix(roots, 1, Array.empty[Int], lengths, nullPatterns.map(p => Seq(p._2)),
         data = inRangeDays, ctx = s"validityByWidth=$byWidth",
-        options = VarkaEmitOptions.DEFAULTS.withValidityByWidth(byWidth)
+        options = VarkaMatrix.base.withValidityByWidth(byWidth)
           .withValidityByBitmap(false))
     }
   }
 
-  test("the specialised helpers are still reached under the bitmap pass default") {
+  test("the specialised helpers are still reached under the bitmap pass default", PinsDefaults) {
     // What the two A/B tests above cannot check once they run on the reference arm: that the
     // width-specialised writer is still emitted, and still right, on the shipped default. A
     // root the bitmap pass declines is what keeps a per-group write there - here a tree that
@@ -756,10 +760,10 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     val mixed = new DateDiff(new Greatest(new ColumnRef(0), new ColumnRef(1)),
       new Greatest(new ColumnRef(2), new ColumnRef(3)))
     assert(VarkaLoopEmitter.bitmapPassCounts(Seq[VarkaVectorIR](mixed).asJava, 4, 0,
-      VarkaEmitOptions.DEFAULTS) === Array(0, 1), "the fixture is meant to be declined")
+      VarkaMatrix.base) === Array(0, 1), "the fixture is meant to be declined")
     for ((lanes, _) <- Seq(2 -> 64, 4 -> 128, 8 -> 256, 16 -> 512)) {
       val bytes = emitMulti(Seq[VarkaVectorIR](mixed), 4, 0,
-        VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))._2
+        VarkaMatrix.base.withLanesOverride(lanes))._2
       val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
       assert(called.contains(s"orValidityBitsAt$lanes"),
         s"$lanes lanes: the default path lost the specialised writer: $called")
@@ -768,7 +772,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
       checkMatrix(Seq(mixed), 4, Array.empty[Int], Seq(17, 64, 65, 1000, 4095),
         nullPatterns.map(p => Seq(p._2, p._2, p._2, p._2)),
         ctx = s"declined root, validityByWidth=$byWidth",
-        options = VarkaEmitOptions.DEFAULTS.withValidityByWidth(byWidth))
+        options = VarkaMatrix.base.withValidityByWidth(byWidth))
     }
   }
 
@@ -781,7 +785,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     for (byWidth <- Seq(true, false)) {
       checkMatrix(Seq(root), 2, Array.empty[Int], Seq(17, 64, 65, 1000, 4095),
         nullPatterns.map(p => Seq(p._2, p._2)), ctx = s"cond, validityByWidth=$byWidth",
-        options = VarkaEmitOptions.DEFAULTS.withValidityByWidth(byWidth))
+        options = VarkaMatrix.base.withValidityByWidth(byWidth))
     }
   }
 
@@ -809,7 +813,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
       checkMatrix(roots, 1, Array(3), Seq(7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095),
         nullPatterns.map(p => Seq(p._2)), data = inRangeDays, forceMasked = true,
         ctx = s"validityOrFirst=$orFirst",
-        options = VarkaEmitOptions.DEFAULTS.withValidityOrFirst(orFirst)
+        options = VarkaMatrix.base.withValidityOrFirst(orFirst)
           .withValidityByBitmap(false))
     }
   }
@@ -823,7 +827,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
     for (lanes <- Seq(2, 4, 8, 16)) {
       checkMatrix(Seq[VarkaVectorIR](new AddDays(col, new LiteralSlot(0))), 1, Array(3),
         Seq(17, 64, 65, 1000), nullPatterns.map(p => Seq(p._2)), ctx = s"lanesOverride=$lanes",
-        options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+        options = VarkaMatrix.base.withLanesOverride(lanes))
     }
   }
 }

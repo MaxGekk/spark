@@ -18,11 +18,12 @@
 package org.apache.spark.sql.execution
 
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaMatrix, VarkaMatrixTests}
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
 import org.apache.spark.sql.execution.columnar.{ArrowCachedBatchSerializer, InMemoryRelation}
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.util.QueryExecutionListener
 
 /**
  * Shared session setup and helpers for the Varka sql/core suites (VARKA-7). Data is cached with
@@ -42,8 +43,13 @@ import org.apache.spark.sql.test.SharedSparkSession
  * the Varka fusion boundary is visible in the executed plan. `InMemoryRelation.clearSerializer()`
  * resets the process-wide serializer singleton around session creation and afterwards so it is
  * not leaked to later suites.
+ *
+ * Under the option matrix (`VarkaMatrix`) every kernel is emitted with the matrix's base options,
+ * and `varkaSpark`'s queries report the batches the Varka kernels processed, so the runner can
+ * tell a test that still fuses from one the row path answered alone.
  */
-trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelper {
+trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelper
+    with VarkaMatrixTests {
 
   protected var varkaSpark: SparkSession = _
   protected var disabledSpark: SparkSession = _
@@ -66,10 +72,20 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
     varkaSpark = newSession(varkaEnabled = true)
     SparkSession.clearActiveSession()
     SparkSession.clearDefaultSession()
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
+    varkaSpark.listenerManager.register(VarkaSharedSessions.fusedBatchCounter)
+    VarkaMatrix.fusedBatches = () => {
+      spark.sparkContext.listenerBus.waitUntilEmpty()
+      VarkaSharedSessions.fusedBatchCount.get()
+    }
   }
 
   override protected def afterAll(): Unit = {
     InMemoryRelation.clearSerializer()
+    VarkaMatrix.fusedBatches = () => -1L
+    if (varkaSpark != null) {
+      varkaSpark.listenerManager.unregister(VarkaSharedSessions.fusedBatchCounter)
+    }
     varkaSpark = null
     disabledSpark = null
     super.afterAll()
@@ -489,5 +505,24 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   protected def assertNotFused(plan: SparkPlan): Unit = {
     assert(find(plan)(isVarkaNode).isEmpty,
       s"expected no Varka node in the plan:\n${plan.treeString}")
+  }
+}
+
+private object VarkaSharedSessions {
+
+  /** Batches the Varka kernels processed in the queries `varkaSpark` ran, over the JVM. */
+  val fusedBatchCount = new java.util.concurrent.atomic.AtomicLong
+
+  /** Sums each successful query's `numVarkaBatches` over its plan into [[fusedBatchCount]]. */
+  val fusedBatchCounter: QueryExecutionListener = new QueryExecutionListener {
+    override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
+      val batches = qe.executedPlan.collectWithSubqueries {
+        case node if node.metrics.contains("numVarkaBatches") =>
+          node.metrics("numVarkaBatches").value
+      }
+      fusedBatchCount.addAndGet(batches.sum)
+    }
+
+    override def onFailure(funcName: String, qe: QueryExecution, exception: Exception): Unit = {}
   }
 }

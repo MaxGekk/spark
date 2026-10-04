@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
 /**
@@ -38,7 +39,7 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
     VarkaEmitCostCorpus.wide().asScala ++ VarkaEmitCostCorpus.ladders().asScala
 
   // The shipped options elide the unread locals; the reference form builds them all.
-  private val elided = VarkaEmitOptions.DEFAULTS.withLanesOverride(VarkaEmitCostCorpus.LANES)
+  private val elided = VarkaMatrix.base.withLanesOverride(VarkaEmitCostCorpus.LANES)
     .withElideUnreadLocals(true)
   private val built = elided.withElideUnreadLocals(false)
 
@@ -72,7 +73,7 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
   }
 
   test("under elideUnreadLocals no loop or epilogue method in the cost corpus stores a " +
-      "reference local it never reads") {
+      "reference local it never reads", PinsDefaults) {
     val on = census(elided)
     assert(on.isEmpty, s"unread reference locals under the switch: $on")
     // Without CSE the body counts its uses for the value columns alone (Slots.plan).
@@ -87,7 +88,7 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
   }
 
   test("under elideUnreadLocals a group that loads a materialized prefix loads what each " +
-      "calendar tail reads, under every option its reads depend on") {
+      "calendar tail reads, under every option its reads depend on", PinsDefaults) {
     // The arms of VarkaChronoLowering.prefixReads that depend on the options - the century
     // without the Julian map, the day of year without the Neri-Schneider month, trunc's
     // recomposing form - matter only where a later group loads a prefix, which the corpus may
@@ -110,7 +111,7 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
       (new TruncDate(col, TruncLevel.MONTH), 1, Array.empty[Int]),
       (new TruncDateDynamic(col, new ColumnRef(1)), 2, Array.empty[Int]))
     // The reference form, which builds every prefix vector, so that the second group loads them.
-    val split = VarkaEmitOptions.DEFAULTS.withElideUnreadLocals(false)
+    val split = VarkaMatrix.base.withElideUnreadLocals(false)
       .withMaterializeChronoPrefix(true).withGroupBudget(1).withFusedCeiling(1)
     val arms = Seq("the defaults" -> split, "no Julian map" -> split.withJulianMap(false),
       "no Neri-Schneider month" -> split.withNeriSchneiderMonth(false),

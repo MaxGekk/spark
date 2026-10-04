@@ -21,6 +21,7 @@ import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar.{drawShape,
   fuzzSeed, shapeRandom}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isGroupMethod
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
@@ -102,7 +103,7 @@ class VarkaEmitterFramesSuite extends VarkaEmitterTestBase {
     // planner walking the kernel again. The lane arithmetic is the same, node for node, and no
     // method grew: locals past 255 lost their wide forms.
     val n = 400
-    val options = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(1 << 20)
+    val options = VarkaMatrix.base.withMethodByteBudget(1 << 20)
     val name = "org.apache.spark.sql.varka.execution.VarkaFrames"
     val kernelWide = profile(emit(name, wide(n), 1, n, options.withGroupLocalSlots(false))
       .fold(d => fail(d.getMessage), identity))
@@ -122,7 +123,7 @@ class VarkaEmitterFramesSuite extends VarkaEmitterTestBase {
   }
 
   test("a one-group kernel emits the same bytes either way, and a several-group one the same " +
-      "operations (VARKA-191)") {
+      "operations (VARKA-191)", PinsDefaults) {
     // The first three hundred shapes of the shared fuzz grammar at its seed, under the default
     // budget - one to three roots, so both kinds of kernel occur - and the benchmark's shape at
     // 25 and 100 outputs. A one-group kernel's body set is the whole kernel, so its slots are
@@ -139,7 +140,7 @@ class VarkaEmitterFramesSuite extends VarkaEmitterTestBase {
         : Unit = {
       val name =
         s"org.apache.spark.sql.varka.execution.VarkaFramesShape${classCounter.addAndGet(1)}"
-      val options = VarkaEmitOptions.DEFAULTS
+      val options = VarkaMatrix.base
       (emit(name, roots, numInputs, numLiterals, options.withGroupLocalSlots(false)),
         emit(name, roots, numInputs, numLiterals, options.withGroupLocalSlots(true))) match {
         case (Right(kernelWideBytes), Right(groupLocalBytes)) =>

@@ -20,7 +20,6 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 import org.scalactic.source.Position
 import org.scalatest.Tag
 
-import org.apache.spark.SparkFunSuite
 import org.apache.spark.util.Utils
 
 /**
@@ -43,8 +42,10 @@ import org.apache.spark.util.Utils
  * the width audit's census, takes about two minutes on the laptop, and the suites' CI jobs
  * finish in eleven to seventeen minutes whole, so a single test past ten is a hang. A suite
  * whose tests are meant to run longer overrides `watchdogMinutes`.
+ *
+ * It extends [[VarkaMatrixTests]], so every test also runs under the option matrix's skip list.
  */
-trait VarkaTestWatchdog extends SparkFunSuite {
+trait VarkaTestWatchdog extends VarkaMatrixTests {
 
   /** Minutes a test may run before the watchdog acts. */
   protected def watchdogMinutes: Long =

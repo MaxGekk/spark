@@ -26,6 +26,7 @@ import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaHugeMethodProbe._
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.{isEpilogue, isGroupMethod, isLoop}
 
 /**
@@ -113,7 +114,7 @@ class VarkaHugeMethodSuite extends SparkFunSuite with VarkaTestWatchdog {
     // The methods the class declares, emitted here under the same options, so the assertion
     // below is over the whole layout and not only over the methods HotSpot happened to name.
     val bytes = VarkaLoopEmitter.emit(CLASS_NAME, ladder(outputs).asJava, 1, outputs,
-      null, null, VarkaEmitOptions.DEFAULTS.withMethodByteBudget(methodByteBudget))
+      null, null, VarkaMatrix.base.withMethodByteBudget(methodByteBudget))
     val names = VarkaEmitterTestSupport.methodNames(bytes).asScala.toSeq
       .filter(isGroupMethod)
     Compiled(tiers.toMap, names)
@@ -124,7 +125,7 @@ class VarkaHugeMethodSuite extends SparkFunSuite with VarkaTestWatchdog {
       .mkString("\n")
 
   test("under the byte budget every loop and epilogue method of a sixteen-output ladder " +
-      "reaches tier 4") {
+      "reaches tier 4", PinsDefaults) {
     val c = runProbe(8000)
     val epilogues = c.names.filter(isEpilogue(_))
     assert(epilogues.size > 2 && epilogues.forall(_.last.isDigit),
@@ -133,7 +134,8 @@ class VarkaHugeMethodSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(short.isEmpty, "not at tier 4:\n" + render(c))
   }
 
-  test("without it the single epilogue of the same ladder is never compiled at any tier") {
+  test("without it the single epilogue of the same ladder is never compiled at any tier",
+      PinsDefaults) {
     val c = runProbe(0)
     assert(c.names.filter(isEpilogue(_)) === Seq("epilogueDense", "epilogueMasked"),
       c.names.mkString(", "))

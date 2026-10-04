@@ -57,7 +57,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * fixed, shared with the IR fuzzer so a nightly varies both with one property). A failure names
  * the seed, the iteration and the rows, and `-Dvarka.fuzz.only=<iteration>` replays one.
  */
-class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite {
+class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
 
   private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(20260925L)
   private val iterations = sys.props.get("varka.fuzz.compositions").map(_.toInt).getOrElse(40)
@@ -82,8 +82,8 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite {
    * as they were.
    */
   private def options(rnd: Random, iteration: Int): VarkaEmitOptions = {
-    val lanes = if (rnd.nextBoolean()) VarkaEmitOptions.DEFAULTS
-      else VarkaEmitOptions.DEFAULTS.withLanesOverride(4)
+    val lanes = if (rnd.nextBoolean()) VarkaMatrix.base
+      else VarkaMatrix.base.withLanesOverride(4)
     lanes.withExactGrouping(new Random(~(seed * 1000003L + iteration)).nextBoolean())
   }
 

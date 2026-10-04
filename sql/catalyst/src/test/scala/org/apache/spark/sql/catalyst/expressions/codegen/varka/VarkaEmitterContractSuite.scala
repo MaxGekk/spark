@@ -60,7 +60,7 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
     // outputs stay within it. Under the byte budget, the default, bytes decide instead and the
     // five chains emit (VARKA-190).
     val disjointChains = (0 until 5).map(k => chain(13, slotBase = k * 13))
-    val reference = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)
+    val reference = VarkaMatrix.base.withMethodByteBudget(0)
     rejects(emitMulti(disjointChains, 1, 65, reference), "MAX_FUSED_NODES")
     val (_, sharedOk) = emitMulti(
       disjointChains.take(4) ++ disjointChains.take(4), 1, 52, reference)
@@ -74,7 +74,7 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
   }
 
   test("a wrong descriptor fails naming the call, not as an anonymous VerifyError") {
-    val named = emit(addDays(0), 1, VarkaEmitOptions.DEFAULTS.withMisdescribeAdd(true))
+    val named = emit(addDays(0), 1, VarkaMatrix.base.withMisdescribeAdd(true))
     // Member resolution is link-time work, so the class still verifies...
     assert(VarkaEmitterTestSupport.verify(named._2).isEmpty)
     val (kernel, loader) = load(named)
@@ -263,7 +263,7 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
     // The misdescribe option fails the AddDays call site at link time, inside the loop - the
     // shape a real kernel failure takes. The frame through the generated class must name the
     // SourceFile and a line, and the class's own key must decode that line to the node.
-    val named = emit(addDays(0), 1, VarkaEmitOptions.DEFAULTS.withMisdescribeAdd(true))
+    val named = emit(addDays(0), 1, VarkaMatrix.base.withMisdescribeAdd(true))
     val (className, bytes) = named
     val (kernel, loader) = load(named)
     try {

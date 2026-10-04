@@ -1,0 +1,10 @@
+# The option matrix's skip list (VARKA-248 step 2; see VarkaMatrix and dev/varka_matrix.sh).
+# Tab separated: configuration, suite (simple name), test name, kind (fails or declines), reason.
+# A listed test that stops failing, or a declines test that fuses again, fails as a stale line.
+guardDayProducers=false	VarkaEmitterChronoSuite	a column-offset producer under a calendar node declines the batch whose result leaves the range - in a loop lane, in an epilogue lane, and not under a null	fails	the test's subject is the day-producer guard, which this configuration turns off
+guardDayProducers=false	VarkaEmitterChronoSuite	a guard whose node's uses do not agree on one arm stays unqualified	fails	the test's subject is the day-producer guard, which this configuration turns off
+guardDayProducers=false	VarkaEmitterChronoSuite	a guarded producer under a CASE arm no longer condemns from the untaken arm	fails	the test's subject is the day-producer guard, which this configuration turns off
+guardDayProducers=false	VarkaEmitterChronoSuite	an unknown condition sends its lane to ELSE, and the guard there still fires	fails	the test's subject is the day-producer guard, which this configuration turns off
+guardDayProducers=false	VarkaEmitterChronoSuite	in-range column offsets under calendar nodes match the reference evaluator under both settings, and CSE off repeats the guard without breaking it	fails	the test's subject is the day-producer guard, which this configuration turns off
+guardDayProducers=false	VarkaEmitterChronoSuite	the guard is emitted only where a calendar node reads a column-offset producer, and adds bytes nowhere else	fails	the test's subject is the day-producer guard, which this configuration turns off
+guardDayProducers=false	VarkaEmitterValiditySuite	the word-liveness invariant is armed, in both directions	fails	the test's subject is the day-producer guard, which this configuration turns off

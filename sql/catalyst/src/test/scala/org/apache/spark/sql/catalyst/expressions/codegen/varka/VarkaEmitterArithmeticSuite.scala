@@ -21,6 +21,7 @@ import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isLoop
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.varka.vector.DateVectorOps
@@ -263,7 +264,7 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
     val shared = new AddDays(new ColumnRef(0), new LiteralSlot(0))
     val roots = Seq[VarkaVectorIR](shared, new DateDiff(shared, new ColumnRef(1)))
     val withCse = emitMulti(roots, 2, 1)
-    val withoutCse = emitMulti(roots, 2, 1, VarkaEmitOptions.DEFAULTS.withCse(false))
+    val withoutCse = emitMulti(roots, 2, 1, VarkaMatrix.base.withCse(false))
     assert(!java.util.Arrays.equals(withCse._2, withoutCse._2),
       "disabling the memo left the bytecode unchanged - CSE was not exercised")
     val (kernelCse, loaderCse) = load(withCse)
@@ -300,7 +301,7 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
     }
   }
 
-  test("a node shared across groups gets no slot in a body that uses it once") {
+  test("a node shared across groups gets no slot in a body that uses it once", PinsDefaults) {
     // VARKA-223: a shared slot is decided by the body's own use count, not the kernel's. Two
     // outputs over one column, each a chain of 12 ops - two would pass the group budget of 16,
     // and the chain depth stays under its limit - take a group each, and use the
@@ -414,7 +415,7 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
     // from drifting into a lowering that quietly wraps where ANSI says raise.
     checkMatrix(Seq(new IntArith(IntOp.MUL, Overflow.WRAP, a, b)), 2, Array.empty[Int],
       caseLengths, combos(2), data = extreme, ctx = "MUL WRAP over the extremes")
-    for (mode <- Seq(Overflow.FAIL, Overflow.NULL); options <- Seq(VarkaEmitOptions.DEFAULTS,
+    for (mode <- Seq(Overflow.FAIL, Overflow.NULL); options <- Seq(VarkaMatrix.base,
         checkOff)) {
       // Under `checkOff` too. Not because that switch never changes meaning - for a checked
       // add it does, deliberately, which is what makes it a reference arm - but because a
@@ -564,14 +565,14 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
     // measures the sign test and nothing else.
     val wrap = new IntArith(IntOp.ADD, Overflow.WRAP, a, b)
     val fail = new IntArith(IntOp.ADD, Overflow.FAIL, a, b)
-    assert(sizes(fail, checkOff) === sizes(wrap, VarkaEmitOptions.DEFAULTS))
+    assert(sizes(fail, checkOff) === sizes(wrap, VarkaMatrix.base))
     // And with it on it costs bytes in every body that computes the node.
-    val checked = sizes(fail, VarkaEmitOptions.DEFAULTS)
-    val unchecked = sizes(wrap, VarkaEmitOptions.DEFAULTS)
+    val checked = sizes(fail, VarkaMatrix.base)
+    val unchecked = sizes(wrap, VarkaMatrix.base)
     assert(checked.zip(unchecked).forall { case (c, u) => c > u },
       s"the check should add bytes to every body: $checked against $unchecked")
     // A WRAP node is untouched by the flag - nothing else in the emitter reads it.
-    assert(sizes(wrap, checkOff) === sizes(wrap, VarkaEmitOptions.DEFAULTS))
+    assert(sizes(wrap, checkOff) === sizes(wrap, VarkaMatrix.base))
   }
 
   test("a TRY node forfeits the dense body, and a checked one does not") {
@@ -590,7 +591,7 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
     assert(failAdd.contains("loopDense0") && failAdd.contains("epilogueDense0"))
   }
 
-  test("the composite key's masked body is its dense twin's bytes") {
+  test("the composite key's masked body is its dense twin's bytes", PinsDefaults) {
     // VARKA-63.md 6.1 prediction 6. `year(d) * 100 + month(d)` under WRAP has the word of
     // a single input, so VARKA-70's driver pass writes the whole output bitmap once per batch
     // and every word in the loop dies - which leaves the masked method with nothing the dense
@@ -612,7 +613,7 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
       "FAIL: the masked loop carries the word the guard reads")
   }
 
-  test("the registered op counts, and the controls that must not move") {
+  test("the registered op counts, and the controls that must not move", PinsDefaults) {
     // VARKA-63.md 3.3, filled from the emitted bytes. The point of pinning these is that
     // an arm that quietly emits twice the ops it should still passes every value test. The
     // counts are `IntVector` calls in `loopDense0`, so they include the loop's unrolling -
