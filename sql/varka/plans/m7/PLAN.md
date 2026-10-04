@@ -71,8 +71,9 @@ base they land on provable where proof is cheap, tested where it is not, and eas
    evaluator held to Spark's own interpreter (276). The filter-order bug the reading found is
    fixed (273). No Varka suite runs a second species of a lane type in the shared test JVM (246),
    and every emit option states why it exists and moves some hash in the bytes oracle, or is gone
-   (247, 248). What the tests miss is measured, by what the emitter reached, branch coverage and
-   a bounded mutation run (280, 265).
+   (247, 248). Every shape the tests run has both its dense and its masked body compared (284).
+   What the tests miss is measured, by what the emitter reached, branch coverage of the emitter
+   and of the code it emits, and a bounded mutation run (280, 285, 265).
 3. **Varka's code is Java and legible**: the compiler ported with its shape cache (214 to 217,
    224) and the evaluators with it (251, 267), checked by Error Prone and NullAway (266); item
    74's refactors landed, each with the proof its row names (248 to 252); the runtime refusals
@@ -137,7 +138,7 @@ checks the calendar rules by exhaustion, and proves a 64-bit rule at a reduced w
 out, as Alive did; row 264's debt on the analysis's loose `INT` answers is paid only with these
 obligations passing.
 
-### 2.2 The tests, and how well they test (81, 138, 246, 247, 262 to 265, 269, 271 to 280)
+### 2.2 The tests, and how well they test (81, 138, 246, 247, 262 to 265, 269, 271 to 280, 284, 285)
 
 Row 81 is planned (`VARKA-81.md`) and suits a newcomer. Row 138's three forms all run in
 `VarkaCoverageDifferentialSuite`, and its ANSI form compares the error class, the SQLSTATE and
@@ -216,6 +217,18 @@ with `NON_VOID_METHOD_CALLS`, `REMOVE_CONDITIONALS` and the bitwise mutators bes
 and each mutant gets one of three verdicts - killed by a behavioural test, killed only by the
 emitted-bytes oracle, survived - the second read as a survivor, since the bytes oracle kills
 equivalent mutants too.
+
+**Coverage of the code the emitter emits (284, 285).** Row 265 measures the emitter; nothing
+measures the classes it emits. A spike on 4 October 2026 ran the Varka suites of the gate's wide
+step under the JaCoCo agent: an emitted class is defined by an ordinary class loader, so the
+agent instruments it like any other once `inclnolocationclasses` is on, and the suites' time did
+not move (841 s against 837 s). Each class's `LineNumberTable` already maps its lines to IR
+nodes, so its coverage sums per operation as well as per method. Of 13,461 classes emitted, 1,555
+ran; about 730 of those ran only their masked body and about 135 only their dense one, and 3,651
+of 5,596 dense loop methods were never entered. A shape is usually run once, on one null pattern,
+so only one of its two bodies is ever compared, and the bytes oracle pins both bodies' bytes, not
+their answers. Row 284 runs each executed shape on both kinds of batch; row 285 makes the
+measurement a script whose report rows 265 and 284 read.
 
 **What the papers found the tests can pass over** (`m7/READING.md` 11).
 
@@ -470,7 +483,9 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 279 | Declines as specified behaviour: a verdict per row (an answer, a decline that must happen, one that may, an input outside the contract), checked on both sides of every guard bound; each guarded coverage row names its domain | TLP, Alive2, Korat, `m7/READING.md` 11 | medium |
 | 280 | What the emitter reached: each fuzzer and coverage suite reports the emitter mechanisms it reached and never reached, read by row 265, then steering toward unseen ones measured by a fixed-seed A/B | QPG, `m7/READING.md` 11 | small to medium |
 | 265 | How well the tests test: branch coverage of the emitter and compiler under the suites and fuzzers, then a bounded mutation run (PIT) on `Slots` and `Analysis` in an idle window; each surviving mutant a test or an equivalence note; PIT through the ScalaTest suites test by test; three verdicts per mutant - killed by a behavioural test, killed only by the bytes oracle, survived | the plan review (2.2), `m7/READING.md` 11 | medium, measured |
-| 248 | `VarkaEmitOptions` from one table of options. **Step 1 done** (`VARKA-248.md` 9.1, 4 October 2026): `VarkaEmitOption.TABLE` holds every option with its reason, and the defaults, `canonical()`, the inventory, the fuzzer's draws and the dump's parser read it; step 2, the configuration matrix, is next. The row: defaults by name, and `canonical()`, the bytes suite's inventory and the fuzzer's draws derived from it; each option's reason recorded - an alternative kept because the winner depends on the machine, a reference form, a fault injector (`misdescribeWordLiveness`), or retired; the suites run under the options' configurations with a reasoned skip list, and a shape marked as declining failing when it starts to fuse. Proof: `emitted_bytes.json` unchanged; each skip entry names its minimal option delta | item 74.1, `m7/READING.md` 3, `m7/READING.md` 11 | small to medium |
+| 284 | Both bodies of every shape compared: the differential suites and the fuzzers run each shape they execute on a null-free batch and on one with nulls, so its dense and its masked body both meet the oracle. *Found 4 October 2026 by row 285's spike*: of the 1,555 emitted classes the Varka suites ran, about 730 ran only the masked body and about 135 only the dense one. Done when row 285's report shows every executed class entering both drivers, or names each exception with its reason | the JaCoCo spike (2.2) | small |
+| 285 | Coverage of the generated code: `dev/varka_gen_coverage.sh` runs the Varka suites under the JaCoCo agent with the emitted classes dumped, and sums the coverage of each emitted class, analysed on its own because tests emit one name with different bytes, per method kind through `VarkaMethodNames` and per IR operation through the class's `LineNumberTable` key; the report committed, its missed branches inside executed loops listed by operation, and read by rows 265 and 284 | the JaCoCo spike (2.2) | small |
+| 248 | `VarkaEmitOptions` from one table of options. **Step 1 done** (`VARKA-248.md` 9.1, 4 October 2026): `VarkaEmitOption.TABLE` holds every option with its reason; `canonical()`, the inventory, the fuzzer's draws and the dump's parser read it, and the written-out defaults are checked against it; step 2, the configuration matrix, is next. The row: defaults by name, and `canonical()`, the bytes suite's inventory and the fuzzer's draws derived from it; each option's reason recorded - an alternative kept because the winner depends on the machine, a reference form, a fault injector (`misdescribeWordLiveness`), or retired; the suites run under the options' configurations with a reasoned skip list, and a shape marked as declining failing when it starts to fuse. Proof: `emitted_bytes.json` unchanged; each skip entry names its minimal option delta | item 74.1, `m7/READING.md` 3, `m7/READING.md` 11 | small to medium |
 | 249 | One class owns the emitted method names, replacing the prefix matches in main and test code. **Done** (`VARKA-249.md` 9, 4 October 2026): `VarkaMethodNames` builds and reads every emitted method's name, main code and tests go through it, and the bytes oracle is unchanged. Proof: `emitted_bytes.json` unchanged | item 74.6 | small |
 | 250 | `emitBody` split into driver, loop and epilogue emitters sharing the prologue helpers. Proof: `emitted_bytes.json` unchanged | item 74.3 | medium |
 | 251 | `VarkaEvaluatorBase` split into Java components: runner, batch ledger, scratch, warm-up, fallback accounting, dumping. Proof: a before-and-after benchmark of per-batch overhead | item 74.5 | medium |
@@ -505,9 +520,9 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
 | 0 | 240, 246, 248, 249, 255, 256, 81, 263, 266, 273, 275, 277, 283 | 240 is the proofs' tooling; 246 makes later suites' verdicts trustworthy; 248 and 249 are what every later refactor touches; 255 and 256 end the laptop queue and the hand splicing for every PR below; 263 and 266 check every port and refactor below as it lands; 81 needs nothing; 273 is a reproduced bug; 275 and 277 make every later test's failure loud and small |
-| 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274 and 276 sharpen the oracles every later test reads |
+| 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276, 284, 285 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274, 276 and 284 sharpen the oracles every later test reads, and 285 measures what 284 closes |
 | 2 | 242, 244, 217, 224, 83, 254, 257, 267, 272, 278, 279, 280, 281 | 217 after the families it fronts; 83 after 250, which rewrites the same paths; 244 after 243 defines what a delta departs from; 267 after 251's components; 272 after 246, so that a configuration's verdict is not a second species' boxing; 278 after 277; 279 after 138; 280 after 262; 281 after 240's tooling |
-| 3 | 245, 86, 252, 268, 265 | 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269 and 280, so that it measures the tests the milestone leaves |
+| 3 | 245, 86, 252, 268, 265 | 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269, 280 and 285, so that it measures the tests the milestone leaves |
 | 4 | 261, 270 | 261 last by definition; 270's post written from what 261 records |
 
 VARKA-180 and VARKA-258 to VARKA-260 run across the waves.
@@ -524,6 +539,8 @@ anything rows 262, 263 and 269 find is weighed against the milestone's scope (se
   emission times for the ports (214 to 217); a before-and-after benchmark of per-batch overhead
   for the evaluator (251, 267); compile time before and after for 222. The Varka suites pass,
   with 263's sanitizer on.
+* VARKA-285 commits the generated code's coverage report, and VARKA-284 is done when that report
+  shows every executed class entering both drivers.
 * VARKA-265 commits its coverage report and its mutation run's survivors, each with the test that
   now kills it or the note that it changes no behaviour.
 * `dev/varka_prove.sh` fails on any `sat` and on a missing solver, and runs in the linters' job
