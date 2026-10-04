@@ -144,22 +144,6 @@ final class VarkaEmitBudget {
   }
 
   /**
-   * The group a loop or epilogue method belongs to, read off its name ({@code loopMasked3},
-   * {@code epilogueDense12}), or -1 for a method that is not a group's: the drivers, the
-   * dispatcher, the constructor, and the legacy form's single epilogue.
-   */
-  static int groupOf(String method) {
-    if (!method.startsWith("loop") && !method.startsWith("epilogue")) {
-      return -1;
-    }
-    int i = method.length();
-    while (i > 0 && Character.isDigit(method.charAt(i - 1))) {
-      i--;
-    }
-    return i == method.length() ? -1 : Integer.parseInt(method.substring(i));
-  }
-
-  /**
    * The groups with a method over {@code methodLimit}, each with its largest such method:
    * what the emitter's regroup splits. A group's methods are its loop and its epilogue on
    * each side, so the largest of the four decides.
@@ -178,7 +162,7 @@ final class VarkaEmitBudget {
       Map<String, Integer> measure, int limit) {
     SortedMap<Integer, Map.Entry<String, Integer>> over = new TreeMap<>();
     for (Map.Entry<String, Integer> e : measure.entrySet()) {
-      int g = groupOf(e.getKey());
+      int g = VarkaMethodNames.groupOf(e.getKey());
       if (g >= 0 && e.getValue() > limit
           && (!over.containsKey(g) || over.get(g).getValue() < e.getValue())) {
         over.put(g, e);
@@ -267,7 +251,7 @@ final class VarkaEmitBudget {
   static List<String> overCallSiteBudget(VarkaEmittedClass emitted, int callSiteBudget) {
     List<String> findings = new ArrayList<>();
     for (Map.Entry<String, Integer> e : emitted.vectorCallSites().entrySet()) {
-      if (groupOf(e.getKey()) >= 0 && e.getValue() > callSiteBudget) {
+      if (VarkaMethodNames.groupOf(e.getKey()) >= 0 && e.getValue() > callSiteBudget) {
         findings.add(e.getKey() + " carries " + e.getValue() + " vector call sites, over the "
             + "call-site budget of " + callSiteBudget + ": C1 refuses it, so it runs "
             + "interpreted until C2 compiles it");
