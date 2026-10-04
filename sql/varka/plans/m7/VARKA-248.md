@@ -61,10 +61,75 @@ source generator), more machinery than 40 entries need.
 
 ### 3.2 Step 2: the configuration matrix
 
-The suites under each option's non-default configuration, a committed skip list with a reason per
-entry naming the minimal option delta that fails, and a declining-shape marker that fails when the
-shape starts to fuse (`m7/READING.md` 3, DuckDB's `test/configs` and Druid's `cannotVectorize`).
-Planned in this file before its code, once step 1 has merged.
+The Varka suites rerun once per *configuration*: the defaults with one option changed, applied
+to every kernel the suites emit - `cse=false`, `groupBudget=8`, `division=DOUBLE_DIV`,
+`lanesOverride=4`. A reference form or a machine's alternative must give the defaults' answers
+under every test, where today it meets only the few tests that set it. The idea is DuckDB's
+`test/configs`, and the declining marker is Druid's `cannotVectorize` (`m7/READING.md` 3).
+
+**3.2.1 The configurations.** Every non-default arm of every table entry but the fault
+injectors: a flag's other value, a choice's other constants, a count's audit values, and
+`lanesOverride` at 4 and 16. The table gives 43 arms today, plus the two lane counts: 45
+configurations (28 reference arms, 6 machine, 9 knob, 2 priced checks). They are derived from
+`VarkaEmitOption.TABLE` and named as `canonical` `name=value` pairs, so a new option joins the
+matrix with its entry.
+
+**3.2.2 Reaching every kernel.** One base value, `VarkaMatrix.base` in the catalyst test jar,
+read from `-Dvarka.matrix.config=<name=value,...>` and `DEFAULTS` without it:
+
+* the SQL suites: `VarkaColumnarToRowExec`'s existing test hook starts at the base instead of
+  `DEFAULTS`, and its nine resets restore the base;
+* the emitter suites: `VarkaEmitterTestBase`'s four defaulted parameters, and the test code's
+  other `VarkaEmitOptions.DEFAULTS` uses that build a variant (`DEFAULTS.withX(...)`), start from
+  the base - a mechanical change over about 300 sites;
+* production code is unchanged: `DEFAULTS` stays a constant and no system property reaches it.
+
+The alternative, `DEFAULTS` itself reading the property, is one line and reaches the defaulted
+parameters in main code too, but it puts an emitter knob on every production JVM, which the
+existing hook's comment keeps off the configuration surface on purpose. A matrix run counts, per
+suite, the emissions whose options are not the base; the first run's counts name the paths the
+base does not reach, and each is closed or listed.
+
+**3.2.3 What stays out, and why.** Whole suites whose subject is the defaults or the machine, not
+an answer: the bytes oracle and the cost audit (they compare with committed output of the
+defaults), `VarkaEmitOptionSuite` and the shape-hash pins, `VarkaAssemblySuite` (it reads the
+JIT's output) and the benchmarks. The list is in the runner with a reason per suite.
+
+**3.2.4 The skip list.** `sql/varka/matrix/skips.tsv`, one line per test a configuration is
+expected to break: the configuration, the suite, the test, the kind and the reason. Kind `fails`:
+the test is expected to fail, as every ANSI overflow test does under `checkIntOverflow=false`.
+`VarkaTestWatchdog`'s test wrapper, which 63 of the 68 Varka suites already run through (the
+other five mix it in), runs a listed test, cancels it with the reason if it fails, and fails it
+as a stale entry if it passes. Each entry names the smallest configuration that breaks the test,
+one option, since every configuration changes one.
+
+**3.2.5 The declining marker.** A configuration that makes the emitter decline everything would
+pass every SQL test vacuously: the row path answers instead. So the wrapper reads the shape
+cache's build and decline counts before and after each test, and the run records them per test;
+the defaults run is configuration zero. A test that fused under the defaults and fuses nothing
+under a configuration fails, unless the skip list marks it kind `declines` with a reason - a
+single output over a small `methodByteBudget` declines by design (VARKA-87) - and a `declines`
+entry whose test fuses fails as stale. VARKA-275, the guard on hidden kernel-failure fallbacks,
+is the per-test half of the same concern and lands independently.
+
+**3.2.6 Running it.** `dev/varka_matrix.sh [--config <name=value>]... [--all] [-j N]` builds once,
+then runs each configuration as its own ScalaTest runner JVM on the test classpath sbt exports,
+N at a time, so parallel runs share no sbt lock or target directory. Each writes a JUnit report
+and the per-test counts; the script prints one line per configuration and exits non-zero on any
+failure. On the laptop, `-j 8` keeps within memory (83 GB) and within what the 100 W charger
+supplies (3 October 2026: twenty JVMs drained the battery and flipped the power profile); a
+PR touching an option's code path runs its configurations this way in about one suite run's time.
+
+The full matrix runs nightly on GitHub Actions, `varka-option-matrix.yml` on vecbricks/varka
+beside the fuzz nightly: one build job, then shards of configurations, each shard running the
+script with `-j 2` on a four-core runner; at about 14 minutes per configuration, 45
+configurations are roughly 11 runner-hours. PR CI is unchanged. The first nightly's times set
+the shard size.
+
+**3.2.7 Done when.** The nightly runs all 45 configurations green, every red test either fixed
+or listed with its reason; the first run's reach counts are closed or listed; the script runs a
+single configuration on the laptop; `sql/varka/AGENTS.md` says a new option gets its matrix arms
+from its table entry and a broken test a skip line with its reason.
 
 ### 3.3 What is deliberately unchanged
 
@@ -114,7 +179,9 @@ None.
 
 ## 8. Sequencing
 
-Step 1, one pull request; step 2 planned here, then its own pull request.
+Step 1, one pull request. Step 2 in two: the base value, the wrapper's skip list and counts, the
+runner script and the first laptop run with its skip entries; then the nightly workflow, once the
+first PR has measured a configuration's time on the laptop.
 
 ## 9. Outcome
 
