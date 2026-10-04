@@ -64,8 +64,8 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeInterval
  * recording of it by phase - and again a probe's reading, where `VarkaEmissionBenchmark` is
  * the number.
  *
- * Options take the record's own `with*` methods by name (`--options cse=false,groupBudget=24`),
- * found by reflection so a new option needs nothing here.
+ * Options are named as in `VarkaEmitOption.TABLE` (`--options cse=false,groupBudget=24`), so a
+ * new option is settable here once it has its table entry.
  *
  * `--table` prints instead the markdown a plan's registered-op-counts section wants: one row
  * per expression, one column per option variant given with `--variant k=v,...` (the defaults
@@ -351,7 +351,7 @@ object VarkaEmitDump {
   private def resolve(e: Expression, childOutput: Seq[Attribute]): Expression =
     VarkaSqlResolve.resolve(e, childOutput)
 
-  /** `k=v,k=v` onto the record's `with<K>` methods, by reflection. */
+  /** `k=v,k=v` onto the options, each `k` looked up in `VarkaEmitOption.TABLE`. */
   private def parseOptions(spec: String): VarkaEmitOptions =
     applyOptions(VarkaEmitOptions.DEFAULTS, spec)
 
@@ -359,30 +359,25 @@ object VarkaEmitDump {
     if (spec.trim.isEmpty) return base
     spec.split(",").foldLeft(base) { (opts, kv) =>
       val Array(k, v) = kv.trim.split("=", 2)
-      val method = "with" + k.head.toUpper + k.tail
-      val m = classOf[VarkaEmitOptions].getMethods.find(_.getName == method).getOrElse(
-        throw new IllegalArgumentException(s"no option $k (no VarkaEmitOptions.$method)"))
-      val param = m.getParameterTypes.head
-      val value: AnyRef =
-        if (param == classOf[Int] || param == classOf[java.lang.Integer]) Integer.valueOf(v.trim)
-        else if (param == classOf[Boolean] || param == classOf[java.lang.Boolean]) {
+      val value = v.trim
+      VarkaEmitOption.named(k) match {
+        case count: VarkaEmitOption.Count => count.`with`(opts, Integer.parseInt(value))
+        case flag: VarkaEmitOption.Flag =>
           // `Boolean.valueOf` answers false for every string that is not "true", so a typo or
-          // a plausible-looking `=on` silently selects the arm you did not ask for - and a
-          // benchmark then measures it without saying so. The enum branch below already
-          // refuses an unknown constant; this refuses an unknown boolean the same way.
-          v.trim.toLowerCase(java.util.Locale.ROOT) match {
-            case "true" => java.lang.Boolean.TRUE
-            case "false" => java.lang.Boolean.FALSE
+          // a plausible-looking `=on` would silently select the arm you did not ask for - and a
+          // benchmark then measure it without saying so. An unknown constant is refused below;
+          // an unknown boolean is refused the same way.
+          value.toLowerCase(java.util.Locale.ROOT) match {
+            case "true" => flag.`with`(opts, true)
+            case "false" => flag.`with`(opts, false)
             case other =>
               throw new IllegalArgumentException(s"$k: expected true or false, got '$other'")
           }
-        } else if (param.isEnum) {
-          param.getEnumConstants.find(_.toString == v.trim).getOrElse(
-            throw new IllegalArgumentException(s"$k: no constant $v")).asInstanceOf[AnyRef]
-        } else throw new IllegalArgumentException(s"$k: unsupported option type $param")
-      m.invoke(opts, value).asInstanceOf[VarkaEmitOptions]
+        case choice: VarkaEmitOption.Choice[_] => choice.withNamed(opts, value)
+      }
     }
   }
+
 
   /** Load the class and run it `rounds` times over synthetic columns of the kernel's lane, so
    *  a `-XX:CompileCommand=print` on the loop method has something to print. The output count

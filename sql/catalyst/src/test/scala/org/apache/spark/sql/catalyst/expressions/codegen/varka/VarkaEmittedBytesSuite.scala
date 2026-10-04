@@ -446,7 +446,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   // ---------------------------------------------------------------------------------------
 
   /**
-   * Every value of every emit option, paired with the transform that selects it.
+   * Every value of every emit option, paired with the transform that selects it, read off the
+   * options table (`VarkaEmitOption.TABLE`).
    *
    * The oracle above pins the defaults, and only the defaults, at two widths. That was enough
    * while `VarkaEmitOptions` was reachable from tests alone; VARKA-121 gave one of its fields a
@@ -457,55 +458,15 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    *
    * Booleans appear at both values rather than only the non-default one, so the report says in
    * its own numbers which value is the default - the arm that moves nothing is it - instead of
-   * resting on a reader's memory of the DEFAULTS constructor. `lanesOverride` is absent because
-   * the oracle already emits every shape at two widths, and the two budgets appear at values
-   * that bracket the shipped ones rather than at every integer.
+   * resting on a reader's memory of the defaults. An enum appears at every constant, and an int
+   * at the values its table entry audits: the budgets at values either side of the shipped ones,
+   * and `lanesOverride` not at all, because the oracle already emits every shape at two widths.
+   * Being read off the table, the list holds every option the table has.
    */
-  private def optionArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] = {
-    val booleans = Seq[(String, (VarkaEmitOptions, Boolean) => VarkaEmitOptions)](
-      "cse" -> (_.withCse(_)),
-      "shareChronoPrefix" -> (_.withShareChronoPrefix(_)),
-      "denseValidityOnce" -> (_.withDenseValidityOnce(_)),
-      "elideChronoMonth" -> (_.withElideChronoMonth(_)),
-      "neriSchneiderMonth" -> (_.withNeriSchneiderMonth(_)),
-      "julianMap" -> (_.withJulianMap(_)),
-      "guardDayProducers" -> (_.withGuardDayProducers(_)),
-      "validityByWidth" -> (_.withValidityByWidth(_)),
-      "validityOrFirst" -> (_.withValidityOrFirst(_)),
-      "validityByBitmap" -> (_.withValidityByBitmap(_)),
-      "checkIntOverflow" -> (_.withCheckIntOverflow(_)),
-      "guardUnderArm" -> (_.withGuardUnderArm(_)),
-      "shareWholeNodes" -> (_.withShareWholeNodes(_)),
-      "validityByWord" -> (_.withValidityByWord(_)),
-      "mulHiDivide" -> (_.withMulHiDivide(_)),
-      "narrowHalfSpecies" -> (_.withNarrowHalfSpecies(_)),
-      "predictGrouping" -> (_.withPredictGrouping(_)),
-      "exactGrouping" -> (_.withExactGrouping(_)),
-      "splitDriver" -> (_.withSplitDriver(_)),
-      "severalKernels" -> (_.withSeveralKernels(_)),
-      "elideUnreadLocals" -> (_.withElideUnreadLocals(_)),
-      "planSize" -> (_.withPlanSize(_)),
-      "driverOutputTable" -> (_.withDriverOutputTable(_)),
-      "misdescribeAdd" -> (_.withMisdescribeAdd(_)),
-      "misdescribeWordLiveness" -> (_.withMisdescribeWordLiveness(_)))
-    val flags = booleans.flatMap { case (name, set) =>
-      Seq(true, false).map(v => s"$name=$v" -> ((o: VarkaEmitOptions) => set(o, v)))
+  private def optionArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
+    VarkaEmitOption.TABLE.asScala.toSeq.flatMap(_.arms.asScala).map { arm =>
+      arm.name -> ((o: VarkaEmitOptions) => arm.apply.apply(o))
     }
-    val division = VarkaEmitOptions.Division.values.toSeq.map { d =>
-      s"division=$d" -> ((o: VarkaEmitOptions) => o.withDivision(d))
-    }
-    val avx = Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 1, 2, 3).map { level =>
-      s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
-    }
-    val budgets = Seq(
-      "groupBudget=64" -> ((o: VarkaEmitOptions) => o.withGroupBudget(64)),
-      "groupBudget=800" -> ((o: VarkaEmitOptions) => o.withGroupBudget(800)),
-      "fusedCeiling=200" -> ((o: VarkaEmitOptions) => o.withFusedCeiling(200)),
-      "fusedCeiling=800" -> ((o: VarkaEmitOptions) => o.withFusedCeiling(800)),
-      "methodByteBudget=0" -> ((o: VarkaEmitOptions) => o.withMethodByteBudget(0)),
-      "methodByteBudget=8000" -> ((o: VarkaEmitOptions) => o.withMethodByteBudget(8000)))
-    flags ++ division ++ avx ++ budgets
-  }
 
   /**
    * What each option arm does to the emitted bytes, over the oracle's own shapes.
