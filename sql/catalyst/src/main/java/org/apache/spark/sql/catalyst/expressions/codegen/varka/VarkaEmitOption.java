@@ -38,10 +38,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.
  * bytes suite's inventory audits.
  *
  * <p>{@link #TABLE} lists every option once, in the record's declaration order, and everything
- * that treats the options as a set reads it rather than its own list: the defaults are built from
- * it by name, {@code canonical()} renders from it, and the bytes suite's inventory, the IR
- * fuzzer's draws and {@code VarkaEmitDump}'s parser walk it. Adding an option is the record
- * component, its builder setter and {@code with*} method, its javadoc, and one entry here.
+ * that treats the options as a set reads it rather than its own list: {@code canonical()} renders
+ * from it, and the bytes suite's inventory, the IR fuzzer's draws and {@code VarkaEmitDump}'s
+ * parser walk it. Adding an option is the record component, its builder setter and {@code with*}
+ * method, its javadoc, its value in {@link VarkaEmitOptions#DEFAULTS}, and one entry here.
  */
 public sealed interface VarkaEmitOption
     permits VarkaEmitOption.Flag, VarkaEmitOption.Count, VarkaEmitOption.Choice {
@@ -59,8 +59,9 @@ public sealed interface VarkaEmitOption
      */
     MACHINE,
     /**
-     * A size limit that tests and benchmarks vary: a small value shows a mechanism on a shape of
-     * a few outputs, a large one prices a retuning.
+     * A value tests and benchmarks vary rather than production: a size limit, where a small value
+     * shows a mechanism on a shape of a few outputs and a large one prices a retuning, or the lane
+     * count a suite emits for when one JVM must cover every width.
      */
     KNOB,
     /**
@@ -125,7 +126,7 @@ public sealed interface VarkaEmitOption
     }
 
     public VarkaEmitOptions with(VarkaEmitOptions options, boolean value) {
-      Builder builder = options.toBuilder();
+      var builder = options.toBuilder();
       set.accept(builder, value);
       return builder.build();
     }
@@ -175,7 +176,7 @@ public sealed interface VarkaEmitOption
     }
 
     public VarkaEmitOptions with(VarkaEmitOptions options, int value) {
-      Builder builder = options.toBuilder();
+      var builder = options.toBuilder();
       set.accept(builder, value);
       return builder.build();
     }
@@ -198,7 +199,7 @@ public sealed interface VarkaEmitOption
 
     @Override
     public List<Arm> arms() {
-      List<Arm> arms = new ArrayList<>();
+      var arms = new ArrayList<Arm>();
       for (int v : auditValues) {
         arms.add(new Arm(name + "=" + v, o -> with(o, v)));
       }
@@ -215,7 +216,7 @@ public sealed interface VarkaEmitOption
     }
 
     public VarkaEmitOptions with(VarkaEmitOptions options, E value) {
-      Builder builder = options.toBuilder();
+      var builder = options.toBuilder();
       set.accept(builder, value);
       return builder.build();
     }
@@ -265,7 +266,7 @@ public sealed interface VarkaEmitOption
 
     @Override
     public List<Arm> arms() {
-      List<Arm> arms = new ArrayList<>();
+      var arms = new ArrayList<Arm>();
       for (E constant : constants()) {
         arms.add(new Arm(name + "=" + constant, o -> with(o, constant)));
       }
@@ -281,6 +282,10 @@ public sealed interface VarkaEmitOption
    * {@code canonical()} renders them in, the positional ones first. See each option's
    * {@code @param} on {@link VarkaEmitOptions} for what it does and the measurement behind its
    * default.
+   *
+   * <p>Production never initialises this list: {@link VarkaEmitOptions#DEFAULTS} is written out
+   * and {@code canonical()} returns before reading it for the defaults, so the cost of linking
+   * its method references falls on tests alone.
    */
   List<VarkaEmitOption> TABLE = List.of(
       new Count("groupBudget", Reason.KNOB, VarkaEmitBudget.GROUP_BUDGET,
@@ -311,7 +316,7 @@ public sealed interface VarkaEmitOption
           VarkaEmitOptions::validityByBitmap, Builder::validityByBitmap, POSITIONAL),
       new Flag("checkIntOverflow", Reason.PRICED_CHECK, true,
           VarkaEmitOptions::checkIntOverflow, Builder::checkIntOverflow, POSITIONAL),
-      new Count("lanesOverride", Reason.MACHINE, 0,
+      new Count("lanesOverride", Reason.KNOB, 0,
           VarkaEmitOptions::lanesOverride, Builder::lanesOverride, POSITIONAL,
           List.of(2, 4, 8, 16, 32), List.of()),
       new Choice<>("truncDate", Reason.REFERENCE, TruncDateForm.class, TruncDateForm.SUBTRACT,
@@ -384,7 +389,7 @@ public sealed interface VarkaEmitOption
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {
-    for (VarkaEmitOption option : TABLE) {
+    for (var option : TABLE) {
       if (option.name().equals(name)) {
         return option;
       }

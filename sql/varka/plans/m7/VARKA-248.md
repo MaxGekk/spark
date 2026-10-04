@@ -46,7 +46,8 @@ record and its setter on the builder, how it renders into `canonical()`, and for
 fuzzer draws and the inventory audits. `VarkaEmitOption.TABLE` lists all 40 in the record's
 declaration order. From it:
 
-* `DEFAULTS` is built by name from each option's default, not from a positional row.
+* `DEFAULTS` stays a positional row, and a test checks each of its values against the table
+  (see 9.1: building it from the table costs every executor about 17 ms at startup).
 * `canonical()` joins the positional options and appends the tags, in table order.
 * The bytes suite's inventory is every option's audit values: both values of a flag, every
   constant of a choice, a count's listed values.
@@ -84,9 +85,10 @@ None: no emitted byte moves.
 ## 5. Tests, and what each is for
 
 * `VarkaEmitOptionSuite`: the table names every record component once, in declaration order;
-  `DEFAULTS` holds every option's default; a flipped option and a changed count render as the
-  committed renderings do; each reason kind is what the table says for the options the javadoc
-  names.
+  `DEFAULTS` holds every option's default; each entry reads and sets the component it is named
+  for and no other; initialising and rendering the defaults never loads the table; a flipped
+  option and a changed count render as the committed renderings do; each reason kind is what the
+  table says for the options the javadoc names.
 * During development, not committed: the old and new `canonical()` over random option values, and
   the old and new fuzzer draws over many seeds, compared for equality before the old code goes.
 * The bytes oracle and the cost audit, unchanged; the Varka suites through the gate.
@@ -126,11 +128,23 @@ Step 1, one pull request; step 2 planned here, then its own pull request.
    code beside the new and were deleted with it.
 3. **Held, counting the builder as one place.** Adding an option is now the record component, the
    builder (its field, setter, copy in `toBuilder` and argument in `build`), its `with*` method, its
-   javadoc and one table entry; `DEFAULTS`, `canonical()`, the inventory, the fuzzer and the dump's
-   parser follow from the entry. Before, each of those five was an edit too.
+   javadoc, its value in `DEFAULTS` and one table entry; `canonical()`, the inventory, the fuzzer
+   and the dump's parser follow from the entry. Before, each of those four was an edit too.
 
 `dev/varka_gate.sh` passed every step. Two things the table needed that the plan did not foresee:
 Scala cannot express a Java enum's bound, so `Choice` gained `withIndex` and `withNamed`, which
 are what the fuzzer and the dump call; and the bytes suite's hand-written inventory had fallen six
 options behind the record, which reading it off the table repairs. `VarkaEmitDump` was run end to
 end with options of every kind and still refuses a boolean that is neither `true` nor `false`.
+
+The review of the pull request changed four things. `DEFAULTS` went back to its positional row:
+building it from the table linked the table's 80-odd method references when the record
+initialised, which a fresh JVM timed at 17 to 26 ms (median about 19 ms over fourteen runs, with
+and without lambdas linked beforehand) against 4 ms for the record itself, and every executor
+would have paid it for options only tests vary. `VarkaEmitOptionSuite` checks the row against the
+table and shows, in a class loader of its own, that the record and its rendered defaults never
+load the table. A second test moves each entry off its default and checks that exactly the
+component it is named for moved, which the defaults test could not see, since it reads each option
+through its own entry; a deliberately miswired setter fails it. `lanesOverride` is a knob, not a
+machine-dependent winner: production always uses the preferred width, and the override exists so
+one JVM's suites can emit for every width.

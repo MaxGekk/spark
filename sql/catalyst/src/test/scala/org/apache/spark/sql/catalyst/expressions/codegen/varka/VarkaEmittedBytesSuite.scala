@@ -461,7 +461,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * resting on a reader's memory of the defaults. An enum appears at every constant, and an int
    * at the values its table entry audits: the budgets at values either side of the shipped ones,
    * and `lanesOverride` not at all, because the oracle already emits every shape at two widths.
-   * Being read off the table, the list cannot fall behind it, as the hand-written one had.
+   * Being read off the table, the list holds every option the table has.
    */
   private def optionArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
     VarkaEmitOption.TABLE.asScala.toSeq.flatMap(_.arms.asScala).map { arm =>

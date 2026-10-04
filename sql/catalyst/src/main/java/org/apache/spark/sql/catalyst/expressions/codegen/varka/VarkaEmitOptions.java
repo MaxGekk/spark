@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.lang.management.ManagementFactory;
+import java.util.StringJoiner;
 
 import com.sun.management.HotSpotDiagnosticMXBean;
 
@@ -69,9 +70,9 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *
  * <p><b>The options as a set are {@link VarkaEmitOption#TABLE}.</b> It lists every option once, in
  * declaration order, with why it exists - a reference form, a winner that depends on the machine,
- * a size knob, a priced check or a fault injector - and {@link #DEFAULTS}, {@link #canonical()},
- * the bytes suite's inventory, the IR fuzzer's draws and {@code VarkaEmitDump}'s parser all read
- * it (VARKA-248).
+ * a size knob, a priced check or a fault injector - and {@link #canonical()}, the bytes suite's
+ * inventory, the IR fuzzer's draws and {@code VarkaEmitDump}'s parser all read it (VARKA-248).
+ * {@link #DEFAULTS} is written out instead, and a suite checks it against the table.
  *
  * <p><b>Defaults hash to what they always hashed.</b> {@link VarkaShapeCacheImpl#shapeHash}
  * renders these into the hash only when they differ from {@link #DEFAULTS}, so production hashes,
@@ -557,17 +558,23 @@ public record VarkaEmitOptions(
     }
   }
 
-  /** What production always emits with; see the hashing note in the class doc. */
-  public static final VarkaEmitOptions DEFAULTS = fromTable();
-
-  /** Every option at its default, set by name from {@link VarkaEmitOption#TABLE}. */
-  private static VarkaEmitOptions fromTable() {
-    Builder builder = new Builder();
-    for (VarkaEmitOption option : VarkaEmitOption.TABLE) {
-      option.applyDefault(builder);
-    }
-    return builder.build();
-  }
+  /**
+   * What production always emits with; see the hashing note in the class doc. Written out rather
+   * than built from {@link VarkaEmitOption#TABLE}: initialising the table links some eighty
+   * method references, about 17 ms in a fresh JVM, which every executor would pay for options
+   * only tests vary. {@code VarkaEmitOptionSuite} checks each value here against its table entry.
+   */
+  public static final VarkaEmitOptions DEFAULTS =
+      new VarkaEmitOptions(
+          VarkaEmitBudget.GROUP_BUDGET, VarkaEmitBudget.FUSED_CEILING,
+          true, true, true, true, true, true, true, true, true, true, true,
+          0,
+          TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, USE_AVX_UNKNOWN,
+          false, false, true, true, false, true, false,
+          VarkaEmitBudget.HUGE_METHOD_LIMIT,
+          true, true, true, true,
+          VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
+          true, true, true, true, true, true, true, 0);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -1126,21 +1133,16 @@ public record VarkaEmitOptions(
     if (isDefault()) {
       return "";
     }
-    StringBuilder positional = new StringBuilder("opts(");
-    StringBuilder tags = new StringBuilder();
-    for (VarkaEmitOption option : VarkaEmitOption.TABLE) {
+    var positional = new StringJoiner("|", "opts(", "");
+    var tags = new StringBuilder();
+    for (var option : VarkaEmitOption.TABLE) {
       switch (option.rendering()) {
-        case VarkaEmitOption.Positional p -> {
-          if (positional.length() > "opts(".length()) {
-            positional.append('|');
-          }
-          positional.append(option.text(this));
-        }
-        case VarkaEmitOption.FlagTag t -> tags.append(option.tag(this));
-        case VarkaEmitOption.CountTag t -> tags.append(option.tag(this));
+        case VarkaEmitOption.Positional _ -> positional.add(option.text(this));
+        case VarkaEmitOption.FlagTag _, VarkaEmitOption.CountTag _ ->
+            tags.append(option.tag(this));
       }
     }
-    return positional.append(tags).append(')').toString();
+    return positional + tags.toString() + ")";
   }
 
 }

@@ -64,8 +64,8 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeInterval
  * recording of it by phase - and again a probe's reading, where `VarkaEmissionBenchmark` is
  * the number.
  *
- * Options take the record's own `with*` methods by name (`--options cse=false,groupBudget=24`),
- * found by reflection so a new option needs nothing here.
+ * Options are named as in `VarkaEmitOption.TABLE` (`--options cse=false,groupBudget=24`), so a
+ * new option is settable here once it has its table entry.
  *
  * `--table` prints instead the markdown a plan's registered-op-counts section wants: one row
  * per expression, one column per option variant given with `--variant k=v,...` (the defaults
@@ -351,7 +351,7 @@ object VarkaEmitDump {
   private def resolve(e: Expression, childOutput: Seq[Attribute]): Expression =
     VarkaSqlResolve.resolve(e, childOutput)
 
-  /** `k=v,k=v` onto the record's `with<K>` methods, by reflection. */
+  /** `k=v,k=v` onto the options, each `k` looked up in `VarkaEmitOption.TABLE`. */
   private def parseOptions(spec: String): VarkaEmitOptions =
     applyOptions(VarkaEmitOptions.DEFAULTS, spec)
 

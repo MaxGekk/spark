@@ -91,6 +91,11 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
   private val randomTrace = new VarkaEmitTrace
   private val lengths = Seq(1, 3, 7, 15, 16, 17, 33, 64, 65, 100, 257, 1000)
 
+  /** The options `randomOptions` draws, in the order it draws them. */
+  private val fuzzedOptions = VarkaEmitOption.TABLE.asScala.toSeq
+    .filter(_.reason != VarkaEmitOption.Reason.FAULT_INJECTOR)
+    .sortBy(o => "with" + o.name.head.toUpper + o.name.tail)
+
   /**
    * A random variant of the options record, drawn from the options table: every option but the
    * fault injectors, in the order of their `with*` setters' names, a boolean as a coin, an enum
@@ -98,15 +103,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
    * a lanes override from the powers of two, the AVX level from the levels either side of 3
    * where the 64-bit division changes lowering, the method byte budget from off, the HotSpot
    * limit and the smaller budgets that bring the size machinery down to the widths drawn here
-   * (VARKA-238), and the other budgets from small values. The order and the draws are the ones
-   * the reflection over the setters made before VARKA-248, so every seed draws what it drew.
+   * (VARKA-238), and the other budgets from small values. The order is fixed so that a seed
+   * recorded in a failure keeps drawing the same options.
    */
   private def randomOptions(rnd: Random): VarkaEmitOptions = {
     var opts = VarkaEmitOptions.DEFAULTS
-    val drawn = VarkaEmitOption.TABLE.asScala
-      .filter(_.reason != VarkaEmitOption.Reason.FAULT_INJECTOR)
-      .sortBy(o => "with" + o.name.head.toUpper + o.name.tail)
-    for (option <- drawn) {
+    for (option <- fuzzedOptions) {
       option match {
         case flag: VarkaEmitOption.Flag => opts = flag.`with`(opts, rnd.nextBoolean())
         case choice: VarkaEmitOption.Choice[_] =>

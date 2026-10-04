@@ -48,6 +48,47 @@ class VarkaEmitOptionSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(d.canonical() === "" && d.isDefault)
   }
 
+  test("each entry reads and sets the record component it is named for, and no other") {
+    // The defaults test above reads each option with its own entry's getter, so an entry wired
+    // to another component's getter and setter would pass it. Here every entry moves one value
+    // off its default and the record's own accessors say which component moved.
+    val d = VarkaEmitOptions.DEFAULTS
+    val components = classOf[VarkaEmitOptions].getRecordComponents.toSeq
+    def values(o: VarkaEmitOptions): Seq[AnyRef] = components.map(_.getAccessor.invoke(o))
+    for (option <- table) {
+      val (moved, readBack) = option match {
+        case f: VarkaEmitOption.Flag =>
+          val v = f.`with`(d, !f.defaultValue)
+          (v, f.value(v) == !f.defaultValue)
+        case c: VarkaEmitOption.Count =>
+          // A power of two away from the default: valid for every count, the lanes included.
+          val target = if (c.defaultValue == 2) 4 else 2
+          val v = c.`with`(d, target)
+          (v, c.value(v) == target)
+        case ch: VarkaEmitOption.Choice[_] =>
+          val index = (ch.constants.indexOf(ch.defaultValue) + 1) % ch.constants.size
+          val v = ch.withIndex(d, index)
+          (v, ch.value(v) == ch.constants.get(index))
+      }
+      val changed = components.zip(values(d).zip(values(moved)))
+        .collect { case (component, (before, after)) if before != after => component.getName }
+      assert(changed === Seq(option.name), option.name)
+      assert(readBack, s"${option.name}: the entry's getter does not read what its setter set")
+    }
+  }
+
+  test("the defaults and their rendering never load the table") {
+    // Linking the table's method references costs a fresh JVM about 17 ms, so DEFAULTS is
+    // written out rather than built from the table. A class loader of its own shows whether
+    // initialising the record and rendering its defaults pulled the table in after all.
+    val loader = new VarkaEmitOptionSuite.Isolated(getClass.getClassLoader)
+    // Reading DEFAULTS initialises the record.
+    val record = loader.loadClass(classOf[VarkaEmitOptions].getName)
+    val defaults = record.getField("DEFAULTS").get(null)
+    assert(record.getMethod("canonical").invoke(defaults) === "")
+    assert(!loader.loaded(classOf[VarkaEmitOption].getName))
+  }
+
   test("canonical renders the positional options, then the tags that show") {
     // The renderings variants have always had: the 26 options that predate the tags by
     // position, then a tag for each later option on the values its entry names - so a flag on
@@ -68,14 +109,14 @@ class VarkaEmitOptionSuite extends SparkFunSuite with VarkaTestWatchdog {
     for (name <- Seq("misdescribeAdd", "misdescribeWordLiveness", "misdescribeDriverBytes")) {
       assert(reasonOf(name) === Reason.FAULT_INJECTOR, name)
     }
-    for (name <- Seq("division", "useAVX", "lanesOverride")) {
+    for (name <- Seq("division", "useAVX")) {
       assert(reasonOf(name) === Reason.MACHINE, name)
     }
     for (name <- Seq("checkIntOverflow", "guardDayProducers")) {
       assert(reasonOf(name) === Reason.PRICED_CHECK, name)
     }
     assert(table.filter(_.reason == Reason.KNOB).map(_.name) ===
-      Seq("groupBudget", "fusedCeiling", "methodByteBudget", "callSiteBudget",
+      Seq("groupBudget", "fusedCeiling", "lanesOverride", "methodByteBudget", "callSiteBudget",
         "heavyGroupOutputs"))
   }
 
@@ -101,5 +142,28 @@ class VarkaEmitOptionSuite extends SparkFunSuite with VarkaTestWatchdog {
         case _ =>
       }
     }
+  }
+}
+
+private object VarkaEmitOptionSuite {
+
+  /** Loads the Varka codegen classes afresh, everything else from `parent`. */
+  final class Isolated(parent: ClassLoader) extends ClassLoader(parent) {
+    private val prefix = classOf[VarkaEmitOptions].getPackageName + "."
+
+    def loaded(name: String): Boolean = findLoadedClass(name) != null
+
+    override def loadClass(name: String, resolve: Boolean): Class[_] =
+      getClassLoadingLock(name).synchronized {
+        if (!name.startsWith(prefix)) {
+          super.loadClass(name, resolve)
+        } else {
+          Option(findLoadedClass(name)).getOrElse {
+            val in = getParent.getResourceAsStream(name.replace('.', '/') + ".class")
+            val bytes = try in.readAllBytes() finally in.close()
+            defineClass(name, bytes, 0, bytes.length)
+          }
+        }
+      }
   }
 }
