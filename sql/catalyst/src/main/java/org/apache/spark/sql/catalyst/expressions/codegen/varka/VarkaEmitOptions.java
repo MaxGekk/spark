@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.lang.management.ManagementFactory;
+import java.util.StringJoiner;
 
 import com.sun.management.HotSpotDiagnosticMXBean;
 
@@ -66,6 +67,12 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * {@link #misdescribeWordLiveness} feed it a wrong descriptor and an inverted liveness verdict
  * so that its own self-checks can be shown to fire; emission under the second of them raises
  * rather than producing a class, which is the point of it.
+ *
+ * <p><b>The options as a set are {@link VarkaEmitOption#TABLE}.</b> It lists every option once, in
+ * declaration order, with why it exists - a reference form, a winner that depends on the machine,
+ * a size knob, a priced check or a fault injector - and {@link #canonical()}, the bytes suite's
+ * inventory, the IR fuzzer's draws and {@code VarkaEmitDump}'s parser all read it (VARKA-248).
+ * {@link #DEFAULTS} is written out instead, and a suite checks it against the table.
  *
  * <p><b>Defaults hash to what they always hashed.</b> {@link VarkaShapeCacheImpl#shapeHash}
  * renders these into the hash only when they differ from {@link #DEFAULTS}, so production hashes,
@@ -551,7 +558,12 @@ public record VarkaEmitOptions(
     }
   }
 
-  /** What production always emits with; see the hashing note in the class doc. */
+  /**
+   * What production always emits with; see the hashing note in the class doc. Written out rather
+   * than built from {@link VarkaEmitOption#TABLE}: initialising the table links some eighty
+   * method references, about 17 ms in a fresh JVM, which every executor would pay for options
+   * only tests vary. {@code VarkaEmitOptionSuite} checks each value here against its table entry.
+   */
   public static final VarkaEmitOptions DEFAULTS =
       new VarkaEmitOptions(
           VarkaEmitBudget.GROUP_BUDGET, VarkaEmitBudget.FUSED_CEILING,
@@ -1112,41 +1124,25 @@ public record VarkaEmitOptions(
    * components and fails if one of them cannot change the rendering, so the next field cannot
    * be forgotten the same way.
    *
-   * <p>The two compiler options, {@code rangeSets} and {@code splitConditions}, render only when
-   * they differ from their defaults, so every variant's rendering from before they existed is
-   * unchanged; so do the fields added since ({@code groupLocalSlots},
-   * {@code materializeChronoPrefix}, {@code callSiteBudget}, {@code heavyGroupOutputs},
-   * {@code predictGrouping}, {@code driverOutputTable}, {@code exactGrouping},
-   * {@code splitDriver}, {@code severalKernels}, {@code elideUnreadLocals}, {@code planSize},
-   * {@code misdescribeDriverBytes}).
+   * <p>It renders from {@link VarkaEmitOption#TABLE}, in its order: the 26 options that predate
+   * the tags by position, then each later option's tag - a flag's when it holds the value its
+   * {@link VarkaEmitOption.FlagTag} names, a count's when it is off its default - so every
+   * variant's rendering from before an option existed is unchanged by adding it.
    */
   public String canonical() {
     if (isDefault()) {
       return "";
     }
-    return "opts(" + groupBudget + '|' + fusedCeiling + '|' + cse + '|' + shareChronoPrefix
-        + '|' + denseValidityOnce + '|' + elideChronoMonth + '|' + neriSchneiderMonth + '|'
-        + julianMap + '|' + guardDayProducers + '|' + validityByWidth + '|' + validityOrFirst
-        + '|' + validityByBitmap + '|' + checkIntOverflow + '|' + lanesOverride + '|'
-        + truncDate + '|' + floorMod7 + '|' + division + '|' + useAVX + '|'
-        + misdescribeAdd + '|' + misdescribeWordLiveness + '|' + guardUnderArm + '|'
-        + shareWholeNodes + '|' + validityByWord + '|' + mulHiDivide
-        + '|' + narrowHalfSpecies + '|' + methodByteBudget
-        + (rangeSets ? "" : "|noRangeSets") + (splitConditions ? "" : "|noSplitConditions")
-        + (groupLocalSlots ? "" : "|kernelWideSlots")
-        + (materializeChronoPrefix ? "" : "|recomputePrefix")
-        + (callSiteBudget == VarkaEmitBudget.CALL_SITE_BUDGET
-            ? "" : "|callSites=" + callSiteBudget)
-        + (heavyGroupOutputs == VarkaEmitBudget.HEAVY_GROUP_OUTPUTS
-            ? "" : "|heavy=" + heavyGroupOutputs)
-        + (predictGrouping ? "|predictGrouping" : "")
-        + (driverOutputTable ? "" : "|unrolledDriver")
-        + (exactGrouping ? "" : "|greedyGrouping")
-        + (splitDriver ? "" : "|wholeDriver")
-        + (severalKernels ? "" : "|oneKernel")
-        + (elideUnreadLocals ? "|elideUnreadLocals" : "")
-        + (planSize ? "|planSize" : "")
-        + (misdescribeDriverBytes == 0 ? "" : "|misdescribeDriverBytes=" + misdescribeDriverBytes)
-        + ')';
+    var positional = new StringJoiner("|", "opts(", "");
+    var tags = new StringBuilder();
+    for (var option : VarkaEmitOption.TABLE) {
+      switch (option.rendering()) {
+        case VarkaEmitOption.Positional _ -> positional.add(option.text(this));
+        case VarkaEmitOption.FlagTag _, VarkaEmitOption.CountTag _ ->
+            tags.append(option.tag(this));
+      }
+    }
+    return positional + tags.toString() + ")";
   }
+
 }

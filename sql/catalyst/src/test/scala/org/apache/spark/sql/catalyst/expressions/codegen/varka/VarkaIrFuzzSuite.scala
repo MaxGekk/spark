@@ -91,44 +91,33 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
   private val randomTrace = new VarkaEmitTrace
   private val lengths = Seq(1, 3, 7, 15, 16, 17, 33, 64, 65, 100, 257, 1000)
 
-  /** A random variant of the options record, through its own `with*` methods. */
+  /** The options `randomOptions` draws, in the order it draws them. */
+  private val fuzzedOptions = VarkaEmitOption.TABLE.asScala.toSeq
+    .filter(_.reason != VarkaEmitOption.Reason.FAULT_INJECTOR)
+    .sortBy(o => "with" + o.name.head.toUpper + o.name.tail)
+
+  /**
+   * A random variant of the options record, drawn from the options table: every option but the
+   * fault injectors, in the order of their `with*` setters' names, a boolean as a coin, an enum
+   * as one of its constants, and an int one time in five from the values its table entry lists -
+   * a lanes override from the powers of two, the AVX level from the levels either side of 3
+   * where the 64-bit division changes lowering, the method byte budget from off, the HotSpot
+   * limit and the smaller budgets that bring the size machinery down to the widths drawn here
+   * (VARKA-238), and the other budgets from small values. The order is fixed so that a seed
+   * recorded in a failure keeps drawing the same options.
+   */
   private def randomOptions(rnd: Random): VarkaEmitOptions = {
     var opts = VarkaEmitOptions.DEFAULTS
-    for (m <- classOf[VarkaEmitOptions].getMethods.sortBy(_.getName)
-        if m.getName.startsWith("with") && m.getParameterCount == 1
-          && !m.getName.toLowerCase(java.util.Locale.ROOT).contains("misdescribe")) {
-      val param = m.getParameterTypes.head
-      val value: Option[AnyRef] =
-        if (param == classOf[Boolean]) Some(java.lang.Boolean.valueOf(rnd.nextBoolean()))
-        else if (param.isEnum) {
-          val constants = param.getEnumConstants.asInstanceOf[Array[AnyRef]]
-          Some(constants(rnd.nextInt(constants.length)))
-        } else if (param == classOf[Int] && rnd.nextInt(5) == 0) {
-          // The int setters do not share a domain, so each one that has its own is named. Task
-          // 46's lanesOverride is an emitted vector width: powers of two and nothing else, the
-          // ones above 16 having no specialised validity helpers and so exercising the
-          // fallback. VARKA-88's useAVX is a machine's reported AVX level, whose interesting
-          // boundary is 3 - below it a 64-bit division takes the magic-number form and at or
-          // above it the conversions - so a range of large numbers would draw one of the two
-          // lowerings every time and never the other. The rest is groupBudget or
-          // fusedCeiling, which take any positive number.
-          if (m.getName == "withLanesOverride") {
-            Some(Integer.valueOf(Seq(2, 4, 8, 16, 32)(rnd.nextInt(5))))
-          } else if (m.getName == "withUseAVX") {
-            Some(Integer.valueOf(
-              Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 2, 3)(rnd.nextInt(4))))
-          } else if (m.getName == "withMethodByteBudget") {
-            // VARKA-87's switch: off, the limit HotSpot enforces, or a smaller budget that brings
-            // the size machinery - the regroup, the stages, the declines - down to the widths
-            // drawn here (VARKA-238). A single output over a small budget declines, and
-            // `emitOrSkip` then runs the shape without the budget, so its answers are still
-            // checked. One draw whatever the list's length, so the stream is not moved.
-            Some(Integer.valueOf(Seq(0, 8000, 1000, 2000, 4000)(rnd.nextInt(5))))
-          } else {
-            Some(Integer.valueOf(Seq(8, 24, 32)(rnd.nextInt(3))))
+    for (option <- fuzzedOptions) {
+      option match {
+        case flag: VarkaEmitOption.Flag => opts = flag.`with`(opts, rnd.nextBoolean())
+        case choice: VarkaEmitOption.Choice[_] =>
+          opts = choice.withIndex(opts, rnd.nextInt(choice.constants.size))
+        case count: VarkaEmitOption.Count =>
+          if (rnd.nextInt(5) == 0) {
+            opts = count.`with`(opts, count.fuzzDraws.get(rnd.nextInt(count.fuzzDraws.size)))
           }
-        } else None
-      value.foreach(v => opts = m.invoke(opts, v).asInstanceOf[VarkaEmitOptions])
+      }
     }
     opts
   }

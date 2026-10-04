@@ -128,7 +128,8 @@ document changed, and `ruff check` plus `ruff format --check` on Python files
 lengths and `VarkaEmitOptions` variants against the shared
 `VarkaReferenceEvaluator`; a failure names its seed and iteration and replays
 with `-Dvarka.fuzz.seed=<seed> -Dvarka.fuzz.only=<iteration>`. A new option is
-fuzzed the day it lands, since the suite toggles every `with*` on the record.
+fuzzed the day it lands: the suite draws from `VarkaEmitOption.TABLE`, and
+`VarkaEmitOptionSuite` fails until a new record component has its table entry.
 
 A regeneration ends with the requote: `dev/varka_bench_diff.py --git HEAD <file>
 --requote` lists, under each moved row, every document line that quotes its old
