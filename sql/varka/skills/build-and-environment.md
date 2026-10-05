@@ -320,3 +320,17 @@ them however the map drifts.
   (`readlink /proc/<pid>/cwd`, the worktree's module) or the arg file's content
   (`grep -l <Class> /tmp/sbt-args*.tmp`), and stop the sbt launcher too; then read the load
   average before trusting that the machine is idle.
+
+## `JAVA_OPTS` never reaches the test JVMs sbt forks
+
+Spark's build forks its test JVMs (`Test/fork` is `true`) and gives them `Test/javaOptions` and
+`Test/envVars`, nothing else. `JAVA_OPTS` - and `SBT_OPTS` - configure the sbt launcher's own JVM,
+and the `java` launcher does not read either variable, so `JAVA_OPTS=-XX:MaxVectorSize=16
+build/sbt testOnly ...` runs the tests at full width. `dev/varka_gate.sh`'s narrow step did
+exactly that from its first version until VARKA-286 (`m7/VARKA-286.md` 2), and every gate passed
+"at 128 bits" without one suite having run there. A flag the test JVMs must see goes into
+`Test/javaOptions` - `set LocalProject("catalyst") / Test / javaOptions += "..."`, since the bare
+`catalyst / Test / ...` form fails with a type error - or onto the command line of a test JVM run
+outside sbt, as the gate now does. `show catalyst/Test/javaOptions` is the check: the flag is in
+that list or it reaches no test.
+
