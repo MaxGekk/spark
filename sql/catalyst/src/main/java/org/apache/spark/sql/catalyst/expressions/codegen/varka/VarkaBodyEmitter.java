@@ -38,11 +38,12 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Nar
 /**
  * The methods of the emitted class, and the lane-group step they all run.
  *
- * <p>{@link #emitBody} emits one method in one of the three {@link BodyMode} roles. A driver is
+ * <p>{@link #emitDriver} emits the driver: from a table, its calls and little else, or unrolled,
  * the shared prologue - segment addresses, the per-input null state, the all-null shortcut -
- * followed by calls to its sibling loop methods, one per output group, and to the epilogue; a
- * loop method is that prologue and the vector loop over full lane groups; the epilogue is the
- * loop body run once, masked, over the rows left past {@code loopBound}. Each has a dense and a
+ * followed by calls to its sibling loop methods, one per output group, and to the epilogues.
+ * {@link #emitGroupBody} emits a loop method - that prologue and the vector loop over full lane
+ * groups - or an epilogue, the loop body run once, masked, over the rows left past
+ * {@code loopBound}; {@link #emitStage} a split driver's stage. Each has a dense and a
  * masked variant, and the two must agree wherever both could run. The lane-group step
  * ({@link #emitLaneGroup}) is the loads, the walk over each output's DAG, the validity write and
  * the stores; the validity side that is decided per body lives here with it - the per-input
@@ -55,92 +56,219 @@ final class VarkaBodyEmitter {
   }
 
   /**
-   * One body method in one of the three roles of the method layout (see
-   * {@link VarkaLoopEmitter#emit}). The dense variants run only when the dispatcher has proven
-   * every referenced input null-free, so they emit no all-null shortcut and no validity words;
-   * the masked variants are the general ones, and the pairs must agree wherever both could run.
-   * Every method re-derives the prologue state from the same seven parameters; only the driver
-   * zeroes the destination validity (the loop and epilogue methods run after bits were written
-   * and must not), and the epilogue starts its single pass at {@code loopBound}.
+   * The driver: the method the dispatcher calls, which prepares every output's validity, takes
+   * the empty batch and the all-null shortcut, and calls the groups' loop methods and then their
+   * epilogues, or the stages that call them (see the method layout in
+   * {@link VarkaLoopEmitter#emit}).
+   * Under {@code driverOutputTable} it is the table form, which reads its per-output work from a
+   * plan; otherwise the unrolled form, which emits that work output by output.
    */
-  static void emitBody(CodeBuilder cb, boolean dense, BodyMode mode, int group,
-      ClassDesc classDesc, List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals,
-      List<List<Integer>> groups) {
-    int numInputs = analysis.numInputs;
-    int numOutputs = outputs.size();
-    List<Integer> all = new java.util.ArrayList<>();
-    for (int o = 0; o < numOutputs; o++) {
-      all.add(o);
+  static void emitDriver(CodeBuilder cb, boolean dense, ClassDesc classDesc,
+      List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals, List<List<Integer>> groups) {
+    List<Integer> all = allOutputs(outputs);
+    Slots s = Slots.plan(dense, BodyMode.DRIVER, outputs, all, analysis, numLiterals, false, -1);
+    if (analysis.options.driverOutputTable()) {
+      emitTableDriver(cb, dense, classDesc, outputs, analysis, groups, s);
+    } else {
+      emitUnrolledDriver(cb, dense, classDesc, outputs, analysis, numLiterals, groups, s);
     }
-    // A loop method is always one group's; the epilogue is one group's, or every output's in
-    // the form before VARKA-87 (the method layout in VarkaLoopEmitter.emit); the driver is
-    // every output's.
+  }
+
+  /**
+   * The driver from a table: the empty-batch return, one call that zeroes or fills every output's
+   * validity and runs the bitmap pass from a plan, the all-null shortcut from a table of columns,
+   * and the calls to the groups. It maps no segment, sizes nothing, hoists no literal and reads no
+   * species - the loop and epilogue methods do all of that for themselves - so its size is its
+   * calls' ({@code VARKA-190.md} 10), and {@code Slots.plan} gives it no locals for any of it but
+   * the status the calls accumulate into.
+   */
+  private static void emitTableDriver(CodeBuilder cb, boolean dense, ClassDesc classDesc,
+      List<VarkaVectorIR> outputs, Analysis analysis, List<List<Integer>> groups, Slots s) {
+    emitEmptyReturn(cb, analysis);
+    cb.aload(P_DST_VALIDITY);
+    cb.aload(P_SRC_VALIDITY);
+    cb.aload(P_NULL_COUNT);
+    cb.loadConstant(tableConstant(outputPlan(analysis, dense, outputs), "output plan"));
+    cb.iload(analysis.lane.pLength);
+    cb.invokestatic(SUPPORT, "prepareOutputValidity", PREPARE_OUTPUT_VALIDITY);
+    if (shortcutApplies(dense, outputs, analysis)) {
+      Label live = cb.newLabel();
+      cb.aload(P_NULL_COUNT);
+      cb.loadConstant(tableConstant(shortcutColumns(analysis, outputs), "all-null shortcut"));
+      cb.iload(analysis.lane.pLength);
+      cb.invokestatic(SUPPORT, "everyOutputReadsAnAllNullColumn", EVERY_OUTPUT_ALL_NULL);
+      cb.ifeq(live);
+      cb.loadConstant(0);
+      cb.ireturn();
+      cb.labelBinding(live);
+    }
+    emitGroupCalls(cb, dense, classDesc, analysis, groups, s);
+  }
+
+  /**
+   * The driver output by output: the shared prologue over every output, with each output's
+   * validity zeroed - or set, where a dense batch makes every bit known - before anything can
+   * return, so that an output nothing writes still reads as all-null; then, in the masked
+   * driver, the bitmap pass for the outputs it serves and the all-null shortcut; then the calls.
+   */
+  private static void emitUnrolledDriver(CodeBuilder cb, boolean dense, ClassDesc classDesc,
+      List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals, List<List<Integer>> groups,
+      Slots s) {
+    emitEmptyReturn(cb, analysis);
+    emitSizes(cb, analysis, s);
+    emitOutputSegments(cb, dense, BodyMode.DRIVER, outputs, allOutputs(outputs), analysis, s);
+    emitInputState(cb, dense, analysis, s);
+    // The bitmap pass (VARKA-70.md 3.1) after the null state it reads and before the shortcut,
+    // since a batch the shortcut returns from must already have every served bitmap written.
+    if (!dense) {
+      for (int o = 0; o < outputs.size(); o++) {
+        BitmapPass pass = analysis.served[o];
+        if (pass != null) {
+          emitBitmapPass(cb, s, o, pass, analysis.lane);
+        }
+      }
+    }
+    if (shortcutApplies(dense, outputs, analysis)) {
+      Label live = cb.newLabel();
+      boolean firstOutput = true;
+      for (VarkaVectorIR root : outputs) {
+        long set = analysis.columns.get(root);
+        boolean firstColumn = true;
+        for (int i = 0; i < analysis.numInputs; i++) {
+          if ((set >>> i & 1L) != 0) {
+            cb.iload(s.dead[i]);
+            if (!firstColumn) {
+              cb.ior();
+            }
+            firstColumn = false;
+          }
+        }
+        if (!firstOutput) {
+          cb.iand();
+        }
+        firstOutput = false;
+      }
+      cb.ifeq(live);
+      cb.loadConstant(0);
+      cb.ireturn();
+      cb.labelBinding(live);
+    }
+    emitSpecies(cb, analysis, s);
+    emitLiterals(cb, analysis, numLiterals, s);
+    emitGroupCalls(cb, dense, classDesc, analysis, groups, s);
+  }
+
+  /**
+   * A loop method or an epilogue: the shared prologue over the outputs the body writes, then the
+   * vector loop over full lane groups, or the loop body run once, masked, over the rows past
+   * {@code loopBound}; then the status return. Under the byte budget the body is one group's and
+   * sets up only what that group writes and reads (VARKA-87); without it, a loop method is one
+   * group's and the single epilogue every output's ({@code group} -1).
+   */
+  static void emitGroupBody(CodeBuilder cb, boolean dense, BodyMode mode, int group,
+      List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals,
+      List<List<Integer>> groups) {
+    List<Integer> all = allOutputs(outputs);
     List<Integer> bodyOutputs = group >= 0 ? groups.get(group) : all;
-    // A group's method sets up only what its group writes and reads, so its size is the
-    // group's and not the kernel's (VARKA-87). The driver owns every output - it zeroes each
-    // validity bitmap and runs the bitmap pass - so unrolled it keeps the whole-kernel prologue
-    // whichever way the option is set; from a table (below) it keeps none of it.
-    boolean perGroup = mode != BodyMode.DRIVER && analysis.options.methodByteBudget() > 0;
+    boolean perGroup = analysis.options.methodByteBudget() > 0;
     if (perGroup && group < 0) {
       throw new IllegalArgumentException(
           "a " + mode + " body under the byte budget is one group's");
     }
     Slots s = Slots.plan(dense, mode, outputs, bodyOutputs, analysis, numLiterals, perGroup,
         group);
-    List<Integer> prologueOutputs = perGroup ? bodyOutputs : all;
-    // Under `driverOutputTable` the driver's per-output work is one call reading a plan, in step
-    // (4b) below, and the driver keeps only what it reads: the empty-batch return, that call, the
-    // all-null shortcut and its calls to the groups. It maps no output or input segment, sizes
-    // nothing, hoists no literal and reads no species - the loop and epilogue methods do all of
-    // that for themselves - so its size is its calls' (see `VARKA-190.md` 10).
-    boolean driverTable = mode == BodyMode.DRIVER && analysis.options.driverOutputTable();
-    if (driverTable) {
-      prologueOutputs = List.of();
+    emitEmptyReturn(cb, analysis);
+    emitSizes(cb, analysis, s);
+    emitScratch(cb, analysis, s);
+    emitOutputSegments(cb, dense, mode, outputs, perGroup ? bodyOutputs : all, analysis, s);
+    emitInputState(cb, dense, analysis, s);
+    emitSpecies(cb, analysis, s);
+    emitLiterals(cb, analysis, numLiterals, s);
+    if (s.guardAcc != null) {
+      // An empty mask: no lane has been found out of range yet.
+      cb.aload(s.species);
+      cb.loadConstant(0L);
+      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+      cb.astore(s.guardAcc);
     }
+    if (mode == BodyMode.LOOP) {
+      emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
+    } else {
+      emitEpilogue(cb, dense, outputs, bodyOutputs, analysis, s);
+    }
+    assertWordsLive(s, mode);
+    emitStatusReturn(cb, s);
+  }
 
-    // (1) if (length <= 0) return 0 - nothing ran, so there is nothing to report.
+  private static List<Integer> allOutputs(List<VarkaVectorIR> outputs) {
+    List<Integer> all = new java.util.ArrayList<>();
+    for (int o = 0; o < outputs.size(); o++) {
+      all.add(o);
+    }
+    return all;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The prologue: the steps every unrolled driver, loop method and epilogue begins with, each
+  // re-derived from the same seven parameters.
+  // ---------------------------------------------------------------------------------------------
+
+  /** {@code if (length <= 0) return 0}: nothing ran, so there is nothing to report. */
+  private static void emitEmptyReturn(CodeBuilder cb, Analysis analysis) {
     Label nonEmpty = cb.newLabel();
     cb.iload(analysis.lane.pLength);
     cb.ifgt(nonEmpty);
     cb.loadConstant(0);
     cb.ireturn();
     cb.labelBinding(nonEmpty);
+  }
 
-    // (2) Nominal sizes: dataBytes = (long) length * 4; validityBytes = (length + 7) / 8L.
-    if (!driverTable) {
-      cb.iload(analysis.lane.pLength);
-      cb.i2l();
-      cb.loadConstant(analysis.lane.byteStride);
-      cb.lmul();
-      cb.lstore(s.dataBytes);
-      cb.iload(analysis.lane.pLength);
-      cb.loadConstant(7);
-      cb.iadd();
-      cb.i2l();
-      cb.loadConstant(8L);
-      cb.ldiv();
-      cb.lstore(s.validityBytes);
+  /**
+   * The nominal sizes: {@code dataBytes = (long) length * stride} and
+   * {@code validityBytes = (length + 7) / 8L}.
+   */
+  private static void emitSizes(CodeBuilder cb, Analysis analysis, Slots s) {
+    cb.iload(analysis.lane.pLength);
+    cb.i2l();
+    cb.loadConstant(analysis.lane.byteStride);
+    cb.lmul();
+    cb.lstore(s.dataBytes);
+    cb.iload(analysis.lane.pLength);
+    cb.loadConstant(7);
+    cb.iadd();
+    cb.i2l();
+    cb.loadConstant(8L);
+    cb.ldiv();
+    cb.lstore(s.validityBytes);
+  }
+
+  /**
+   * A materialized prefix's scratch (VARKA-198), in a body that stores into or loads from it: one
+   * segment over all of it, regions times {@code SCRATCH_VECTORS} times {@code dataBytes}, so the
+   * caller's scratch is laid out by the batch's own length; region r's vector k is read and
+   * written at {@code byteOffset + (r * SCRATCH_VECTORS + k) * dataBytes}.
+   */
+  private static void emitScratch(CodeBuilder cb, Analysis analysis, Slots s) {
+    if (s.scratchSeg < 0) {
+      return;
     }
+    cb.lload(analysis.scratchParam());
+    cb.lload(s.dataBytes);
+    cb.loadConstant((long) (analysis.materialized.size() * Analysis.SCRATCH_VECTORS));
+    cb.lmul();
+    cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
+    cb.astore(s.scratchSeg);
+  }
 
-    // A materialized prefix's scratch (VARKA-198): one segment over all of it, regions times
-    // SCRATCH_VECTORS times dataBytes, so the caller's scratch is laid out by the batch's own
-    // length and a body needs no size but the one it has; region r's vector k is read and
-    // written at byteOffset + (r * SCRATCH_VECTORS + k) * dataBytes.
-    if (s.scratchSeg >= 0) {
-      cb.lload(analysis.scratchParam());
-      cb.lload(s.dataBytes);
-      cb.loadConstant((long) (analysis.materialized.size() * Analysis.SCRATCH_VECTORS));
-      cb.lmul();
-      cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
-      cb.astore(s.scratchSeg);
-    }
-
-    // (3) Per output: segments, and - in the driver only - zero(dstValidity) before any
-    // return below, the emitter invariant: an output nothing writes must still read as
-    // all-null. The loop and epilogue methods run after bits were written and must not. A
-    // Cond root's data address is 0L by the interface contract and must not be materialized
-    // (the same rule as an all-null input's validity address); zeroing its bitmap doubles
-    // as the selection invariant - an unwritten row reads as unselected.
+  /**
+   * Each output's data and validity segments, and - in the driver only - its validity zeroed
+   * before any return, the emitter invariant: an output nothing writes must still read as
+   * all-null. The loop and epilogue methods run after bits were written and must not. A
+   * {@code Cond} root's data address is 0L by the interface contract and is not materialized;
+   * zeroing its bitmap doubles as the selection invariant - an unwritten row reads as unselected.
+   */
+  private static void emitOutputSegments(CodeBuilder cb, boolean dense, BodyMode mode,
+      List<VarkaVectorIR> outputs, List<Integer> prologueOutputs, Analysis analysis, Slots s) {
     for (int o : prologueOutputs) {
       if (!(outputs.get(o) instanceof Cond)) {
         loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
@@ -152,8 +280,7 @@ final class VarkaBodyEmitter {
         // word, ((length + 63) / 64) * 8 bytes, where the nominal (length + 7) / 8 is short of it
         // for every length not a multiple of 64. The Arrow buffer behind it carries that at every
         // length (VarkaKernelEvaluatorSuite), and the driver's zero below then covers exactly the
-        // bytes the loop stores. Every other output keeps the nominal size, so an emission that
-        // word-writes nothing keeps its bytes.
+        // bytes the loop stores. Every other output keeps the nominal size.
         if (wordWrites(analysis) && keepsPerGroupWrite(analysis, dense, outputs, o)) {
           cb.aload(P_DST_VALIDITY);
           cb.loadConstant(o);
@@ -172,15 +299,15 @@ final class VarkaBodyEmitter {
           loadSegment(cb, P_DST_VALIDITY, o, s.validityBytes, s.dstValSeg[o]);
         }
       }
-      // an output the bitmap pass serves is written whole between steps (4) and (5) below - after
-      // the null state it reads exists and before the shortcut can return - and that write is what
-      // keeps this step's invariant for it, not a zero it overwrites.
+      // an output the bitmap pass serves is written whole after the input null state exists and
+      // before the shortcut can return, and that write is what keeps this invariant for it, not
+      // a zero it overwrites.
       if (mode == BodyMode.DRIVER && !servedByPass(analysis, dense, o)) {
         cb.aload(s.dstValSeg[o]);
         if (fillsValidityOnce(analysis, dense, outputs.get(o))) {
           // on a dense batch every value output is valid on every row, so the bits are known here
-          // and the loop's per-lane-group OR is writing ones over ones. Setting them once costs a
-          // fill of the same bytes this zero would have touched.
+          // and the loop's per-lane-group OR would write ones over ones. Setting them once costs a
+          // fill of the same bytes the zero would have touched.
           cb.iload(analysis.lane.pLength);
           cb.invokestatic(SUPPORT, "setValid", SET_VALID);
         } else {
@@ -188,28 +315,27 @@ final class VarkaBodyEmitter {
         }
       }
     }
+  }
 
-    // (4) Per referenced input: null state (masked body only - the dispatcher has proven a
-    // dense batch null-free) and the data segment. An all-null input's validity address is 0L
-    // by the morsel contract, so its segment must not be materialized; its validity word is 0L
-    // in every group instead, which nulls everything computed from it.
-    for (int i = 0; i < numInputs; i++) {
+  /**
+   * Each referenced input's null state and data segment. The dense body derives no null state -
+   * the dispatcher has proven the batch null-free - and neither does a body whose every reader of
+   * the input's word is gone, which is what makes such a masked body the dense one's bytes. An
+   * all-null input's validity address is 0L by the morsel contract, so its segment is not
+   * materialized; its validity word is 0L in every group instead, which nulls everything computed
+   * from it.
+   *
+   * <p>The unrolled driver derives all of it, and most of that is dead there: {@code hasNulls},
+   * the validity segment and the data segment are read only by the lane-group step, which only a
+   * loop or epilogue body runs, and {@code dead} only by the all-null shortcut. The driver is
+   * planned without the liveness pass (see {@code Slots.plan}), so this residue stays; it is what
+   * {@code VARKA-70.md} 9.2 prediction 3 measures.
+   */
+  private static void emitInputState(CodeBuilder cb, boolean dense, Analysis analysis, Slots s) {
+    for (int i = 0; i < analysis.numInputs; i++) {
       if ((s.inputs >>> i & 1L) == 0) {
         continue;
       }
-      // a loop or epilogue body whose every reader of this input's word is gone needs none of its
-      // null state either. This is what makes such a body the dense one's bytes.
-      //
-      // The driver still derives all of it, and most of that is dead there: `hasNulls[i]`,
-      // `srcValSeg[i]` and `srcSeg[i]` are read only inside `emitLaneGroup` and `emitValue`, which
-      // only a loop or epilogue body calls, so in the masked driver they are written and never
-      // read; `dead[i]` is read by the unrolled all-null shortcut alone, and is dead too on any
-      // shape that emits no shortcut - a `Cond` root, a null-skipping root, an output over no
-      // column. The driver from a table plans no input at all (Slots.plan), so none of this is
-      // emitted there. The
-      // liveness pass this task added is what could remove it, but the driver is planned with `live
-      // = null` (see Slots.plan) and this is deliberately not that change: it is the residue
-      // VARKA-70.md 9.2 prediction 3 measures and leaves // to the driver.
       if (dense || s.deadRefs.contains(s.word[i])) {
         // A column only a skipped date reads, with its word dead too, is read by nothing here.
         // Nor one the body reads only for its validity, under elideUnreadLocals (Slots.plan).
@@ -259,106 +385,56 @@ final class VarkaBodyEmitter {
         loadSegment(cb, P_SRC_DATA, i, s.dataBytes, s.srcSeg[i]);
       }
     }
+  }
 
-    // (4b) The bitmap pass (see VARKA-70.md 3.1): for each served output, its validity written
-    // whole from the input bitmaps, here and not per lane group. Between (4) and (5) on purpose -
-    // the null counts it passes are read in (4), and a batch the shortcut returns from in (5) must
-    // already have every served bitmap written, since nothing after (5) runs for it. The engine
-    // resolves each operand's three states, so this is one call per node of the flattened
-    // expression and no branch: arguments straight from the kernel's parameters.
-    if (driverTable) {
-      // Step (3)'s zero or fill and this step's pass, for every output, in one call.
-      cb.aload(P_DST_VALIDITY);
-      cb.aload(P_SRC_VALIDITY);
-      cb.aload(P_NULL_COUNT);
-      cb.loadConstant(tableConstant(outputPlan(analysis, dense, outputs), "output plan"));
-      cb.iload(analysis.lane.pLength);
-      cb.invokestatic(SUPPORT, "prepareOutputValidity", PREPARE_OUTPUT_VALIDITY);
-    } else if (!dense && mode == BodyMode.DRIVER) {
-      for (int o = 0; o < numOutputs; o++) {
-        BitmapPass pass = analysis.served[o];
-        if (pass != null) {
-          emitBitmapPass(cb, s, o, pass, analysis.lane);
-        }
-      }
-    }
-
-    // (5) All-null shortcut: return iff every output reads at least one all-null column.
-    // Sound only for null-intolerant outputs - a null-skipping subtree (greatest, IfElse) can
-    // be valid over an all-null column - and emitted in the masked driver only (the dense
-    // body has nothing null; the loop and epilogue methods never run when it fires), and
-    // only when every output references a column. A Cond root is excluded outright
-    // rather than reasoned about: Or(unknown, known-true) is known true, so an OR over one
-    // all-null column and one live one still selects rows, which the zeroed bitmap the
-    // shortcut leaves behind would deny. The loop needs no shortcut to be correct there -
-    // an all-null input's word is 0L, so its side contributes no known-true bits.
-    boolean shortcutApplies = !dense && mode == BodyMode.DRIVER;
+  /**
+   * Whether the driver emits the all-null shortcut - return iff every output reads at least one
+   * all-null column. Only in the masked driver (the dense body has nothing null; the loop and
+   * epilogue methods never run when it fires), only when every output reads a column, and only
+   * for null-intolerant outputs: a null-skipping subtree ({@code greatest}, {@code IfElse}) can
+   * be valid over an all-null column. A {@code Cond} root is excluded outright: an OR over one
+   * all-null column and one live one still selects rows, which the zeroed bitmap the shortcut
+   * leaves behind would deny. The loop needs no shortcut to be correct there.
+   */
+  private static boolean shortcutApplies(boolean dense, List<VarkaVectorIR> outputs,
+      Analysis analysis) {
+    boolean applies = !dense;
     for (VarkaVectorIR root : outputs) {
-      shortcutApplies &= analysis.columns.get(root) != 0L && !analysis.skipping.get(root)
+      applies &= analysis.columns.get(root) != 0L && !analysis.skipping.get(root)
           && !(root instanceof Cond);
     }
-    if (shortcutApplies && driverTable) {
-      Label live = cb.newLabel();
-      cb.aload(P_NULL_COUNT);
-      cb.loadConstant(tableConstant(shortcutColumns(analysis, outputs), "all-null shortcut"));
-      cb.iload(analysis.lane.pLength);
-      cb.invokestatic(SUPPORT, "everyOutputReadsAnAllNullColumn", EVERY_OUTPUT_ALL_NULL);
-      cb.ifeq(live);
-      cb.loadConstant(0);
-      cb.ireturn();
-      cb.labelBinding(live);
-    } else if (shortcutApplies) {
-      Label live = cb.newLabel();
-      boolean firstOutput = true;
-      for (VarkaVectorIR root : outputs) {
-        long set = analysis.columns.get(root);
-        boolean firstColumn = true;
-        for (int i = 0; i < numInputs; i++) {
-          if ((set >>> i & 1L) != 0) {
-            cb.iload(s.dead[i]);
-            if (!firstColumn) {
-              cb.ior();
-            }
-            firstColumn = false;
-          }
-        }
-        if (!firstOutput) {
-          cb.iand();
-        }
-        firstOutput = false;
-      }
-      cb.ifeq(live);
-      cb.loadConstant(0);
-      cb.ireturn();
-      cb.labelBinding(live);
-    }
+    return applies;
+  }
 
-    // Species, lane count, loop bound, and the hoisted scalar arguments (LICM). The species is
-    // read with getstatic so it stays a JIT constant - what lets C2 intrinsify the calls.
-    //
-    // Which species: the concrete one this emission was built for where the width-specialised
-    // validity helpers are in use, so the class cannot disagree with the helper names beside it,
-    // and the lane count is a bytecode constant rather than a call. Otherwise SPECIES_PREFERRED and
-    // its length(), which is what a width with no specialised helpers does.
-    if (!driverTable) {
-      cb.getstatic(analysis.lane.vector, analysis.lane.speciesField(analysis.lanes),
-          VECTOR_SPECIES);
-      cb.astore(s.species);
-      if (analysis.lanes != 0) {
-        cb.loadConstant(analysis.lanes);
-      } else {
-        cb.aload(s.species);
-        cb.invokeinterface(VECTOR_SPECIES, "length", SPECIES_LENGTH);
-      }
-      cb.istore(s.lanes);
+  /**
+   * The species, the lane count and the loop bound. The species is read with getstatic so it
+   * stays a JIT constant - what lets C2 intrinsify the calls - and it is the concrete one this
+   * emission was built for where the width-specialised validity helpers are in use, so the class
+   * cannot disagree with the helper names beside it and the lane count is a bytecode constant;
+   * otherwise {@code SPECIES_PREFERRED} and its {@code length()}.
+   */
+  private static void emitSpecies(CodeBuilder cb, Analysis analysis, Slots s) {
+    cb.getstatic(analysis.lane.vector, analysis.lane.speciesField(analysis.lanes),
+        VECTOR_SPECIES);
+    cb.astore(s.species);
+    if (analysis.lanes != 0) {
+      cb.loadConstant(analysis.lanes);
+    } else {
       cb.aload(s.species);
-      cb.iload(analysis.lane.pLength);
-      cb.invokeinterface(VECTOR_SPECIES, "loopBound", LOOP_BOUND);
-      cb.istore(s.loopBound);
+      cb.invokeinterface(VECTOR_SPECIES, "length", SPECIES_LENGTH);
     }
+    cb.istore(s.lanes);
+    cb.aload(s.species);
+    cb.iload(analysis.lane.pLength);
+    cb.invokeinterface(VECTOR_SPECIES, "loopBound", LOOP_BOUND);
+    cb.istore(s.loopBound);
+  }
+
+  /** The literals the body reads, hoisted out of the loop, and broadcast where it wants vectors. */
+  private static void emitLiterals(CodeBuilder cb, Analysis analysis, int numLiterals, Slots s) {
     for (int j = 0; j < numLiterals; j++) {
       if (s.scalarArg[j] < 0) {
-        continue; // a literal no output of this group reads (per-group planning, VARKA-87)
+        continue; // a literal no output of this body reads (per-group planning, VARKA-87)
       }
       cb.aload(analysis.lane.scalarArgsSlot());
       cb.loadConstant(j);
@@ -371,76 +447,53 @@ final class VarkaBodyEmitter {
         cb.astore(s.broadcastSlot[j]);
       }
     }
+  }
 
-    if (s.guardAcc != null) {
-      // An empty mask: no lane has been found out of range yet.
-      cb.aload(s.species);
-      cb.loadConstant(0L);
-      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
-      cb.astore(s.guardAcc);
+  /**
+   * The driver's calls: every group's loop method, then its epilogue, or each stage in order under
+   * {@code splitDriver}, returning the union of their statuses - one out-of-range lane anywhere
+   * condemns the batch, which is what the caller acts on. Each epilogue keeps its own even-batch
+   * return rather than the driver testing once for all of them: the calls that return at once are
+   * what warm the method up on a scan whose batches mostly divide evenly (VARKA-87.md 2.6.3).
+   * Under {@code splitDriver} the status stays on the operand stack; otherwise it is kept in the
+   * status local between calls.
+   */
+  private static void emitGroupCalls(CodeBuilder cb, boolean dense, ClassDesc classDesc,
+      Analysis analysis, List<List<Integer>> groups, Slots s) {
+    if (analysis.stageGroups > 0) {
+      cb.loadConstant(0);
+      for (int k = 0; k * analysis.stageGroups < groups.size(); k++) {
+        invokeCall(cb, classDesc, VarkaMethodNames.stage(dense, k), analysis);
+        cb.ior();
+      }
+      cb.ireturn();
+      return;
     }
-
-    switch (mode) {
-      case DRIVER -> {
-        // Every callee returns a status; the batch's is their union, so one out-of-range lane
-        // anywhere condemns the whole batch - which is what the caller acts on.
-        if (analysis.stageGroups > 0) {
-          // Under `splitDriver` the calls to the groups sit in the stages, a run of consecutive
-          // groups each, and the driver calls the stages in order; the status is still the
-          // union of every group's, since each stage returns its own groups' union.
-          cb.loadConstant(0);
-          for (int k = 0; k * analysis.stageGroups < groups.size(); k++) {
-            invokeCall(cb, classDesc, VarkaMethodNames.stage(dense, k), analysis);
-            cb.ior();
-          }
-          cb.ireturn();
-          return;
-        }
-        cb.loadConstant(0);
-        cb.istore(s.status);
-        for (int g = 0; g < groups.size(); g++) {
-          cb.iload(s.status);
-          invokeCall(cb, classDesc, VarkaMethodNames.loop(dense, g), analysis);
-          cb.ior();
+    cb.loadConstant(0);
+    cb.istore(s.status);
+    for (int g = 0; g < groups.size(); g++) {
+      cb.iload(s.status);
+      invokeCall(cb, classDesc, VarkaMethodNames.loop(dense, g), analysis);
+      cb.ior();
+      cb.istore(s.status);
+    }
+    if (analysis.options.methodByteBudget() > 0) {
+      // The last call's status is returned as it is rather than stored and reloaded: the driver
+      // is the one method no regroup can shrink, so its bytes are worth keeping.
+      for (int g = 0; g < groups.size(); g++) {
+        cb.iload(s.status);
+        invokeCall(cb, classDesc, VarkaMethodNames.epilogue(dense, g), analysis);
+        cb.ior();
+        if (g < groups.size() - 1) {
           cb.istore(s.status);
         }
-        // The rows past loopBound belong to the sibling epilogues, one per group (or the one
-        // method of the pre-task-87 form). Each epilogue keeps its own even-batch return
-        // rather than the driver testing once for all of them: the calls that return at once
-        // are what warm the method up on a scan whose batches mostly divide evenly
-        // (VARKA-87.md 2.6.3).
-        if (analysis.options.methodByteBudget() > 0) {
-          // The last call's status is returned as it is rather than stored and reloaded: the
-          // driver is the one method no regroup can shrink, so its bytes are worth keeping.
-          for (int g = 0; g < groups.size(); g++) {
-            cb.iload(s.status);
-            invokeCall(cb, classDesc, VarkaMethodNames.epilogue(dense, g), analysis);
-            cb.ior();
-            if (g < groups.size() - 1) {
-              cb.istore(s.status);
-            }
-          }
-        } else {
-          cb.iload(s.status);
-          invokeCall(cb, classDesc, VarkaMethodNames.epilogue(dense), analysis);
-          cb.ior();
-        }
-        cb.ireturn();
       }
-      case LOOP -> {
-        emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
-        assertWordsLive(s, mode);
-        emitStatusReturn(cb, s);
-      }
-      case EPILOGUE -> {
-        // The loop body run once over the partial lane group past loopBound - the same shape
-        // the scalar tail it replaces had - for every output, or for one group's under the
-        // byte budget.
-        emitEpilogue(cb, dense, outputs, bodyOutputs, analysis, s);
-        assertWordsLive(s, mode);
-        emitStatusReturn(cb, s);
-      }
+    } else {
+      cb.iload(s.status);
+      invokeCall(cb, classDesc, VarkaMethodNames.epilogue(dense), analysis);
+      cb.ior();
     }
+    cb.ireturn();
   }
 
   /**
