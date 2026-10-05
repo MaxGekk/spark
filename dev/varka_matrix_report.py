@@ -42,19 +42,28 @@ def modules_run(runs):
     return tuple(path.read_text().split()) if path.exists() else MODULES
 
 
+def jvm_dirs(run, module):
+    """A module's JVM directories in one configuration's run: `module`, or `module-<k>` under
+    the runner's `--split`."""
+    return sorted(
+        d for d in run.glob(f"{module}*") if d.name == module or d.name.startswith(f"{module}-")
+    )
+
+
 def fused(run):
     counts = {}
     for module in MODULES:
-        path = run / module / "fused.tsv"
-        if path.exists():
-            for line in path.read_text().splitlines():
-                suite, test, n = line.rsplit("\t", 2)
-                counts[(suite.split(".")[-1], test)] = int(n)
+        for jvm in jvm_dirs(run, module):
+            path = jvm / "fused.tsv"
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    suite, test, n = line.rsplit("\t", 2)
+                    counts[(suite.split(".")[-1], test)] = int(n)
     return counts
 
 
-def read(run, module, name, default=""):
-    path = run / module / name
+def read(jvm, name, default=""):
+    path = jvm / name
     return path.read_text(errors="replace") if path.exists() else default
 
 
@@ -88,20 +97,24 @@ def main(runs, skips_path):
         ok = failed = canceled = aborted = status = seconds = 0
         log = ""
         for module in modules_run(runs):
-            text = ANSI.sub("", read(d, module, "run.log"))
-            log += text
-            tests = re.findall(r"Tests: succeeded (\d+), failed (\d+), canceled (\d+)", text)
-            if tests:
-                ok, failed, canceled = (
-                    a + int(b) for a, b in zip((ok, failed, canceled), tests[-1])
-                )
-            if not (d / module / "exit").exists():
+            jvms = jvm_dirs(d, module)
+            if not jvms:
                 notrun.append(f"  {name}: the {module} suites did not run")
-                continue
-            suites = re.findall(r"Suites: completed (\d+), aborted (\d+)", text)
-            aborted += int(suites[-1][1]) if suites else 1
-            status = max(status, int(read(d, module, "exit", "1")))
-            seconds = max(seconds, int(read(d, module, "seconds", "0")))
+            for jvm in jvms:
+                text = ANSI.sub("", read(jvm, "run.log"))
+                log += text
+                tests = re.findall(r"Tests: succeeded (\d+), failed (\d+), canceled (\d+)", text)
+                if tests:
+                    ok, failed, canceled = (
+                        a + int(b) for a, b in zip((ok, failed, canceled), tests[-1])
+                    )
+                if not (jvm / "exit").exists():
+                    notrun.append(f"  {name}: {jvm.name} did not finish")
+                    continue
+                suites = re.findall(r"Suites: completed (\d+), aborted (\d+)", text)
+                aborted += int(suites[-1][1]) if suites else 1
+                status = max(status, int(read(jvm, "exit", "1")))
+                seconds = max(seconds, int(read(jvm, "seconds", "0")))
         unfused, stale = [], []
         if name != "defaults":
             mine = fused(d)

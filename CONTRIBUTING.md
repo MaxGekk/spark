@@ -92,7 +92,9 @@ shows). The Varka suites live beside Spark's:
 
 `dev/varka_gate.sh` is the standing gate in one command: compile, the Varka
 suites at the host's vector width and at 128 bits, the javadoc build, the
-linters and the quote check, each step logged, one summary table.
+linters and the quote check, each step logged, one summary table. After the
+compile its steps run in parallel lanes and the suites are split over several
+JVMs, so it takes about 11 minutes on a 24-core laptop (VARKA-286).
 `dev/varka_gate.sh --list` shows the steps. Install the pre-commit hook once
 per clone:
 

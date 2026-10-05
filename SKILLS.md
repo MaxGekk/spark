@@ -53,6 +53,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [The Maven build CI runs takes about fifteen minutes here, and it is the only place three failures appear](sql/varka/skills/build-and-environment.md#the-maven-build-ci-runs-takes-about-fifteen-minutes-here-and-it-is-the-only-place-three-failures-appear)
 * [A committed file outside every module runs the whole CI matrix](sql/varka/skills/build-and-environment.md#a-committed-file-outside-every-module-runs-the-whole-ci-matrix)
 * [An sbt-forked JVM hides its main class in an arg file](sql/varka/skills/build-and-environment.md#an-sbt-forked-jvm-hides-its-main-class-in-an-arg-file)
+* [`JAVA_OPTS` never reaches the test JVMs sbt forks](sql/varka/skills/build-and-environment.md#java_opts-never-reaches-the-test-jvms-sbt-forks)
 
 #### [Calendar algorithms](sql/varka/skills/calendar-algorithms.md)
 * [Reading a paper into the repo](sql/varka/skills/calendar-algorithms.md#reading-a-paper-into-the-repo)
