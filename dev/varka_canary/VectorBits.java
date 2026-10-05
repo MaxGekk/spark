@@ -21,9 +21,13 @@
  * so the gate's log shows the narrow step really runs at 128 bits (VARKA-286.md 2):
  *
  * <pre>java --add-modules jdk.incubator.vector -XX:MaxVectorSize=16 \
- *     dev/varka_vector_bits.java</pre>
+ *     dev/varka_canary/VectorBits.java</pre>
+ *
+ * <p>It is not directly in {@code dev/}: that is the base directory of Spark's sbt project
+ * {@code oldDeps}, which MiMa builds, and sbt compiles the Java files there without the
+ * incubator vector module.
  */
-public class varka_vector_bits {
+public class VectorBits {
   public static void main(String[] args) {
     System.out.println(jdk.incubator.vector.IntVector.SPECIES_PREFERRED.vectorBitSize());
   }
