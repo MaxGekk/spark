@@ -4421,6 +4421,37 @@ read-back floor at all; this item is only why one of them moved, and it may land
 cost accepted with its reason, or as noise shown to be noise. Done when the cause is named, and
 the README's row is requoted if it moves.
 
+### Item 84. Compile thresholds lowered for the kernel classes alone, on top of the warm-up
+
+*Recorded 5 October 2026, at the owner's request, from a reading of JEP 515.*
+
+**The idea.** One executor JVM option that scales HotSpot's compile thresholds for the emitted
+kernel classes and nothing else:
+`-XX:CompileCommand=CompileThresholdScaling,org.apache.spark.sql.varka.execution.VarkaFusedProjection_*::*,0.1`.
+VARKA-212 rejected scaling the thresholds for the whole JVM - every method compiled sooner, the
+compiles competed for the cores, and a new shape's first query got slower (`VARKA-212.md` 9.1) -
+and named this per-class form only as a deployment note, never measured. Scaled to the kernels
+alone, the competition is gone, and what is left to win is the part of the warm-up spent crossing
+the thresholds: each kernel method needs about 5,000 of the warm-up's short calls before its C2
+compile is queued, where the verdict lands after about 13,000 (`VarkaColdStartBenchmark` at 16
+entries). At 0.1 the queueing comes after about 500. The warm-up's verdict takes 0.8 to 1.1 s at
+16 entries and 6.3 to 6.8 s at 100 (`VARKA-212.md` 10.5); C2's time per method, about 0.4 s,
+dominates at the wide shapes and this cannot touch it, so the gain is expected largest at small
+shapes. It would also help a session with the warm-up off, whose kernels start the climb to C2
+about a hundred batches late under the C1 exclusion (`VARKA-212.md` 10.6).
+
+**The work.** The cold-start benchmark's warm-up arm with and without the option, at 16, 54 and
+100 entries, on a quiet machine: the verdict times, and the first and second runs to show nothing
+gets worse. If the verdict is at least a fifth faster at 16 entries with no regression, the option
+becomes a documented executor setting - it cannot be set from inside Varka, since a compiler
+directive, the runtime route `VarkaKernelCompileDirective` uses, rejects it ("No such key:
+'CompileThresholdScaling'", JDK 25.0.4); otherwise the result is recorded beside VARKA-212's.
+
+**Not this item.** JEP 515's ahead-of-time method profiles: on JDK 25.0.4,
+`--add-modules jdk.incubator.vector` turns off AOT class linking and profiling altogether, and
+the kernels, defined by Varka's own class loader, are outside the AOT cache in any case
+(`sql/varka/skills/the-jit.md`).
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

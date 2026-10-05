@@ -663,6 +663,31 @@ reliable (`VARKA-212.md` 10).
   different entry, cold. A check that a shape's compiled kernel served a query has to run the
   query the way the query it checks ran.
 
+## JEP 515's profiles cannot reach a kernel, and on the incubator module they reach nothing
+
+JEP 515 (JDK 25) stores method profiles in the AOT cache of JEP 483 so that a production run
+compiles its hot methods at once. Two things keep it from Varka, both checked on JDK 25.0.4 with
+a probe trained in one step (`-XX:AOTCacheOutput`, JEP 514) on 5 October 2026:
+
+* **The module that Varka needs switches it off.** With `--add-modules jdk.incubator.vector`,
+  identical in training and production as JEP 483 asks, the dump disables the full module graph,
+  links no class ahead of time (0 of 901) and stores no profile (`MethodTrainingData = 0`).
+  Without it, 889 of 890 classes are linked and 230 methods profiled. Spark's `--add-opens`,
+  which JEP 483's text forbids, is accepted on JDK 25: 899 linked, 236 profiled.
+* **A kernel is outside the cache anyway.** Only classes the JDK's built-in loaders take from
+  the class path, the module path or the JDK are cached (JEP 483). A class a user-defined loader
+  defines - as `VarkaGeneratedClassLoader` defines every kernel - is archived as "unregistered",
+  its bytes only: not linked, not profiled.
+
+The cache also refuses a directory on the class path ("Cannot have non-empty directory in
+paths"), so it needs the jars of an installed distribution, not a development build.
+
+The JVM lever that does reach the kernels alone is
+`-XX:CompileCommand=CompileThresholdScaling,<kernel class pattern>,<factor>`, a startup flag; a
+compiler directive - what `VarkaKernelCompileDirective` adds at runtime - rejects the key. Whether
+it pays on top of the warm-up is `m8/SCOPE.md` item 84; scaling the whole JVM does not
+(`VARKA-212.md` 9.1).
+
 ## A kernel's methods compile one at a time, so a verdict on the whole kernel must see every loop
 
 C2 compiles a kernel's loop methods one after another - on a starved machine about a hundred
