@@ -1821,7 +1821,7 @@ object VarkaEmitterParityBenchmark extends BenchmarkBase {
         // Two comparisons, read differently. Within a pair the call counts match to within
         // one, so the difference is the tail and nothing else. Between the pairs the call
         // count rises 64-fold, so the difference prices the per-call prologue - which matters
-        // here because emitBody emits that prologue in every mode, so today's tail method
+        // here because every loop and epilogue method emits that prologue, so the tail method
         // re-wraps every segment, re-reads the species and recomputes loopBound before
         // discovering it has no rows to process.
         //
