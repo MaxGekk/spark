@@ -27,9 +27,13 @@
 #   dev/varka_gate.sh --engine             # also run the engine module's tests
 #
 # Steps, by name:
-#   compile   build/sbt catalyst/Test/compile sql/Test/compile
-#   wide      catalyst and sql/core Varka suites at the host's vector width
-#   narrow    the same under -XX:MaxVectorSize=16 (128-bit lanes)
+#   compile   build/sbt catalyst/Test/compile sql/Test/compile, and the test classpath exported
+#   wide      catalyst and sql/core Varka suites at the host's vector width, split over several
+#             JVMs per module (dev/varka_matrix.sh --defaults --split)
+#   narrow    the same under -XX:MaxVectorSize=16 (128-bit lanes), on each test JVM's own
+#             command line
+#   quiet     the two suites that measure the JIT rather than answers, VarkaAssemblySuite and
+#             VarkaWarmupEndToEndSuite, at both widths, after everything else
 #   sweep     the opt-in exhaustive calendar sweeps (-Dvarka.sweep=true), both
 #             the scalar model's and the emitted kernel's, at the wide width
 #   doc       build/sbt catalyst/doc, the javadoc gate CI runs
@@ -43,7 +47,12 @@
 #   quotes    dev/varka_quote_check.py: every number the documents quote traces to a
 #             committed results file (or the allowlist)
 #
-# The assembly suite (VARKA-31) is part of `wide` and `narrow`; it needs a
+# After compile, three lanes run at once (VARKA-286): the suites, wide and narrow together;
+# sbt's steps - doc, lint, sweep - one after another, since two sbt invocations in one worktree
+# contend for its lock; and bench and quotes. quiet runs last, on a machine the lanes have left.
+# VARKA_GATE_SPLIT (default 3) sets the JVMs per module and width.
+#
+# The assembly suite (VARKA-31) is part of `quiet`; it needs a
 # disassembler and cancels without one. If VARKA_HSDIS_DIR is unset this
 # script looks for hsdis-<arch>.so in the usual local places and exports it
 # when found, and says so either way, because a gate that silently skipped
@@ -60,7 +69,7 @@ set -uo pipefail
 # first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 
-steps_all=(compile wide narrow sweep doc bench lint quotes)
+steps_all=(compile wide narrow quiet sweep doc bench lint quotes)
 only=""; skip=""; engine=0; list=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -101,49 +110,87 @@ else
   echo "hsdis: not found - the assembly suite will cancel, not fail (see SKILLS.md on building it)"
 fi
 
-declare -A status secs
+# A step's verdict and seconds go to files beside its log, so a step run in a lane - a background
+# subshell - reports to the summary as one run in the foreground does.
 run_step() {
   local name="$1"; shift
   local log="$logdir/$name.log"
   local start=$SECONDS
   echo "== $name: $* (log: $log)"
   if "$root/dev/varka_deadline.sh" "${VARKA_STEP_DEADLINE:-3600}" "$@" > "$log" 2>&1; then
-    status[$name]=ok
+    echo ok > "$logdir/$name.status"
   else
-    status[$name]=FAILED
+    echo FAILED > "$logdir/$name.status"
   fi
-  secs[$name]=$((SECONDS - start))
-  if [ "${status[$name]}" = FAILED ]; then
+  echo $((SECONDS - start)) > "$logdir/$name.secs"
+  if [ "$(cat "$logdir/$name.status")" = FAILED ]; then
     echo "-- $name FAILED; last lines of $log:"
-    grep -E "FAILED \*\*\*|\[error\]|error:|Tests: succeeded" "$log" | tail -12
-  else
-    grep -h -E "Tests: succeeded" "$log" | sed 's/^\[info\] //' | sed "s/^/   /"
+    grep -E "FAILED \*\*\*|ABORTED|\[error\]|error:|Tests: succeeded|^configuration|^defaults" "$log" | tail -12
   fi
 }
+selected_has() { [[ " ${selected[*]} " == *" $1 "* ]]; }
+rm -f "$logdir"/*.status "$logdir"/*.secs
 
+# The suites run outside sbt, on the classpath the compile step exports (dev/varka_matrix.sh).
+suites_build="$logdir/suites-build"
+split="${VARKA_GATE_SPLIT:-3}"
+timing_suites=VarkaAssemblySuite,VarkaWarmupEndToEndSuite
+suites=(dev/varka_matrix.sh --defaults --skip-build --build-dir "$suites_build")
 
-for s in "${selected[@]}"; do
-  case "$s" in
-    compile) run_step compile build/sbt -batch catalyst/Test/compile sql/Test/compile ;;
-    wide) run_step wide build/sbt -batch 'catalyst/testOnly *Varka*' 'sql/testOnly *Varka*' ;;
-    narrow) run_step narrow env JAVA_OPTS="${JAVA_OPTS:-} -XX:MaxVectorSize=16" build/sbt -batch \
-              'catalyst/testOnly *Varka*' 'sql/testOnly *Varka*' ;;
-    sweep) run_step sweep build/sbt -batch "project catalyst" \
-             'set Test/javaOptions += "-Dvarka.sweep=true"' \
-             'testOnly *VarkaChronoSuite *VarkaEmitter*Suite -- -z opt-in' ;;
-    doc) run_step doc build/sbt -batch catalyst/doc ;;
-    engine) run_step engine ./build/mvn -q -f sql/varka/engine/pom.xml test ;;
-    bench) run_step bench ./build/mvn -q -f sql/varka/bench/pom.xml test ;;
-    lint) run_step lint bash -c 'dev/lint-java && dev/scalastyle' ;;
-    quotes) run_step quotes dev/varka_quote_check.py ;;
-  esac
-done
+if selected_has compile; then
+  run_step compile dev/varka_matrix.sh --defaults --out "$suites_build" --list
+fi
+
+lane_suites() {
+  if selected_has wide; then
+    run_step wide "${suites[@]}" --out "$logdir/wide-runs" --split "$split" \
+      -j $((2 * split)) --skip-suites "$timing_suites" &
+  fi
+  if selected_has narrow; then
+    echo "narrow: the preferred vector is $(java --add-modules jdk.incubator.vector \
+      -XX:MaxVectorSize=16 dev/varka_vector_bits.java) bits under the narrow step's flag"
+    run_step narrow "${suites[@]}" --out "$logdir/narrow-runs" --split "$split" \
+      -j $((2 * split)) --jvm-arg -XX:MaxVectorSize=16 --skip-suites "$timing_suites" &
+  fi
+  wait
+}
+lane_sbt() {
+  if selected_has doc; then run_step doc build/sbt -batch catalyst/doc; fi
+  if selected_has lint; then run_step lint bash -c 'dev/lint-java && dev/scalastyle'; fi
+  if selected_has sweep; then
+    run_step sweep build/sbt -batch "project catalyst" \
+      'set Test/javaOptions += "-Dvarka.sweep=true"' \
+      'testOnly *VarkaChronoSuite *VarkaEmitter*Suite -- -z opt-in'
+  fi
+}
+lane_rest() {
+  if selected_has bench; then run_step bench ./build/mvn -q -f sql/varka/bench/pom.xml test; fi
+  if selected_has engine; then run_step engine ./build/mvn -q -f sql/varka/engine/pom.xml test; fi
+  if selected_has quotes; then run_step quotes dev/varka_quote_check.py; fi
+}
+lane_suites &
+lane_sbt &
+lane_rest &
+wait
+
+# The quiet phase: each width's two JIT-measuring suites, the narrow after the wide. The deadline
+# wrapper runs a program, so the two runs are one quoted bash command.
+if selected_has quiet; then
+  quiet_wide=$(printf '%q ' "${suites[@]}" --out "$logdir/quiet-wide-runs" \
+    --suites "$timing_suites" -j 2)
+  quiet_narrow=$(printf '%q ' "${suites[@]}" --out "$logdir/quiet-narrow-runs" \
+    --suites "$timing_suites" -j 2 --jvm-arg -XX:MaxVectorSize=16)
+  run_step quiet bash -c "$quiet_wide && $quiet_narrow"
+fi
 
 echo
 printf '%-8s %-7s %6s  %s\n' step status secs log
 bad=0
 for s in "${selected[@]}"; do
-  printf '%-8s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
-  [ "${status[$s]}" = ok ] || bad=$((bad + 1))
+  st=$(cat "$logdir/$s.status" 2>/dev/null || echo "not run")
+  printf '%-8s %-7s %6d  %s\n' "$s" "$st" "$(cat "$logdir/$s.secs" 2>/dev/null || echo 0)" \
+    "$logdir/$s.log"
+  [ "$st" = ok ] || bad=$((bad + 1))
 done
+echo "gate: $SECONDS s"
 exit "$bad"
