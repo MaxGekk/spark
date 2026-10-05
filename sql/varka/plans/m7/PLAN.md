@@ -433,7 +433,7 @@ runs them in parallel lanes over split JVMs, 11 minutes, and found on the way th
 step had never been narrow: `JAVA_OPTS` never reached sbt's forked test JVMs. Row 287 applies the
 same split to CI's four-core `varka-scoped` jobs, where it is worth less and must be measured on
 the runners.
-### 2.5 Promotion (180, 258 to 260, 270)
+### 2.5 Promotion (180, 258 to 260, 270, 288)
 
 VARKA-180 is the cadence carried from milestone 6. VARKA-258 and VARKA-259 are the pair of posts in
 items 78 and 79, 258 first; 260, the reference post of item 80, comes between them and the next
@@ -444,6 +444,11 @@ answers are right - the proofs, the differential against Spark, the sanitizer, t
 adequacy of its tests - and where that knowledge stops, at the emitter's plumbing, which item 58
 bounds. Milestones 4, 5 and 6 each ended in a public message, and item 58 calls "every
 arithmetic lowering carries a machine-checked proof over its guarded domain" publishable.
+
+VARKA-288, added 5 October 2026 at the owner's request, is the sequel to "The 8000-byte cliff in
+Spark SQL": apache/spark#59225 (SPARK-33301) closes the thread that post left in review, by
+splitting a large `CASE WHEN` inside a stage only where its method is past the line. It waits on
+that pull request's merge rather than on a wave.
 
 ### 2.6 The closing task (261)
 
@@ -523,6 +528,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 259 | Its companion for Spark and JVM developers: bytecode without source | item 79 | medium |
 | 260 | A reference post: Spark's code generator by the numbers | item 80 | small |
 | 270 | The milestone's own post, for JVM and database engineers: how Varka knows its answers are right, and where that stops | the plan review (2.5), item 58 | medium |
+| 288 | The cliff's sequel, for the readers of "The 8000-byte cliff in Spark SQL": a large CASE WHEN inside a stage split only where its method is past 8000 bytes, as apache/spark#59225 (SPARK-33301) does it; the cliff post's workaround measured against the fix, and C2's inlining under splitting always; published once the pull request merges, naming the release (`VARKA-288.md`) | the owner, 5 October 2026 | small |
 | 261 | The closing task: 1.1 read row by row, and the README's account of how Varka is checked rewritten; then the close `CONTRIBUTING.md` asks of every milestone, in VARKA-282's shape - the documents, the issue mirror, the lessons, the oracles, the `CHANGELOG.md` entry, the tag `varka-m7`, the cleanup | this plan | small |
 
 ## 4. Ordering
@@ -535,7 +541,8 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 3 | 245, 86, 252, 268, 265 | 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269, 280 and 285, so that it measures the tests the milestone leaves |
 | 4 | 261, 270 | 261 last by definition; 270's post written from what 261 records |
 
-VARKA-180 and VARKA-258 to VARKA-260 run across the waves.
+VARKA-180 and VARKA-258 to VARKA-260 run across the waves; VARKA-288 waits on apache/spark#59225's
+merge.
 
 At the halfway point the milestone is reviewed against 1.1, not against this table, and the
 review is recorded as section 9 with an ordering for what remains, as milestone 6's was
