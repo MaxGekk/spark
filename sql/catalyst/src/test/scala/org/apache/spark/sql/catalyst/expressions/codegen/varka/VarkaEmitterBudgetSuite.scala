@@ -854,7 +854,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
   }
 
   test("a refused method regroups before it declines: a group the class-file format cannot " +
-      "hold in one method builds once split (VARKA-219)") {
+      "hold in one method builds once split (VARKA-219)", PinsDefaults) {
     // Four depth-three trees of the family, each under the cap alone, in one group by a group
     // budget past their weight: their one loop method is refused, the group is split, and the
     // class builds with two loop methods each under the cap. A fix that declined on the refusal
@@ -1192,7 +1192,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
   }
 
   test("the call-site budget regroups only the corpus shapes with a wide group method over it, " +
-      "and leaves every other shape's bytes unchanged, at both lanes (VARKA-209)") {
+      "and leaves every other shape's bytes unchanged, at both lanes (VARKA-209)", PinsDefaults) {
     // Prediction 2 of VARKA-209.md 6.1, read as bytes rather than time: a shape whose group
     // methods are all under the budget with it off emits byte for byte the same with it on,
     // since the budget only ever adds a forced start once a method measures over it - and so
