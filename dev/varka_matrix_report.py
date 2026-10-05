@@ -36,6 +36,12 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 MODULES = ("catalyst", "sql")
 
 
+def modules_run(runs):
+    """The modules the runner was asked for (`--module`), both when it does not say."""
+    path = runs / "modules"
+    return tuple(path.read_text().split()) if path.exists() else MODULES
+
+
 def fused(run):
     counts = {}
     for module in MODULES:
@@ -81,7 +87,7 @@ def main(runs, skips_path):
         name = (d / "name").read_text().strip()
         ok = failed = canceled = aborted = status = seconds = 0
         log = ""
-        for module in MODULES:
+        for module in modules_run(runs):
             text = ANSI.sub("", read(d, module, "run.log"))
             log += text
             tests = re.findall(r"Tests: succeeded (\d+), failed (\d+), canceled (\d+)", text)

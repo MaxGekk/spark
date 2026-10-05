@@ -143,6 +143,39 @@ time, which the 60 W the laptop's USB-C supply negotiated does not quite cover (
 * **The laptop**, by hand: a PR that changes an option's code path runs its configurations with
   `--config`, in about one configuration's time.
 
+**3.2.8 The CI pull request, planned 5 October 2026.** Two pieces, both on the runner script
+and its report as they are, with two runner options added: `--module catalyst|sql` (one module's
+JVMs only) and `--shard I/N` (every N-th configuration from the I-th, for the weekly jobs).
+
+*The PR job.* The existing `varka-scoped` job in `build_and_test.yml` runs each module's Varka
+suites under the defaults in sbt. It gains a step after that one, in the same two jobs: pick one
+configuration, then `dev/varka_matrix.sh --module <m> --config <picked> -j 2`, which runs the
+defaults and the configuration as two JVMs side by side on the runner's four cores. The defaults
+run is needed again: the declining check compares each test's fused batches with it, and sbt's
+run records none. Expected cost: 15 to 25 minutes more per job.
+
+* **The pick**, `dev/varka_matrix_pick.py`: if the PR's diff against `VARKA_DIFF_BASE` names an
+  option - its record component, its `with` method or its builder setter on an added or removed
+  line - one of that option's configurations; otherwise a stable hash of the branch name modulo
+  the configuration count. The branch name rather than the PR number, because the fork's push
+  builds do not know their PR; a rerun or a later push draws the same configuration, and
+  different branches spread over the list. The step summary names the pick and why.
+* **The merge-base check**: when the configuration fails, the same step checks out
+  `VARKA_DIFF_BASE` into a worktree, builds it and runs the same configuration and module there.
+  If the same tests fail on the base, the job passes with a warning naming the configuration and
+  the tests as pre-existing; otherwise it fails. This costs a second build and run, only on
+  failure.
+
+*The weekly workflow*, `varka-option-matrix.yml`: Sunday 03:00 UTC, after the weekly full Spark
+matrix starts, on this project's repositories only, and by `workflow_dispatch`. Twelve jobs, each
+`--shard I/12` of all 45 configurations for both modules, `-j 2`, with the defaults run in each
+job for its comparison: about four configurations, roughly 80 to 100 minutes, a job. Each job
+uploads its report and run logs, and its summary is the report's table. The first run is the
+confirmation 9.2 defers to.
+
+Not in this pull request: the option-to-files map 3.2.6 suggested; matching the diff on option
+names covers the same intent without a list to keep in step.
+
 **3.2.7 Done when.** All 45 configurations have run, every red test either tagged
 `PinsDefaults`, fixed, or listed with its reason, and the weekly workflow's first run of all 45 is
 green; the PR job runs one configuration with the
@@ -272,3 +305,13 @@ Not rerun on the laptop: the configurations whose tags or skip lines were added 
 Each line came from that configuration's own observed failure, so the confirmation is the weekly
 workflow's first run in the second pull request, beside the PR job; a missing tag fails there,
 and a stale skip line fails as stale.
+
+### 9.3 Step 2's CI pull request, 5 October 2026
+
+The PR job and the weekly workflow as 3.2.8 plans them, with the runner's `--module`, `--shard`
+and `--sbt-arg`. `dev/varka_matrix_ci.sh catalyst` ran on the laptop as the PR job runs it: the
+picker drew `materializeChronoPrefix=false` from the branch name's hash, since this branch's diff
+names no option, and the defaults and that configuration passed side by side, two JVMs, in about
+six minutes. The merge-base comparison was checked on two made-up reports: a failure the base
+shares drops out, a new one is reported. The picker carries doctests, which the PR job runs before
+every pick. The weekly workflow's first run, the confirmation 9.2 defers to, comes after merge.
