@@ -439,7 +439,7 @@ final class Slots {
             : Map.of();
     // The columns this body reads for their values, under elideUnreadLocals: those the walk visits.
     // A column only an isNotNull reads, for its validity word, is not one of them, and maps no
-    // data segment (VarkaBodyEmitter step (4)).
+    // data segment (VarkaBodyEmitter.emitInputState).
     long valueColumns = ~0L;
     if (elide && (mode == BodyMode.LOOP || mode == BodyMode.EPILOGUE)) {
       valueColumns = 0L;
@@ -474,7 +474,7 @@ final class Slots {
     // kernel's columns are the kernel's, so its input slots are numbered exactly as before.
     boolean groupLocal = perGroup && analysis.options.groupLocalSlots();
     s.inputs = analysis.referencedColumns;
-    // A driver from a table reads no input (VarkaBodyEmitter step 4 is dead there), so it plans
+    // A driver from a table reads no input (VarkaBodyEmitter.emitTableDriver), so it plans
     // none; see the output segments and literals below.
     boolean strippedDriver = mode == VarkaBodyEmitter.BodyMode.DRIVER
         && analysis.options.driverOutputTable();
@@ -487,7 +487,8 @@ final class Slots {
         s.inputs |= analysis.columns.get(outputs.get(o));
       }
     }
-    // Under `driverOutputTable` the driver maps no output segment (VarkaBodyEmitter step 4b).
+    // Under `driverOutputTable` the driver maps no output segment
+    // (VarkaBodyEmitter.emitTableDriver).
     for (int o = 0; o < outputs.size(); o++) {
       if ((perGroup && !planned.get(o)) || strippedDriver) {
         s.dstSeg[o] = -1;

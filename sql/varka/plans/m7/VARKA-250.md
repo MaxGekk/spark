@@ -124,3 +124,21 @@ status.
 literals for it, and no driver of either form gets a guard accumulator or a scratch segment, so
 `emitTableDriver` calls no prologue helper at all. The group body no longer takes the class
 descriptor, which only the driver's calls read.
+
+**What the plan named that was built otherwise.** Section 3.1 planned `emitSpeciesAndLiterals`
+and `emitGuardInit`. The code has `emitSpecies` and `emitLiterals` as two helpers, since the table
+driver takes neither and the unrolled driver both, and keeps the guard accumulator's three
+instructions inline in `emitGroupBody`, the only body with one. The 372 lines of section 1 are
+item 74.3's count when the item was written; the method measured 379 when this task started.
+
+**The review of the pull request** (`/code-review high`) found no correctness bug and changed
+four things: `emitGroupBody` switches over its mode exhaustively again, a driver mode an error
+rather than an epilogue; the comments that cited the old numbered steps name the helpers instead,
+in `VarkaBodyEmitter`, `Slots.plan` and `VarkaEmitterValiditySuite`; `emitTableDriver`'s javadoc no
+longer claims the driver has no locals but its status - `Slots.plan` numbers about a dozen for
+every body, and the table driver uses the status alone; and the output list is built once in the
+unrolled driver and only where used in a group body. Left for later: the table driver still pays a
+whole-kernel `Slots.plan` for its one status slot. Giving it a small plan of its own would move
+that slot's number and so the bytes, and it costs emission time only, a few small plans per
+sizing round.
+

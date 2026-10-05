@@ -70,7 +70,7 @@ final class VarkaBodyEmitter {
     if (analysis.options.driverOutputTable()) {
       emitTableDriver(cb, dense, classDesc, outputs, analysis, groups, s);
     } else {
-      emitUnrolledDriver(cb, dense, classDesc, outputs, analysis, numLiterals, groups, s);
+      emitUnrolledDriver(cb, dense, classDesc, outputs, all, analysis, numLiterals, groups, s);
     }
   }
 
@@ -79,8 +79,8 @@ final class VarkaBodyEmitter {
    * validity and runs the bitmap pass from a plan, the all-null shortcut from a table of columns,
    * and the calls to the groups. It maps no segment, sizes nothing, hoists no literal and reads no
    * species - the loop and epilogue methods do all of that for themselves - so its size is its
-   * calls' ({@code VARKA-190.md} 10), and {@code Slots.plan} gives it no locals for any of it but
-   * the status the calls accumulate into.
+   * calls' ({@code VARKA-190.md} 10). Of the locals {@code Slots.plan} numbers for every body it
+   * uses only the status the calls accumulate into, and under {@code splitDriver} not that.
    */
   private static void emitTableDriver(CodeBuilder cb, boolean dense, ClassDesc classDesc,
       List<VarkaVectorIR> outputs, Analysis analysis, List<List<Integer>> groups, Slots s) {
@@ -112,11 +112,11 @@ final class VarkaBodyEmitter {
    * driver, the bitmap pass for the outputs it serves and the all-null shortcut; then the calls.
    */
   private static void emitUnrolledDriver(CodeBuilder cb, boolean dense, ClassDesc classDesc,
-      List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals, List<List<Integer>> groups,
-      Slots s) {
+      List<VarkaVectorIR> outputs, List<Integer> all, Analysis analysis, int numLiterals,
+      List<List<Integer>> groups, Slots s) {
     emitEmptyReturn(cb, analysis);
     emitSizes(cb, analysis, s);
-    emitOutputSegments(cb, dense, BodyMode.DRIVER, outputs, allOutputs(outputs), analysis, s);
+    emitOutputSegments(cb, dense, BodyMode.DRIVER, outputs, all, analysis, s);
     emitInputState(cb, dense, analysis, s);
     // The bitmap pass (VARKA-70.md 3.1) after the null state it reads and before the shortcut,
     // since a batch the shortcut returns from must already have every served bitmap written.
@@ -168,9 +168,8 @@ final class VarkaBodyEmitter {
   static void emitGroupBody(CodeBuilder cb, boolean dense, BodyMode mode, int group,
       List<VarkaVectorIR> outputs, Analysis analysis, int numLiterals,
       List<List<Integer>> groups) {
-    List<Integer> all = allOutputs(outputs);
-    List<Integer> bodyOutputs = group >= 0 ? groups.get(group) : all;
     boolean perGroup = analysis.options.methodByteBudget() > 0;
+    List<Integer> bodyOutputs = group >= 0 ? groups.get(group) : allOutputs(outputs);
     if (perGroup && group < 0) {
       throw new IllegalArgumentException(
           "a " + mode + " body under the byte budget is one group's");
@@ -180,7 +179,8 @@ final class VarkaBodyEmitter {
     emitEmptyReturn(cb, analysis);
     emitSizes(cb, analysis, s);
     emitScratch(cb, analysis, s);
-    emitOutputSegments(cb, dense, mode, outputs, perGroup ? bodyOutputs : all, analysis, s);
+    emitOutputSegments(cb, dense, mode, outputs, perGroup ? bodyOutputs : allOutputs(outputs),
+        analysis, s);
     emitInputState(cb, dense, analysis, s);
     emitSpecies(cb, analysis, s);
     emitLiterals(cb, analysis, numLiterals, s);
@@ -191,10 +191,10 @@ final class VarkaBodyEmitter {
       cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
       cb.astore(s.guardAcc);
     }
-    if (mode == BodyMode.LOOP) {
-      emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
-    } else {
-      emitEpilogue(cb, dense, outputs, bodyOutputs, analysis, s);
+    switch (mode) {
+      case LOOP -> emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
+      case EPILOGUE -> emitEpilogue(cb, dense, outputs, bodyOutputs, analysis, s);
+      case DRIVER -> throw new IllegalArgumentException("the driver is emitDriver's, not a body's");
     }
     assertWordsLive(s, mode);
     emitStatusReturn(cb, s);
@@ -1006,13 +1006,14 @@ final class VarkaBodyEmitter {
   }
 
   /**
-   * Whether a body maps output {@code o}'s validity segment (step (3)). The driver always does, for
-   * its zero, fill or bitmap pass. Under {@link VarkaEmitOptions#elideUnreadLocals} a loop or
-   * epilogue body does only for an output whose validity it writes: one that
-   * {@link #keepsPerGroupWrite}, or a {@link Cond} root, whose selection bitmap the lane group
-   * always writes. Read by {@code Slots.plan}, which plans the segment's local, and by step (3),
-   * which builds it, so the two cannot disagree; a write through a segment never built fails at
-   * the first emission in {@code Slots.dstValSeg(int)}.
+   * Whether a body maps output {@code o}'s validity segment ({@link #emitOutputSegments}). The
+   * driver always does, for its zero, fill or bitmap pass. Under
+   * {@link VarkaEmitOptions#elideUnreadLocals} a loop or epilogue body does only for an output
+   * whose validity it writes: one that {@link #keepsPerGroupWrite}, or a {@link Cond} root, whose
+   * selection bitmap the lane group always writes. Read by {@code Slots.plan}, which plans the
+   * segment's local, and by {@link #emitOutputSegments}, which builds it, so the two cannot
+   * disagree; a write through a segment never built fails at the first emission in
+   * {@code Slots.dstValSeg(int)}.
    */
   static boolean buildsValiditySegment(Analysis analysis, boolean dense, BodyMode mode,
       List<VarkaVectorIR> outputs, int o) {
@@ -1099,8 +1100,8 @@ final class VarkaBodyEmitter {
    * The plan {@code VarkaVectorSupport.prepareOutputValidity} reads under
    * {@code driverOutputTable}: per output, in order, the step the unrolled driver would emit for
    * it - its bitmap pass where it is served, else a fill where {@link #fillsValidityOnce}, else a
-   * zero at the size step (3) maps its segment at. Decided by the same predicates as the
-   * unrolled form, so the two write the same bits.
+   * zero at the size {@link #emitOutputSegments} maps its segment at. Decided by the same
+   * predicates as the unrolled form, so the two write the same bits.
    */
   private static String outputPlan(Analysis analysis, boolean dense, List<VarkaVectorIR> outputs) {
     StringBuilder plan = new StringBuilder();
