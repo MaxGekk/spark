@@ -673,13 +673,13 @@ public final class VarkaLoopEmitter {
         b.withFlags(AccessFlag.PUBLIC, AccessFlag.FINAL);
         if (!analysis.nullsFromValidInputs) {
           b.withMethodBody(VarkaMethodNames.driver(true), desc, AccessFlag.PRIVATE.mask(),
-              (CodeBuilder cb) -> VarkaBodyEmitter.emitBody(cb, true, BodyMode.DRIVER, -1,
-                  classDesc, outputs, analysis, numLiterals, groups));
+              (CodeBuilder cb) -> VarkaBodyEmitter.emitDriver(cb, true, classDesc, outputs,
+                  analysis, numLiterals, groups));
         }
         if (anyColumns || analysis.nullsFromValidInputs) {
           b.withMethodBody(VarkaMethodNames.driver(false), desc, AccessFlag.PRIVATE.mask(),
-              (CodeBuilder cb) -> VarkaBodyEmitter.emitBody(cb, false, BodyMode.DRIVER, -1,
-                  classDesc, outputs, analysis, numLiterals, groups));
+              (CodeBuilder cb) -> VarkaBodyEmitter.emitDriver(cb, false, classDesc, outputs,
+                  analysis, numLiterals, groups));
         }
       });
       return VarkaEmittedClass.measure(bytes);
@@ -876,8 +876,8 @@ public final class VarkaLoopEmitter {
       List<List<Integer>> groups, boolean epiloguePerGroup) {
     MethodTypeDesc desc = analysis.bodyDesc();
     b.withMethodBody(VarkaMethodNames.driver(dense), desc, AccessFlag.PRIVATE.mask(),
-        (CodeBuilder cb) -> VarkaBodyEmitter.emitBody(cb, dense, BodyMode.DRIVER, -1,
-            classDesc, outputs, analysis, numLiterals, groups));
+        (CodeBuilder cb) -> VarkaBodyEmitter.emitDriver(cb, dense, classDesc, outputs,
+            analysis, numLiterals, groups));
     for (int k = 0; analysis.stageGroups > 0 && k * analysis.stageGroups < groups.size(); k++) {
       final int stage = k;
       b.withMethodBody(VarkaMethodNames.stage(dense, k), desc, AccessFlag.PRIVATE.mask(),
@@ -886,18 +886,18 @@ public final class VarkaLoopEmitter {
     }
     if (!epiloguePerGroup) {
       b.withMethodBody(VarkaMethodNames.epilogue(dense), desc, AccessFlag.PRIVATE.mask(),
-          (CodeBuilder cb) -> VarkaBodyEmitter.emitBody(cb, dense, BodyMode.EPILOGUE, -1,
-              classDesc, outputs, analysis, numLiterals, groups));
+          (CodeBuilder cb) -> VarkaBodyEmitter.emitGroupBody(cb, dense, BodyMode.EPILOGUE, -1,
+              outputs, analysis, numLiterals, groups));
     }
     for (int g = 0; g < groups.size(); g++) {
       final int group = g;
       b.withMethodBody(VarkaMethodNames.loop(dense, g), desc, AccessFlag.PRIVATE.mask(),
-          (CodeBuilder cb) -> VarkaBodyEmitter.emitBody(cb, dense, BodyMode.LOOP, group,
-              classDesc, outputs, analysis, numLiterals, groups));
+          (CodeBuilder cb) -> VarkaBodyEmitter.emitGroupBody(cb, dense, BodyMode.LOOP, group,
+              outputs, analysis, numLiterals, groups));
       if (epiloguePerGroup) {
         b.withMethodBody(VarkaMethodNames.epilogue(dense, g), desc, AccessFlag.PRIVATE.mask(),
-            (CodeBuilder cb) -> VarkaBodyEmitter.emitBody(cb, dense, BodyMode.EPILOGUE, group,
-                classDesc, outputs, analysis, numLiterals, groups));
+            (CodeBuilder cb) -> VarkaBodyEmitter.emitGroupBody(cb, dense, BodyMode.EPILOGUE, group,
+                outputs, analysis, numLiterals, groups));
       }
     }
   }

@@ -143,7 +143,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
         Seq(new IfElse(new Compare(CompareOp.LT, d, d2), d, d2)), 2, combos(2)),
       // Two outputs where an all-null d does not fire the driver's shortcut, since year(d3)
       // reads no all-null column: the AND root's bitmap has to be written by the pass, before
-      // step (5), or it is never written at all (3.1).
+      // the shortcut, or it is never written at all (3.1).
       ("datediff(d, d2) beside year(d3): the AND root past the shortcut",
         Seq(new DateDiff(d, d2), new Year(d3)), 3, combos(3)),
       // A null-free input inside a masked kernel: year(d)'s bitmap is setValid, not a copy.
