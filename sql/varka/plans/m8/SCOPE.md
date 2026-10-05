@@ -4398,6 +4398,29 @@ what serves milestone 7's goal became its rows 273 to 281, and this is the rest.
   would keep the compiler's admission and the emitter's shape rules in step mechanically; and
   pruning row 269's enumeration by the emitter's record, to reach size 6.
 
+### Item 83. `WHERE d < d2` counted lost 16% between two surface regenerations
+
+*Recorded 5 October 2026, from the regeneration of the date surface on the `varka-m6` tag
+(`751def147b0`), at the owner's request.*
+
+**The number.** On the laptop, at 1e9 rows, the Varka arm's `WHERE d < d2`, counted, fell from
+88.1 M rows/s in the file committed on 13 September (`fc6a80fa5ed`) to 74.2 on the milestone 6
+build, -15.8%, so the row went from 0.80x to 0.70x against stock 4.2.0. Two more counted rows
+moved the same way by less, `WHERE d BETWEEN ...` (265.1 to 250.1, -5.7%) and `WHERE d IS NOT
+NULL` (85.7 to 80.7, -5.8%), while every columnar-consumer row moved up, `WHERE d < d2` from
+91.7 to 554.2.
+
+**What is not yet known.** The fork's engine-off arm fell on the same row too, from 114.9 to
+106.0 (-7.7%), so up to half of the loss may be the machine or the fork's row engine rather
+than Varka. Each figure is one run.
+
+**The work.** First separate the two: rerun the counted rows alone (`--only`) on both commits,
+Varka on and off, several times each, under the same machine state. If Varka's share stands,
+bisect the commits between them on that row. Item 13 is why counted rows sit near the
+read-back floor at all; this item is only why one of them moved, and it may land as a fix, as a
+cost accepted with its reason, or as noise shown to be noise. Done when the cause is named, and
+the README's row is requoted if it moves.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
