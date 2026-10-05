@@ -192,7 +192,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   }
 
   test("the column and literal next_day forms cost what VARKA-59.md 3.3 " +
-      "registered, and the literal form's bytes did not move") {
+      "registered, and the literal form's bytes did not move", PinsDefaults) {
     val literal = emitMulti(Seq(new NextDay(new ColumnRef(0), new LiteralSlot(0))), 1, 1)._2
     val column = emitMulti(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0)._2
     assert(laneOps(literal, "loopDense0") === 18, "the literal form")
@@ -546,7 +546,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     }
   }
 
-  test("dayofweek_iso costs weekday plus one, and neither sibling moved") {
+  test("dayofweek_iso costs weekday plus one, and neither sibling moved", PinsDefaults) {
     val col = new ColumnRef(0)
     def ops(root: VarkaVectorIR): Int =
       laneOps(emitMulti(Seq(root), 1, 0, VarkaMatrix.base)._2, "loopDense0")
@@ -1626,7 +1626,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
       "the year tail must not change when only the month axis does")
   }
 
-  test("the Julian map costs what VARKA-54.md 3.3 registered, per node") {
+  test("the Julian map costs what VARKA-54.md 3.3 registered, per node", PinsDefaults) {
     // Off the class file, like VARKA-53's: the prefix loses the century fold and the year-step
     // underflow correction and gains the map and a second carry, and the year assembly loses
     // the `100 * century` multiply-add. Registered before the run; a miss is a bug in the

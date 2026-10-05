@@ -24,12 +24,16 @@
 #   dev/varka_matrix.sh --all -j 8                     # every configuration, eight at a time
 #   dev/varka_matrix.sh --list                         # print the configurations and stop
 #   dev/varka_matrix.sh --all --skip-build             # reuse the last build and classpath
+#   dev/varka_matrix.sh --all -j 8 --deadline 06:30    # start no JVM after 06:30
 #
 # sbt builds once and exports the test classpath and JVM options; each configuration then runs
 # as its own ScalaTest runner JVM in its own directory under target/varka-matrix/, so parallel
 # runs share no sbt lock, warehouse or temporary directory. The defaults always run too, as
 # configuration zero: a test that fused under the defaults and fuses nothing under a
 # configuration fails, unless sql/varka/matrix/skips.tsv marks it "declines" (see VarkaMatrix).
+#
+# On a laptop the runner also waits before each launch while the battery discharges below 30%,
+# so an unattended run does not drain it (a charger can supply less than ten JVMs draw).
 #
 # Exit status: 0 when every configuration passed, 1 otherwise; one line per configuration.
 
@@ -41,9 +45,10 @@ OUT=$ROOT/target/varka-matrix
 jobs=1
 build=1
 list=0
+deadline=""
 configs=()
 
-usage() { sed -n '18,35p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n '18,39p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,6 +56,8 @@ while [ $# -gt 0 ]; do
     --all) configs+=("ALL"); shift ;;
     -j) jobs="$2"; shift 2 ;;
     --skip-build) build=0; shift ;;
+    --deadline) deadline=$(date -d "$2" +%s) || exit 2
+      [ "$deadline" -lt "$(date +%s)" ] && deadline=$(date -d "tomorrow $2" +%s); shift 2 ;;
     --list) list=1; shift ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage ;;
@@ -128,11 +135,22 @@ run_one() {
 }
 # Each configuration's two modules in the background, at most $jobs JVMs at once; the defaults
 # first. The SQL suites take the longer, so each configuration starts them first.
+# Waits while a laptop battery discharges below 30%; true unless the deadline has passed.
+may_launch() {
+  local bat=/sys/class/power_supply/BAT0
+  while [ -r "$bat/status" ] && [ "$(cat "$bat/status")" = Discharging ] &&
+      [ "$(cat "$bat/capacity")" -lt 30 ]; do
+    sleep 60
+  done
+  [ -z "$deadline" ] || [ "$(date +%s)" -lt "$deadline" ]
+}
+
 rm -rf "$OUT/runs"
 all=("" "${configs[@]}")
 running=0
 for config in "${all[@]}"; do
   for module in sql catalyst; do
+    may_launch || { echo "== deadline reached; no further configurations start"; break 2; }
     run_one "$config" "$module" &
     running=$((running + 1))
     if [ "$running" -ge "$jobs" ]; then wait -n; running=$((running - 1)); fi

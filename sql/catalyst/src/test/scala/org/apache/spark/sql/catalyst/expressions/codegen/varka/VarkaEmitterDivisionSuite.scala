@@ -200,7 +200,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     }
   }
 
-  test("the shipped default emits no double-lane ops at all") {
+  test("the shipped default emits no double-lane ops at all", PinsDefaults) {
     // The option is off by default, so no production kernel converts anything: the emitted bytes
     // for every calendar shape are what they were before this existed, which is also what keeps
     // VarkaEmittedBytesSuite's registered hashes valid without regenerating them.
@@ -321,7 +321,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
   }
 
   test("a constant division takes the multiply-high form by default and the double lane as " +
-      "the reference arm, whatever the division option says") {
+      "the reference arm, whatever the division option says", PinsDefaults) {
     // The `division` option chooses among the lowerings the *calendar* has and does not reach
     // this node. What does is `mulHiDivide`: on, the body has no double-lane op at all and
     // carries the multiply-high's four long-lane ops - two multiplies, two shifts - and four
@@ -516,8 +516,10 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     val mask52 = (1L << 52) - 1
     val divisors = Seq(3_600_000_000_000L, 60_000_000_000L, 1_000_000_000L, 1_000L,
       86_400_000_000L, 60L, -60L)
+    // The level selects the form, so the conversion arm keeps the default level whatever the
+    // option matrix's configuration sets it to.
     val forms = Seq(
-      ("conversion", VarkaMatrix.base),
+      ("conversion", VarkaMatrix.base.withUseAVX(VarkaEmitOptions.DEFAULTS.useAVX)),
       ("magic", VarkaMatrix.base.withUseAVX(2)))
     // A region is [base, 2 * base): the ends, the first multiple boundary, one deep inside.
     def region(base: Long, d: Long): Seq[Long] = {

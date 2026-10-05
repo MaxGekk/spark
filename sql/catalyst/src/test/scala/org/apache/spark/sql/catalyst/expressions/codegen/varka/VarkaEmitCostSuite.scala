@@ -227,7 +227,8 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
     assert(onBuilds <= offBuilds, s"$onBuilds builds predicted, $offBuilds under the weights")
   }
 
-  test("under predictGrouping the shapes it regroups answer as the reference evaluator does") {
+  test("under predictGrouping the shapes it regroups answer as the reference evaluator does",
+      PinsDefaults) {
     // The fuzz draw toggles the switch like every option, but its shapes are too narrow for a
     // prediction to close a group, so the switch is checked here on the shapes where it does:
     // the cheap tails at the int lane, and at the long lane forty outputs over one shared

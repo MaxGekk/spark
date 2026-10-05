@@ -25,6 +25,7 @@ import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.util.Utils
 
 /**
@@ -323,7 +324,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
-  test("the AVX level rides the shape key, so two hosts cannot share one identity") {
+  test("the AVX level rides the shape key, so two hosts cannot share one identity", PinsDefaults) {
     // `VARKA-88.md` risk 6: the level changes emitted bytes at the long lane, so an
     // emission that assumed AVX-512 converts must not be handed to a kernel compiled for a
     // host without them. Rendering it is what keeps the two apart.

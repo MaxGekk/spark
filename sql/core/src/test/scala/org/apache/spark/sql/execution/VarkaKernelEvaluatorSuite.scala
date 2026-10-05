@@ -28,6 +28,7 @@ import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, DateAddYMInterval, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaMatrix, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
@@ -214,7 +215,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
   }
 
   test("the emit.useAVX level reaches the shape key, so a session at a level emits its own " +
-      "class") {
+      "class", PinsDefaults) {
     // VARKA-121's session switch: `spark.sql.codegen.varka.emit.useAVX` is read on the driver,
     // carried to the evaluator and applied onto the emit options that form the shape key. The
     // level is part of the shape hash, so the class name moves with it - which is what keeps a

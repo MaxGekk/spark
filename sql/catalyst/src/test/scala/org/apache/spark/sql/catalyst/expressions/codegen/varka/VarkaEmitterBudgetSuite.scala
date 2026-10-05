@@ -333,7 +333,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
       VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0", s"jdk.incubator.vector.$owner")
     }.sum
 
-  test("a constant division weighs the larger of its two forms, counted over every vector type") {
+  test("a constant division weighs the larger of its two forms, counted over every vector type",
+      PinsDefaults) {
     // The division's register, asserted off the class file as the calendar register above is.
     // Each lane has two forms and a body picks one after the groups are formed, so the weight is
     // the larger. The count takes in every vector type: the int lane's multiply-high form runs
@@ -467,7 +468,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
   }
 
   test("the driver stays under HugeMethodLimit on the output ladder, with the pass " +
-      "on and off, and the pass costs the 48-output driver what prediction 6 said") {
+      "on and off, and the pass costs the 48-output driver what prediction 6 said", PinsDefaults) {
     // Nothing measured the driver before this task; it is one method for every output and the
     // one method every batch runs. Measured before the work: 2409 bytes at 44 outputs against
     // the epilogue's 8058, 2624 at 48 (VARKA-70.md 6.1). The pass adds about ten bytes
@@ -816,7 +817,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
   private val perCopy = unshared.withCse(false)
 
   test("a method the class-file format cannot hold declines like a method over the budget, " +
-      "budget or not, naming the method, the bytes and the cap (VARKA-219)") {
+      "budget or not, naming the method, the bytes and the cap (VARKA-219)", PinsDefaults) {
     // Depth four builds a loop method under the cap; depth five builds one the Class-File API
     // refuses while the class is assembled, before the byte budget can measure it. The emitter
     // reads the refusal as the measurement, so the shape declines exactly as a method over the
@@ -1163,7 +1164,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
   }
 
   test("on the long lane a wide group over the call-site budget is split too, and answers the " +
-      "same (VARKA-209)") {
+      "same (VARKA-209)", PinsDefaults) {
     // The budget reads the vector classes whatever the lane, and the split is by outputs, so
     // the long lane takes the same path; nothing materializes there, so each half recomputes
     // the shared node. Forty `t / 3600000000000 + k` outputs share the division by whole-node

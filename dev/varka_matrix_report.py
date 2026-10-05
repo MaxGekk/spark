@@ -52,15 +52,14 @@ def read(run, module, name, default=""):
     return path.read_text(errors="replace") if path.exists() else default
 
 
-def declines(skips_path):
+def skip_lines(skips_path):
     entries = set()
     if skips_path.exists():
         for line in skips_path.read_text().splitlines():
             if not line.strip() or line.startswith("#"):
                 continue
             config, suite, test, kind, _reason = line.split("\t")
-            if kind == "declines":
-                entries.add((config, suite, test))
+            entries.add((kind, config, suite, test))
     return entries
 
 
@@ -71,13 +70,13 @@ def main(runs, skips_path):
         key=lambda d: (d.name != "defaults", d.name),
     )
     base = fused(runs / "defaults")
-    marked = declines(skips_path)
+    marked = skip_lines(skips_path)
     bad = 0
     print(
         f"{'configuration':32} {'exit':>4} {'secs':>5} {'ok':>5} {'fail':>4} {'canc':>4} "
         f"{'abort':>5} {'unfused':>7}"
     )
-    details = []
+    details, notrun = [], []
     for d in dirs:
         name = (d / "name").read_text().strip()
         ok = failed = canceled = aborted = status = seconds = 0
@@ -90,6 +89,9 @@ def main(runs, skips_path):
                 ok, failed, canceled = (
                     a + int(b) for a, b in zip((ok, failed, canceled), tests[-1])
                 )
+            if not (d / module / "exit").exists():
+                notrun.append(f"  {name}: the {module} suites did not run")
+                continue
             suites = re.findall(r"Suites: completed (\d+), aborted (\d+)", text)
             aborted += int(suites[-1][1]) if suites else 1
             status = max(status, int(read(d, module, "exit", "1")))
@@ -98,10 +100,12 @@ def main(runs, skips_path):
         if name != "defaults":
             mine = fused(d)
             for key, n in base.items():
-                if n > 0 and mine.get(key) == 0 and (name, *key) not in marked:
+                # A test listed as failing under this configuration says nothing by fusing.
+                listed = any((kind, name, *key) in marked for kind in ("declines", "fails"))
+                if n > 0 and mine.get(key) == 0 and not listed:
                     unfused.append(key)
-            for config, suite, test in marked:
-                if config == name and mine.get((suite, test), 0) > 0:
+            for kind, config, suite, test in marked:
+                if kind == "declines" and config == name and mine.get((suite, test), 0) > 0:
                     stale.append((suite, test))
         failing = status != 0 or unfused or stale
         bad += bool(failing)
@@ -118,6 +122,8 @@ def main(runs, skips_path):
         details += [f"  {name}: stale declines line, the test fuses: {s} / {t}" for s, t in stale]
     if details:
         print("\n" + "\n".join(details))
+    if notrun:
+        print("\n" + "\n".join(notrun))
     return 1 if bad else 0
 
 
