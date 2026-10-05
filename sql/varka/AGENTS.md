@@ -136,7 +136,10 @@ with one option changed at a time. A test starts from `VarkaMatrix.base`, not
 `VarkaEmitOptions.DEFAULTS`, so the matrix reaches its kernels; a test whose
 subject is the defaults' emitted structure takes the tag `PinsDefaults`; and an
 answer test a configuration breaks by design gets a line in
-`sql/varka/matrix/skips.tsv` with its reason.
+`sql/varka/matrix/skips.tsv` with its reason. A pull request's CI runs one
+configuration - an option its diff names, or one its branch name hashes to - and
+blames the pull request only for failures its merge base does not share; the
+weekly `varka-option-matrix` workflow runs all of them.
 
 A regeneration ends with the requote: `dev/varka_bench_diff.py --git HEAD <file>
 --requote` lists, under each moved row, every document line that quotes its old

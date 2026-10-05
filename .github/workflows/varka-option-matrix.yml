@@ -1,0 +1,98 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# The option configuration matrix, every configuration (VARKA-248.md 3.2.8). The Varka suites
+# rerun once per configuration - the emit defaults with one option changed, carried by every
+# kernel they emit - in twelve jobs of about four configurations each, every job with its own
+# defaults run, which the declining check compares fused batches with. A pull request runs one
+# configuration in its varka-scoped jobs; this runs all of them once a week, so a configuration
+# no pull request has drawn lately is still checked. See dev/varka_matrix.sh.
+name: Varka option matrix
+
+on:
+  schedule:
+    # Sunday 03:00 UTC, after the weekly full Spark matrix has started and before Monday's
+    # pull requests.
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+jobs:
+  matrix:
+    name: "Option matrix: shard ${{ matrix.shard }} of 12"
+    # Never on apache/spark, whose tree has no Varka; on this project's repositories always.
+    if: github.repository != 'apache/spark'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Cache SBT and Maven
+      uses: actions/cache@v4
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+        key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
+        restore-keys: |
+          build-
+    - name: Cache Coursier local repository
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/coursier
+        key: varka-option-matrix-coursier-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
+        restore-keys: |
+          varka-option-matrix-coursier-
+    - name: Install Java 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '25'
+    - name: Install the Varka engine
+      uses: ./.github/actions/install-varka-engine
+    # Two JVMs at a time on the runner's four cores and 16 GB: a configuration's catalyst and
+    # SQL suites, each with a 4 GB heap.
+    - name: Run this shard's configurations
+      run: |
+        set -o pipefail
+        mkdir -p target
+        ./dev/varka_matrix.sh --all --shard ${{ matrix.shard }}/12 -j 2 --sbt-arg -Phive \
+          | tee target/varka-matrix-report.txt
+    - name: Summary
+      if: always()
+      run: |
+        {
+          echo "## Option matrix, shard ${{ matrix.shard }} of 12"
+          echo '```'
+          sed -n '/^configuration/,$p' target/varka-matrix-report.txt 2>/dev/null || echo "no report"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload the run logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-option-matrix-shard-${{ matrix.shard }}
+        path: |
+          target/varka-matrix-report.txt
+          target/varka-matrix/runs/*/*/run.log
+          target/varka-matrix/runs/*/*/fused.tsv
+        if-no-files-found: ignore
+        retention-days: 30

@@ -25,6 +25,8 @@
 #   dev/varka_matrix.sh --list                         # print the configurations and stop
 #   dev/varka_matrix.sh --all --skip-build             # reuse the last build and classpath
 #   dev/varka_matrix.sh --all -j 8 --deadline 06:30    # start no JVM after 06:30
+#   dev/varka_matrix.sh --all --shard 3/12 -j 2        # every 12th configuration from the 3rd
+#   dev/varka_matrix.sh --module sql --config cse=false --sbt-arg -Phive   # as the PR job runs
 #
 # sbt builds once and exports the test classpath and JVM options; each configuration then runs
 # as its own ScalaTest runner JVM in its own directory under target/varka-matrix/, so parallel
@@ -46,9 +48,12 @@ jobs=1
 build=1
 list=0
 deadline=""
+modules=(sql catalyst)
+shard=""
+sbt_args=()
 configs=()
 
-usage() { sed -n '18,39p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n '18,41p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -59,6 +64,9 @@ while [ $# -gt 0 ]; do
     --deadline) deadline=$(date -d "$2" +%s) || exit 2
       [ "$deadline" -lt "$(date +%s)" ] && deadline=$(date -d "tomorrow $2" +%s); shift 2 ;;
     --list) list=1; shift ;;
+    --module) modules=("$2"); shift 2 ;;
+    --shard) shard="$2"; shift 2 ;;
+    --sbt-arg) sbt_args+=("$2"); shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
@@ -77,10 +85,14 @@ EXCLUDED=(
 
 mkdir -p "$OUT"
 if [ "$build" = 1 ]; then
-  echo "== build: catalyst and sql test classes, the test classpath and JVM options"
-  build/sbt -batch 'catalyst/Test/compile' 'sql/Test/compile' \
-    'export sql/Test/fullClasspath' 'show sql/Test/javaOptions' > "$OUT/build.log" 2>&1 || {
-      echo "build failed; see $OUT/build.log" >&2; exit 1; }
+  # The catalyst suites alone need only catalyst's classes; anything with the SQL suites needs
+  # sql's classpath, which holds catalyst's test classes too.
+  project=sql
+  [ "${modules[*]}" = catalyst ] && project=catalyst
+  echo "== build: $project's test classes, its test classpath and JVM options"
+  build/sbt -batch "${sbt_args[@]}" "$project/Test/compile" \
+    "export $project/Test/fullClasspath" "show $project/Test/javaOptions" \
+    > "$OUT/build.log" 2>&1 || { echo "build failed; see $OUT/build.log" >&2; exit 1; }
   # The exported classpath is the one line that is a colon-separated list of paths.
   grep -E '^/[^ ]+:/' "$OUT/build.log" | tail -1 > "$OUT/classpath"
   sed -n 's/^\[info\] \* //p' "$OUT/build.log" | grep -v '^-Djava.io.tmpdir=' > "$OUT/jvm.opts"
@@ -91,12 +103,20 @@ CP=$(cat "$OUT/classpath")
 mapfile -t OPTS < "$OUT/jvm.opts"
 
 # The configurations, from VarkaMatrix itself so that the table stays their one source.
-java "${OPTS[@]}" -cp "$CP" org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixMain \
+MAIN=org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixMain
+java "${OPTS[@]}" -cp "$CP" "$MAIN" \
   > "$OUT/configurations" 2> "$OUT/configurations.err" || {
     echo "could not list the configurations; see $OUT/configurations.err" >&2; exit 1; }
 if [ "$list" = 1 ]; then cat "$OUT/configurations"; exit 0; fi
 [ ${#configs[@]} -gt 0 ] || usage
 if [ "${configs[0]}" = "ALL" ]; then mapfile -t configs < "$OUT/configurations"; fi
+if [ -n "$shard" ]; then
+  # --shard I/N keeps the configurations at positions I, I + N, I + 2N, ... (from zero).
+  index=${shard%/*} count=${shard#*/}
+  kept=()
+  for k in "${!configs[@]}"; do (( k % count == index )) && kept+=("${configs[$k]}"); done
+  configs=("${kept[@]}")
+fi
 
 # Every concrete Varka suite of a module, by its source file, minus the exclusions, as runner
 # arguments. Each module runs in a JVM of its own, as sbt runs it: a shape a catalyst suite
@@ -122,7 +142,11 @@ run_one() {
   local config=$1 module=$2 name=${1:-defaults}
   local dir=$OUT/runs/${name//[^A-Za-z0-9=_.-]/_}/$module
   local -a suites
-  if [ "$module" = catalyst ]; then suites=("${catalyst_suites[@]}"); else suites=("${sql_suites[@]}"); fi
+  if [ "$module" = catalyst ]; then
+    suites=("${catalyst_suites[@]}")
+  else
+    suites=("${sql_suites[@]}")
+  fi
   rm -rf "$dir"; mkdir -p "$dir/tmp"
   local start; start=$(date +%s)
   (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 java "${OPTS[@]}" \
@@ -133,8 +157,6 @@ run_one() {
   echo "$(( $(date +%s) - start ))" > "$dir/seconds"
   echo "$name" > "$dir/../name"
 }
-# Each configuration's two modules in the background, at most $jobs JVMs at once; the defaults
-# first. The SQL suites take the longer, so each configuration starts them first.
 # Waits while a laptop battery discharges below 30%; true unless the deadline has passed.
 may_launch() {
   local bat=/sys/class/power_supply/BAT0
@@ -145,11 +167,15 @@ may_launch() {
   [ -z "$deadline" ] || [ "$(date +%s)" -lt "$deadline" ]
 }
 
+# Each configuration's modules in the background, at most $jobs JVMs at once; the defaults
+# first. The SQL suites take the longer, so each configuration starts them first.
 rm -rf "$OUT/runs"
+mkdir -p "$OUT/runs"
+echo "${modules[*]}" > "$OUT/runs/modules"
 all=("" "${configs[@]}")
 running=0
 for config in "${all[@]}"; do
-  for module in sql catalyst; do
+  for module in "${modules[@]}"; do
     may_launch || { echo "== deadline reached; no further configurations start"; break 2; }
     run_one "$config" "$module" &
     running=$((running + 1))
