@@ -94,8 +94,14 @@ if [ "$build" = 1 ]; then
     "export $project/Test/fullClasspath" "show $project/Test/javaOptions" \
     > "$OUT/build.log" 2>&1 || { echo "build failed; see $OUT/build.log" >&2; exit 1; }
   # The exported classpath is the one line that is a colon-separated list of paths.
-  grep -E '^/[^ ]+:/' "$OUT/build.log" | tail -1 > "$OUT/classpath"
-  sed -n 's/^\[info\] \* //p' "$OUT/build.log" | grep -v '^-Djava.io.tmpdir=' > "$OUT/jvm.opts"
+  # Under CI sbt colours its output, so its escape sequences and carriage returns are stripped
+  # before the classpath and the JVM options are read off the log, as varka-fuzz.yml does.
+  sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$OUT/build.log" > "$OUT/build.plain.log"
+  grep -E '^/[^ ]+:/' "$OUT/build.plain.log" | tail -1 > "$OUT/classpath"
+  sed -n 's/^\[info\] \* //p' "$OUT/build.plain.log" | grep -v '^-Djava.io.tmpdir=' \
+    > "$OUT/jvm.opts"
+  grep -q scalatest "$OUT/classpath" || {
+    echo "no test classpath in $OUT/build.log" >&2; exit 1; }
 fi
 [ -s "$OUT/classpath" ] && [ -s "$OUT/jvm.opts" ] || {
   echo "no classpath or JVM options in $OUT; run without --skip-build" >&2; exit 1; }
