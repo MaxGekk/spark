@@ -57,7 +57,7 @@ ones, what they found, and what this engine does differently.
 
 Two questions, and they have different answers. **How much faster is a query
 that does real arithmetic?** About **10x**. **How much faster is a single date
-call?** Up to **39x** - but most of that is Spark's per-row overhead rather than
+call?** Up to **37x** - but most of that is Spark's per-row overhead rather than
 vectorised arithmetic, and the honest way to read the two numbers is below the
 tables.
 
@@ -99,26 +99,26 @@ HX PRO 370 (JDK 25). This is the coverage document, and it commits the losses.
 
 | Case | vs stock 4.2 (JDK 25) |
 | :--- | ---: |
-| `dayofweek(d)`, projection | 38.0x |
-| `weekofyear(d)`, projection | 28.8x |
-| `date_add(d, 3)`, projection | 17.3x |
-| `year(d)`, projection | 17.6x |
-| `last_day(d)`, projection | 14.2x |
-| `add_months(d, i)`, projection - the heaviest single call | 12.1x |
-| `WHERE d BETWEEN ... AND ...`, columnar consumer | 7.8x |
-| `WHERE year(d) = 2020`, columnar consumer | 6.5x |
-| `WHERE d IN (3 literals)`, columnar consumer | 6.3x |
-| `WHERE d < d2 AND month(d) = 6`, counted | 3.4x |
-| `WHERE d IS NULL`, counted | 2.9x |
-| `WHERE d < d2`, columnar consumer | **1.14x** |
-| `WHERE d < d2`, counted | **0.80x** |
-| `WHERE d IS NOT NULL`, counted | **0.45x** |
+| `dayofweek(d)`, projection | 37.4x |
+| `weekofyear(d)`, projection | 26.1x |
+| `date_add(d, 3)`, projection | 23.0x |
+| `year(d)`, projection | 18.5x |
+| `last_day(d)`, projection | 15.6x |
+| `add_months(d, i)`, projection - the heaviest single call | 12.3x |
+| `WHERE d BETWEEN ... AND ...`, columnar consumer | 8.2x |
+| `WHERE d < d2`, columnar consumer | 7.7x |
+| `WHERE year(d) = 2020`, columnar consumer | 7.6x |
+| `WHERE d IN (3 literals)`, columnar consumer | 7.1x |
+| `WHERE d < d2 AND month(d) = 6`, counted | 3.8x |
+| `WHERE d IS NULL`, counted | 3.3x |
+| `WHERE d < d2`, counted | **0.70x** |
+| `WHERE d IS NOT NULL`, counted | **0.46x** |
 
-45 projection rows span 11.5x to 38.0x with a median of 19.5x; 18 filter rows
-span 0.45x to 14.0x.
+45 projection rows span 12.3x to 37.4x with a median of 21.2x; 18 filter rows
+span 0.46x to 14.7x. Measured on the milestone 6 build (`varka-m6`).
 
-**The two remaining losses have two different causes**, and neither is the
-kernel. (An earlier version of this section said all three were one bug; the
+**The two remaining losses are both counted rows**, and neither is the kernel.
+(An earlier version of this section said all three were one bug; the
 measurement below disproved it.)
 
 The first cause is a *narrowing projection*. A predicate over two columns
@@ -128,23 +128,25 @@ row-based operator on top, dragging the discarded column across the row
 boundary. One-column predicates never hit this, because Spark's own column
 pruning removes the redundant projection first. Absorbing that projection into
 the filter node fixed the columnar-consumer row: **`WHERE d < d2` went from
-0.59x to 1.14x**, a loss turned into a win.
+0.59x to 1.14x**, a loss turned into a win, and on the milestone 6 build it reads
+7.7x.
 
 The second cause is the **read-back floor**: about 25 ns for every row that
 crosses from the vector world into Spark's row world. It is why the two
 *counted* rows are still below 1.0x while both columnar rows are fine. Removing
 the operator boundary moved `WHERE d < d2` counted from 0.56x to 0.80x and could
-not take it further, and it left `WHERE d IS NOT NULL` counted at 0.45x
+not take it further (it reads 0.70x on the milestone 6 build), and it left
+`WHERE d IS NOT NULL` counted at 0.46x
 essentially untouched - that one is a single-column predicate, so it never had a
 narrowing projection to remove. Heavy expressions clear the floor; a bare
 `COUNT(*)` over a cheap predicate cannot, because there is almost nothing else
 in the row for the vector loop to have saved.
 
 One row is quoted against the engine-off column instead of stock:
-`trunc(d, 'QUARTER')` reads 29.4x against stock 4.2.0 but **21.6x** against this
+`trunc(d, 'QUARTER')` reads 31.2x against stock 4.2.0 but **23.2x** against this
 fork's own row engine, because the fork tracks Spark master and its `truncDate`
 is faster than 4.2.0's. That difference is upstream Spark's, not Varka's.
-It is the only row of fifty where the two baselines disagree by more than 20%.
+It is the only row of the 63 where the two baselines disagree by more than 20%.
 
 ### The TIME chains, on the same verified 512-bit machine
 
@@ -184,23 +186,24 @@ surface this is the coverage document, and it commits the losses.
 
 | Case | vs stock 4.2 (JDK 25) |
 | :--- | ---: |
-| `time_trunc('MILLISECOND', t2)`, projection | 38.2x |
-| `time_trunc('MINUTE', t)`, projection | 34.3x |
-| `time_diff('microsecond', t2, t)`, projection | 31.4x |
-| `t + dt`, projection | 20.6x |
-| `hour(t)`, projection | 17.0x |
-| `t - t2`, projection | 14.4x |
-| `minute(t)`, projection | 13.4x |
+| `time_trunc('MILLISECOND', t2)`, projection | 37.5x |
+| `time_diff('microsecond', t2, t)`, projection | 36.3x |
+| `time_trunc('MINUTE', t)`, projection | 34.5x |
+| `t + dt`, projection | 20.4x |
+| `hour(t)`, projection | 17.2x |
+| `t - t2`, projection | 14.6x |
+| `minute(t)`, projection | 14.0x |
 | `WHERE time_trunc('MINUTE', t) = ...`, columnar consumer | 9.9x |
 | `WHERE l2 IS NULL`, counted | 2.7x |
-| `WHERE t < t2`, counted | **0.93x** |
-| `WHERE greatest(l, l2) > ...`, counted | **0.76x** |
+| `WHERE t < t2`, counted | **0.91x** |
+| `WHERE greatest(l, l2) > ...`, counted | **0.75x** |
 | `WHERE dt IS NOT NULL`, counted | **0.34x** |
 
-15 projection rows span 13.4x to 38.2x with a median of 16.2x; 28 filter rows
-span 0.34x to 9.9x. The losses are the same read-back floor the date surface
-has, and the explanation below applies unchanged: a `COUNT(*)` over a cheap
-predicate has almost nothing in the row for a vector loop to save.
+15 projection rows span 13.9x to 37.5x with a median of 16.2x; 28 filter rows
+span 0.34x to 9.9x, on the milestone 6 build. The losses are the same read-back
+floor the date surface has, and the explanation below applies unchanged: a
+`COUNT(*)` over a cheap predicate has almost nothing in the row for a vector
+loop to save.
 
 Two things this table is not. The extracts - `hour`, `minute`, `second` - are
 measuring vanilla Spark's `LocalTime` allocation as much as Varka's lane, so
@@ -210,19 +213,19 @@ measurement: the laptop's own datapath probe reads 1.14, so nothing here is a
 claim about 512-bit hardware. The chains above are, and they are the reason that
 list exists separately.
 
-### Why 10x and 39x are both true
+### Why 10x and 37x are both true
 
 Stock Spark's cost per row is *overhead plus arithmetic*; Varka's is
 *arithmetic divided by lanes*. So the ratio between them depends entirely on
 how much arithmetic there is:
 
-* On `dayofweek(d)` - one call, a few instructions - almost all of stock's 23 ns
-  is per-row machinery, and removing it reads as 39x.
+* On `dayofweek(d)` - one call, a few instructions - almost all of stock's 24 ns
+  is per-row machinery, and removing it reads as 37x.
 * On a four-deep chain, that machinery is amortised across real work, and what
   is left is the arithmetic speedup: **about 10x**.
 
 Both numbers are real; they measure different things. **10x is what to expect on
-your own workload**, and it is the figure to carry away. Anyone quoting 39x
+your own workload**, and it is the figure to carry away. Anyone quoting 37x
 should say that it is a single call on cached columnar data.
 
 The surface also understates the engine in the other direction: about a third of
