@@ -315,3 +315,19 @@ names no option, and the defaults and that configuration passed side by side, tw
 six minutes. The merge-base comparison was checked on two made-up reports: a failure the base
 shares drops out, a new one is reported. The picker carries doctests, which the PR job runs before
 every pick. The weekly workflow's first run, the confirmation 9.2 defers to, comes after merge.
+
+### 9.4 The weekly workflow's first run, 5 October 2026
+
+The first dispatch of `varka-option-matrix.yml` stopped on every shard about five minutes in
+with "no classpath or JVM options": under CI sbt colours its output, and the runner read the
+classpath and the JVM options off the raw log, which on the laptop is never coloured (#626 strips
+the escape sequences first, as `varka-fuzz.yml` does; the PR step from #625 had the same defect
+and had not run yet). The second dispatch, [run 37291764919](https://github.com/vecbricks/varka/actions/runs/37291764919),
+passed: all 45 configurations in twelve shards of 35 to 60 minutes each, 47,464 tests passed, none
+failed or aborted, and no test that fused under the defaults fused nothing under a configuration;
+every shard's own defaults run passed 926. That is the confirmation 9.2 deferred to, so every tag
+and skip line added after its configuration last ran holds.
+
+The PR step's first run in CI was #626's own: both modules under `useAVX=0`, picked by the branch
+name's hash, passed beside the defaults in about eight minutes for catalyst and thirteen for SQL,
+under the fifteen to twenty-five 3.2.8 estimated. Its merge-base path has not yet met a failure.
