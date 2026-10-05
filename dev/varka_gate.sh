@@ -148,7 +148,7 @@ lane_suites() {
   fi
   if selected_has narrow; then
     echo "narrow: the preferred vector is $(java --add-modules jdk.incubator.vector \
-      -XX:MaxVectorSize=16 dev/varka_vector_bits.java) bits under the narrow step's flag"
+      -XX:MaxVectorSize=16 dev/varka_canary/VectorBits.java) bits under the narrow step's flag"
     run_step narrow "${suites[@]}" --out "$logdir/narrow-runs" --split "$split" \
       -j $((2 * split)) --jvm-arg -XX:MaxVectorSize=16 --skip-suites "$timing_suites" &
   fi
