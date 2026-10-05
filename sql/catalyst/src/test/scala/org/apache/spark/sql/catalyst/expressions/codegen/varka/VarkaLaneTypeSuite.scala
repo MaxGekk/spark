@@ -355,7 +355,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
       // check means a bare column root would decline rather than emit, so it is wrapped.
       val roots = Seq[VarkaVectorIR](node)
       val bytes = VarkaLoopEmitter.emit(s"VarkaReach${cls.getSimpleName}$lane",
-        roots.asJava, 2, 1, null, null, VarkaEmitOptions.DEFAULTS)
+        roots.asJava, 2, 1, null, null, VarkaMatrix.base)
       val problems = VarkaEmitterTestSupport.verify(bytes).asScala
       assert(problems.isEmpty, s"${cls.getSimpleName} at $lane: ${problems.mkString("; ")}")
       (lane, cls.getSimpleName)
@@ -390,7 +390,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     val interior = new IntArith(IntOp.ADD, Overflow.WRAP, narrowed, intLit)
     val belowRoot = intercept[IllegalArgumentException] {
       VarkaLoopEmitter.emit("VarkaInteriorNarrowKernel", Seq[VarkaVectorIR](interior).asJava,
-        1, 1, null, null, VarkaEmitOptions.DEFAULTS)
+        1, 1, null, null, VarkaMatrix.base)
     }
     assert(belowRoot.getMessage.contains("an output root only"), belowRoot.getMessage)
   }
@@ -414,7 +414,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     for (lane <- Seq(Lane.INT, Lane.LONG);
          n <- Seq(0, 1, 2, 4, 8, 16, 32)) {
       val baked = VarkaLoopEmitter.emitLanesForTest(
-        VarkaEmitOptions.DEFAULTS.withLanesOverride(n), lane)
+        VarkaMatrix.base.withLanesOverride(n), lane)
       assert(baked == 0 || (lane.hasSpecies(baked) && helperCounts.contains(baked)),
         s"$lane baked $baked lanes for an override of $n, without both a species constant " +
           "and a validity pair")
@@ -422,7 +422,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // The case that shipped broken, named rather than left to the loop: one 64-bit lane has a
     // species and no helpers, so it must not be baked.
     assert(VarkaLoopEmitter.emitLanesForTest(
-      VarkaEmitOptions.DEFAULTS.withLanesOverride(1), Lane.LONG) === 0)
+      VarkaMatrix.base.withLanesOverride(1), Lane.LONG) === 0)
     assert(Lane.LONG.hasSpecies(1), "SPECIES_64 is one long lane")
   }
 
@@ -433,7 +433,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // descriptor - the int form of `broadcast`, a species constant the class does not have -
     // is a class that loads and then fails, which a test that only called emit would miss.
     for (lanes <- Seq(2, 8)) {
-      val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes)
+      val options = VarkaMatrix.base.withLanesOverride(lanes)
       val bytes = VarkaLoopEmitter.emit("VarkaLongLaneKernel", Seq[VarkaVectorIR](longCol).asJava,
         1, 0, null, null, options)
       val problems = VarkaEmitterTestSupport.verify(bytes).asScala
@@ -450,7 +450,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     try {
       def kernel(root: VarkaVectorIR, name: String): VarkaFusedKernel = {
         val bytes = VarkaLoopEmitter.emit(name, Seq(root).asJava, 1, 0, null, null,
-          VarkaEmitOptions.DEFAULTS)
+          VarkaMatrix.base)
         loader.defineGeneratedClass(name, bytes)
         loader.loadClass(name).getConstructor().newInstance().asInstanceOf[VarkaFusedKernel]
       }
@@ -476,7 +476,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // to one emission.
     val e = intercept[IllegalArgumentException] {
       VarkaLoopEmitter.emit("VarkaMixedLaneKernel",
-        Seq[VarkaVectorIR](intCol, longCol).asJava, 1, 0, null, null, VarkaEmitOptions.DEFAULTS)
+        Seq[VarkaVectorIR](intCol, longCol).asJava, 1, 0, null, null, VarkaMatrix.base)
     }
     assert(e.getMessage === "outputs mix lanes: INT and LONG", e.getMessage)
   }

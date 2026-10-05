@@ -22,6 +22,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isLoop
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
@@ -89,7 +90,7 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
     VarkaLoopEmitter.talliesForTest(roots.asJava, options, VarkaEmitCostTable.PRICES).asScala
       .map(_.counts().asScala.map { case (k, v) => k -> v.toInt }.toMap).toSeq
 
-  test("the grouping counts what the emitter emits once, once") {
+  test("the grouping counts what the emitter emits once, once", PinsDefaults) {
     // The features are fed by the grouping's own walk, so they follow its sharing: a repeated
     // root is one more store and nothing else, a node two outputs hold is counted once, a
     // shared prefix is counted once per date and its month step once, an unshared one once per
@@ -97,7 +98,7 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
     val d = new ColumnRef(0)
     val year = new Year(d)
     val month = new Month(d)
-    val defaults = VarkaEmitOptions.DEFAULTS
+    val defaults = VarkaMatrix.base
     val one = Map("fixed/INT" -> 1, "out/INT" -> 1, "Year" -> 1, "ColumnRef/INT" -> 1,
       "prefix" -> 1)
     assert(counts(defaults, year) === Seq(one))
@@ -124,7 +125,7 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
    * what this suite holds is the prediction; the plan is `VarkaKernelPlanSuite`'s.
    */
   private def emitted(roots: Seq[VarkaVectorIR], inputs: Int, lits: Int, predict: Boolean,
-      base: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS.withPlanSize(false))
+      base: VarkaEmitOptions = VarkaMatrix.base.withPlanSize(false))
       : (Option[Array[Byte]], Int) = {
     val builds = new Array[Int](1)
     val bytes = try {
@@ -156,7 +157,7 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
     }
   }
 
-  test("the cheap tails build once under predictGrouping, in fewer loop methods") {
+  test("the cheap tails build once under predictGrouping, in fewer loop methods", PinsDefaults) {
     // The one family the call-site budget rebuilds at the shipped options: the weights put every
     // tail over one date in one group, the built class measures its methods over the budget, and
     // the halving builds it two or three times. The prediction closes each group where the
@@ -177,7 +178,7 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
   }
 
   test("under predictGrouping every wide shape gets the weights' verdict, and those that gain " +
-      "a loop method are the ones the plans record") {
+      "a loop method are the ones the plans record", PinsDefaults) {
     // The predicted grouping closes groups the weights keep, and each group is a call more in
     // the driver, which on the widest shapes pushed the driver past the byte budget; such a class
     // is built again with the weights alone, so the switch never costs a kernel, and a shape the
@@ -188,7 +189,7 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
     // seen rather than averaged away. The greedy walk's, as the plan records it: under the exact
     // grouping, the default since `VARKA-200.md` 8.2, `VarkaGroupingBoundSuite` holds the
     // same wide shapes to no decline and no fallback.
-    val greedy = VarkaEmitOptions.DEFAULTS.withExactGrouping(false).withPlanSize(false)
+    val greedy = VarkaMatrix.base.withExactGrouping(false).withPlanSize(false)
     val gained = Seq.newBuilder[String]
     for (shape <- VarkaEmitCostCorpus.wide().asScala) {
       val where = s"${shape.family} ${shape.index}"
@@ -219,21 +220,22 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase {
     val col = new ColumnRef(0)
     val roots = Seq(new MakeDate(new Year(col), new Month(col), new LiteralSlot(0), true),
       new Year(col))
-    val tight = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(300)
+    val tight = VarkaMatrix.base.withMethodByteBudget(300)
     val (off, offBuilds) = emitted(roots, 1, 1, predict = false, tight)
     val (on, onBuilds) = emitted(roots, 1, 1, predict = true, tight)
     assert(off.isEmpty && on.isEmpty)
     assert(onBuilds <= offBuilds, s"$onBuilds builds predicted, $offBuilds under the weights")
   }
 
-  test("under predictGrouping the shapes it regroups answer as the reference evaluator does") {
+  test("under predictGrouping the shapes it regroups answer as the reference evaluator does",
+      PinsDefaults) {
     // The fuzz draw toggles the switch like every option, but its shapes are too narrow for a
     // prediction to close a group, so the switch is checked here on the shapes where it does:
     // the cheap tails at the int lane, and at the long lane forty outputs over one shared
     // division, which the call-site budget splits. Each emits under the switch in a grouping the
     // weights never form, and is run at every null pattern over lengths that leave an epilogue.
     // The prediction alone, without the plan's margins (VARKA-236), against the weights alone.
-    val weights = VarkaEmitOptions.DEFAULTS.withPlanSize(false).withPredictGrouping(false)
+    val weights = VarkaMatrix.base.withPlanSize(false).withPredictGrouping(false)
     val predicted = weights.withPredictGrouping(true)
     val tails = (0 until 64).map(VarkaEmitCostCorpus.tailEntry)
     assert(VarkaLoopEmitter.groupsForTest(tails.asJava, predicted) !=

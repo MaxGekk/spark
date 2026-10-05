@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isLoop
 
 /**
@@ -32,7 +33,7 @@ class VarkaExactGroupingSuite extends VarkaEmitterTestBase {
 
   // Pinned to sixteen lanes: the lane count changes the prefix's ops, and with them where the
   // groups close, so the counts below hold on every machine only at one lane count.
-  private val greedy = VarkaEmitOptions.DEFAULTS.withLanesOverride(16).withExactGrouping(false)
+  private val greedy = VarkaMatrix.base.withLanesOverride(16).withExactGrouping(false)
   private val exact = greedy.withExactGrouping(true)
 
   private def mixed(n: Int): Seq[VarkaVectorIR] = VarkaGroupingBound.mixed(n).asScala.toSeq
@@ -47,7 +48,7 @@ class VarkaExactGroupingSuite extends VarkaEmitterTestBase {
   private def mixedLits(n: Int): Array[Int] = Array.tabulate(n)(k => k % 28 + 1)
 
   test("on the mixed family the exact grouping emits the best partition's loop methods, about " +
-      "half the greedy walk's, at the same ops") {
+      "half the greedy walk's, at the same ops", PinsDefaults) {
     // The greedy walk closes a group on the three prefix-sharers before each date_add, which
     // then fits nowhere and takes a loop method of its own; the best partition starts each group
     // at the cheap outputs instead. At forty entries that is 20 groups against 11.
@@ -112,7 +113,7 @@ class VarkaExactGroupingSuite extends VarkaEmitterTestBase {
   }
 
   test("under a byte budget the measurement regroups the exact grouping until every method " +
-      "fits, without falling back to the greedy grouping, and the kernel answers") {
+      "fits, without falling back to the greedy grouping, and the kernel answers", PinsDefaults) {
     // Forty mixed entries - the family where the exact grouping differs from the greedy walk -
     // at a budget their best partition's masked groups, about 2040 bytes, do not fit: the
     // build measures, forces starts, and the exact grouping rebuilds around them. The switch

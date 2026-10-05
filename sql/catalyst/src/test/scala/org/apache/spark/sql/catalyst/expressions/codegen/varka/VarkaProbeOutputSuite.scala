@@ -24,7 +24,7 @@ import org.apache.spark.SparkFunSuite
  * compile record on either side, which is what a compiler thread writing to the probe's stream
  * produces (`m6/PLAN.md` row 229).
  */
-class VarkaProbeOutputSuite extends SparkFunSuite {
+class VarkaProbeOutputSuite extends SparkFunSuite with VarkaMatrixTests {
 
   // A `PrintCompilation` record as HotSpot prints it, timestamp padded with spaces.
   private val record =

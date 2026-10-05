@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.{isDriverOrDispatch, isLoop, isStage}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
@@ -33,8 +34,8 @@ class VarkaEmitterSplitDriverSuite extends VarkaEmitterTestBase {
   // (VARKA-236) is off throughout: this suite is the size loop's, which reads the stage size off
   // the built class, and the plan that reads it off a driver built alone is
   // `VarkaKernelPlanSuite`'s.
-  private val whole = VarkaEmitOptions.DEFAULTS.withSplitDriver(false).withPlanSize(false)
-  private val split = VarkaEmitOptions.DEFAULTS.withSplitDriver(true).withPlanSize(false)
+  private val whole = VarkaMatrix.base.withSplitDriver(false).withPlanSize(false)
+  private val split = VarkaMatrix.base.withSplitDriver(true).withPlanSize(false)
 
   /** One group per output: a group budget of one closes a group after every `date_add`. */
   private def oneEach(options: VarkaEmitOptions): VarkaEmitOptions =
@@ -78,7 +79,8 @@ class VarkaEmitterSplitDriverSuite extends VarkaEmitterTestBase {
     }
   }
 
-  test("a class whose drivers fit is the same class under the option, byte for byte") {
+  test("a class whose drivers fit is the same class under the option, byte for byte",
+      PinsDefaults) {
     for ((name, roots, lits) <- Seq(
         ("four hundred greatest entries", (0 until 400).map(ladderEntry), 400),
         ("a hundred and eighty groups", dateAdds(180), 180))) {
@@ -128,7 +130,7 @@ class VarkaEmitterSplitDriverSuite extends VarkaEmitterTestBase {
   }
 
   test("eight hundred greatest entries - two hundred groups over one date - answer from a split " +
-      "driver, the prefix each group shares computed as before") {
+      "driver, the prefix each group shares computed as before", PinsDefaults) {
     val roots = (0 until 800).map(ladderEntry)
     val (_, _, m) = emitted(roots, 800, split)
     assert(named(m, isStage(_, true)) >= 2, "two hundred groups are past the driver's ceiling")

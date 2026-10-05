@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution
 import java.time.LocalDate
 
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaMatrix}
 
 /**
  * The evaluator's side of a materialized calendar prefix (VARKA-198, `VARKA-198.md` 8.3): a
@@ -61,7 +61,7 @@ class VarkaMaterializedPrefixSuite extends QueryTest with VarkaSharedSessions {
       checkAnswer(actual, spark.sql(query))
       assertKernelsRan(plan)
     } finally {
-      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS)
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
     }
   }
 
@@ -76,7 +76,7 @@ class VarkaMaterializedPrefixSuite extends QueryTest with VarkaSharedSessions {
         s"make_date(year(d) + $offset, month(d), $day) AS c$k"
       } :+ "year(d) + 1 AS y" :+ "i"
       val query = s"SELECT ${outputs.mkString(", ")} FROM $view"
-      val on = VarkaEmitOptions.DEFAULTS.withMaterializeChronoPrefix(true)
+      val on = VarkaMatrix.base.withMaterializeChronoPrefix(true)
       check(on, query)
       // Every output its own group: one producer and sixty consumers of the stored prefix.
       check(on.withGroupBudget(1).withFusedCeiling(1), query)

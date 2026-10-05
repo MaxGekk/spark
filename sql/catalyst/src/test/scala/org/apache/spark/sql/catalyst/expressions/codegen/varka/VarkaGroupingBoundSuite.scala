@@ -22,6 +22,7 @@ import scala.util.Random
 
 import org.apache.spark.sql.catalyst.expressions.Alias
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isLoop
 
 /**
@@ -38,7 +39,7 @@ class VarkaGroupingBoundSuite extends VarkaEmitterTestBase {
   // The greedy walk, the baseline every arm below is held against, without the plan: its margins
   // close groups earlier than the rule the bound admits runs by (VARKA-236), and the bound is
   // about the rule.
-  private val options = VarkaEmitOptions.DEFAULTS.withLanesOverride(VarkaEmitCostCorpus.LANES)
+  private val options = VarkaMatrix.base.withLanesOverride(VarkaEmitCostCorpus.LANES)
     .withExactGrouping(false).withPlanSize(false)
 
   private lazy val table =
@@ -96,7 +97,7 @@ class VarkaGroupingBoundSuite extends VarkaEmitterTestBase {
     shipped(shape, options).map(_._1)
 
   test("the greedy grouping is within half a percent of the best partition's ops on every " +
-      "family, and never below it once the prediction closes groups") {
+      "family, and never below it once the prediction closes groups", PinsDefaults) {
     val accounts = shapes.map { s =>
       VarkaGroupingBound.account(s.family, s.index, s.roots, options)
     }

@@ -79,7 +79,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * 10 compositions, a few seconds); `-Dvarka.fuzz.seed` (default fixed, so the committed run is
  * reproducible and a nightly can vary it). The iterations and the seed apply to both lanes.
  */
-class VarkaIrFuzzSuite extends SparkFunSuite {
+class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
 
   private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(fuzzSeed)
   private val longSeed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(longFuzzSeed)
@@ -107,7 +107,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
    * recorded in a failure keeps drawing the same options.
    */
   private def randomOptions(rnd: Random): VarkaEmitOptions = {
-    var opts = VarkaEmitOptions.DEFAULTS
+    var opts = VarkaMatrix.base
     for (option <- fuzzedOptions) {
       option match {
         case flag: VarkaEmitOption.Flag => opts = flag.`with`(opts, rnd.nextBoolean())
@@ -470,9 +470,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     // The variants are the size loop's, with the plan and the prediction off (VARKA-236): under
     // both the first build is the last and no mechanism is reached. The defaults run beside
     // them, planned, so every composition is also checked as production emits it.
-    val d = VarkaEmitOptions.DEFAULTS.withPlanSize(false).withPredictGrouping(false)
+    val d = VarkaMatrix.base.withPlanSize(false).withPredictGrouping(false)
     Seq(
-      "the defaults, planned" -> VarkaEmitOptions.DEFAULTS,
+      "the defaults, planned" -> VarkaMatrix.base,
       "split driver" -> d.withSplitDriver(true),
       "whole driver" -> d.withSplitDriver(false),
       "whole driver, predicted grouping" -> d.withSplitDriver(false).withPredictGrouping(true),
@@ -537,7 +537,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
     // so the retry does not count as the variant reaching a mechanism.
     val bytes = emitWith(options, trace).orElse {
       wideDeclines += 1
-      emitWith(VarkaEmitOptions.DEFAULTS, new VarkaEmitTrace)
+      emitWith(VarkaMatrix.base, new VarkaEmitTrace)
     }
     bytes.foreach { b =>
       VarkaKernelCheck.runAndCompare(context, className, b, roots, numInputs, lits,
@@ -564,8 +564,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite {
       "the prediction dropped" -> trace.predictFallbacks,
       "a decline" -> wideDeclines)
     reached.foreach { case (mechanism, n) => info(s"$mechanism: $n") }
-    // Every variant runs at least once only from a full cycle up.
-    if (wideIterations >= wideVariants.size) {
+    // Every variant runs at least once only from a full cycle up. Which mechanisms a width
+    // reaches is the defaults' structure, so the option matrix checks only the answers.
+    if (wideIterations >= wideVariants.size && VarkaMatrix.config.isEmpty) {
       val missed = reached.collect { case (mechanism, 0) => mechanism }
       assert(missed.isEmpty, s"no wide composition reached: ${missed.mkString(", ")}")
     }

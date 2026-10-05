@@ -82,7 +82,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
   protected def emit(
       root: VarkaVectorIR,
       numLiterals: Int,
-      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): (String, Array[Byte]) =
+      options: VarkaEmitOptions = VarkaMatrix.base): (String, Array[Byte]) =
     emitMulti(Seq(root), 1, numLiterals, options)
 
   /**
@@ -94,7 +94,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
       roots: Seq[VarkaVectorIR],
       numInputs: Int,
       numLiterals: Int,
-      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): (String, Array[Byte]) = {
+      options: VarkaEmitOptions = VarkaMatrix.base): (String, Array[Byte]) = {
     val name = s"org.apache.spark.sql.varka.execution.VarkaFusedTest${classCounter.addAndGet(1)}"
     (name, VarkaLoopEmitter.emit(name, roots.asJava, numInputs, numLiterals, null, null, options))
   }
@@ -269,7 +269,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
       data: (Int, Int) => Int = defaultData,
       forceMasked: Boolean = false,
       ctx: String = "",
-      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): Unit = {
+      options: VarkaEmitOptions = VarkaMatrix.base): Unit = {
     val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
     try {
       for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
@@ -398,7 +398,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
       data: (Int, Int) => Long,
       ctx: String,
       lanes: Int,
-      base: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS): Unit = {
+      base: VarkaEmitOptions = VarkaMatrix.base): Unit = {
     val options = base.withLanesOverride(lanes)
     val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
     try {
@@ -703,9 +703,9 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
   // the only body where sharing does anything at all.
   protected val remainderLengths = Seq(1, 13, 17, 63, 1001)
 
-  protected val sharing = VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(true)
+  protected val sharing = VarkaMatrix.base.withShareChronoPrefix(true)
 
-  protected val unshared = VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false)
+  protected val unshared = VarkaMatrix.base.withShareChronoPrefix(false)
 
   /** The lane ops one emitted body method runs: its `IntVector` invocations, counted off the
    * class file. VARKA-48's deliverable is a count, not a duration, so it is asserted as one. */
@@ -746,7 +746,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
 
   // VARKA-63's int arithmetic. `checkOff` is the A/B arm the benchmark prices and the flag the
   // emitter reads to drop the sign test; it is never a correct setting for an ANSI query.
-  protected val checkOff = VarkaEmitOptions.DEFAULTS.withCheckIntOverflow(false)
+  protected val checkOff = VarkaMatrix.base.withCheckIntOverflow(false)
 
   /** Values that put the sign test under load: both extremes, their neighbours, and zero. */
   protected def extreme(col: Int, i: Int): Int = {

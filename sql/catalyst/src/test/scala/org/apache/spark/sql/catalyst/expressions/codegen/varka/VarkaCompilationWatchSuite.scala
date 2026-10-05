@@ -164,7 +164,7 @@ class VarkaCompilationWatchSuite extends SparkFunSuite with VarkaTestWatchdog {
     val col = new VarkaVectorIR.ColumnRef(0)
     val outputs = java.util.List.of[VarkaVectorIR](new VarkaVectorIR.Year(col))
     val bytes = VarkaLoopEmitter.emit(
-      className, outputs, 1, 0, null, null, VarkaEmitOptions.DEFAULTS)
+      className, outputs, 1, 0, null, null, VarkaMatrix.base)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
     loader.defineGeneratedClass(className, bytes)
     val kernel = loader.loadClass(className).getConstructor().newInstance()

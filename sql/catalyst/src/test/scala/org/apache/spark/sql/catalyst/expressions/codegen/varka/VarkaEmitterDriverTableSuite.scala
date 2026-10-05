@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.{isDriver, isLoop}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.varka.vector.VarkaVectorSupport
@@ -32,8 +33,8 @@ import org.apache.spark.sql.varka.vector.VarkaVectorSupport
  */
 class VarkaEmitterDriverTableSuite extends VarkaEmitterTestBase {
 
-  private val table = VarkaEmitOptions.DEFAULTS.withDriverOutputTable(true)
-  private val unrolled = VarkaEmitOptions.DEFAULTS.withDriverOutputTable(false)
+  private val table = VarkaMatrix.base.withDriverOutputTable(true)
+  private val unrolled = VarkaMatrix.base.withDriverOutputTable(false)
 
   test("the emitter's plan steps are the engine's") {
     // Catalyst names the engine's support class by string and cannot import its constants, so
@@ -65,7 +66,7 @@ class VarkaEmitterDriverTableSuite extends VarkaEmitterTestBase {
     // its ceiling too. Unrolled, each output adds about forty bytes to either driver, each literal
     // it hoists and never reads about seven more, and each column its null state and segments;
     // from a table the driver's size is a constant plus its two calls per group, 44 bytes.
-    val wide = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(VarkaEmitBudget.METHOD_CODE_CAP)
+    val wide = VarkaMatrix.base.withMethodByteBudget(VarkaEmitBudget.METHOD_CODE_CAP)
     for (inputs <- Seq(1, VarkaEmitBudget.MAX_INPUTS); n <- Seq(64, 100, 200, 400)) {
       val roots = (0 until n).map(k => new AddDays(new ColumnRef(k % inputs), new LiteralSlot(k)))
       val before = measured(roots, n, wide.withDriverOutputTable(false), inputs)
@@ -95,7 +96,7 @@ class VarkaEmitterDriverTableSuite extends VarkaEmitterTestBase {
   }
 
   test("four hundred greatest entries emit under the shipped budget from a table, and decline " +
-      "on the driver without it") {
+      "on the driver without it", PinsDefaults) {
     // The size ladder's widest rung. Unrolled, both drivers pass 8000 bytes past about 140
     // entries whatever the grouping; from a table the driver is 44 bytes a group, and a
     // hundred groups fit.
@@ -127,7 +128,7 @@ class VarkaEmitterDriverTableSuite extends VarkaEmitterTestBase {
         VarkaIrGrammar.shapeRandom(VarkaIrGrammar.longFuzzSeed, k))
       for ((roots, inputs, lits) <- Seq((d.roots, d.numInputs, d.numLiterals),
           (l.roots, l.numInputs, l.numLiterals))) {
-        (emitted(roots, inputs, lits, VarkaEmitOptions.DEFAULTS),
+        (emitted(roots, inputs, lits, VarkaMatrix.base),
           emitted(roots, inputs, lits, table)) match {
           case (Some(a), Some(b)) =>
             compared += 1

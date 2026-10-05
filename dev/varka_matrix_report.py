@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+"""Summarise a dev/varka_matrix.sh run: one line per configuration, then what failed.
+
+    dev/varka_matrix_report.py target/varka-matrix/runs sql/varka/matrix/skips.tsv
+
+A configuration fails when its runner JVM exits non-zero (a failed test or an aborted suite),
+or when a test that fused under the defaults fuses nothing under it and the skip list has no
+"declines" line for it - the row path answered alone, so the test passed without testing the
+configuration. A "declines" line whose test fuses is stale and fails too. Exit status 1 when
+anything failed.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+MODULES = ("catalyst", "sql")
+
+
+def fused(run):
+    counts = {}
+    for module in MODULES:
+        path = run / module / "fused.tsv"
+        if path.exists():
+            for line in path.read_text().splitlines():
+                suite, test, n = line.rsplit("\t", 2)
+                counts[(suite.split(".")[-1], test)] = int(n)
+    return counts
+
+
+def read(run, module, name, default=""):
+    path = run / module / name
+    return path.read_text(errors="replace") if path.exists() else default
+
+
+def skip_lines(skips_path):
+    entries = set()
+    if skips_path.exists():
+        for line in skips_path.read_text().splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            config, suite, test, kind, _reason = line.split("\t")
+            entries.add((kind, config, suite, test))
+    return entries
+
+
+def main(runs, skips_path):
+    runs, skips_path = Path(runs), Path(skips_path)
+    dirs = sorted(
+        (d for d in runs.iterdir() if (d / "name").exists()),
+        key=lambda d: (d.name != "defaults", d.name),
+    )
+    base = fused(runs / "defaults")
+    marked = skip_lines(skips_path)
+    bad = 0
+    print(
+        f"{'configuration':32} {'exit':>4} {'secs':>5} {'ok':>5} {'fail':>4} {'canc':>4} "
+        f"{'abort':>5} {'unfused':>7}"
+    )
+    details, notrun = [], []
+    for d in dirs:
+        name = (d / "name").read_text().strip()
+        ok = failed = canceled = aborted = status = seconds = 0
+        log = ""
+        for module in MODULES:
+            text = ANSI.sub("", read(d, module, "run.log"))
+            log += text
+            tests = re.findall(r"Tests: succeeded (\d+), failed (\d+), canceled (\d+)", text)
+            if tests:
+                ok, failed, canceled = (
+                    a + int(b) for a, b in zip((ok, failed, canceled), tests[-1])
+                )
+            if not (d / module / "exit").exists():
+                notrun.append(f"  {name}: the {module} suites did not run")
+                continue
+            suites = re.findall(r"Suites: completed (\d+), aborted (\d+)", text)
+            aborted += int(suites[-1][1]) if suites else 1
+            status = max(status, int(read(d, module, "exit", "1")))
+            seconds = max(seconds, int(read(d, module, "seconds", "0")))
+        unfused, stale = [], []
+        if name != "defaults":
+            mine = fused(d)
+            for key, n in base.items():
+                # A test listed as failing under this configuration says nothing by fusing.
+                listed = any((kind, name, *key) in marked for kind in ("declines", "fails"))
+                if n > 0 and mine.get(key) == 0 and not listed:
+                    unfused.append(key)
+            for kind, config, suite, test in marked:
+                if kind == "declines" and config == name and mine.get((suite, test), 0) > 0:
+                    stale.append((suite, test))
+        failing = status != 0 or unfused or stale
+        bad += bool(failing)
+        print(
+            f"{name:32} {status:>4} {seconds:>5} {ok:>5} "
+            f"{failed:>4} {canceled:>4} {aborted:>5} {len(unfused):>7}"
+        )
+        for line in log.splitlines():
+            if "*** FAILED ***" in line or "*** ABORTED ***" in line:
+                details.append(f"  {name}: {line.strip()}")
+        details += [
+            f"  {name}: fuses nothing, fused under the defaults: {s} / {t}" for s, t in unfused
+        ]
+        details += [f"  {name}: stale declines line, the test fuses: {s} / {t}" for s, t in stale]
+    if details:
+        print("\n" + "\n".join(details))
+    if notrun:
+        print("\n" + "\n".join(notrun))
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(*sys.argv[1:3]))

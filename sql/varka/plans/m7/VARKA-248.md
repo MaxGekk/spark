@@ -61,10 +61,94 @@ source generator), more machinery than 40 entries need.
 
 ### 3.2 Step 2: the configuration matrix
 
-The suites under each option's non-default configuration, a committed skip list with a reason per
-entry naming the minimal option delta that fails, and a declining-shape marker that fails when the
-shape starts to fuse (`m7/READING.md` 3, DuckDB's `test/configs` and Druid's `cannotVectorize`).
-Planned in this file before its code, once step 1 has merged.
+The Varka suites rerun once per *configuration*: the defaults with one option changed, applied
+to every kernel the suites emit - `cse=false`, `groupBudget=8`, `division=DOUBLE_DIV`,
+`lanesOverride=4`. A reference form or a machine's alternative must give the defaults' answers
+under every test, where today it meets only the few tests that set it. The idea is DuckDB's
+`test/configs`, and the declining marker is Druid's `cannotVectorize` (`m7/READING.md` 3).
+
+**3.2.1 The configurations.** Every non-default arm of every table entry but the fault
+injectors: a flag's other value, a choice's other constants, a count's audit values, and
+`lanesOverride` at 4 and 16. The table gives 43 arms today, plus the two lane counts: 45
+configurations (28 reference arms, 6 machine, 9 knob, 2 priced checks). They are derived from
+`VarkaEmitOption.TABLE` and named as `canonical` `name=value` pairs, so a new option joins the
+matrix with its entry.
+
+**3.2.2 Reaching every kernel.** One base value, `VarkaMatrix.base` in the catalyst test jar,
+read from `-Dvarka.matrix.config=<name=value,...>` and `DEFAULTS` without it:
+
+* the SQL suites: `VarkaColumnarToRowExec`'s existing test hook starts at the base instead of
+  `DEFAULTS`, and its nine resets restore the base;
+* the emitter suites: `VarkaEmitterTestBase`'s four defaulted parameters, and the test code's
+  other `VarkaEmitOptions.DEFAULTS` uses that build a variant (`DEFAULTS.withX(...)`), start from
+  the base - a mechanical change over about 300 sites;
+* production code is unchanged: `DEFAULTS` stays a constant and no system property reaches it.
+
+The alternative, `DEFAULTS` itself reading the property, is one line and reaches the defaulted
+parameters in main code too, but it puts an emitter knob on every production JVM, which the
+existing hook's comment keeps off the configuration surface on purpose. A matrix run counts, per
+suite, the emissions whose options are not the base; the first run's counts name the paths the
+base does not reach, and each is closed or listed.
+
+**3.2.3 What stays out, and why.** Whole suites whose subject is the defaults or the machine, not
+an answer: the bytes oracle and the cost audit (they compare with committed output of the
+defaults), `VarkaEmitOptionSuite`, `VarkaMatrixSuite`, `VarkaAssemblySuite` (it reads the JIT's
+output) and `VarkaWarmupEndToEndSuite` (it times a kernel's compilation, which a loaded machine
+moves). The list is in the runner with a reason per suite.
+
+Within the suites that run, a test whose subject is the defaults' emitted structure - registered
+op counts, a `HugeMethodLimit` crossing, a loop-method count, bytes compared byte for byte, the
+size at which a shape declines - carries the tag `PinsDefaults`, and the matrix cancels it under
+any configuration: run there, it measures nothing new, and its failure would say only that a
+configuration changed what it pins. The first laptop run (4 October 2026, 14 configurations)
+showed such tests to be almost every failure.
+
+**3.2.4 The skip list.** `sql/varka/matrix/skips.tsv`, one line per answer test a configuration
+breaks by design: the configuration, the suite, the test, the kind and the reason. Kind `fails`:
+the test is expected to fail, as a guard test does under `guardDayProducers=false` and an ANSI
+overflow test under `checkIntOverflow=false`. `VarkaMatrixTests`, which `VarkaTestWatchdog`
+extends and the suites without the watchdog mix in, runs a listed test, cancels it with the
+reason if it fails, and fails it as a stale line if it passes.
+
+**3.2.5 The declining marker.** A configuration that makes the emitter decline everything would
+pass every SQL test vacuously: the row path answers instead. So the SQL sessions register a
+query listener that sums each query's `numVarkaBatches` over its plan, the wrapper reads the sum
+before and after each test, and the run records each test's fused batches; the defaults run is
+configuration zero. (The shape cache's build count cannot serve: a shape built in an earlier
+test is a cache hit in a later one.) A test that fused under the defaults and fuses nothing
+under a configuration fails, unless the skip list marks it kind `declines` with a reason - a
+single output over a small `methodByteBudget` declines by design (VARKA-87) - and a `declines`
+entry whose test fuses fails as stale. VARKA-275, the guard on hidden kernel-failure fallbacks,
+is the per-test half of the same concern and lands independently.
+
+**3.2.6 Running it.** `dev/varka_matrix.sh [--config <name=value>]... [--all] [-j N]` builds once,
+then runs each configuration's catalyst and SQL suites as two ScalaTest runner JVMs on the test
+classpath sbt exports, N JVMs at a time, each in its own directory, so parallel runs share no sbt
+lock, warehouse or temporary directory, and a shape a catalyst suite compiled is not warm when a
+SQL suite asks for its first query. Each JVM writes a JUnit report and its tests' fused batches;
+`dev/varka_matrix_report.py` prints one line per configuration and exits non-zero on any failure.
+
+Measured on the laptop at ten JVMs, a configuration takes 15 to 18 minutes for catalyst and 22
+to 27 for SQL, about 40 JVM-minutes, so the 45 are about 31 JVM-hours: three hours at ten at a
+time, which the 60 W the laptop's USB-C supply negotiated does not quite cover (the battery fell
+3.6 W net). Three places run it:
+
+* **PR CI**, one configuration per pull request: the option the PR's files touch if there is one,
+  otherwise `configurations[PR number mod 45]`, so a rerun draws the same one and consecutive PRs
+  walk the list. A configuration that fails is rerun on the merge base; failing there too, the
+  job reports it pre-existing rather than blaming the PR. Two jobs, catalyst and SQL, about 25
+  minutes beside the existing ones.
+* **Weekly**, every configuration: `varka-option-matrix.yml` on Sunday beside the weekly full
+  Spark matrix, about 30 runner-hours on four-core runners, two configurations per job.
+* **The laptop**, by hand: a PR that changes an option's code path runs its configurations with
+  `--config`, in about one configuration's time.
+
+**3.2.7 Done when.** All 45 configurations have run, every red test either tagged
+`PinsDefaults`, fixed, or listed with its reason, and the weekly workflow's first run of all 45 is
+green; the PR job runs one configuration with the
+merge-base check; the weekly workflow runs all of them; `sql/varka/AGENTS.md` says a new option
+gets its matrix arms from its table entry, a structure test its tag, and a broken answer test a
+skip line with its reason.
 
 ### 3.3 What is deliberately unchanged
 
@@ -114,7 +198,9 @@ None.
 
 ## 8. Sequencing
 
-Step 1, one pull request; step 2 planned here, then its own pull request.
+Step 1, one pull request. Step 2 in two: the base value, the wrapper's tag, skip list and counts,
+the runner script and a green laptop run of all 45 configurations; then the PR job and the weekly
+workflow.
 
 ## 9. Outcome
 
@@ -148,3 +234,41 @@ component it is named for moved, which the defaults test could not see, since it
 through its own entry; a deliberately miswired setter fails it. `lanesOverride` is a knob, not a
 machine-dependent winner: production always uses the preferred width, and the override exists so
 one JVM's suites can emit for every width.
+
+### 9.2 Step 2, the matrix and its first runs, 4 and 5 October 2026
+
+The base value, the `PinsDefaults` tag, the skip list, the fused-batch count and the runner landed
+as 3.2 describes, and all 45 configurations ran on the laptop, in three sittings: 14 on the
+evening of 4 October before the run was stopped for the battery, 21 overnight, and the remaining
+13 on the morning of 5 October. **No configuration found a wrong answer.** Every failure was one
+of three things:
+
+* **A test pinning the defaults' structure** - registered op counts, a `HugeMethodLimit`
+  crossing, a method count, the size a shape declines at: 79 tests now carry `PinsDefaults`.
+* **A by-design break**, now one of 71 skip lines: a switched-off check computing what it exists
+  to price (`checkIntOverflow`, `guardDayProducers`, `guardUnderArm`), or a reference form of the
+  size machinery that cannot hold the wide shape a test builds (`methodByteBudget=0`,
+  `driverOutputTable=false`, `splitDriver=false`, `severalKernels=false`,
+  `splitConditions=false`).
+* **A test that assumed the base was the defaults**: the 64-bit division test's conversion arm
+  now keeps the default AVX level, and the IR fuzzer's reach check runs under the defaults only.
+
+The declining marker earned its place: under `methodByteBudget=0` three SQL tests passed while
+fusing nothing, the row path answering alone, and each turned out to be a designed decline past
+the 64 distinct ops a kernel holds without the byte budget. Two apparent defects were the tests'
+own: an Arrow "memory leaked" under `useAVX=2` was a failed assertion skipping a test helper's
+cleanup, and "got 0, Java says 1250" past 2^52 was the magic division form answering in the shape
+its lowering predicts, under an arm that assumed the conversion form.
+
+`VarkaWarmupEndToEndSuite` left the matrix: it times a kernel's compilation, and at ten JVMs its
+first-query tests read a kernel `RELEASED` where they wait for `COMPILED`.
+
+Measured cost: a configuration is 15 to 18 minutes of catalyst and 22 to 27 of SQL at ten JVMs,
+about 40 JVM-minutes, so the 45 are about 31 JVM-hours - 2.5 to 3 hours on the laptop at eight
+or ten JVMs. The runner gained `--deadline` and a pause while the battery discharges below 30%,
+after the 60 W the laptop's USB-C supply negotiated on 4 October did not cover ten JVMs.
+
+Not rerun on the laptop: the configurations whose tags or skip lines were added after they ran.
+Each line came from that configuration's own observed failure, so the confirmation is the weekly
+workflow's first run in the second pull request, beside the PR job; a missing tag fails there,
+and a stale skip line fails as stale.

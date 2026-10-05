@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import scala.jdk.CollectionConverters._
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isDriver
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
@@ -33,7 +34,7 @@ class VarkaKernelPlanSuite extends VarkaEmitterTestBase {
   // Both arms under the weights alone: with the prediction on, the plan's margins close groups
   // the prediction without them keeps, so the loop and the plan would not be building the same
   // grouping on the shapes `emit_cost_audit.json` names; the margins are the audit's to pin.
-  private val unplanned = VarkaEmitOptions.DEFAULTS.withPlanSize(false).withPredictGrouping(false)
+  private val unplanned = VarkaMatrix.base.withPlanSize(false).withPredictGrouping(false)
   private val planned = unplanned.withPlanSize(true)
 
   /** One group per output: a group budget of one closes a group after every `date_add`. */
@@ -63,7 +64,8 @@ class VarkaKernelPlanSuite extends VarkaEmitterTestBase {
     case (k, v) if isDriver(k) => k -> v.intValue
   }.toMap
 
-  test("the plan's driver is the built driver, byte for byte, from one group to four hundred") {
+  test("the plan's driver is the built driver, byte for byte, from one group to four hundred",
+      PinsDefaults) {
     // The driver from a table is its calls alone, so built by itself over the first grouping it
     // measures what the full class's driver measures; a change to the driver's code fails here
     // instead of costing a rebuild. The whole driver is read, so the split driver is off.
@@ -79,7 +81,8 @@ class VarkaKernelPlanSuite extends VarkaEmitterTestBase {
     }
   }
 
-  test("the planned split driver is the two-build class, byte for byte, in one build") {
+  test("the planned split driver is the two-build class, byte for byte, in one build",
+      PinsDefaults) {
     // Past the driver's ceiling the loop builds the class whole, reads the stage size off its
     // driver and builds it again; the plan reads the same size off the driver built alone, so
     // its one build is that second build (`VARKA-236.md` 2.2). The compositions of wide draws
@@ -112,7 +115,7 @@ class VarkaKernelPlanSuite extends VarkaEmitterTestBase {
   }
 
   test("a driver over the budget with the split driver off declines before any build, naming " +
-      "the prefix one class serves") {
+      "the prefix one class serves", PinsDefaults) {
     val whole = planned.withSplitDriver(false)
     val roots = (0 until 800).map(ladderEntry)
     val trace = new VarkaEmitTrace
@@ -178,7 +181,7 @@ class VarkaKernelPlanSuite extends VarkaEmitterTestBase {
     assert(corrected.size <= 9, s"${corrected.size} shapes corrected: $corrected")
   }
 
-  test("a planned kernel answers as the reference evaluator does, staged and cut") {
+  test("a planned kernel answers as the reference evaluator does, staged and cut", PinsDefaults) {
     val staged = dateAdds(300)
     for (masked <- Seq(false, true)) {
       checkMatrix(staged, 1, (0 until 300).map(k => k * 7 - 1000).toArray,

@@ -25,6 +25,7 @@ import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.util.Utils
 
 /**
@@ -199,7 +200,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     val key = new VarkaShapeKey(
       java.util.List.of[VarkaVectorIR](new VarkaVectorIR.MakeDate(
         new VarkaVectorIR.Year(columnRef), new VarkaVectorIR.Month(columnRef), literal, true)),
-      1, 1, VarkaEmitOptions.DEFAULTS.withMethodByteBudget(300))
+      1, 1, VarkaMatrix.base.withMethodByteBudget(300))
     val first = intercept[VarkaEmitDeclined] { cache.getOrEmit(parent, key, "exec") }
     val second = intercept[VarkaEmitDeclined] { cache.getOrEmit(parent, key, "exec") }
     assert(second eq first, "the second lookup must rethrow the remembered decline")
@@ -280,7 +281,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     val shape = chain(bits = 3, depth = 2)
     val plain = keyOf(shape)
     val noCse =
-      new VarkaShapeKey(java.util.List.of(shape), 1, 1, VarkaEmitOptions.DEFAULTS.withCse(false))
+      new VarkaShapeKey(java.util.List.of(shape), 1, 1, VarkaMatrix.base.withCse(false))
     // Before VARKA-23 this pair could not coexist. The emitter's non-shape inputs were static
     // hooks the key could not see, so the cache refused every lookup - hit and miss alike -
     // while any of them was set. They are a key component now, so the variant simply misses.
@@ -323,7 +324,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
-  test("the AVX level rides the shape key, so two hosts cannot share one identity") {
+  test("the AVX level rides the shape key, so two hosts cannot share one identity", PinsDefaults) {
     // `VARKA-88.md` risk 6: the level changes emitted bytes at the long lane, so an
     // emission that assumed AVX-512 converts must not be handed to a kernel compiled for a
     // host without them. Rendering it is what keeps the two apart.
@@ -331,7 +332,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     // has to carry the level rather than merely differ - an earlier form of this test asserted
     // `contains("4")` against a string that always holds `fusedCeiling`, which is 400, so it
     // would have passed with the component deleted from canonical() entirely.
-    val defaults = VarkaEmitOptions.DEFAULTS
+    val defaults = VarkaMatrix.base
     val converting = defaults.withUseAVX(3)
     val fallingBack = defaults.withUseAVX(2)
     assert(converting.canonical() !== fallingBack.canonical())
@@ -362,7 +363,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     // looked - so this walks the record's components and holds each one to it. It reflects
     // rather than listing names on purpose: a list would have to be updated by the same person
     // who forgot the field.
-    val defaults = VarkaEmitOptions.DEFAULTS
+    val defaults = VarkaMatrix.base
     val components = classOf[VarkaEmitOptions].getRecordComponents
     assert(components.length >= 13, "components were removed; re-read this test's reason")
 
@@ -623,7 +624,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     val cache = new VarkaShapeCacheImpl(8)
     // A budget no group method fits: the single output declines, naming itself.
     val key = new VarkaShapeKey(java.util.List.of(chain(bits = 5, depth = 6)), 1, 1,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(50))
+      VarkaMatrix.base.withMethodByteBudget(50))
     intercept[VarkaEmitDeclined](cache.admit(parent, key, true))
     val builds = cache.buildCount
     intercept[VarkaEmitDeclined](cache.admit(parent, key, true))

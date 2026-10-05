@@ -119,7 +119,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
       if (VarkaVectorIR.emissionLane(roots.head) == LaneType.LONG) lanes / 2 else lanes
     // The arm is applied over the width, not under it: every arm below leaves the lane count
     // alone, and the oracle's two widths are what the arm is being compared across.
-    val options = arm(VarkaEmitOptions.DEFAULTS.withLanesOverride(laneCount))
+    val options = arm(VarkaMatrix.base.withLanesOverride(laneCount))
     val bytes =
       try {
         VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null, options)

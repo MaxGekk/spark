@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.lang.foreign.{Arena, ValueLayout}
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
 /**
@@ -62,7 +63,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
       checkMatrix(divisionRoots, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
         nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
         ctx = s"division=$form julianMap=$julian",
-        options = VarkaEmitOptions.DEFAULTS.withDivision(form).withJulianMap(julian))
+        options = VarkaMatrix.base.withDivision(form).withJulianMap(julian))
     }
   }
 
@@ -75,7 +76,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
       checkMatrix(divisionRoots, 1, Array.empty[Int], Seq(17, 64, 1000),
         nullPatterns.map(p => Seq(p._2)), data = calendarBoundaryDay,
         ctx = s"division=$form lanes=$lanes",
-        options = VarkaEmitOptions.DEFAULTS.withDivision(form).withLanesOverride(lanes))
+        options = VarkaMatrix.base.withDivision(form).withLanesOverride(lanes))
     }
   }
 
@@ -87,7 +88,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
       checkMatrix(Seq[VarkaVectorIR](new WeekOfYear(thursday)), 1, Array.empty[Int],
         Seq(1, 13, 17, 64, 1000), nullPatterns.map(p => Seq(p._2)), data = isoWeekDay,
         ctx = s"weekofyear division=$form",
-        options = VarkaEmitOptions.DEFAULTS.withDivision(form))
+        options = VarkaMatrix.base.withDivision(form))
     }
   }
 
@@ -99,7 +100,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     for (form <- divisionForms) {
       checkMatrix(Seq[VarkaVectorIR](root), 2, Array.emptyIntArray, Seq(1, 13, 17, 64, 1000),
         combos(2), data = data, ctx = s"add_months division=$form",
-        options = VarkaEmitOptions.DEFAULTS.withDivision(form))
+        options = VarkaMatrix.base.withDivision(form))
     }
   }
 
@@ -107,7 +108,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // Both reach `emitDaysFromCivil`, whose `/400` and `/100` share one multiplier and differ
     // only in the shift - the pair the division table exists to keep apart.
     for (form <- divisionForms) {
-      val options = VarkaEmitOptions.DEFAULTS.withDivision(form)
+      val options = VarkaMatrix.base.withDivision(form)
       checkMatrix(Seq(makeDateNull), 3, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
         combos(3), data = tripleData(makeDateValid), ctx = s"make_date division=$form",
         options = options)
@@ -147,7 +148,8 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     halves / 2
   }
 
-  test("a double-lane division costs seven ops where the magic costs two, and kills the carry") {
+  test("a double-lane division costs seven ops where the magic costs two, and kills the carry",
+      PinsDefaults) {
     // `year` over the shipped prefix divides three times - the era step, the Julian century and
     // the Julian year - and each of the three rounds down and is corrected by a carry. The magic
     // form spends two `IntVector` ops on the division and three more on the carry; the double
@@ -160,7 +162,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // what these counts pin.
     val year = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
     def bytes(form: VarkaEmitOptions.Division): Array[Byte] =
-      emitMulti(year, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
+      emitMulti(year, 1, 0, VarkaMatrix.base.withDivision(form))._2
 
     val magic = bytes(VarkaEmitOptions.Division.MAGIC)
     assert(opsOn(magic, "IntVector") === 34)
@@ -190,7 +192,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     for (julian <- Seq(false, true)) {
       def bytes(form: VarkaEmitOptions.Division): Array[Byte] =
         emitMulti(year, 1, 0,
-          VarkaEmitOptions.DEFAULTS.withDivision(form).withJulianMap(julian))._2
+          VarkaMatrix.base.withDivision(form).withJulianMap(julian))._2
       assert(doubleDivisions(bytes(VarkaEmitOptions.Division.DOUBLE_DIV)) === 3,
         s"julianMap=$julian")
       assert(doubleDivisions(bytes(VarkaEmitOptions.Division.DOUBLE_RECIP)) === 2,
@@ -198,13 +200,13 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     }
   }
 
-  test("the shipped default emits no double-lane ops at all") {
+  test("the shipped default emits no double-lane ops at all", PinsDefaults) {
     // The option is off by default, so no production kernel converts anything: the emitted bytes
     // for every calendar shape are what they were before this existed, which is also what keeps
     // VarkaEmittedBytesSuite's registered hashes valid without regenerating them.
     val bytes = emitMulti(divisionRoots, 1, 0)._2
     assert(doubleDivisions(bytes) === 0)
-    assert(VarkaEmitOptions.DEFAULTS.division() === VarkaEmitOptions.Division.MAGIC)
+    assert(VarkaMatrix.base.division() === VarkaEmitOptions.Division.MAGIC)
   }
 
   test("the emitted calendar kernels agree over the whole covered range under both double " +
@@ -226,7 +228,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // Both prefix forms, because they divide by 146097 at different sites and the reciprocal is
     // admitted at one and refused at the other - the single most load-bearing row of the table.
     for (form <- doubleForms; julian <- Seq(true, false)) {
-      val options = VarkaEmitOptions.DEFAULTS.withDivision(form).withJulianMap(julian)
+      val options = VarkaMatrix.base.withDivision(form).withJulianMap(julian)
       sweepCalendar(fields, options)
       sweepTrunc(options)
       sweepLastDay(options)
@@ -261,7 +263,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
         checkMatrix(root, 1, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
           nullPatterns.map(p => Seq(p._2)), data = dividends,
           ctx = s"divc/$d mulHi=$mulHi lanes=$lanes",
-          options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes).withMulHiDivide(mulHi))
+          options = VarkaMatrix.base.withLanesOverride(lanes).withMulHiDivide(mulHi))
       }
     }
   }
@@ -319,7 +321,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
   }
 
   test("a constant division takes the multiply-high form by default and the double lane as " +
-      "the reference arm, whatever the division option says") {
+      "the reference arm, whatever the division option says", PinsDefaults) {
     // The `division` option chooses among the lowerings the *calendar* has and does not reach
     // this node. What does is `mulHiDivide`: on, the body has no double-lane op at all and
     // carries the multiply-high's four long-lane ops - two multiplies, two shifts - and four
@@ -327,12 +329,12 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // node with no lowering.
     val root = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     for (form <- VarkaEmitOptions.Division.values()) {
-      val mulHi = emitMulti(root, 1, 0, VarkaEmitOptions.DEFAULTS.withDivision(form))._2
+      val mulHi = emitMulti(root, 1, 0, VarkaMatrix.base.withDivision(form))._2
       assert(doubleDivisions(mulHi) === 0, s"division=$form")
       assert(opsOn(mulHi, "LongVector") === 4, s"division=$form")
       assert(convertShapes(mulHi) === 4, s"division=$form")
       val converting = emitMulti(root, 1, 0,
-        VarkaEmitOptions.DEFAULTS.withDivision(form).withMulHiDivide(false))._2
+        VarkaMatrix.base.withDivision(form).withMulHiDivide(false))._2
       assert(doubleDivisions(converting) === 1, s"division=$form")
       assert(opsOn(converting, "LongVector") === 0, s"division=$form")
     }
@@ -398,7 +400,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // without this the test would check the conversion form on an AVX-512 host and the magic
     // form on every other - covering one lowering twice and the other never, on a machine
     // nobody chose. The magic form has its own test below, at its own pinned level.
-    val converting = VarkaEmitOptions.DEFAULTS.withUseAVX(3)
+    val converting = VarkaMatrix.base.withUseAVX(3)
     val divisors = Seq(
       3_600_000_000_000L,   // hour(t), nanos per hour
       60_000_000_000L,      // minute(t) step 1
@@ -426,7 +428,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // forms could disagree, so they are driven over the same dividends and required to agree
     // with the same reference. The option is set explicitly rather than inherited: the
     // arithmetic is correct on any machine, and it is the lowering that is under test.
-    val avx2 = VarkaEmitOptions.DEFAULTS.withUseAVX(2)
+    val avx2 = VarkaMatrix.base.withUseAVX(2)
     val divisors = Seq(3_600_000_000_000L, 1_000_000_000L, 1_000L, 86_400_000_000L, 60L, -60L)
     for (d <- divisors; lanes <- Seq(2, 8)) {
       val root = Seq[VarkaVectorIR](
@@ -446,7 +448,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
     def converts(roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Int =
       convertShapes(emitMulti(roots, 1, 0, options)._2)
-    val defaults = VarkaEmitOptions.DEFAULTS
+    val defaults = VarkaMatrix.base
     assert(converts(long64, defaults.withUseAVX(2)) === 0, "AVX2 emits no conversion")
     assert(converts(long64, defaults.withUseAVX(3)) === 2, "AVX-512 converts in and out")
     // A machine that reports no level has told us nothing against its converts, so it keeps
@@ -479,7 +481,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     // 64-bit lane pairs one to one.
     // Both levels are named. `DEFAULTS.useAVX` is whatever the machine reports, so emitting
     // with it would assert the conversion form's shape against whichever form the host picked.
-    val converting = VarkaEmitOptions.DEFAULTS.withUseAVX(3)
+    val converting = VarkaMatrix.base.withUseAVX(3)
     val long64 = Seq[VarkaVectorIR](
       new ConstDivide(new ColumnRef(0, LaneType.LONG), 1000, ConstDivide.EXACT_DIVIDEND_BOUND))
     val int32 = Seq[VarkaVectorIR](new ConstDivide(new ColumnRef(0, LaneType.INT), 12))
@@ -514,9 +516,11 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
     val mask52 = (1L << 52) - 1
     val divisors = Seq(3_600_000_000_000L, 60_000_000_000L, 1_000_000_000L, 1_000L,
       86_400_000_000L, 60L, -60L)
+    // The level selects the form, so the conversion arm keeps the default level whatever the
+    // option matrix's configuration sets it to.
     val forms = Seq(
-      ("conversion", VarkaEmitOptions.DEFAULTS),
-      ("magic", VarkaEmitOptions.DEFAULTS.withUseAVX(2)))
+      ("conversion", VarkaMatrix.base.withUseAVX(VarkaEmitOptions.DEFAULTS.useAVX)),
+      ("magic", VarkaMatrix.base.withUseAVX(2)))
     // A region is [base, 2 * base): the ends, the first multiple boundary, one deep inside.
     def region(base: Long, d: Long): Seq[Long] = {
       val m = math.abs(d)
@@ -613,7 +617,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
       val root = Seq[VarkaVectorIR](BoundedDivide.of(new ColumnRef(0), d, bound))
       checkMatrix(root, 1, Array.empty[Int], Seq(1, 17, bound), combos(1),
         data = (_, i) => i % bound, ctx = s"divb $d over $bound",
-        options = VarkaEmitOptions.DEFAULTS.withLanesOverride(lanes))
+        options = VarkaMatrix.base.withLanesOverride(lanes))
     }
     // No single multiply is exact for / 60 over the whole day: the product would pass 2^32.
     val e = intercept[IllegalArgumentException](BoundedDivide.of(new ColumnRef(0), 60, 86400))

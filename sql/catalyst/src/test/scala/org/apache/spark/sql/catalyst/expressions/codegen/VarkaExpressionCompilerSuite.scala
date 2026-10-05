@@ -23,8 +23,9 @@ import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, CurrentTime, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Rand, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractTimes, TimeAddInterval, TimeDiff, TimeExpression, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimestampAddInterval, TimeToMicros, TimeToMillis, TimeToSeconds, TimeTrunc, ToTime, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaEmitOptions, VarkaEmitterTestSupport, VarkaLoopEmitter, VarkaShapeCache, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaEmitterTestSupport, VarkaLoopEmitter, VarkaMatrix, VarkaShapeCache, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmup, VarkaShapeKey}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isStage
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, Year => IRYear}
@@ -1637,7 +1638,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // byte budget; under the default the third entry fuses too (VARKA-190). Every case here is
     // read with one kernel per projection: under the default `severalKernels` an entry that
     // fits alone is another kernel's instead (VARKA-190.md 11).
-    val oneKernel = VarkaEmitOptions.DEFAULTS.withSeveralKernels(false)
+    val oneKernel = VarkaMatrix.base.withSeveralKernels(false)
     val threeEntries = Seq(inIf(0), inIf(1000), out(DateAdd(d, Literal(9999))))
     val partial = VarkaExpressionCompiler.compilePartial(threeEntries, childOutput,
       oneKernel.withMethodByteBudget(0)).get
@@ -1846,7 +1847,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       .map(k => GreaterThan(d, Literal(k, DateType)): Expression)
       .reduceLeft(org.apache.spark.sql.catalyst.expressions.And(_, _))
     val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)).get
+      VarkaMatrix.base.withMethodByteBudget(0)).get
     assert(predicate.fusedConjuncts.size === 32)
     assert(predicate.residualConjuncts.size === 8)
     val decline = predicate.specs.reverse.head.decline.get
@@ -2345,7 +2346,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       s"org.apache.spark.sql.varka.execution.VarkaCompilerSizeProbe${System.nanoTime()}",
       fused.outputs.asJava,
       fused.inputOrdinals.size, fused.numLiterals, null, null,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(budget))
+      VarkaMatrix.base.withMethodByteBudget(budget))
     val methods = VarkaEmitterTestSupport.methodNames(bytes).asScala.filter(_ != "<init>")
     methods.map(VarkaEmitterTestSupport.codeSize(bytes, _)).max
   }
@@ -2369,7 +2370,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // Read with one kernel per projection: under the default the op cap's overflow entry fits
     // alone and is a second kernel's (VARKA-190.md 11).
     val legacy = VarkaExpressionCompiler.compilePartial(list, childOutput,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0).withSeveralKernels(false)).get
+      VarkaMatrix.base.withMethodByteBudget(0).withSeveralKernels(false)).get
     assert(legacy.specs === Seq(FusedOutput(0), FusedOutput(1), ResidualOutput))
     assert(legacy.declines(2).reason === "exceeds the emitter's fused budget")
     // The heavy output alone: nothing is left to fuse, so the projection does not fuse at all,
@@ -2390,7 +2391,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     }
     // One kernel per projection, the reference: under the default the demoted suffix is a second
     // kernel's instead (VARKA-190.md 11).
-    val budget = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(2000).withDriverOutputTable(false)
+    val budget = VarkaMatrix.base.withMethodByteBudget(2000).withDriverOutputTable(false)
       .withSeveralKernels(false)
     val partial = VarkaExpressionCompiler.compilePartial(list, childOutput, budget).get
     val fused = partial.specs.count(_.isInstanceOf[FusedOutput])
@@ -2438,17 +2439,17 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val condition = conjuncts.reduceLeft[Expression](And(_, _))
     val two = VarkaExpressionCompiler.compilePredicate(
       conjuncts.take(2).reduceLeft[Expression](And(_, _)), childOutput,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)).get
+      VarkaMatrix.base.withMethodByteBudget(0)).get
     val three = VarkaExpressionCompiler.compilePredicate(condition, childOutput,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)).get
+      VarkaMatrix.base.withMethodByteBudget(0)).get
     val limit = largestMethod(two.fused, 60000)
     assert(largestMethod(three.fused, 60000) > limit, "the third conjunct has to add bytes")
     val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(limit).withSplitConditions(false)).get
+      VarkaMatrix.base.withMethodByteBudget(limit).withSplitConditions(false)).get
     assert(predicate.specs.map(_.fused) === Seq(true, true, false))
     assert(predicate.specs(2).decline.get.reason.startsWith("over the emitter's method budget"))
     val split = VarkaExpressionCompiler.compilePredicate(condition, childOutput,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(limit)).get
+      VarkaMatrix.base.withMethodByteBudget(limit)).get
     // Every conjunct fuses, in several conjunction roots. How many is the emitter's answer, not
     // this test's: a root at exactly this budget alone can be over it beside another.
     assert(split.specs.forall(_.fused))
@@ -2468,7 +2469,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   }
 
   test("a hundred four-op entries all fuse under the byte budget, two hundred from a table, and " +
-      "past the unrolled driver's ceiling the last-admitted are demoted with its reason") {
+      "past the unrolled driver's ceiling the last-admitted are demoted with its reason",
+      PinsDefaults) {
     // VARKA-190.md 1, 2 and 10: the op cap fused fifteen of these entries; the byte budget
     // fuses the ladder's whole range. The unrolled driver sets up every output and grows with
     // them, so past about a hundred and forty it is over the budget, and VARKA-169's plan-time
@@ -2479,12 +2481,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val hundred = VarkaExpressionCompiler.compilePartial((1 to 100).map(entry), childOutput).get
     assert(hundred.specs.forall(_.isInstanceOf[FusedOutput]))
     val capped = VarkaExpressionCompiler.compilePartial((1 to 100).map(entry), childOutput,
-      VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0)).get
+      VarkaMatrix.base.withMethodByteBudget(0)).get
     assert(capped.specs.count(_.isInstanceOf[FusedOutput]) === 15)
     val tabled = VarkaExpressionCompiler.compilePartial((1 to 200).map(entry), childOutput).get
     assert(tabled.specs.forall(_.isInstanceOf[FusedOutput]))
     val wide = VarkaExpressionCompiler.compilePartial((1 to 200).map(entry), childOutput,
-      VarkaEmitOptions.DEFAULTS.withDriverOutputTable(false).withSeveralKernels(false)).get
+      VarkaMatrix.base.withDriverOutputTable(false).withSeveralKernels(false)).get
     val fused = wide.specs.count(_.isInstanceOf[FusedOutput])
     assert(fused > 100 && fused < 200, s"$fused of 200 fused")
     assert(wide.specs.drop(fused).forall(_ == ResidualOutput))
@@ -2493,12 +2495,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   }
 
   test("under severalKernels the suffix the unrolled driver's ceiling demotes is a second " +
-      "kernel, and every entry fuses") {
+      "kernel, and every entry fuses", PinsDefaults) {
     // VARKA-190.md 11: the entries VARKA-169's bisection demotes fit, only not beside the
     // others, so they are classified again as a kernel of their own.
     def entry(k: Int): NamedExpression =
       out(Greatest(Seq(AddMonths(d, Literal(k)), DateAdd(d, Literal(k)), LastDay(d))))
-    val unrolled = VarkaEmitOptions.DEFAULTS.withDriverOutputTable(false).withSeveralKernels(false)
+    val unrolled = VarkaMatrix.base.withDriverOutputTable(false).withSeveralKernels(false)
     val one = VarkaExpressionCompiler.compilePartial((1 to 200).map(entry), childOutput,
       unrolled).get
     val first = one.specs.count(_.isInstanceOf[FusedOutput])
@@ -2526,11 +2528,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val output = columns :+ longCol
     val list = columns.map(c => out(DateAdd(c, Literal(1)))) :+ out(Add(longCol, Literal(1L)))
     val one = VarkaExpressionCompiler.compilePartial(list, output,
-      VarkaEmitOptions.DEFAULTS.withSeveralKernels(false)).get
+      VarkaMatrix.base.withSeveralKernels(false)).get
     assert(one.specs.count(_.isInstanceOf[FusedOutput]) === 64) // VarkaEmitBudget.MAX_INPUTS
     assert(one.declines(64).reason === "exceeds the emitter's fused budget")
     val two = VarkaExpressionCompiler.compilePartial(list, output,
-      VarkaEmitOptions.DEFAULTS.withSeveralKernels(true)).get
+      VarkaMatrix.base.withSeveralKernels(true)).get
     assert(two.kernels.size === 2)
     assert(two.specs.slice(64, 70) === (0 until 6).map(KernelOutput(1, _)))
     assert(two.more.head.inputOrdinals === (64 until 70))
@@ -2539,7 +2541,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   }
 
   test("under the defaults the split driver serves the driver's ceiling in one kernel, planned " +
-      "in one emission, and several kernels serve only what one kernel cannot") {
+      "in one emission, and several kernels serve only what one kernel cannot", PinsDefaults) {
     // VARKA-190.md 11.5: both options on. Eight hundred ladder entries are past the driver
     // from a table's ceiling of about 180 groups; with the split driver they are one kernel whose
     // driver calls stages, found without the bisection several kernels would need. Sixty-nine
@@ -2549,7 +2551,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     def stages(plan: CompiledVarkaProjection): Int =
       VarkaEmitterTestSupport.methodBodies(VarkaLoopEmitter.emit("VarkaStagesProbe",
         plan.outputs.asJava, plan.inputOrdinals.size, plan.numLiterals, null, null,
-        VarkaEmitOptions.DEFAULTS)).keySet.asScala.count(isStage(_, true))
+        VarkaMatrix.base)).keySet.asScala.count(isStage(_, true))
     val builds = VarkaShapeCache.buildCount
     val ladder = VarkaExpressionCompiler.compilePartial((1 to 800).map(entry(_, d)),
       childOutput).get
@@ -2573,7 +2575,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       out(Greatest(Seq(AddMonths(d, Literal(k)), DateAdd(d, Literal(k + 1)), LastDay(d2))))
     // The plan would read the cut off the driver and build nothing (VARKA-236); the bisection
     // whose probes this test is about runs with it off.
-    val oneKernel = VarkaEmitOptions.DEFAULTS.withDriverOutputTable(false)
+    val oneKernel = VarkaMatrix.base.withDriverOutputTable(false)
       .withSeveralKernels(false).withPlanSize(false)
     VarkaShapeCache.invalidateAll()
     val before = VarkaShapeCache.buildCount
@@ -2591,7 +2593,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   }
 
   test("under planSize the compiler cuts a projection past the driver's ceiling in one step, " +
-      "at the bisection's kernels, with one class built per kernel (VARKA-236)") {
+      "at the bisection's kernels, with one class built per kernel (VARKA-236)", PinsDefaults) {
     // VARKA-236.md 3.4: with the split driver off, eight hundred ladder entries are two
     // kernels. The loop finds the first by bisection, ten or more emissions each building and
     // measuring a class; the plan reads the cut off the driver built alone and declines before
@@ -2599,7 +2601,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     def entry(k: Int): NamedExpression =
       out(Greatest(Seq(AddMonths(d, Literal(k)), DateAdd(d, Literal(k)), LastDay(d))))
     val list = (1 to 800).map(entry)
-    val loop = VarkaEmitOptions.DEFAULTS.withSplitDriver(false).withSeveralKernels(true)
+    val loop = VarkaMatrix.base.withSplitDriver(false).withSeveralKernels(true)
       .withPlanSize(false)
     VarkaShapeCache.invalidateAll()
     val before = VarkaShapeCache.buildCount
@@ -2622,14 +2624,14 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   }
 
   test("under planSize a kernel the plan read as fitting that declines is cut once from the " +
-      "built grouping, not bisected") {
+      "built grouping, not bisected", PinsDefaults) {
     // `misdescribeDriverBytes` takes bytes off the plan's reading of the driver, so the plan
     // admits eight hundred entries as one class; the build finds the driver over, and the decline
     // carries the cut read off the grouping it built, which the compiler takes in one step.
     def entry(k: Int): NamedExpression =
       out(Greatest(Seq(AddMonths(d, Literal(k)), DateAdd(d, Literal(k + 1)), LastDay(d2))))
     val list = (1 to 800).map(entry)
-    val options = VarkaEmitOptions.DEFAULTS.withSplitDriver(false).withSeveralKernels(true)
+    val options = VarkaMatrix.base.withSplitDriver(false).withSeveralKernels(true)
       .withPlanSize(true).withMisdescribeDriverBytes(100000)
     VarkaShapeCache.invalidateAll()
     val before = VarkaShapeCache.buildCount
