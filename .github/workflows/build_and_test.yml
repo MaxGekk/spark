@@ -1270,9 +1270,7 @@ jobs:
       matrix:
         include:
           - module: catalyst
-            suites: 'catalyst/testOnly *Varka*'
           - module: sql
-            suites: 'sql/testOnly *Varka* *ArrowCachedBatchSerializerSuite'
     steps:
     - name: Bootstrap composite actions
       uses: actions/checkout@v6
@@ -1302,8 +1300,17 @@ jobs:
       with:
         distribution: zulu
         java-version: ${{ inputs.java }}
+    # The suites' JUnit times from this module's previous run, which the runner balances its
+    # JVMs by (VARKA-287.md 3.1); saved under this run's key, restored from the latest.
+    - name: Cache the Varka suites' times
+      uses: actions/cache@v4
+      with:
+        path: target/varka-scoped
+        key: varka-scoped-times-${{ matrix.module }}-${{ github.run_id }}
+        restore-keys: |
+          varka-scoped-times-${{ matrix.module }}-
     - name: Run the Varka suites of ${{ matrix.module }}
-      run: ./build/sbt -Phive "${{ matrix.suites }}"
+      run: ./dev/varka_scoped_suites.sh ${{ matrix.module }}
     # The catalyst suites include the emitted-bytes oracle, VarkaEmittedBytesSuite, which has
     # just passed: the emitter produces exactly what sql/varka/emitted_bytes.json pins. Whether
     # this change moved that file is then the difference between a refactor the oracle proves
