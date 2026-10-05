@@ -36,6 +36,12 @@
 # holding a shared build's classpath; --suites and --skip-suites take comma-separated simple
 # names.
 #
+# CI's options (VARKA-287): --extra-suite MODULE:CLASS adds a suite the Varka-name search does not
+# find (ArrowCachedBatchSerializerSuite, Varka's without the name) to that module's run;
+# --defaults-from DIR takes a finished defaults run - the runs/defaults under DIR, which the
+# declining check compares fused batches with - instead of running the defaults again, and
+# balances the JVMs by its JUnit times.
+#
 # sbt builds once and exports the test classpath and JVM options; each configuration then runs
 # as its own ScalaTest runner JVM in its own directory under target/varka-matrix/, so parallel
 # runs share no sbt lock, warehouse or temporary directory. The defaults always run too, as
@@ -65,9 +71,11 @@ split=1
 jvm_args=()
 build_dir=""
 only_suites=""
-skip_suites=
+skip_suites=""
+extra_suites=()
+defaults_from=""
 
-usage() { sed -n '18,49p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n '18,55p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -88,6 +96,8 @@ while [ $# -gt 0 ]; do
     --build-dir) build_dir=$(realpath -m "$2"); shift 2 ;;
     --suites) only_suites="$2"; shift 2 ;;
     --skip-suites) skip_suites="$2"; shift 2 ;;
+    --extra-suite) extra_suites+=("$2"); shift 2 ;;
+    --defaults-from) defaults_from=$(realpath -m "$2"); shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
@@ -180,9 +190,13 @@ mkdir -p "$OUT/shards"
 total=0
 for module in "${modules[@]}"; do
   mapfile -t found < <(module_suites "${module_root[$module]}")
+  for extra in "${extra_suites[@]}"; do
+    [ "${extra%%:*}" = "$module" ] && found+=("${extra#*:}")
+  done
   total=$((total + ${#found[@]}))
   if [ ${#found[@]} -gt 0 ]; then
-    python3 dev/varka_suite_shards.py "$split" "$OUT/runs" "${found[@]}" > "$OUT/shards/$module"
+    python3 dev/varka_suite_shards.py "$split" "${defaults_from:-$OUT}/runs" "${found[@]}" \
+      > "$OUT/shards/$module"
   else
     : > "$OUT/shards/$module"
   fi
@@ -225,6 +239,12 @@ rm -rf "$OUT/runs"
 mkdir -p "$OUT/runs"
 echo "${modules[*]}" > "$OUT/runs/modules"
 all=("" "${configs[@]}")
+if [ -n "$defaults_from" ]; then
+  [ -d "$defaults_from/runs/defaults" ] || {
+    echo "no defaults run under $defaults_from" >&2; exit 1; }
+  cp -r "$defaults_from/runs/defaults" "$OUT/runs/defaults"
+  all=("${configs[@]}")
+fi
 running=0
 for config in "${all[@]}"; do
   for module in "${modules[@]}"; do

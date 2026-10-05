@@ -36,12 +36,23 @@ branch=${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}
 base=${VARKA_DIFF_BASE:-}
 
 python3 dev/varka_matrix_pick.py --self-test || exit 1
-dev/varka_matrix.sh --module "$module" --sbt-arg -Phive --list > /dev/null || exit 1
+# The job's suites step (dev/varka_scoped_suites.sh) has run the defaults through the runner in
+# target/varka-scoped: its build is reused, and its fused batches are what the declining check
+# compares with, so the configuration runs alone. Without that run, the defaults run here too.
+scoped=target/varka-scoped
+reuse=()
+if [ -d "$scoped/runs/defaults" ] && [ -s "$scoped/classpath" ]; then
+  reuse=(--skip-build --build-dir "$scoped" --defaults-from "$scoped" --split 2)
+  dev/varka_matrix.sh --module "$module" "${reuse[@]:0:3}" --list > /dev/null || exit 1
+else
+  dev/varka_matrix.sh --module "$module" --sbt-arg -Phive --list > /dev/null || exit 1
+  reuse=(--skip-build)
+fi
 mapfile -t picked < <(python3 dev/varka_matrix_pick.py "$OUT/configurations" "$branch" "$base")
 config=${picked[0]}
 echo "== $module under $config: ${picked[1]}" | tee -a "$SUMMARY"
 
-dev/varka_matrix.sh --module "$module" --skip-build --config "$config" -j 2 \
+dev/varka_matrix.sh --module "$module" "${reuse[@]}" --config "$config" -j 2 \
   > "$OUT/report.txt" 2>&1
 status=$?
 cat "$OUT/report.txt"
