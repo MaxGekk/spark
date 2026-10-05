@@ -130,6 +130,13 @@ lengths and `VarkaEmitOptions` variants against the shared
 with `-Dvarka.fuzz.seed=<seed> -Dvarka.fuzz.only=<iteration>`. A new option is
 fuzzed the day it lands: the suite draws from `VarkaEmitOption.TABLE`, and
 `VarkaEmitOptionSuite` fails until a new record component has its table entry.
+The same entry gives it its configurations in the option matrix
+(`dev/varka_matrix.sh`, `m7/VARKA-248.md` 3.2), which reruns the Varka suites
+with one option changed at a time. A test starts from `VarkaMatrix.base`, not
+`VarkaEmitOptions.DEFAULTS`, so the matrix reaches its kernels; a test whose
+subject is the defaults' emitted structure takes the tag `PinsDefaults`; and an
+answer test a configuration breaks by design gets a line in
+`sql/varka/matrix/skips.tsv` with its reason.
 
 A regeneration ends with the requote: `dev/varka_bench_diff.py --git HEAD <file>
 --requote` lists, under each moved row, every document line that quotes its old

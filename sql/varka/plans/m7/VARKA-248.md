@@ -143,8 +143,9 @@ time, which the 60 W the laptop's USB-C supply negotiated does not quite cover (
 * **The laptop**, by hand: a PR that changes an option's code path runs its configurations with
   `--config`, in about one configuration's time.
 
-**3.2.7 Done when.** All 45 configurations pass on the laptop, every red test either tagged
-`PinsDefaults`, fixed, or listed with its reason; the PR job runs one configuration with the
+**3.2.7 Done when.** All 45 configurations have run, every red test either tagged
+`PinsDefaults`, fixed, or listed with its reason, and the weekly workflow's first run of all 45 is
+green; the PR job runs one configuration with the
 merge-base check; the weekly workflow runs all of them; `sql/varka/AGENTS.md` says a new option
 gets its matrix arms from its table entry, a structure test its tag, and a broken answer test a
 skip line with its reason.
@@ -233,3 +234,41 @@ component it is named for moved, which the defaults test could not see, since it
 through its own entry; a deliberately miswired setter fails it. `lanesOverride` is a knob, not a
 machine-dependent winner: production always uses the preferred width, and the override exists so
 one JVM's suites can emit for every width.
+
+### 9.2 Step 2, the matrix and its first runs, 4 and 5 October 2026
+
+The base value, the `PinsDefaults` tag, the skip list, the fused-batch count and the runner landed
+as 3.2 describes, and all 45 configurations ran on the laptop, in three sittings: 14 on the
+evening of 4 October before the run was stopped for the battery, 21 overnight, and the remaining
+13 on the morning of 5 October. **No configuration found a wrong answer.** Every failure was one
+of three things:
+
+* **A test pinning the defaults' structure** - registered op counts, a `HugeMethodLimit`
+  crossing, a method count, the size a shape declines at: 79 tests now carry `PinsDefaults`.
+* **A by-design break**, now one of 71 skip lines: a switched-off check computing what it exists
+  to price (`checkIntOverflow`, `guardDayProducers`, `guardUnderArm`), or a reference form of the
+  size machinery that cannot hold the wide shape a test builds (`methodByteBudget=0`,
+  `driverOutputTable=false`, `splitDriver=false`, `severalKernels=false`,
+  `splitConditions=false`).
+* **A test that assumed the base was the defaults**: the 64-bit division test's conversion arm
+  now keeps the default AVX level, and the IR fuzzer's reach check runs under the defaults only.
+
+The declining marker earned its place: under `methodByteBudget=0` three SQL tests passed while
+fusing nothing, the row path answering alone, and each turned out to be a designed decline past
+the 64 distinct ops a kernel holds without the byte budget. Two apparent defects were the tests'
+own: an Arrow "memory leaked" under `useAVX=2` was a failed assertion skipping a test helper's
+cleanup, and "got 0, Java says 1250" past 2^52 was the magic division form answering in the shape
+its lowering predicts, under an arm that assumed the conversion form.
+
+`VarkaWarmupEndToEndSuite` left the matrix: it times a kernel's compilation, and at ten JVMs its
+first-query tests read a kernel `RELEASED` where they wait for `COMPILED`.
+
+Measured cost: a configuration is 15 to 18 minutes of catalyst and 22 to 27 of SQL at ten JVMs,
+about 40 JVM-minutes, so the 45 are about 31 JVM-hours - 2.5 to 3 hours on the laptop at eight
+or ten JVMs. The runner gained `--deadline` and a pause while the battery discharges below 30%,
+after the 60 W the laptop's USB-C supply negotiated on 4 October did not cover ten JVMs.
+
+Not rerun on the laptop: the configurations whose tags or skip lines were added after they ran.
+Each line came from that configuration's own observed failure, so the confirmation is the weekly
+workflow's first run in the second pull request, beside the PR job; a missing tag fails there,
+and a stale skip line fails as stale.
