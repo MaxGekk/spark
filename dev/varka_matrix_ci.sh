@@ -41,8 +41,11 @@ python3 dev/varka_matrix_pick.py --self-test || exit 1
 # compares with, so the configuration runs alone. Without that run, the defaults run here too.
 scoped=target/varka-scoped
 reuse=()
+# As the suites step splits them (dev/varka_scoped_suites.sh).
+split=2
+[ "$module" = sql ] && split=1
 if [ -d "$scoped/runs/defaults" ] && [ -s "$scoped/classpath" ]; then
-  reuse=(--skip-build --build-dir "$scoped" --defaults-from "$scoped" --split 2)
+  reuse=(--skip-build --build-dir "$scoped" --defaults-from "$scoped" --split "$split")
   dev/varka_matrix.sh --module "$module" "${reuse[@]:0:3}" --list > /dev/null || exit 1
 else
   dev/varka_matrix.sh --module "$module" --sbt-arg -Phive --list > /dev/null || exit 1

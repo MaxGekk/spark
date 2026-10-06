@@ -96,3 +96,33 @@ step, before (a recent Varka-only run) and after (the second pull request's run)
 Two pull requests, as 2 explains: the script and the cache, then the runner behind them.
 
 ## 9. Outcome
+
+### 9.1 The first two runs, 6 October 2026
+
+The second pull request's CI, run 37394228601 on `bcc6cd31c`, attempt 1 with no cached times
+and attempt 2 balanced by attempt 1's, against the last two Varka code pull requests' runs on the
+sbt step, #629's (37327600891) and #628's (37333525488). Minutes, from the jobs' step times:
+
+| | #629 | #628 | attempt 1 | attempt 2 |
+|---|---|---|---|---|
+| catalyst job | 25 | 22 | 17 | 14 |
+| catalyst suites step | 15.5 | 13.3 | 12.7 | 10.5 |
+| catalyst matrix step | 8.3 | 7.3 | 3.1 | 2.8 |
+| SQL job | 22 | 33 | 24 | 22 |
+| SQL suites step | 11.5 | 17.9 | 16.6 | 14.0 |
+| SQL matrix step | 9.8 | 14.2 | 6.6 | 6.8 |
+
+**The scoring, on attempt 2.**
+
+1. *Each module's job at least a third shorter.* Held for catalyst, 14 minutes from 25 and 22;
+   not for SQL, 22 from 22 and 33.
+2. *The SQL test step under two thirds of its sbt time.* Missed. Split by the logs' timestamps,
+   attempt 2's SQL step was 6.5 minutes of build and 7.6 of tests over two JVMs; #629's was 5.5
+   of build and about 6.0 of tests in one.
+
+**Why SQL did not gain.** The reused defaults work for both modules: the matrix step fell by 60%
+for catalyst and 30 to 50% for SQL. The split helped only catalyst. Each SQL suite runs a Spark
+session on several threads, so two of its JVMs on four vCPUs compete for the same cores and start
+two sessions, while the catalyst suites are mostly single-threaded. So SQL's suites now run in
+one JVM, still through the runner so the matrix step reuses their defaults, and catalyst's stay
+over two; the next run measures that.
