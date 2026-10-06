@@ -331,7 +331,7 @@ enumerates two or three outputs over one shared subtree, which VARKA-234's shape
 reach per position, since the grammar draws `date_add` offsets only as literals today; and runs
 under row 248's word and guard configurations.
 
-### 2.3 Structure (248 to 254, 214 to 217, 224, 83, 86, 222, 264, 266 to 268, 290)
+### 2.3 Structure (248 to 254, 214 to 217, 224, 83, 86, 222, 264, 266 to 268, 290, 291)
 
 Each row names its own proof. For the emitter's refactors (248, 249, 250, 83) it is
 `emitted_bytes.json`, unchanged. The ports (214 to 217) change no emitted byte either, but the
@@ -396,6 +396,17 @@ have no recorded outcome. Each is closed, made a row, or moved to `m8/SCOPE.md`.
 VARKA-253 states and enforces the seven-argument `run`'s scratch contract (item 68). Row 222
 caches each IR node's hash. VARKA-254 (item 63) either pins each grouping weight to the count
 its node emits alone, or retires the hand-written register so the grouping reads the class.
+
+**The IR's storage, measured (291).** Item 85 of `m8/SCOPE.md` asks whether the IR's nodes should
+live as rows of flat arrays, in memory the client supplies, and the owner asked on 6 October 2026
+whether that could come before milestone 8. It is a measurement before it is a decision, and the
+ports of rows 214 to 217 are the work it could change: they build the IR with about seventy `new`
+expressions, most of them its records, so a representation change under them would be written
+twice, as row 86's admission would have been. Row 291 compares four layouts on the real IR's graphs, with the real
+IR compiled as value records as a fifth arm, in a spike beside the project; its plan registers its
+predictions and its gate before a number is taken. Until its verdict the ports could build nodes
+through factory methods, which would cost them nothing and leave the representation free to
+change; that is the owner's decision and not yet taken, and rows 214 to 216 stand as written.
 
 ### 2.4 Infrastructure (255 to 257, 283, 286, 287)
 
@@ -521,6 +532,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 249 | One class owns the emitted method names, replacing the prefix matches in main and test code. **Done** (`VARKA-249.md` 9, 4 October 2026): `VarkaMethodNames` builds and reads every emitted method's name, main code and tests go through it, and the bytes oracle is unchanged. Proof: `emitted_bytes.json` unchanged | item 74.6 | small |
 | 250 | `emitBody` split into driver, loop and epilogue emitters sharing the prologue helpers. **Done** (`VARKA-250.md` 9.1, 5 October 2026): `emitDriver` (its table and unrolled forms) and `emitGroupBody` over shared prologue steps, byte-identical under every option arm at both widths. Proof: `emitted_bytes.json` unchanged | item 74.3 | medium |
 | 290 | The size loop restructured: the private `VarkaLoopEmitter.emit`, 281 lines that build, measure and correct a class - the plan's first build, the rollback, the fallbacks in their order and the declines - with about eight pieces of mutable state, split into named steps over one state record, the fallback order stated once. Proof: `emitted_bytes.json` unchanged, and the size-control trace counts (`VarkaEmitTrace`) unchanged over the IR fuzzer's corpus. *Added 6 October 2026*: item 74.2 had no row, since VARKA-236 kept the loop as its last resort | item 74.2, the owner, 6 October 2026 | medium |
+| 291 | The IR's storage measured: records against `int[]` columns, FFM struct rows on JDK 25, and value-record rows on the early-access JDK, with the real IR as value records as a fifth arm, on the real IR's graphs up to ten thousand nodes - build time, bytes a node, structural hash and equality, a bottom-up analysis, the cold first run - behind an agreement check, the gate being a 1.3x win on the cold first compile or a factor growing with depth on hash and equality. A spike beside the project, not in its build (`VARKA-291.md`). *Added 6 October 2026* at the owner's request, from item 85's storage question | item 85 of `m8/SCOPE.md`, the owner, 6 October 2026 | medium |
 | 251 | **Done** (`VARKA-251.md` 9.2, 6 October 2026): six Java components under `sql/core/.../execution/varka/` - the batch ledger, the scratch, the kernel runner, the warm-up gate, the fallback accounting, the class dump - and `VarkaEvaluatorBase` a Scala composition of them, from 1079 lines to 549; per batch the same as the unchanged evaluators over ten runs at each width, every case's range overlapping and no minimum more than 7% higher. Planned in two pull requests: the per-batch benchmark and its baseline, then the six components. `VarkaEvaluatorBase` split into Java components: runner, batch ledger, scratch, warm-up, fallback accounting, dumping. Proof: a before-and-after benchmark of per-batch overhead | item 74.5 | medium |
 | 252 | Comments that narrate history rewritten to explain the code as it is; and the comments the paper reading found wrong | item 74.7, `m7/READING.md` 11 | small, last |
 | 214 | Port `VarkaTimeCompiler` to Java. Proof: the coverage and family-chain oracles, and VARKA-191's emission times | item 81 | mechanical; an agent's |
@@ -556,7 +568,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
 | 0 | 240, 246, 248, 249, 255, 256, 81, 263, 266, 273, 275, 277, 283, 286, 287, 289 | 240 is the proofs' tooling; 246 makes later suites' verdicts trustworthy; 248 and 249 are what every later refactor touches; 255 and 256 end the laptop queue and the hand splicing for every PR below; 263 and 266 check every port and refactor below as it lands; 81 needs nothing; 273 is a reproduced bug; 289 a reproduced test gap; 275 and 277 make every later test's failure loud and small |
-| 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276, 284, 285 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274, 276 and 284 sharpen the oracles every later test reads, and 285 measures what 284 closes |
+| 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276, 284, 285, 291 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274, 276 and 284 sharpen the oracles every later test reads, and 285 measures what 284 closes; 291 needs only the IR's source and a quiet machine, and its verdict is wanted before the ports have built much of the compiler |
 | 2 | 242, 244, 217, 224, 83, 254, 257, 267, 272, 278, 279, 280, 281, 290 | 217 after the families it fronts; 83 after 250, which rewrites the same paths; 290 after 83, whose single refusal is where the size loop's declines end; 244 after 243 defines what a delta departs from; 267 after 251's components; 272 after 246, so that a configuration's verdict is not a second species' boxing; 278 after 277; 279 after 138; 280 after 262; 281 after 240's tooling |
 | 3 | 245, 86, 252, 268, 265 | 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269, 280 and 285, so that it measures the tests the milestone leaves |
 | 4 | 261, 270 | 261 last by definition; 270's post written from what 261 records |
