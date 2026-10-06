@@ -331,7 +331,7 @@ enumerates two or three outputs over one shared subtree, which VARKA-234's shape
 reach per position, since the grammar draws `date_add` offsets only as literals today; and runs
 under row 248's word and guard configurations.
 
-### 2.3 Structure (248 to 254, 214 to 217, 224, 83, 86, 222, 264, 266 to 268)
+### 2.3 Structure (248 to 254, 214 to 217, 224, 83, 86, 222, 264, 266 to 268, 290)
 
 Each row names its own proof. For the emitter's refactors (248, 249, 250, 83) it is
 `emitted_bytes.json`, unchanged. The ports (214 to 217) change no emitted byte either, but the
@@ -357,7 +357,10 @@ emitter's refusal paths. Row 86's single operand admission goes after the ports,
 admission is written once in Java and not ported twice. The ports themselves (214 to 217, 224) are
 mechanical and meant for an agent, gated as VARKA-175 was. Row 217 is item 74.4, and takes
 `VarkaShapeCache.scala` with it, the one Scala file in the compiler's own package, so that 1.1's
-claim holds. Item 74.2, the size loop, is VARKA-236's and is not repeated here. The comments pass
+claim holds. Item 74.2, the size loop, is VARKA-236's and is not repeated here. *Corrected 6
+October 2026:* VARKA-236 put a plan in front of the loop and kept the loop itself, unchanged, as
+the last resort (`VARKA-236.md` 3.2), so item 74.2 had no owner; row 290 is it, after row 83, which
+rewrites the declines the loop ends in. The comments pass
 (252) runs last, once the structure has settled, and corrects what the paper reading found wrong:
 `VarkaEmitterDivisionSuite` says Java's `/` throws at `Integer.MIN_VALUE / -1`, where it wraps
 (JLS 15.17.2), and `emitConstDivide`'s javadoc calls the long-lane division exact over the whole
@@ -517,6 +520,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 248 | `VarkaEmitOptions` from one table of options. **Done** (`VARKA-248.md` 9.4, 5 October 2026): the table (#618), the option matrix on the laptop (#624), one configuration per pull request and all 45 weekly in CI (#625, #626), the first weekly run green over all 45. **Step 1 done** (`VARKA-248.md` 9.1, 4 October 2026): `VarkaEmitOption.TABLE` holds every option with its reason; `canonical()`, the inventory, the fuzzer's draws and the dump's parser read it, and the written-out defaults are checked against it; **Step 2's matrix merged** (#624, `VARKA-248.md` 9.2, 5 October 2026): all 45 configurations ran on the laptop and found no wrong answer; 79 tests tagged `PinsDefaults`, 71 skip lines; the PR job and the weekly workflow in review (3.2.8), the weekly's first run the confirmation. The row: defaults by name, and `canonical()`, the bytes suite's inventory and the fuzzer's draws derived from it; each option's reason recorded - an alternative kept because the winner depends on the machine, a reference form, a fault injector (`misdescribeWordLiveness`), or retired; the suites run under the options' configurations with a reasoned skip list, and a shape marked as declining failing when it starts to fuse. Proof: `emitted_bytes.json` unchanged; each skip entry names its minimal option delta | item 74.1, `m7/READING.md` 3, `m7/READING.md` 11 | small to medium |
 | 249 | One class owns the emitted method names, replacing the prefix matches in main and test code. **Done** (`VARKA-249.md` 9, 4 October 2026): `VarkaMethodNames` builds and reads every emitted method's name, main code and tests go through it, and the bytes oracle is unchanged. Proof: `emitted_bytes.json` unchanged | item 74.6 | small |
 | 250 | `emitBody` split into driver, loop and epilogue emitters sharing the prologue helpers. **Done** (`VARKA-250.md` 9.1, 5 October 2026): `emitDriver` (its table and unrolled forms) and `emitGroupBody` over shared prologue steps, byte-identical under every option arm at both widths. Proof: `emitted_bytes.json` unchanged | item 74.3 | medium |
+| 290 | The size loop restructured: the private `VarkaLoopEmitter.emit`, 281 lines that build, measure and correct a class - the plan's first build, the rollback, the fallbacks in their order and the declines - with about eight pieces of mutable state, split into named steps over one state record, the fallback order stated once. Proof: `emitted_bytes.json` unchanged, and the size-control trace counts (`VarkaEmitTrace`) unchanged over the IR fuzzer's corpus. *Added 6 October 2026*: item 74.2 had no row, since VARKA-236 kept the loop as its last resort | item 74.2, the owner, 6 October 2026 | medium |
 | 251 | `VarkaEvaluatorBase` split into Java components: runner, batch ledger, scratch, warm-up, fallback accounting, dumping. Proof: a before-and-after benchmark of per-batch overhead | item 74.5 | medium |
 | 252 | Comments that narrate history rewritten to explain the code as it is; and the comments the paper reading found wrong | item 74.7, `m7/READING.md` 11 | small, last |
 | 214 | Port `VarkaTimeCompiler` to Java. Proof: the coverage and family-chain oracles, and VARKA-191's emission times | item 81 | mechanical; an agent's |
@@ -553,7 +557,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | ---: | :--- | :--- |
 | 0 | 240, 246, 248, 249, 255, 256, 81, 263, 266, 273, 275, 277, 283, 286, 287, 289 | 240 is the proofs' tooling; 246 makes later suites' verdicts trustworthy; 248 and 249 are what every later refactor touches; 255 and 256 end the laptop queue and the hand splicing for every PR below; 263 and 266 check every port and refactor below as it lands; 81 needs nothing; 273 is a reproduced bug; 289 a reproduced test gap; 275 and 277 make every later test's failure loud and small |
 | 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276, 284, 285 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274, 276 and 284 sharpen the oracles every later test reads, and 285 measures what 284 closes |
-| 2 | 242, 244, 217, 224, 83, 254, 257, 267, 272, 278, 279, 280, 281 | 217 after the families it fronts; 83 after 250, which rewrites the same paths; 244 after 243 defines what a delta departs from; 267 after 251's components; 272 after 246, so that a configuration's verdict is not a second species' boxing; 278 after 277; 279 after 138; 280 after 262; 281 after 240's tooling |
+| 2 | 242, 244, 217, 224, 83, 254, 257, 267, 272, 278, 279, 280, 281, 290 | 217 after the families it fronts; 83 after 250, which rewrites the same paths; 290 after 83, whose single refusal is where the size loop's declines end; 244 after 243 defines what a delta departs from; 267 after 251's components; 272 after 246, so that a configuration's verdict is not a second species' boxing; 278 after 277; 279 after 138; 280 after 262; 281 after 240's tooling |
 | 3 | 245, 86, 252, 268, 265 | 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269, 280 and 285, so that it measures the tests the milestone leaves |
 | 4 | 261, 270 | 261 last by definition; 270's post written from what 261 records |
 
