@@ -26,8 +26,9 @@ import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYea
 import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, KernelOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
-  VarkaEmitOptions, VarkaFallbackEvent, VarkaKernelAllocationEvent}
+  VarkaEmitOptions}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
+import org.apache.spark.sql.execution.varka.{VarkaBatchDeclined, VarkaKernelFailure}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, IntegerType, LongType, StructType, TimeType, YearMonthIntervalType}
 import org.apache.spark.sql.util.ArrowUtils
@@ -219,7 +220,7 @@ private[sql] class VarkaKernelEvaluator(
       }.toArray
       val batch = new ColumnarBatch(columns)
       batch.setNumRows(len)
-      trackOwned(batch, owned.toSeq)
+      trackOwned(batch, owned.toArray)
       batch
     } catch {
       case e: Throwable =>
@@ -242,7 +243,7 @@ private[sql] class VarkaKernelEvaluator(
       val fusedColumns = computeFused(input, len, owned).flatten
       val batch = new ColumnarBatch(fusedColumns)
       batch.setNumRows(len)
-      trackOwned(batch, owned.toSeq)
+      trackOwned(batch, owned.toArray)
       batch
     } catch {
       case e: Throwable =>
@@ -381,69 +382,12 @@ private[execution] object VarkaKernelEvaluator {
   private[execution] def isWarmupBatch(batch: ColumnarBatch): Boolean =
     warmupBatches.containsKey(batch)
 
-  /**
-   * Emits the task-22 fallback JFR event; shared by the evaluator's emission-failure path and
-   * the per-batch fallback accounting. Populates only while a recording has the event
-   * enabled - the identity is by-name because rendering it computes the shape hash, which the
-   * metered-but-uneventful path must not pay (task-21 review); `exceptionClass` is empty for
-   * the non-Arrow cause, a data property rather than an error.
-   */
-  private[execution] def emitFallbackEvent(
-      cause: String,
-      kernelIdentity: => String,
-      exceptionClass: String): Unit = {
-    val event = new VarkaFallbackEvent
-    if (event.isEnabled()) {
-      event.cause = cause
-      event.kernelIdentity = kernelIdentity
-      event.exceptionClass = exceptionClass
-      event.commit()
-    }
-  }
-
-  /** The allocation-sample event; populated only while a recording has it enabled. */
-  private[execution] def emitAllocationEvent(
-      kernelIdentity: => String,
-      batchIndex: Long,
-      rows: Int,
-      allocatedBytes: Long,
-      suspect: Boolean): Unit = {
-    val event = new VarkaKernelAllocationEvent
-    if (event.isEnabled()) {
-      event.kernelIdentity = kernelIdentity
-      event.batchIndex = batchIndex
-      event.rows = rows
-      event.allocatedBytes = allocatedBytes
-      event.suspect = suspect
-      event.commit()
-    }
-  }
-
   // Which kernel batches the allocation sampler measures. The production schedule skips the
   // JIT warm-up (see VarkaAllocationSampler); suites set a dense one so a short query samples,
-  // and restore the default in a finally.
-  /**
-   * The decline status the evaluator itself reports when an input lane lies outside a bound
-   * the compiler recorded - bit 1, beside the kernels' `STATUS_CHRONO_RANGE` (bit 0),
-   * so a log line tells the two apart. Never returned by an emitted kernel.
-   */
-  private[execution] val STATUS_INPUT_BOUND: Int = 2
-
-  /**
-   * The decline status the evaluator reports when a derived input met a value its
-   * row-engine definition raises on under ANSI - an unrecognised weekday name - bit 2. The
-   * row engine recomputes the batch and raises where a non-null date sits beside the name.
-   */
-  private[execution] val STATUS_DERIVED_INPUT: Int = 4
-
+  // and restore the default in a finally. The decline statuses the evaluator itself reports
+  // are `VarkaKernelRunner.STATUS_INPUT_BOUND` and `STATUS_DERIVED_INPUT`.
   @volatile private[execution] var allocationSchedule: VarkaAllocationSampler.Schedule =
     VarkaAllocationSampler.Schedule.DEFAULT
-
-  // The (directory, SourceFile) pairs this JVM has dumped, so a shape's class file is
-  // written once per process rather than once per task - and exactly once per process,
-  // because a file left by an older emitter under the same shape name must be refreshed.
-  private[execution] val dumpedClassFiles =
-    java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
 
   // The emitter's size declines this JVM has logged, by reason, so a shape declined on every
   // task logs one warning rather than one per task. A reason names the method and its bytes,

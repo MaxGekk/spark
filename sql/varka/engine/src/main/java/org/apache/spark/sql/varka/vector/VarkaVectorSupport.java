@@ -644,7 +644,7 @@ public final class VarkaVectorSupport {
    * {@code nullCount == length} while an earlier form of these methods used {@code >= rows}:
    * for a column reporting more nulls than the caller's row count the two disagreed, and one
    * batch could then have reported a column all-null for a served output and per-row valid for
-   * an unserved one. The production caller cannot produce that - {@code extractMorsel}
+   * an unserved one. The production caller cannot produce that - {@code VarkaKernelRunner.fill}
    * requires the vector's value count to equal the batch's length - but the engine's own
    * {@code VarkaMorsel.extractDate} maps a prefix of a longer vector while reporting the whole
    * vector's null count, so the shape exists at this module's public boundary and is refused

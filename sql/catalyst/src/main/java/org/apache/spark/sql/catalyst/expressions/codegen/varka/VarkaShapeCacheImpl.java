@@ -549,7 +549,8 @@ public final class VarkaShapeCacheImpl {
     emissionEvent.end();
     commitEmission(emissionEvent, hash, key, bytes, true);
     LOG.debug("Emitted and defined {} for shape {}", className, hash);
-    // Resolved once per shape rather than once per task: newKernel runs on every FusedRunner.
+    // Resolved once per shape rather than once per task: newKernel runs on every task's
+    // VarkaKernelRunner.
     Constructor<?> constructor;
     try {
       constructor = klass.getConstructor();

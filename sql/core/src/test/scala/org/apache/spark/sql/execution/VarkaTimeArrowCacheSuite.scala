@@ -36,10 +36,13 @@ import org.apache.spark.sql.vectorized.ArrowColumnVector
  * Every piece of that path exists on its own - Spark's Arrow writer and accessors, the cache
  * serializer's column stats, the evaluator's buffer mapping - and nothing composes them for
  * these two types until here. The lanes are checked by mapping the Arrow buffer with the same
- * call `VarkaKernelEvaluator.extractMorsel` uses, `MemorySegment.ofAddress(...).reinterpret`,
- * rather than through `ArrowColumnVector`'s accessor: the accessor would prove Spark's path,
- * and this suite is about Varka's. The checks run inside the cached RDD's partitions, where the
- * Arrow memory lives, and return counts, so no off-heap buffer outlives its batch.
+ * call `VarkaKernelRunner.fill` hands the kernel an address with (since VARKA-251; before it,
+ * `VarkaKernelEvaluator.extractMorsel`), `MemorySegment.ofAddress(...).reinterpret`, rather than
+ * through `ArrowColumnVector`'s accessor: the accessor would prove Spark's path, and this suite
+ * is about Varka's. It proves the layout of Arrow's buffers, which `fill` relies on, and not
+ * `fill` itself, which the long-lane and time-arithmetic suites run. The checks run inside the
+ * cached RDD's partitions, where the Arrow memory lives, and return counts, so no off-heap
+ * buffer outlives its batch.
  */
 class VarkaTimeArrowCacheSuite extends QueryTest with VarkaSharedSessions with VarkaTestWatchdog {
 
@@ -108,7 +111,7 @@ class VarkaTimeArrowCacheSuite extends QueryTest with VarkaSharedSessions with V
         val fixed = v.asInstanceOf[BaseFixedWidthVector]
         val n = fixed.getValueCount
         require(n == batch.numRows, s"value count $n != batch rows ${batch.numRows}")
-        // The evaluator's own mapping: address and capacity, nothing else.
+        // The runner's own mapping: address and capacity, nothing else.
         val dataBuf = fixed.getDataBuffer
         val data = MemorySegment.ofAddress(dataBuf.memoryAddress()).reinterpret(dataBuf.capacity())
         require(dataBuf.capacity() >= 8L * n, s"data buffer ${dataBuf.capacity()} < 8 * $n")

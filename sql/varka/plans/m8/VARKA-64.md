@@ -175,7 +175,10 @@ section 5 pins that with a test that emits both kernels for every calendar
 consumer and asserts the compiler recorded a bound exactly when the two
 kernels' bytes differ.
 
-**The evaluator chooses.** `FusedRunner` resolves two cache entries when the
+**The evaluator chooses.** *(Written before VARKA-251, 6 October 2026, which moved the runner to
+Java: `FusedRunner` is now `VarkaKernelRunner`, and `fillSources` and `invokeFused` are its `fill`
+and `invoke`, which `computeFused`, the warm-up gate and `filterMask` all call directly, so a choice
+belongs inside the runner, where every path meets it.)* `FusedRunner` resolves two cache entries when the
 plan carries guard bounds and the switch is on: the guarded kernel under the
 current options (what it resolves today) and the unguarded one under
 `options.withGuardDayProducers(false)`. Both lookups record the execution in

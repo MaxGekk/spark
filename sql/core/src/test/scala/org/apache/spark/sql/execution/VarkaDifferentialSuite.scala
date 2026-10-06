@@ -1594,7 +1594,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       assert(varkaMetric(plan, "numFallbackBatchesRowPath") === 0L)
       assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
       assert(varkaMetric(plan, "numFallbackBatchesNonArrow") === 0L)
-      // The filter route reads the derived input through the same fillSources.
+      // The filter route reads the derived input through the same `VarkaKernelRunner.fill`.
       checkDifferential(spark, varkaSpark,
         "SELECT count(*) AS c FROM varka_dates_weekday WHERE next_day(d, s) = d2",
         expectFused = true)
@@ -2282,7 +2282,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       assert(varkaMetric(plan, "numFallbackBatchesRowPath") === 0L)
       assert(varkaMetric(plan, "numFallbackBatchesDeclined") === 0L)
       assert(varkaMetric(plan, "numFallbackBatchesNonArrow") === 0L)
-      // The filter route reads the derived input through the same fillSources.
+      // The filter route reads the derived input through the same `VarkaKernelRunner.fill`.
       checkDifferential(spark, varkaSpark,
         "SELECT count(*) AS c FROM varka_dates_trunc_formats " +
           "WHERE trunc(d, fmt) = trunc(d, 'MONTH')",

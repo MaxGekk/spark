@@ -6,10 +6,10 @@ OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 1 rows a batch, ns per batch:             Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-date_add(d, 3)                                       12             14           2          1.6         619.5       1.0X
-least(l, 5000000000L)                                12             13           1          1.7         579.3       1.1X
-filter (d > DATE '2000-01-01')                        3              3           1          7.3         137.9       4.5X
-trunc(d, fmt)                                        16             18           1          1.2         811.9       0.8X
+date_add(d, 3)                                       11             12           1          1.8         548.8       1.0X
+least(l, 5000000000L)                                11             12           1          1.8         569.2       1.0X
+filter (d > DATE '2000-01-01')                        3              3           0          7.1         140.2       3.9X
+trunc(d, fmt)                                        14             15           1          1.4         712.3       0.8X
 
 
 ================================================================================================
@@ -20,10 +20,10 @@ OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 16 rows a batch, ns per batch:            Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-date_add(d, 3)                                       12             14           1          1.7         588.5       1.0X
-least(l, 5000000000L)                                12             13           1          1.7         592.4       1.0X
-filter (d > DATE '2000-01-01')                       10             11           1          1.9         517.5       1.1X
-trunc(d, fmt)                                        27             29           1          0.7        1351.8       0.4X
+date_add(d, 3)                                       11             12           1          1.8         546.5       1.0X
+least(l, 5000000000L)                                12             13           1          1.7         578.7       0.9X
+filter (d > DATE '2000-01-01')                       10             10           0          2.0         500.8       1.1X
+trunc(d, fmt)                                        25             26           1          0.8        1237.4       0.4X
 
 
 ================================================================================================
@@ -34,9 +34,9 @@ OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 1024 rows a batch, ns per batch:          Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------
-date_add(d, 3)                                        2              2           0          1.2         822.1       1.0X
-least(l, 5000000000L)                                 3              3           0          0.8        1312.6       0.6X
-filter (d > DATE '2000-01-01')                        2              3           0          0.8        1232.9       0.7X
-trunc(d, fmt)                                        61             63           1          0.0       30397.6       0.0X
+date_add(d, 3)                                        2              2           0          1.2         812.5       1.0X
+least(l, 5000000000L)                                 3              3           0          0.8        1308.3       0.6X
+filter (d > DATE '2000-01-01')                        2              3           0          0.8        1239.8       0.7X
+trunc(d, fmt)                                        60             61           1          0.0       30248.8       0.0X
 
 

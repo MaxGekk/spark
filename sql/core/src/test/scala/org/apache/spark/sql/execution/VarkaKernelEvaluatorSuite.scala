@@ -31,6 +31,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoRe
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.execution.varka.{VarkaBatchDeclined, VarkaKernelRunner}
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.{DateType, IntegerType, StringType, YearMonthIntervalType}
@@ -630,7 +631,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       val bad = weekdayBatch(allocator, dates, Seq("MON", "nope", "WED"))
       assert(ansi.canRun(bad))
       val declined = intercept[VarkaBatchDeclined](ansi.project(bad))
-      assert(declined.status === VarkaKernelEvaluator.STATUS_DERIVED_INPUT)
+      assert(declined.status === VarkaKernelRunner.STATUS_DERIVED_INPUT)
       bad.close()
       val goodNames = Seq("MON", null, "WED")
       val good = weekdayBatch(allocator, dates, goodNames)

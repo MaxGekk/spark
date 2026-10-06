@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjectio
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps,
   VarkaEmitOptions, VarkaSelectionBitmap}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
+import org.apache.spark.sql.execution.varka.VarkaBatchLedger
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.{StructType}
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
@@ -94,8 +95,9 @@ private[sql] class VarkaFilterEvaluator(
   private var maskBuf: ArrowBuf = null
 
   override protected def onTaskCleanup(): Unit = {
-    // Clear the field before closing, as `closeScratch` does: a throw from `close()` must not
-    // leave a released buffer referenced for a later `maskBuffer` to size itself against.
+    // Clear the field before closing, as `VarkaKernelScratch.release` does: a throw from
+    // `close()` must not leave a released buffer referenced for a later `maskBuffer` to size
+    // itself against.
     val buf = maskBuf
     maskBuf = null
     if (buf != null) {
@@ -133,7 +135,7 @@ private[sql] class VarkaFilterEvaluator(
   def filterMask(input: ColumnarBatch): VarkaSelection = {
     val len = input.numRows()
     val runner = fusedRunner.get
-    fillSources(runner, input, len)
+    runner.fill(input, len)
     // One bitmap per output, whole words each, output 0's first. A mask output's data slot is
     // unused by contract (the emitted body never touches it); its validity slot receives its
     // selection bitmap.
@@ -145,7 +147,7 @@ private[sql] class VarkaFilterEvaluator(
       runner.dstData(o) = 0L
       runner.dstValidity(o) = buf.memoryAddress() + o * stride
     }
-    invokeFused(runner, len)
+    runner.invoke(len)
     val base = MemorySegment.ofAddress(buf.memoryAddress()).reinterpret(stride * outputs)
     if (outputs > 1) {
       // A split predicate (see `CompiledVarkaPredicate.clauses`): each clause's partial roots
@@ -219,7 +221,7 @@ private[sql] class VarkaFilterEvaluator(
       // filter nodes run: the output batch is released before the next input is requested.
       val batch = new ColumnarBatch(Array.tabulate(childOutput.length)(input.column))
       batch.setNumRows(count)
-      trackOwned(batch, Seq.empty)
+      trackOwned(batch, VarkaBatchLedger.NO_VECTORS)
       return batch
     }
     val owned = mutable.ArrayBuffer.empty[ColumnVector]
@@ -277,7 +279,7 @@ private[sql] class VarkaFilterEvaluator(
       }
       val batch = new ColumnarBatch(columns)
       batch.setNumRows(count)
-      trackOwned(batch, owned.toSeq)
+      trackOwned(batch, owned.toArray)
       batch
     } catch {
       case e: Throwable =>

@@ -17,63 +17,49 @@
 
 package org.apache.spark.sql.execution
 
-import java.io.File
-import java.lang.foreign.MemorySegment
-import java.nio.file.Files
-
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
-import scala.util.control.NonFatal
 
-import org.apache.arrow.memory.{ArrowBuf, BufferAllocator}
+import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.{BaseFixedWidthVector, BigIntVector, DateDayVector, DurationVector,
   IntervalYearVector, IntVector, TimeNanoVector, VarCharVector}
 
-import org.apache.spark.{TaskContext}
+import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.catalyst.expressions.{Attribute}
-import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{IntRangeOps, TruncLevelLeaf,
-  VarkaAllocationSampler, VarkaDerivedKind, VarkaEmitDeclined, VarkaEmitOptions, VarkaFallbackEvent,
-  VarkaFusedKernel, VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache, VarkaShapeKey,
-  VarkaVectorIR, WeekdayLeaf}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
+import org.apache.spark.sql.catalyst.expressions.Attribute
+import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
+  VarkaEmitDeclined, VarkaEmitOptions, VarkaFallbackEvent, VarkaKernelWarmup, VarkaShapeCache,
+  VarkaShapeKey, VarkaVectorIR}
+import org.apache.spark.sql.execution.varka.{VarkaBatchDeclined, VarkaBatchLedger, VarkaClassDump,
+  VarkaFallbackAccounting, VarkaKernelFailure, VarkaKernelRunner, VarkaKernelScratch,
+  VarkaWarmupGate}
 import org.apache.spark.sql.types.DataType
-import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
 
 /**
- * Marks a throwable as coming from the emitted kernel invocation itself (task-21 review): the
- * exec nodes label their per-batch catch by it, so a catchable failure in the per-row
- * machinery running beside the kernel - a residual or merge projection's compile or
- * evaluation - is not metered as a kernel failure.
- */
-private[execution] class VarkaKernelFailure(cause: Throwable, val kernel: String = null)
-  extends Exception(cause)
-
-/**
- * The batch was declined to the row engine: the kernel ran and returned a non-zero status,
- * meaning some lane lay outside the range a partial lowering is defined over, or
- * the evaluator's own pre-check found an input lane outside a bound the compiler recorded
- * (see [[VarkaKernelEvaluator.STATUS_INPUT_BOUND]]). Not an error - it carries no cause
- * and no stack trace, because it is control flow on a designed path, and [[serveBatch]] turns
- * it into the row-engine fallback.
- */
-private[execution] class VarkaBatchDeclined(val status: Int, val kernel: String = null)
-  extends Exception(null, null, false, false)
-
-/**
  * The task-lifetime machinery shared by every Varka evaluator (split out of
- * [[VarkaKernelEvaluator]] when the filter evaluator became its second user): the
- * shape-cached kernel runner and its argument arrays, the task's Arrow allocator, the
- * open-batch ledger with its task-completion safety net, the Arrow-backed `canRun` test, and
- * the telemetry names. A concrete evaluator supplies the compiled fused sub-plan the kernel
- * follows and what its identity reads as in the shape cache's side table; the projection and
- * filter evaluators below own everything specific to their output shape - vector allocation
- * and batch assembly there, the selection bitmap here.
+ * [[VarkaKernelEvaluator]] when the filter evaluator became its second user), as a composition of
+ * the Java components that do the work (VARKA-251):
+ *
+ *  - [[VarkaBatchLedger]]: the task's Arrow allocator, the open-batch ledger and its
+ *    task-completion safety net;
+ *  - [[VarkaKernelScratch]]: the derived inputs' buffers and the kernel's prefix scratch;
+ *  - [[VarkaKernelRunner]]: the shape-cached kernel, its argument arrays, and filling and running
+ *    them per batch;
+ *  - [[VarkaWarmupGate]]: whether a batch waits on the row path while the shape's kernel warms;
+ *  - [[VarkaFallbackAccounting]]: each fallback counted and evented under its actual cause;
+ *  - [[VarkaClassDump]]: the emitted class written for `javap`.
+ *
+ * What stays here is what the evaluators share and Scala expresses best: the Arrow-backed
+ * `canRun` test, the telemetry names, and [[serveBatch]], whose kernel and fallback paths are
+ * by-name. A concrete evaluator supplies the compiled fused sub-plan the kernel follows and what
+ * its identity reads as in the shape cache's side table; the projection and filter evaluators
+ * own everything specific to their output shape - vector allocation and batch assembly there,
+ * the selection bitmap here.
  *
  * The ownership and ordering contracts documented on [[VarkaKernelEvaluator]] are implemented
- * here and hold for every subclass.
+ * here and in the components, and hold for every subclass.
  *
  * @param warmupEnabled whether a shape's batches wait on the row path while its new kernel
  *                      compiles (`spark.sql.codegen.varka.warmup.enabled`; see [[serveBatch]]).
@@ -99,28 +85,41 @@ private[sql] abstract class VarkaEvaluatorBase(
    */
   protected def identityEntries: Iterator[String]
 
-  // One Arrow child allocator for the whole task, created on the first kernel batch. Allocating
-  // one per batch - and registering a task-completion listener per batch to close it - would
-  // hold every result batch off-heap until the task ended, which is exactly what the streaming
-  // iterator model exists to avoid.
-  private var kernelAllocator: BufferAllocator = null
+  private val ledger = new VarkaBatchLedger
 
-  // Batches handed out and not released yet, each mapped to the vectors this evaluator owns in
-  // it - never the forwarded input vectors (see the ownership note in the class doc). A batch
-  // is normally released by the caller as soon as it is done with it; the map is the safety net
-  // for a task that stops early (a LIMIT, a failure) and is drained by the task-completion
-  // listener.
-  private val openBatches = mutable.Map.empty[ColumnarBatch, Seq[ColumnVector]]
+  // Built on first use, since its size is the fused plan's, which a subclass defines after this
+  // constructor has run. It grows through `taskAllocator`, which a suite may override to cap.
+  private var scratchOrNull: VarkaKernelScratch = null
 
-  private var cleanupRegistered = false
+  private def scratch: VarkaKernelScratch = {
+    if (scratchOrNull == null) {
+      val numInputs = fusedPlan.map(_.inputOrdinals.size).getOrElse(0)
+      scratchOrNull = new VarkaKernelScratch(() => taskAllocator(), numInputs)
+    }
+    scratchOrNull
+  }
+
+  // The task-completion listener closes the open batches, then runs these in order, each guarded
+  // on its own, then closes the allocator.
+  ledger.onTaskCompletion(() => releaseTaskScratch())
+  ledger.onTaskCompletion(() => onTaskCleanup())
+
+  private lazy val accounting = new VarkaFallbackAccounting(
+    new VarkaFallbackAccounting.Counters(
+      metrics.fallbackBatchesKernel.orNull,
+      metrics.fallbackBatchesRowPath.orNull,
+      metrics.fallbackBatchesDeclined.orNull,
+      metrics.fallbackBatchesNonArrow.orNull,
+      metrics.suspectAllocationSamples.orNull),
+    () => kernelIdentity)
 
   // The task-lifetime emitted fused loop and its reused argument arrays. None when emission
   // failed - an IR shape past the emitter's caps, or any linkage problem - in which case every
   // batch takes the caller's fallback path.
-  protected lazy val fusedRunner: Option[FusedRunner] = {
+  protected lazy val fusedRunner: Option[VarkaKernelRunner] = {
     fusedPlan.flatMap { plan =>
       try {
-        Some(new FusedRunner(plan))
+        Some(newRunner(plan))
       } catch {
         case d: VarkaEmitDeclined =>
           // A shape over the emitter's method budget: the same reason on every task, so it is
@@ -133,18 +132,41 @@ private[sql] abstract class VarkaEvaluatorBase(
               "falling back to the per-row path.")
           }
           metrics.emissionFailures.foreach(_ += 1)
-          VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.EMISSION_FAILURE,
-            kernelIdentity, d.getClass.getName)
+          VarkaFallbackAccounting.fallbackEvent(VarkaFallbackEvent.EMISSION_FAILURE,
+            () => kernelIdentity, d.getClass.getName)
           None
         case e if isCatchable(e) =>
           logWarning(s"Failed to emit the Varka fused kernel $kernelIdentity; falling back " +
             "to the per-row path.", e)
           metrics.emissionFailures.foreach(_ += 1)
-          VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.EMISSION_FAILURE,
-            kernelIdentity, e.getClass.getName)
+          VarkaFallbackAccounting.fallbackEvent(VarkaFallbackEvent.EMISSION_FAILURE,
+            () => kernelIdentity, e.getClass.getName)
           None
       }
     }
+  }
+
+  /**
+   * The runner for `plan`: the shape-named class from [[VarkaShapeCache]], whose lookup records
+   * this execution (operator, stage, the evaluator's leading entries) in the cache's side table
+   * so the class joins back to the plan nodes that ran it; the class dumped where a directory is
+   * configured, on hit and miss alike, so a session that configured it after the shape was cached
+   * still gets its file; and the plan handed over as arrays, read per batch without boxing.
+   */
+  private def newRunner(plan: CompiledVarkaProjection): VarkaKernelRunner = {
+    if (VarkaColumnarToRowExec.isFailEmissionForTesting) {
+      throw new IllegalStateException("injected Varka emission failure")
+    }
+    val lookup = VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
+    (if (lookup.hit) metrics.cacheHits else metrics.cacheMisses).foreach(_ += 1)
+    val entry = lookup.entry
+    VarkaClassDump.dump(classDumpDirectory.orNull, entry.sourceFile, entry.classBytes)
+    val n = plan.inputOrdinals.size
+    new VarkaKernelRunner(entry, plan.lane, plan.inputOrdinals.toArray,
+      Array.tabulate(n)(i => plan.derivedAt(i).map(_.kind).orNull),
+      plan.inputBounds.map(b => new VarkaKernelRunner.Bound(b.inputIndex, b.lo, b.hi)).toArray,
+      plan.outputs.size, plan.literals.toArray, plan.longLiterals.toArray, scratch, accounting,
+      VarkaEvaluatorBase.runnerHooks)
   }
 
   /**
@@ -210,7 +232,7 @@ private[sql] abstract class VarkaEvaluatorBase(
    * stage. Every fallback warning - here and in the exec nodes - says which kernel it gave up
    * on, so a log line identifies both the class and the plan node without correlation.
    * Reading it forces no emission: the shape hash is computed from the IR, not the bytes.
-   * A lazy val (task-21 review): the rendering hashes the canonical IR, and it is constant
+   * A lazy val (VARKA-21 review): the rendering hashes the canonical IR, and it is constant
    * per evaluator, so per-batch fallback paths must not recompute it.
    *
    * The IR renders through `VarkaVectorIR.canonical` rather than `Record.toString` (with the line
@@ -254,7 +276,7 @@ private[sql] abstract class VarkaEvaluatorBase(
       : Array[ColumnVector] = {
     val plan = fusedPlan.get
     val runner = fusedRunner.get
-    fillSources(runner, input, len)
+    runner.fill(input, len)
     val fixed = new Array[BaseFixedWidthVector](plan.outputs.size)
     val columns = new Array[ColumnVector](plan.outputs.size)
     var o = 0
@@ -267,7 +289,7 @@ private[sql] abstract class VarkaEvaluatorBase(
       runner.dstValidity(o) = vector.getValidityBuffer().memoryAddress()
       o += 1
     }
-    invokeFused(runner, len)
+    runner.invoke(len)
     fixed.foreach(_.setValueCount(len))
     columns
   }
@@ -284,26 +306,19 @@ private[sql] abstract class VarkaEvaluatorBase(
     }
   }
 
-  // ---------------------------------------------------------------------------------------
-  // Per-batch fallback accounting, shared by all four exec nodes (task-21 review: the nodes
-  // carried byte-identical copies of these blocks, which had already begun to drift). Each
-  // method counts and events one batch under its actual cause; the caller then takes its
-  // own fallback path.
-  // ---------------------------------------------------------------------------------------
-
   /**
-   * The per-batch dispatch every exec node runs (task-21 review, second pass: the
-   * canRun/catch/refuse skeleton had grown into four identical copies - the very drift
-   * surface whose accounting half the first pass deduplicated): the kernel path under the
-   * shared cause accounting, with every degradation routed to the caller's fallback.
+   * The per-batch dispatch every exec node runs (VARKA-21 review, second pass: the
+   * canRun/catch/refuse skeleton had grown into four identical copies): the kernel path under the
+   * shared cause accounting ([[VarkaFallbackAccounting]]), with every degradation routed to the
+   * caller's fallback.
    *
    * With the warm-up on, a batch the kernel could serve still takes the row path while the
-   * shape's kernel is not compiled yet ([[kernelReady]]). That is not a fallback and is counted
-   * apart from them: the row path is the faster of the two until C2 has the kernel. A batch the
-   * evaluator declines while it is copied for the warm-up is counted as the declined batch it
-   * is, as it would be on the kernel path. A batch that is not Arrow because a Varka node below
-   * sent it down its own row path while its kernel warmed is a warm-up batch here too, and so is
-   * this node's output for it, for the node above.
+   * shape's kernel is not compiled yet ([[VarkaWarmupGate]]). That is not a fallback and is
+   * counted apart from them: the row path is the faster of the two until C2 has the kernel. A
+   * batch the evaluator declines while it is copied for the warm-up is counted as the declined
+   * batch it is, as it would be on the kernel path. A batch that is not Arrow because a Varka
+   * node below sent it down its own row path while its kernel warmed is a warm-up batch here too,
+   * and so is this node's output for it, for the node above.
    */
   private[execution] def serveBatch[T](input: ColumnarBatch)(kernelPath: => T)(
       fallbackPath: => T): T = {
@@ -316,7 +331,7 @@ private[sql] abstract class VarkaEvaluatorBase(
         }
       ready match {
         case Left(declined) =>
-          recordDeclinedBatch(declined.status, declined.kernel)
+          accounting.declinedBatch(declined.status, declined.kernel)
           fallbackPath
         case Right(false) =>
           metrics.warmupBatches.foreach(_ += 1)
@@ -327,15 +342,15 @@ private[sql] abstract class VarkaEvaluatorBase(
           } catch {
             // Not a failure: the kernel ran and said it could not answer for this batch.
             case e: VarkaBatchDeclined =>
-              recordDeclinedBatch(e.status, e.kernel)
+              accounting.declinedBatch(e.status, e.kernel)
               fallbackPath
             // A genuine kernel error is told apart from a failure in the per-row machinery
-            // sharing the try by the marker invokeFused wraps it in.
+            // sharing the try by the marker the runner wraps it in.
             case e: VarkaKernelFailure =>
-              recordKernelFailure(e.getCause, e.kernel)
+              accounting.kernelFailure(e.getCause, e.kernel)
               fallbackPath
             case e if isCatchable(e) =>
-              recordRowPathFailure(e)
+              accounting.rowPathFailure(e)
               fallbackPath
           }
       }
@@ -346,59 +361,12 @@ private[sql] abstract class VarkaEvaluatorBase(
     }
   }
 
-  /**
-   * Whether this batch goes to the kernel: always when the kernel is not warmed, and otherwise
-   * once the shape's kernel is compiled or nothing is warming it any more
-   * ([[VarkaKernelWarmth]]). The first task to meet a cold shape claims it and queues the warm-up
-   * on a copy of this batch; until the verdict, every batch of the shape in every task takes the
-   * row path. A volatile read per batch once the shape is ready. Throws the
-   * [[VarkaBatchDeclined]] the copy met, having handed the claim back.
-   */
-  private[execution] def kernelReady(input: ColumnarBatch): Boolean = {
-    if (!warmed) {
-      true
-    } else {
-      val runner = fusedRunner.get
-      val warmth = runner.warmth
-      if (!warmth.ready() && warmth.tryClaim()) {
-        startWarmup(runner, input)
-      }
-      warmth.ready()
-    }
-  }
+  private lazy val warmupGate = new VarkaWarmupGate(fusedRunner.get, anyNullableInput,
+    (input: ColumnarBatch) => inputWidths(input), () => kernelIdentity)
 
-  /**
-   * Copies this batch's kernel inputs and queues the shape's warm-up on them
-   * ([[VarkaKernelWarmup.start]], which copies before it returns, so the batch is free to go).
-   * A batch the evaluator declines before the kernel would run cannot be copied, so the claim
-   * goes back for a later batch and the decline goes on to the caller. Every other way out
-   * without a queued warm-up releases the shape - its batches then run the kernel - because a
-   * claim left behind would keep them on the row path with nothing warming the kernel.
-   */
-  private def startWarmup(runner: FusedRunner, input: ColumnarBatch): Unit = {
-    val len = input.numRows()
-    var settled = false
-    try {
-      fillSources(runner, input, len)
-      VarkaKernelWarmup.start(runner.warmth, runner.shapeHash, runner.newKernel(),
-        runner.lane == LaneType.LONG, runner.srcData, runner.srcValidity, runner.srcNullCount,
-        inputWidths(input), anyNullableInput, len, runner.dstData.length, runner.scalarArgs,
-        runner.longArgs)
-      settled = true
-    } catch {
-      case e: VarkaBatchDeclined =>
-        runner.warmth.unclaim()
-        settled = true
-        throw e
-      case e if isCatchable(e) =>
-        logWarning(s"Could not start the warm-up of the Varka SIMD kernels $kernelIdentity; " +
-          "its batches run the kernel from now on.", e)
-    } finally {
-      if (!settled) {
-        runner.warmth.release()
-      }
-    }
-  }
+  /** Whether this batch goes to the kernel; see [[VarkaWarmupGate]]. */
+  private[execution] def kernelReady(input: ColumnarBatch): Boolean =
+    !warmed || warmupGate.kernelReady(input)
 
   /**
    * Whether any kernel input can hold a null, so that a batch can reach the kernel's masked
@@ -425,84 +393,8 @@ private[sql] abstract class VarkaEvaluatorBase(
     }.toArray
   }
 
-  // The species-pollution check (SKILLS.md, "Every operator the plans rely on ..."): a kernel
-  // that boxes still answers correctly, so no fallback path and no differential test can see
-  // it - only its allocation rate can. Sampled on the schedule VarkaAllocationSampler explains,
-  // never on every batch: the two management reads cost more than a short kernel call.
-  private var kernelBatches = 0L
-  private val allocationSampling = VarkaAllocationSampler.supported()
-  private val allocationTracker = new VarkaAllocationSampler.Tracker
-
-  /** One allocation sample of the kernel call: evented always, counted and warned when suspect. */
-  private def recordAllocationSample(allocatedBytes: Long, rows: Int): Unit = {
-    val suspect = VarkaAllocationSampler.suspect(allocatedBytes, rows)
-    VarkaKernelEvaluator.emitAllocationEvent(kernelIdentity, kernelBatches, rows, allocatedBytes,
-      suspect)
-    if (suspect) {
-      metrics.suspectAllocationSamples.foreach(_ += 1)
-      if (allocationTracker.record(true)) {
-        logWarning(s"The Varka SIMD kernels $kernelIdentity allocated $allocatedBytes bytes " +
-          s"over a $rows-row batch (batch $kernelBatches), and did so on the previous sample " +
-          "too. A kernel that runs as emitted allocates nothing per row; this rate means the " +
-          "Vector API is boxing its vectors, most likely because two vector species of one " +
-          "lane type ran hot in this JVM (SKILLS.md, the species-pollution section). Results " +
-          "are still correct; the kernel is several times slower than it should be.")
-      }
-    } else {
-      allocationTracker.record(false)
-    }
-  }
-
   /**
-   * The ghost fallback's bookkeeping: an error from the emitted kernel itself. `kernel` names a
-   * further kernel of the projection when that is the one that failed, and is null for this
-   * evaluator's own.
-   */
-  private def recordKernelFailure(e: Throwable, kernel: String): Unit = {
-    val identity = Option(kernel).getOrElse(kernelIdentity)
-    logWarning(s"The Varka SIMD kernels $identity failed on this batch; falling back " +
-      "to the per-row path.", e)
-    metrics.fallbackBatchesKernel.foreach(_ += 1)
-    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.KERNEL_FAILURE, identity,
-      e.getClass.getName)
-  }
-
-  /**
-   * A catchable failure from the per-row machinery running beside the kernel - the residual
-   * or merge projection's compile or evaluation - which the task-21 review split out of the
-   * kernel metric: it is not the kernel's failure, and a throwing lazy re-runs its
-   * initializer, so counting it there would inflate the ghost-fallback metric on every
-   * batch. Counted under its own bounded cause metric (the review's second pass: with no
-   * metric these batches vanished from the SQL UI entirely), evented and logged.
-   */
-  private def recordRowPathFailure(e: Throwable): Unit = {
-    logWarning(s"The per-row machinery beside the Varka kernel $kernelIdentity failed on " +
-      "this batch; falling back to the per-row path.", e)
-    metrics.fallbackBatchesRowPath.foreach(_ += 1)
-    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.ROW_PATH_FAILURE, kernelIdentity,
-      e.getClass.getName)
-  }
-
-  /**
-   * A batch the kernel itself declined: a lowering that is correct only over part of
-   * its input domain met a value outside it - a date beyond the narrowed civil-from-days range
-   * - and reported it rather than publishing an answer it does not have. Logged at debug
-   * rather than warning: unlike the ghost fallback this is a designed outcome, not a defect,
-   * and a batch of far-future dates would otherwise fill the log.
-   */
-  private def recordDeclinedBatch(status: Int, kernel: String): Unit = {
-    val identity = Option(kernel).getOrElse(kernelIdentity)
-    logDebug(s"The Varka SIMD kernels $identity declined this batch (status $status); " +
-      "falling back to the per-row path.")
-    metrics.fallbackBatchesDeclined.foreach(_ += 1)
-    // The third field is the event's exceptionClass, and a declined batch has no exception:
-    // passing the status there would put "1" in a JFR column a dashboard groups by class
-    // name. The status is in the log line above, where it belongs.
-    VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, identity, "")
-  }
-
-  /**
-   * A batch [[canRun]] refused, counted under its actual cause (task-21 review: the nodes
+   * A batch [[canRun]] refused, counted under its actual cause (VARKA-21 review: the nodes
    * used to label every refusal "input not Arrow-backed"): an emission failure was already
    * counted once per task by the emission catch; an empty batch is served trivially and is
    * no fallback at all; an ineligible plan (defensive - the rule should not have fused it)
@@ -517,9 +409,7 @@ private[sql] abstract class VarkaEvaluatorBase(
         metrics.warmupBatches.foreach(_ += 1)
         true
       } else {
-        metrics.fallbackBatchesNonArrow.foreach(_ += 1)
-        VarkaKernelEvaluator.emitFallbackEvent(VarkaFallbackEvent.NON_ARROW_BATCH,
-          kernelIdentity, "")
+        accounting.nonArrowBatch()
         false
       }
     } else {
@@ -528,61 +418,28 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * Takes ownership of a batch the caller built itself - a fallback batch, every column the
-   * caller's own - so that the same task-completion listener closes it if the task stops before
-   * the caller releases it.
+   * Takes ownership of a batch the caller built itself; see [[VarkaBatchLedger.track]].
    */
-  def track(batch: ColumnarBatch): ColumnarBatch = {
-    trackOwned(batch, (0 until batch.numCols()).map(batch.column))
-    batch
-  }
+  def track(batch: ColumnarBatch): ColumnarBatch = ledger.track(batch)
 
   /**
-   * The output batch for a projection that only forwards columns of its input: the input's own
-   * vectors, selected and reordered by `ordinals`, with nothing copied and no kernel run.
-   *
-   * It is tracked owning nothing, so [[release]] unregisters it and closes none of its columns -
-   * they belong to the input batch, exactly as a forwarded entry's column does on the kernel
-   * path. A batch built with `new ColumnarBatch(...)` and not tracked would instead reach
-   * `release`'s "not one of ours" arm and be closed whole, taking the input's vectors with it.
+   * The output batch for a projection that only forwards columns of its input; see
+   * [[VarkaBatchLedger.forwardColumns]].
    */
-  def forwardColumns(input: ColumnarBatch, ordinals: Array[Int]): ColumnarBatch = {
-    val batch = new ColumnarBatch(ordinals.map(input.column), input.numRows())
-    trackOwned(batch, Seq.empty)
-    batch
-  }
+  def forwardColumns(input: ColumnarBatch, ordinals: Array[Int]): ColumnarBatch =
+    ledger.forwardColumns(input, ordinals)
 
-  protected def trackOwned(batch: ColumnarBatch, owned: Seq[ColumnVector]): Unit = {
-    ensureCleanup()
-    openBatches(batch) = owned
-  }
+  protected def trackOwned(batch: ColumnarBatch, owned: Array[ColumnVector]): Unit =
+    ledger.trackOwned(batch, owned)
 
   /**
-   * Releases a batch obtained from this evaluator or handed to [[track]]: closes exactly the
-   * vectors this evaluator owns in it, so a forwarded input vector is left to its input batch.
-   *
-   * Each close is guarded, even though this is the ordinary path with a caller above it that
-   * could handle a throw. The registry entry is removed first, so by the time anything closes,
-   * this call is the only route to those vectors: a throw part-way would strand the rest where
-   * nothing - not a later `release`, not the task-completion listener - can reach them. The
-   * task's allocator close then finds outstanding bytes and raises "Memory was leaked by
-   * query" *instead of* completing, so the child allocator's accounting stays charged against
-   * the shared root for the JVM's lifetime, which is the exact failure the listener's own guard
-   * exists to prevent. Closing everything and logging what failed is strictly better here than
-   * handing the caller an exception it can do nothing useful with.
+   * Releases a batch obtained from this evaluator or handed to [[track]]; see
+   * [[VarkaBatchLedger.release]].
    */
-  def release(batch: ColumnarBatch): Unit = {
-    openBatches.remove(batch) match {
-      case Some(owned) => closeAllQuietly(owned, "a Varka output vector on release")
-      // Not one of ours - nothing borrowed can be inside, so closing it whole is safe.
-      case None => batch.close()
-    }
-  }
+  def release(batch: ColumnarBatch): Unit = ledger.release(batch)
 
   /** A kernel failure worth falling back on, rather than one that has to fail the task. */
-  def isCatchable(e: Throwable): Boolean = {
-    NonFatal(e) || e.isInstanceOf[LinkageError]
-  }
+  def isCatchable(e: Throwable): Boolean = VarkaKernelRunner.isCatchable(e)
 
   /**
    * Whether the kernel can run over this batch: every referenced column must be an Arrow
@@ -623,9 +480,9 @@ private[sql] abstract class VarkaEvaluatorBase(
             // The long lane's three (VARKA-29): a `bigint`, a `TIME(p)` - nanoseconds of day at
             // every precision - and a day-time interval in microseconds. All three are
             // `BaseFixedWidthVector`s of width eight, and VARKA-116 proved the two datetime ones
-            // map through `extractMorsel` exactly as the int vectors do. The timestamp vectors
-            // are deliberately not here: the compiler never builds a leaf for them, so admitting
-            // them would only decline the batch one layer later.
+            // map through the runner's `fill` exactly as the int vectors do. The timestamp
+            // vectors are deliberately not here: the compiler never builds a leaf for them, so
+            // admitting them would only decline the batch one layer later.
             case (v: BigIntVector, None) => v.getValueCount() == rows
             case (v: TimeNanoVector, None) => v.getValueCount() == rows
             case (v: DurationVector, None) => v.getValueCount() == rows
@@ -653,427 +510,33 @@ private[sql] abstract class VarkaEvaluatorBase(
    * so the projection's evaluator releases its scratch before it closes that allocator.
    */
   private[execution] def releaseTaskScratch(): Unit = {
-    releaseDerivedScratch()
-    releaseKernelScratch()
-  }
-
-  // The derived inputs' scratch buffers, one data and one validity buffer per kernel
-  // input the evaluator derives, reused across batches and grown on demand under the filter's
-  // maskBuf discipline; released by the task-completion listener before the allocator closes.
-  // Read only inside kernel.run, so a batch never sees another batch's fill.
-  private var derivedData: Array[ArrowBuf] = null
-  private var derivedValidity: Array[ArrowBuf] = null
-
-  // The scratch a kernel with a materialized calendar prefix takes (VARKA-198): one buffer for
-  // the task, grown to the largest batch's need under the same discipline as the derived
-  // inputs' buffers, and released beside them. A kernel without scratch asks for zero bytes per
-  // row and is passed a zero address, which its `run` ignores.
-  private var kernelScratch: ArrowBuf = null
-
-  private def kernelScratchAddress(bytesPerRow: Int, len: Int): Long = {
-    if (bytesPerRow == 0 || len <= 0) {
-      0L
-    } else {
-      val needed = bytesPerRow.toLong * len
-      if (kernelScratch == null || kernelScratch.capacity() < needed) {
-        // Allocate, store, then release, for the reasons `growSlot` gives.
-        val fresh = taskAllocator().buffer(needed)
-        val old = kernelScratch
-        kernelScratch = fresh
-        if (old != null) {
-          old.close()
-        }
-      }
-      kernelScratch.memoryAddress()
+    if (scratchOrNull != null) {
+      scratchOrNull.release()
     }
   }
 
-  private def releaseKernelScratch(): Unit = {
-    val b = kernelScratch
-    kernelScratch = null
-    if (b != null) {
-      closeQuietly(b, "a Varka kernel scratch buffer")
-    }
-  }
-
-  private def derivedScratch(i: Int, len: Int): Unit = {
-    if (derivedData == null) {
-      val n = fusedPlan.get.inputOrdinals.size
-      derivedData = new Array[ArrowBuf](n)
-      derivedValidity = new Array[ArrowBuf](n)
-    }
-    val dataNeeded = math.max(len * 4L, 8L)
-    val validityNeeded = ((len + 63) / 64) * 8L
-    if (derivedData(i) == null || derivedData(i).capacity() < dataNeeded) {
-      growSlot(derivedData, i, dataNeeded)
-    }
-    if (derivedValidity(i) == null || derivedValidity(i).capacity() < validityNeeded) {
-      growSlot(derivedValidity, i, validityNeeded)
-    }
-  }
-
-  /**
-   * Replaces `slots(i)` with a fresh buffer of `needed` bytes: allocate, store, and only then
-   * release what was there, so that no step can leave a released buffer referenced.
-   *
-   * All three parts of that order matter, and each was got wrong in turn. Closing before
-   * allocating was a use-after-free: `buffer` throws `OutOfMemoryException` when the allocator
-   * cannot satisfy the request, a plain `RuntimeException`, so `serveBatch` catches it as a
-   * per-batch failure and *the task keeps running* - with the slot holding a buffer that had
-   * already been released, because the assignment that would have replaced it never ran.
-   *
-   * Storing through the caller (`slots(i) = grown(...)`) narrowed that window without closing
-   * it: `close()` can throw too - `BufferLedger.release` raises on reference-count underflow,
-   * and with assertions on it checks the allocator is open - and a throw there again unwinds
-   * before the caller's store, stranding the released buffer in the slot and leaking the fresh
-   * one. Doing the store inside the helper is what makes the release the last thing that can
-   * fail, and makes this identical to `maskBuffer` rather than merely similar to it.
-   *
-   * Why a stranded slot is worse than it sounds: Arrow's `close()` only releases the reference,
-   * while `capacity()` and `memoryAddress()` stay plain field reads it does not touch. So the
-   * next, smaller batch finds the stale capacity still large enough, skips the regrow, and has
-   * the leaf write through an address the allocator has already freed; the task's cleanup then
-   * closes the same buffer a second time and the reference count goes negative.
-   */
-  private def growSlot(slots: Array[ArrowBuf], i: Int, needed: Long): Unit = {
-    val fresh = taskAllocator().buffer(needed)
-    val old = slots(i)
-    slots(i) = fresh
-    if (old != null) {
-      old.close()
-    }
-  }
-
-  /**
-   * Closes every derived-input scratch buffer and drops the arrays.
-   *
-   * Each slot is cleared before its buffer is closed and each close is guarded on its own, so
-   * that one throwing `close()` cannot leave the rest unclosed or leave a closed buffer
-   * referenced - the `maskBuf` discipline this follows nulls its field before the close for the
-   * same reason. The arrays go first, so even a failure part-way leaves the evaluator with no
-   * scratch rather than with half-released scratch: the next batch reallocates, which is correct
-   * if wasteful, where reusing a partly-closed array is not. Whatever a close throws is logged
-   * and swallowed; this runs from the task-completion listener, where the allocator close below
-   * it matters more than any one buffer, and a throw here would mask the task's real error.
-   */
-  private def releaseDerivedScratch(): Unit = {
-    val data = derivedData
-    val validity = derivedValidity
-    derivedData = null
-    derivedValidity = null
-    closeScratch(data)
-    closeScratch(validity)
-  }
-
-  private def closeScratch(buffers: Array[ArrowBuf]): Unit = {
-    if (buffers != null) {
-      var i = 0
-      while (i < buffers.length) {
-        val b = buffers(i)
-        buffers(i) = null
-        if (b != null) {
-          closeQuietly(b, "a Varka derived-input scratch buffer")
-        }
-        i += 1
-      }
-    }
-  }
-
-  /**
-   * Closes one resource on a path that must not be derailed by the close itself: whatever it
-   * throws is logged and swallowed.
-   *
-   * Used where something has already gone wrong, or where the caller is on its way out. On a
-   * failure path the original exception is the one worth keeping - a `foreach(_.close())` there
-   * both strands every resource after the one that threw and replaces the error being reported
-   * with a cleanup error, which is the same objection the task-completion listener's own guard
-   * was written for.
-   */
-  protected def closeQuietly(c: AutoCloseable, what: String): Unit = {
-    try {
-      c.close()
-    } catch {
-      case NonFatal(e) => logWarning(s"Closing $what failed.", e)
-    }
-  }
+  /** See [[VarkaBatchLedger.closeQuietly]]. */
+  protected def closeQuietly(c: AutoCloseable, what: String): Unit =
+    VarkaBatchLedger.closeQuietly(c, what)
 
   /** [[closeQuietly]] over a collection, guarding each element separately. */
-  protected def closeAllQuietly(cs: Iterable[_ <: AutoCloseable], what: String): Unit = {
+  protected def closeAllQuietly(cs: Iterable[_ <: AutoCloseable], what: String): Unit =
     cs.foreach(closeQuietly(_, what))
-  }
 
-  /**
-   * Registers the single task-completion listener that closes any batch still open and then the
-   * allocator. Both this and [[taskAllocator]] are called from the task thread only.
-   */
-  protected def ensureCleanup(): Unit = {
-    if (!cleanupRegistered) {
-      // The flag records a registration that happened, so it is set after the call and not
-      // before it. Setting it first meant a throw from `addTaskCompletionListener` - outside a
-      // task `TaskContext.get()` is null - left the evaluator believing it had a listener, and
-      // the next `taskAllocator()` would then create a child allocator that nothing ever
-      // closes. Not reachable from a query, where every evaluator is built inside a
-      // `PartitionEvaluator`, but reachable from a harness that drives one directly.
-      TaskContext.get().addTaskCompletionListener[Unit] { _ =>
-        // Every stage here frees task-lifetime Arrow memory, and each is guarded separately so
-        // that one failure cannot skip the others. The reason was written for the hook alone -
-        // a throw must not skip the allocator close below, or the child allocator's accounting
-        // leaks against the shared root for the JVM's lifetime and the task's real error is
-        // masked (task-21 review, second pass) - and it applies word for word to its
-        // neighbours, which a later review noticed close Arrow buffers too. One try around the
-        // whole prologue would satisfy the letter of that and not its point: a throwing batch
-        // close would still cost the scratch release and the hook.
-        closeAllQuietly(openBatches.values.flatten, "a Varka batch left open at task completion")
-        openBatches.clear()
-        releaseDerivedScratch()
-        releaseKernelScratch()
-        try {
-          onTaskCleanup()
-        } catch {
-          case NonFatal(e) => logWarning("Varka task-cleanup hook failed.", e)
-        }
-        if (kernelAllocator != null) {
-          kernelAllocator.close()
-          kernelAllocator = null
-        }
-      }
-      cleanupRegistered = true
-    }
-  }
+  /** Registers the single task-completion listener; see [[VarkaBatchLedger.ensureCleanup]]. */
+  protected def ensureCleanup(): Unit = ledger.ensureCleanup()
 
   /** Returns the task's Arrow child allocator, creating it on first use. */
-  protected def taskAllocator(): BufferAllocator = {
-    ensureCleanup()
-    if (kernelAllocator == null) {
-      kernelAllocator =
-        ArrowUtils.rootAllocator.newChildAllocator("varka-kernels", 0, Long.MaxValue)
-    }
-    kernelAllocator
-  }
-
-  /**
-   * Writes the emitted class to the configured dump directory under its `SourceFile` name,
-   * so `javap -c -p` reaches a generated loop with no debugger. Diagnostics only:
-   * every failure is logged and swallowed, because a query must not fail over a debug write.
-   * Every task of a shape holds identical bytes, so a per-JVM memo makes the
-   * shape's first task with the directory configured write the file once, instead of every
-   * task re-writing it on the task-setup path. The memo is per-process on purpose: the file
-   * name derives from the shape, not the bytes, so a file left by an *older* emitter must be
-   * overwritten, not trusted - each JVM's first write refreshes it. (Two first tasks can
-   * still race past the memo; they write the same bytes, so the race is benign.)
-   */
-  private def dumpClass(sourceFile: String, bytes: Array[Byte]): Unit = {
-    classDumpDirectory.foreach { directory =>
-      val memoKey = s"$directory|$sourceFile"
-      if (VarkaKernelEvaluator.dumpedClassFiles.add(memoKey)) {
-        try {
-          val target = new File(directory, sourceFile.stripSuffix(".java") + ".class")
-          Files.createDirectories(target.toPath.getParent)
-          Files.write(target.toPath, bytes)
-          logInfo(s"Wrote the Varka kernel class to ${target.getAbsolutePath}")
-        } catch {
-          case NonFatal(e) =>
-            VarkaKernelEvaluator.dumpedClassFiles.remove(memoKey)
-            logWarning(s"Could not dump the Varka kernel class to $directory; " +
-              "execution is unaffected.", e)
-        }
-      }
-    }
-  }
-
-  /**
-   * Fills the runner's source-side argument arrays from the input batch - one morsel per
-   * referenced input column, in dense kernel-input order. `canRun` has vouched for every
-   * column this reads. A derived input is computed here, before the kernel runs,
-   * into the task's scratch buffers: the string column goes through the row engine's own
-   * parser and the kernel reads the int32 result like any other input. The leaves never throw;
-   * under ANSI an unrecognised weekday name declines the batch, and the row engine - which
-   * parses a name only beside a non-null date - raises its own error where one is due. The
-   * trunc level has no such route: an unrecognised format is a null lane in every
-   * mode, as it is a NULL result on the row engine.
-   */
-  protected def fillSources(runner: FusedRunner, input: ColumnarBatch, len: Int): Unit = {
-    val plan = fusedPlan.get
-    var i = 0
-    plan.inputOrdinals.foreach { ordinal =>
-      val acv = input.column(ordinal).asInstanceOf[ArrowColumnVector]
-      plan.derivedAt(i) match {
-        case None =>
-          val morsel =
-            extractMorsel(acv.getValueVector().asInstanceOf[BaseFixedWidthVector], len)
-          runner.srcData(i) = morsel.data.address()
-          runner.srcValidity(i) = morsel.validityAddress
-          runner.srcNullCount(i) = morsel.nullCount.toInt
-        case Some(derived) =>
-          derivedScratch(i, len)
-          val data = derivedData(i)
-          val validity = derivedValidity(i)
-          val nulls = derived.kind match {
-            case VarkaDerivedKind.TRUNC_LEVEL =>
-              TruncLevelLeaf.fill(acv, len, data.memoryAddress(), validity.memoryAddress())
-            case _ =>
-              WeekdayLeaf.fill(acv, len, derived.kind.failOnError, WeekdayLeaf.DEFAULT_PARSER,
-                data.memoryAddress(), validity.memoryAddress())
-          }
-          if (nulls == WeekdayLeaf.DECLINED) {
-            throw new VarkaBatchDeclined(VarkaKernelEvaluator.STATUS_DERIVED_INPUT)
-          }
-          // The leaf writes (len + 7) / 8 validity bytes; the rest of the words the kernel
-          // reads is zeroed so a longer earlier batch's bits cannot read as lanes past `len`.
-          // The bound is what `derivedScratch` sized the buffer to need, not its capacity: the
-          // scratch grows and is never shrunk, so after one wide batch the capacity can be many
-          // times the words in play and zeroing to it memsets a buffer nothing will read - the
-          // kernel addresses validity at `row / 8` and never past the batch's own words. The
-          // comment here used to say "the last word" while the code said "to capacity"; this is
-          // the version the comment described.
-          val written = (len + 7) / 8
-          val readable = ((len + 63) / 64) * 8L
-          validity.setZero(written, readable - written)
-          runner.srcData(i) = data.memoryAddress()
-          runner.srcValidity(i) = if (nulls == len) 0L else validity.memoryAddress()
-          runner.srcNullCount(i) = nulls
-      }
-      i += 1
-    }
-    // an input the compiler bounded - today a day offset that came from
-    // CAST(i AS INTERVAL DAY), which Spark's cast throws on past the bound - is checked before
-    // the kernel runs, over its live lanes only. A lane outside declines the batch the same
-    // way a kernel status does: the row engine recomputes it and raises the error the kernel
-    // cannot. One vector compare pass over the column, priced in VarkaThroughputBenchmark
-    // against the unbounded date_add row.
-    plan.inputBounds.foreach { b =>
-      val k = b.inputIndex
-      if (!IntRangeOps.allWithin(runner.srcData(k), runner.srcValidity(k), runner.srcNullCount(k),
-          len, b.lo, b.hi)) {
-        throw new VarkaBatchDeclined(VarkaKernelEvaluator.STATUS_INPUT_BOUND)
-      }
-    }
-  }
-
-  /**
-   * Invokes the emitted loop, marking any catchable throw as [[VarkaKernelFailure]] so the
-   * exec nodes' catch can tell a genuine kernel error from a failure in the per-row
-   * machinery that shares the same try (task-21 review). A fatal error passes unmarked.
-   */
-  protected def invokeFused(runner: FusedRunner, len: Int): Unit = {
-    kernelBatches += 1
-    val sampled = allocationSampling && VarkaKernelEvaluator.allocationSchedule.due(kernelBatches)
-    val before = if (sampled) VarkaAllocationSampler.allocatedBytes() else 0L
-    // Grown outside the try below, as the derived inputs' buffers are: an allocator's failure
-    // is the per-batch machinery's, not the kernel's, and must not be marked as the kernel's.
-    val scratch = kernelScratchAddress(runner.scratchBytesPerRow, len)
-    val status = try {
-      if (VarkaColumnarToRowExec.isFailKernelForTesting) {
-        // scalastyle:off throwerror
-        throw new NoClassDefFoundError("injected Varka kernel failure")
-        // scalastyle:on throwerror
-      }
-      // One emitted class is one lane, and each lane has its own `run`: the seven-argument
-      // form reads the int literal table, the eight-argument one adds the long table. The
-      // plan's lane is fixed at compile time, so this is a branch on a final field, not a
-      // per-batch discovery. The wrong overload would not run a wrong kernel - each default
-      // throws naming the lane - but that throw would be a fallback with a misleading cause.
-      if (runner.lane == LaneType.LONG) {
-        runner.kernel.run(runner.srcData, runner.srcValidity, runner.srcNullCount,
-          runner.dstData, runner.dstValidity, runner.scalarArgs, runner.longArgs, len, scratch)
-      } else {
-        runner.kernel.run(runner.srcData, runner.srcValidity, runner.srcNullCount,
-          runner.dstData, runner.dstValidity, runner.scalarArgs, len, scratch)
-      }
-    } catch {
-      case e if isCatchable(e) => throw new VarkaKernelFailure(e)
-    }
-    if (sampled) recordAllocationSample(VarkaAllocationSampler.allocatedBytes() - before, len)
-    // A non-zero status means the kernel met a value its lowering is not defined over and
-    // declined the batch. The outputs it wrote are not answers; the batch takes the
-    // caller's fallback path, which recomputes it row by row. Signalled by a throw because
-    // that is the one path every caller of this method already routes to the fallback - the
-    // vectors already allocated are released by the task-completion listener like any other.
-    if (status != 0 || VarkaColumnarToRowExec.isDeclineKernelForTesting) {
-      throw new VarkaBatchDeclined(if (status != 0) status else 1)
-    }
-  }
-
-  /**
-   * Maps a `DateDayVector` or `IntVector` to its data and validity segments
-   * (zero-copy), mirroring the engine's `VarkaMorsel.extractDate` contract: the validity
-   * segment is null for an all-null column, and callers pass a `0L` address in that case
-   * because the kernels never dereference it then. Both vector kinds are four bytes wide with
-   * the same buffer layout, so the body does not care which one it was handed.
-   *
-   * The vector must hold exactly the batch's rows, which `isArrowBacked` has already checked -
-   * that is what makes the vector's null count the batch's null count, and so what makes the
-   * all-null test below sound.
-   */
-  private def extractMorsel(v: BaseFixedWidthVector, len: Int): Morsel = {
-    require(len == v.getValueCount(),
-      s"rowCount $len does not match the vector value count ${v.getValueCount()}")
-    val data = ofAddress(v.getDataBuffer())
-    val nullCount = v.getNullCount()
-    val validity = if (nullCount == len) null else ofAddress(v.getValidityBuffer())
-    Morsel(data, validity, nullCount)
-  }
-
-  private def ofAddress(buf: ArrowBuf): MemorySegment = {
-    MemorySegment.ofAddress(buf.memoryAddress()).reinterpret(buf.capacity())
-  }
-
-  /**
-   * The fused loop serving one task, plus the `run` argument arrays, allocated once here and
-   * refilled per batch - nothing is allocated per call. the class comes from
-   * [[VarkaShapeCache]] - shared across tasks and released on cache eviction, so its C2 code
-   * survives the task boundary - and only the kernel instance and these arrays are the
-   * task's own. The cache owns the loader in every configuration: with `maxEntries` = 0 it
-   * evicts (and releases) each entry as it is loaded, and this task's strong references
-   * carry the class to task end - the pre-task-18 lifecycle through the same path.
-   */
-  protected class FusedRunner(plan: CompiledVarkaProjection) {
-    // The lookup records this execution (operator, stage, the evaluator's leading entries)
-    // in the cache's side table, so the shape-named class joins back to the plan nodes that
-    // ran it.
-    private val lookup = {
-      if (VarkaColumnarToRowExec.isFailEmissionForTesting) {
-        throw new IllegalStateException("injected Varka emission failure")
-      }
-      VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
-    }
-    private val entry = lookup.entry
-    (if (lookup.hit) metrics.cacheHits else metrics.cacheMisses).foreach(_ += 1)
-
-    val sourceFile: String = entry.sourceFile
-
-    val classBytes: Array[Byte] = {
-      // dumpClass writes once per shape and directory (an existing file is left alone), and
-      // runs on hit and miss alike so a session that configured the dump directory after the
-      // shape was cached still gets its file.
-      dumpClass(sourceFile, entry.classBytes)
-      entry.classBytes
-    }
-
-    val kernel: VarkaFusedKernel = entry.newKernel()
-
-    /** Bytes of scratch per row this kernel's `run` takes; zero for most kernels (VARKA-198). */
-    val scratchBytesPerRow: Int = kernel.scratchBytesPerRow()
-
-    /** The shape's warm state, shared with every task that runs the shape. */
-    val warmth: VarkaKernelWarmth = entry.warmth()
-
-    val shapeHash: String = entry.shapeHash()
-
-    /** Another instance of the shape's class, which no task runs: the warm-up's own. */
-    def newKernel(): VarkaFusedKernel = entry.newKernel()
-
-    val srcData = new Array[Long](plan.inputOrdinals.size)
-    val srcValidity = new Array[Long](plan.inputOrdinals.size)
-    val srcNullCount = new Array[Int](plan.inputOrdinals.size)
-    val dstData = new Array[Long](plan.outputs.size)
-    val dstValidity = new Array[Long](plan.outputs.size)
-    val scalarArgs: Array[Int] = plan.literals.toArray
-    val longArgs: Array[Long] = plan.longLiterals.toArray
-    val lane: LaneType = plan.lane
-  }
+  protected def taskAllocator(): BufferAllocator = ledger.allocator()
 }
 
-private case class Morsel(data: MemorySegment, validity: MemorySegment, nullCount: Long) {
-  def validityAddress: Long = if (validity == null) 0L else validity.address()
+private object VarkaEvaluatorBase {
+
+  /** The runner's test hooks, read per batch from the exec nodes' test switches. */
+  val runnerHooks: VarkaKernelRunner.Hooks = new VarkaKernelRunner.Hooks {
+    override def failKernel(): Boolean = VarkaColumnarToRowExec.isFailKernelForTesting
+    override def declineKernel(): Boolean = VarkaColumnarToRowExec.isDeclineKernelForTesting
+    override def allocationSchedule(): VarkaAllocationSampler.Schedule =
+      VarkaKernelEvaluator.allocationSchedule
+  }
 }

@@ -88,9 +88,12 @@ object VarkaColdPath {
    * of the injection, not of the path. Callers read the nodes' metrics instead.
    */
   def silenceEvaluator(): () => Unit = {
-    val logger = "org.apache.spark.sql.execution.VarkaKernelEvaluator"
-    val level = LogManager.getLogger(logger).getLevel
-    Configurator.setLevel(logger, Level.ERROR)
-    () => Configurator.setLevel(logger, level)
+    // The emission warning is logged under the evaluator's own class name; the fallback, decline
+    // and warm-up messages come from the components in the `varka` package (VARKA-251).
+    val loggers = Seq("org.apache.spark.sql.execution.VarkaKernelEvaluator",
+      "org.apache.spark.sql.execution.varka")
+    val levels = loggers.map(l => l -> LogManager.getLogger(l).getLevel)
+    loggers.foreach(Configurator.setLevel(_, Level.ERROR))
+    () => levels.foreach { case (l, level) => Configurator.setLevel(l, level) }
   }
 }
