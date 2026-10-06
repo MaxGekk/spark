@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.execution
 
+import java.util.concurrent.TimeUnit
+
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
@@ -102,26 +104,53 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
     withWarmup {
       // A shape another suite emitted is a class this JVM has already met; start from a new one.
       VarkaShapeCache.invalidateAll()
+      val startedAt = System.nanoTime()
       val first = varkaSpark.sql(query)
       runAndCheck(first, expected)
-      assert(varkaMetric(first, "numWarmupBatches") === numBatches)
-      assert(varkaMetric(first, "numVarkaBatches") === 0L)
+      val firstMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+      expectWarmup(first, firstMillis, "the first run")(
+        varkaMetric(first, "numWarmupBatches") === numBatches)
+      expectWarmup(first, firstMillis, "the first run")(
+        varkaMetric(first, "numVarkaBatches") === 0L)
 
       assert(VarkaKernelWarmup.awaitIdle(120000), "the warm-up did not finish in two minutes")
       val outcome = VarkaKernelWarmup.recentOutcomes().asScala.last
-      logInfo(s"The warm-up of `$query`: $outcome")
-      assert(outcome.state() === VarkaKernelWarmth.State.COMPILED, outcome)
+      logInfo(s"The warm-up of `$query`: $outcome; the first run took $firstMillis ms")
+      assert(outcome.state() === VarkaKernelWarmth.State.COMPILED,
+        s"$outcome; the first run took $firstMillis ms")
       assert(outcome.firstProbeBytes() > outcome.lastProbeBytes(), outcome)
 
       val second = varkaSpark.sql(query)
       runAndCheck(second, expected)
-      assert(varkaMetric(second, "numVarkaBatches") === numBatches)
-      assert(varkaMetric(second, "numWarmupBatches") === 0L)
+      expectWarmup(second, firstMillis, "the second run")(
+        varkaMetric(second, "numVarkaBatches") === numBatches)
+      expectWarmup(second, firstMillis, "the second run")(
+        varkaMetric(second, "numWarmupBatches") === 0L)
       Seq("numFallbackBatchesNonArrow", "numFallbackBatchesKernel", "numFallbackBatchesRowPath",
         "numFallbackBatchesDeclined").foreach { m =>
         assert(varkaMetric(first, m) === 0L, m)
         assert(varkaMetric(second, m) === 0L, m)
       }
+    }
+  }
+
+  /**
+   * Fails with what a failure here needs to be told apart: the run's batch counters, how long
+   * the first run took, and the warm-up's own outcome - its verdict, calls, time in the queue and
+   * running, and first and last probe - read once the warm-up has finished. A first run that
+   * outlasts the warm-up sees the kernel on its later batches and a warm-up that is released at
+   * its deadline sees none, and the counters alone read alike for both (`VARKA-233.md` 13.7).
+   */
+  private def expectWarmup(df: DataFrame, firstMillis: Long, which: String)(
+      holds: => Boolean): Unit = {
+    if (!holds) {
+      VarkaKernelWarmup.awaitIdle(120000)
+      val counters = Seq("numWarmupBatches", "numVarkaBatches", "numFallbackBatchesNonArrow",
+        "numFallbackBatchesKernel", "numFallbackBatchesRowPath", "numFallbackBatchesDeclined")
+        .map(m => s"$m=${varkaMetric(df, m)}").mkString(", ")
+      fail(s"$which of $numBatches batches did not take the path expected: $counters; the " +
+        s"first run took $firstMillis ms; warm-ups: " +
+        VarkaKernelWarmup.recentOutcomes().asScala.mkString("; "))
     }
   }
 

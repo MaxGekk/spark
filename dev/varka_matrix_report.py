@@ -132,9 +132,16 @@ def main(runs, skips_path):
             f"{name:32} {status:>4} {seconds:>5} {ok:>5} "
             f"{failed:>4} {canceled:>4} {aborted:>5} {len(unfused):>7}"
         )
-        for line in log.splitlines():
+        lines = log.splitlines()
+        for i, line in enumerate(lines):
             if "*** FAILED ***" in line or "*** ABORTED ***" in line:
                 details.append(f"  {name}: {line.strip()}")
+                # ScalaTest prints the message and the cause on the indented lines that follow;
+                # without them a failure that CI cannot reproduce says only which test it was.
+                for more in lines[i + 1 : i + 7]:
+                    if not more.startswith("  ") or not more.strip():
+                        break
+                    details.append(f"      {more.strip()[:400]}")
         details += [
             f"  {name}: fuses nothing, fused under the defaults: {s} / {t}" for s, t in unfused
         ]
