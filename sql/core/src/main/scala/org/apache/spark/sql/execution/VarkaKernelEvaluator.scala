@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjectio
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
   VarkaEmitOptions}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
-import org.apache.spark.sql.execution.varka.{VarkaBatchDeclined, VarkaKernelFailure, VarkaKernelRunner}
+import org.apache.spark.sql.execution.varka.{VarkaBatchDeclined, VarkaKernelFailure}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, IntegerType, LongType, StructType, TimeType, YearMonthIntervalType}
 import org.apache.spark.sql.util.ArrowUtils
@@ -220,7 +220,7 @@ private[sql] class VarkaKernelEvaluator(
       }.toArray
       val batch = new ColumnarBatch(columns)
       batch.setNumRows(len)
-      trackOwned(batch, owned.toSeq)
+      trackOwned(batch, owned.toArray)
       batch
     } catch {
       case e: Throwable =>
@@ -243,7 +243,7 @@ private[sql] class VarkaKernelEvaluator(
       val fusedColumns = computeFused(input, len, owned).flatten
       val batch = new ColumnarBatch(fusedColumns)
       batch.setNumRows(len)
-      trackOwned(batch, owned.toSeq)
+      trackOwned(batch, owned.toArray)
       batch
     } catch {
       case e: Throwable =>
@@ -384,21 +384,8 @@ private[execution] object VarkaKernelEvaluator {
 
   // Which kernel batches the allocation sampler measures. The production schedule skips the
   // JIT warm-up (see VarkaAllocationSampler); suites set a dense one so a short query samples,
-  // and restore the default in a finally.
-  /**
-   * The decline status the evaluator itself reports when an input lane lies outside a bound
-   * the compiler recorded - bit 1, beside the kernels' `STATUS_CHRONO_RANGE` (bit 0),
-   * so a log line tells the two apart. Never returned by an emitted kernel.
-   */
-  private[execution] val STATUS_INPUT_BOUND: Int = VarkaKernelRunner.STATUS_INPUT_BOUND
-
-  /**
-   * The decline status the evaluator reports when a derived input met a value its
-   * row-engine definition raises on under ANSI - an unrecognised weekday name - bit 2. The
-   * row engine recomputes the batch and raises where a non-null date sits beside the name.
-   */
-  private[execution] val STATUS_DERIVED_INPUT: Int = VarkaKernelRunner.STATUS_DERIVED_INPUT
-
+  // and restore the default in a finally. The decline statuses the evaluator itself reports
+  // are `VarkaKernelRunner.STATUS_INPUT_BOUND` and `STATUS_DERIVED_INPUT`.
   @volatile private[execution] var allocationSchedule: VarkaAllocationSampler.Schedule =
     VarkaAllocationSampler.Schedule.DEFAULT
 

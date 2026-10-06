@@ -28,9 +28,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
 /**
- * Whether a batch goes to the kernel while the shape's kernel warms: always when the kernel is not
- * warmed, and otherwise once the shape's kernel is compiled or nothing is warming it any more
- * ({@link VarkaKernelWarmth}). The first task to meet a cold shape claims it and queues the warm-up
+ * Whether a batch goes to the kernel while the shape's kernel warms: once the shape's kernel is
+ * compiled or nothing is warming it any more ({@link VarkaKernelWarmth}). Asked only by an
+ * evaluator whose kernels are warmed; one that is not never builds this gate and serves its batches
+ * at once. The first task to meet a cold shape claims it and queues the warm-up
  * on a copy of its batch; until the verdict, every batch of the shape in every task takes the row
  * path. A volatile read per batch once the shape is ready.
  */
@@ -44,20 +45,17 @@ public final class VarkaWarmupGate {
   }
 
   private final VarkaKernelRunner runner;
-  private final boolean warmed;
   private final boolean anyNullableInput;
   private final InputWidths inputWidths;
   private final Supplier<String> kernelIdentity;
 
   /**
-   * @param warmed whether this evaluator's kernels are warmed before they serve batches
    * @param anyNullableInput whether any kernel input can hold a null, so that a batch can reach
    *                         the masked driver, which the warm-up then compiles too
    */
-  public VarkaWarmupGate(VarkaKernelRunner runner, boolean warmed, boolean anyNullableInput,
+  public VarkaWarmupGate(VarkaKernelRunner runner, boolean anyNullableInput,
       InputWidths inputWidths, Supplier<String> kernelIdentity) {
     this.runner = runner;
-    this.warmed = warmed;
     this.anyNullableInput = anyNullableInput;
     this.inputWidths = inputWidths;
     this.kernelIdentity = kernelIdentity;
@@ -65,9 +63,6 @@ public final class VarkaWarmupGate {
 
   /** Whether this batch goes to the kernel. Throws the decline the warm-up's copy met. */
   public boolean kernelReady(ColumnarBatch input) {
-    if (!warmed) {
-      return true;
-    }
     VarkaKernelWarmth warmth = runner.warmth;
     if (!warmth.ready() && warmth.tryClaim()) {
       startWarmup(input);

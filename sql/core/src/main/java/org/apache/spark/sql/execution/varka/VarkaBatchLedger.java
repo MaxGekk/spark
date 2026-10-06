@@ -51,7 +51,10 @@ public final class VarkaBatchLedger {
 
   private static final SparkLogger LOG = SparkLoggerFactory.getLogger(VarkaBatchLedger.class);
 
-  private final Map<ColumnarBatch, List<ColumnVector>> openBatches = new HashMap<>();
+  /** The owned vectors of a batch that owns none: a forwarded batch. */
+  public static final ColumnVector[] NO_VECTORS = new ColumnVector[0];
+
+  private final Map<ColumnarBatch, ColumnVector[]> openBatches = new HashMap<>();
   private final List<Runnable> cleanups = new ArrayList<>();
   private BufferAllocator allocator;
   private boolean cleanupRegistered;
@@ -95,13 +98,15 @@ public final class VarkaBatchLedger {
    * Every stage here frees task-lifetime Arrow memory, and each is guarded separately so that one
    * failure cannot skip the others: a throw must not skip the allocator close below, or the child
    * allocator's accounting leaks against the shared root for the JVM's lifetime and the task's
-   * real error is masked (task-21 review, second pass). One try around the whole prologue would
+   * real error is masked (VARKA-21 review, second pass). One try around the whole prologue would
    * satisfy the letter of that and not its point: a throwing batch close would still cost the
    * scratch release and the hook.
    */
   private void completeTask() {
-    for (List<ColumnVector> owned : openBatches.values()) {
-      closeAllQuietly(owned, "a Varka batch left open at task completion");
+    // A snapshot, closed and then cleared: a close that re-entered the ledger would otherwise
+    // modify the map under the iteration and skip the cleanups and the allocator close below.
+    for (ColumnVector[] owned : new ArrayList<>(openBatches.values())) {
+      closeAll(owned, "a Varka batch left open at task completion");
     }
     openBatches.clear();
     for (Runnable cleanup : cleanups) {
@@ -124,9 +129,9 @@ public final class VarkaBatchLedger {
    * caller releases it.
    */
   public ColumnarBatch track(ColumnarBatch batch) {
-    var owned = new ArrayList<ColumnVector>(batch.numCols());
-    for (int c = 0; c < batch.numCols(); c++) {
-      owned.add(batch.column(c));
+    var owned = new ColumnVector[batch.numCols()];
+    for (int c = 0; c < owned.length; c++) {
+      owned[c] = batch.column(c);
     }
     trackOwned(batch, owned);
     return batch;
@@ -148,12 +153,12 @@ public final class VarkaBatchLedger {
       columns[i] = input.column(ordinals[i]);
     }
     var batch = new ColumnarBatch(columns, input.numRows());
-    trackOwned(batch, List.of());
+    trackOwned(batch, NO_VECTORS);
     return batch;
   }
 
   /** Registers {@code batch} as open, owning exactly the vectors in {@code owned}. */
-  public void trackOwned(ColumnarBatch batch, List<ColumnVector> owned) {
+  public void trackOwned(ColumnarBatch batch, ColumnVector[] owned) {
     ensureCleanup();
     openBatches.put(batch, owned);
   }
@@ -172,9 +177,9 @@ public final class VarkaBatchLedger {
    * better here than handing the caller an exception it can do nothing useful with.
    */
   public void release(ColumnarBatch batch) {
-    var owned = openBatches.remove(batch);
+    ColumnVector[] owned = openBatches.remove(batch);
     if (owned != null) {
-      closeAllQuietly(owned, "a Varka output vector on release");
+      closeAll(owned, "a Varka output vector on release");
     } else {
       // Not one of ours - nothing borrowed can be inside, so closing it whole is safe.
       batch.close();
@@ -200,9 +205,9 @@ public final class VarkaBatchLedger {
     }
   }
 
-  /** {@link #closeQuietly} over a collection, guarding each element separately. */
-  public static void closeAllQuietly(Iterable<? extends AutoCloseable> resources, String what) {
-    for (AutoCloseable resource : resources) {
+  /** {@link #closeQuietly} over an array, guarding each element separately. */
+  private static void closeAll(ColumnVector[] resources, String what) {
+    for (ColumnVector resource : resources) {
       closeQuietly(resource, what);
     }
   }

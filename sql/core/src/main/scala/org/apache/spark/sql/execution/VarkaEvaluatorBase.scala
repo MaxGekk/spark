@@ -164,9 +164,9 @@ private[sql] abstract class VarkaEvaluatorBase(
     val n = plan.inputOrdinals.size
     new VarkaKernelRunner(entry, plan.lane, plan.inputOrdinals.toArray,
       Array.tabulate(n)(i => plan.derivedAt(i).map(_.kind).orNull),
-      plan.inputBounds.map(_.inputIndex).toArray, plan.inputBounds.map(_.lo).toArray,
-      plan.inputBounds.map(_.hi).toArray, plan.outputs.size, plan.literals.toArray,
-      plan.longLiterals.toArray, scratch, accounting, VarkaEvaluatorBase.runnerHooks)
+      plan.inputBounds.map(b => new VarkaKernelRunner.Bound(b.inputIndex, b.lo, b.hi)).toArray,
+      plan.outputs.size, plan.literals.toArray, plan.longLiterals.toArray, scratch, accounting,
+      VarkaEvaluatorBase.runnerHooks)
   }
 
   /**
@@ -232,7 +232,7 @@ private[sql] abstract class VarkaEvaluatorBase(
    * stage. Every fallback warning - here and in the exec nodes - says which kernel it gave up
    * on, so a log line identifies both the class and the plan node without correlation.
    * Reading it forces no emission: the shape hash is computed from the IR, not the bytes.
-   * A lazy val (task-21 review): the rendering hashes the canonical IR, and it is constant
+   * A lazy val (VARKA-21 review): the rendering hashes the canonical IR, and it is constant
    * per evaluator, so per-batch fallback paths must not recompute it.
    *
    * The IR renders through `VarkaVectorIR.canonical` rather than `Record.toString` (with the line
@@ -307,7 +307,7 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * The per-batch dispatch every exec node runs (task-21 review, second pass: the
+   * The per-batch dispatch every exec node runs (VARKA-21 review, second pass: the
    * canRun/catch/refuse skeleton had grown into four identical copies): the kernel path under the
    * shared cause accounting ([[VarkaFallbackAccounting]]), with every degradation routed to the
    * caller's fallback.
@@ -361,7 +361,7 @@ private[sql] abstract class VarkaEvaluatorBase(
     }
   }
 
-  private lazy val warmupGate = new VarkaWarmupGate(fusedRunner.get, warmed, anyNullableInput,
+  private lazy val warmupGate = new VarkaWarmupGate(fusedRunner.get, anyNullableInput,
     (input: ColumnarBatch) => inputWidths(input), () => kernelIdentity)
 
   /** Whether this batch goes to the kernel; see [[VarkaWarmupGate]]. */
@@ -394,7 +394,7 @@ private[sql] abstract class VarkaEvaluatorBase(
   }
 
   /**
-   * A batch [[canRun]] refused, counted under its actual cause (task-21 review: the nodes
+   * A batch [[canRun]] refused, counted under its actual cause (VARKA-21 review: the nodes
    * used to label every refusal "input not Arrow-backed"): an emission failure was already
    * counted once per task by the emission catch; an empty batch is served trivially and is
    * no fallback at all; an ineligible plan (defensive - the rule should not have fused it)
@@ -429,8 +429,8 @@ private[sql] abstract class VarkaEvaluatorBase(
   def forwardColumns(input: ColumnarBatch, ordinals: Array[Int]): ColumnarBatch =
     ledger.forwardColumns(input, ordinals)
 
-  protected def trackOwned(batch: ColumnarBatch, owned: Seq[ColumnVector]): Unit =
-    ledger.trackOwned(batch, owned.asJava)
+  protected def trackOwned(batch: ColumnarBatch, owned: Array[ColumnVector]): Unit =
+    ledger.trackOwned(batch, owned)
 
   /**
    * Releases a batch obtained from this evaluator or handed to [[track]]; see
@@ -528,13 +528,6 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   /** Returns the task's Arrow child allocator, creating it on first use. */
   protected def taskAllocator(): BufferAllocator = ledger.allocator()
-
-  /** Fills the runner's source-side argument arrays; see [[VarkaKernelRunner.fill]]. */
-  protected def fillSources(runner: VarkaKernelRunner, input: ColumnarBatch, len: Int): Unit =
-    runner.fill(input, len)
-
-  /** Invokes the emitted loop; see [[VarkaKernelRunner.invoke]]. */
-  protected def invokeFused(runner: VarkaKernelRunner, len: Int): Unit = runner.invoke(len)
 }
 
 private object VarkaEvaluatorBase {

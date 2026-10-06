@@ -58,6 +58,12 @@ public final class VarkaKernelRunner {
    */
   public static final int STATUS_DERIVED_INPUT = 4;
 
+  /**
+   * A kernel input the compiler bounded: its position among the kernel's inputs and the closed
+   * interval every live value must lie in.
+   */
+  public record Bound(int input, int lo, int hi) {}
+
   /** Test hooks, read per batch: a kernel failure injected, a decline forced. */
   public interface Hooks {
     boolean failKernel();
@@ -67,13 +73,9 @@ public final class VarkaKernelRunner {
     VarkaAllocationSampler.Schedule allocationSchedule();
   }
 
-  public final VarkaFusedKernel kernel;
-  /** Bytes of scratch per row this kernel's {@code run} takes; zero for most kernels. */
-  public final int scratchBytesPerRow;
   /** The shape's warm state, shared with every task that runs the shape. */
   public final VarkaKernelWarmth warmth;
   public final String shapeHash;
-  public final String sourceFile;
   public final byte[] classBytes;
   public final LaneType lane;
   public final long[] srcData;
@@ -85,37 +87,34 @@ public final class VarkaKernelRunner {
   public final long[] longArgs;
 
   private final VarkaShapeEntry entry;
+  private final VarkaFusedKernel kernel;
+  /** Bytes of scratch per row the kernel's {@code run} takes; zero for most kernels. */
+  private final int scratchBytesPerRow;
   private final int[] inputOrdinals;
   private final VarkaDerivedKind[] derived;
-  private final int[] boundInputs;
-  private final int[] boundLo;
-  private final int[] boundHi;
+  private final Bound[] bounds;
   private final VarkaKernelScratch scratch;
   private final VarkaFallbackAccounting accounting;
   private final Hooks hooks;
 
   /**
    * @param derived each kernel input's derivation, or null for a column read as it is
-   * @param boundInputs the kernel inputs the compiler bounded, with each one's closed interval in
-   *                    {@code boundLo} and {@code boundHi}
+   * @param bounds the kernel inputs the compiler bounded
    */
   public VarkaKernelRunner(VarkaShapeEntry entry, LaneType lane, int[] inputOrdinals,
-      VarkaDerivedKind[] derived, int[] boundInputs, int[] boundLo, int[] boundHi,
-      int numOutputs, int[] scalarArgs, long[] longArgs, VarkaKernelScratch scratch,
-      VarkaFallbackAccounting accounting, Hooks hooks) {
+      VarkaDerivedKind[] derived, Bound[] bounds, int numOutputs, int[] scalarArgs,
+      long[] longArgs, VarkaKernelScratch scratch, VarkaFallbackAccounting accounting,
+      Hooks hooks) {
     this.entry = entry;
     this.kernel = entry.newKernel();
     this.scratchBytesPerRow = kernel.scratchBytesPerRow();
     this.warmth = entry.warmth();
     this.shapeHash = entry.shapeHash();
-    this.sourceFile = entry.sourceFile();
     this.classBytes = entry.classBytes();
     this.lane = lane;
     this.inputOrdinals = inputOrdinals;
     this.derived = derived;
-    this.boundInputs = boundInputs;
-    this.boundLo = boundLo;
-    this.boundHi = boundHi;
+    this.bounds = bounds;
     this.srcData = new long[inputOrdinals.length];
     this.srcValidity = new long[inputOrdinals.length];
     this.srcNullCount = new int[inputOrdinals.length];
@@ -170,10 +169,15 @@ public final class VarkaKernelRunner {
         scratch.ensureDerived(i, len);
         ArrowBuf data = scratch.derivedData(i);
         ArrowBuf validity = scratch.derivedValidity(i);
-        int nulls = kind == VarkaDerivedKind.TRUNC_LEVEL
-            ? TruncLevelLeaf.fill(acv, len, data.memoryAddress(), validity.memoryAddress())
-            : WeekdayLeaf.fill(acv, len, kind.failOnError, WeekdayLeaf.DEFAULT_PARSER,
-                data.memoryAddress(), validity.memoryAddress());
+        // No default: a derived kind added to the enum is a compile error here, not a silent
+        // trip down the weekday path.
+        int nulls = switch (kind) {
+          case TRUNC_LEVEL ->
+              TruncLevelLeaf.fill(acv, len, data.memoryAddress(), validity.memoryAddress());
+          case WEEKDAY, WEEKDAY_ANSI ->
+              WeekdayLeaf.fill(acv, len, kind.failOnError, WeekdayLeaf.DEFAULT_PARSER,
+                  data.memoryAddress(), validity.memoryAddress());
+        };
         if (nulls == WeekdayLeaf.DECLINED) {
           throw new VarkaBatchDeclined(STATUS_DERIVED_INPUT);
         }
@@ -189,10 +193,10 @@ public final class VarkaKernelRunner {
         srcNullCount[i] = nulls;
       }
     }
-    for (int b = 0; b < boundInputs.length; b++) {
-      int k = boundInputs[b];
-      if (!IntRangeOps.allWithin(srcData[k], srcValidity[k], srcNullCount[k], len, boundLo[b],
-          boundHi[b])) {
+    for (Bound b : bounds) {
+      int k = b.input();
+      if (!IntRangeOps.allWithin(srcData[k], srcValidity[k], srcNullCount[k], len, b.lo(),
+          b.hi())) {
         throw new VarkaBatchDeclined(STATUS_INPUT_BOUND);
       }
     }
@@ -201,7 +205,7 @@ public final class VarkaKernelRunner {
   /**
    * Invokes the emitted loop, marking any catchable throw as {@link VarkaKernelFailure} so the
    * exec nodes' catch can tell a genuine kernel error from a failure in the per-row machinery that
-   * shares the same try (task-21 review). A fatal error passes unmarked. A non-zero status means
+   * shares the same try (VARKA-21 review). A fatal error passes unmarked. A non-zero status means
    * the kernel met a value its lowering is not defined over and declined the batch: the outputs it
    * wrote are not answers, and the batch takes the caller's fallback path, signalled by a throw
    * because that is the one path every caller already routes to the fallback.

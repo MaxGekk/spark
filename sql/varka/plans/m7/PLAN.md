@@ -267,7 +267,7 @@ mechanism beside the random ones, rather than by the luck of 10 draws.
   that never took the guard, null or remainder branch - since 89.6% of Artemis's disagreements
   needed choices between all-interpreted and all-compiled (Table 4, p. 10).
 * **The ghost fallback (275).** A kernel that throws gets a warning, a metric and a JFR event,
-  and its batch reruns on the row path (`VarkaEvaluatorBase.recordKernelFailure`), so a `sql/core`
+  and its batch reruns on the row path (`VarkaFallbackAccounting.kernelFailure`), so a `sql/core`
   test with right answers passes over a broken kernel. Row 275 fails a test on any kernel-failure
   fallback it did not expect, as Spark's own suites turn the codegen fallback off.
 * **A validity bit never set (138).** The harnesses pre-fill output validity with ones, which

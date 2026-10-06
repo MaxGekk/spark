@@ -19,7 +19,7 @@
 package org.apache.spark.sql.execution.varka;
 
 /**
- * Marks a throwable as coming from the emitted kernel invocation itself (task-21 review): the
+ * Marks a throwable as coming from the emitted kernel invocation itself (VARKA-21 review): the
  * exec nodes label their per-batch catch by it, so a catchable failure in the per-row machinery
  * running beside the kernel - a residual or merge projection's compile or evaluation - is not
  * metered as a kernel failure.

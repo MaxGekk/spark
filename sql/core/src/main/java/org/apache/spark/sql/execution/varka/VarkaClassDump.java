@@ -57,7 +57,7 @@ public final class VarkaClassDump {
       try {
         String name = sourceFile.endsWith(".java")
             ? sourceFile.substring(0, sourceFile.length() - ".java".length()) : sourceFile;
-        File target = new File(directory, name + ".class");
+        var target = new File(directory, name + ".class");
         Files.createDirectories(target.toPath().getParent());
         Files.write(target.toPath(), bytes);
         LOG.info("Wrote the Varka kernel class to " + target.getAbsolutePath());

@@ -28,12 +28,12 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelAlloca
 import org.apache.spark.sql.execution.metric.SQLMetric;
 
 /**
- * Per-batch fallback accounting, shared by every Varka evaluator (task-21 review: the nodes carried
- * byte-identical copies of these blocks, which had already begun to drift). Each method counts and
- * events one batch under its actual cause; the caller then takes its own fallback path. Also the
- * species-pollution check: a kernel that boxes still answers correctly, so no fallback path and no
- * differential test can see it - only its allocation rate can, sampled on the schedule
- * {@link VarkaAllocationSampler} explains, never on every batch.
+ * Per-batch fallback accounting, shared by every Varka evaluator (VARKA-21 review: the nodes
+ * carried byte-identical copies of these blocks, which had already begun to drift). Each method
+ * counts and events one batch under its actual cause; the caller then takes its own fallback
+ * path. Also the species-pollution check: a kernel that boxes still answers correctly, so no
+ * fallback path and no differential test can see it - only its allocation rate can, sampled on
+ * the schedule {@link VarkaAllocationSampler} explains, never on every batch.
  *
  * <p>The kernel's identity is rendered only when a line or an event needs it: rendering hashes the
  * canonical IR, which the metered-but-uneventful path must not pay. So it arrives as a supplier,
@@ -85,7 +85,7 @@ public final class VarkaFallbackAccounting {
 
   /**
    * A catchable failure from the per-row machinery running beside the kernel - the residual or
-   * merge projection's compile or evaluation - which the task-21 review split out of the kernel
+   * merge projection's compile or evaluation - which the VARKA-21 review split out of the kernel
    * metric: it is not the kernel's failure, and a throwing lazy re-runs its initializer, so
    * counting it there would inflate the ghost-fallback metric on every batch. Counted under its
    * own bounded cause metric, evented and logged.
@@ -155,7 +155,7 @@ public final class VarkaFallbackAccounting {
   }
 
   /**
-   * Emits the task-22 fallback JFR event, populated only while a recording has it enabled;
+   * Emits the VARKA-22 fallback JFR event, populated only while a recording has it enabled;
    * {@code exceptionClass} is empty for the non-Arrow and declined causes, which are not errors.
    */
   public static void fallbackEvent(String cause, Supplier<String> kernelIdentity,
@@ -170,7 +170,7 @@ public final class VarkaFallbackAccounting {
   }
 
   /** The allocation-sample event; populated only while a recording has it enabled. */
-  public static void allocationEvent(Supplier<String> kernelIdentity, long batchIndex, int rows,
+  private static void allocationEvent(Supplier<String> kernelIdentity, long batchIndex, int rows,
       long allocatedBytes, boolean suspect) {
     var event = new VarkaKernelAllocationEvent();
     if (event.isEnabled()) {
