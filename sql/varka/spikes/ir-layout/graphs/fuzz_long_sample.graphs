@@ -1,0 +1,1655 @@
+graph fuzz_long-0 inputs 1 literals 2 roots 10,19
+0 ColumnRef 0 LONG |
+1 IntNeg FAIL | 0
+2 IntNeg FAIL | 1
+3 LiteralSlot 1 LONG |
+4 Greatest | 3 0
+5 Compare GE | 0 0
+6 LiteralSlot 0 LONG |
+7 IfElse | 5 0 6
+8 Greatest | 4 7
+9 Least | 2 8
+10 GuardedRange -70368744177664 70368744177664 | 9
+11 Compare GT | 3 0
+12 IfElse | 11 0 6
+13 IntNeg WRAP | 3
+14 IntArith MUL WRAP | 12 13
+15 GuardedRange -70368744177664 70368744177664 | 0
+16 IntNeg WRAP | 0
+17 IntArith MUL WRAP | 15 16
+18 IntArith MUL WRAP | 14 17
+19 IntArith ADD WRAP | 18 0
+graph fuzz_long-1 inputs 2 literals 1 roots 1
+0 ColumnRef 1 LONG |
+1 IsNotNull | 0
+graph fuzz_long-2 inputs 2 literals 0 roots 14
+0 ColumnRef 1 LONG |
+1 Compare EQ | 0 0
+2 ColumnRef 0 LONG |
+3 Compare EQ | 2 0
+4 And | 1 3
+5 IsNotNull | 0
+6 Or | 4 5
+7 Least | 2 2
+8 IntArith ADD FAIL | 2 0
+9 Compare LE | 7 8
+10 Compare GT | 2 0
+11 Compare GE | 0 0
+12 And | 10 11
+13 And | 9 12
+14 Or | 6 13
+graph fuzz_long-3 inputs 2 literals 0 roots 4
+0 ColumnRef 0 LONG |
+1 ColumnRef 1 LONG |
+2 IntArith MUL WRAP | 0 1
+3 IntArith ADD WRAP | 2 0
+4 IntNeg WRAP | 3
+graph fuzz_long-4 inputs 3 literals 2 roots 10,13,19
+0 ColumnRef 2 LONG |
+1 LiteralSlot 0 LONG |
+2 IntArith ADD FAIL | 0 1
+3 ColumnRef 1 LONG |
+4 IntArith SUB WRAP | 3 3
+5 Greatest | 2 4
+6 ConstDivide -60 70368744177665 | 3
+7 LiteralSlot 1 LONG |
+8 IntNeg WRAP | 7
+9 IntArith SUB NULL | 6 8
+10 Least | 5 9
+11 Least | 3 0
+12 ConstDivide 1000 70368744177665 | 11
+13 ConstDivide -12 70368744178 | 12
+14 ColumnRef 0 LONG |
+15 IntNeg FAIL | 14
+16 GuardedRange -70368744177664 70368744177664 | 15
+17 ConstDivide 1000000000 70368744177665 | 3
+18 IntNeg WRAP | 17
+19 Least | 16 18
+graph fuzz_long-5 inputs 1 literals 1 roots 1,3
+0 ColumnRef 0 LONG |
+1 Least | 0 0
+2 Compare GT | 0 0
+3 IfElse | 2 0 0
+graph fuzz_long-6 inputs 2 literals 0 roots 3
+0 ColumnRef 1 LONG |
+1 IntNeg FAIL | 0
+2 ColumnRef 0 LONG |
+3 IntArith SUB NULL | 1 2
+graph fuzz_long-7 inputs 1 literals 0 roots 1,2,3
+0 ColumnRef 0 LONG |
+1 ConstDivide 1000000 70368744177665 | 0
+2 IntNeg FAIL | 0
+3 Least | 0 0
+graph fuzz_long-8 inputs 2 literals 2 roots 1
+0 ColumnRef 0 LONG |
+1 IsNotNull | 0
+graph fuzz_long-9 inputs 3 literals 1 roots 7,12,19
+0 ColumnRef 1 LONG |
+1 LiteralSlot 0 LONG |
+2 Least | 0 1
+3 IntArith MUL WRAP | 0 0
+4 Greatest | 2 3
+5 GuardedRange -9223372036854775808 9223372036854775807 | 4
+6 ColumnRef 0 LONG |
+7 IntArith ADD WRAP | 5 6
+8 IntArith ADD NULL | 6 0
+9 ColumnRef 2 LONG |
+10 IntArith SUB FAIL | 8 9
+11 ConstDivide 86400000000 211106232532993 | 10
+12 IntArith ADD FAIL | 11 6
+13 IntArith MUL WRAP | 6 1
+14 GuardedRange -9223372036854775808 9223372036854775807 | 13
+15 GuardedRange -9223372036854775808 9223372036854775807 | 14
+16 Least | 0 9
+17 IntArith ADD WRAP | 16 0
+18 ConstDivide 1000000 140737488355329 | 17
+19 Greatest | 15 18
+graph fuzz_long-10 inputs 1 literals 0 roots 3
+0 ColumnRef 0 LONG |
+1 Compare GE | 0 0
+2 Compare LT | 0 0
+3 Or | 1 2
+graph fuzz_long-11 inputs 1 literals 0 roots 3,5
+0 ColumnRef 0 LONG |
+1 IntArith MUL WRAP | 0 0
+2 IntNeg FAIL | 0
+3 IntArith ADD WRAP | 1 2
+4 IntArith ADD FAIL | 0 0
+5 IntArith ADD WRAP | 4 1
+graph fuzz_long-12 inputs 2 literals 2 roots 7,12
+0 ColumnRef 1 LONG |
+1 ColumnRef 0 LONG |
+2 Compare LT | 0 1
+3 Not | 2
+4 IntArith MUL WRAP | 1 0
+5 Compare GT | 0 0
+6 IfElse | 5 0 0
+7 IfElse | 3 4 6
+8 Least | 0 1
+9 LiteralSlot 0 LONG |
+10 IntNeg FAIL | 9
+11 IntArith SUB NULL | 8 10
+12 GuardedRange -70368745226240 70368745226240 | 11
+graph fuzz_long-13 inputs 3 literals 2 roots 1,4,6
+0 LiteralSlot 1 LONG |
+1 ConstDivide 3600000000000 1048577 | 0
+2 ColumnRef 0 LONG |
+3 ColumnRef 1 LONG |
+4 Least | 2 3
+5 LiteralSlot 0 LONG |
+6 GuardedRange -1048576 1048576 | 5
+graph fuzz_long-14 inputs 3 literals 1 roots 8,12,15
+0 ColumnRef 2 LONG |
+1 ColumnRef 0 LONG |
+2 Compare GT | 0 1
+3 Not | 2
+4 LiteralSlot 0 LONG |
+5 GuardedRange -1048576 1048576 | 4
+6 ConstDivide 1000000000 1048577 | 4
+7 IfElse | 3 5 6
+8 NarrowLane | 7
+9 ColumnRef 1 LONG |
+10 Compare GE | 9 1
+11 IfElse | 10 0 4
+12 ConstDivide 2 70368744177665 | 11
+13 Least | 1 1
+14 ConstDivide 60000000000 70368744177665 | 0
+15 Least | 13 14
+graph fuzz_long-15 inputs 3 literals 0 roots 1
+0 ColumnRef 0 LONG |
+1 IntNeg WRAP | 0
+graph fuzz_long-16 inputs 1 literals 0 roots 7
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ConstDivide 3600000000000 70368744177665 | 0
+3 Greatest | 1 2
+4 IntArith ADD WRAP | 0 0
+5 IntNeg FAIL | 0
+6 IntArith SUB FAIL | 4 5
+7 Compare EQ | 3 6
+graph fuzz_long-17 inputs 2 literals 2 roots 15
+0 LiteralSlot 0 LONG |
+1 ColumnRef 1 LONG |
+2 Greatest | 0 1
+3 IntNeg FAIL | 2
+4 GuardedRange -70368744177664 70368744177664 | 3
+5 ColumnRef 0 LONG |
+6 Compare LE | 5 0
+7 IfElse | 6 0 5
+8 Compare LE | 1 5
+9 LiteralSlot 1 LONG |
+10 IfElse | 8 1 9
+11 Greatest | 7 10
+12 Least | 5 1
+13 IntArith ADD WRAP | 12 5
+14 IntArith MUL WRAP | 11 13
+15 Greatest | 4 14
+graph fuzz_long-18 inputs 3 literals 1 roots 6
+0 LiteralSlot 0 LONG |
+1 ColumnRef 2 LONG |
+2 IntArith MUL WRAP | 0 1
+3 ColumnRef 1 LONG |
+4 IntArith SUB WRAP | 2 3
+5 IntNeg WRAP | 4
+6 IntArith SUB WRAP | 5 1
+graph fuzz_long-19 inputs 2 literals 0 roots 16,20,0
+0 ColumnRef 0 LONG |
+1 ColumnRef 1 LONG |
+2 IntArith ADD WRAP | 0 1
+3 ConstDivide 60 70368744177665 | 1
+4 Compare EQ | 2 3
+5 IntArith ADD NULL | 0 0
+6 IntArith SUB FAIL | 0 0
+7 Compare EQ | 5 6
+8 And | 4 7
+9 Compare LT | 0 1
+10 IfElse | 9 1 1
+11 GuardedRange -70368744177664 70368744177664 | 10
+12 IntNeg FAIL | 0
+13 ConstDivide 7 70368744177665 | 1
+14 Least | 12 13
+15 IfElse | 8 11 14
+16 GuardedRange -70368744177664 70368744177664 | 15
+17 ConstDivide 7 70368744177665 | 0
+18 Least | 17 0
+19 GuardedRange -70368744177664 70368744177664 | 18
+20 IntArith MUL WRAP | 19 1
+graph fuzz_long-20 inputs 3 literals 0 roots 14,21
+0 ColumnRef 2 LONG |
+1 IntArith ADD FAIL | 0 0
+2 Least | 0 0
+3 IntArith MUL WRAP | 1 2
+4 GuardedRange -9223372036854775808 9223372036854775807 | 3
+5 ColumnRef 1 LONG |
+6 IntArith ADD FAIL | 5 0
+7 ColumnRef 0 LONG |
+8 IntArith SUB NULL | 7 5
+9 Least | 6 8
+10 IntArith MUL WRAP | 0 7
+11 GuardedRange -70368744177664 70368744177664 | 7
+12 Greatest | 10 11
+13 IntArith SUB WRAP | 9 12
+14 Least | 4 13
+15 IsNotNull | 5
+16 GuardedRange -70368744177664 70368744177664 | 5
+17 IntNeg WRAP | 16
+18 IntArith MUL WRAP | 7 0
+19 IntArith MUL WRAP | 18 0
+20 IfElse | 15 17 19
+21 GuardedRange -9223372036854775808 9223372036854775807 | 20
+graph fuzz_long-21 inputs 1 literals 2 roots 4
+0 ColumnRef 0 LONG |
+1 IntNeg FAIL | 0
+2 Compare LE | 0 0
+3 IfElse | 2 0 0
+4 Least | 1 3
+graph fuzz_long-22 inputs 2 literals 1 roots 1
+0 ColumnRef 0 LONG |
+1 IsNotNull | 0
+graph fuzz_long-23 inputs 2 literals 0 roots 4,7
+0 ColumnRef 1 LONG |
+1 ConstDivide 1000000 70368744177665 | 0
+2 ColumnRef 0 LONG |
+3 IntArith MUL WRAP | 0 2
+4 Least | 1 3
+5 ConstDivide 3600000000000 70368744177665 | 2
+6 IntArith SUB NULL | 0 2
+7 IntArith SUB FAIL | 5 6
+graph fuzz_long-24 inputs 2 literals 0 roots 7,10
+0 ColumnRef 0 LONG |
+1 Least | 0 0
+2 IntNeg WRAP | 1
+3 ConstDivide -12 70368744177665 | 0
+4 ColumnRef 1 LONG |
+5 Greatest | 0 4
+6 Least | 3 5
+7 IntArith SUB WRAP | 2 6
+8 IntArith ADD FAIL | 0 0
+9 IntArith SUB WRAP | 8 0
+10 ConstDivide 7 211106232532993 | 9
+graph fuzz_long-25 inputs 1 literals 2 roots 1,3
+0 ColumnRef 0 LONG |
+1 IntArith MUL WRAP | 0 0
+2 Compare LE | 0 0
+3 IfElse | 2 0 0
+graph fuzz_long-26 inputs 1 literals 1 roots 4
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 Compare LT | 0 1
+3 IfElse | 2 1 0
+4 ConstDivide 1000 70368744177665 | 3
+graph fuzz_long-27 inputs 1 literals 0 roots 1,2
+0 ColumnRef 0 LONG |
+1 IntNeg WRAP | 0
+2 IntArith SUB WRAP | 0 0
+graph fuzz_long-28 inputs 1 literals 2 roots 4,7
+0 ColumnRef 0 LONG |
+1 Compare LE | 0 0
+2 LiteralSlot 1 LONG |
+3 IfElse | 1 2 0
+4 GuardedRange -70368744177664 70368744177664 | 3
+5 IntArith ADD FAIL | 0 0
+6 IntArith ADD NULL | 0 2
+7 IntArith ADD NULL | 5 6
+graph fuzz_long-29 inputs 3 literals 2 roots 21,23,0
+0 ColumnRef 1 LONG |
+1 ColumnRef 2 LONG |
+2 IntArith MUL WRAP | 0 1
+3 GuardedRange -9223372036854775808 9223372036854775807 | 2
+4 ColumnRef 0 LONG |
+5 Compare GE | 4 0
+6 LiteralSlot 1 LONG |
+7 IfElse | 5 6 0
+8 IntArith ADD NULL | 4 0
+9 Least | 7 8
+10 Greatest | 3 9
+11 LiteralSlot 0 LONG |
+12 Least | 11 1
+13 Least | 12 2
+14 IntArith SUB WRAP | 1 0
+15 IntArith ADD FAIL | 4 11
+16 Compare GT | 14 15
+17 IntArith MUL WRAP | 11 11
+18 IntArith ADD FAIL | 1 0
+19 IfElse | 16 17 18
+20 IntArith SUB WRAP | 13 19
+21 Least | 10 20
+22 ConstDivide 1000 1048577 | 6
+23 NarrowLane | 22
+graph fuzz_long-30 inputs 3 literals 1 roots 20
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 IntNeg FAIL | 1
+3 ColumnRef 2 LONG |
+4 ColumnRef 1 LONG |
+5 Compare EQ | 3 4
+6 IfElse | 5 0 0
+7 IntArith SUB NULL | 4 4
+8 IntArith ADD FAIL | 6 7
+9 Least | 2 8
+10 IsNotNull | 3
+11 Compare LT | 4 3
+12 IfElse | 11 4 0
+13 IntArith ADD FAIL | 12 0
+14 LiteralSlot 0 LONG |
+15 IntArith ADD NULL | 14 14
+16 IntArith SUB NULL | 14 0
+17 IntArith MUL WRAP | 15 16
+18 IfElse | 10 13 17
+19 Compare GE | 9 18
+20 Not | 19
+graph fuzz_long-31 inputs 3 literals 0 roots 7,16
+0 ColumnRef 2 LONG |
+1 IntArith SUB WRAP | 0 0
+2 ColumnRef 1 LONG |
+3 IntNeg WRAP | 2
+4 Greatest | 1 3
+5 IntArith MUL WRAP | 0 0
+6 IntNeg WRAP | 5
+7 Least | 4 6
+8 ColumnRef 0 LONG |
+9 Greatest | 2 8
+10 ConstDivide 3 70368744177665 | 2
+11 Least | 9 10
+12 Greatest | 2 0
+13 IntArith SUB FAIL | 2 2
+14 IntArith MUL WRAP | 12 13
+15 Least | 11 14
+16 GuardedRange -9223372036854775808 9223372036854775807 | 15
+graph fuzz_long-32 inputs 3 literals 0 roots 2
+0 ColumnRef 0 LONG |
+1 ColumnRef 2 LONG |
+2 Least | 0 1
+graph fuzz_long-33 inputs 2 literals 2 roots 7,13
+0 LiteralSlot 1 LONG |
+1 IntNeg WRAP | 0
+2 GuardedRange -1048576 1048576 | 1
+3 ColumnRef 0 LONG |
+4 ConstDivide 1000000000 70368744177665 | 3
+5 ConstDivide 3 70369 | 4
+6 IntArith ADD WRAP | 2 5
+7 NarrowLane | 6
+8 LiteralSlot 0 LONG |
+9 ColumnRef 1 LONG |
+10 IntArith ADD FAIL | 8 9
+11 IntNeg WRAP | 3
+12 IntArith MUL WRAP | 10 11
+13 IntArith ADD WRAP | 12 8
+graph fuzz_long-34 inputs 2 literals 1 roots 8,14
+0 ColumnRef 1 LONG |
+1 LiteralSlot 0 LONG |
+2 IntArith SUB NULL | 0 1
+3 IntArith SUB FAIL | 2 0
+4 ColumnRef 0 LONG |
+5 Compare LT | 4 4
+6 IfElse | 5 1 0
+7 IntArith SUB WRAP | 6 4
+8 IntArith MUL WRAP | 3 7
+9 Compare GT | 0 1
+10 Or | 9 5
+11 IntArith ADD FAIL | 0 1
+12 GuardedRange -70368744177664 70368744177664 | 4
+13 IfElse | 10 11 12
+14 IntNeg FAIL | 13
+graph fuzz_long-35 inputs 2 literals 0 roots 15
+0 ColumnRef 0 LONG |
+1 ColumnRef 1 LONG |
+2 Least | 0 1
+3 Greatest | 1 1
+4 Greatest | 2 3
+5 Greatest | 0 1
+6 Compare GE | 1 1
+7 IfElse | 6 1 1
+8 Least | 5 7
+9 Compare LT | 4 8
+10 ConstDivide 3600000000000 70368744177665 | 1
+11 ConstDivide 2 20 | 10
+12 IntArith MUL WRAP | 1 1
+13 GuardedRange -9223372036854775808 9223372036854775807 | 12
+14 Compare LT | 11 13
+15 And | 9 14
+graph fuzz_long-36 inputs 3 literals 0 roots 11,14,19
+0 ColumnRef 2 LONG |
+1 ColumnRef 0 LONG |
+2 IntArith ADD WRAP | 0 1
+3 GuardedRange -140737488355328 140737488355328 | 2
+4 IntArith MUL WRAP | 1 0
+5 ColumnRef 1 LONG |
+6 ConstDivide -60 70368744177665 | 5
+7 Compare EQ | 4 6
+8 Least | 5 1
+9 Least | 1 1
+10 IfElse | 7 8 9
+11 IntArith ADD FAIL | 3 10
+12 GuardedRange -70368744177664 70368744177664 | 1
+13 ConstDivide 3600000000000 70368744177665 | 12
+14 IntArith ADD FAIL | 13 0
+15 IsNotNull | 5
+16 ConstDivide 3 70368744177665 | 0
+17 GuardedRange -70368744177664 70368744177664 | 5
+18 IfElse | 15 16 17
+19 GuardedRange -70368744177664 70368744177664 | 18
+graph fuzz_long-37 inputs 1 literals 2 roots 1
+0 ColumnRef 0 LONG |
+1 IntArith MUL WRAP | 0 0
+graph fuzz_long-38 inputs 1 literals 1 roots 4,9,11
+0 LiteralSlot 0 LONG |
+1 ColumnRef 0 LONG |
+2 IntArith SUB FAIL | 0 1
+3 ConstDivide 60000000000 70368745226241 | 2
+4 NarrowLane | 3
+5 Compare GT | 1 1
+6 Not | 5
+7 Greatest | 1 1
+8 Least | 1 1
+9 IfElse | 6 7 8
+10 Greatest | 0 1
+11 GuardedRange -70368744177664 70368744177664 | 10
+graph fuzz_long-39 inputs 1 literals 0 roots 2,3
+0 ColumnRef 0 LONG |
+1 Compare GT | 0 0
+2 IfElse | 1 0 0
+3 IntArith MUL WRAP | 0 0
+graph fuzz_long-40 inputs 2 literals 0 roots 2,5
+0 ColumnRef 0 LONG |
+1 IntArith SUB NULL | 0 0
+2 IntNeg FAIL | 1
+3 ColumnRef 1 LONG |
+4 IntArith MUL WRAP | 3 3
+5 GuardedRange -9223372036854775808 9223372036854775807 | 4
+graph fuzz_long-41 inputs 3 literals 2 roots 2
+0 ColumnRef 1 LONG |
+1 IsNotNull | 0
+2 Not | 1
+graph fuzz_long-42 inputs 1 literals 1 roots 1,3
+0 ColumnRef 0 LONG |
+1 Greatest | 0 0
+2 LiteralSlot 0 LONG |
+3 Greatest | 0 2
+graph fuzz_long-43 inputs 1 literals 0 roots 3
+0 ColumnRef 0 LONG |
+1 Compare EQ | 0 0
+2 IfElse | 1 0 0
+3 GuardedRange -70368744177664 70368744177664 | 2
+graph fuzz_long-44 inputs 1 literals 2 roots 7
+0 ColumnRef 0 LONG |
+1 Least | 0 0
+2 GuardedRange -70368744177664 70368744177664 | 1
+3 LiteralSlot 1 LONG |
+4 IntArith ADD FAIL | 3 0
+5 Greatest | 0 0
+6 IntArith MUL WRAP | 4 5
+7 Least | 2 6
+graph fuzz_long-45 inputs 3 literals 1 roots 4,5
+0 ColumnRef 0 LONG |
+1 ColumnRef 1 LONG |
+2 Compare GE | 0 1
+3 ColumnRef 2 LONG |
+4 IfElse | 2 3 3
+5 GuardedRange -70368744177664 70368744177664 | 0
+graph fuzz_long-46 inputs 3 literals 1 roots 7
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 Compare LE | 0 1
+3 ColumnRef 1 LONG |
+4 Compare EQ | 1 3
+5 And | 2 4
+6 IsNotNull | 0
+7 And | 5 6
+graph fuzz_long-47 inputs 3 literals 0 roots 2
+0 ColumnRef 0 LONG |
+1 ColumnRef 2 LONG |
+2 Least | 0 1
+graph fuzz_long-48 inputs 1 literals 2 roots 4,6,8
+0 ColumnRef 0 LONG |
+1 IntNeg FAIL | 0
+2 LiteralSlot 0 LONG |
+3 ConstDivide 60000000000 1048577 | 2
+4 IntArith SUB FAIL | 1 3
+5 IntArith SUB WRAP | 0 0
+6 ConstDivide 2 140737488355329 | 5
+7 LiteralSlot 1 LONG |
+8 IntArith ADD NULL | 1 7
+graph fuzz_long-49 inputs 2 literals 1 roots 15
+0 ColumnRef 1 LONG |
+1 Greatest | 0 0
+2 LiteralSlot 0 LONG |
+3 IntArith ADD WRAP | 2 0
+4 Greatest | 1 3
+5 GuardedRange -70368745226240 70368745226240 | 4
+6 IntNeg WRAP | 5
+7 IntArith ADD NULL | 0 2
+8 IntNeg FAIL | 7
+9 ColumnRef 0 LONG |
+10 IntNeg WRAP | 9
+11 Least | 9 9
+12 Least | 10 11
+13 Greatest | 8 12
+14 GuardedRange -70368745226240 70368745226240 | 13
+15 Compare GT | 6 14
+graph fuzz_long-50 inputs 2 literals 1 roots 6
+0 LiteralSlot 0 LONG |
+1 ColumnRef 1 LONG |
+2 IntArith MUL WRAP | 0 1
+3 ColumnRef 0 LONG |
+4 IntArith SUB FAIL | 3 3
+5 IntArith SUB WRAP | 2 4
+6 IntArith SUB WRAP | 5 3
+graph fuzz_long-51 inputs 2 literals 0 roots 19,0
+0 ColumnRef 1 LONG |
+1 Compare LT | 0 0
+2 ColumnRef 0 LONG |
+3 Compare GT | 0 2
+4 Or | 1 3
+5 Not | 4
+6 IntArith ADD WRAP | 0 2
+7 Least | 2 0
+8 Compare LT | 6 7
+9 Not | 8
+10 And | 5 9
+11 IntNeg WRAP | 2
+12 ConstDivide 1000000000 70368744177665 | 2
+13 Least | 11 12
+14 GuardedRange -70368744177664 70368744177664 | 13
+15 ConstDivide 3 70368744177665 | 2
+16 IntNeg FAIL | 15
+17 ConstDivide 60 70369 | 12
+18 IntArith MUL WRAP | 16 17
+19 IfElse | 10 14 18
+graph fuzz_long-52 inputs 3 literals 2 roots 17,23
+0 ColumnRef 0 LONG |
+1 ColumnRef 2 LONG |
+2 IntArith SUB NULL | 0 1
+3 LiteralSlot 1 LONG |
+4 ColumnRef 1 LONG |
+5 Least | 3 4
+6 IntArith MUL WRAP | 2 5
+7 LiteralSlot 0 LONG |
+8 IntArith MUL WRAP | 0 7
+9 IntArith ADD WRAP | 8 4
+10 IntArith MUL WRAP | 6 9
+11 GuardedRange -70368744177664 70368744177664 | 4
+12 Least | 1 4
+13 Greatest | 11 12
+14 Least | 0 0
+15 IntNeg FAIL | 14
+16 Least | 13 15
+17 IntArith MUL WRAP | 10 16
+18 GuardedRange -1048576 1048576 | 3
+19 Compare GT | 1 1
+20 IfElse | 19 1 4
+21 Greatest | 18 20
+22 IntArith ADD FAIL | 21 7
+23 Least | 22 4
+graph fuzz_long-53 inputs 1 literals 2 roots 3,8,11
+0 ColumnRef 0 LONG |
+1 IntArith ADD FAIL | 0 0
+2 IntNeg WRAP | 0
+3 IntArith MUL WRAP | 1 2
+4 LiteralSlot 0 LONG |
+5 GuardedRange -1048576 1048576 | 4
+6 LiteralSlot 1 LONG |
+7 Greatest | 0 6
+8 IntArith MUL WRAP | 5 7
+9 Least | 0 0
+10 IntArith ADD WRAP | 4 0
+11 IntArith MUL WRAP | 9 10
+graph fuzz_long-54 inputs 2 literals 1 roots 10,15
+0 ColumnRef 1 LONG |
+1 IsNotNull | 0
+2 ColumnRef 0 LONG |
+3 Least | 2 0
+4 IntArith MUL WRAP | 2 2
+5 IfElse | 1 3 4
+6 LiteralSlot 0 LONG |
+7 GuardedRange -1048576 1048576 | 6
+8 Greatest | 2 0
+9 IntArith MUL WRAP | 7 8
+10 Greatest | 5 9
+11 IntNeg FAIL | 0
+12 GuardedRange -70368744177664 70368744177664 | 11
+13 IntArith SUB NULL | 0 0
+14 GuardedRange -140737488355328 140737488355328 | 13
+15 Least | 12 14
+graph fuzz_long-55 inputs 1 literals 0 roots 4
+0 ColumnRef 0 LONG |
+1 IntNeg FAIL | 0
+2 Compare EQ | 0 0
+3 IfElse | 2 0 0
+4 IntArith ADD NULL | 1 3
+graph fuzz_long-56 inputs 2 literals 2 roots 10
+0 ColumnRef 1 LONG |
+1 Greatest | 0 0
+2 ColumnRef 0 LONG |
+3 IntArith ADD WRAP | 1 2
+4 LiteralSlot 0 LONG |
+5 IntArith SUB FAIL | 3 4
+6 LiteralSlot 1 LONG |
+7 Greatest | 6 4
+8 IntNeg FAIL | 7
+9 IntArith ADD WRAP | 8 0
+10 Compare EQ | 5 9
+graph fuzz_long-57 inputs 3 literals 2 roots 2
+0 LiteralSlot 0 LONG |
+1 ConstDivide 2 1048577 | 0
+2 NarrowLane | 1
+graph fuzz_long-58 inputs 1 literals 1 roots 6,12
+0 ColumnRef 0 LONG |
+1 Compare EQ | 0 0
+2 Not | 1
+3 IntArith ADD WRAP | 0 0
+4 LiteralSlot 0 LONG |
+5 ConstDivide 3600000000000 1048577 | 4
+6 IfElse | 2 3 5
+7 IntNeg FAIL | 4
+8 IntArith SUB WRAP | 0 0
+9 Compare LT | 7 8
+10 IntArith MUL WRAP | 0 0
+11 GuardedRange -70368744177664 70368744177664 | 0
+12 IfElse | 9 10 11
+graph fuzz_long-59 inputs 3 literals 0 roots 8
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ConstDivide 7 70368744177665 | 1
+3 ColumnRef 1 LONG |
+4 IntArith SUB NULL | 3 3
+5 Least | 0 0
+6 IntArith MUL WRAP | 4 5
+7 Compare LT | 2 6
+8 Not | 7
+graph fuzz_long-60 inputs 1 literals 2 roots 7
+0 ColumnRef 0 LONG |
+1 IntArith SUB FAIL | 0 0
+2 IntNeg WRAP | 1
+3 IntNeg FAIL | 2
+4 LiteralSlot 1 LONG |
+5 IntArith ADD NULL | 1 4
+6 GuardedRange -140737489403904 140737489403904 | 5
+7 IntArith MUL WRAP | 3 6
+graph fuzz_long-61 inputs 2 literals 1 roots 2,5,9
+0 ColumnRef 0 LONG |
+1 IntArith ADD FAIL | 0 0
+2 IntNeg FAIL | 1
+3 LiteralSlot 0 LONG |
+4 IntArith ADD WRAP | 0 3
+5 GuardedRange -70368745226240 70368745226240 | 4
+6 ColumnRef 1 LONG |
+7 IntArith MUL WRAP | 3 6
+8 ConstDivide 2 70368744177665 | 0
+9 Least | 7 8
+graph fuzz_long-62 inputs 3 literals 1 roots 5,7
+0 LiteralSlot 0 LONG |
+1 ColumnRef 1 LONG |
+2 Least | 0 1
+3 ColumnRef 0 LONG |
+4 Least | 3 3
+5 Least | 2 4
+6 Least | 3 0
+7 IntArith ADD WRAP | 6 1
+graph fuzz_long-63 inputs 2 literals 0 roots 3
+0 ColumnRef 1 LONG |
+1 IntNeg FAIL | 0
+2 Greatest | 0 0
+3 IntArith MUL WRAP | 1 2
+graph fuzz_long-64 inputs 3 literals 2 roots 2
+0 ColumnRef 2 LONG |
+1 ColumnRef 0 LONG |
+2 IntArith MUL WRAP | 0 1
+graph fuzz_long-65 inputs 1 literals 1 roots 8
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 IntArith SUB NULL | 1 1
+3 ConstDivide 7 70368744177665 | 0
+4 LiteralSlot 0 LONG |
+5 Greatest | 0 4
+6 Greatest | 3 5
+7 IntArith ADD FAIL | 2 6
+8 GuardedRange -211106232532992 211106232532992 | 7
+graph fuzz_long-66 inputs 2 literals 1 roots 3
+0 ColumnRef 0 LONG |
+1 Greatest | 0 0
+2 IntNeg FAIL | 0
+3 Compare GT | 1 2
+graph fuzz_long-67 inputs 2 literals 0 roots 11,20
+0 ColumnRef 0 LONG |
+1 IntArith SUB WRAP | 0 0
+2 IntArith ADD WRAP | 1 0
+3 ColumnRef 1 LONG |
+4 Compare LE | 3 3
+5 Compare EQ | 3 0
+6 And | 4 5
+7 Least | 3 3
+8 ConstDivide 60 70368744177665 | 3
+9 IfElse | 6 7 8
+10 IntArith SUB WRAP | 2 9
+11 ConstDivide -12 281474976710657 | 10
+12 IntNeg WRAP | 0
+13 IntArith ADD FAIL | 12 0
+14 GuardedRange -70368744177664 70368744177664 | 0
+15 ConstDivide 2 70368744177665 | 14
+16 Compare LE | 13 15
+17 Least | 3 0
+18 Least | 17 3
+19 IfElse | 16 18 0
+20 IntArith SUB NULL | 19 0
+graph fuzz_long-68 inputs 2 literals 2 roots 2,3
+0 LiteralSlot 1 LONG |
+1 ColumnRef 0 LONG |
+2 Greatest | 0 1
+3 IntArith MUL WRAP | 1 1
+graph fuzz_long-69 inputs 1 literals 1 roots 8,18,20
+0 ColumnRef 0 LONG |
+1 Compare GT | 0 0
+2 IfElse | 1 0 0
+3 GuardedRange -70368744177664 70368744177664 | 0
+4 Least | 2 3
+5 IntArith SUB NULL | 0 0
+6 ConstDivide 1000000 70368744177665 | 0
+7 Greatest | 5 6
+8 Greatest | 4 7
+9 LiteralSlot 0 LONG |
+10 IntNeg FAIL | 9
+11 ConstDivide 3 70368744177665 | 0
+12 Compare GT | 10 11
+13 ConstDivide 86400000000 70368744177665 | 0
+14 Least | 0 9
+15 IfElse | 12 13 14
+16 Least | 0 0
+17 IntArith SUB FAIL | 16 0
+18 Greatest | 15 17
+19 IntArith MUL WRAP | 9 9
+20 IntArith SUB NULL | 19 0
+graph fuzz_long-70 inputs 1 literals 1 roots 9,20,0
+0 ColumnRef 0 LONG |
+1 Least | 0 0
+2 ConstDivide -60 70368744177665 | 1
+3 ConstDivide 60000000000 1172812402962 | 2
+4 LiteralSlot 0 LONG |
+5 ConstDivide 3 1048577 | 4
+6 IntArith SUB FAIL | 5 4
+7 ConstDivide 1000 1398102 | 6
+8 IntArith SUB NULL | 3 7
+9 NarrowLane | 8
+10 ConstDivide 2 70368744177665 | 0
+11 IntNeg FAIL | 0
+12 Compare GE | 10 11
+13 Greatest | 0 0
+14 ConstDivide 1000 1048577 | 4
+15 IfElse | 12 13 14
+16 GuardedRange -70368744177664 70368744177664 | 15
+17 IntNeg WRAP | 0
+18 Least | 17 11
+19 Greatest | 18 0
+20 IntArith MUL WRAP | 16 19
+graph fuzz_long-71 inputs 1 literals 0 roots 12
+0 ColumnRef 0 LONG |
+1 IntNeg WRAP | 0
+2 IntArith SUB WRAP | 1 0
+3 Least | 0 0
+4 IntNeg FAIL | 3
+5 Compare GT | 2 4
+6 ConstDivide 1000 70368744177665 | 0
+7 IntArith SUB NULL | 0 0
+8 Greatest | 6 7
+9 IntArith SUB FAIL | 0 0
+10 IntArith ADD WRAP | 9 0
+11 Compare EQ | 8 10
+12 Or | 5 11
+graph fuzz_long-72 inputs 1 literals 2 roots 9
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 GuardedRange -70368744177664 70368744177664 | 1
+3 LiteralSlot 0 LONG |
+4 IntArith SUB NULL | 1 3
+5 Greatest | 2 4
+6 IntArith ADD FAIL | 0 0
+7 IntNeg FAIL | 6
+8 IntArith SUB NULL | 7 0
+9 Least | 5 8
+graph fuzz_long-73 inputs 3 literals 2 roots 4
+0 LiteralSlot 1 LONG |
+1 Greatest | 0 0
+2 LiteralSlot 0 LONG |
+3 ConstDivide 3600000000000 1048577 | 2
+4 IntArith ADD NULL | 1 3
+graph fuzz_long-74 inputs 3 literals 1 roots 6
+0 LiteralSlot 0 LONG |
+1 ConstDivide 86400000000 1048577 | 0
+2 ColumnRef 2 LONG |
+3 ColumnRef 1 LONG |
+4 IntArith SUB WRAP | 2 3
+5 Compare LT | 1 4
+6 Not | 5
+graph fuzz_long-75 inputs 3 literals 1 roots 12
+0 ColumnRef 0 LONG |
+1 IntArith MUL WRAP | 0 0
+2 ColumnRef 2 LONG |
+3 ConstDivide 2 70368744177665 | 2
+4 Greatest | 1 3
+5 IntNeg WRAP | 4
+6 ColumnRef 1 LONG |
+7 GuardedRange -70368744177664 70368744177664 | 6
+8 LiteralSlot 0 LONG |
+9 Greatest | 8 6
+10 Least | 7 9
+11 IntArith ADD NULL | 10 8
+12 IntArith ADD WRAP | 5 11
+graph fuzz_long-76 inputs 1 literals 0 roots 1,2
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 IntArith MUL WRAP | 0 0
+graph fuzz_long-77 inputs 2 literals 2 roots 7
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ColumnRef 1 LONG |
+3 LiteralSlot 0 LONG |
+4 Compare LE | 2 3
+5 IfElse | 4 2 0
+6 IntArith SUB WRAP | 1 5
+7 GuardedRange -140737488355328 140737488355328 | 6
+graph fuzz_long-78 inputs 3 literals 1 roots 9
+0 ColumnRef 1 LONG |
+1 IntArith ADD FAIL | 0 0
+2 LiteralSlot 0 LONG |
+3 ColumnRef 2 LONG |
+4 IntArith SUB WRAP | 2 3
+5 Greatest | 1 4
+6 Greatest | 0 0
+7 ColumnRef 0 LONG |
+8 IntArith ADD NULL | 6 7
+9 Least | 5 8
+graph fuzz_long-79 inputs 3 literals 1 roots 5,21,22
+0 ColumnRef 0 LONG |
+1 ConstDivide 7 70368744177665 | 0
+2 LiteralSlot 0 LONG |
+3 IntNeg FAIL | 2
+4 IntArith SUB NULL | 1 3
+5 ConstDivide 1000 10052678788243 | 4
+6 ColumnRef 1 LONG |
+7 IntArith SUB NULL | 0 6
+8 IntNeg WRAP | 7
+9 ColumnRef 2 LONG |
+10 IsNotNull | 9
+11 GuardedRange -1048576 1048576 | 2
+12 IntArith ADD FAIL | 0 9
+13 IfElse | 10 11 12
+14 Compare LE | 8 13
+15 Greatest | 2 6
+16 IntArith ADD WRAP | 2 0
+17 IntArith SUB FAIL | 15 16
+18 Compare GE | 6 6
+19 IfElse | 18 2 2
+20 ConstDivide 1000 1048577 | 19
+21 IfElse | 14 17 20
+22 Least | 0 6
+graph fuzz_long-80 inputs 3 literals 0 roots 5
+0 ColumnRef 1 LONG |
+1 ColumnRef 2 LONG |
+2 Compare LE | 0 1
+3 Not | 2
+4 Not | 3
+5 Not | 4
+graph fuzz_long-81 inputs 2 literals 2 roots 2,3,5
+0 LiteralSlot 0 LONG |
+1 ColumnRef 1 LONG |
+2 Least | 0 1
+3 GuardedRange -70368744177664 70368744177664 | 1
+4 ColumnRef 0 LONG |
+5 IntArith ADD FAIL | 4 0
+graph fuzz_long-82 inputs 2 literals 1 roots 3,5,8
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ColumnRef 1 LONG |
+3 IntArith ADD FAIL | 1 2
+4 IntArith SUB NULL | 0 2
+5 GuardedRange -140737488355328 140737488355328 | 4
+6 IntArith SUB NULL | 2 2
+7 IntArith ADD FAIL | 0 0
+8 Greatest | 6 7
+graph fuzz_long-83 inputs 2 literals 1 roots 4
+0 ColumnRef 0 LONG |
+1 IntArith SUB WRAP | 0 0
+2 ColumnRef 1 LONG |
+3 IntArith ADD FAIL | 2 2
+4 Compare LT | 1 3
+graph fuzz_long-84 inputs 2 literals 0 roots 7
+0 ColumnRef 0 LONG |
+1 ConstDivide 60000000000 70368744177665 | 0
+2 ColumnRef 1 LONG |
+3 Greatest | 2 2
+4 Compare LE | 1 3
+5 IntArith ADD WRAP | 0 0
+6 IntArith MUL WRAP | 0 2
+7 IfElse | 4 5 6
+graph fuzz_long-85 inputs 1 literals 2 roots 20,1
+0 LiteralSlot 0 LONG |
+1 ColumnRef 0 LONG |
+2 Compare LE | 0 1
+3 IfElse | 2 1 1
+4 GuardedRange -70368744177664 70368744177664 | 3
+5 Compare GE | 1 1
+6 IfElse | 5 1 0
+7 GuardedRange -70368744177664 70368744177664 | 6
+8 Compare GE | 4 7
+9 Compare LT | 1 1
+10 Not | 9
+11 IsNotNull | 1
+12 And | 10 11
+13 Or | 8 12
+14 GuardedRange -70368744177664 70368744177664 | 1
+15 ConstDivide 3 70368744177665 | 14
+16 IntArith SUB FAIL | 15 1
+17 Least | 1 1
+18 IntNeg WRAP | 17
+19 IntArith SUB WRAP | 18 1
+20 IfElse | 13 16 19
+graph fuzz_long-86 inputs 1 literals 1 roots 1,3
+0 ColumnRef 0 LONG |
+1 IntArith MUL WRAP | 0 0
+2 LiteralSlot 0 LONG |
+3 Greatest | 2 0
+graph fuzz_long-87 inputs 1 literals 1 roots 18,19,0
+0 ColumnRef 0 LONG |
+1 IntNeg WRAP | 0
+2 LiteralSlot 0 LONG |
+3 Least | 2 0
+4 Compare GT | 1 3
+5 Greatest | 0 0
+6 Compare EQ | 1 5
+7 And | 4 6
+8 Not | 7
+9 Least | 0 0
+10 ConstDivide 60000000000 70368744177665 | 0
+11 IntArith MUL WRAP | 9 10
+12 Greatest | 2 0
+13 IntArith SUB NULL | 12 0
+14 IntArith ADD NULL | 11 13
+15 IntArith MUL WRAP | 0 0
+16 GuardedRange -9223372036854775808 9223372036854775807 | 15
+17 GuardedRange -9223372036854775808 9223372036854775807 | 16
+18 IfElse | 8 14 17
+19 GuardedRange -70368744177664 70368744177664 | 0
+graph fuzz_long-88 inputs 2 literals 2 roots 2,4,7
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 IntArith SUB WRAP | 0 1
+3 LiteralSlot 1 LONG |
+4 IntArith MUL WRAP | 3 1
+5 Compare LE | 3 0
+6 ColumnRef 1 LONG |
+7 IfElse | 5 3 6
+graph fuzz_long-89 inputs 3 literals 2 roots 4,14,18
+0 ColumnRef 1 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 IntNeg WRAP | 1
+3 ColumnRef 2 LONG |
+4 IntArith SUB FAIL | 2 3
+5 LiteralSlot 1 LONG |
+6 ConstDivide 1000000000 1048577 | 5
+7 ColumnRef 0 LONG |
+8 Least | 7 7
+9 Least | 6 8
+10 GuardedRange -70368744177664 70368744177664 | 7
+11 LiteralSlot 0 LONG |
+12 Greatest | 11 3
+13 IntArith SUB FAIL | 10 12
+14 IntArith SUB NULL | 9 13
+15 Greatest | 7 7
+16 IntArith ADD NULL | 5 0
+17 IntArith SUB FAIL | 15 16
+18 ConstDivide 1000000 140737489403905 | 17
+graph fuzz_long-90 inputs 3 literals 1 roots 4
+0 ColumnRef 2 LONG |
+1 ConstDivide 60000000000 70368744177665 | 0
+2 LiteralSlot 0 LONG |
+3 IntArith ADD NULL | 1 2
+4 IntNeg FAIL | 3
+graph fuzz_long-91 inputs 3 literals 0 roots 2
+0 ColumnRef 1 LONG |
+1 ColumnRef 0 LONG |
+2 Least | 0 1
+graph fuzz_long-92 inputs 3 literals 0 roots 1
+0 ColumnRef 1 LONG |
+1 IntArith SUB FAIL | 0 0
+graph fuzz_long-93 inputs 2 literals 2 roots 10,14
+0 LiteralSlot 1 LONG |
+1 ColumnRef 0 LONG |
+2 IntArith ADD FAIL | 0 1
+3 Least | 1 1
+4 Greatest | 2 3
+5 ColumnRef 1 LONG |
+6 IntArith ADD NULL | 5 1
+7 LiteralSlot 0 LONG |
+8 GuardedRange -1048576 1048576 | 7
+9 Greatest | 6 8
+10 IntArith SUB NULL | 4 9
+11 Least | 5 5
+12 Least | 0 5
+13 Greatest | 11 12
+14 GuardedRange -70368744177664 70368744177664 | 13
+graph fuzz_long-94 inputs 2 literals 1 roots 6
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ColumnRef 1 LONG |
+3 ConstDivide 60000000000 70368744177665 | 2
+4 Greatest | 1 3
+5 IntNeg WRAP | 4
+6 IntNeg WRAP | 5
+graph fuzz_long-95 inputs 2 literals 0 roots 1
+0 ColumnRef 0 LONG |
+1 IsNotNull | 0
+graph fuzz_long-96 inputs 3 literals 0 roots 13,22,2
+0 ColumnRef 0 LONG |
+1 IntNeg WRAP | 0
+2 ColumnRef 2 LONG |
+3 ColumnRef 1 LONG |
+4 Greatest | 2 3
+5 Least | 1 4
+6 IntArith ADD FAIL | 3 3
+7 IntArith ADD NULL | 3 3
+8 Greatest | 6 7
+9 Greatest | 5 8
+10 IntArith SUB FAIL | 2 0
+11 GuardedRange -140737488355328 140737488355328 | 10
+12 IntArith SUB WRAP | 11 3
+13 IntArith MUL WRAP | 9 12
+14 Least | 3 2
+15 GuardedRange -70368744177664 70368744177664 | 3
+16 Greatest | 14 15
+17 IntArith ADD WRAP | 2 0
+18 IntNeg FAIL | 17
+19 IntArith ADD FAIL | 16 18
+20 Compare EQ | 0 2
+21 IfElse | 20 2 0
+22 IntArith MUL WRAP | 19 21
+graph fuzz_long-97 inputs 1 literals 2 roots 4,6,8
+0 LiteralSlot 1 LONG |
+1 ConstDivide -12 1048577 | 0
+2 ColumnRef 0 LONG |
+3 ConstDivide 7 70368744177665 | 2
+4 IntArith MUL WRAP | 1 3
+5 IntArith ADD NULL | 2 2
+6 ConstDivide 86400000000 140737488355329 | 5
+7 Greatest | 2 2
+8 ConstDivide 3600000000000 70368744177665 | 7
+graph fuzz_long-98 inputs 1 literals 1 roots 3
+0 LiteralSlot 0 LONG |
+1 ConstDivide 60000000000 1048577 | 0
+2 IntArith SUB FAIL | 1 0
+3 ConstDivide -60 1048577 | 2
+graph fuzz_long-99 inputs 1 literals 1 roots 4,6
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 Greatest | 0 1
+3 IntArith SUB NULL | 0 0
+4 IntArith SUB WRAP | 2 3
+5 Least | 0 0
+6 IntNeg FAIL | 5
+graph fuzz_long-100 inputs 2 literals 0 roots 5
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ColumnRef 1 LONG |
+3 IntArith SUB NULL | 2 2
+4 IntArith MUL WRAP | 1 3
+5 IntNeg WRAP | 4
+graph fuzz_long-101 inputs 3 literals 2 roots 6
+0 ColumnRef 0 LONG |
+1 LiteralSlot 1 LONG |
+2 Compare EQ | 0 1
+3 ColumnRef 2 LONG |
+4 LiteralSlot 0 LONG |
+5 Compare EQ | 3 4
+6 Or | 2 5
+graph fuzz_long-102 inputs 1 literals 1 roots 4
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 Compare GT | 0 1
+3 Compare EQ | 0 1
+4 And | 2 3
+graph fuzz_long-103 inputs 3 literals 1 roots 1
+0 ColumnRef 2 LONG |
+1 IntNeg WRAP | 0
+graph fuzz_long-104 inputs 1 literals 0 roots 1,2,3
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 IntArith SUB WRAP | 0 0
+3 IntArith MUL WRAP | 0 0
+graph fuzz_long-105 inputs 2 literals 2 roots 6
+0 ColumnRef 1 LONG |
+1 LiteralSlot 0 LONG |
+2 IntArith SUB NULL | 0 1
+3 ColumnRef 0 LONG |
+4 IntNeg WRAP | 3
+5 IntArith ADD NULL | 2 4
+6 GuardedRange -140737489403904 140737489403904 | 5
+graph fuzz_long-106 inputs 3 literals 1 roots 12
+0 LiteralSlot 0 LONG |
+1 ColumnRef 1 LONG |
+2 Compare LE | 0 1
+3 IfElse | 2 1 0
+4 GuardedRange -70368744177664 70368744177664 | 1
+5 IntArith ADD NULL | 3 4
+6 ColumnRef 2 LONG |
+7 IntArith SUB FAIL | 1 6
+8 GuardedRange -1048576 1048576 | 0
+9 Least | 7 8
+10 Least | 5 9
+11 ColumnRef 0 LONG |
+12 IntArith ADD NULL | 10 11
+graph fuzz_long-107 inputs 3 literals 0 roots 5,7,9
+0 ColumnRef 1 LONG |
+1 ColumnRef 0 LONG |
+2 Least | 0 1
+3 ColumnRef 2 LONG |
+4 GuardedRange -70368744177664 70368744177664 | 3
+5 Least | 2 4
+6 Greatest | 1 3
+7 GuardedRange -70368744177664 70368744177664 | 6
+8 GuardedRange -70368744177664 70368744177664 | 0
+9 IntNeg WRAP | 8
+graph fuzz_long-108 inputs 1 literals 2 roots 2,4
+0 ColumnRef 0 LONG |
+1 ConstDivide 1000000 70368744177665 | 0
+2 IntArith SUB FAIL | 1 0
+3 ConstDivide 1000000000 70368744177665 | 0
+4 GuardedRange -70368 70368 | 3
+graph fuzz_long-109 inputs 2 literals 2 roots 16
+0 ColumnRef 1 LONG |
+1 ColumnRef 0 LONG |
+2 IntArith SUB WRAP | 0 1
+3 GuardedRange -70368744177664 70368744177664 | 1
+4 Least | 2 3
+5 IntArith MUL WRAP | 0 0
+6 IntNeg WRAP | 5
+7 IntArith SUB WRAP | 4 6
+8 IsNotNull | 1
+9 GuardedRange -70368744177664 70368744177664 | 0
+10 ConstDivide 2 70368744177665 | 9
+11 LiteralSlot 1 LONG |
+12 IntArith SUB WRAP | 11 0
+13 ConstDivide -60 70368745226241 | 12
+14 IfElse | 8 10 13
+15 GuardedRange -35184372088832 35184372088832 | 14
+16 Compare EQ | 7 15
+graph fuzz_long-110 inputs 2 literals 1 roots 1,3,4
+0 ColumnRef 1 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ColumnRef 0 LONG |
+3 IntNeg FAIL | 2
+4 IntArith ADD NULL | 2 0
+graph fuzz_long-111 inputs 2 literals 0 roots 12,18
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ColumnRef 1 LONG |
+3 IntArith ADD NULL | 0 2
+4 IntArith MUL WRAP | 1 3
+5 Compare EQ | 2 0
+6 Compare LT | 0 0
+7 Or | 5 6
+8 Greatest | 2 0
+9 ConstDivide -60 70368744177665 | 0
+10 IfElse | 7 8 9
+11 Greatest | 4 10
+12 IntArith ADD WRAP | 11 2
+13 Greatest | 0 2
+14 IntArith ADD NULL | 0 0
+15 IntArith ADD WRAP | 13 14
+16 ConstDivide 86400000000 211106232532993 | 15
+17 GuardedRange -2443 2443 | 16
+18 NarrowLane | 17
+graph fuzz_long-112 inputs 3 literals 2 roots 1,2
+0 ColumnRef 1 LONG |
+1 ConstDivide -60 70368744177665 | 0
+2 GuardedRange -70368744177664 70368744177664 | 0
+graph fuzz_long-113 inputs 1 literals 2 roots 4,7
+0 ColumnRef 0 LONG |
+1 Compare GE | 0 0
+2 IfElse | 1 0 0
+3 IntArith SUB WRAP | 2 0
+4 ConstDivide 86400000000 140737488355329 | 3
+5 GuardedRange -70368744177664 70368744177664 | 0
+6 IntArith ADD FAIL | 5 5
+7 IntArith ADD WRAP | 6 0
+graph fuzz_long-114 inputs 2 literals 1 roots 21,8,0
+0 ColumnRef 0 LONG |
+1 IntArith SUB FAIL | 0 0
+2 ColumnRef 1 LONG |
+3 IntArith ADD WRAP | 0 2
+4 Greatest | 1 3
+5 Compare GT | 0 2
+6 Not | 5
+7 Greatest | 0 2
+8 LiteralSlot 0 LONG |
+9 IntArith SUB FAIL | 2 8
+10 IfElse | 6 7 9
+11 IntArith ADD FAIL | 4 10
+12 IsNotNull | 0
+13 IntArith SUB NULL | 8 0
+14 Least | 8 8
+15 IfElse | 12 13 14
+16 IntArith ADD NULL | 8 2
+17 ConstDivide 60 70368745226241 | 16
+18 Compare LT | 15 17
+19 IntArith MUL WRAP | 8 2
+20 IfElse | 18 19 0
+21 Greatest | 11 20
+graph fuzz_long-115 inputs 1 literals 0 roots 3,16,17
+0 ColumnRef 0 LONG |
+1 IntArith ADD FAIL | 0 0
+2 ConstDivide 86400000000 140737488355329 | 1
+3 IntArith ADD FAIL | 2 0
+4 Compare GE | 0 0
+5 Compare LE | 0 0
+6 Or | 4 5
+7 Compare EQ | 0 0
+8 Or | 7 4
+9 Or | 6 8
+10 Least | 0 0
+11 Least | 10 10
+12 Greatest | 0 0
+13 Compare LT | 0 0
+14 IfElse | 13 0 0
+15 IntArith SUB WRAP | 12 14
+16 IfElse | 9 11 15
+17 IntArith MUL WRAP | 0 0
+graph fuzz_long-116 inputs 2 literals 0 roots 1
+0 ColumnRef 1 LONG |
+1 IsNotNull | 0
+graph fuzz_long-117 inputs 3 literals 2 roots 9
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 Greatest | 0 1
+3 ColumnRef 2 LONG |
+4 IntArith ADD FAIL | 2 3
+5 ColumnRef 1 LONG |
+6 GuardedRange -70368744177664 70368744177664 | 5
+7 ConstDivide -60 70368744177665 | 5
+8 Greatest | 6 7
+9 Compare EQ | 4 8
+graph fuzz_long-118 inputs 1 literals 1 roots 7
+0 LiteralSlot 0 LONG |
+1 ColumnRef 0 LONG |
+2 Compare LE | 0 1
+3 Compare LT | 1 1
+4 And | 2 3
+5 Least | 0 0
+6 IntArith ADD NULL | 1 0
+7 IfElse | 4 5 6
+graph fuzz_long-119 inputs 1 literals 0 roots 9
+0 ColumnRef 0 LONG |
+1 IntArith MUL WRAP | 0 0
+2 Compare EQ | 0 0
+3 IfElse | 2 0 0
+4 Compare LE | 1 3
+5 Compare GE | 0 0
+6 IfElse | 5 0 0
+7 ConstDivide -60 70368744177665 | 0
+8 Compare GE | 6 7
+9 And | 4 8
+graph fuzz_long-120 inputs 1 literals 0 roots 6,9
+0 ColumnRef 0 LONG |
+1 IntNeg FAIL | 0
+2 IntArith ADD NULL | 1 0
+3 IntNeg WRAP | 0
+4 IntArith ADD FAIL | 0 0
+5 IntArith SUB FAIL | 3 4
+6 Least | 2 5
+7 ConstDivide -12 70368744177665 | 0
+8 Least | 3 7
+9 IntNeg WRAP | 8
+graph fuzz_long-121 inputs 3 literals 2 roots 4,5,7
+0 ColumnRef 0 LONG |
+1 LiteralSlot 1 LONG |
+2 Compare LT | 0 1
+3 ColumnRef 2 LONG |
+4 IfElse | 2 3 3
+5 ConstDivide 60000000000 70368744177665 | 0
+6 ColumnRef 1 LONG |
+7 ConstDivide 1000 70368744177665 | 6
+graph fuzz_long-122 inputs 3 literals 1 roots 2,4,5
+0 LiteralSlot 0 LONG |
+1 ColumnRef 1 LONG |
+2 IntArith ADD WRAP | 0 1
+3 ColumnRef 2 LONG |
+4 Least | 3 0
+5 IntNeg FAIL | 3
+graph fuzz_long-123 inputs 2 literals 0 roots 4,6,8
+0 ColumnRef 0 LONG |
+1 ConstDivide 1000000000 70368744177665 | 0
+2 ColumnRef 1 LONG |
+3 Least | 0 2
+4 IntArith MUL WRAP | 1 3
+5 Least | 0 0
+6 GuardedRange -70368744177664 70368744177664 | 5
+7 IntArith SUB NULL | 0 0
+8 IntArith SUB WRAP | 7 5
+graph fuzz_long-124 inputs 3 literals 2 roots 15,18,21
+0 LiteralSlot 1 LONG |
+1 ColumnRef 1 LONG |
+2 Compare EQ | 0 1
+3 IfElse | 2 0 1
+4 IntNeg WRAP | 3
+5 LiteralSlot 0 LONG |
+6 Compare GT | 5 0
+7 ColumnRef 0 LONG |
+8 IfElse | 6 7 5
+9 ColumnRef 2 LONG |
+10 Least | 7 9
+11 Compare EQ | 8 10
+12 IntArith MUL WRAP | 7 9
+13 IntArith MUL WRAP | 1 7
+14 IfElse | 11 12 13
+15 Greatest | 4 14
+16 IntArith MUL WRAP | 1 1
+17 GuardedRange -9223372036854775808 9223372036854775807 | 16
+18 IntArith SUB WRAP | 17 1
+19 ConstDivide 3600000000000 70368744177665 | 7
+20 IntArith ADD NULL | 19 1
+21 IntNeg FAIL | 20
+graph fuzz_long-125 inputs 1 literals 1 roots 2
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 Least | 0 1
+graph fuzz_long-126 inputs 2 literals 1 roots 8
+0 ColumnRef 0 LONG |
+1 ConstDivide 1000 70368744177665 | 0
+2 LiteralSlot 0 LONG |
+3 IntArith MUL WRAP | 0 2
+4 Least | 1 3
+5 Greatest | 2 2
+6 ColumnRef 1 LONG |
+7 IntArith ADD FAIL | 5 6
+8 Compare LT | 4 7
+graph fuzz_long-127 inputs 2 literals 0 roots 1,3,4
+0 ColumnRef 0 LONG |
+1 ConstDivide -60 70368744177665 | 0
+2 ColumnRef 1 LONG |
+3 IntArith MUL WRAP | 0 2
+4 ConstDivide 3 70368744177665 | 0
+graph fuzz_long-128 inputs 2 literals 2 roots 8,16
+0 ColumnRef 1 LONG |
+1 Compare LT | 0 0
+2 Compare EQ | 0 0
+3 And | 1 2
+4 ConstDivide 86400000000 70368744177665 | 0
+5 LiteralSlot 1 LONG |
+6 ColumnRef 0 LONG |
+7 Least | 5 6
+8 IfElse | 3 4 7
+9 Compare EQ | 0 6
+10 Compare GT | 6 0
+11 And | 9 10
+12 LiteralSlot 0 LONG |
+13 Compare GT | 12 0
+14 IfElse | 13 0 12
+15 Least | 6 6
+16 IfElse | 11 14 15
+graph fuzz_long-129 inputs 1 literals 2 roots 12,20
+0 LiteralSlot 1 LONG |
+1 IntNeg FAIL | 0
+2 ConstDivide 1000000000 1048577 | 1
+3 ColumnRef 0 LONG |
+4 IntArith SUB NULL | 2 3
+5 Compare LE | 0 3
+6 Not | 5
+7 GuardedRange -70368744177664 70368744177664 | 3
+8 LiteralSlot 0 LONG |
+9 IntArith ADD WRAP | 8 3
+10 IfElse | 6 7 9
+11 IntNeg WRAP | 10
+12 IntArith SUB WRAP | 4 11
+13 IntArith SUB NULL | 3 8
+14 IntNeg FAIL | 13
+15 IntArith SUB FAIL | 3 3
+16 IntArith MUL WRAP | 3 3
+17 Least | 15 16
+18 Compare EQ | 14 17
+19 IfElse | 18 7 3
+20 IntArith SUB FAIL | 19 3
+graph fuzz_long-130 inputs 1 literals 1 roots 20,0
+0 ColumnRef 0 LONG |
+1 Compare LE | 0 0
+2 IfElse | 1 0 0
+3 Greatest | 0 0
+4 IntArith SUB NULL | 2 3
+5 GuardedRange -140737488355328 140737488355328 | 4
+6 IntNeg FAIL | 0
+7 LiteralSlot 0 LONG |
+8 GuardedRange -1048576 1048576 | 7
+9 Compare GT | 6 8
+10 Compare EQ | 7 7
+11 Compare EQ | 7 0
+12 And | 10 11
+13 And | 9 12
+14 GuardedRange -70368744177664 70368744177664 | 0
+15 Least | 0 0
+16 IntArith SUB FAIL | 14 15
+17 Compare LE | 0 7
+18 IfElse | 17 0 0
+19 IfElse | 13 16 18
+20 IntArith MUL WRAP | 5 19
+graph fuzz_long-131 inputs 1 literals 0 roots 18
+0 ColumnRef 0 LONG |
+1 ConstDivide 1000 70368744177665 | 0
+2 IntArith ADD NULL | 1 0
+3 GuardedRange -70439112921841 70439112921841 | 2
+4 Compare EQ | 0 0
+5 And | 4 4
+6 Greatest | 0 0
+7 Least | 0 0
+8 IfElse | 5 6 7
+9 IntArith ADD WRAP | 8 0
+10 IntArith SUB FAIL | 3 9
+11 IntArith MUL WRAP | 0 0
+12 Greatest | 11 7
+13 GuardedRange -9223372036854775808 9223372036854775807 | 12
+14 Compare LT | 0 0
+15 IfElse | 14 0 0
+16 GuardedRange -70368744177664 70368744177664 | 15
+17 IntArith MUL WRAP | 13 16
+18 Compare GT | 10 17
+graph fuzz_long-132 inputs 1 literals 2 roots 21,0
+0 ColumnRef 0 LONG |
+1 ConstDivide 60000000000 70368744177665 | 0
+2 IntArith SUB FAIL | 0 0
+3 IntArith SUB FAIL | 1 2
+4 LiteralSlot 1 LONG |
+5 IntArith MUL WRAP | 0 4
+6 ConstDivide 2 1048577 | 4
+7 IntArith SUB WRAP | 5 6
+8 Least | 3 7
+9 Greatest | 0 4
+10 Compare GT | 0 0
+11 IfElse | 10 0 0
+12 Compare GE | 9 11
+13 LiteralSlot 0 LONG |
+14 GuardedRange -1048576 1048576 | 13
+15 Least | 0 0
+16 IfElse | 12 14 15
+17 Compare GT | 4 0
+18 IfElse | 17 13 0
+19 GuardedRange -70368744177664 70368744177664 | 18
+20 IntArith MUL WRAP | 16 19
+21 IntArith SUB WRAP | 8 20
+graph fuzz_long-133 inputs 3 literals 2 roots 5,8
+0 ColumnRef 0 LONG |
+1 Least | 0 0
+2 ColumnRef 1 LONG |
+3 ColumnRef 2 LONG |
+4 Least | 2 3
+5 IntArith SUB FAIL | 1 4
+6 Compare EQ | 3 3
+7 IfElse | 6 2 0
+8 IntNeg FAIL | 7
+graph fuzz_long-134 inputs 3 literals 1 roots 12
+0 ColumnRef 1 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 LiteralSlot 0 LONG |
+3 IntArith SUB FAIL | 2 2
+4 Least | 1 3
+5 ConstDivide 3 70368744177665 | 4
+6 IntNeg WRAP | 0
+7 ColumnRef 2 LONG |
+8 ColumnRef 0 LONG |
+9 Greatest | 7 8
+10 Greatest | 6 9
+11 ConstDivide -12 70368744177665 | 10
+12 Compare LT | 5 11
+graph fuzz_long-135 inputs 3 literals 0 roots 5,7,12
+0 ColumnRef 1 LONG |
+1 ColumnRef 2 LONG |
+2 Compare GT | 0 1
+3 IfElse | 2 0 0
+4 ColumnRef 0 LONG |
+5 IntArith ADD NULL | 3 4
+6 GuardedRange -70368744177664 70368744177664 | 1
+7 GuardedRange -70368744177664 70368744177664 | 6
+8 Compare GT | 1 0
+9 Compare LE | 0 4
+10 And | 8 9
+11 IntArith MUL WRAP | 4 1
+12 IfElse | 10 11 6
+graph fuzz_long-136 inputs 1 literals 0 roots 8,12,16
+0 ColumnRef 0 LONG |
+1 Compare LT | 0 0
+2 IfElse | 1 0 0
+3 GuardedRange -70368744177664 70368744177664 | 2
+4 Compare LE | 0 0
+5 IfElse | 4 0 0
+6 IntArith SUB FAIL | 0 0
+7 Least | 5 6
+8 IntArith MUL WRAP | 3 7
+9 Compare EQ | 0 0
+10 IfElse | 9 0 0
+11 GuardedRange -70368744177664 70368744177664 | 10
+12 IntNeg WRAP | 11
+13 IntArith ADD NULL | 0 0
+14 IntArith MUL WRAP | 0 0
+15 Greatest | 13 14
+16 IntArith ADD WRAP | 15 0
+graph fuzz_long-137 inputs 2 literals 2 roots 3
+0 ColumnRef 1 LONG |
+1 ColumnRef 0 LONG |
+2 Compare GT | 0 1
+3 Not | 2
+graph fuzz_long-138 inputs 2 literals 1 roots 2
+0 ColumnRef 1 LONG |
+1 IntArith MUL WRAP | 0 0
+2 GuardedRange -9223372036854775808 9223372036854775807 | 1
+graph fuzz_long-139 inputs 3 literals 0 roots 3,15
+0 ColumnRef 0 LONG |
+1 IntNeg WRAP | 0
+2 IntNeg FAIL | 1
+3 ConstDivide -12 70368744177665 | 2
+4 ColumnRef 1 LONG |
+5 ColumnRef 2 LONG |
+6 Compare GT | 4 5
+7 Compare LE | 0 4
+8 Or | 6 7
+9 Not | 8
+10 Least | 5 5
+11 IntArith ADD WRAP | 10 5
+12 IntArith MUL WRAP | 4 4
+13 IntNeg FAIL | 5
+14 IntArith MUL WRAP | 12 13
+15 IfElse | 9 11 14
+graph fuzz_long-140 inputs 3 literals 2 roots 23
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 ColumnRef 1 LONG |
+3 LiteralSlot 0 LONG |
+4 Least | 2 3
+5 Compare GE | 1 4
+6 IntNeg WRAP | 2
+7 ColumnRef 2 LONG |
+8 Compare LE | 7 2
+9 IfElse | 8 2 2
+10 Compare LT | 6 9
+11 Or | 5 10
+12 IsNotNull | 0
+13 Compare GE | 7 7
+14 Not | 13
+15 And | 12 14
+16 And | 11 15
+17 Compare GE | 3 2
+18 Compare GE | 0 7
+19 Or | 17 18
+20 Not | 19
+21 Compare LT | 0 2
+22 Or | 20 21
+23 Or | 16 22
+graph fuzz_long-141 inputs 2 literals 1 roots 4,7,13
+0 ColumnRef 0 LONG |
+1 LiteralSlot 0 LONG |
+2 IntArith ADD FAIL | 0 1
+3 ConstDivide 3600000000000 70368744177665 | 0
+4 Least | 2 3
+5 ColumnRef 1 LONG |
+6 IntNeg WRAP | 5
+7 IntArith ADD WRAP | 6 0
+8 Greatest | 0 0
+9 ConstDivide 3600000000000 70368744177665 | 5
+10 Compare GE | 8 9
+11 Least | 1 5
+12 IntArith SUB WRAP | 0 5
+13 IfElse | 10 11 12
+graph fuzz_long-142 inputs 2 literals 0 roots 1
+0 ColumnRef 1 LONG |
+1 IsNotNull | 0
+graph fuzz_long-143 inputs 2 literals 0 roots 4
+0 ColumnRef 1 LONG |
+1 ColumnRef 0 LONG |
+2 IntArith SUB FAIL | 0 1
+3 Greatest | 1 0
+4 Greatest | 2 3
+graph fuzz_long-144 inputs 2 literals 2 roots 17
+0 ColumnRef 1 LONG |
+1 Compare GT | 0 0
+2 LiteralSlot 1 LONG |
+3 Compare LE | 0 2
+4 And | 1 3
+5 ColumnRef 0 LONG |
+6 Compare GE | 5 2
+7 Compare GE | 2 0
+8 And | 6 7
+9 Or | 4 8
+10 IntArith ADD WRAP | 5 5
+11 IntArith MUL WRAP | 5 0
+12 Least | 10 11
+13 LiteralSlot 0 LONG |
+14 Least | 5 13
+15 IntNeg FAIL | 0
+16 Greatest | 14 15
+17 IfElse | 9 12 16
+graph fuzz_long-145 inputs 1 literals 1 roots 3
+0 ColumnRef 0 LONG |
+1 GuardedRange -70368744177664 70368744177664 | 0
+2 IntNeg FAIL | 0
+3 Compare GE | 1 2
+graph fuzz_long-146 inputs 1 literals 1 roots 1,4
+0 ColumnRef 0 LONG |
+1 ConstDivide 1000000 70368744177665 | 0
+2 Compare EQ | 0 0
+3 LiteralSlot 0 LONG |
+4 IfElse | 2 0 3
+graph fuzz_long-147 inputs 1 literals 0 roots 2,3,5
+0 ColumnRef 0 LONG |
+1 Compare GE | 0 0
+2 IfElse | 1 0 0
+3 IntArith SUB WRAP | 0 0
+4 Compare GT | 0 0
+5 IfElse | 4 0 0
+graph fuzz_long-148 inputs 2 literals 2 roots 3,7
+0 ColumnRef 0 LONG |
+1 ColumnRef 1 LONG |
+2 Greatest | 0 1
+3 IntArith SUB NULL | 2 1
+4 LiteralSlot 1 LONG |
+5 IntArith MUL WRAP | 4 1
+6 IntArith ADD NULL | 1 0
+7 IntArith MUL WRAP | 5 6
+graph fuzz_long-149 inputs 3 literals 1 roots 3
+0 LiteralSlot 0 LONG |
+1 ConstDivide 3600000000000 1048577 | 0
+2 ConstDivide -60 1 | 1
+3 IntNeg WRAP | 2

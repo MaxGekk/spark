@@ -1,0 +1,178 @@
+graph cheap_tails-22 inputs 1 literals 22 roots 3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45
+0 ColumnRef 0 INT |
+1 Year | 0
+2 LiteralSlot 0 INT |
+3 IntArith ADD WRAP | 1 2
+4 LiteralSlot 1 INT |
+5 IntArith ADD WRAP | 1 4
+6 LiteralSlot 2 INT |
+7 IntArith ADD WRAP | 1 6
+8 LiteralSlot 3 INT |
+9 IntArith ADD WRAP | 1 8
+10 LiteralSlot 4 INT |
+11 IntArith ADD WRAP | 1 10
+12 LiteralSlot 5 INT |
+13 IntArith ADD WRAP | 1 12
+14 LiteralSlot 6 INT |
+15 IntArith ADD WRAP | 1 14
+16 LiteralSlot 7 INT |
+17 IntArith ADD WRAP | 1 16
+18 LiteralSlot 8 INT |
+19 IntArith ADD WRAP | 1 18
+20 LiteralSlot 9 INT |
+21 IntArith ADD WRAP | 1 20
+22 LiteralSlot 10 INT |
+23 IntArith ADD WRAP | 1 22
+24 LiteralSlot 11 INT |
+25 IntArith ADD WRAP | 1 24
+26 LiteralSlot 12 INT |
+27 IntArith ADD WRAP | 1 26
+28 LiteralSlot 13 INT |
+29 IntArith ADD WRAP | 1 28
+30 LiteralSlot 14 INT |
+31 IntArith ADD WRAP | 1 30
+32 LiteralSlot 15 INT |
+33 IntArith ADD WRAP | 1 32
+34 LiteralSlot 16 INT |
+35 IntArith ADD WRAP | 1 34
+36 LiteralSlot 17 INT |
+37 IntArith ADD WRAP | 1 36
+38 LiteralSlot 18 INT |
+39 IntArith ADD WRAP | 1 38
+40 LiteralSlot 19 INT |
+41 IntArith ADD WRAP | 1 40
+42 LiteralSlot 20 INT |
+43 IntArith ADD WRAP | 1 42
+44 LiteralSlot 21 INT |
+45 IntArith ADD WRAP | 1 44
+graph cheap_tails-64 inputs 1 literals 64 roots 3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51,53,55,57,59,61,63,65,67,69,71,73,75,77,79,81,83,85,87,89,91,93,95,97,99,101,103,105,107,109,111,113,115,117,119,121,123,125,127,129
+0 ColumnRef 0 INT |
+1 Year | 0
+2 LiteralSlot 0 INT |
+3 IntArith ADD WRAP | 1 2
+4 LiteralSlot 1 INT |
+5 IntArith ADD WRAP | 1 4
+6 LiteralSlot 2 INT |
+7 IntArith ADD WRAP | 1 6
+8 LiteralSlot 3 INT |
+9 IntArith ADD WRAP | 1 8
+10 LiteralSlot 4 INT |
+11 IntArith ADD WRAP | 1 10
+12 LiteralSlot 5 INT |
+13 IntArith ADD WRAP | 1 12
+14 LiteralSlot 6 INT |
+15 IntArith ADD WRAP | 1 14
+16 LiteralSlot 7 INT |
+17 IntArith ADD WRAP | 1 16
+18 LiteralSlot 8 INT |
+19 IntArith ADD WRAP | 1 18
+20 LiteralSlot 9 INT |
+21 IntArith ADD WRAP | 1 20
+22 LiteralSlot 10 INT |
+23 IntArith ADD WRAP | 1 22
+24 LiteralSlot 11 INT |
+25 IntArith ADD WRAP | 1 24
+26 LiteralSlot 12 INT |
+27 IntArith ADD WRAP | 1 26
+28 LiteralSlot 13 INT |
+29 IntArith ADD WRAP | 1 28
+30 LiteralSlot 14 INT |
+31 IntArith ADD WRAP | 1 30
+32 LiteralSlot 15 INT |
+33 IntArith ADD WRAP | 1 32
+34 LiteralSlot 16 INT |
+35 IntArith ADD WRAP | 1 34
+36 LiteralSlot 17 INT |
+37 IntArith ADD WRAP | 1 36
+38 LiteralSlot 18 INT |
+39 IntArith ADD WRAP | 1 38
+40 LiteralSlot 19 INT |
+41 IntArith ADD WRAP | 1 40
+42 LiteralSlot 20 INT |
+43 IntArith ADD WRAP | 1 42
+44 LiteralSlot 21 INT |
+45 IntArith ADD WRAP | 1 44
+46 LiteralSlot 22 INT |
+47 IntArith ADD WRAP | 1 46
+48 LiteralSlot 23 INT |
+49 IntArith ADD WRAP | 1 48
+50 LiteralSlot 24 INT |
+51 IntArith ADD WRAP | 1 50
+52 LiteralSlot 25 INT |
+53 IntArith ADD WRAP | 1 52
+54 LiteralSlot 26 INT |
+55 IntArith ADD WRAP | 1 54
+56 LiteralSlot 27 INT |
+57 IntArith ADD WRAP | 1 56
+58 LiteralSlot 28 INT |
+59 IntArith ADD WRAP | 1 58
+60 LiteralSlot 29 INT |
+61 IntArith ADD WRAP | 1 60
+62 LiteralSlot 30 INT |
+63 IntArith ADD WRAP | 1 62
+64 LiteralSlot 31 INT |
+65 IntArith ADD WRAP | 1 64
+66 LiteralSlot 32 INT |
+67 IntArith ADD WRAP | 1 66
+68 LiteralSlot 33 INT |
+69 IntArith ADD WRAP | 1 68
+70 LiteralSlot 34 INT |
+71 IntArith ADD WRAP | 1 70
+72 LiteralSlot 35 INT |
+73 IntArith ADD WRAP | 1 72
+74 LiteralSlot 36 INT |
+75 IntArith ADD WRAP | 1 74
+76 LiteralSlot 37 INT |
+77 IntArith ADD WRAP | 1 76
+78 LiteralSlot 38 INT |
+79 IntArith ADD WRAP | 1 78
+80 LiteralSlot 39 INT |
+81 IntArith ADD WRAP | 1 80
+82 LiteralSlot 40 INT |
+83 IntArith ADD WRAP | 1 82
+84 LiteralSlot 41 INT |
+85 IntArith ADD WRAP | 1 84
+86 LiteralSlot 42 INT |
+87 IntArith ADD WRAP | 1 86
+88 LiteralSlot 43 INT |
+89 IntArith ADD WRAP | 1 88
+90 LiteralSlot 44 INT |
+91 IntArith ADD WRAP | 1 90
+92 LiteralSlot 45 INT |
+93 IntArith ADD WRAP | 1 92
+94 LiteralSlot 46 INT |
+95 IntArith ADD WRAP | 1 94
+96 LiteralSlot 47 INT |
+97 IntArith ADD WRAP | 1 96
+98 LiteralSlot 48 INT |
+99 IntArith ADD WRAP | 1 98
+100 LiteralSlot 49 INT |
+101 IntArith ADD WRAP | 1 100
+102 LiteralSlot 50 INT |
+103 IntArith ADD WRAP | 1 102
+104 LiteralSlot 51 INT |
+105 IntArith ADD WRAP | 1 104
+106 LiteralSlot 52 INT |
+107 IntArith ADD WRAP | 1 106
+108 LiteralSlot 53 INT |
+109 IntArith ADD WRAP | 1 108
+110 LiteralSlot 54 INT |
+111 IntArith ADD WRAP | 1 110
+112 LiteralSlot 55 INT |
+113 IntArith ADD WRAP | 1 112
+114 LiteralSlot 56 INT |
+115 IntArith ADD WRAP | 1 114
+116 LiteralSlot 57 INT |
+117 IntArith ADD WRAP | 1 116
+118 LiteralSlot 58 INT |
+119 IntArith ADD WRAP | 1 118
+120 LiteralSlot 59 INT |
+121 IntArith ADD WRAP | 1 120
+122 LiteralSlot 60 INT |
+123 IntArith ADD WRAP | 1 122
+124 LiteralSlot 61 INT |
+125 IntArith ADD WRAP | 1 124
+126 LiteralSlot 62 INT |
+127 IntArith ADD WRAP | 1 126
+128 LiteralSlot 63 INT |
+129 IntArith ADD WRAP | 1 128
