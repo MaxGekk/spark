@@ -162,3 +162,51 @@ client of it, or Varka's.
 6. Section 9, the gate's verdict, and item 85's "Where the nodes live" updated from it.
 
 ## 9. Outcome
+
+### 9.1 Step 1, the exporter, 6 October 2026
+
+The last admission check of section 2 is done: a reflection over the IR's records describes every
+graph the corpus and the grammar build, and rebuilds it into records equal to the original.
+
+**What the 37 kinds are made of**, read by reflection: every one is a record, and a component is a
+child node (45 of them across the kinds, six typed as the `Cond` subtype), one of five enums
+(`CompareOp`, `IntOp`, `LaneType`, `Overflow`, `TruncLevel`), an `int` (six), a `long` (four), a
+`boolean` (one), or a single `List<Integer>`, `InRanges.bounds`. So a description line needs only
+the kind, its scalars as text and its children's ids; `VarkaIrDescription` writes it, rebuilds a
+record through its canonical constructor by walking the components once, and holds equal subtrees
+as one line.
+
+**The checks.** `VarkaIrDescriptionSuite` round-trips every shape of the corpus and 400 draws of
+each of the grammar's int and long shapes and 20 of each wide one, through the graph and through
+the text, and requires the union to contain all 37 kinds. The corpus alone reaches all 37, as a
+run with the draws removed showed; with nothing reached the test fails and lists the kinds, so the
+assertion can fail. Equal subtrees being one node, and a description that names an unknown kind or
+a child that does not come before its parent being refused, have a test each.
+
+**What the corpus is, and what it lacks.** `VarkaIrLayoutExport` writes its families, and the
+spike's gate asks for sizes it does not reach:
+
+| family | graphs | nodes | largest graph |
+|---|---|---|---|
+| size ladder | 5 | 3860 | 2002 |
+| make_date ladder | 2 | 150 | 123 |
+| cheap tails | 2 | 176 | 130 |
+| fuzz, int | 2000 | 18680 | 34 |
+| fuzz, long | 2000 | 21773 | 26 |
+| wide, int | 200 | 63055 | 609 |
+| wide, long | 200 | 75872 | 799 |
+| past the driver's ceiling | 2 | 10004 | 6002 |
+| wide compositions, int | 20 | 16970 | 1057 |
+| wide compositions, long | 20 | 20704 | 1240 |
+| **grown ladder** (added) | 2 | 11004 | 10002 |
+| **deep chain** (added) | 3 | 2339 | 2049 |
+
+The corpus's largest graph is 6002 nodes and every entry in it is a tree four deep, so it has
+neither the ten thousand nodes of section 3.1 nor any depth to read a hash's cost against. The
+exporter adds two families of its own: the size ladder's entry repeated 200 and 2000 times, about a
+thousand and ten thousand nodes, and one output nested 16, 128 and 1024 levels, which is where a
+record's hash walks the whole chain on every lookup.
+
+**Next**, step 2: arms 1 and 2 and the agreement check on JDK 25, and the small families committed
+beside the harness.
+
