@@ -138,7 +138,7 @@ checks the calendar rules by exhaustion, and proves a 64-bit rule at a reduced w
 out, as Alive did; row 264's debt on the analysis's loose `INT` answers is paid only with these
 obligations passing.
 
-### 2.2 The tests, and how well they test (81, 138, 246, 247, 262 to 265, 269, 271 to 280, 284, 285)
+### 2.2 The tests, and how well they test (81, 138, 246, 247, 262 to 265, 269, 271 to 280, 284, 285, 289)
 
 Row 81 is planned (`VARKA-81.md`) and suits a newcomer. Row 138's three forms all run in
 `VarkaCoverageDifferentialSuite`, and its ANSI form compares the error class, the SQLSTATE and
@@ -229,6 +229,16 @@ of 5,596 dense loop methods were never entered. A shape is usually run once, on 
 so only one of its two bodies is ever compared, and the bytes oracle pins both bodies' bytes, not
 their answers. Row 284 runs each executed shape on both kinds of batch; row 285 makes the
 measurement a script whose report rows 265 and 284 read.
+
+**The wide compositions' long lane (289).** Found 6 October 2026 by a fuzz campaign in an idle
+window. `VarkaCoverageCompositionFuzzSuite`'s wide test compares a kernel row by row only on the
+int lane (`checkKernel` returns before emitting anything else), so no long-lane kernel of a wide
+projection is ever compared, under any seed. The test's adequacy assertion assumes 20 projections
+always reach an int-lane kernel, and seed 2026100605003 draws 20 that are all long-lane: 0
+kernels compared, a failure that reproduces on every run. It was 1 of the campaign's 40 seeds.
+Row 289 compares the long lane's kernels too, against the reference evaluator with long inputs
+drawn within each input's bound, and counts the comparisons per lane, so the assertion holds by
+construction rather than by the draw.
 
 **What the papers found the tests can pass over** (`m7/READING.md` 11).
 
@@ -498,6 +508,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 265 | How well the tests test: branch coverage of the emitter and compiler under the suites and fuzzers, then a bounded mutation run (PIT) on `Slots` and `Analysis` in an idle window; each surviving mutant a test or an equivalence note; PIT through the ScalaTest suites test by test; three verdicts per mutant - killed by a behavioural test, killed only by the bytes oracle, survived | the plan review (2.2), `m7/READING.md` 11 | medium, measured |
 | 284 | Both bodies of every shape compared: the differential suites and the fuzzers run each shape they execute on a null-free batch and on one with nulls, so its dense and its masked body both meet the oracle. *Found 4 October 2026 by row 285's spike*: of the 1,555 emitted classes the Varka suites ran, about 730 ran only the masked body and about 135 only the dense one. Done when row 285's report shows every executed class entering both drivers, or names each exception with its reason | the JaCoCo spike (2.2) | small |
 | 285 | Coverage of the generated code: `dev/varka_gen_coverage.sh` runs the Varka suites under the JaCoCo agent with the emitted classes dumped, and sums the coverage of each emitted class, analysed on its own because tests emit one name with different bytes, per method kind through `VarkaMethodNames` and per IR operation through the class's `LineNumberTable` key; the report committed, its missed branches inside executed loops listed by operation, and read by rows 265 and 284 | the JaCoCo spike (2.2) | small |
+| 289 | The wide compositions' long lane compared: `VarkaCoverageCompositionFuzzSuite`'s wide test compares long-lane kernels row by row as it does int-lane ones, and counts comparisons per lane. *Found 6 October 2026 by an idle-window fuzz campaign*: seed 2026100605003 draws 20 wide projections that are all long-lane, so 0 kernels are compared and the adequacy assertion fails, deterministically; no long-lane kernel of a wide projection is compared under any seed. Done when the long lane is compared, that seed passes, and the run reports how many kernels of each lane it compared | the fuzz campaign of 6 October 2026 | small |
 | 248 | `VarkaEmitOptions` from one table of options. **Done** (`VARKA-248.md` 9.4, 5 October 2026): the table (#618), the option matrix on the laptop (#624), one configuration per pull request and all 45 weekly in CI (#625, #626), the first weekly run green over all 45. **Step 1 done** (`VARKA-248.md` 9.1, 4 October 2026): `VarkaEmitOption.TABLE` holds every option with its reason; `canonical()`, the inventory, the fuzzer's draws and the dump's parser read it, and the written-out defaults are checked against it; **Step 2's matrix merged** (#624, `VARKA-248.md` 9.2, 5 October 2026): all 45 configurations ran on the laptop and found no wrong answer; 79 tests tagged `PinsDefaults`, 71 skip lines; the PR job and the weekly workflow in review (3.2.8), the weekly's first run the confirmation. The row: defaults by name, and `canonical()`, the bytes suite's inventory and the fuzzer's draws derived from it; each option's reason recorded - an alternative kept because the winner depends on the machine, a reference form, a fault injector (`misdescribeWordLiveness`), or retired; the suites run under the options' configurations with a reasoned skip list, and a shape marked as declining failing when it starts to fuse. Proof: `emitted_bytes.json` unchanged; each skip entry names its minimal option delta | item 74.1, `m7/READING.md` 3, `m7/READING.md` 11 | small to medium |
 | 249 | One class owns the emitted method names, replacing the prefix matches in main and test code. **Done** (`VARKA-249.md` 9, 4 October 2026): `VarkaMethodNames` builds and reads every emitted method's name, main code and tests go through it, and the bytes oracle is unchanged. Proof: `emitted_bytes.json` unchanged | item 74.6 | small |
 | 250 | `emitBody` split into driver, loop and epilogue emitters sharing the prologue helpers. **Done** (`VARKA-250.md` 9.1, 5 October 2026): `emitDriver` (its table and unrolled forms) and `emitGroupBody` over shared prologue steps, byte-identical under every option arm at both widths. Proof: `emitted_bytes.json` unchanged | item 74.3 | medium |
@@ -535,7 +546,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
-| 0 | 240, 246, 248, 249, 255, 256, 81, 263, 266, 273, 275, 277, 283, 286, 287 | 240 is the proofs' tooling; 246 makes later suites' verdicts trustworthy; 248 and 249 are what every later refactor touches; 255 and 256 end the laptop queue and the hand splicing for every PR below; 263 and 266 check every port and refactor below as it lands; 81 needs nothing; 273 is a reproduced bug; 275 and 277 make every later test's failure loud and small |
+| 0 | 240, 246, 248, 249, 255, 256, 81, 263, 266, 273, 275, 277, 283, 286, 287, 289 | 240 is the proofs' tooling; 246 makes later suites' verdicts trustworthy; 248 and 249 are what every later refactor touches; 255 and 256 end the laptop queue and the hand splicing for every PR below; 263 and 266 check every port and refactor below as it lands; 81 needs nothing; 273 is a reproduced bug; 289 a reproduced test gap; 275 and 277 make every later test's failure loud and small |
 | 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276, 284, 285 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274, 276 and 284 sharpen the oracles every later test reads, and 285 measures what 284 closes |
 | 2 | 242, 244, 217, 224, 83, 254, 257, 267, 272, 278, 279, 280, 281 | 217 after the families it fronts; 83 after 250, which rewrites the same paths; 244 after 243 defines what a delta departs from; 267 after 251's components; 272 after 246, so that a configuration's verdict is not a second species' boxing; 278 after 277; 279 after 138; 280 after 262; 281 after 240's tooling |
 | 3 | 245, 86, 252, 268, 265 | 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269, 280 and 285, so that it measures the tests the milestone leaves |
