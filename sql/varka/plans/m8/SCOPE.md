@@ -4277,6 +4277,25 @@ and C2's queue logged around the suite.
 in with a test that holds a warm-up behind a stalled compile queue and expects `COMPILED`, and
 `VarkaWarmupEndToEndSuite` passes in a full CI run of the sql module. Size: small.
 
+*Investigated 6 October 2026.* The suite's first projection test failed three more CI runs in two
+days: #631's first run, and #644's first run and its rerun, each passing on another rerun or on
+the next commit, and one of #644's failures on a commit whose code had passed. The CI log names
+the test and no assertion, so which of two failures it was is not known; the first of them is the
+one above, and the second is the test's own. The test asserts that all four batches of the first
+query take the row path (`numVarkaBatches === 0`), which holds only while the warm-up outlasts the
+first query's last batch. A warm-up that finishes sooner is the compile done early and the kernel
+serving the batches after it, which is right, so a failure there is the test's race and not the
+product's. Twenty runs of CI's SQL step under CI's conditions (`VarkaWarmupCiLike-laptop-results.txt`)
+failed none: the projection's warm-up took 686 to 2868 ms, under a twentieth of the deadline at
+worst, and finished 57 ms to some seconds after the first query's check ended, a margin the first
+query's comparison of its answers makes look smaller than it is. So the deadline is far from the
+runs that pass and the race's margin is not known to be wide, and the next CI failure says which:
+`VarkaWarmupEndToEndSuite` now fails with the batch counters, how long the first query took and
+every warm-up's outcome, and `dev/varka_matrix.sh`'s report prints the message lines under a
+failure. The two changes above stay as written for the deadline; if the counters show a kernel
+serving a later batch, the first-run assertion becomes `numWarmupBatches + numVarkaBatches ===
+numBatches` with the claiming batch on the row path.
+
 ### Item 78. A post for Spark users: how Spark compiles a query, and why it compiles it again
 
 *Added 2 October 2026 on the owner's decision, from the post proposals made after VARKA-233's

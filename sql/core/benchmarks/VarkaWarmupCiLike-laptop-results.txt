@@ -1,0 +1,22 @@
+VarkaWarmupEndToEndSuite under CI's conditions, 20 runs (VARKA-233.md 13.7, m8/SCOPE.md item 77).
+
+What ran: dev/varka_matrix.sh's SQL defaults step as CI runs it (33 suites, 2 test JVMs), five copies
+at a time, each pinned with taskset to two physical cores and their SMT siblings (CPUs 2i, 2i+1,
+2i+12, 2i+13), as a 4-vCPU runner is, four rounds. A copy took 675 to 1101 seconds, against 359 alone
+and CI's 14 to 16 minutes. The machine: an AMD Ryzen AI 9 HX PRO 370, JDK 25, performance profile.
+
+Result: 0 failures in 20 runs, every warm-up compiled. The columns are milliseconds: the warm-up's
+own running time (the deadline is 60000), and how long the first query's runAndCheck took, which
+includes comparing its answer and so overstates when its last batch ran: the filter's first query
+outlasts its warm-up by that measure and its batches still all took the row path.
+
+projection (first test): 20 runs, all compiled: True
+  warm-up running time ms: min 686, median 1436, max 2868
+  first query ms:          min 596, median 1064, max 1542
+  warm-up minus first query ms: min 57, median 334
+
+filter (second test): 20 runs, all compiled: True
+  warm-up running time ms: min 120, median 300, max 681
+  first query ms:          min 223, median 368, max 614
+  warm-up minus first query ms: min -315, median -94
+
