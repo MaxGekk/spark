@@ -127,6 +127,11 @@ sizes that matter: under a thousand nodes, where Varka's graphs are, and ten tho
 3. FFM rows cost more than `int[]` columns only where a `VarHandle` is not folded.
 4. The real IR as value records (arm 5) is smaller a node than records by less than half, since
    the child references stay, and within 1.3x in time.
+5. *The owner's, added 6 October 2026 before any run.* A flat layout beats records at every size,
+   not only past a thousand nodes: from experience, flat arrays almost always win over trees of
+   objects on the cache hierarchies of current CPUs. It is scored against prediction 2, which expects
+   no gap at a thousand nodes or fewer, and on the warm and the cold measures separately, so that a
+   win in steady state which the cold first compile loses is seen as it is.
 
 ### 6.2 The gate
 
