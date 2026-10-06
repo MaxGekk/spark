@@ -946,6 +946,9 @@ among them (validity, width, ISA) staying policies. Milestone 6 was declared ful
 day, so the IR decisions are a milestone 7 task, first in this item's order, and VARKA-198's
 build should wait for them rather than fix the scratch buffer as a special case.
 
+*Added 6 October 2026: item 85 records what jegg 0.1.0 did on the real IR, takes up this item's
+"what it needs first" as its step 1, and names the steps that go deeper.*
+
 ### Item 12. Fork-only date functions on intermediates the kernels already hold
 
 Recorded on 4 September 2026 while planning VARKA-37, at the owner's request.
@@ -4451,6 +4454,94 @@ directive, the runtime route `VarkaKernelCompileDirective` uses, rejects it ("No
 `--add-modules jdk.incubator.vector` turns off AOT class linking and profiling altogether, and
 the kernels, defined by Varka's own class loader, are outside the AOT cache in any case
 (`sql/varka/skills/the-jit.md`).
+
+### Item 85. jegg tried on the real IR, and the steps that go deeper
+
+*Recorded 6 October 2026, at the owner's request, from `VarkaEgraphProbe` run against jegg
+0.1.0 and from the owner's questions on how deep the integration could go. It takes up item 11's
+"what it needs first" and turns its design inputs into gates.*
+
+**What was tried.** jegg 0.1.0, built from jegg's `main` into a local repository (it is not on
+Maven Central until the owner publishes it), run against `VarkaVectorIR` as it stands, with no
+change to the IR. One generic e-node holds an IR record's class, its non-child components as the
+payload and its children as class ids, and a `TreeBridge` reads that split off the record
+components by reflection, so any of the 37 node kinds goes in and out by the same path; the
+probe's sample covers nine of them. The probe is
+`VarkaEgraphProbe` in `sql/catalyst/src/test`, on the branch `varka-jegg-0-1-0`, not merged: its
+dependency does not resolve until the release. The reflection bridge is the probe's, not a
+proposal; it reads components on every node, and a client would build one lambda per kind.
+
+**What passed.** Seven trees, `InRanges`, `IfElse` and `TruncDate` among them, come out equal and
+are found by `lookupTree`. A rule matching `IntArith(ADD, ?mode, x, y)` for any overflow mode
+commutes it and carries the mode, so a `WRAP` sum and a `FAIL` sum never share a class; a rule
+whose right-hand side read a mode its left side never bound was refused when it was built.
+`date_add(date_add(d, a), b)` folds to `date_add(d, a + b)` under `WRAP`, where int addition wraps
+in both, and extracts as a tree the IR's own constructors accept. `Year` and `Month` of one
+shifted date extract through `extractAll` with the shared `AddDays` paid once, and a client score
+over a whole selection runs. The probe compiles with `-Xlint:all` and runs without JSpecify.
+
+**What it showed, for jegg.** No change to jegg's API was needed. Three things are on jegg's
+side: a one-class e-node cannot name `Head.type()`, so a payload-binding head scans every class
+(a record per kind avoids it); `Pattern.binding` wants a node class, so a generic node needs a
+hand-written `Head`; and `CostFunction.nodeCost` sees one node and not its children's facts,
+while Varka's costs depend on them (a scalar over slots is hoisted, a value constant for the
+batch is free). The third blocks steps 3 and 4 below.
+
+**The steps, shallow to deep.** Each gates the next, and none needs an IR change before step 4.
+
+1. *The corpus measurement item 11 asks for, with jegg doing the rewriting.* Take the shapes of
+   `VarkaEmitCostCorpus` and the TPC queries through the compiler, write the compiler's own arms
+   as rules, extract under the priced `VarkaEmitCost`, and report for each shape the bytes and
+   call sites of the extracted plan against the emitted one, and how many shapes merge under
+   canonical forms. This replaces item 11's "one script" and is the number its decision rests on.
+   Prediction, a guess scored when it runs: algebra alone changes the cost of under one shape in
+   ten, and the larger gap is in grouping, step 2.
+2. *Output grouping as extraction, VARKA-58's question.* `extractAll` scores a whole selection
+   through a client function, so `VarkaEmitCost`'s bytes and call sites can replace
+   `GROUP_BUDGET` as the thing that decides what shares a method. Gate: the order the selection
+   gives for shared against split agrees with the measured order on VARKA-58's pair (0.58x) and
+   on the held-out shapes of `VarkaEmitCostAudit`.
+3. *Analyses that sharpen as equalities are found.* `VarkaRangeAnalysis` answers a query that
+   carries the kind, days or int, down from the consumer, because the IR says only the lane; an
+   e-class analysis is bottom-up, so the kind has to be on the value, item 11's first design
+   input. Then equal forms' ranges intersect, and the two decisions the compiler takes from
+   ranges, whether a calendar node's per-lane range check can come off and whether a checked int
+   operation's overflow check can, are read off a fact that tightens with every equality found.
+   The same facts feed a choice the code already names: `BoundedDivide` costs two lane
+   operations where `ConstDivide` costs seven, and its bound is proved structurally or by a
+   `GuardedRange` below it. That guard declines the batch to the row engine, so it is a priced
+   option and never a free rewrite.
+4. *Lowerings as alternatives in one class.* The division and calendar lowerings stay as
+   candidate generators and the extractor chooses by a cost table keyed by operation,
+   representation and width. Needs the representation on IR values.
+5. *Physical forms as members of an e-class*, `yyyymmdd` the first case, probed first with
+   e-nodes beside the IR and the existing prices.
+6. *Shape-cache keys from a canonical form*, so equivalent queries share a kernel. There is no
+   corpus of query shapes to measure the hit rate on yet (`sql/varka/traffic` holds repository
+   statistics, not queries), so the corpus comes first.
+
+**Where the nodes live.** The owner proposed holding the IR's nodes as rows of flat arrays inside
+jegg, in off-heap arenas allocated once before planning and released after, with analyses, costs
+and dynamic rewrites reading rows through accessors instead of records. It is jegg issue #92,
+with a profile of jegg's `main` (a profile, not a committed benchmark), the pros and cons, a
+staged plan, predictions and a gate. What matters here: the collector is not the payoff, since
+GC time was negligible in every profiled run and a flat store gets the same from plain `int[]`;
+the payoff is memory per node, the hashing and building share of rebuild and apply, and, off
+heap, alignment and reuse. Three things would be Varka's to decide. First, the memory is
+Varka's to supply. Compilation runs once per shape and the result is cached, and whether a task
+allocator is in reach where it runs is the first thing to check. The safe default is Varka's own
+arena, as the warm-up's is (`VarkaKernelWarmup`), confined to the compiling thread, 64-byte
+aligned like `VarkaScratch`, and closed after extraction; whether it counts against Spark's
+off-heap budget is the owner's call. Second, analyses and costs over rows lose the exhaustive
+`switch` over the sealed IR, so the IR would need an opcode with accessors for them. Third,
+Varka's graphs are expected to be small, a projection of ten thousand nodes being the
+benchmark's size, which weakens the memory argument; the cold first compile, unmeasured, is what
+counts, so a cold-start measurement gates it.
+
+**When.** Step 1 needs only jegg 0.1.0 on Central and can become a task when the owner schedules
+it; step 2 follows it. Steps 3 to 5 wait for the representation on IR values and for jegg's cost
+function with child facts. The storage question waits for jegg's cheaper speed items and its own
+gate (#92). Done when step 1's table exists and item 11's decision is taken from it.
 
 ## 5. Ordering
 
