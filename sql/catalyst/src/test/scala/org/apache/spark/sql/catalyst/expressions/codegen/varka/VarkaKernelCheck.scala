@@ -25,10 +25,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
 /**
- * The fuzzers' row-by-row check of one emitted int-lane kernel against
- * [[VarkaReferenceEvaluator]], shared by the IR fuzzer's drawn and wide shapes and the
- * composition fuzzer's compiled kernels (VARKA-238). Scala because the oracle it drives is a Scala
- * object.
+ * The fuzzers' row-by-row check of one emitted kernel against [[VarkaReferenceEvaluator]], at the
+ * int lane and at the long lane, shared by the IR fuzzer's drawn, long and wide shapes and the
+ * composition fuzzer's compiled kernels (VARKA-238, VARKA-289). Scala because the oracle it drives
+ * is a Scala object.
  */
 object VarkaKernelCheck {
 
@@ -37,6 +37,10 @@ object VarkaKernelCheck {
    * the masked body is forced by reporting a null over a full bitmap.
    */
   case class Batch(length: Int, patterns: Seq[Int => Boolean], data: Array[Array[Int]],
+      forceMasked: Boolean)
+
+  /** [[Batch]] at the long lane: the same, with 64-bit column values. */
+  case class LongBatch(length: Int, patterns: Seq[Int => Boolean], data: Array[Array[Long]],
       forceMasked: Boolean)
 
   private def alloc(arena: Arena, bytes: Long): MemorySegment =
@@ -119,6 +123,91 @@ object VarkaKernelCheck {
               want.foreach { v =>
                 assert(outs(o)._2.get(ValueLayout.JAVA_INT, i * 4L) === v,
                   s"$context: output $o row $i differs (want $v)")
+              }
+          }
+        }
+      }
+      true
+    } finally {
+      arena.close()
+      loader.release()
+    }
+  }
+
+  /**
+   * [[runAndCompare]] at the long lane: 64-bit buffers, the eight-argument `run` with `lits` as
+   * the long literal table, and `evalLong` as the oracle. Null lanes are poisoned with the lane's
+   * own extremes. A narrowing root stores four bytes a row, so its output is read at that width
+   * and sign-extended: a value that did not fit 32 bits then differs from the evaluator's 64-bit
+   * answer instead of being truncated on both sides.
+   */
+  def runAndCompareLong(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
+      declineAllowed: Boolean = false): Boolean = {
+    val LongBatch(length, patterns, data, forceMasked) = batch
+    val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
+    loader.defineGeneratedClass(className, bytes)
+    val kernel = loader.loadClass(className).getConstructor().newInstance()
+      .asInstanceOf[VarkaFusedKernel]
+    val arena = Arena.ofConfined()
+    try {
+      val srcData = new Array[Long](numInputs)
+      val srcValidity = new Array[Long](numInputs)
+      val nullCounts = new Array[Int](numInputs)
+      for (c <- 0 until numInputs) {
+        val d = alloc(arena, length * 8L)
+        val v = alloc(arena, (length + 7) / 8L)
+        v.fill(0.toByte)
+        var nulls = 0
+        for (i <- 0 until length) {
+          if (patterns(c)(i)) {
+            d.set(ValueLayout.JAVA_LONG, i * 8L,
+              if ((nulls & 1) == 0) Long.MinValue else Long.MaxValue)
+            nulls += 1
+          } else {
+            d.set(ValueLayout.JAVA_LONG, i * 8L, data(c)(i))
+            val off = i / 8L
+            v.set(ValueLayout.JAVA_BYTE, off,
+              (v.get(ValueLayout.JAVA_BYTE, off) | (1 << (i % 8))).toByte)
+          }
+        }
+        srcData(c) = d.address()
+        nullCounts(c) = if (forceMasked && nulls == 0) 1 else nulls
+        srcValidity(c) =
+          if (nullCounts(c) == 0 || nulls == length) 0L else v.address()
+      }
+      val outs = roots.map { r =>
+        val d = alloc(arena, length * 8L)
+        for (i <- 0 until length) d.set(ValueLayout.JAVA_LONG, i * 8L, 0xDEADBEEFCAFEBABEL)
+        val v = alloc(arena, (length + 7) / 8L)
+        v.fill(0xFF.toByte)
+        (if (r.isInstanceOf[Cond]) 0L else d.address(), d, v)
+      }
+      val status = kernel.run(srcData, srcValidity, nullCounts, outs.map(_._1).toArray,
+        outs.map(_._3.address()).toArray, Array.empty[Int], lits, length,
+        VarkaEmitterTestSupport.scratch(kernel, length))
+      if (status != 0 && declineAllowed) {
+        return false
+      }
+      assert(status === 0, s"$context: the kernel declined the batch (status $status)")
+      for (i <- 0 until length) {
+        val row = (0 until numInputs).map(c => if (patterns(c)(i)) None else Some(data(c)(i)))
+        for ((root, o) <- roots.zipWithIndex) {
+          val bit = (outs(o)._3.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+          root match {
+            case c: Cond =>
+              val want = VarkaReferenceEvaluator.evalCondLong(c, row, lits).contains(true)
+              assert(bit === want, s"$context: selection row $i differs (want $want)")
+            case _ =>
+              val want = VarkaReferenceEvaluator.evalLong(root, row, lits)
+              assert(bit === want.isDefined,
+                s"$context: validity of output $o row $i differs (want $want)")
+              val got: Long = root match {
+                case _: NarrowLane => outs(o)._2.get(ValueLayout.JAVA_INT, i * 4L).toLong
+                case _ => outs(o)._2.get(ValueLayout.JAVA_LONG, i * 8L)
+              }
+              want.foreach { v =>
+                assert(got === v, s"$context: output $o row $i differs (want $v)")
               }
           }
         }

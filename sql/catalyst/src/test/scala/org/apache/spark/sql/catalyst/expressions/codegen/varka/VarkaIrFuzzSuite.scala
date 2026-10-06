@@ -17,14 +17,12 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 import java.util.concurrent.atomic.AtomicInteger
 
 import scala.jdk.CollectionConverters._
 import scala.util.Random
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -73,7 +71,8 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * 180 groups, under option variants that reach every size mechanism - the regroup, the call-site
  * splits and their rollback, the split driver's stages, both grouping switches dropped, and the
  * decline. Every composition is checked row by row, under the defaults where its variant
- * declines, and a run that reaches no instance of some mechanism fails (`VarkaEmitTrace`).
+ * declines. A mechanism the drawn compositions miss is drawn for, up to six more cycles of the
+ * variants, and a run that still reaches no instance of it fails (`VarkaEmitTrace`, VARKA-289).
  *
  * Budget: `-Dvarka.fuzz.iterations` (default 300, a few seconds); `-Dvarka.fuzz.wide` (default
  * 10 compositions, a few seconds); `-Dvarka.fuzz.seed` (default fixed, so the committed run is
@@ -133,9 +132,6 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
       val bits = Array.fill(length)(rnd.nextInt(3) == 0)
       i => bits(i)
   }
-
-  private def alloc(arena: Arena, bytes: Long): MemorySegment =
-    arena.allocate(math.max(bytes, 1L), 8)
 
   /**
    * The shape's class, or None for a shape no form of the emitter holds. Under the byte budget
@@ -227,8 +223,6 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
       VarkaKernelCheck.Batch(length, patterns, data, forceMasked))
   }
 
-
-
   /**
    * `runOne` at the long lane: the same draw of length, null patterns, masking and options
    * over a long-lane shape, 64-bit buffers, the eight-argument `run`, and `evalLong` as the
@@ -265,77 +259,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
       case Some(b) => b
       case None => return
     }
-    val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
-    loader.defineGeneratedClass(className, bytes)
-    val kernel = loader.loadClass(className).getConstructor().newInstance()
-      .asInstanceOf[VarkaFusedKernel]
-    val arena = Arena.ofConfined()
-    try {
-      val srcData = new Array[Long](numInputs)
-      val srcValidity = new Array[Long](numInputs)
-      val nullCounts = new Array[Int](numInputs)
-      for (c <- 0 until numInputs) {
-        val d = alloc(arena, length * 8L)
-        val v = alloc(arena, (length + 7) / 8L)
-        v.fill(0.toByte)
-        var nulls = 0
-        for (i <- 0 until length) {
-          if (patterns(c)(i)) {
-            d.set(ValueLayout.JAVA_LONG, i * 8L,
-              if ((nulls & 1) == 0) Long.MinValue else Long.MaxValue)
-            nulls += 1
-          } else {
-            d.set(ValueLayout.JAVA_LONG, i * 8L, data(c)(i))
-            val off = i / 8L
-            v.set(ValueLayout.JAVA_BYTE, off,
-              (v.get(ValueLayout.JAVA_BYTE, off) | (1 << (i % 8))).toByte)
-          }
-        }
-        srcData(c) = d.address()
-        nullCounts(c) = if (forceMasked && nulls == 0) 1 else nulls
-        srcValidity(c) =
-          if (nullCounts(c) == 0 || nulls == length) 0L else v.address()
-      }
-      val outs = roots.map { r =>
-        val d = alloc(arena, length * 8L)
-        for (i <- 0 until length) d.set(ValueLayout.JAVA_LONG, i * 8L, 0xDEADBEEFCAFEBABEL)
-        val v = alloc(arena, (length + 7) / 8L)
-        v.fill(0xFF.toByte)
-        (if (r.isInstanceOf[Cond]) 0L else d.address(), d, v)
-      }
-      val status = kernel.run(srcData, srcValidity, nullCounts, outs.map(_._1).toArray,
-        outs.map(_._3.address()).toArray, Array.empty[Int], lits, length,
-        VarkaEmitterTestSupport.scratch(kernel, length))
-      assert(status === 0, s"$context: the kernel declined the batch (status $status)")
-      for (i <- 0 until length) {
-        val row = (0 until numInputs).map(c => if (patterns(c)(i)) None else Some(data(c)(i)))
-        for ((root, o) <- roots.zipWithIndex) {
-          val bit = (outs(o)._3.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
-          root match {
-            case c: Cond =>
-              val want = VarkaReferenceEvaluator.evalCondLong(c, row, lits).contains(true)
-              assert(bit === want, s"$context: selection row $i differs (want $want)")
-            case _ =>
-              val want = VarkaReferenceEvaluator.evalLong(root, row, lits)
-              assert(bit === want.isDefined,
-                s"$context: validity of output $o row $i differs (want $want)")
-              // A narrowing root stores four bytes a row; read at that width and sign-extended,
-              // a value that did not fit 32 bits differs from the evaluator's 64-bit answer
-              // instead of being truncated on both sides.
-              val got: Long = root match {
-                case _: NarrowLane => outs(o)._2.get(ValueLayout.JAVA_INT, i * 4L).toLong
-                case _ => outs(o)._2.get(ValueLayout.JAVA_LONG, i * 8L)
-              }
-              want.foreach { v =>
-                assert(got === v, s"$context: output $o row $i differs (want $v)")
-              }
-          }
-        }
-      }
-    } finally {
-      arena.close()
-      loader.release()
-    }
+    VarkaKernelCheck.runAndCompareLong(context, className, bytes, roots, numInputs, lits,
+      VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked))
   }
 
   /** The record node types of the sealed IR, by simple name. */
@@ -555,7 +480,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
     // Under the defaults nothing of this width declines: the split driver serves every one.
     assert(wideChecked === wideIterations,
       s"$wideChecked of $wideIterations compositions ran against the reference evaluator")
-    val reached = Seq(
+    def reached: Seq[(String, Int)] = Seq(
       "a group halved on bytes" -> trace.byteRegroups,
       "a group split on call sites" -> trace.siteSplits,
       "the call-site splits rolled back" -> trace.siteRollbacks,
@@ -563,12 +488,25 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
       "the exact grouping dropped" -> trace.exactFallbacks,
       "the prediction dropped" -> trace.predictFallbacks,
       "a decline" -> wideDeclines)
-    reached.foreach { case (mechanism, n) => info(s"$mechanism: $n") }
+    def missed: Seq[String] = reached.collect { case (mechanism, 0) => mechanism }
     // Every variant runs at least once only from a full cycle up. Which mechanisms a width
-    // reaches is the defaults' structure, so the option matrix checks only the answers.
+    // reaches is the defaults' structure, so the option matrix checks only the answers. A
+    // mechanism the drawn compositions missed is drawn for: further compositions, cycling the
+    // variants and each checked row by row, up to six cycles of them (VARKA-289), so the run
+    // fails only where a mechanism has become unreachable, not where ten draws were unlucky.
     if (wideIterations >= wideVariants.size && VarkaMatrix.config.isEmpty) {
-      val missed = reached.collect { case (mechanism, 0) => mechanism }
-      assert(missed.isEmpty, s"no wide composition reached: ${missed.mkString(", ")}")
+      val cap = wideIterations + 6 * wideVariants.size
+      var k = wideIterations
+      while (missed.nonEmpty && k < cap) {
+        runWide(k, trace)
+        k += 1
+      }
+      info(s"${k - wideIterations} further compositions drawn for a mechanism the first " +
+        s"$wideIterations missed")
+      reached.foreach { case (mechanism, n) => info(s"$mechanism: $n") }
+      assert(missed.isEmpty, s"no wide composition reached, in $k: ${missed.mkString(", ")}")
+    } else {
+      reached.foreach { case (mechanism, n) => info(s"$mechanism: $n") }
     }
   }
 

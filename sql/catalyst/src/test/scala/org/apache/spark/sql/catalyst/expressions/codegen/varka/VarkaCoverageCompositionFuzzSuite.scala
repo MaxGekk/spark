@@ -24,7 +24,8 @@ import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, FusedOutput, KernelOutput, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
-import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.catalyst.util.{DateTimeConstants, DateTimeUtils}
+import org.apache.spark.sql.types.{DataType, DayTimeIntervalType, TimeType}
 
 /**
  * Random compositions of the coverage table, through the compiler to the emitter.
@@ -49,9 +50,10 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * Past the columns one kernel reads (VARKA-238): a third test spreads each of 150 to 300 rows over
  * eighty renamed copies of the table's columns, so the compiler serves the projection with
  * several kernels (`VarkaEmitOptions.severalKernels`), holds the same property, and runs every
- * int-lane kernel without derived inputs or bounds against the reference evaluator
- * (`VarkaKernelCheck`); a batch a guard declines, over columns drawn without their domains, is
- * counted rather than compared. `-Dvarka.fuzz.wideCompositions` sets its count (default 20).
+ * kernel, at either lane, against the reference evaluator (`VarkaKernelCheck`). A batch a guard
+ * declines, over columns drawn without all of their domains, is drawn again nearer zero, so every
+ * kernel is compared and each lane that has kernels has comparisons (VARKA-289).
+ * `-Dvarka.fuzz.wideCompositions` sets its count (default 20).
  *
  * Budget: `-Dvarka.fuzz.compositions` (default 40, under a minute); `-Dvarka.fuzz.seed` (default
  * fixed, shared with the IR fuzzer so a nightly varies both with one property). A failure names
@@ -177,18 +179,42 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
     sys.props.get("varka.fuzz.wideCompositions").map(_.toInt).getOrElse(20)
 
   /**
-   * Runs one compiled int-lane kernel against the reference evaluator, each input drawn from its
-   * own domain: a derived input from its kind's codes, a bounded input inside its bound, any other
-   * within thirty thousand either side of zero. A batch a guard still declines is counted rather
-   * than compared. Returns whether rows were compared.
+   * The value of a long-lane input of `dataType` at `scale`, the attempt's step towards zero: a
+   * `TIME` inside the day in nanoseconds, the domain every long-lane guard assumes; a day-time
+   * interval and a `BIGINT` within 2^45 and 2^40 of zero, then nearer at each step.
    */
-  private def checkKernel(plan: CompiledVarkaProjection, opts: VarkaEmitOptions, rnd: Random,
-      where: String): Boolean = {
-    if (plan.lane != LaneType.INT) {
-      return false
+  private def drawLong(rnd: Random, dataType: DataType, scale: Int): Long = {
+    def within(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
+    (dataType, scale) match {
+      case (_, 2) => 1 + rnd.nextInt(3)
+      case (_: TimeType, 0) => Math.floorMod(rnd.nextLong(), DateTimeConstants.NANOS_PER_DAY)
+      case (_: TimeType, _) => Math.floorMod(rnd.nextLong(), 1000000L)
+      case (_: DayTimeIntervalType, 0) => within(1L << 45)
+      case (_, 0) => within(1L << 40)
+      case _ => within(30000)
     }
+  }
+
+  /** Kernels compared row by row and batches drawn again after a decline, per lane. */
+  private val comparedByLane = scala.collection.mutable.Map.empty[LaneType, Int]
+  private val kernelsByLane = scala.collection.mutable.Map.empty[LaneType, Int]
+  private var redrawn = 0
+
+  /**
+   * Runs one compiled kernel, at its lane, against the reference evaluator over `inputs`, the
+   * attributes its input ordinals index. Each input is drawn from its own domain: a derived input
+   * from its kind's codes, a bounded input across its bound, an int-lane input within thirty
+   * thousand either side of zero, a long-lane one by its type (`drawLong`). A batch a guard
+   * declines is drawn again twice, nearer zero each time and a bounded input clamped into its
+   * bound, the last within one to three, which no guard declines; each attempt keeps the length
+   * and null patterns. The test then asserts that
+   * every kernel was compared.
+   */
+  private def checkKernel(plan: CompiledVarkaProjection, inputs: Seq[Attribute],
+      opts: VarkaEmitOptions, rnd: Random, where: String): Unit = {
     val numInputs = plan.inputOrdinals.size
     kernelCounter += 1
+    kernelsByLane(plan.lane) = kernelsByLane.getOrElse(plan.lane, 0) + 1
     val className = s"org.apache.spark.sql.varka.execution.VarkaCompositionWide$kernelCounter"
     val bytes = VarkaLoopEmitter.emit(className, plan.outputs.asJava, numInputs,
       plan.numLiterals, null, null, opts)
@@ -202,33 +228,56 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
           (i: Int) => bits(i)
       }
     }
-    val data = Array.tabulate(numInputs) { i =>
-      val bound = plan.inputBounds.find(_.inputIndex == i)
-      Array.fill(length) {
-        plan.derivedAt(i).map(_.kind) match {
-          case Some(VarkaDerivedKind.TRUNC_LEVEL) =>
-            DateTimeUtils.TRUNC_TO_WEEK +
-              rnd.nextInt(DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
-          case Some(_) => rnd.nextInt(7)
-          case None => bound match {
-            case Some(b) =>
-              (b.lo + (rnd.nextLong() & Long.MaxValue) % (b.hi.toLong - b.lo + 1)).toInt
-            case None => rnd.nextInt(60001) - 30000
-          }
+    val forceMasked = length > 1 && rnd.nextBoolean()
+    val context = s"$where, ${plan.lane} kernel of ${plan.outputs.size}"
+    def intValue(i: Int, scale: Int): Int = plan.derivedAt(i).map(_.kind) match {
+      case Some(VarkaDerivedKind.TRUNC_LEVEL) =>
+        DateTimeUtils.TRUNC_TO_WEEK +
+          rnd.nextInt(DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
+      case Some(_) => rnd.nextInt(7)
+      case None =>
+        def unbounded: Int = scale match {
+          case 0 => rnd.nextInt(60001) - 30000
+          case 1 => rnd.nextInt(201) - 100
+          case _ => 1 + rnd.nextInt(3)
         }
-      }
+        plan.inputBounds.find(_.inputIndex == i) match {
+          case Some(b) if scale == 0 =>
+            (b.lo + (rnd.nextLong() & Long.MaxValue) % (b.hi.toLong - b.lo + 1)).toInt
+          // Nearer zero as the unbounded draw, inside the bound: a value across the whole of
+          // it, added to a date, passes the date guard at every attempt.
+          case Some(b) => unbounded.max(b.lo).min(b.hi)
+          case None => unbounded
+        }
     }
-    VarkaKernelCheck.runAndCompare(s"$where, kernel of ${plan.outputs.size}", className, bytes,
-      plan.outputs, numInputs, plan.literals.toArray,
-      VarkaKernelCheck.Batch(length, patterns, data, forceMasked = length > 1 && rnd.nextBoolean()),
-      declineAllowed = true)
+    def attempt(scale: Int): Boolean = if (plan.lane == LaneType.LONG) {
+      val data = Array.tabulate(numInputs) { i =>
+        val dataType = inputs(plan.inputOrdinals(i)).dataType
+        Array.fill(length)(drawLong(rnd, dataType, scale))
+      }
+      VarkaKernelCheck.runAndCompareLong(context, className, bytes, plan.outputs, numInputs,
+        plan.longLiterals.toArray,
+        VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked), declineAllowed = true)
+    } else {
+      val data = Array.tabulate(numInputs)(i => Array.fill(length)(intValue(i, scale)))
+      VarkaKernelCheck.runAndCompare(context, className, bytes, plan.outputs, numInputs,
+        plan.literals.toArray, VarkaKernelCheck.Batch(length, patterns, data, forceMasked),
+        declineAllowed = true)
+    }
+    val compared = (0 until 3).exists { scale =>
+      if (scale > 0) redrawn += 1
+      attempt(scale)
+    }
+    if (compared) comparedByLane(plan.lane) = comparedByLane.getOrElse(plan.lane, 0) + 1
   }
 
   test("random projections over more columns than a kernel reads are fused or declined, and " +
       "their kernels answer as the reference evaluator does") {
     var severalKernels = 0
-    var compared = 0
     var widest = 0
+    comparedByLane.clear()
+    kernelsByLane.clear()
+    redrawn = 0
     for (iteration <- 0 until wideIterations) {
       val rnd = new Random(seed * 1000003L + 900000L + iteration)
       val picked = Seq.fill(150 + rnd.nextInt(151))(projections(rnd.nextInt(projections.size)))
@@ -260,15 +309,24 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
         if (p.kernels.size > 1) {
           severalKernels += 1
         }
-        p.kernels.foreach(k => if (checkKernel(k, opts, rnd, where)) compared += 1)
+        p.kernels.foreach(checkKernel(_, wide, opts, rnd, where))
       }
     }
+    def perLane(m: scala.collection.Map[LaneType, Int]): String =
+      LaneType.values.toSeq.map(l => s"${m.getOrElse(l, 0)} $l").mkString(", ")
     info(s"$severalKernels of $wideIterations projections served by several kernels, " +
-      s"$compared kernels compared row by row, the widest first kernel reading $widest columns")
-    // From the default count up: a handful of projections can all be of the long lane.
-    assert(severalKernels > 0 && (compared > 0 || wideIterations < 20),
-      s"$severalKernels projections reached several " +
-      s"kernels and $compared kernels were compared; the widest first kernel read $widest columns")
+      s"kernels compared row by row: ${perLane(comparedByLane)} of ${perLane(kernelsByLane)}, " +
+      s"$redrawn batches drawn again after a decline, the widest first kernel reading $widest " +
+      "columns")
+    // Every lane that has kernels has comparisons, since a declined batch is drawn again until
+    // no guard declines it; the draw decides only how many kernels each lane gets.
+    assert(severalKernels > 0, s"no projection reached several kernels; the widest first " +
+      s"kernel read $widest columns")
+    kernelsByLane.keys.foreach { lane =>
+      assert(comparedByLane.getOrElse(lane, 0) == kernelsByLane(lane),
+        s"${comparedByLane.getOrElse(lane, 0)} of ${kernelsByLane(lane)} $lane kernels were " +
+          "compared row by row")
+    }
   }
 
   test("random projections of coverage rows are fused or declined in bytes, never thrown") {
