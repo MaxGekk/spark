@@ -127,6 +127,11 @@ sizes that matter: under a thousand nodes, where Varka's graphs are, and ten tho
 3. FFM rows cost more than `int[]` columns only where a `VarHandle` is not folded.
 4. The real IR as value records (arm 5) is smaller a node than records by less than half, since
    the child references stay, and within 1.3x in time.
+5. *The owner's, added 6 October 2026 before any run.* A flat layout beats records at every size,
+   not only past a thousand nodes: from experience, flat arrays almost always win over trees of
+   objects on the cache hierarchies of current CPUs. It is scored against prediction 2, which expects
+   no gap at a thousand nodes or fewer, and on the warm and the cold measures separately, so that a
+   win in steady state which the cold first compile loses is seen as it is.
 
 ### 6.2 The gate
 
@@ -162,3 +167,146 @@ client of it, or Varka's.
 6. Section 9, the gate's verdict, and item 85's "Where the nodes live" updated from it.
 
 ## 9. Outcome
+
+### 9.1 Step 1, the exporter, 6 October 2026
+
+The last admission check of section 2 is done: a reflection over the IR's records describes every
+graph the corpus and the grammar build, and rebuilds it into records equal to the original.
+
+**What the 37 kinds are made of**, read by reflection: every one is a record, and a component is a
+child node (45 of them across the kinds, six typed as the `Cond` subtype), one of five enums
+(`CompareOp`, `IntOp`, `LaneType`, `Overflow`, `TruncLevel`), an `int` (six), a `long` (four), a
+`boolean` (one), or a single `List<Integer>`, `InRanges.bounds`. So a description line needs only
+the kind, its scalars as text and its children's ids; `VarkaIrDescription` writes it, rebuilds a
+record through its canonical constructor by walking the components once, and holds equal subtrees
+as one line.
+
+**The checks.** `VarkaIrDescriptionSuite` round-trips every shape of the corpus and 400 draws of
+each of the grammar's int and long shapes and 20 of each wide one, through the graph and through
+the text, and requires the union to contain all 37 kinds. The corpus alone reaches all 37, as a
+run with the draws removed showed; with nothing reached the test fails and lists the kinds, so the
+assertion can fail. Equal subtrees being one node, and a description that names an unknown kind or
+a child that does not come before its parent being refused, have a test each.
+
+**What the corpus is, and what it lacks.** `VarkaIrLayoutExport` writes its families, and the
+spike's gate asks for sizes it does not reach:
+
+| family | graphs | nodes | largest graph |
+|---|---|---|---|
+| size ladder | 5 | 3860 | 2002 |
+| make_date ladder | 2 | 150 | 123 |
+| cheap tails | 2 | 176 | 130 |
+| fuzz, int | 2000 | 18680 | 34 |
+| fuzz, long | 2000 | 21773 | 26 |
+| wide, int | 200 | 63055 | 609 |
+| wide, long | 200 | 75872 | 799 |
+| past the driver's ceiling | 2 | 10004 | 6002 |
+| wide compositions, int | 20 | 16970 | 1057 |
+| wide compositions, long | 20 | 20704 | 1240 |
+| **grown ladder** (added) | 2 | 11004 | 10002 |
+| **deep chain** (added) | 3 | 2339 | 2049 |
+
+The corpus's largest graph is 6002 nodes and every entry in it is a tree four deep, so it has
+neither the ten thousand nodes of section 3.1 nor any depth to read a hash's cost against. The
+exporter adds two families of its own: the size ladder's entry repeated 200 and 2000 times, about a
+thousand and ten thousand nodes, and one output nested 16, 128 and 1024 levels, which is where a
+record's hash walks the whole chain on every lookup.
+
+**Next**, step 2: arms 1 and 2 and the agreement check on JDK 25, and the small families committed
+beside the harness.
+
+### 9.2 Decisions for step 2, 6 October 2026
+
+Made with the owner, after step 1, before any harness code. Sections 1 to 8 stand as written; this
+says what changed and why.
+
+**The order.** The owner judged FFM struct rows the more promising arm, so step 2 builds arms 1
+(records) and 3 (FFM struct rows) and `int[]` columns (arm 2) move to step 3, as the plain-array
+baseline FFM's cost is read against. Prediction 3, that FFM costs more than `int[]` only where a
+`VarHandle` is not folded, is scored at step 3, when the baseline exists.
+
+**Two row layouts for arm 3**, from the 244,587 nodes `VarkaIrLayoutExport` writes. A row is
+addressed by id, row `i` at byte `16 * i` or `32 * i`, and a child id of -1 means none.
+
+```
+ Layout A: 32 bytes, fixed (the row of eight ints jegg issue #92 proposes)
+  byte   0         4         8         12        16                  24                  32
+         +---------+---------+---------+---------+-------------------+-------------------+
+         |  kind   |   c0    |   c1    |   c2    |        p0         |        p1         |
+         +---------+---------+---------+---------+-------------------+-------------------+
+          int32     int32     int32     int32     int64               int64
+
+ Layout B: 16 bytes, children in the row, only scalars spill
+  byte   0         4         8         12        16
+         +---------+---------+---------+---------+
+         |  head   |   c0    |   c1    |   c2    |
+         +---------+---------+---------+---------+
+          int32     int32     int32     int32
+```
+
+`kind` is the record kind's index in a fixed table of the 37 kinds. `c0` to `c2` are child ids in
+component order, so `IfElse` is condition, then, else and `MakeDate` year, month, day. In A, `p0`
+and `p1` hold the scalars in component order, each widened to 64 bits (an enum's ordinal, an `int`,
+a `long`, a `boolean`); `BoundedDivide`'s four ints are packed two to a long, and `InRanges` keeps
+its list's offset and length in `p0` and `p1`, the only use of a pool in A.
+
+In B, `head` holds the kind in bits 0 to 5 and the node's scalars in bits 6 to 31, or, for the four
+kinds whose scalars do not fit, the offset of an entry in a pool of ints, interned so that equal
+rows stay equal. The widths come from the enums (`CompareOp` has 5 constants, `IntOp` 3,
+`LaneType` 2, `Overflow` 3, `TruncLevel` 3), `MAX_INPUTS` (64) and the largest literal index in the
+corpus (1999):
+
+| kind | in `head`, from bit 6 |
+|---|---|
+| `ColumnRef`, `LiteralSlot` | bit 6 = lane (INT or LONG), bits 7 to 31 = ordinal or literal index |
+| `IntArith` | bits 6 to 7 = op (ADD, SUB, MUL), bits 8 to 9 = overflow mode (WRAP, FAIL, NULL) |
+| `IntNeg` | bits 6 to 7 = overflow mode |
+| `Compare` | bits 6 to 8 = op (LT, LE, GT, GE, EQ) |
+| `TruncDate` | bits 6 to 7 = level (YEAR, MONTH, QUARTER) |
+| `MakeDate` | bit 6 = `failOnError` |
+| 26 other kinds | 0, they have no scalars |
+| `BoundedDivide` | pool entry: divisor, bound, multiplier, shift |
+| `ConstDivide` | pool entry: divisor and dividend bound, each as a low and a high int |
+| `GuardedRange` | pool entry: lo and hi, each as a low and a high int |
+| `InRanges` | pool entry: the count, then the bounds |
+
+The pool never holds a child id, so nothing in it changes when an e-graph rewrites children. About
+12% of the corpus's nodes spill, and the average is about 18 bytes a node for B, against 32 for A;
+a hash-consing table adds about 8 bytes a node while a graph is built. What a record costs is the
+experiment's to measure, so whether either layout meets prediction 1 is not yet known. An earlier
+draft of B kept the third child of `IfElse` and `MakeDate` in the pool; that is wrong for an
+e-graph, whose rebuild rewrites children in place, so all three children are in the row.
+
+**One row format and one builder, not two copies of the graph.** An immutable IR is an e-graph
+with no merges, so with a node's id as its class id the IR's rows are already valid e-graph rows,
+with nothing converted on the way in. The compiler builds rows once; a shape that does not
+saturate keeps them as the shape cache's key, and one that does appends rows, merges classes, and
+extracts a compact immutable selection, the only copy, because a saturated graph is too large,
+mutable and confined to one thread to be retained and read by many. Whether jegg stays a separate
+library or becomes a part of Varka is open, and a change to jegg to adopt such a store is
+postponed with it; the accessors are plain functions of a store and a row, with no interface for a
+library to plug into.
+
+**Where the e-graph's own state lives:** in the row, only what is the node: kind, scalars and
+children, which rebuild rewrites to canonical ids. Everything else is a side array indexed by row
+id and allocated per saturation, so a graph that never saturates pays nothing and the retained
+selection carries nothing:
+
+| state | where | why |
+|---|---|---|
+| union-find parent | side `int[]` | `find` runs on every child during matching and rebuild |
+| members of a class | side `int[]` `next`, a circular list | merging two classes swaps two pointers |
+| parent lists | side pool, 8 bytes a child edge | a node is in the list of each child, 1.59 children a node here |
+| analysis facts | side arrays by class id | one array per analysis, allocated if it runs |
+| repair marks | a bitset | a bit a row |
+| hashcons table | side `int[]`, shared with the IR | the table hash-consing the IR already uses |
+| extraction costs and choices | side arrays | transient |
+
+The class-member `next` is the one candidate for the row, if matching turns out to wait on the
+cache miss of reading it; that is a layout variant for step 5, not a decision now.
+
+**Measures added.** A rebuild pass, which remaps every row's children through a permutation as
+`find` would, rehashes and re-interns, since that is what an e-graph does to a layout and reads do
+not show it; and the cost of adopting an IR's rows as singleton classes against extracting a
+selection.
+
