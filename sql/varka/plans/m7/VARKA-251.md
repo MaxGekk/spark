@@ -136,3 +136,36 @@ a batch, wide:
 | 1 | 620 | 579 | 138 | 812 |
 | 16 | 589 | 592 | 518 | 1352 |
 | 1024 | 822 | 1313 | 1233 | 30398 |
+
+### 9.2 The split, 6 October 2026
+
+The six components and the base composing them, `1a59b2b1e40`, the benchmark regenerated the same
+way on the same machine (the files' provenance). Nanoseconds a batch, before and after:
+
+| rows | shape | wide before | wide after | narrow before | narrow after |
+|---|---|---|---|---|---|
+| 1 | int lane | 620 | 534 | 588 | 538 |
+| 1 | long lane | 579 | 555 | 746 | 724 |
+| 1 | filter | 138 | 146 | 138 | 142 |
+| 1 | derived input | 812 | 729 | 752 | 780 |
+| 16 | int lane | 589 | 558 | 577 | 589 |
+| 16 | long lane | 592 | 589 | 847 | 880 |
+| 16 | filter | 518 | 490 | 532 | 508 |
+| 16 | derived input | 1352 | 1255 | 1259 | 1333 |
+| 1024 | int lane | 822 | 836 | 839 | 883 |
+| 1024 | long lane | 1313 | 1334 | 12287 | 12375 |
+| 1024 | filter | 1233 | 1202 | 2482 | 2493 |
+| 1024 | derived input | 30398 | 30281 | 28166 | 28086 |
+
+**The scoring.**
+
+1. *No case slower by more than 10%.* Held: the largest slowdown is 5.9%, the narrow derived input
+   at 16 rows; most cases are faster.
+2. *The 1-row cases no more than 50 ns slower.* Held: the slower ones lose 8 ns (filter, wide), 4
+   ns (filter, narrow) and 28 ns (derived input, narrow). The wide int lane is 85 ns faster, the
+   per-input allocations `fillSources` made gone.
+
+The gate's two suite steps first failed one test at both widths, `VarkaKernelEvaluatorSuite`'s
+capped-allocator test: it caps the scratch by overriding `taskAllocator`, and the scratch had
+asked the ledger instead. It grows through `taskAllocator` again, as before the split.
+

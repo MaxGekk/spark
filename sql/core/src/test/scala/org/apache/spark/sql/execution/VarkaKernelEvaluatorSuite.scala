@@ -31,6 +31,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoRe
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.execution.varka.VarkaBatchDeclined
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.{DateType, IntegerType, StringType, YearMonthIntervalType}
