@@ -4538,10 +4538,80 @@ Varka's graphs are expected to be small, a projection of ten thousand nodes bein
 benchmark's size, which weakens the memory argument; the cold first compile, unmeasured, is what
 counts, so a cold-start measurement gates it.
 
-**When.** Step 1 needs only jegg 0.1.0 on Central and can become a task when the owner schedules
-it; step 2 follows it. Steps 3 to 5 wait for the representation on IR values and for jegg's cost
-function with child facts. The storage question waits for jegg's cheaper speed items and its own
-gate (#92). Done when step 1's table exists and item 11's decision is taken from it.
+**The storage spike.** *Added 6 October 2026, at the owner's request, from a probe of Project
+Valhalla's value classes and of the foreign-memory API.* The storage question above is a
+measurement, and it needs neither jegg nor Maven Central, so it can run first. Two things the
+probe settled change what it compares.
+
+*Value classes do not flatten a tree.* A node whose children are references to other nodes stays a
+graph of pointers whether it is a record or a value record; what a value class can flatten is an
+array of small rows. The probe ran the early-access build `27-jep401ea3+1-1` of March 2026
+(checksum verified; JEP 401 is a preview feature, which the JEP page says is integrated in JDK 28,
+and `--enable-preview` is not something Varka's rules allow) and asked the VM, with
+`ValueClass.isFlatArray`, which arrays are flat:
+
+| array | flat |
+|---|---|
+| nullable value record, 7 bytes of payload | yes |
+| nullable value record, 8 bytes | no: payload and null flag pass 64 bits |
+| nullable value record, 16 bytes | no |
+| null-restricted atomic, 16 bytes | no |
+| null-restricted non-atomic, 16 bytes | no, silently given an atomic array |
+| null-restricted non-atomic, 16 bytes, `@LooselyConsistentValue` | yes |
+
+So a row of the width a node needs is flat only through `jdk.internal` classes and an internal
+annotation, and the public preview flattens rows of about 63 bits and less; null-restriction is a
+later, separate JEP. The probe is a scratch program, not a committed benchmark; the heap-size
+deltas it also printed were noisy and are not evidence.
+
+*Typed flat rows exist today, in final APIs.* A `StructLayout` with named `int` fields, `VarHandle`
+accessors from `layout.varHandle(PathElement.groupElement(..))`, and a `MemorySegment` from an
+`Arena` give a 16-byte row of opcode, payload and two child ids: off heap, 64-byte aligned, zeroed,
+bounds-checked, freed when the arena closes, on JDK 25 with no preview flag and no
+`--enable-native-access` (that is needed by `reinterpret`, not by `Arena.allocate`). The same
+accessors run over a heap array through `MemorySegment.ofArray`. Run on this machine with a
+16-byte row, a read one row past the end throws `IndexOutOfBoundsException` and a heap-backed
+segment writes through to its `int[]`. The `VarHandle`s must be `static final` for the JIT to fold
+them, so the accessors' cost against plain arrays is part of what is measured.
+
+**The experiment.** Four layouts for the same graphs, in a scratch worktree and not in the
+repository, because the fourth needs the preview JDK:
+
+1. Records, today's `VarkaVectorIR`, as the baseline.
+2. `int[]` columns, the layout jegg issue #92 proposes: opcode, payload, and child ids each a
+   column, indexed by node id.
+3. FFM struct rows on JDK 25, as above, off heap and on heap.
+4. Value-record rows on the early-access JDK, as the reference for what a later JDK allows,
+   including a 63-bit packed row (opcode and up to three child ids in one word, which limits a
+   graph to about half a million nodes, ten thousand being the benchmark's size).
+
+The graphs are the real IR's: the shapes of `VarkaEmitCostCorpus` and the TPC queries through the
+compiler, and projections built up to ten thousand nodes. Each layout is measured on: build time;
+bytes a node; structural hash and equality; one bottom-up analysis, a `dayRange`-like interval
+pass; and the cold first run, which the memory argument above says is what counts. Whether a
+layout is flat is read from `isFlatArray` or from the layout's own size, never from heap deltas.
+Each claim under 1.3x is re-run and compared by minimums, and read against a band, as
+`sql/varka/AGENTS.md` asks.
+
+*Predictions, guesses scored when it runs.* A flat layout is at least twice as small a node as a
+record, whose header and child references a row does not pay. Its time on a graph of a thousand
+nodes or fewer is within 1.3x of the records' either way, because the graphs are small; the gap,
+if there is one, opens past that and in hashing and equality, where ids replace a walk. FFM rows
+cost more than `int[]` columns only where a `VarHandle` is not folded.
+
+**Gate, from the decision above.** A layout is worth losing the sealed `switch` over the IR for
+only if it beats records by 1.3x or more on the cold first compile of a representative projection,
+or by a factor that grows with depth on hash and equality; and a layout that is not flat, or that
+needs a `jdk.internal` class or the preview, is a finding about a later JDK and not a candidate.
+If a layout passes, the next decision is whose schema the rows are: jegg's, generic over opcode,
+payload and child ids, with Varka's IR a client of it, or Varka's. **Done when** the table of
+layouts against measures exists and the gate's verdict is written.
+
+**When.** Step 1 needs only jegg 0.1.0 on Central and can become a task when the owner schedules it;
+step 2 follows it. Steps 3 to 5 wait for the representation on IR values and for jegg's cost
+function with child facts. The storage spike needs neither jegg nor Central and can run first; the
+storage decision waits for its verdict, for jegg's cheaper speed items and for #92's gate. Done when
+step 1's table exists and item 11's decision is taken from it.
 
 ## 5. Ordering
 
