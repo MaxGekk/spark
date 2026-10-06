@@ -126,3 +126,16 @@ session on several threads, so two of its JVMs on four vCPUs compete for the sam
 two sessions, while the catalyst suites are mostly single-threaded. So SQL's suites now run in
 one JVM, still through the runner so the matrix step reuses their defaults, and catalyst's stay
 over two; the next run measures that.
+
+### 9.2 SQL in one JVM, and the correction, 6 October 2026
+
+Run 37413314800 on `6f352b49e1d`, SQL's suites in one JVM: the SQL job took 24 minutes, its
+suites step 14.6 (5.8 of build, then the tests in 532 seconds, against 455 over two JVMs) and its
+matrix step 8.0 (the configuration in 483 seconds, against 408). Catalyst, unchanged, took 14.
+
+**This corrects 9.1's explanation.** Two JVMs did not slow SQL's suites; they sped them up by
+about a seventh. What makes the runner's SQL tests slower than sbt's single JVM (about 6.0
+minutes on #629) is something else, most likely the runner itself: it records each test's fused
+batches for the declining check, which sbt's run never did. So SQL is back on two JVMs, as 9.1's
+run had it. The outcome stands at: catalyst's job 14 minutes from 22 to 25, held; SQL's 22 to 24
+from 22 and 33, no clear change, the reused defaults paying for the recording.

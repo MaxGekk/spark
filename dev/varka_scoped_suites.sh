@@ -25,25 +25,21 @@
 # change to a Varka script, whose pull request runs the varka-scoped jobs it changes; a change to
 # the workflow runs Spark's module matrix instead (dev/varka_scope.py).
 #
-# The suites run through dev/varka_matrix.sh in target/varka-scoped: catalyst's over two JVMs, the
-# runner's four cores' worth, and SQL's in one, since each SQL suite's Spark session already uses
-# several threads and a second JVM made them slower on the runner (VARKA-287.md 9). The job caches
-# the directory so the next run balances its JVMs by this run's JUnit times. The run records each
-# test's fused batches too, which the option matrix's step (dev/varka_matrix_ci.sh) takes instead of
-# running the defaults again.
+# The suites run through dev/varka_matrix.sh over two JVMs, the runner's four cores' worth, in
+# target/varka-scoped, which the job caches so the next run balances its JVMs by this run's JUnit
+# times. The run records each test's fused batches too, which the option matrix's step
+# (dev/varka_matrix_ci.sh) takes instead of running the defaults again.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 module=${1:?usage: dev/varka_scoped_suites.sh catalyst|sql}
 extra=()
-split=2
 case "$module" in
   catalyst) ;;
-  sql) split=1
-       extra=(--extra-suite
+  sql) extra=(--extra-suite
          sql:org.apache.spark.sql.execution.columnar.ArrowCachedBatchSerializerSuite) ;;
   *) echo "unknown module: $module" >&2; exit 2 ;;
 esac
-dev/varka_matrix.sh --defaults --module "$module" --split "$split" -j 2 --sbt-arg -Phive \
+dev/varka_matrix.sh --defaults --module "$module" --split 2 -j 2 --sbt-arg -Phive \
   --out target/varka-scoped "${extra[@]}"
