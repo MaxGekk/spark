@@ -1,0 +1,25 @@
+Band for 12 cases: how far apart repeated runs of an unchanged file land.
+Written by dev/varka_bench_band.py. Read by dev/varka_bench_diff.py --band, which
+uses a case's tier to decide whether its move in a regeneration means anything.
+
+tier 0 <= 3%   1 <= 10%   2 <= 25%   3 not readable from a diff at all
+
+runs:    10
+commit:  7e8faaa2b21
+date:    2026-10-06T14:44:31+00:00
+jdk:     openjdk version "25.0.4.1" 2026-08-18
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+
+tier   spread occ  table | case
+2    14.51   1  1 rows a batch, ns per batch | date_add(d, 3)
+1     6.25   1  1 rows a batch, ns per batch | filter (d > DATE '2000-01-01')
+1     9.82   1  1 rows a batch, ns per batch | least(l, 5000000000L)
+2    19.10   1  1 rows a batch, ns per batch | trunc(d, fmt)
+2    15.57   1  1024 rows a batch, ns per batch | date_add(d, 3)
+0     2.86   1  1024 rows a batch, ns per batch | filter (d > DATE '2000-01-01')
+1     8.64   1  1024 rows a batch, ns per batch | least(l, 5000000000L)
+1     5.71   1  1024 rows a batch, ns per batch | trunc(d, fmt)
+1     8.41   1  16 rows a batch, ns per batch | date_add(d, 3)
+1     6.68   1  16 rows a batch, ns per batch | filter (d > DATE '2000-01-01')
+1     9.94   1  16 rows a batch, ns per batch | least(l, 5000000000L)
+2    13.98   1  16 rows a batch, ns per batch | trunc(d, fmt)

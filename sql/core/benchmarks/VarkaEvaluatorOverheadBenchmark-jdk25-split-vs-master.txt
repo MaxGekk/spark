@@ -1,0 +1,38 @@
+VarkaEvaluatorOverheadBenchmark: the evaluators before and after VARKA-251's split, ten runs
+of each at each vector width, on one machine (an AMD Ryzen AI 9 HX PRO 370, JDK 25, pinned as
+dev/varka_bench_regen.sh pins it). "master" is commit 7e8faaa2b21, the evaluators as they were;
+"split" is commit 644a2faa36b, VarkaEvaluatorBase composed of the Java components. Each side's
+ten runs came from dev/varka_bench_repeat.sh; lo is the case's minimum over the ten, hi its
+maximum, in nanoseconds per batch, and "lo move" the split's minimum against master's. A move is
+read against the band of the unchanged code (-band.txt and -128bit-band.txt beside this file).
+
+== wide
+case                                                       master lo  split lo  lo move  master hi  split hi  ranges
+1 rows | date_add(d, 3)                                          490       522    +6.7%        570       611  overlap
+1 rows | filter (d > DATE '2000-01-01')                          133       138    +3.8%        143       148  overlap
+1 rows | least(l, 5000000000L)                                   541       542    +0.1%        580       632  overlap
+1 rows | trunc(d, fmt)                                           691       678    -1.8%        767       794  overlap
+16 rows | date_add(d, 3)                                         533       538    +0.9%        576       588  overlap
+16 rows | filter (d > DATE '2000-01-01')                         459       491    +7.0%        514       536  overlap
+16 rows | least(l, 5000000000L)                                  568       582    +2.5%        632       624  overlap
+16 rows | trunc(d, fmt)                                         1198      1240    +3.4%       1304      1327  overlap
+1024 rows | date_add(d, 3)                                       791       812    +2.6%        856       852  overlap
+1024 rows | filter (d > DATE '2000-01-01')                      1148      1222    +6.5%       1273      1621  overlap
+1024 rows | least(l, 5000000000L)                               1285      1295    +0.8%       1377      1362  overlap
+1024 rows | trunc(d, fmt)                                      29751     29686    -0.2%      31305     31589  overlap
+
+== 128-bit (MaxVectorSize=16)
+case                                                       master lo  split lo  lo move  master hi  split hi  ranges
+1 rows | date_add(d, 3)                                          513       525    +2.5%        587       610  overlap
+1 rows | filter (d > DATE '2000-01-01')                          134       134    -0.1%        143       145  overlap
+1 rows | least(l, 5000000000L)                                   693       700    +1.0%        762       791  overlap
+1 rows | trunc(d, fmt)                                           697       680    -2.4%        830       766  overlap
+16 rows | date_add(d, 3)                                         539       539    -0.1%        584       571  overlap
+16 rows | filter (d > DATE '2000-01-01')                         495       500    +1.0%        528       527  overlap
+16 rows | least(l, 5000000000L)                                  794       792    -0.3%        873       842  overlap
+16 rows | trunc(d, fmt)                                         1211      1203    -0.6%       1380      1322  overlap
+1024 rows | date_add(d, 3)                                       790       814    +2.9%        914       871  overlap
+1024 rows | filter (d > DATE '2000-01-01')                      2357      2364    +0.3%       2424      2709  overlap
+1024 rows | least(l, 5000000000L)                              11759     11844    +0.7%      12775     13302  overlap
+1024 rows | trunc(d, fmt)                                      27461     27883    +1.5%      29030     28901  overlap
+

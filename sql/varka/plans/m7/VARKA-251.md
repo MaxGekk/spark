@@ -139,33 +139,70 @@ a batch, wide:
 
 ### 9.2 The split, 6 October 2026
 
-The six components and the base composing them, `1a59b2b1e40`, the benchmark regenerated the same
-way on the same machine (the files' provenance). Nanoseconds a batch, before and after:
+The six components, with `VarkaEvaluatorBase` a Scala composition of them, at `644a2faa36b`.
+`VarkaEvaluatorOverheadBenchmark` ran ten times at each vector width on the split and ten times on
+the unchanged evaluators (`7e8faaa2b21`), on the laptop under `dev/varka_bench_repeat.sh`, and
+`VarkaEvaluatorOverheadBenchmark-jdk25-split-vs-master.txt` holds every case's minimum and maximum
+on both sides. Minimums, in nanoseconds a batch, are what the table below compares, as
+`sql/varka/AGENTS.md` asks of a ratio under 1.3x; each case's move is read against the band of the
+unchanged code (`-band.txt`, `-128bit-band.txt`), whose median spread over ten runs is 8.5% wide and
+9.2% narrow, and up to 16% and 19% in a single case.
 
-| rows | shape | wide before | wide after | narrow before | narrow after |
+| rows | shape | wide master | wide split | 128-bit master | 128-bit split |
 |---|---|---|---|---|---|
-| 1 | int lane | 620 | 534 | 588 | 538 |
-| 1 | long lane | 579 | 555 | 746 | 724 |
-| 1 | filter | 138 | 146 | 138 | 142 |
-| 1 | derived input | 812 | 729 | 752 | 780 |
-| 16 | int lane | 589 | 558 | 577 | 589 |
-| 16 | long lane | 592 | 589 | 847 | 880 |
-| 16 | filter | 518 | 490 | 532 | 508 |
-| 16 | derived input | 1352 | 1255 | 1259 | 1333 |
-| 1024 | int lane | 822 | 836 | 839 | 883 |
-| 1024 | long lane | 1313 | 1334 | 12287 | 12375 |
-| 1024 | filter | 1233 | 1202 | 2482 | 2493 |
-| 1024 | derived input | 30398 | 30281 | 28166 | 28086 |
+| 1 | int lane | 490 | 522 | 513 | 525 |
+| 1 | long lane | 541 | 542 | 693 | 700 |
+| 1 | filter | 133 | 138 | 134 | 134 |
+| 1 | derived input | 691 | 678 | 697 | 680 |
+| 16 | int lane | 533 | 538 | 539 | 539 |
+| 16 | long lane | 568 | 582 | 794 | 792 |
+| 16 | filter | 459 | 491 | 495 | 500 |
+| 16 | derived input | 1198 | 1240 | 1211 | 1203 |
+| 1024 | int lane | 791 | 812 | 790 | 814 |
+| 1024 | long lane | 1285 | 1295 | 11759 | 11844 |
+| 1024 | filter | 1148 | 1222 | 2357 | 2364 |
+| 1024 | derived input | 29751 | 29686 | 27461 | 27883 |
+
+**The result: no measurable difference.** In all 24 cases the split's range over its ten runs
+overlaps the unchanged code's. The largest rise in a minimum is 7.0% (wide, the filter at 16 rows),
+against a band spread of 12% for that case; at 128 bits it is 2.9%. Some minimums are lower and
+most are slightly higher, which is not a pattern the band can tell from noise.
 
 **The scoring.**
 
-1. *No case slower by more than 10%.* Held: the largest slowdown is 5.9%, the narrow derived input
-   at 16 rows; most cases are faster.
-2. *The 1-row cases no more than 50 ns slower.* Held: the slower ones lose 8 ns (filter, wide), 4
-   ns (filter, narrow) and 28 ns (derived input, narrow). The wide int lane is 85 ns faster, the
-   per-input allocations `fillSources` made gone.
+1. *No case slower by more than 10%, or by more than the run's own spread.* Held: no minimum is
+   more than 7.0% higher.
+2. *The 1-row cases no more than 50 ns a batch slower.* Held: the largest rise in a 1-row minimum
+   is 33 ns (the wide int lane, 490 to 522), against a band of 80 ns for that case; the other three
+   move by 5 ns, 1 ns and minus 12 ns.
 
-The gate's two suite steps first failed one test at both widths, `VarkaKernelEvaluatorSuite`'s
-capped-allocator test: it caps the scratch by overriding `taskAllocator`, and the scratch had
-asked the ledger instead. It grows through `taskAllocator` again, as before the split.
+**What an earlier draft of this section got wrong.** It was written from one run at each width and
+claimed that most cases got faster, crediting the wide 1-row int lane's 620 to 534 ns to the removed
+per-input allocations. The unchanged code's ten runs put that case between 490 and 570 ns: the
+baseline run of 620 had been a high outlier, so the "improvement" was the baseline's noise, and at
+128 bits the one-run comparison had in fact shown eight of twelve cases slower. The code review of
+the pull request found both; the band is what settles them, and the per-input allocation the
+split removes is real but too small to see here.
 
+**What else the review changed.** The ledger holds `ColumnVector[]` rather than a Java list built
+per batch; the derived-input arm is an enum `switch` with no `default`; the runner takes its
+bounds as a `Bound` record array; the task end closes a snapshot of the open batches; the warm-up
+gate does not repeat the base's `warmed` test; `filterMask` calls the runner directly and the
+`fillSources` and `invokeFused` shims are gone; and `VarkaEvaluatorComponentsSuite` drives the
+components' guard paths (the task end's order and guards, a close that re-enters the ledger, a
+node with no counters, the class dump's memo), each checked to fail when its guard is removed.
+
+**Built otherwise than planned.** Section 3.1 expected a base of about 300 lines: it is 549 (275
+without comments), because `serveBatch`, `canRun`, `isArrowBacked` and the identity names stay in
+it. Section 8 expected a commit per component; the components are one commit. Section 4 listed
+`VarkaFilterEvaluator.scala` and `VarkaKernelPart.scala` as changed: `VarkaFilterEvaluator`
+changed in the review (it calls the runner directly), `VarkaKernelPart` did not, and
+`VarkaKernelEvaluatorSuite.scala` and `VarkaColdPath.scala` changed instead. The evaluators and the
+base itself stay Scala until row 267, which now owns `VarkaEvaluatorBase` and `VarkaKernelPart`
+beside the five files it listed. The log lines of fallbacks, declines, the warm-up and the dump now
+come from the components' own loggers, under `org.apache.spark.sql.execution.varka`; the
+cold-path benchmark's logging switch names both.
+
+The first gate run failed one test at both widths, `VarkaKernelEvaluatorSuite`'s capped-allocator
+test: it caps the scratch by overriding `taskAllocator`, and the scratch had asked the ledger. It
+grows through `taskAllocator` again, as before the split.
