@@ -84,11 +84,63 @@ emitter's bytes must not move.
 
 ## 4. Verification
 
-*Filled in as the work happens.*
+*Written as the work happened, 7 October 2026.*
+
+**Step 1, routing.** `VarkaEmittedBytesSuite` and the suites of the touched classes
+(`IntRangeOpsSuite`, `TruncLevelLeafSuite`, `WeekdayLeafSuite`, `VarkaSelectionVectorOpsSuite`,
+`VarkaKernelWarmupSuite`) passed: 28 succeeded, 1 canceled, none failed, and `emitted_bytes.json`
+did not move. The pre-commit rule rejects a raw `.reinterpret(` in a probe file and passes the
+three files that may have one.
+
+**Steps 2 to 4, the sanitizer.** `VarkaMemorySanitizerSuite` (catalyst, ten tests) drives the
+window directly: a mapping inside a buffer from its first to its last byte, one byte past, before,
+between and spanning two buffers, the null address, a negative size, a wrap-around, an empty
+window, a canary intact and overwritten. `VarkaMemorySanitizerEndToEndSuite` (core, seven tests)
+runs only with `-Dvarka.sanitizeMemory=true`: a real projection's kernel increases the count of
+mappings checked, so the sanitizer is on and reached it; a mapping one byte past a registered
+buffer fails through the engine's `ofAddress` and through catalyst's `VarkaSegments`, naming the
+buffer; an overwritten canary fails the check made when the kernel returns; a nested suite that
+leaks a buffer is aborted by name and bytes, and one that closes it passes; and a violation is not
+a catchable kernel failure. `ofAddress` is 22 bytecode bytes (`javap`), under HotSpot's 35.
+
+**Five broad runs of every Varka suite with the flag on** (`dev/varka_matrix.sh --defaults --split 3
+-j 6 --jvm-arg -Dvarka.sanitizeMemory=true`, the gate's wide step without the two JIT-measuring
+suites), each after one more step:
+
+| run | after | ok | failed | canceled | violations |
+|---|---|---|---|---|---|
+| 1 | the engine's `ofAddress` and the registry | 954 | 6 | 27 | one pattern, 36 |
+| 2 | `VarkaSegments.map` checked too | 955 | 6 | 27 | the same |
+| 3 | canaries | 958 | 6 | 27 | the same, with exact sizes |
+| 4 | the leak check as `beforeAll`/`afterAll` | - | - | - | did not compile: `TPCBase` widens those to public |
+| 5 | the leak check wrapping `run` | 958 | 6 | 27 | the same; no suite aborted for a leak |
+
+All six failures are one pattern: a mapping of 80000 bytes where the nearest registered buffer, output
+data 0, holds 40000, and one of 40 bytes over 20, in `VarkaTimeArithmeticSuite` and
+`VarkaCoverageDifferentialSuite` (`hour(t)`, `minute(t2)`, `second(t)`, the `emit.useAVX` switch,
+the second-of-the-day sweep, an extract under another expression). The cause, read in
+`VarkaBodyEmitter.emitSizes`: `dataBytes = length * lane.byteStride` is the size of every data
+segment, and a `NarrowLane` root's output is an int32 stored at `i * 4`, so it is mapped at twice
+its size. The answers are right. That is row 292. The 27 canceled were not compared with a run
+without the flag.
 
 ## 5. Outcome
 
-*Filled in as the work happens.*
+*Partial: steps 1 to 4 are done; step 5 waits for row 292.*
+
+1. *The bytes oracle is unchanged by every step.* Held for step 1, the only step that touches main
+   code the emitter's classes share; steps 2 to 4 changed nothing the emitter reads. To be run once
+   more at the end.
+2. *`ofAddress` stays small and inlined with the flag off.* The size held, 22 bytes against 35. The
+   `-XX:+PrintInlining` reading on a kernel is not taken yet.
+3. *No out-of-range access on master.* Failed, in the way the task exists to fail: one finding,
+   an over-wide mapping of a narrowed output, row 292. No canary was overwritten and no mapping
+   left an input, a derived input, the scratch or the selection bitmaps. No false positive was
+   met: the all-null column's address 0 is never mapped with a size in these suites.
+4. *Under 1.3 times the time with the flag on.* Not measured yet.
+5. *Each seeded violation fails by name.* Held, in both suites, for a byte past a buffer, an
+   unregistered mapping, an overwritten canary and a leak.
+6. *No raw `.reinterpret(` outside the two functions.* Held, and kept so by the pre-commit rule.
 
 ## 6. Explicitly out of this task
 
@@ -96,5 +148,8 @@ emitter's bytes must not move.
   a violation fails the test.
 * A native sanitizer (AddressSanitizer or valgrind) under the JVM, which row 272's platform arms
   and the milestone's later nightly could take up.
+* Memory that is not Arrow's: the warm-up's `Arena` has no allocation accounting to compare, so
+  "every byte back" covers the Arrow root allocator, which holds every buffer an evaluator hands a
+  kernel, and the warm-up's arena is closed by its try-with-resources and not measured.
 * Anything the sanitizer finds beyond the sanitizer itself becomes its own row, as the plan asks
   of rows 262, 263 and 269.
