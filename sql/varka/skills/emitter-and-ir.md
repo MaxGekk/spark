@@ -893,3 +893,18 @@ records and need the preview; Arrow is a good wire image (1.03 to 1.05 times the
 slow working store (its accessor is about 30 times raw reads). One final class owns the columns, so
 that swapping to A rewrites its body and nothing else; an interface over per-field access is
 exactly what would add the cost the benchmarks showed is absent.
+
+## A kernel's mapping is its entitlement, so size it by the column's width and not the lane's
+
+The emitter maps every data segment as `length * lane.byteStride` (`VarkaBodyEmitter.emitSizes`),
+and the bounds check enforces that size, not the buffer's. A `NarrowLane` root's output is an int32
+stored at `i * 4` in a long-lane kernel, so it was mapped at twice its own size for as long as the
+emitter has had narrowed roots: the answers were right, and a bad store in the upper half would
+have raised nothing. Nothing in the tests could see it, since the kernel stays inside the bytes
+it writes; the memory sanitizer (VARKA-263, `-Dvarka.sanitizeMemory=true`) found it on its first run
+over the suites, as six TIME tests failing with `a mapping of 80000 bytes ... for 40000 bytes`, and
+`VARKA-292` maps such an output at `length * 4`. A new kind of output that stores at another width
+than the lane's needs its own mapping size, and the sanitizer will say so if it does not. The fix
+cost five bytes in each prologue that maps one: the bytes oracle, the price table's `NarrowLane` row
+and its register all moved by exactly that, and nothing else moved (`VARKA-292.md` 4).
+

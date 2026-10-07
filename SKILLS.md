@@ -90,6 +90,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Measure what a method spends its bytes on before designing a split of it](sql/varka/skills/emitter-and-ir.md#measure-what-a-method-spends-its-bytes-on-before-designing-a-split-of-it)
 * [An exact search that replaces a heuristic should keep the heuristic's answer where it is already best](sql/varka/skills/emitter-and-ir.md#an-exact-search-that-replaces-a-heuristic-should-keep-the-heuristics-answer-where-it-is-already-best)
 * [The IR's storage: flat columns behind one class, FFM rows as the alternative, Arrow at the edges](sql/varka/skills/emitter-and-ir.md#the-irs-storage-flat-columns-behind-one-class-ffm-rows-as-the-alternative-arrow-at-the-edges)
+* [A kernel's mapping is its entitlement, so size it by the column's width and not the lane's](sql/varka/skills/emitter-and-ir.md#a-kernels-mapping-is-its-entitlement-so-size-it-by-the-columns-width-and-not-the-lanes)
 
 #### [Testing and debugging](sql/varka/skills/testing-and-debugging.md)
 * [Buffer-Reuse Aliasing (UnsafeProjection)](sql/varka/skills/testing-and-debugging.md#buffer-reuse-aliasing-unsafeprojection)
