@@ -18,9 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import org.scalactic.source.Position
-import org.scalatest.Tag
+import org.scalatest.{Args, Status, Tag}
 
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.util.ArrowUtils
 
 /**
  * Runs each test of a Varka suite through [[VarkaMatrix.around]]: under the option matrix, a test
@@ -29,8 +30,35 @@ import org.apache.spark.SparkFunSuite
  * A test tagged `VarkaMatrix.PinsDefaults` is cancelled under any configuration. Outside the
  * matrix it changes nothing. `VarkaTestWatchdog` extends it; a suite that runs
  * without the watchdog, such as a fuzzer whose tests outlast its cap, mixes in this alone.
+ *
+ * Under the memory sanitizer (`-Dvarka.sanitizeMemory=true`, VARKA-263) it also holds each suite to
+ * leave Arrow's root allocator where it found it: the level when the suite starts is the baseline,
+ * and whatever is above it once the suite has cleaned up fails the suite by name, as Trino asserts
+ * every memory pool is back to zero after each test class. Off, it changes nothing.
  */
 trait VarkaMatrixTests extends SparkFunSuite {
+
+  /**
+   * Under the sanitizer, the suite's whole run - `beforeAll`, the tests, `afterAll` - is measured
+   * against Arrow's root allocator, and a suite that leaves memory allocated is aborted by name.
+   * It wraps `run`, which every suite inherits with the same public signature, and not the
+   * `beforeAll` and `afterAll` hooks, which some suites widen to public and the rest keep
+   * protected.
+   */
+  override def run(testName: Option[String], args: Args): Status = {
+    if (!VarkaMemorySanitizer.ENABLED) {
+      return super.run(testName, args)
+    }
+    val before = ArrowUtils.rootAllocator.getAllocatedMemory
+    val status = super.run(testName, args)
+    status.waitUntilCompleted()
+    val leaked = ArrowUtils.rootAllocator.getAllocatedMemory - before
+    if (leaked != 0L) {
+      throw new IllegalStateException(s"$suiteName left $leaked bytes of Arrow memory allocated" +
+        " (the memory sanitizer's every-byte-back check): a buffer was not closed")
+    }
+    status
+  }
 
   override protected def test(testName: String, testTags: Tag*)(testBody: => Any)
       (implicit pos: Position): Unit = {

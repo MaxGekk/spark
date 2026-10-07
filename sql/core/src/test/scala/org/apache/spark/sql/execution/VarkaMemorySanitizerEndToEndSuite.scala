@@ -17,9 +17,14 @@
 
 package org.apache.spark.sql.execution
 
+import org.apache.arrow.memory.ArrowBuf
+import org.scalatest.{Args, Reporter}
+import org.scalatest.events.Event
+
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaMemorySanitizer,
-  VarkaMemoryViolation, VarkaSegments, VarkaTestWatchdog}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaMatrixTests,
+  VarkaMemorySanitizer, VarkaMemoryViolation, VarkaSegments, VarkaTestWatchdog}
+import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.varka.vector.VarkaVectorSupport
 
 /**
@@ -54,7 +59,7 @@ class VarkaMemorySanitizerEndToEndSuite
 
   test("a mapping one byte past a registered buffer fails through the engine's ofAddress") {
     withSanitizer {
-      val buf = org.apache.spark.sql.util.ArrowUtils.rootAllocator.buffer(64L)
+      val buf = ArrowUtils.rootAllocator.buffer(64L)
       try {
         VarkaMemorySanitizer.begin()
         try {
@@ -75,7 +80,7 @@ class VarkaMemorySanitizerEndToEndSuite
 
   test("a mapping through catalyst's VarkaSegments is checked the same way") {
     withSanitizer {
-      val buf = org.apache.spark.sql.util.ArrowUtils.rootAllocator.buffer(64L)
+      val buf = ArrowUtils.rootAllocator.buffer(64L)
       try {
         VarkaMemorySanitizer.begin()
         try {
@@ -97,7 +102,7 @@ class VarkaMemorySanitizerEndToEndSuite
   test("an overwritten canary fails the check made when the kernel returns") {
     withSanitizer {
       val bytes = 64L
-      val buf = org.apache.spark.sql.util.ArrowUtils.rootAllocator.buffer(
+      val buf = ArrowUtils.rootAllocator.buffer(
         bytes + VarkaMemorySanitizer.CANARY_BYTES)
       try {
         VarkaMemorySanitizer.begin()
@@ -113,6 +118,45 @@ class VarkaMemorySanitizerEndToEndSuite
       } finally {
         buf.close()
       }
+    }
+  }
+
+  test("a suite that leaves Arrow memory allocated is aborted by name") {
+    // Catches: the every-byte-back check being a no-op, which a suite that never leaks cannot
+    // tell from one that works.
+    withSanitizer {
+      val leaked = new java.util.concurrent.atomic.AtomicReference[ArrowBuf]()
+      class Leaker extends VarkaMatrixTests {
+        test("allocates and forgets") {
+          leaked.set(ArrowUtils.rootAllocator.buffer(128L))
+        }
+      }
+      val silent = new Reporter {
+        override def apply(event: Event): Unit = {}
+      }
+      try {
+        val e = intercept[IllegalStateException] {
+          new Leaker().run(None, Args(silent))
+        }
+        assert(e.getMessage.contains("Leaker"), e.getMessage)
+        assert(e.getMessage.contains("128 bytes"), e.getMessage)
+      } finally {
+        leaked.get().close()
+      }
+    }
+  }
+
+  test("a suite that cleans up after itself passes the check") {
+    withSanitizer {
+      class Tidy extends VarkaMatrixTests {
+        test("allocates and closes") {
+          ArrowUtils.rootAllocator.buffer(128L).close()
+        }
+      }
+      val silent = new Reporter {
+        override def apply(event: Event): Unit = {}
+      }
+      new Tidy().run(None, Args(silent))
     }
   }
 
