@@ -134,9 +134,24 @@ that fail under the sanitizer pass without it.
 off: `VarkaVectorSupport::ofAddress (22 bytes)` is inlined at 61 call sites as "inline (hot)" and
 at 10 more as "inline"; the one refusal is a cold site, "low call site frequency".
 
+**Step 5, the sanitizer on (7 October 2026, after row 292).** `dev/varka_matrix.sh`, which CI, the
+weekly option matrix and the gate all run their suites through, passes `-Dvarka.sanitizeMemory=true`
+to every test JVM by default, and `--no-sanitizer` turns it off: the gate's quiet phase, the two
+suites that measure the JIT, uses it, since the sanitizer's branches change what C2 compiles; no
+benchmark runs through the runner. The runner also proves the flag arrived: when it is on and
+`VarkaMemorySanitizerEndToEndSuite` ran, the run fails if that suite cancelled a test, because
+every test in it that needs the flag cancels without it (six of them did, in the run without it).
+The catalyst fuzzers, which run kernels through `VarkaKernelCheck` and have no evaluator to open a
+window, now run them inside one over the buffers the harness allocated; the harness allocated each
+validity bitmap at the nominal `(length + 7) / 8` bytes, which is not what Arrow gives a kernel (whole
+64-bit words), so it allocates the words now. A test runs a small kernel through that harness and
+asserts the count of mappings checked rises. The gate's wide step with the sanitizer on, every suite
+of both modules: 966 ok, none failed, none aborted, 27 canceled (the suites' own), in 321 seconds,
+no violation.
+
 ## 5. Outcome
 
-*Partial: steps 1 to 4 are done; step 5 waits for row 292.*
+*Done, 7 October 2026: steps 1 to 4 in #658, row 292 in #660, step 5 in the pull request after.*
 
 1. *The bytes oracle is unchanged by every step.* Held for step 1, the only step that touches main
    code the emitter's classes share; steps 2 to 4 changed nothing the emitter reads. To be run once
@@ -153,6 +168,15 @@ at 10 more as "inline"; the one refusal is a cold site, "low call site frequency
 5. *Each seeded violation fails by name.* Held, in both suites, for a byte past a buffer, an
    unregistered mapping, an overwritten canary and a leak.
 6. *No raw `.reinterpret(` outside the two functions.* Held, and kept so by the pre-commit rule.
+
+*The done-when, "the suites and fuzzers run with it on".* Held: every Varka suite of both modules
+runs with it, in CI and in the gate, and the runner fails a run that says so and does not. The
+limits, which are the design's and not oversights: a kernel run that has no window is not checked
+(the warm-up's thread, a unit test that calls a kernel directly); the canaries are past Arrow
+buffers Varka allocates, not past the `Arena` segments the catalyst harness allocates, which are
+registered for the mapping check and have no tail; and the warm-up's own `Arena` has no accounting
+for "every byte back". The sanitizer found one thing in the code, row 292, and one in the
+harness, the validity bitmaps; nothing else.
 
 ## 6. Explicitly out of this task
 

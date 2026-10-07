@@ -51,6 +51,14 @@
 # On a laptop the runner also waits before each launch while the battery discharges below 30%,
 # so an unattended run does not drain it (a charger can supply less than ten JVMs draw).
 #
+# The memory sanitizer (VARKA-263) is on in every test JVM, as -Dvarka.sanitizeMemory=true: each
+# kernel's mappings are checked against the buffers the evaluator handed it, canaries sit past the
+# buffers Varka allocates, and a suite that leaves Arrow memory allocated is aborted. --no-sanitizer
+# leaves it off, for the suites that measure the JIT rather than answers, whose compiled code the
+# sanitizer's branches would change. With it on, the run also fails when
+# VarkaMemorySanitizerEndToEndSuite ran and cancelled a test, since a cancelled test there means
+# the flag never reached the JVM.
+#
 # Exit status: 0 when every configuration passed, 1 otherwise; one line per configuration.
 
 set -uo pipefail
@@ -69,13 +77,15 @@ configs=()
 defaults_only=0
 split=1
 jvm_args=()
+sanitize=1
 build_dir=""
 only_suites=""
 skip_suites=""
 extra_suites=()
 defaults_from=""
 
-usage() { sed -n '18,55p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+# The header is found, not numbered: a hard-coded range truncates as the comment grows.
+usage() { sed -n '18,/^[^#]/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -92,6 +102,7 @@ while [ $# -gt 0 ]; do
     --defaults) defaults_only=1; shift ;;
     --split) split="$2"; shift 2 ;;
     --jvm-arg) jvm_args+=("$2"); shift 2 ;;
+    --no-sanitizer) sanitize=0; shift ;;
     --out) OUT=$(realpath -m "$2"); shift 2 ;;
     --build-dir) build_dir=$(realpath -m "$2"); shift 2 ;;
     --suites) only_suites="$2"; shift 2 ;;
@@ -141,6 +152,7 @@ fi
   echo "no classpath or JVM options in $BUILD; run without --skip-build" >&2; exit 1; }
 CP=$(cat "$BUILD/classpath")
 mapfile -t OPTS < "$BUILD/jvm.opts"
+[ "$sanitize" = 1 ] && jvm_args+=("-Dvarka.sanitizeMemory=true")
 OPTS+=("${jvm_args[@]}")
 
 # The configurations, from VarkaMatrix itself so that the table stays their one source. The gate
@@ -260,3 +272,17 @@ done
 wait
 
 python3 dev/varka_matrix_report.py "$OUT/runs" sql/varka/matrix/skips.tsv
+status=$?
+
+# The proof that the sanitizer was on: its own suite cancels its tests without the flag, so any
+# cancelled test there (JUnit's skipped) means a run that said it was sanitized was not.
+if [ "$sanitize" = 1 ]; then
+  while IFS= read -r xml; do
+    if grep -q '<skipped' "$xml"; then
+      echo "the memory sanitizer's own suite cancelled a test (${xml#"$OUT/"}):" \
+        "the flag did not reach the JVM"
+      status=1
+    fi
+  done < <(find "$OUT/runs" -name 'TEST-*VarkaMemorySanitizerEndToEndSuite.xml')
+fi
+exit "$status"

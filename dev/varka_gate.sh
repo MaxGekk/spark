@@ -32,6 +32,7 @@
 #             JVMs per module (dev/varka_matrix.sh --defaults --split)
 #   narrow    the same under -XX:MaxVectorSize=16 (128-bit lanes), on each test JVM's own
 #             command line
+#             Every suite step runs with the memory sanitizer on (VARKA-263); quiet does not.
 #   quiet     the two suites that measure the JIT rather than answers, VarkaAssemblySuite and
 #             VarkaWarmupEndToEndSuite, at both widths, after everything else
 #   sweep     the opt-in exhaustive calendar sweeps (-Dvarka.sweep=true), both
@@ -177,9 +178,9 @@ wait
 # wrapper runs a program, so the two runs are one quoted bash command.
 if selected_has quiet; then
   quiet_wide=$(printf '%q ' "${suites[@]}" --out "$logdir/quiet-wide-runs" \
-    --suites "$timing_suites" -j 2)
+    --suites "$timing_suites" -j 2 --no-sanitizer)
   quiet_narrow=$(printf '%q ' "${suites[@]}" --out "$logdir/quiet-narrow-runs" \
-    --suites "$timing_suites" -j 2 --jvm-arg -XX:MaxVectorSize=16)
+    --suites "$timing_suites" -j 2 --no-sanitizer --jvm-arg -XX:MaxVectorSize=16)
   run_step quiet bash -c "$quiet_wide && $quiet_narrow"
 fi
 

@@ -291,6 +291,15 @@ opens with what its conversion lost. See `papers/README.md` before adding one.
   (VARKA-32, 2.15x on four fields). Nothing else widens a method: two plain
   chains over a shared subchain stay split, and whether they still should is VARKA-43's open question (VARKA-17 measured the merge as a loss; the parity file has read
   it as a win since VARKA-46 moved the validity OR ahead of the vector work).
+* **The suites run with the memory sanitizer on** (VARKA-263): `dev/varka_matrix.sh` passes
+  `-Dvarka.sanitizeMemory=true`, so every mapping a kernel makes is checked against the buffers the
+  evaluator handed it, and a suite that leaves Arrow memory allocated is aborted. A buffer given to
+  a kernel is registered where it is obtained (`VarkaMemorySanitizer.register` or `guard`, which
+  also puts a canary past a buffer Varka allocates), an address becomes a segment only through
+  `VarkaSegments.map` or the engine's `VarkaVectorSupport.ofAddress` (the pre-commit hook rejects
+  a raw `.reinterpret(`), and a buffer Varka allocates under the flag leaves room for the canary.
+  Benchmarks and the JIT-measuring suites run with it off (`--no-sanitizer`), since its branches
+  change what C2 compiles. A violation is not a kernel failure and is never a fallback.
 * The ghost fallback is a correctness contract: a Varka failure degrades to the
   row engine and never fails a query. Anything that can return a *wrong* answer
   rather than fail - a cache key, for one - gets its own differential coverage,
