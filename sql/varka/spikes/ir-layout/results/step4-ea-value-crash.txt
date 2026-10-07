@@ -1,0 +1,9 @@
+# step 4, early-access JDK, value records, default JVM options, full corpus, records alone: C2 crashes, 2026-10-07
+# command: EA_JAVA_HOME=<jdk 27-jep401ea3+1-1> run-ea.sh value --layouts none --graphs <full corpus>
+# exit code 134
+jdk 27-jep401ea3+1-1, node classes: value records (37)
+edge cases: 6 graphs at the packing limits agree
+#
+#  SIGSEGV (0xb) at
+# V  [libjvm.so+0x86b2e3]  ConnectionGraph::optimize_ideal_graph(GrowableArray<Node*>&, GrowableArray<MemBarStoreStoreNode*>&)+0x263
+C2:653 1702       4       java.lang.invoke.LambdaForm$MH/::invoke (52 bytes)

@@ -357,3 +357,50 @@ confounds them: each graph is built as records, then A, then B, then C in one JV
 the others have already warmed (the hash, the pool, the interval maths) and the JIT has seen it.
 Prediction 3, that FFM costs more than `int[]` only where a `VarHandle` is not folded, is therefore
 not scored here; it moves to step 5, which runs each arm in fresh JVMs.
+
+### 9.5 Step 4, the early-access JDK arms, 7 October 2026
+
+Added `run-ea.sh` (variants `plain` and `value`, JDK from `EA_JAVA_HOME`), `src-ea/` and a
+`--layouts` option, so that an arm runs alone in its own JVM, as step 5 needs. The build is
+`27-jep401ea3+1-1`. `plain` is the control: the same sources on the same JDK with ordinary records.
+
+**Arm 5, the real IR as value records.** `VarkaVectorIR.java` compiles unchanged but for `value`
+on its 37 records, which `run-ea.sh` generates and nothing commits. Nothing in the harness or the
+IR depends on node identity (no identity maps, no `synchronized`, no `==` on nodes), and the
+harness asserts that every node class is a value class. On the committed graphs, and on the full
+corpus with escape analysis off, the value records, A, B, C, V16 and V63 agree.
+
+**C2 crashes on value records.** With default options, the value variant on the full corpus
+crashes the JVM in C2 (`SIGSEGV` in `ConnectionGraph::optimize_ideal_graph`), every time, even
+with `--layouts none`, which runs the records alone. The method being compiled is a
+`LambdaForm$MH::invoke` in all of the crash logs; the harness reaches those through reflection
+(the description code builds and reads records that way), which is a hypothesis, not a finding.
+`-XX:-DoEscapeAnalysis` and `-XX:TieredStopAtLevel=1` both avoid it, and the committed graphs, too
+small to compile much, run clean. The plain variant on the same JDK is unaffected. The evidence is
+`results/step4-ea-value-crash.txt`; the passing runs are `results/step4-ea-value-*.txt`.
+
+**What this means for step 5.** Value types lean on escape analysis to be scalarized, so a value
+arm measured with it off would understate them. Step 5 therefore measures arm 5 with escape
+analysis on and the reflective agreement check out of that JVM (a `--no-check` mode, to add
+there), and runs the check in a separate JVM with it off. If the arm still crashes, that is the
+result for this build and the verdict says so.
+
+**Arm 4 as built, and what changed from 3.2.**
+- *V16* is layout B's row and packing in a null-restricted, non-atomic array of a
+  `@LooselyConsistentValue` record, flat only through the internal API (the probe in item 85).
+- *V63* is one `long` a node, 6 bits of kind and three 19-bit child ids stored plus one, in a
+  null-restricted atomic array, which is flat at 8 bytes through the same internal API. The word
+  has no room for scalars, so they go in a parallel `int[]`, holding what B has in the upper bits
+  of its head, so a node is 8 + 4 bytes and the arm differs from B only in its container. It
+  refuses a graph of more than 524,286 nodes; the largest in the corpus has 10,002, and no test
+  builds one past the limit.
+- The public-API alternative, a nullable 7-byte row, does flatten (the probe), but 16-bit ids cap
+  a graph at 65,535 nodes, and it was not built.
+
+**Sizes, full corpus, computed by the same formula as in 9.4, not measured.** V16 takes 17.04 bytes
+a node, B's size, and V63 takes 13.04. Their tables are B's, 13.27 bytes a node.
+
+**Still open for step 5.** The bytes of arm 1 and arm 5 from `Instrumentation.getObjectSize`
+(section 3.3) are not taken here; the nodes' children are interface-typed fields, which stay
+pointers, so the heap footprint of the value records is a measurement, not a formula.
+
