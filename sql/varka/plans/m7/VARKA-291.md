@@ -330,6 +330,7 @@ was without interning.
 kind's scalars; the FFM segment's bounds check threw. It is sized from the wide scalars now, and so
 is the pool's table.
 
-**Not a measurement.** One cold pass in one JVM: records build 29 ms and analyze 92, A build 13 and
-analyze 8, B build 22 and analyze 9. Step 5 measures on the quiet machine, with fresh JVMs.
+**Not a measurement.** One cold pass in one JVM, from `results/step2-full-corpus.txt`: records
+build 28 ms and analyze 91, A build 14 and analyze 8, B build 22 and analyze 8. Step 5 measures on
+the quiet machine, with fresh JVMs.
 

@@ -40,7 +40,7 @@ final class KindTable {
   record Kind(int index, String name, int children, List<Scalar> scalars, List<Class<?>> enums) {
     Kind {
       scalars = List.copyOf(scalars);
-      enums = new ArrayList<>(enums);
+      enums = java.util.Collections.unmodifiableList(new ArrayList<>(enums));
     }
 
     /** The scalars that are not the list, which is stored apart. */

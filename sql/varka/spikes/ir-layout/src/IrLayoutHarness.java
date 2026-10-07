@@ -121,6 +121,10 @@ public final class IrLayoutHarness {
     }
     System.out.printf("graphs %d, nodes %d, kinds %d of %d%n", loaded.size(), nodes, seen.size(),
         table.size());
+    if (seen.size() != table.size()) {
+      throw new IllegalStateException("the graphs cover " + seen.size() + " of " + table.size()
+          + " kinds, so the agreement above is incomplete");
+    }
     System.out.println("agreement: records, layout A and layout B agree on every graph "
         + "(distinct nodes, interval facts, round trip)");
     for (int l = 0; l < layouts.length; l++) {
