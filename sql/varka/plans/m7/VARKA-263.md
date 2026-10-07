@@ -121,8 +121,18 @@ data 0, holds 40000, and one of 40 bytes over 20, in `VarkaTimeArithmeticSuite` 
 the second-of-the-day sweep, an extract under another expression). The cause, read in
 `VarkaBodyEmitter.emitSizes`: `dataBytes = length * lane.byteStride` is the size of every data
 segment, and a `NarrowLane` root's output is an int32 stored at `i * 4`, so it is mapped at twice
-its size. The answers are right. That is row 292. The 27 canceled were not compared with a run
-without the flag.
+its size. The answers are right. That is row 292.
+
+**Run 6, the same suites and classpath without the flag** (later the same day): 960 ok, none failed,
+33 canceled, in 325 seconds against run 5's 321. The six extra cancellations are the six
+flag-dependent tests of `VarkaMemorySanitizerEndToEndSuite`, which cancel without the property, so
+the 27 canceled of the flagged runs are the same 27 the suites cancel anyway; this corrects the
+sentence above, written before this run, which said they had not been compared. The six TIME tests
+that fail under the sanitizer pass without it.
+
+**`-XX:+PrintInlining` on `VarkaWarmupEndToEndSuite`** (the suite that drives kernels to C2), flag
+off: `VarkaVectorSupport::ofAddress (22 bytes)` is inlined at 61 call sites as "inline (hot)" and
+at 10 more as "inline"; the one refusal is a cold site, "low call site frequency".
 
 ## 5. Outcome
 
@@ -131,13 +141,15 @@ without the flag.
 1. *The bytes oracle is unchanged by every step.* Held for step 1, the only step that touches main
    code the emitter's classes share; steps 2 to 4 changed nothing the emitter reads. To be run once
    more at the end.
-2. *`ofAddress` stays small and inlined with the flag off.* The size held, 22 bytes against 35. The
-   `-XX:+PrintInlining` reading on a kernel is not taken yet.
+2. *`ofAddress` stays small and inlined with the flag off.* Held: 22 bytes against 35, and inlined
+   hot into the kernels of the warm-up suite, as above.
 3. *No out-of-range access on master.* Failed, in the way the task exists to fail: one finding,
    an over-wide mapping of a narrowed output, row 292. No canary was overwritten and no mapping
    left an input, a derived input, the scratch or the selection bitmaps. No false positive was
    met: the all-null column's address 0 is never mapped with a size in these suites.
-4. *Under 1.3 times the time with the flag on.* Not measured yet.
+4. *Under 1.3 times the time with the flag on.* Held: the whole Varka run over three JVMs a module
+   took 321 seconds with the flag on and 325 without (0.99 times). That is a wall-clock of a suite
+   run, not a kernel benchmark; the benchmarks run with the flag off by design.
 5. *Each seeded violation fails by name.* Held, in both suites, for a byte past a buffer, an
    unregistered mapping, an overwritten canary and a leak.
 6. *No raw `.reinterpret(` outside the two functions.* Held, and kept so by the pre-commit rule.
