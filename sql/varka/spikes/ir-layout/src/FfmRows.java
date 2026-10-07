@@ -103,7 +103,28 @@ abstract class FfmRows implements AutoCloseable {
     return roots;
   }
 
+  /** A layout the early-access JDK adds: src-ea registers it, so src builds on JDK 25 alone. */
+  interface Factory {
+    FfmRows create(int nodes, int poolIntCapacity, int poolEntryCapacity);
+  }
+
+  static final java.util.Map<String, Factory> EXTRA = new java.util.TreeMap<>();
+
+  /** Whether the layout's pool also holds wide scalars, so that it is sized like B's. */
+  static boolean spillsWide(String layout) {
+    return layout.equals("B") || layout.startsWith("V");
+  }
+
+  /** Whether the layout packs scalars into the row's head, and so refuses one that is too big. */
+  static boolean packsInHead(String layout) {
+    return layout.equals("B") || layout.startsWith("V");
+  }
+
   static FfmRows create(String layout, int nodes, int poolIntCapacity, int poolEntryCapacity) {
+    Factory extra = EXTRA.get(layout);
+    if (extra != null) {
+      return extra.create(nodes, poolIntCapacity, poolEntryCapacity);
+    }
     return switch (layout) {
       case "A" -> new FfmRowsA(nodes, poolIntCapacity, poolEntryCapacity);
       case "B" -> new FfmRowsB(nodes, poolIntCapacity, poolEntryCapacity);

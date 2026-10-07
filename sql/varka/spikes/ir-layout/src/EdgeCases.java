@@ -16,6 +16,7 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.util.Arrays;
 import java.util.List;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.Intervals.Facts;
@@ -81,28 +82,30 @@ final class EdgeCases {
           """, false));
 
   /** Runs every case, failing with the case's name if an arm disagrees or B truncates. */
-  static void run(KindTable table) {
+  static void run(KindTable table, String[] layouts) {
     for (Case c : CASES) {
       LoadedGraph g = LoadedGraph.loadAll(table, c.text()).get(0);
       List<VarkaVectorIR> records = RecordsArm.build(g);
       Facts expected = RecordsArm.analyze(records);
-      for (String layout : new String[] {"A", "B", "C"}) {
-        boolean wide = !layout.equals("B");
+      for (String layout : layouts) {
+        boolean wide = !FfmRows.spillsWide(layout);
         try (FfmRows rows = FfmRows.create(layout, g.size(),
             wide ? g.listInts() : g.wideInts(table), wide ? g.listNodes() : g.wideNodes(table))) {
           int[] roots;
           try {
             roots = rows.build(g);
           } catch (IllegalArgumentException e) {
-            if (layout.equals("B") && c.bRefuses() && e.getMessage().contains("does not fit")) {
+            if (FfmRows.packsInHead(layout) && c.bRefuses()
+                && e.getMessage().contains("does not fit")) {
               continue;
             }
             throw new IllegalStateException("edge case " + c.name() + ", layout " + layout
                 + ": " + e.getMessage(), e);
           }
-          if (layout.equals("B") && c.bRefuses()) {
+          if (FfmRows.packsInHead(layout) && c.bRefuses()) {
             throw new IllegalStateException("edge case " + c.name()
-                + ": layout B took a literal index that does not fit, which it must refuse");
+                + ": layout " + layout + " took a literal index that does not fit, which it must"
+                + " refuse");
           }
           Facts facts = rows.analyze(roots);
           if (!facts.sameAs(expected)) {
@@ -116,7 +119,8 @@ final class EdgeCases {
         }
       }
     }
-    System.out.println("edge cases: " + CASES.size() + " graphs at the packing limits agree,"
-        + " and layout B refuses an index that does not fit");
+    System.out.println("edge cases: " + CASES.size() + " graphs at the packing limits agree"
+        + (Arrays.asList(layouts).contains("B")
+            ? ", and layout B refuses an index that does not fit" : ""));
   }
 }

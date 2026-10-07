@@ -48,14 +48,27 @@ public final class IrLayoutHarness {
 
   public static void main(String[] args) throws IOException {
     Path graphs = Path.of("graphs");
+    String[] layouts = {"A", "B", "C"};
     for (int i = 0; i < args.length; i++) {
       if (args[i].equals("--graphs")) {
         graphs = Path.of(args[++i]);
+      } else if (args[i].equals("--layouts")) {
+        // A subset, to run one arm in its own JVM; "none" runs the records alone.
+        String list = args[++i];
+        layouts = list.equals("none") ? new String[0] : list.split(",");
       } else {
-        throw new IllegalArgumentException("usage: IrLayoutHarness [--graphs DIR]");
+        throw new IllegalArgumentException(
+            "usage: IrLayoutHarness [--graphs DIR] [--layouts A,B,C|none]");
       }
     }
     KindTable table = KindNames.TABLE;
+    checkVariant();
+    for (String layout : layouts) {
+      if (layout.startsWith("V")) {
+        registerEarlyAccessLayouts();
+        break;
+      }
+    }
     var loaded = new ArrayList<LoadedGraph>();
     try (Stream<Path> files = Files.list(graphs)) {
       for (Path file : files.filter(f -> f.toString().endsWith(".graphs")).sorted().toList()) {
@@ -66,20 +79,65 @@ public final class IrLayoutHarness {
     if (loaded.isEmpty()) {
       throw new IllegalArgumentException("no .graphs files in " + graphs);
     }
-    EdgeCases.run(table);
-    run(table, loaded);
+    EdgeCases.run(table, layouts);
+    run(table, loaded, layouts);
   }
 
-  static void run(KindTable table, List<LoadedGraph> loaded) {
+  /**
+   * Prints the JDK and which kind of node classes this run holds, and fails if the run script's
+   * claim (the {@code ir.variant} property, "plain" or "value") is not what the classes are: a
+   * variant that silently ran the other one would be read as a result.
+   */
+  private static void checkVariant() {
+    String claim = System.getProperty("ir.variant", "plain");
+    boolean expectValue = claim.equals("value");
+    int records = 0;
+    int values = 0;
+    for (Class<?> c : VarkaVectorIR.class.getDeclaredClasses()) {
+      if (c.isRecord()) {
+        records++;
+        if (isValueClass(c)) {
+          values++;
+        }
+      }
+    }
+    if (records == 0 || values != (expectValue ? records : 0)) {
+      throw new IllegalStateException("the run claims " + claim + " node classes, but "
+          + values + " of " + records + " are value classes");
+    }
+    System.out.println("jdk " + Runtime.version() + ", node classes: " + claim + " records ("
+        + records + ")");
+  }
+
+  /** The layouts of src-ea, which only the early-access JDK compiles, register themselves. */
+  private static void registerEarlyAccessLayouts() {
+    try {
+      Class.forName("org.apache.spark.sql.catalyst.expressions.codegen.varka.EaLayouts");
+    } catch (ClassNotFoundException e) {
+      throw new IllegalStateException("the V layouts need run-ea.sh, which compiles src-ea", e);
+    }
+  }
+
+  /** {@code Class.isValue} exists only on the early-access JDK, so it is read by reflection. */
+  private static boolean isValueClass(Class<?> c) {
+    try {
+      return (boolean) Class.class.getMethod("isValue").invoke(c);
+    } catch (NoSuchMethodException e) {
+      return false;
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  static void run(KindTable table, List<LoadedGraph> loaded, String[] layouts) {
     long nodes = 0;
     var seen = new TreeSet<String>();
     long recordsBuild = 0;
     long recordsAnalyze = 0;
-    long[] build = new long[3];
-    long[] analyze = new long[3];
-    long[] rowBytes = new long[3];
-    long[] tableBytes = new long[3];
-    String[] layouts = {"A", "B", "C"};
+    long[] build = new long[layouts.length];
+    long[] analyze = new long[layouts.length];
+    long[] rowBytes = new long[layouts.length];
+    long[] tableBytes = new long[layouts.length];
     for (LoadedGraph g : loaded) {
       nodes += g.size();
       for (int k : g.kind()) {
@@ -97,7 +155,7 @@ public final class IrLayoutHarness {
           "the records hold " + expected.distinct() + " distinct nodes, the description "
               + g.size());
       for (int l = 0; l < layouts.length; l++) {
-        boolean a = !layouts[l].equals("B");
+        boolean a = !FfmRows.spillsWide(layouts[l]);
         try (FfmRows rows = FfmRows.create(layouts[l], g.size(),
             a ? g.listInts() : g.wideInts(table), a ? g.listNodes() : g.wideNodes(table))) {
           t = System.nanoTime();
@@ -125,18 +183,20 @@ public final class IrLayoutHarness {
       throw new IllegalStateException("the graphs cover " + seen.size() + " of " + table.size()
           + " kinds, so the agreement above is incomplete");
     }
-    System.out.println("agreement: records and layouts A, B and C agree on every graph "
-        + "(distinct nodes, interval facts, round trip)");
+    System.out.println("agreement: records and layouts " + String.join(", ", layouts)
+        + " agree on every graph (distinct nodes, interval facts, round trip)");
     for (int l = 0; l < layouts.length; l++) {
       System.out.printf("layout %s: %d bytes in rows and pool, %.2f bytes a node; hash-consing"
           + " tables %.2f bytes a node%n", layouts[l], rowBytes[l], rowBytes[l] / (double) nodes,
           tableBytes[l] / (double) nodes);
     }
-    System.out.printf("one cold pass, ms (not a measurement): records build %d analyze %d;"
-        + " A build %d analyze %d; B build %d analyze %d; C build %d analyze %d%n",
-        recordsBuild / 1_000_000, recordsAnalyze / 1_000_000, build[0] / 1_000_000,
-        analyze[0] / 1_000_000, build[1] / 1_000_000, analyze[1] / 1_000_000,
-        build[2] / 1_000_000, analyze[2] / 1_000_000);
+    var cold = new StringBuilder(String.format("records build %d analyze %d",
+        recordsBuild / 1_000_000, recordsAnalyze / 1_000_000));
+    for (int l = 0; l < layouts.length; l++) {
+      cold.append(String.format("; %s build %d analyze %d", layouts[l], build[l] / 1_000_000,
+          analyze[l] / 1_000_000));
+    }
+    System.out.println("one cold pass, ms (not a measurement): " + cold);
   }
 
   private static void require(boolean ok, LoadedGraph g, String message) {

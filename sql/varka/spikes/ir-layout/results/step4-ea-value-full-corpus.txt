@@ -1,0 +1,11 @@
+# step 4, early-access JDK, value records, JVM_OPTS=-XX:-DoEscapeAnalysis, full corpus, 2026-10-07
+jdk 27-jep401ea3+1-1, node classes: value records (37)
+edge cases: 6 graphs at the packing limits agree, and layout B refuses an index that does not fit
+graphs 4456, nodes 244587, kinds 37 of 37
+agreement: records and layouts A, B, C, V16, V63 agree on every graph (distinct nodes, interval facts, round trip)
+layout A: 7841964 bytes in rows and pool, 32.06 bytes a node; hash-consing tables 12.16 bytes a node
+layout B: 4167836 bytes in rows and pool, 17.04 bytes a node; hash-consing tables 13.27 bytes a node
+layout C: 7841964 bytes in rows and pool, 32.06 bytes a node; hash-consing tables 12.16 bytes a node
+layout V16: 4167836 bytes in rows and pool, 17.04 bytes a node; hash-consing tables 13.27 bytes a node
+layout V63: 3189488 bytes in rows and pool, 13.04 bytes a node; hash-consing tables 13.27 bytes a node
+one cold pass, ms (not a measurement): records build 29 analyze 143; A build 10 analyze 7; B build 16 analyze 7; C build 5 analyze 6; V16 build 22 analyze 36; V63 build 19 analyze 18

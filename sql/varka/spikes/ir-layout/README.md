@@ -3,7 +3,8 @@
 A throwaway harness that compares ways to store Varka IR nodes. The plan is
 `plans/m7/VARKA-291.md`; read its sections 2 and 9.2 for the layouts and the predictions.
 
-Steps 2 and 3 hold four of the arms, on JDK 25 with no preview features:
+Steps 2 and 3 hold four of the arms, on JDK 25 with no preview features; step 4 adds three on the
+early-access Valhalla JDK (`run-ea.sh`, below):
 
 | arm | what it is |
 |---|---|
@@ -11,6 +12,9 @@ Steps 2 and 3 hold four of the arms, on JDK 25 with no preview features:
 | layout A | FFM struct rows of 32 bytes: `kind, c0, c1, c2` ints, then `p0, p1` longs |
 | layout B | FFM struct rows of 16 bytes: `head` (kind and packed scalars), then `c0, c1, c2` |
 | layout C | layout A's six fields as `int[]` and `long[]` columns, the plain-array baseline |
+| layout V16 | layout B's row and packing in a flat array of 16-byte value records (internal API) |
+| layout V63 | a `long` a node (kind, three 19-bit child ids) in a flat array, and an `int[]` of scalars |
+| value records | the real IR with `value` added to every record, generated at run time (arm 5) |
 
 A, B and C hash-cons rows in an open-addressing `int[]` table of row ids, and spill what does not
 fit a row (a list, or wide scalars) to an interned pool of ints. B refuses a scalar that does not
@@ -49,3 +53,20 @@ The measurement is step 5.
 `graphs/` holds samples small enough to commit: the size ladder, the make-date ladder, the cheap
 tails, the deep chain, 150 int and 150 long fuzz graphs, and four wide graphs of each lane. Between
 them they use all 37 node kinds.
+
+## The early-access JDK
+
+`run-ea.sh` needs `EA_JAVA_HOME`, a JDK built from the JEP 401 early-access branch (tested on
+`27-jep401ea3+1-1`). Its first argument is the variant:
+
+    EA_JAVA_HOME=/path/to/jdk run-ea.sh plain   # the IR's records as they are, the JDK constant
+    EA_JAVA_HOME=/path/to/jdk run-ea.sh value   # the same file with `value` on every record
+
+`src-ea/` holds what only that JDK compiles (`RowsV16`, `RowsV63` and `EaLayouts`, which registers
+them), so `run.sh` on JDK 25 never sees it. The harness checks that the variant it was told is what
+the classes are (`Class.isValue`), and each V layout's constructor requires `isFlatArray`, so a
+row the VM did not flatten fails instead of being measured as if it were.
+
+Value records crash C2 of this build on the full corpus (`results/step4-ea-value-crash.txt`), so
+the value variant runs there with `JVM_OPTS=-XX:-DoEscapeAnalysis`. See plan section 9.5.
+

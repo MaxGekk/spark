@@ -56,13 +56,13 @@ final class FfmRowsB extends FfmRows {
   private static final VarHandle C1 = ROW.varHandle(PathElement.groupElement("c1"));
   private static final VarHandle C2 = ROW.varHandle(PathElement.groupElement("c2"));
 
-  private static final int KIND_BITS = 6;
-  private static final int KIND_MASK = (1 << KIND_BITS) - 1;
-  private static final int MAX_POOL_OFFSET = (1 << (32 - KIND_BITS)) - 1;
+  static final int KIND_BITS = 6;
+  static final int KIND_MASK = (1 << KIND_BITS) - 1;
+  static final int MAX_POOL_OFFSET = (1 << (32 - KIND_BITS)) - 1;
 
   /** Where, in bits, and how wide a kind's plain scalars are in {@code head}, by kind index. */
-  private static final int[][] SHIFT;
-  private static final int[][] MASK;
+  static final int[][] SHIFT;
+  static final int[][] MASK;
 
   static {
     KindTable table = KindNames.TABLE;
