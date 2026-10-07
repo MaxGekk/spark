@@ -47,6 +47,49 @@ object VarkaKernelCheck {
     arena.allocate(math.max(bytes, 1L), 8)
 
   /**
+   * A validity bitmap's size as Arrow Java's `allocateNew` gives it, in whole 64-bit words: the
+   * kernels write and read a word at a time, so a buffer of the nominal `(length + 7) / 8` bytes
+   * would be one a kernel is not entitled to, and the memory sanitizer (VARKA-263) says so.
+   */
+  private def wordBytes(length: Int): Long = ((length + 63) / 64) * 8L
+
+  /**
+   * Runs `run` with the scratch address the kernel takes, inside the memory sanitizer's window over
+   * the buffers this harness allocated, so that every mapping the kernel makes is checked against
+   * them when the sanitizer is on. `stride` is a value's bytes in the lane. Nothing is registered,
+   * and nothing changes, when it is off.
+   */
+  private def sanitized(kernel: VarkaFusedKernel, length: Int, stride: Long,
+      srcData: Array[Long], srcValidity: Array[Long], outData: Array[Long],
+      outValidity: Array[Long])(run: Long => Int): Int = {
+    val scratch = VarkaEmitterTestSupport.scratch(kernel, length)
+    VarkaMemorySanitizer.begin()
+    try {
+      if (VarkaMemorySanitizer.ENABLED) {
+        for (c <- srcData.indices) {
+          VarkaMemorySanitizer.register("input data", c, srcData(c), length * stride)
+          if (srcValidity(c) != 0L) {
+            VarkaMemorySanitizer.register("input validity", c, srcValidity(c), wordBytes(length))
+          }
+        }
+        for (o <- outData.indices) {
+          if (outData(o) != 0L) {
+            VarkaMemorySanitizer.register("output data", o, outData(o), length * stride)
+          }
+          VarkaMemorySanitizer.register("output validity", o, outValidity(o), wordBytes(length))
+        }
+        if (scratch != 0L) {
+          VarkaMemorySanitizer.register("kernel scratch", 0, scratch,
+            kernel.scratchBytesPerRow().toLong * length)
+        }
+      }
+      run(scratch)
+    } finally {
+      VarkaMemorySanitizer.end()
+    }
+  }
+
+  /**
    * Runs one emitted int-lane kernel over the drawn columns and checks every row and validity bit
    * against [[VarkaReferenceEvaluator]]. Null lanes are poisoned; `forceMasked` reports a null over
    * a full bitmap so the masked body runs. Returns whether the rows were compared: false only
@@ -68,7 +111,7 @@ object VarkaKernelCheck {
       val nullCounts = new Array[Int](numInputs)
       for (c <- 0 until numInputs) {
         val d = alloc(arena, length * 4L)
-        val v = alloc(arena, (length + 7) / 8L)
+        val v = alloc(arena, wordBytes(length))
         v.fill(0.toByte)
         var nulls = 0
         for (i <- 0 until length) {
@@ -97,13 +140,16 @@ object VarkaKernelCheck {
       val outs = roots.map { r =>
         val d = alloc(arena, length * 4L)
         for (i <- 0 until length) d.set(ValueLayout.JAVA_INT, i * 4L, 0xDEADBEEF)
-        val v = alloc(arena, (length + 7) / 8L)
+        val v = alloc(arena, wordBytes(length))
         v.fill(0xFF.toByte)
         (if (r.isInstanceOf[Cond]) 0L else d.address(), d, v)
       }
-      val status = kernel.run(srcData, srcValidity, nullCounts, outs.map(_._1).toArray,
-        outs.map(_._3.address()).toArray, lits, length,
-        VarkaEmitterTestSupport.scratch(kernel, length))
+      val outData = outs.map(_._1).toArray
+      val outValidity = outs.map(_._3.address()).toArray
+      val status = sanitized(kernel, length, 4L, srcData, srcValidity, outData, outValidity) {
+        scratch => kernel.run(srcData, srcValidity, nullCounts, outData, outValidity, lits, length,
+          scratch)
+      }
       if (status != 0 && declineAllowed) {
         return false
       }
@@ -156,7 +202,7 @@ object VarkaKernelCheck {
       val nullCounts = new Array[Int](numInputs)
       for (c <- 0 until numInputs) {
         val d = alloc(arena, length * 8L)
-        val v = alloc(arena, (length + 7) / 8L)
+        val v = alloc(arena, wordBytes(length))
         v.fill(0.toByte)
         var nulls = 0
         for (i <- 0 until length) {
@@ -179,13 +225,16 @@ object VarkaKernelCheck {
       val outs = roots.map { r =>
         val d = alloc(arena, length * 8L)
         for (i <- 0 until length) d.set(ValueLayout.JAVA_LONG, i * 8L, 0xDEADBEEFCAFEBABEL)
-        val v = alloc(arena, (length + 7) / 8L)
+        val v = alloc(arena, wordBytes(length))
         v.fill(0xFF.toByte)
         (if (r.isInstanceOf[Cond]) 0L else d.address(), d, v)
       }
-      val status = kernel.run(srcData, srcValidity, nullCounts, outs.map(_._1).toArray,
-        outs.map(_._3.address()).toArray, Array.empty[Int], lits, length,
-        VarkaEmitterTestSupport.scratch(kernel, length))
+      val outData = outs.map(_._1).toArray
+      val outValidity = outs.map(_._3.address()).toArray
+      val status = sanitized(kernel, length, 8L, srcData, srcValidity, outData, outValidity) {
+        scratch => kernel.run(srcData, srcValidity, nullCounts, outData, outValidity,
+          Array.empty[Int], lits, length, scratch)
+      }
       if (status != 0 && declineAllowed) {
         return false
       }

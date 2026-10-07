@@ -16,6 +16,8 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import scala.jdk.CollectionConverters._
+
 import org.apache.arrow.memory.RootAllocator
 
 import org.apache.spark.SparkFunSuite
@@ -115,6 +117,25 @@ class VarkaMemorySanitizerSuite extends SparkFunSuite {
 
   test("a window with no guarded buffer verifies nothing and passes") {
     new VarkaMemorySanitizer.Window().verifyCanaries()
+  }
+
+  test("the catalyst harness runs its kernels inside the sanitizer's window") {
+    // Catches: the fuzzers' kernel runs, which have no evaluator to open a window, being checked
+    // against nothing, which a suite that passes under the sanitizer cannot tell from one that is
+    // checked: the count of mappings checked has to rise.
+    assume(VarkaMemorySanitizer.ENABLED, "run with -Dvarka.sanitizeMemory=true")
+    val roots = Seq[VarkaVectorIR](new VarkaVectorIR.IntArith(VarkaVectorIR.IntOp.ADD,
+      VarkaVectorIR.Overflow.WRAP, new VarkaVectorIR.ColumnRef(0, VarkaVectorIR.LaneType.INT),
+      new VarkaVectorIR.LiteralSlot(0, VarkaVectorIR.LaneType.INT)))
+    val className = "org.apache.spark.sql.varka.execution.VarkaSanitizerHarnessProbe"
+    val bytes = VarkaLoopEmitter.emit(className, roots.asJava, 1, 1)
+    val length = 100
+    val before = VarkaMemorySanitizer.checked()
+    VarkaKernelCheck.runAndCompare("sanitizer harness probe", className, bytes, roots, 1,
+      Array(5), VarkaKernelCheck.Batch(length, Seq(_ => false),
+        Array(Array.tabulate(length)(identity)), forceMasked = false))
+    assert(VarkaMemorySanitizer.checked() > before,
+      "the harness's kernel mapped nothing in a window: the sanitizer did not reach it")
   }
 
   test("the facade checks inside a window only when the sanitizer is on, never outside one") {
