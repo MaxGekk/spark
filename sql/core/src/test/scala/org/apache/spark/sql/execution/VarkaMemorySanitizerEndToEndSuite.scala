@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution
 
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaMemorySanitizer,
-  VarkaMemoryViolation, VarkaTestWatchdog}
+  VarkaMemoryViolation, VarkaSegments, VarkaTestWatchdog}
 import org.apache.spark.sql.varka.vector.VarkaVectorSupport
 
 /**
@@ -64,6 +64,27 @@ class VarkaMemorySanitizerEndToEndSuite
             VarkaVectorSupport.ofAddress(buf.memoryAddress(), buf.capacity() + 1)
           }
           assert(e.getMessage.contains("input data 7"), e.getMessage)
+        } finally {
+          VarkaMemorySanitizer.end()
+        }
+      } finally {
+        buf.close()
+      }
+    }
+  }
+
+  test("a mapping through catalyst's VarkaSegments is checked the same way") {
+    withSanitizer {
+      val buf = org.apache.spark.sql.util.ArrowUtils.rootAllocator.buffer(64L)
+      try {
+        VarkaMemorySanitizer.begin()
+        try {
+          VarkaMemorySanitizer.register("input validity", 3, buf)
+          VarkaSegments.map(buf.memoryAddress(), buf.capacity())
+          val e = intercept[VarkaMemoryViolation] {
+            VarkaSegments.map(buf.memoryAddress() + 8L, buf.capacity())
+          }
+          assert(e.getMessage.contains("input validity 3"), e.getMessage)
         } finally {
           VarkaMemorySanitizer.end()
         }

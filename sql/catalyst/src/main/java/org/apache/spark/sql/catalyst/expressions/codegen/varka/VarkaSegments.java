@@ -34,8 +34,14 @@ public final class VarkaSegments {
 
   private VarkaSegments() {}
 
-  /** {@code addr} as a segment of exactly {@code bytes} bytes. */
+  /**
+   * {@code addr} as a segment of exactly {@code bytes} bytes; under the memory sanitizer, checked
+   * first against the buffers the evaluator registered ({@link VarkaMemorySanitizer}).
+   */
   public static MemorySegment map(long addr, long bytes) {
+    if (VarkaMemorySanitizer.ENABLED) {
+      VarkaMemorySanitizer.check(addr, bytes);
+    }
     return MemorySegment.ofAddress(addr).reinterpret(bytes);
   }
 }
