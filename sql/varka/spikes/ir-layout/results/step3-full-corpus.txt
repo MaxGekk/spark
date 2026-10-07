@@ -1,0 +1,8 @@
+# step 3, full corpus (VarkaIrLayoutExport), openjdk version "25.0.4.1" 2026-08-18, 2026-10-07
+edge cases: 6 graphs at the packing limits agree, and layout B refuses an index that does not fit
+graphs 4456, nodes 244587, kinds 37 of 37
+agreement: records and layouts A, B and C agree on every graph (distinct nodes, interval facts, round trip)
+layout A: 7841964 bytes in rows and pool, 32.06 bytes a node; hash-consing tables 12.16 bytes a node
+layout B: 4167836 bytes in rows and pool, 17.04 bytes a node; hash-consing tables 13.27 bytes a node
+layout C: 7841964 bytes in rows and pool, 32.06 bytes a node; hash-consing tables 12.16 bytes a node
+one cold pass, ms (not a measurement): records build 31 analyze 91; A build 14 analyze 8; B build 21 analyze 8; C build 6 analyze 5
