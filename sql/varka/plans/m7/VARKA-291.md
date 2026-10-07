@@ -310,3 +310,27 @@ cache miss of reading it; that is a layout variant for step 5, not a decision no
 not show it; and the cost of adopting an IR's rows as singleton classes against extracting a
 selection.
 
+### 9.3 Step 2, the harness for records and the FFM rows, 7 October 2026
+
+Built `sql/varka/spikes/ir-layout/`: arm 1 (records), arm 3 in layouts A and B, the agreement check,
+the run script, and the small graphs beside it (320 graphs, 11,699 nodes, all 37 kinds). The
+`int[]` columns are step 3, as decided in 9.2.
+
+**Agreement.** On the committed graphs and on the full corpus (4,456 graphs, 244,587 nodes)
+records, layout A and layout B agree on distinct nodes and interval facts, and both layouts round
+trip to equal records. Six edge cases at the packing limits agree too, and B refuses the one index
+past its limit.
+
+**Sizes, full corpus.** Layout A takes 32.06 bytes a node and layout B 17.04, with interning. The
+hash-consing tables take 12.16 and 13.27 bytes a node, not the 8 that 9.2 estimated: the table
+rounds to a power of two, and B has a second table for its pool. Section 9.2's figure of 18 for B
+was without interning.
+
+**A bug the bounds check caught.** B's pool was sized for lists only, but B spills every wide
+kind's scalars; the FFM segment's bounds check threw. It is sized from the wide scalars now, and so
+is the pool's table.
+
+**Not a measurement.** One cold pass in one JVM, from `results/step2-full-corpus.txt`: records
+build 28 ms and analyze 91, A build 14 and analyze 8, B build 22 and analyze 8. Step 5 measures on
+the quiet machine, with fresh JVMs.
+
