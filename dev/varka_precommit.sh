@@ -39,6 +39,9 @@
 #   * no TODO or FIXME marker under sql/varka or in a Varka source directory
 #     (sql/varka/AGENTS.md: open work is recorded in a plan, never left as a
 #     marker);
+#   * no raw `.reinterpret(` in the main Scala or Java of a Varka class: an address is mapped
+#     through VarkaSegments.map (catalyst) or VarkaVectorSupport.ofAddress (the engine), so that
+#     the memory sanitizer (VARKA-263) sees every mapping;
 #   * SKILLS.md's generated index still matches the lesson files under
 #     sql/varka/skills/ (dev/varka_toc.py), when either changed;
 #   * every number the documents quote traces to a committed results file
@@ -243,6 +246,15 @@ for f in "${files[@]}"; do
       wrote_line "$f" "$hit" \
         && note "$f:$hit: TODO/FIXME marker; record it in the plan instead"
     done < <(grep -n -E "$pattern" "$f" | cut -d: -f1)
+  fi
+  if [[ "$f" == */src/main/* && "$f" =~ \.(scala|java)$ ]] \
+      && { is_varka "$f" || [[ "${f##*/}" == Varka* ]]; } \
+      && [[ ! "$f" =~ /(VarkaSegments|VarkaVectorSupport|VarkaMorsel)\.java$ ]]; then
+    while IFS= read -r hit; do
+      wrote_line "$f" "$hit" \
+        && note "$f:$hit: raw .reinterpret(; map an address through VarkaSegments.map or" \
+              "VarkaVectorSupport.ofAddress, so the memory sanitizer sees it (VARKA-263)"
+    done < <(grep -n -F '.reinterpret(' "$f" | cut -d: -f1)
   fi
 done
 

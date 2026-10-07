@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, UnsafeP
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection,
   VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps,
-  VarkaEmitOptions, VarkaSelectionBitmap}
+  VarkaEmitOptions, VarkaSegments, VarkaSelectionBitmap}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.varka.VarkaBatchLedger
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -148,7 +148,7 @@ private[sql] class VarkaFilterEvaluator(
       runner.dstValidity(o) = buf.memoryAddress() + o * stride
     }
     runner.invoke(len)
-    val base = MemorySegment.ofAddress(buf.memoryAddress()).reinterpret(stride * outputs)
+    val base = VarkaSegments.map(buf.memoryAddress(), stride * outputs)
     if (outputs > 1) {
       // A split predicate (see `CompiledVarkaPredicate.clauses`): each clause's partial roots
       // OR into its first bitmap, and the clauses AND into output 0's, which the first clause

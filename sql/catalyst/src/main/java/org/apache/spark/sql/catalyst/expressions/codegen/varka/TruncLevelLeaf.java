@@ -68,8 +68,8 @@ public final class TruncLevelLeaf {
    * @param dstValidity address of a bitmap of {@code (length + 7) / 8} bytes, rewritten whole
    */
   public static int fill(ColumnVector formats, int length, long dstData, long dstValidity) {
-    MemorySegment data = MemorySegment.ofAddress(dstData).reinterpret(length * 4L);
-    MemorySegment validity = MemorySegment.ofAddress(dstValidity).reinterpret((length + 7) / 8L);
+    MemorySegment data = VarkaSegments.map(dstData, length * 4L);
+    MemorySegment validity = VarkaSegments.map(dstValidity, (length + 7) / 8L);
     int nulls = 0;
     int bits = 0;
     for (int i = 0; i < length; i++) {
