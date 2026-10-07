@@ -1,0 +1,8 @@
+# step 3, committed graphs, openjdk version "25.0.4.1" 2026-08-18, 2026-10-07
+edge cases: 6 graphs at the packing limits agree, and layout B refuses an index that does not fit
+graphs 320, nodes 11699, kinds 37 of 37
+agreement: records and layouts A, B and C agree on every graph (distinct nodes, interval facts, round trip)
+layout A: 374704 bytes in rows and pool, 32.03 bytes a node; hash-consing tables 12.23 bytes a node
+layout B: 194720 bytes in rows and pool, 16.64 bytes a node; hash-consing tables 12.57 bytes a node
+layout C: 374704 bytes in rows and pool, 32.03 bytes a node; hash-consing tables 12.23 bytes a node
+one cold pass, ms (not a measurement): records build 5 analyze 18; A build 4 analyze 2; B build 4 analyze 2; C build 0 analyze 0

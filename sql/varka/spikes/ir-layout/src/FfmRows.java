@@ -29,7 +29,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.KindTable.Scalar;
 
 /**
  * Arm 3 of the spike: the IR as rows of a flat store in an FFM {@link Arena}, one class for each
- * of the two layouts ({@link FfmRowsA} and {@link FfmRowsB}) so that neither pays for a switch on
+ * of the two layouts ({@link FfmRowsA} and {@link FfmRowsB}; {@link ColumnRows}, arm 2, is the same
+ * contract over heap columns) so that neither pays for a switch on
  * the layout at every access. What they share is here: the pool of ints that holds what a row
  * cannot, interned so that equal content has one offset and equal rows stay equal; the hash and the
  * decoding of a row's scalars back to text, for the round trip through {@link VarkaIrDescription};
@@ -107,6 +108,7 @@ abstract class FfmRows implements AutoCloseable {
     return switch (layout) {
       case "A" -> new FfmRowsA(nodes, poolIntCapacity, poolEntryCapacity);
       case "B" -> new FfmRowsB(nodes, poolIntCapacity, poolEntryCapacity);
+      case "C" -> new ColumnRows(nodes, poolIntCapacity, poolEntryCapacity);
       default -> throw new IllegalArgumentException("no layout " + layout);
     };
   }

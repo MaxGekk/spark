@@ -75,11 +75,11 @@ public final class IrLayoutHarness {
     var seen = new TreeSet<String>();
     long recordsBuild = 0;
     long recordsAnalyze = 0;
-    long[] build = new long[2];
-    long[] analyze = new long[2];
-    long[] rowBytes = new long[2];
-    long[] tableBytes = new long[2];
-    String[] layouts = {"A", "B"};
+    long[] build = new long[3];
+    long[] analyze = new long[3];
+    long[] rowBytes = new long[3];
+    long[] tableBytes = new long[3];
+    String[] layouts = {"A", "B", "C"};
     for (LoadedGraph g : loaded) {
       nodes += g.size();
       for (int k : g.kind()) {
@@ -97,7 +97,7 @@ public final class IrLayoutHarness {
           "the records hold " + expected.distinct() + " distinct nodes, the description "
               + g.size());
       for (int l = 0; l < layouts.length; l++) {
-        boolean a = layouts[l].equals("A");
+        boolean a = !layouts[l].equals("B");
         try (FfmRows rows = FfmRows.create(layouts[l], g.size(),
             a ? g.listInts() : g.wideInts(table), a ? g.listNodes() : g.wideNodes(table))) {
           t = System.nanoTime();
@@ -125,7 +125,7 @@ public final class IrLayoutHarness {
       throw new IllegalStateException("the graphs cover " + seen.size() + " of " + table.size()
           + " kinds, so the agreement above is incomplete");
     }
-    System.out.println("agreement: records, layout A and layout B agree on every graph "
+    System.out.println("agreement: records and layouts A, B and C agree on every graph "
         + "(distinct nodes, interval facts, round trip)");
     for (int l = 0; l < layouts.length; l++) {
       System.out.printf("layout %s: %d bytes in rows and pool, %.2f bytes a node; hash-consing"
@@ -133,9 +133,10 @@ public final class IrLayoutHarness {
           tableBytes[l] / (double) nodes);
     }
     System.out.printf("one cold pass, ms (not a measurement): records build %d analyze %d;"
-        + " A build %d analyze %d; B build %d analyze %d%n", recordsBuild / 1_000_000,
-        recordsAnalyze / 1_000_000, build[0] / 1_000_000, analyze[0] / 1_000_000,
-        build[1] / 1_000_000, analyze[1] / 1_000_000);
+        + " A build %d analyze %d; B build %d analyze %d; C build %d analyze %d%n",
+        recordsBuild / 1_000_000, recordsAnalyze / 1_000_000, build[0] / 1_000_000,
+        analyze[0] / 1_000_000, build[1] / 1_000_000, analyze[1] / 1_000_000,
+        build[2] / 1_000_000, analyze[2] / 1_000_000);
   }
 
   private static void require(boolean ok, LoadedGraph g, String message) {

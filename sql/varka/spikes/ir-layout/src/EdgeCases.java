@@ -86,8 +86,8 @@ final class EdgeCases {
       LoadedGraph g = LoadedGraph.loadAll(table, c.text()).get(0);
       List<VarkaVectorIR> records = RecordsArm.build(g);
       Facts expected = RecordsArm.analyze(records);
-      for (String layout : new String[] {"A", "B"}) {
-        boolean wide = layout.equals("A");
+      for (String layout : new String[] {"A", "B", "C"}) {
+        boolean wide = !layout.equals("B");
         try (FfmRows rows = FfmRows.create(layout, g.size(),
             wide ? g.listInts() : g.wideInts(table), wide ? g.listNodes() : g.wideNodes(table))) {
           int[] roots;

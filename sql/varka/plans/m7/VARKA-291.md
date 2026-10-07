@@ -334,3 +334,21 @@ is the pool's table.
 build 28 ms and analyze 91, A build 14 and analyze 8, B build 22 and analyze 8. Step 5 measures on
 the quiet machine, with fresh JVMs.
 
+### 9.4 Step 3, the `int[]` columns baseline, 7 October 2026
+
+Added `ColumnRows` (layout C) to the harness: layout A's six fields as `kind`, `c0`, `c1`, `c2`
+`int[]` and `p0`, `p1` `long[]` columns, with A's packing, so a node is the same 32 bytes and the
+arms differ in where a field lives and how it is read. It is the plain-array baseline the FFM rows
+are read against.
+
+**Agreement.** Records and layouts A, B and C agree on the committed graphs and on the full corpus,
+and C passes the six edge cases. C's sizes are A's, 32.06 bytes a node with 12.16 for the tables.
+
+**One departure from the plan.** C shares the off-heap pool of lists with the FFM arms. Only
+`InRanges` has a list, so a heap pool would change one kind in 37; it is noted here so that step 5
+does not read C as free of `MemorySegment` altogether.
+
+**Not a measurement.** One cold pass, from `results/step3-full-corpus.txt`: records build 31 ms and
+analyze 91, A build 14 and analyze 8, B build 21 and analyze 8, C build 6 and analyze 5. Step 5
+measures on the quiet machine, with fresh JVMs.
+
