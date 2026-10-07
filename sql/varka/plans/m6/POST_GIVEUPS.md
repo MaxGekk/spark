@@ -306,14 +306,14 @@ exists.
 
 ## 6. Which release changes what
 
-Read from the tracker on 2 October 2026.
+Read from the tracker on 7 October 2026.
 
 | ticket | what changes for you | state |
 |--|--|--|
 | SPARK-37019 | `transform`, `filter`, `exists`, `forall` and `aggregate` generate code, so they keep their operator in its stage | fixed in 4.3.0 |
 | SPARK-32750 | a sort aggregate with grouping keys, such as a `max` of a string per group, runs in a stage | fixed in 4.3.0 |
 | SPARK-59774 | the method too long to be JIT compiled becomes a warning, once, naming the remedy | fixed in 4.4.0 |
-| SPARK-33301 | a large `CASE WHEN` in a stage is split into methods instead of passing 64 KB (section 4) | open; in review as [apache/spark#59069](https://github.com/apache/spark/pull/59069) |
+| SPARK-33301 | a large `CASE WHEN` in a stage is split into methods instead of passing 64 KB (section 4) | open; in review as [apache/spark#59225](https://github.com/apache/spark/pull/59225) |
 
 
 ## How you'd know, across your own history

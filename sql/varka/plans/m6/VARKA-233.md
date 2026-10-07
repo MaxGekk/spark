@@ -752,6 +752,17 @@ at publication and needed no change: SPARK-37019 and SPARK-32750 fixed in 4.3.0,
 4.4.0, SPARK-33301 open with apache/spark#59069 unmerged. Its spark-shell snippets ran on stock
 Spark 4.2.0 under JDK 17, 21 and 25 (11.5, 13.1, 13.2 and 14), so the row's done-when holds.
 
+### 16.1 Section 6 reread, 7 October 2026
+
+Before the post was shared again its section 6 was read against the tracker once more. SPARK-37019
+and SPARK-32750 (fixed in 4.3.0) and SPARK-59774 (4.4.0) were unchanged. SPARK-33301 is still open,
+but apache/spark#59069 was closed on 3 October in favour of a redesign, apache/spark#59225, which
+is open and under review; the row and its date were updated, and nothing else in the post changed.
+The page was rendered again from the updated source with `dev/varka_post_page.py`, whose figure
+lookup had stopped finding the figures when the plans moved into milestone folders and now looks
+beside the plans directory too; the rendered text differs from what was live in those two places
+only.
+
 ## 17. The laptop runs, pinned and repeated, 2 October 2026
 
 Section 13.6's laptop runs, and 13.8's interpreter run, were not pinned: `build/sbt runMain`
