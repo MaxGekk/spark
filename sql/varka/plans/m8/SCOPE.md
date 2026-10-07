@@ -4626,6 +4626,20 @@ If a layout passes, the next decision is whose schema the rows are: jegg's, gene
 payload and child ids, with Varka's IR a client of it, or Varka's. **Done when** the table of
 layouts against measures exists and the gate's verdict is written.
 
+**Result.** *Added 7 October 2026, from `VARKA-291.md` 9.* The gate's verdict is written. The
+collector is not the payoff (over 3,000 builds GC time stayed in the low milliseconds for records,
+A and C, and layout A allocates the least heap a build). Memory per node is not either: a record is about 24 bytes, flat
+rows are 32 (A and C) or 16 (B), and only a 12-byte packed row, which needs the internal API, is
+half of it. What a flat layout gives is analysis 2.8 to 7 times faster than a records pass that
+memoizes by identity, a rebuild about twice as fast, and a factor that grows with depth where
+records hash structurally. The cold first compile, the number this item said was unmeasured, is
+a warm-up cost: FFM rows pay 7 to 13 ms of class initialization and slow interpreted accessors on
+a fresh JVM, which a start-up warm-up of a few thousand rounds removes (`VarkaKernelWarmup`
+already exists for kernels), and `int[]` columns are ahead after one. Layout C, heap columns
+behind one owning class, is the store and A the alternative; Arrow is the wire and the native
+boundary; the second question above, whose schema, is open, and the analyses' loss of the
+exhaustive `switch` is the cost. The migration itself is this item's, and is not scheduled.
+
 **When.** Step 1 needs only jegg 0.1.0 on Central and can become a task when the owner schedules it;
 step 2 follows it. Steps 3 to 5 wait for the representation on IR values and for jegg's cost
 function with child facts. The storage spike needs neither jegg nor Central and can run first; the

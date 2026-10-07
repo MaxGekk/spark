@@ -675,3 +675,21 @@ can falsify.
   benchmark JVM had died in one section, and the file it wrote was missing that section's rows.
   A regeneration is checked by reading every section of the file it wrote, never by the
   script's exit code.
+
+## A cold comparison prices two things, and a baseline that hashes its subtree flatters whatever replaces it
+
+VARKA-291 compared the IR's storage layouts on a fresh JVM and warm. Two traps, both settled by
+measurement.
+
+- The first records baseline memoized an analysis by the records' own `hashCode`, which walks the
+  whole subtree on every lookup, so every flat layout beat it by 3 to 250 times. The real pass has
+  no such memo; the same pass keyed by node identity is the fair baseline, and against it the
+  cold win mostly disappeared. Name which baseline a ratio is read against, and build the fairer
+  one before quoting the larger gap.
+- "Cold" is a one-time cost (class initialization, the FFM machinery: 7 to 8 ms on a 46-node
+  graph) and the cost of code the JIT has not yet compiled (an interpreted `VarHandle` access is
+  slower than an array load: the FFM layout's cold analyze was twice the columns'). A warm-up on
+  another graph removes the first and not the second; only rounds of the real work remove it.
+  After 3,000 rounds every flat layout beat records, and between 30 and 300 rounds the FFM layouts
+  were mostly 1.2 to 1.7 times slower than records. Measure the warm-up the production path
+  actually gets, not "cold" and "warm" alone (`VARKA-291.md` 9.6, 9.7).
