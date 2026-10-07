@@ -195,6 +195,111 @@ def identity_table():
     return out
 
 
+def prewarm_table():
+    """Cold again with the one-time costs paid on another graph first, and the cold rebuild."""
+    out = [
+        "cold with a pre-initialized JVM (one build, analyze, intern and rebuild of a 10-node "
+        "graph first), median, microseconds; ratio of build+analyze over the records' (jdk25: "
+        "the identity-memo ones)"
+    ]
+    out.append(
+        f"{'variant':<7} {'arm':<14} {'graph':<18} {'build':>8} {'analyze':>8} "
+        f"{'b+a':>8} {'ratio':>6} {'rebuild':>8}"
+    )
+    data = defaultdict(lambda: defaultdict(list))
+    for variant in ("jdk25", "plain", "value"):
+        for l in lines("coldprewarm", variant):
+            m = re.match(
+                r"COLD (\S+) (\S+) nodes (\d+) build_ns (\d+) analyze_ns (\d+) intern_ns (\d+) "
+                r"rebuild_ns (\d+) prewarm 1",
+                l,
+            )
+            if m:
+                d = data[(variant, m[1], m[2])]
+                d["b"].append(int(m[4]))
+                d["a"].append(int(m[5]))
+                d["r"].append(int(m[7]))
+    for variant in ("jdk25", "plain", "value"):
+        for graph in ORDER:
+            base_arm = "records-id" if variant == "jdk25" else "records"
+            base = data.get((baseline_variant(variant), base_arm, graph))
+            for (v, arm, g), d in sorted(data.items()):
+                if v != variant or g != graph:
+                    continue
+                b, a, r = (statistics.median(d[k]) / 1000 for k in "bar")
+                ratio = "-"
+                if base:
+                    base_total = sum(statistics.median(base[k]) for k in "ba") / 1000
+                    ratio = f"{(b + a) / base_total:.2f}"
+                out.append(
+                    f"{variant:<7} {arm_label(variant, arm):<14} {graph:<18} {b:>8.0f} "
+                    f"{a:>8.0f} {b + a:>8.0f} {ratio:>6} {r:>8.0f}"
+                )
+    return out
+
+
+def rebuild_table():
+    out = [
+        "warm rebuild (remap every row's children, rehash, re-intern), minimum, microseconds; "
+        "spread; ratio over the records' reconstruction (a lower bound: records are not "
+        "deduplicated)"
+    ]
+    out.append(
+        f"{'variant':<7} {'arm':<14} {'graph':<18} {'min us':>10} {'spread':>7} {'ratio':>6}"
+    )
+    data = defaultdict(list)
+    for variant in ("jdk25", "plain", "value"):
+        for l in lines("warmrebuild", variant):
+            m = re.match(
+                r"WARM (\S+) (\S+) nodes (\d+) op rebuild iteration (\d+) ns_per_op "
+                r"([\d.]+)",
+                l,
+            )
+            if m:
+                data[(variant, m[1], m[2])].append(float(m[5]))
+    for variant in ("jdk25", "plain", "value"):
+        for graph in ORDER:
+            base = data.get((baseline_variant(variant), "records", graph))
+            for (v, arm, g), xs in sorted(data.items()):
+                if v != variant or g != graph:
+                    continue
+                ratio = f"{min(xs) / min(base):.2f}" if base else "-"
+                out.append(
+                    f"{variant:<7} {arm_label(variant, arm):<14} {graph:<18} "
+                    f"{min(xs) / 1000:>10.2f} {max(xs) / min(xs):>7.2f} {ratio:>6}"
+                )
+    return out
+
+
+def alloc_table():
+    out = [
+        "heap allocated by one build, once warm (3,000 builds): bytes, GCs and GC milliseconds "
+        "over the run, ns a build"
+    ]
+    out.append(
+        f"{'variant':<7} {'arm':<14} {'graph':<18} {'bytes/build':>12} {'gcs':>5} "
+        f"{'gc ms':>6} {'ns/build':>10}"
+    )
+    for variant in ("jdk25", "plain", "value"):
+        rows = {}
+        for l in lines("alloc", variant):
+            m = re.match(
+                r"ALLOC (\S+) (\S+) nodes (\d+) builds (\d+) heap_bytes_per_build (\d+) "
+                r"gc_count (\d+) gc_ms (\d+) ns_per_build (\d+)",
+                l,
+            )
+            if m:
+                rows[(m[2], m[1])] = (m[5], m[6], m[7], m[8])
+        for graph in ORDER:
+            for (g, arm), v in sorted(rows.items()):
+                if g == graph:
+                    out.append(
+                        f"{variant:<7} {arm_label(variant, arm):<14} {graph:<18} "
+                        f"{v[0]:>12} {v[1]:>5} {v[2]:>6} {v[3]:>10}"
+                    )
+    return out
+
+
 def failures():
     out = []
     for path in sorted(glob.glob(os.path.join(results, "step5-*.txt"))):
@@ -205,5 +310,14 @@ def failures():
 
 
 if __name__ == "__main__":
-    sections = [bytes_table(), cold_table(), warm_table(), identity_table(), failures()]
+    sections = [
+        bytes_table(),
+        cold_table(),
+        warm_table(),
+        identity_table(),
+        prewarm_table(),
+        rebuild_table(),
+        alloc_table(),
+        failures(),
+    ]
     print("\n\n".join("\n".join(s) for s in sections))

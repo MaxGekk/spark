@@ -30,7 +30,8 @@
 #            bytes  bytes a node, with a java agent for the records
 #            alloc  heap bytes allocated and GC time over 3,000 builds, once warm
 #
-#   --prewarm GRAPH   cold mode: build once on another graph first, paying the one-time costs
+#   --prewarm GRAPH   cold mode: run every measure on another graph first, --prewarm-rounds times
+#                     (default 1), paying the one-time costs and as much JIT warm-up as asked
 #   --ops             warm mode: the measures to run (default: build intern analyze rebuild)
 #
 # The machine must be quiet: it refuses to start above a load of 0.8 unless FORCE=1.
@@ -46,6 +47,7 @@ samples=20
 seconds=2
 ops="build intern analyze rebuild"
 prewarm=""
+rounds=1
 arms=""
 graphs="cheap_tails-22 wide_int-1 size_ladder-100 size_ladder-200 deep_chain-1024 grown_ladder-2000"
 while [ $# -gt 0 ]; do
@@ -56,6 +58,7 @@ while [ $# -gt 0 ]; do
     --graphs) graphs=$2; shift 2 ;;
     --ops) ops=$2; shift 2 ;;
     --prewarm) prewarm=$2; shift 2 ;;
+    --prewarm-rounds) rounds=$2; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -130,7 +133,7 @@ jvm+=(-Xss16m -Xmx4g -cp "$out/classes")
   echo "# VARKA-291 step 5, variant $variant, mode $mode, $(date +%Y-%m-%d)"
   echo "# jdk: $("${bin}java" -version 2>&1 | head -1)"
   echo "# pin: ${runner[*]:-none}; load average at start $load; samples $samples; seconds $seconds;\
-prewarm ${prewarm:-none}"
+prewarm ${prewarm:-none} x${rounds}"
   echo "# power: governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null \
 || echo n/a) profile=$(powerprofilesctl get 2>/dev/null || echo n/a)"
 } > "$outfile"
@@ -153,7 +156,7 @@ for graph in $graphs; do
   for arm in $arms; do
     case "$mode" in
       cold) for _ in $(seq "$samples"); do
-              run --arm "$arm" --graph "$graph" --mode cold ${prewarm:+--prewarm "$prewarm"}
+              run --arm "$arm" --graph "$graph" --mode cold ${prewarm:+--prewarm "$prewarm" --prewarm-rounds "$rounds"}
             done ;;
       alloc) run --arm "$arm" --graph "$graph" --mode alloc ;;
       warm) for op in $ops; do

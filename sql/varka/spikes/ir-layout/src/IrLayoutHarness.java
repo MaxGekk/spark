@@ -48,7 +48,7 @@ public final class IrLayoutHarness {
 
   public static void main(String[] args) throws IOException {
     Path graphs = Path.of("graphs");
-    String[] layouts = {"A", "B", "C"};
+    String[] layouts = {"A", "B", "C", "D"};
     for (int i = 0; i < args.length; i++) {
       if (args[i].equals("--graphs")) {
         graphs = Path.of(args[++i]);

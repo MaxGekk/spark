@@ -76,4 +76,4 @@ ea_sources=("$here"/src-ea/*.java)
   --add-exports java.base/jdk.internal.vm.annotation=ALL-UNNAMED \
   -Dir.variant="$variant" -Xss16m -Xmx4g -cp "$out/classes" \
   org.apache.spark.sql.catalyst.expressions.codegen.varka.IrLayoutHarness \
-  --graphs "$here/graphs" --layouts A,B,C,V16,V63 "$@"
+  --graphs "$here/graphs" --layouts A,B,C,D,V16,V63 "$@"

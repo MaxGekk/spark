@@ -225,6 +225,7 @@ public final class IrLayoutBench {
     String arm = null;
     String graph = null;
     String prewarm = null;
+    int rounds = 1;
     String mode = "cold";
     String op = "build";
     Path graphs = Path.of("graphs");
@@ -238,6 +239,7 @@ public final class IrLayoutBench {
         case "--mode" -> mode = args[++i];
         case "--op" -> op = args[++i];
         case "--prewarm" -> prewarm = args[++i];
+        case "--prewarm-rounds" -> rounds = Integer.parseInt(args[++i]);
         case "--graphs" -> graphs = Path.of(args[++i]);
         case "--seconds" -> seconds = Double.parseDouble(args[++i]);
         case "--warmup" -> warmup = Integer.parseInt(args[++i]);
@@ -256,11 +258,13 @@ public final class IrLayoutBench {
       // Pays the one-time costs (class initialization, the FFM machinery) on another graph, so
       // that the timed first compile below does not: what a startup warm-up would do.
       Case other = newCase(arm, find(graphs, prewarm));
-      other.build();
-      other.analyze();
-      other.prepareIntern();
-      other.intern();
-      other.rebuild();
+      for (int round = 0; round < rounds; round++) {
+        other.build();
+        other.analyze();
+        other.prepareIntern();
+        other.intern();
+        other.rebuild();
+      }
     }
     LoadedGraph g = find(graphs, graph);
     Case c = newCase(arm, g);

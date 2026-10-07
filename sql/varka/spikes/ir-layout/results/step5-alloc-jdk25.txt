@@ -1,0 +1,35 @@
+# VARKA-291 step 5, variant jdk25, mode alloc, 2026-10-07
+# jdk: openjdk version "25.0.4.1" 2026-08-18
+# pin: taskset -c 0,12,13,14,15,1,2,3; load average at start 1.40; samples 20; seconds 2;prewarm none
+# power: governor=performance profile=performance
+ALLOC records cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 3584 gc_count 0 gc_ms 0 ns_per_build 1245
+ALLOC records-id cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 3584 gc_count 0 gc_ms 0 ns_per_build 1147
+ALLOC A cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 1192 gc_count 0 gc_ms 0 ns_per_build 1091
+ALLOC B cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 29160 gc_count 0 gc_ms 0 ns_per_build 5620
+ALLOC C cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 2688 gc_count 0 gc_ms 0 ns_per_build 1387
+ALLOC records wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 9116 gc_count 1 gc_ms 1 ns_per_build 12151
+ALLOC records-id wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 9115 gc_count 1 gc_ms 1 ns_per_build 11016
+ALLOC A wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 3760 gc_count 0 gc_ms 0 ns_per_build 3287
+ALLOC B wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 150632 gc_count 1 gc_ms 1 ns_per_build 26562
+ALLOC C wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 11080 gc_count 1 gc_ms 0 ns_per_build 3940
+ALLOC records size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 21752 gc_count 0 gc_ms 0 ns_per_build 8330
+ALLOC records-id size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 21752 gc_count 0 gc_ms 0 ns_per_build 8710
+ALLOC A size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 6912 gc_count 1 gc_ms 1 ns_per_build 6766
+ALLOC B size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 296064 gc_count 1 gc_ms 1 ns_per_build 50749
+ALLOC C size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 23000 gc_count 0 gc_ms 0 ns_per_build 7538
+ALLOC records size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 43352 gc_count 0 gc_ms 0 ns_per_build 19827
+ALLOC records-id size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 43352 gc_count 0 gc_ms 0 ns_per_build 20313
+ALLOC A size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 13408 gc_count 0 gc_ms 0 ns_per_build 10262
+ALLOC B size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 590560 gc_count 2 gc_ms 2 ns_per_build 68268
+ALLOC C size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 45496 gc_count 0 gc_ms 0 ns_per_build 16127
+ALLOC records deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 106616 gc_count 1 gc_ms 1 ns_per_build 29415
+ALLOC records-id deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 106616 gc_count 1 gc_ms 1 ns_per_build 31574
+ALLOC A deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 41384 gc_count 0 gc_ms 0 ns_per_build 25004
+ALLOC B deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 1319960 gc_count 4 gc_ms 4 ns_per_build 156221
+ALLOC C deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 106992 gc_count 1 gc_ms 1 ns_per_build 34758
+ALLOC records grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 432152 gc_count 2 gc_ms 3 ns_per_build 141387
+ALLOC records-id grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 432152 gc_count 2 gc_ms 4 ns_per_build 143238
+ALLOC A grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 179488 gc_count 0 gc_ms 0 ns_per_build 102893
+ALLOC B grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 5940640 gc_count 21 gc_ms 14 ns_per_build 635507
+ALLOC C grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 499576 gc_count 1 gc_ms 1 ns_per_build 106533
+# done, load average at end 1.38

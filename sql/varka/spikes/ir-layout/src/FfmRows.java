@@ -141,6 +141,7 @@ abstract class FfmRows implements AutoCloseable {
       case "A" -> new FfmRowsA(nodes, poolIntCapacity, poolEntryCapacity);
       case "B" -> new FfmRowsB(nodes, poolIntCapacity, poolEntryCapacity);
       case "C" -> new ColumnRows(nodes, poolIntCapacity, poolEntryCapacity);
+      case "D" -> new SegmentColumns(nodes, poolIntCapacity, poolEntryCapacity);
       default -> throw new IllegalArgumentException("no layout " + layout);
     };
   }

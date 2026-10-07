@@ -264,5 +264,176 @@ A          grown_ladder-2000                 2.43          0.16   (cold 31844 us
 B          grown_ladder-2000                 2.64          0.16   (cold 34541 us, warm analyze 45.00 us)
 C          grown_ladder-2000                 0.74          0.14   (cold 9744 us, warm analyze 40.60 us)
 
+cold with a pre-initialized JVM (one build, analyze, intern and rebuild of a 10-node graph first), median, microseconds; ratio of build+analyze over the records' (jdk25: the identity-memo ones)
+variant arm            graph                 build  analyze      b+a  ratio  rebuild
+jdk25   A              cheap_tails-22          224      113      337   1.11      273
+jdk25   B              cheap_tails-22          284      107      390   1.29      191
+jdk25   C              cheap_tails-22           31        8       39   0.13       12
+jdk25   records        cheap_tails-22           55     1029     1084   3.57       33
+jdk25   records-id     cheap_tails-22           57      246      304   1.00       35
+jdk25   A              wide_int-1             1283      479     1762   1.88     1294
+jdk25   B              wide_int-1             1339      505     1844   1.97      888
+jdk25   C              wide_int-1             4405       43     4448   4.75       50
+jdk25   records        wide_int-1              361     7614     7976   8.52      212
+jdk25   records-id     wide_int-1              367      570      936   1.00      218
+jdk25   A              size_ladder-100        1724      678     2401   2.44     1793
+jdk25   B              size_ladder-100        2172      709     2882   2.93     1286
+jdk25   C              size_ladder-100         215       68      284   0.29       92
+jdk25   records        size_ladder-100         460     4900     5360   5.45      167
+jdk25   records-id     size_ladder-100         463      520      983   1.00      174
+jdk25   A              size_ladder-200        3067     1374     4441   2.53     3388
+jdk25   B              size_ladder-200        3488     1227     4715   2.69     2528
+jdk25   C              size_ladder-200         348      122      470   0.27      159
+jdk25   records        size_ladder-200         784     6676     7460   4.26      360
+jdk25   records-id     size_ladder-200         789      963     1752   1.00      270
+jdk25   A              deep_chain-1024        4846     3014     7860   2.95     5261
+jdk25   B              deep_chain-1024        6145     2461     8606   3.23     3496
+jdk25   C              deep_chain-1024         711      222      933   0.35      298
+jdk25   records        deep_chain-1024        1062    14503    15565   5.84      343
+jdk25   records-id     deep_chain-1024        1067     1597     2664   1.00      333
+jdk25   A              grown_ladder-2000     13521    10652    24173   2.26     5635
+jdk25   B              grown_ladder-2000     15757     7709    23466   2.20     3830
+jdk25   C              grown_ladder-2000      2219      998     3217   0.30     1515
+jdk25   records        grown_ladder-2000      4809    14046    18855   1.77      991
+jdk25   records-id     grown_ladder-2000      4834     5841    10675   1.00      620
+plain   V16            cheap_tails-22          158       16      174   0.11       18
+plain   V63            cheap_tails-22          166       21      187   0.11       23
+plain   records        cheap_tails-22           58     1595     1652   1.00       34
+plain   V16            wide_int-1              726      116      842   0.05       87
+plain   V63            wide_int-1              701      132      833   0.05      169
+plain   records        wide_int-1              383    15133    15516   1.00      243
+plain   V16            size_ladder-100        1036      134     1170   0.18      156
+plain   V63            size_ladder-100        1038      207     1246   0.19      815
+plain   records        size_ladder-100         511     6163     6673   1.00      183
+plain   V16            size_ladder-200        2222      436     2658   0.29      351
+plain   V63            size_ladder-200        1742      431     2173   0.24     2017
+plain   records        size_ladder-200         905     8219     9124   1.00      470
+plain   V16            deep_chain-1024        3861      620     4481   0.18      619
+plain   V63            deep_chain-1024        3879     3493     7372   0.30     4341
+plain   records        deep_chain-1024        1240    23020    24260   1.00      417
+plain   V16            grown_ladder-2000     17719     2346    20065   0.89     2785
+plain   V63            grown_ladder-2000     18486    16585    35072   1.56     3770
+plain   records        grown_ladder-2000      5604    16871    22475   1.00      843
+value   value records  cheap_tails-22           71     1885     1956   1.18       40
+value   value records  wide_int-1              424    17246    17669   1.14      237
+value   value records  size_ladder-100         529     6408     6937   1.04      183
+value   value records  size_ladder-200         891     8043     8934   0.98      432
+value   value records  deep_chain-1024        1240    23531    24772   1.02      390
+value   value records  grown_ladder-2000      5673    17444    23117   1.03      835
+
+warm rebuild (remap every row's children, rehash, re-intern), minimum, microseconds; spread; ratio over the records' reconstruction (a lower bound: records are not deduplicated)
+variant arm            graph                  min us  spread  ratio
+jdk25   A              cheap_tails-22           0.32    1.02   0.63
+jdk25   B              cheap_tails-22           0.30    1.01   0.59
+jdk25   C              cheap_tails-22           0.34    1.05   0.66
+jdk25   records        cheap_tails-22           0.51    1.01   1.00
+jdk25   records-id     cheap_tails-22           0.51    1.01   1.00
+jdk25   A              wide_int-1               1.38    1.03   0.23
+jdk25   B              wide_int-1               1.25    1.01   0.21
+jdk25   C              wide_int-1               1.50    1.02   0.25
+jdk25   records        wide_int-1               5.98    1.01   1.00
+jdk25   records-id     wide_int-1               6.10    1.02   1.02
+jdk25   A              size_ladder-100          3.51    1.01   0.54
+jdk25   B              size_ladder-100          3.19    1.02   0.49
+jdk25   C              size_ladder-100          3.39    1.01   0.52
+jdk25   records        size_ladder-100          6.51    1.01   1.00
+jdk25   records-id     size_ladder-100          6.57    1.01   1.01
+jdk25   A              size_ladder-200          6.69    1.03   0.50
+jdk25   B              size_ladder-200          6.12    1.01   0.45
+jdk25   C              size_ladder-200          6.44    1.01   0.48
+jdk25   records        size_ladder-200         13.47    1.02   1.00
+jdk25   records-id     size_ladder-200         13.00    1.02   0.96
+jdk25   A              deep_chain-1024         12.89    1.02   0.67
+jdk25   B              deep_chain-1024         11.21    1.01   0.58
+jdk25   C              deep_chain-1024         12.76    1.02   0.66
+jdk25   records        deep_chain-1024         19.25    1.03   1.00
+jdk25   records-id     deep_chain-1024         19.22    1.03   1.00
+jdk25   A              grown_ladder-2000       67.32    1.02   0.52
+jdk25   B              grown_ladder-2000       61.96    1.02   0.48
+jdk25   C              grown_ladder-2000       66.75    1.01   0.52
+jdk25   records        grown_ladder-2000      128.98    1.01   1.00
+jdk25   records-id     grown_ladder-2000      127.26    1.01   0.99
+plain   V16            cheap_tails-22           0.72    1.03   1.46
+plain   V63            cheap_tails-22           0.71    1.01   1.45
+plain   records        cheap_tails-22           0.49    1.01   1.00
+plain   V16            wide_int-1               3.23    1.01   0.53
+plain   V63            wide_int-1               3.48    1.04   0.57
+plain   records        wide_int-1               6.05    1.02   1.00
+plain   V16            size_ladder-100          7.37    1.01   1.08
+plain   V63            size_ladder-100          7.67    1.01   1.12
+plain   records        size_ladder-100          6.86    1.02   1.00
+plain   V16            size_ladder-200         14.37    1.02   1.03
+plain   V63            size_ladder-200         15.30    1.01   1.10
+plain   records        size_ladder-200         13.91    1.01   1.00
+plain   V16            deep_chain-1024         28.94    1.01   1.34
+plain   V63            deep_chain-1024         30.01    1.03   1.39
+plain   records        deep_chain-1024         21.53    1.02   1.00
+plain   V16            grown_ladder-2000      148.10    1.02   1.06
+plain   V63            grown_ladder-2000      153.30    1.03   1.10
+plain   records        grown_ladder-2000      139.53    1.02   1.00
+value   value records  cheap_tails-22           0.45    1.01   0.92
+value   value records  wide_int-1               5.67    1.03   0.94
+value   value records  size_ladder-100          6.65    1.02   0.97
+value   value records  size_ladder-200         13.23    1.03   0.95
+value   value records  deep_chain-1024         19.73    1.02   0.92
+value   value records  grown_ladder-2000      129.30    1.03   0.93
+
+heap allocated by one build, once warm (3,000 builds): bytes, GCs and GC milliseconds over the run, ns a build
+variant arm            graph               bytes/build   gcs  gc ms   ns/build
+jdk25   A              cheap_tails-22             1192     0      0       1091
+jdk25   B              cheap_tails-22            29160     0      0       5620
+jdk25   C              cheap_tails-22             2688     0      0       1387
+jdk25   records        cheap_tails-22             3584     0      0       1245
+jdk25   records-id     cheap_tails-22             3584     0      0       1147
+jdk25   A              wide_int-1                 3760     0      0       3287
+jdk25   B              wide_int-1               150632     1      1      26562
+jdk25   C              wide_int-1                11080     1      0       3940
+jdk25   records        wide_int-1                 9116     1      1      12151
+jdk25   records-id     wide_int-1                 9115     1      1      11016
+jdk25   A              size_ladder-100            6912     1      1       6766
+jdk25   B              size_ladder-100          296064     1      1      50749
+jdk25   C              size_ladder-100           23000     0      0       7538
+jdk25   records        size_ladder-100           21752     0      0       8330
+jdk25   records-id     size_ladder-100           21752     0      0       8710
+jdk25   A              size_ladder-200           13408     0      0      10262
+jdk25   B              size_ladder-200          590560     2      2      68268
+jdk25   C              size_ladder-200           45496     0      0      16127
+jdk25   records        size_ladder-200           43352     0      0      19827
+jdk25   records-id     size_ladder-200           43352     0      0      20313
+jdk25   A              deep_chain-1024           41384     0      0      25004
+jdk25   B              deep_chain-1024         1319960     4      4     156221
+jdk25   C              deep_chain-1024          106992     1      1      34758
+jdk25   records        deep_chain-1024          106616     1      1      29415
+jdk25   records-id     deep_chain-1024          106616     1      1      31574
+jdk25   A              grown_ladder-2000        179488     0      0     102893
+jdk25   B              grown_ladder-2000       5940640    21     14     635507
+jdk25   C              grown_ladder-2000        499576     1      1     106533
+jdk25   records        grown_ladder-2000        432152     2      3     141387
+jdk25   records-id     grown_ladder-2000        432152     2      4     143238
+plain   V16            cheap_tails-22            28384     1      0       6110
+plain   V63            cheap_tails-22            28216     1      1       6282
+plain   records        cheap_tails-22             3584     0      0       1128
+plain   V16            wide_int-1               143296     3      1      23735
+plain   V63            wide_int-1               164288     3      1      23172
+plain   records        wide_int-1                 9195     1      1      17515
+plain   V16            size_ladder-100          304056     2      2      64601
+plain   V63            size_ladder-100          302064     3      2      65287
+plain   records        size_ladder-100           21752     1      1       8907
+plain   V16            size_ladder-200          606552     4      4      78951
+plain   V63            size_ladder-200          698752     5      3      85391
+plain   records        size_ladder-200           43352     3      2      15372
+plain   V16            deep_chain-1024         1451056     9      5     184331
+plain   V63            deep_chain-1024         1311744     8      5     178808
+plain   records        deep_chain-1024          106616     2      3      28150
+plain   V16            grown_ladder-2000       6100632    41     25     791646
+plain   V63            grown_ladder-2000       6060640    41     22     803124
+plain   records        grown_ladder-2000        432152     7      5     146276
+value   value records  cheap_tails-22             3776     1      1       1481
+value   value records  wide_int-1                10888     0      0      19567
+value   value records  size_ladder-100           25768     2      1       8410
+value   value records  size_ladder-200           51368     2      1      16250
+value   value records  deep_chain-1024          123008     2      2      24351
+value   value records  grown_ladder-2000        512168     3      4     138868
+
 failures
 none
