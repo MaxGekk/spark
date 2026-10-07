@@ -84,8 +84,13 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
     try {
       val input = VarkaColumnarToRowExecSuite.buildBatch(
         BatchSpec("arrow", Seq(dates, ints)), childOutput, allocator)
-      body(input, () => context.markTaskCompleted(None))
-      input.close()
+      // Closed whether or not the body returns: a test the option matrix expects to break under a
+      // configuration throws out of it, and the batch it built must not stay in the allocator.
+      try {
+        body(input, () => context.markTaskCompleted(None))
+      } finally {
+        input.close()
+      }
       assert(ArrowUtils.rootAllocator.getAllocatedMemory === initial,
         "the test left Arrow memory allocated")
     } finally {

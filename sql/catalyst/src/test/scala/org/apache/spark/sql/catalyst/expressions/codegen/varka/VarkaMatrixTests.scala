@@ -54,6 +54,13 @@ trait VarkaMatrixTests extends SparkFunSuite {
     status.waitUntilCompleted()
     val leaked = ArrowUtils.rootAllocator.getAllocatedMemory - before
     if (leaked != 0L) {
+      if (sys.props.get("arrow.memory.debug.allocator").contains("true")) {
+        // The allocator's own account of what is outstanding, with the stack that allocated each
+        // buffer: how the first leak the sanitizer found, a test's, was traced.
+        // scalastyle:off println
+        System.err.println(ArrowUtils.rootAllocator.toVerboseString)
+        // scalastyle:on println
+      }
       throw new IllegalStateException(s"$suiteName left $leaked bytes of Arrow memory allocated" +
         " (the memory sanitizer's every-byte-back check): a buffer was not closed")
     }
