@@ -1,0 +1,21 @@
+# VARKA-291 Arrow spike, 2026-10-07, pin taskset -c 0,12,13,14,15,1,2,3
+# jdk: openjdk version "25.0.4.1" 2026-08-18
+# arrow: arrow-vector-19.0.0.jar
+ARROW wire cheap_tails-22 nodes 46 raw_bytes 1472 ipc_bytes 2352 write_ns 3094 read_ns 2188
+ARROW create cheap_tails-22 nodes 46 first_batch_ns 459370 arrow_warm_ns 1871 arena_warm_ns 138
+ARROW access cheap_tails-22 nodes 46 get_ns 266 buffer_segment_ns 46 arena_segment_ns 43
+ARROW wire wide_int-1 nodes 228 raw_bytes 7296 ipc_bytes 8320 write_ns 4709 read_ns 2555
+ARROW create wide_int-1 nodes 228 first_batch_ns 448429 arrow_warm_ns 2047 arena_warm_ns 201
+ARROW access wide_int-1 nodes 228 get_ns 1244 buffer_segment_ns 67 arena_segment_ns 76
+ARROW wire size_ladder-100 nodes 502 raw_bytes 16064 ipc_bytes 17280 write_ns 6607 read_ns 2985
+ARROW create size_ladder-100 nodes 502 first_batch_ns 611675 arrow_warm_ns 2513 arena_warm_ns 328
+ARROW access size_ladder-100 nodes 502 get_ns 2680 buffer_segment_ns 111 arena_segment_ns 101
+ARROW wire size_ladder-200 nodes 1002 raw_bytes 32064 ipc_bytes 33664 write_ns 8500 read_ns 3224
+ARROW create size_ladder-200 nodes 1002 first_batch_ns 563775 arrow_warm_ns 3381 arena_warm_ns 384
+ARROW access size_ladder-200 nodes 1002 get_ns 5321 buffer_segment_ns 171 arena_segment_ns 176
+ARROW wire deep_chain-1024 nodes 2049 raw_bytes 65568 ipc_bytes 68000 write_ns 12869 read_ns 3776
+ARROW create deep_chain-1024 nodes 2049 first_batch_ns 465672 arrow_warm_ns 4675 arena_warm_ns 539
+ARROW access deep_chain-1024 nodes 2049 get_ns 10585 buffer_segment_ns 316 arena_segment_ns 316
+ARROW wire grown_ladder-2000 nodes 10002 raw_bytes 320064 ipc_bytes 328432 write_ns 45014 read_ns 8062
+ARROW create grown_ladder-2000 nodes 10002 first_batch_ns 430506 arrow_warm_ns 12265 arena_warm_ns 1395
+ARROW access grown_ladder-2000 nodes 10002 get_ns 51671 buffer_segment_ns 1417 arena_segment_ns 1402

@@ -72,6 +72,19 @@ final class SegmentColumns extends FfmRows {
     column.setAtIndex(ValueLayout.JAVA_LONG, index, value);
   }
 
+  /** The column for field {@code field}: kind, c0, c1, c2 (ints), then p0, p1 (longs). */
+  MemorySegment column(int field) {
+    return switch (field) {
+      case 0 -> kindCol;
+      case 1 -> c0Col;
+      case 2 -> c1Col;
+      case 3 -> c2Col;
+      case 4 -> p0Col;
+      case 5 -> p1Col;
+      default -> throw new IllegalArgumentException("no field " + field);
+    };
+  }
+
   @Override
   String layout() {
     return "D";

@@ -12,6 +12,7 @@ early-access Valhalla JDK (`run-ea.sh`, below):
 | layout A | FFM struct rows of 32 bytes: `kind, c0, c1, c2` ints, then `p0, p1` longs |
 | layout B | FFM struct rows of 16 bytes: `head` (kind and packed scalars), then `c0, c1, c2` |
 | layout C | layout A's six fields as `int[]` and `long[]` columns, the plain-array baseline |
+| layout D | layout A's fields as one off-heap segment for each field (off-heap columns) |
 | layout V16 | layout B's row and packing in a flat array of 16-byte value records (internal API) |
 | layout V63 | a `long` a node (kind, three 19-bit child ids) in a flat array, scalars in `int[]` |
 | value records | the real IR with `value` added to every record, generated at run time (arm 5) |
@@ -81,4 +82,11 @@ each arm against the records on the same JDK, and against records that memoize b
 
     sql/varka/spikes/ir-layout/bench.sh jdk25 cold results/step5-cold-jdk25.txt
     sql/varka/spikes/ir-layout/summarize.py
+
+`vector-loops.sh OUTFILE` measures which layouts C2 and the Vector API can vectorize a per-row pass
+over (`src-vector/`, needs `jdk.incubator.vector`), and `arrow-spike.sh OUTFILE` the cost of an
+Arrow batch as the wire image or the store of layout D's columns (`src-arrow/`, needs Arrow jars:
+see the script's header). `bench.sh` also has `alloc` (heap bytes and GC over 3,000 builds),
+`--prewarm GRAPH --prewarm-rounds N` (a cold first compile after N rounds of warm-up) and the
+`rebuild` measure.
 

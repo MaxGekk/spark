@@ -1,5 +1,6 @@
 bytes a node (records measured with Instrumentation.getObjectSize, the rest computed)
 arm                 cheap_tails-22          wide_int-1     size_ladder-100     size_ladder-200     deep_chain-1024   grown_ladder-2000
+D                            32.00               32.21               32.00               32.00               32.00               32.00
 records                      27.65               22.95               23.98               23.99               24.00               24.00
 A                            32.00               32.21               32.00               32.00               32.00               32.00
 B                            16.00               17.12               16.00               16.00               16.00               16.00
@@ -14,31 +15,37 @@ variant arm            graph                n     build   analyze build+analyze 
 jdk25   A              cheap_tails-22      20      7420       737          8156   0.87       159   0.25
 jdk25   B              cheap_tails-22      20      8251       523          8774   0.94       235   0.38
 jdk25   C              cheap_tails-22      20      3408       381          3789   0.41        13   0.02
+jdk25   D              cheap_tails-22      20      6863       734          7597   0.81       207   0.33
 jdk25   records        cheap_tails-22      20      2062      7271          9333   1.00       625   1.00
 jdk25   records-id     cheap_tails-22      20      2056       829          2885   0.31      6663  10.65
 jdk25   A              wide_int-1          20      9532       929         10461   0.52       496   0.34
 jdk25   B              wide_int-1          20     11099      1013         12112   0.60       590   0.40
 jdk25   C              wide_int-1          20      8009       724          8733   0.43       167   0.11
+jdk25   D              wide_int-1          20      9092      1072         10164   0.50       574   0.39
 jdk25   records        wide_int-1          20      3181     17066         20247   1.00      1469   1.00
 jdk25   records-id     wide_int-1          20      3119      1226          4345   0.21     15859  10.80
 jdk25   A              size_ladder-100     20     10741      1376         12116   0.77      1067   0.26
 jdk25   B              size_ladder-100     20     11582      1468         13050   0.83      1095   0.27
 jdk25   C              size_ladder-100     20      4737       547          5284   0.34       138   0.03
+jdk25   D              size_ladder-100     20     10129      1530         11659   0.74      1232   0.31
 jdk25   records        size_ladder-100     20      3406     12364         15770   1.00      4036   1.00
 jdk25   records-id     size_ladder-100     20      3244      1338          4581   0.29     13061   3.24
 jdk25   A              size_ladder-200     20     12279      1952         14232   0.76      1839   0.39
 jdk25   B              size_ladder-200     20     13140      1869         15009   0.80      2043   0.44
 jdk25   C              size_ladder-200     20      4879       616          5495   0.29       240   0.05
+jdk25   D              size_ladder-200     20     11563      2140         13703   0.73      1745   0.37
 jdk25   records        size_ladder-200     20      3861     14965         18826   1.00      4675   1.00
 jdk25   records-id     size_ladder-200     20      3637      1811          5448   0.29     15708   3.36
 jdk25   A              deep_chain-1024     20     12489      3011         15500   0.73      2540   0.23
 jdk25   B              deep_chain-1024     20     15387      3218         18605   0.88      3161   0.29
 jdk25   C              deep_chain-1024     20      4437       645          5081   0.24       423   0.04
+jdk25   D              deep_chain-1024     20     12316      3742         16057   0.76      1302   0.12
 jdk25   records        deep_chain-1024     20      3502     17746         21248   1.00     10998   1.00
 jdk25   records-id     deep_chain-1024     20      3464      2427          5890   0.28     21546   1.96
 jdk25   A              grown_ladder-2000   20     24554      5514         30069   1.03      3142   0.30
 jdk25   B              grown_ladder-2000   20     26686      5667         32352   1.11      4010   0.38
 jdk25   C              grown_ladder-2000   20      7965      1779          9744   0.34      1081   0.10
+jdk25   D              grown_ladder-2000   20     20418      5911         26329   0.91      4353   0.41
 jdk25   records        grown_ladder-2000   20      7671     21404         29075   1.00     10489   1.00
 jdk25   records-id     grown_ladder-2000   20      7511      5604         13115   0.45     22216   2.12
 plain   V16            cheap_tails-22      20      8166       409          8576   0.59       119   0.11
@@ -71,91 +78,109 @@ variant arm            graph              op           min us  spread  ratio
 jdk25   A              cheap_tails-22     build          0.49    1.01   0.94
 jdk25   B              cheap_tails-22     build          2.80    1.03   5.37
 jdk25   C              cheap_tails-22     build          0.50    1.01   0.96
+jdk25   D              cheap_tails-22     build          0.73    1.01   1.41
 jdk25   records        cheap_tails-22     build          0.52    1.01   1.00
 jdk25   records-id     cheap_tails-22     build          0.53    1.00   1.01
 jdk25   A              cheap_tails-22     intern         0.36    1.01   0.94
 jdk25   B              cheap_tails-22     intern         1.08    1.00   2.85
 jdk25   C              cheap_tails-22     intern         0.39    1.00   1.02
+jdk25   D              cheap_tails-22     intern         0.66    1.01   1.74
 jdk25   records        cheap_tails-22     intern         0.38    1.02   1.00
 jdk25   records-id     cheap_tails-22     intern         0.38    1.04   1.00
 jdk25   A              cheap_tails-22     analyze        0.23    1.00   0.27
 jdk25   B              cheap_tails-22     analyze        0.24    1.01   0.28
 jdk25   C              cheap_tails-22     analyze        0.20    1.01   0.24
+jdk25   D              cheap_tails-22     analyze        0.34    1.03   0.40
 jdk25   records        cheap_tails-22     analyze        0.86    1.04   1.00
 jdk25   records-id     cheap_tails-22     analyze        0.67    1.01   0.78
 jdk25   A              wide_int-1         build          2.06    1.00   0.32
 jdk25   B              wide_int-1         build         16.60    1.01   2.54
 jdk25   C              wide_int-1         build          2.32    1.00   0.36
+jdk25   D              wide_int-1         build          3.07    1.01   0.47
 jdk25   records        wide_int-1         build          6.53    1.02   1.00
 jdk25   records-id     wide_int-1         build          6.49    1.01   0.99
 jdk25   A              wide_int-1         intern         1.86    1.01   0.24
 jdk25   B              wide_int-1         intern         6.04    1.02   0.78
 jdk25   C              wide_int-1         intern         1.85    1.00   0.24
+jdk25   D              wide_int-1         intern         2.61    1.00   0.34
 jdk25   records        wide_int-1         intern         7.72    1.04   1.00
 jdk25   records-id     wide_int-1         intern         7.60    1.09   0.98
 jdk25   A              wide_int-1         analyze        1.31    1.01   0.02
 jdk25   B              wide_int-1         analyze        1.46    1.02   0.02
 jdk25   C              wide_int-1         analyze        1.20    1.02   0.02
+jdk25   D              wide_int-1         analyze        1.81    1.03   0.03
 jdk25   records        wide_int-1         analyze       59.13    1.01   1.00
 jdk25   records-id     wide_int-1         analyze        4.13    1.00   0.07
 jdk25   A              size_ladder-100    build          4.76    1.03   0.71
 jdk25   B              size_ladder-100    build         29.26    1.01   4.38
 jdk25   C              size_ladder-100    build          4.71    1.00   0.70
+jdk25   D              size_ladder-100    build          6.63    1.01   0.99
 jdk25   records        size_ladder-100    build          6.68    1.00   1.00
 jdk25   records-id     size_ladder-100    build          6.58    1.01   0.98
 jdk25   A              size_ladder-100    intern         4.21    1.01   0.61
 jdk25   B              size_ladder-100    intern        12.59    1.02   1.83
 jdk25   C              size_ladder-100    intern         4.32    1.01   0.63
+jdk25   D              size_ladder-100    intern         6.60    1.01   0.96
 jdk25   records        size_ladder-100    intern         6.87    1.01   1.00
 jdk25   records-id     size_ladder-100    intern         7.02    1.05   1.02
 jdk25   A              size_ladder-100    analyze        2.46    1.01   0.15
 jdk25   B              size_ladder-100    analyze        2.50    1.00   0.15
 jdk25   C              size_ladder-100    analyze        2.29    1.02   0.14
+jdk25   D              size_ladder-100    analyze        3.60    1.01   0.22
 jdk25   records        size_ladder-100    analyze       16.31    1.02   1.00
 jdk25   records-id     size_ladder-100    analyze        7.67    1.00   0.47
 jdk25   A              size_ladder-200    build          9.51    1.01   0.73
 jdk25   B              size_ladder-200    build         62.25    1.01   4.75
 jdk25   C              size_ladder-200    build          9.33    1.00   0.71
+jdk25   D              size_ladder-200    build         12.86    1.02   0.98
 jdk25   records        size_ladder-200    build         13.10    1.01   1.00
 jdk25   records-id     size_ladder-200    build         13.05    1.01   1.00
 jdk25   A              size_ladder-200    intern         8.57    1.00   0.63
 jdk25   B              size_ladder-200    intern        26.44    1.01   1.94
 jdk25   C              size_ladder-200    intern         8.94    1.01   0.66
+jdk25   D              size_ladder-200    intern        12.83    1.01   0.94
 jdk25   records        size_ladder-200    intern        13.64    1.02   1.00
 jdk25   records-id     size_ladder-200    intern        13.60    1.06   1.00
 jdk25   A              size_ladder-200    analyze        4.47    1.01   0.14
 jdk25   B              size_ladder-200    analyze        5.38    1.01   0.17
 jdk25   C              size_ladder-200    analyze        4.51    1.00   0.14
+jdk25   D              size_ladder-200    analyze        6.49    1.01   0.20
 jdk25   records        size_ladder-200    analyze       32.32    1.01   1.00
 jdk25   records-id     size_ladder-200    analyze       16.48    1.00   0.51
 jdk25   A              deep_chain-1024    build         18.41    1.00   0.94
 jdk25   B              deep_chain-1024    build        129.39    1.02   6.64
 jdk25   C              deep_chain-1024    build         19.68    1.01   1.01
+jdk25   D              deep_chain-1024    build         25.95    1.01   1.33
 jdk25   records        deep_chain-1024    build         19.50    1.03   1.00
 jdk25   records-id     deep_chain-1024    build         19.32    1.04   0.99
 jdk25   A              deep_chain-1024    intern        17.05    1.02   0.00
 jdk25   B              deep_chain-1024    intern        62.07    1.08   0.01
 jdk25   C              deep_chain-1024    intern        17.98    1.02   0.00
+jdk25   D              deep_chain-1024    intern        29.59    1.01   0.01
 jdk25   records        deep_chain-1024    intern      4947.98    1.01   1.00
 jdk25   records-id     deep_chain-1024    intern      4919.32    1.01   0.99
 jdk25   A              deep_chain-1024    analyze        8.88    1.03   0.00
 jdk25   B              deep_chain-1024    analyze        9.32    1.00   0.00
 jdk25   C              deep_chain-1024    analyze        8.85    1.02   0.00
+jdk25   D              deep_chain-1024    analyze       13.49    1.00   0.01
 jdk25   records        deep_chain-1024    analyze     2191.41    1.10   1.00
 jdk25   records-id     deep_chain-1024    analyze       31.04    1.00   0.01
 jdk25   A              grown_ladder-2000  build         97.61    1.01   0.75
 jdk25   B              grown_ladder-2000  build        644.40    1.02   4.98
 jdk25   C              grown_ladder-2000  build         96.70    1.01   0.75
+jdk25   D              grown_ladder-2000  build        132.75    1.03   1.02
 jdk25   records        grown_ladder-2000  build        129.51    1.01   1.00
 jdk25   records-id     grown_ladder-2000  build        126.67    1.02   0.98
 jdk25   A              grown_ladder-2000  intern       131.51    1.00   1.00
 jdk25   B              grown_ladder-2000  intern       252.65    1.00   1.92
 jdk25   C              grown_ladder-2000  intern        98.19    1.02   0.75
+jdk25   D              grown_ladder-2000  intern       150.36    1.01   1.14
 jdk25   records        grown_ladder-2000  intern       131.52    1.09   1.00
 jdk25   records-id     grown_ladder-2000  intern       131.40    1.08   1.00
 jdk25   A              grown_ladder-2000  analyze       44.03    1.01   0.11
 jdk25   B              grown_ladder-2000  analyze       45.00    1.00   0.11
 jdk25   C              grown_ladder-2000  analyze       40.60    1.00   0.10
+jdk25   D              grown_ladder-2000  analyze       65.03    1.01   0.17
 jdk25   records        grown_ladder-2000  analyze      392.56    1.03   1.00
 jdk25   records-id     grown_ladder-2000  analyze      283.65    1.03   0.72
 plain   V16            cheap_tails-22     build          3.28    1.02   6.36
@@ -238,62 +263,74 @@ records-id cheap_tails-22                    1.00          1.00   (cold 2890 us,
 A          cheap_tails-22                    2.84          0.34   (cold 8200 us, warm analyze 0.23 us)
 B          cheap_tails-22                    3.03          0.36   (cold 8768 us, warm analyze 0.24 us)
 C          cheap_tails-22                    1.31          0.30   (cold 3788 us, warm analyze 0.20 us)
+D          cheap_tails-22                    2.62          0.51   (cold 7582 us, warm analyze 0.34 us)
 records    wide_int-1                        4.66         14.31   (cold 20321 us, warm analyze 59.13 us)
 records-id wide_int-1                        1.00          1.00   (cold 4361 us, warm analyze 4.13 us)
 A          wide_int-1                        2.41          0.32   (cold 10519 us, warm analyze 1.31 us)
 B          wide_int-1                        2.78          0.35   (cold 12121 us, warm analyze 1.46 us)
 C          wide_int-1                        2.00          0.29   (cold 8705 us, warm analyze 1.20 us)
+D          wide_int-1                        2.32          0.44   (cold 10138 us, warm analyze 1.81 us)
 records    size_ladder-100                   3.44          2.13   (cold 15781 us, warm analyze 16.31 us)
 records-id size_ladder-100                   1.00          1.00   (cold 4592 us, warm analyze 7.67 us)
 A          size_ladder-100                   2.63          0.32   (cold 12081 us, warm analyze 2.46 us)
 B          size_ladder-100                   2.83          0.33   (cold 13001 us, warm analyze 2.50 us)
 C          size_ladder-100                   1.15          0.30   (cold 5279 us, warm analyze 2.29 us)
+D          size_ladder-100                   2.54          0.47   (cold 11645 us, warm analyze 3.60 us)
 records    size_ladder-200                   3.46          1.96   (cold 18787 us, warm analyze 32.32 us)
 records-id size_ladder-200                   1.00          1.00   (cold 5431 us, warm analyze 16.48 us)
 A          size_ladder-200                   2.62          0.27   (cold 14214 us, warm analyze 4.47 us)
 B          size_ladder-200                   2.80          0.33   (cold 15198 us, warm analyze 5.38 us)
 C          size_ladder-200                   1.01          0.27   (cold 5494 us, warm analyze 4.51 us)
+D          size_ladder-200                   2.53          0.39   (cold 13768 us, warm analyze 6.49 us)
 records    deep_chain-1024                   3.59         70.59   (cold 21231 us, warm analyze 2191.41 us)
 records-id deep_chain-1024                   1.00          1.00   (cold 5908 us, warm analyze 31.04 us)
 A          deep_chain-1024                   2.67          0.29   (cold 15763 us, warm analyze 8.88 us)
 B          deep_chain-1024                   3.18          0.30   (cold 18777 us, warm analyze 9.32 us)
 C          deep_chain-1024                   0.86          0.29   (cold 5086 us, warm analyze 8.85 us)
+D          deep_chain-1024                   2.73          0.43   (cold 16136 us, warm analyze 13.49 us)
 records    grown_ladder-2000                 2.21          1.38   (cold 28955 us, warm analyze 392.56 us)
 records-id grown_ladder-2000                 1.00          1.00   (cold 13082 us, warm analyze 283.65 us)
 A          grown_ladder-2000                 2.43          0.16   (cold 31844 us, warm analyze 44.03 us)
 B          grown_ladder-2000                 2.64          0.16   (cold 34541 us, warm analyze 45.00 us)
 C          grown_ladder-2000                 0.74          0.14   (cold 9744 us, warm analyze 40.60 us)
+D          grown_ladder-2000                 2.02          0.23   (cold 26448 us, warm analyze 65.03 us)
 
 cold with a pre-initialized JVM (one build, analyze, intern and rebuild of a 10-node graph first), median, microseconds; ratio of build+analyze over the records' (jdk25: the identity-memo ones)
 variant arm            graph                 build  analyze      b+a  ratio  rebuild
 jdk25   A              cheap_tails-22          224      113      337   1.11      273
 jdk25   B              cheap_tails-22          284      107      390   1.29      191
 jdk25   C              cheap_tails-22           31        8       39   0.13       12
+jdk25   D              cheap_tails-22          287      143      431   1.42      324
 jdk25   records        cheap_tails-22           55     1029     1084   3.57       33
 jdk25   records-id     cheap_tails-22           57      246      304   1.00       35
 jdk25   A              wide_int-1             1283      479     1762   1.88     1294
 jdk25   B              wide_int-1             1339      505     1844   1.97      888
 jdk25   C              wide_int-1             4405       43     4448   4.75       50
+jdk25   D              wide_int-1             1211      648     1859   1.99     1473
 jdk25   records        wide_int-1              361     7614     7976   8.52      212
 jdk25   records-id     wide_int-1              367      570      936   1.00      218
 jdk25   A              size_ladder-100        1724      678     2401   2.44     1793
 jdk25   B              size_ladder-100        2172      709     2882   2.93     1286
 jdk25   C              size_ladder-100         215       68      284   0.29       92
+jdk25   D              size_ladder-100        2207      956     3163   3.22     1819
 jdk25   records        size_ladder-100         460     4900     5360   5.45      167
 jdk25   records-id     size_ladder-100         463      520      983   1.00      174
 jdk25   A              size_ladder-200        3067     1374     4441   2.53     3388
 jdk25   B              size_ladder-200        3488     1227     4715   2.69     2528
 jdk25   C              size_ladder-200         348      122      470   0.27      159
+jdk25   D              size_ladder-200        3560     1616     5177   2.95     2869
 jdk25   records        size_ladder-200         784     6676     7460   4.26      360
 jdk25   records-id     size_ladder-200         789      963     1752   1.00      270
 jdk25   A              deep_chain-1024        4846     3014     7860   2.95     5261
 jdk25   B              deep_chain-1024        6145     2461     8606   3.23     3496
 jdk25   C              deep_chain-1024         711      222      933   0.35      298
+jdk25   D              deep_chain-1024        4680     3990     8670   3.25     3591
 jdk25   records        deep_chain-1024        1062    14503    15565   5.84      343
 jdk25   records-id     deep_chain-1024        1067     1597     2664   1.00      333
 jdk25   A              grown_ladder-2000     13521    10652    24173   2.26     5635
 jdk25   B              grown_ladder-2000     15757     7709    23466   2.20     3830
 jdk25   C              grown_ladder-2000      2219      998     3217   0.30     1515
+jdk25   D              grown_ladder-2000     15554     8540    24094   2.26     4452
 jdk25   records        grown_ladder-2000      4809    14046    18855   1.77      991
 jdk25   records-id     grown_ladder-2000      4834     5841    10675   1.00      620
 plain   V16            cheap_tails-22          158       16      174   0.11       18
@@ -326,31 +363,37 @@ variant arm            graph                  min us  spread  ratio
 jdk25   A              cheap_tails-22           0.32    1.02   0.63
 jdk25   B              cheap_tails-22           0.30    1.01   0.59
 jdk25   C              cheap_tails-22           0.34    1.05   0.66
+jdk25   D              cheap_tails-22           0.96    1.01   1.90
 jdk25   records        cheap_tails-22           0.51    1.01   1.00
 jdk25   records-id     cheap_tails-22           0.51    1.01   1.00
 jdk25   A              wide_int-1               1.38    1.03   0.23
 jdk25   B              wide_int-1               1.25    1.01   0.21
 jdk25   C              wide_int-1               1.50    1.02   0.25
+jdk25   D              wide_int-1               3.08    1.02   0.52
 jdk25   records        wide_int-1               5.98    1.01   1.00
 jdk25   records-id     wide_int-1               6.10    1.02   1.02
 jdk25   A              size_ladder-100          3.51    1.01   0.54
 jdk25   B              size_ladder-100          3.19    1.02   0.49
 jdk25   C              size_ladder-100          3.39    1.01   0.52
+jdk25   D              size_ladder-100          9.30    1.00   1.43
 jdk25   records        size_ladder-100          6.51    1.01   1.00
 jdk25   records-id     size_ladder-100          6.57    1.01   1.01
 jdk25   A              size_ladder-200          6.69    1.03   0.50
 jdk25   B              size_ladder-200          6.12    1.01   0.45
 jdk25   C              size_ladder-200          6.44    1.01   0.48
+jdk25   D              size_ladder-200         18.46    1.01   1.37
 jdk25   records        size_ladder-200         13.47    1.02   1.00
 jdk25   records-id     size_ladder-200         13.00    1.02   0.96
 jdk25   A              deep_chain-1024         12.89    1.02   0.67
 jdk25   B              deep_chain-1024         11.21    1.01   0.58
 jdk25   C              deep_chain-1024         12.76    1.02   0.66
+jdk25   D              deep_chain-1024         20.77    1.01   1.08
 jdk25   records        deep_chain-1024         19.25    1.03   1.00
 jdk25   records-id     deep_chain-1024         19.22    1.03   1.00
 jdk25   A              grown_ladder-2000       67.32    1.02   0.52
 jdk25   B              grown_ladder-2000       61.96    1.02   0.48
 jdk25   C              grown_ladder-2000       66.75    1.01   0.52
+jdk25   D              grown_ladder-2000      113.33    1.00   0.88
 jdk25   records        grown_ladder-2000      128.98    1.01   1.00
 jdk25   records-id     grown_ladder-2000      127.26    1.01   0.99
 plain   V16            cheap_tails-22           0.72    1.03   1.46
@@ -383,31 +426,37 @@ variant arm            graph               bytes/build   gcs  gc ms   ns/build
 jdk25   A              cheap_tails-22             1192     0      0       1091
 jdk25   B              cheap_tails-22            29160     0      0       5620
 jdk25   C              cheap_tails-22             2688     0      0       1387
+jdk25   D              cheap_tails-22             1648     0      0       1352
 jdk25   records        cheap_tails-22             3584     0      0       1245
 jdk25   records-id     cheap_tails-22             3584     0      0       1147
 jdk25   A              wide_int-1                 3760     0      0       3287
 jdk25   B              wide_int-1               150632     1      1      26562
 jdk25   C              wide_int-1                11080     1      0       3940
+jdk25   D              wide_int-1                 4216     0      0       4011
 jdk25   records        wide_int-1                 9116     1      1      12151
 jdk25   records-id     wide_int-1                 9115     1      1      11016
 jdk25   A              size_ladder-100            6912     1      1       6766
 jdk25   B              size_ladder-100          296064     1      1      50749
 jdk25   C              size_ladder-100           23000     0      0       7538
+jdk25   D              size_ladder-100            7368     1      1       8089
 jdk25   records        size_ladder-100           21752     0      0       8330
 jdk25   records-id     size_ladder-100           21752     0      0       8710
 jdk25   A              size_ladder-200           13408     0      0      10262
 jdk25   B              size_ladder-200          590560     2      2      68268
 jdk25   C              size_ladder-200           45496     0      0      16127
+jdk25   D              size_ladder-200           13864     0      0      13396
 jdk25   records        size_ladder-200           43352     0      0      19827
 jdk25   records-id     size_ladder-200           43352     0      0      20313
 jdk25   A              deep_chain-1024           41384     0      0      25004
 jdk25   B              deep_chain-1024         1319960     4      4     156221
 jdk25   C              deep_chain-1024          106992     1      1      34758
+jdk25   D              deep_chain-1024           41840     0      0      32395
 jdk25   records        deep_chain-1024          106616     1      1      29415
 jdk25   records-id     deep_chain-1024          106616     1      1      31574
 jdk25   A              grown_ladder-2000        179488     0      0     102893
 jdk25   B              grown_ladder-2000       5940640    21     14     635507
 jdk25   C              grown_ladder-2000        499576     1      1     106533
+jdk25   D              grown_ladder-2000        179944     0      0     138807
 jdk25   records        grown_ladder-2000        432152     2      3     141387
 jdk25   records-id     grown_ladder-2000        432152     2      4     143238
 plain   V16            cheap_tails-22            28384     1      0       6110
@@ -434,6 +483,31 @@ value   value records  size_ladder-100           25768     2      1       8410
 value   value records  size_ladder-200           51368     2      1      16250
 value   value records  deep_chain-1024          123008     2      2      24351
 value   value records  grown_ladder-2000        512168     3      4     138868
+
+cold first compile (build+analyze) after N rounds of every measure on size_ladder-100, JDK 25, median of 10, microseconds (ratio over the identity-memo records)
+graph              rounds              records-id                     A                     C                     D
+size_ladder-200         1              993 (1.00)           1081 (1.09)            574 (0.58)            987 (0.99)
+size_ladder-200        30              242 (1.00)            292 (1.21)            231 (0.95)            312 (1.29)
+size_ladder-200       300               95 (1.00)            158 (1.66)            118 (1.24)             97 (1.02)
+size_ladder-200      3000               93 (1.00)             46 (0.49)             53 (0.57)             56 (0.61)
+grown_ladder-2000       1             6884 (1.00)           9320 (1.35)           3212 (0.47)           8875 (1.29)
+grown_ladder-2000      30             1834 (1.00)           2736 (1.49)           2001 (1.09)           2761 (1.51)
+grown_ladder-2000     300              795 (1.00)           1191 (1.50)            623 (0.78)           1141 (1.44)
+grown_ladder-2000    3000              805 (1.00)            450 (0.56)            592 (0.73)            626 (0.78)
+
+per-row hash over 65,536 rows, ns a row (C2's auto-vectorizer on and off, JDK 25)
+# jdk: openjdk version "25.0.4.1" 2026-08-18
+# vector species: MaxVectorSize=64
+VLOOP heap-columns superword on ns_per_row 0.150
+VLOOP heap-columns superword off ns_per_row 0.799
+VLOOP segment-columns superword on ns_per_row 0.141
+VLOOP segment-columns superword off ns_per_row 1.018
+VLOOP segment-rows superword on ns_per_row 0.837
+VLOOP segment-rows superword off ns_per_row 0.837
+VLOOP vector-heap superword on ns_per_row 0.175
+VLOOP vector-heap superword off ns_per_row 0.162
+VLOOP vector-segment superword on ns_per_row 0.124
+VLOOP vector-segment superword off ns_per_row 0.131
 
 failures
 none

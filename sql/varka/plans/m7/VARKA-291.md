@@ -482,3 +482,89 @@ only one measured on a build that fails under other conditions; B's build time i
 harness; and the graphs are Varka's corpus, whose cold compile is a few milliseconds for the
 records, small next to a Spark task.
 
+### 9.7 Step 5, continued: more backends, warm-up, Arrow, and the direction, 7 October 2026
+
+Raised by the owner after 9.6 and measured the same day with the same pinned setup. New files under
+`results/`: `step5-coldprewarm-*`, `step5-warmrebuild-*`, `step5-alloc-*`, `step5-coldwarmup-*`,
+`step5-vector-loops.txt`, `step5-arrow-spike.txt`, and the files for layout D; `step5-summary.txt`
+has the tables.
+
+**New measures.** The rebuild is what an e-graph does after a merge: remap every row's children,
+rehash, re-intern (the harness checks it against a build of the substituted graph, on 178 real
+substitutions). Prewarmed cold pays the one-time costs first. Alloc is heap bytes and GC over
+3,000 builds. Layout D is layout A's fields as one off-heap segment for each field.
+
+**Rebuild, warm.** A, B and C are 0.45 to 0.67 of the records' reconstruction (a lower bound: records
+are not deduplicated), and within 10% of each other. V16 and V63 are no better than records.
+
+**Allocation.** At 1,002 nodes a build allocates 13,408 bytes of heap in A, 45,496 in C and 43,352
+in records; at 10,002 nodes 179,488, 499,576 and 432,152, with no garbage collection over 3,000
+builds in A, one in C and two in records. B allocates 590,560 bytes at 1,002 nodes and 5,940,640
+at 10,002 (21 collections), and V16 and V63 606,552 to 698,752 and about 6.1 million (41
+collections): the per-node scratch arrays of this harness, which is why B's build was slow. D
+allocates what A does.
+
+**Cold, with the one-time costs paid first.** A 10-node warm-up graph removes the class
+initialization (A on the 46-node graph falls from 8,156 us to 337 us) but not the interpreted phase:
+against identity-memo records C is 0.13, 0.27, 0.35 and 0.30 of their time at 46, 1,002, 2,049 and
+10,002 nodes, A is 1.11, 2.53, 2.95 and 2.26. How much warm-up the first compile needs, from
+rounds of every measure on a 502-node graph (JDK 25, median of 10, ratio over `records-id`, at
+1,002 and 10,002 nodes):
+
+- 1 round: C 0.58 and 0.47, A 1.09 and 1.35, D 0.99 and 1.29.
+- 30 rounds: C 0.95 and 1.09, A 1.21 and 1.49, D 1.29 and 1.51.
+- 300 rounds: C 1.24 and 0.78, A 1.66 and 1.50, D 1.02 and 1.44.
+- 3,000 rounds: A 0.49 and 0.56, C 0.57 and 0.73, D 0.61 and 0.78.
+
+So the cold penalty of the FFM rows is a warm-up cost, not a property of the layout: with a thorough
+start-up warm-up all three flat layouts beat the records, A by the most. Between a little and a
+lot of warm-up there is a valley where A and D are 1.2 to 1.7 times slower than records; C is not
+in it after the first round. This replaces the cold verdict of 9.6 for the case of a warmed JVM.
+
+**Layout D (off-heap columns) is slower than A and C warm.** At 1,002 nodes build is 12.86 us
+against 9.51 (A) and 9.33 (C), analyze 6.49 against 4.47 and 4.51, rebuild 18.46 against 6.69 and
+6.44; at 10,002 nodes 132.75, 65.03 and 113.33 against 97.61, 44.03 and 67.32 for A. Six segments
+cost more per access than one segment or an array, and D's rebuild allocates six arena segments.
+Its sizes and heap allocation match A. The cause of the access cost is not isolated.
+
+**Which layouts the JVM vectorizes** (`step5-vector-loops.txt`, a per-row hash of four int fields over
+65,536 rows, ns a row, C2's auto-vectorizer on, then off): heap columns 0.150 and 0.799, off-heap
+columns 0.141 and 1.018, off-heap rows 32 bytes apart 0.837 and 0.837. Unit-stride columns are
+vectorized on JDK 25 in the heap and off it, by 5 to 7 times; rows are not, in either place. The
+Vector API adds nothing over the auto-vectorizer for heap columns (0.175) and about 12% for
+off-heap columns (0.124). The deciding factor is rows against columns, not heap against off-heap.
+Most of the compiler's passes are dependency chains that no vectorizer can touch; the candidates
+are hashing every row, the rebuild's remap, and table clears.
+
+**Arrow** (`step5-arrow-spike.txt`, layout D's six columns as an Arrow 19 batch; netty 4.1 is needed
+ahead of a Spark 4.2 distribution's 4.2, whose empty buffer has no address). The IPC stream is
+2,352 bytes for the 46-node graph (1,472 raw), 33,664 for 1,002 nodes (32,064) and 328,432 for
+10,002 nodes (320,064); writing it takes 3,094 to 45,014 ns and reading it 2,188 to 8,062 ns.
+Creating a batch costs 459,370 ns the first time and 1,871 to 12,265 ns warm, against 138 to 1,395
+ns for an arena. Reading through Arrow's `IntVector.get` is about 30 times slower than raw reads
+(5,321 ns against 171 for 1,002 rows); the raw buffer wrapped as a segment is as fast as an arena.
+Arrow suits the wire and the native boundary; as the working store it needs raw-buffer access, at
+which point it is layout D on Arrow-owned memory.
+
+**The direction, from the owner, 7 October 2026.**
+1. *Layout C, heap columns, is the primary store; layout A is the alternative.* They share their
+   fields and packing, so the choice is reversible.
+2. *Keep A open without an abstraction that costs anything:* one final class owns the columns and
+   every read of a node goes through its methods; nothing outside it touches a column. Swapping to
+   A is then a rewrite of that class's body with the same signatures, with no interface, no
+   runtime selection and no bimorphic call. Define the schema once, next to the class.
+3. *Do not build now* generated accessors, a configuration switch or two implementations in main;
+   they are worth it only if A is adopted. The harness keeps A and D alive for the differential
+   check.
+4. *Arrow is the wire and the native-boundary format*, not the working store. A wire format must
+   not depend on the in-memory layout, and needs stable kind ids and a schema version, since the
+   kind index in this harness comes from sorted names.
+5. *Native offload* (a Rust or C analysis called by downcall over the columns) was discussed and
+   not measured: the break-even size, below which a downcall costs more than the Java pass, is the
+   open question.
+
+**What 9.6's gate reads as now.** The cold leg is met by C against any warm-up, and by A and D only
+after a thorough one; the warm legs (analyze 2.8 to 7 times faster, rebuild about twice, the depth
+factor on structural hashing) hold for A, B and C alike. The remaining decision is the migration
+of the IR from records to the owning class, which is the work of item 85.
+

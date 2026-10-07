@@ -47,11 +47,12 @@ done
 runner=()
 [ -n "$fast" ] && command -v taskset > /dev/null && runner=(taskset -c "$fast")
 
+width=$("$java" --add-modules jdk.incubator.vector -XX:+PrintFlagsFinal -version 2>/dev/null \
+  | awk '/ MaxVectorSize /{print "MaxVectorSize=" $4}')
 {
   echo "# VARKA-291 vector loops, $(date +%Y-%m-%d), pin ${runner[*]:-none}"
   echo "# jdk: $("$java" -version 2>&1 | head -1)"
-  echo "# vector species: $("$java" --add-modules jdk.incubator.vector -XX:+PrintFlagsFinal -version \
-2>/dev/null | awk '/ MaxVectorSize /{print "MaxVectorSize=" $4}')"
+  echo "# $width"
 } > "$outfile"
 for mode in heap-columns segment-columns segment-rows vector-heap vector-segment; do
   for sw in on off; do

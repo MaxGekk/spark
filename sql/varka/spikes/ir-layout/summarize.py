@@ -34,6 +34,7 @@ from collections import defaultdict
 
 here = os.path.dirname(os.path.abspath(__file__))
 results = os.path.join(here, "results")
+ARMS_WARMUP = ("records-id", "A", "C", "D")
 ORDER = [
     "cheap_tails-22",
     "wide_int-1",
@@ -180,7 +181,7 @@ def identity_table():
         base_w = warm.get(("records-id", graph))
         if not base_c or not base_w:
             continue
-        for arm in ("records", "records-id", "A", "B", "C"):
+        for arm in ("records", "records-id", "A", "B", "C", "D"):
             c = cold.get((arm, graph))
             w = warm.get((arm, graph))
             if not c or not w:
@@ -300,6 +301,44 @@ def alloc_table():
     return out
 
 
+def warmup_table():
+    """How much start-up warm-up the first compile needs: cold after N rounds on another graph."""
+    out = [
+        "cold first compile (build+analyze) after N rounds of every measure on size_ladder-100, "
+        "JDK 25, median of 10, microseconds (ratio over the identity-memo records)"
+    ]
+    out.append(f"{'graph':<18} {'rounds':>6}  " + "".join(f"{a:>22}" for a in ARMS_WARMUP))
+    data = defaultdict(lambda: defaultdict(list))
+    for path in sorted(glob.glob(os.path.join(results, "step5-coldwarmup-r*-jdk25.txt"))):
+        rounds = int(re.search(r"-r(\d+)-", path).group(1))
+        for l in open(path):
+            m = re.match(r"COLD (\S+) (\S+) nodes \d+ build_ns (\d+) analyze_ns (\d+)", l)
+            if m:
+                data[(m[2], rounds)][m[1]].append(int(m[3]) + int(m[4]))
+    for graph in ("size_ladder-200", "grown_ladder-2000"):
+        for rounds in sorted({r for (g, r) in data if g == graph}):
+            d = data[(graph, rounds)]
+            base = statistics.median(d["records-id"]) if d.get("records-id") else None
+            cells = []
+            for arm in ARMS_WARMUP:
+                if d.get(arm) and base:
+                    t = statistics.median(d[arm])
+                    cells.append(f"{t / 1000:>12.0f} ({t / base:.2f})")
+                else:
+                    cells.append(f"{'-':>20}")
+            out.append(f"{graph:<18} {rounds:>6}  " + "".join(f"{c:>22}" for c in cells))
+    return out
+
+
+def vector_table():
+    path = os.path.join(results, "step5-vector-loops.txt")
+    if not os.path.exists(path):
+        return ["vector loops: no file"]
+    out = ["per-row hash over 65,536 rows, ns a row (C2's auto-vectorizer on and off, JDK 25)"]
+    out += [l.rstrip("\n") for l in open(path) if l.startswith(("VLOOP", "# vector", "# jdk"))]
+    return out
+
+
 def failures():
     out = []
     for path in sorted(glob.glob(os.path.join(results, "step5-*.txt"))):
@@ -318,6 +357,8 @@ if __name__ == "__main__":
         prewarm_table(),
         rebuild_table(),
         alloc_table(),
+        warmup_table(),
+        vector_table(),
         failures(),
     ]
     print("\n\n".join("\n".join(s) for s in sections))
