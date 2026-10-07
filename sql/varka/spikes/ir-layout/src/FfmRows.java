@@ -77,6 +77,18 @@ abstract class FfmRows implements AutoCloseable {
   /** The rows as a description, to rebuild records from. */
   abstract VarkaIrDescription.Graph toGraph(LoadedGraph g, int[] roots);
 
+  /**
+   * The rebuild an e-graph does after a merge: every row's children are remapped (a reference to
+   * {@code from} becomes one to {@code to}, and every child to the row it was rebuilt as), the row
+   * is rehashed and interned into a fresh table, and rows that became equal are one. Returns the
+   * number of rows after. Requires {@code to < from}, as {@link LoadedGraph#substitution} gives.
+   */
+  abstract int rebuild(int from, int to);
+
+  static int remap(int child, int from, int to, int[] rebuilt) {
+    return child < 0 ? -1 : rebuilt[child == from ? to : child];
+  }
+
   /** Bytes of the hash-consing tables, which a graph that is not being built does not need. */
   abstract long tableBytes();
 

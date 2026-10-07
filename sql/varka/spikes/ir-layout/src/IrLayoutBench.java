@@ -66,6 +66,9 @@ public final class IrLayoutBench {
 
     abstract void analyze();
 
+    /** The rebuild after a merge: {@link FfmRows#rebuild}, and for records a reconstruction. */
+    abstract void rebuild();
+
     /** Bytes of the arm's store for the graph, and whether the figure is measured or computed. */
     abstract long bytes();
 
@@ -76,6 +79,7 @@ public final class IrLayoutBench {
         case "build" -> build();
         case "intern" -> intern();
         case "analyze" -> analyze();
+        case "rebuild" -> rebuild();
         default -> throw new IllegalArgumentException("no measure " + op);
       }
     }
@@ -86,12 +90,15 @@ public final class IrLayoutBench {
     private List<VarkaVectorIR> roots;
     private VarkaVectorIR[] first;
     private VarkaVectorIR[] second;
+    private final LoadedGraph substituted;
 
     private final boolean identity;
 
     RecordsCase(LoadedGraph g, boolean identity) {
       super(g);
       this.identity = identity;
+      int[] swap = g.substitution();
+      this.substituted = g.substitute(swap[0], swap[1]);
     }
 
     @Override
@@ -118,6 +125,13 @@ public final class IrLayoutBench {
         throw new IllegalStateException("equal graphs compare unequal");
       }
       sink += h;
+    }
+
+    @Override
+    void rebuild() {
+      // Records are immutable and not hash-consed, so a rebuild reconstructs every node over the
+      // substituted children: a lower bound, with no deduplication of what became equal.
+      sink += RecordsArm.buildAll(substituted).length;
     }
 
     @Override
@@ -155,10 +169,12 @@ public final class IrLayoutBench {
     private final KindTable table = KindNames.TABLE;
     private FfmRows rows;
     private int[] roots;
+    private final int[] swap;
 
     RowsCase(LoadedGraph g, String layout) {
       super(g);
       this.layout = layout;
+      this.swap = g.substitution();
     }
 
     @Override
@@ -190,6 +206,11 @@ public final class IrLayoutBench {
     }
 
     @Override
+    void rebuild() {
+      sink += rows.rebuild(swap[0], swap[1]);
+    }
+
+    @Override
     long bytes() {
       return rows.bytes();
     }
@@ -203,6 +224,7 @@ public final class IrLayoutBench {
   public static void main(String[] args) throws IOException {
     String arm = null;
     String graph = null;
+    String prewarm = null;
     String mode = "cold";
     String op = "build";
     Path graphs = Path.of("graphs");
@@ -215,6 +237,7 @@ public final class IrLayoutBench {
         case "--graph" -> graph = args[++i];
         case "--mode" -> mode = args[++i];
         case "--op" -> op = args[++i];
+        case "--prewarm" -> prewarm = args[++i];
         case "--graphs" -> graphs = Path.of(args[++i]);
         case "--seconds" -> seconds = Double.parseDouble(args[++i]);
         case "--warmup" -> warmup = Integer.parseInt(args[++i]);
@@ -229,18 +252,33 @@ public final class IrLayoutBench {
     if (arm.startsWith("V")) {
       IrLayoutHarness.registerEarlyAccessLayouts();
     }
+    if (prewarm != null) {
+      // Pays the one-time costs (class initialization, the FFM machinery) on another graph, so
+      // that the timed first compile below does not: what a startup warm-up would do.
+      Case other = newCase(arm, find(graphs, prewarm));
+      other.build();
+      other.analyze();
+      other.prepareIntern();
+      other.intern();
+      other.rebuild();
+    }
     LoadedGraph g = find(graphs, graph);
-    Case c = switch (arm) {
-      case "records" -> new RecordsCase(g, false);
-      case "records-id" -> new RecordsCase(g, true);
-      default -> new RowsCase(g, arm);
-    };
+    Case c = newCase(arm, g);
     switch (mode) {
-      case "cold" -> cold(c, arm);
+      case "cold" -> cold(c, arm, prewarm != null);
+      case "alloc" -> alloc(c, arm);
       case "warm" -> warm(c, arm, op, seconds, warmup, iterations);
       case "bytes" -> bytes(c, arm);
       default -> throw new IllegalArgumentException("no mode " + mode);
     }
+  }
+
+  private static Case newCase(String arm, LoadedGraph g) {
+    return switch (arm) {
+      case "records" -> new RecordsCase(g, false);
+      case "records-id" -> new RecordsCase(g, true);
+      default -> new RowsCase(g, arm);
+    };
   }
 
   private static LoadedGraph find(Path dir, String name) throws IOException {
@@ -258,7 +296,7 @@ public final class IrLayoutBench {
     throw new IllegalArgumentException("no graph " + name + " in " + dir);
   }
 
-  private static void cold(Case c, String arm) {
+  private static void cold(Case c, String arm, boolean prewarmed) {
     long t = System.nanoTime();
     c.build();
     long build = System.nanoTime() - t;
@@ -269,8 +307,12 @@ public final class IrLayoutBench {
     t = System.nanoTime();
     c.intern();
     long intern = System.nanoTime() - t;
-    System.out.printf("COLD %s %s nodes %d build_ns %d analyze_ns %d intern_ns %d%n", arm,
-        c.g.name(), c.g.size(), build, analyze, intern);
+    t = System.nanoTime();
+    c.rebuild();
+    long rebuild = System.nanoTime() - t;
+    System.out.printf("COLD %s %s nodes %d build_ns %d analyze_ns %d intern_ns %d rebuild_ns %d"
+        + " prewarm %d%n", arm, c.g.name(), c.g.size(), build, analyze, intern, rebuild,
+        prewarmed ? 1 : 0);
   }
 
   private static void warm(Case c, String arm, String op, double seconds, int warmup,
@@ -293,6 +335,39 @@ public final class IrLayoutBench {
             c.g.name(), c.g.size(), op, it - warmup, (now - start) / (double) n);
       }
     }
+  }
+
+  /**
+   * Heap bytes allocated and garbage-collection time over a run of builds, once warm: the flat
+   * arms keep their rows off the heap or in a few large arrays, records allocate a node each.
+   */
+  private static void alloc(Case c, String arm) {
+    var threads = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory
+        .getThreadMXBean();
+    for (int i = 0; i < 3000; i++) {
+      c.build();
+    }
+    long gcCount = 0;
+    long gcMillis = 0;
+    for (var gc : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+      gcCount -= gc.getCollectionCount();
+      gcMillis -= gc.getCollectionTime();
+    }
+    long before = threads.getCurrentThreadAllocatedBytes();
+    int builds = 3000;
+    long t = System.nanoTime();
+    for (int i = 0; i < builds; i++) {
+      c.build();
+    }
+    long elapsed = System.nanoTime() - t;
+    long allocated = threads.getCurrentThreadAllocatedBytes() - before;
+    for (var gc : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+      gcCount += gc.getCollectionCount();
+      gcMillis += gc.getCollectionTime();
+    }
+    System.out.printf("ALLOC %s %s nodes %d builds %d heap_bytes_per_build %d gc_count %d gc_ms %d"
+        + " ns_per_build %d%n", arm, c.g.name(), c.g.size(), builds, allocated / builds, gcCount,
+        gcMillis, elapsed / builds);
   }
 
   private static void bytes(Case c, String arm) {

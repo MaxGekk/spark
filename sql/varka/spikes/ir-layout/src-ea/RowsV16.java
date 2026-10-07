@@ -122,6 +122,44 @@ final class RowsV16 extends FfmRows {
   }
 
   @Override
+  int rebuild(int from, int to) {
+    int[] dslots = tableOf(count);
+    int dmask = dslots.length - 1;
+    int[] rebuilt = new int[count];
+    Row[] dst = (Row[]) ValueClass.newNullRestrictedNonAtomicArray(
+        Row.class, Math.max(1, count), new Row(0, 0, 0, 0));
+    int n = 0;
+    for (int id = 0; id < count; id++) {
+      Row row = rows[id];
+      int c0 = remap(row.c0(), from, to, rebuilt);
+      int c1 = remap(row.c1(), from, to, rebuilt);
+      int c2 = remap(row.c2(), from, to, rebuilt);
+      int slot = hashRow(row.head(), c0, c1, c2, 0, 0) & dmask;
+      int found = -1;
+      while (true) {
+        int e = dslots[slot];
+        if (e < 0) {
+          break;
+        }
+        Row other = dst[e];
+        if (other.head() == row.head() && other.c0() == c0 && other.c1() == c1
+            && other.c2() == c2) {
+          found = e;
+          break;
+        }
+        slot = (slot + 1) & dmask;
+      }
+      if (found < 0) {
+        found = n++;
+        dst[found] = new Row(row.head(), c0, c1, c2);
+        dslots[slot] = found;
+      }
+      rebuilt[id] = found;
+    }
+    return n;
+  }
+
+  @Override
   Facts analyze(int[] roots) {
     var lo = new long[count];
     var hi = new long[count];

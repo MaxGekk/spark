@@ -120,6 +120,54 @@ final class ColumnRows extends FfmRows {
   }
 
   @Override
+  int rebuild(int from, int to) {
+    int[] dslots = tableOf(count);
+    int dmask = dslots.length - 1;
+    int[] rebuilt = new int[count];
+    int[] dkind = new int[Math.max(1, count)];
+    int[] dc0 = new int[dkind.length];
+    int[] dc1 = new int[dkind.length];
+    int[] dc2 = new int[dkind.length];
+    long[] dp0 = new long[dkind.length];
+    long[] dp1 = new long[dkind.length];
+    int n = 0;
+    for (int id = 0; id < count; id++) {
+      int kind = kindCol[id];
+      int c0 = remap(c0Col[id], from, to, rebuilt);
+      int c1 = remap(c1Col[id], from, to, rebuilt);
+      int c2 = remap(c2Col[id], from, to, rebuilt);
+      long p0 = p0Col[id];
+      long p1 = p1Col[id];
+      int slot = hashRow(kind, c0, c1, c2, p0, p1) & dmask;
+      int found = -1;
+      while (true) {
+        int e = dslots[slot];
+        if (e < 0) {
+          break;
+        }
+        if (dkind[e] == kind && dc0[e] == c0 && dc1[e] == c1 && dc2[e] == c2 && dp0[e] == p0
+            && dp1[e] == p1) {
+          found = e;
+          break;
+        }
+        slot = (slot + 1) & dmask;
+      }
+      if (found < 0) {
+        found = n++;
+        dkind[found] = kind;
+        dc0[found] = c0;
+        dc1[found] = c1;
+        dc2[found] = c2;
+        dp0[found] = p0;
+        dp1[found] = p1;
+        dslots[slot] = found;
+      }
+      rebuilt[id] = found;
+    }
+    return n;
+  }
+
+  @Override
   Facts analyze(int[] roots) {
     var lo = new long[count];
     var hi = new long[count];

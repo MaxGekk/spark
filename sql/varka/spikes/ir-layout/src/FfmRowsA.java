@@ -22,6 +22,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.StructLayout;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.VarHandle;
+import java.lang.foreign.Arena;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -133,6 +134,55 @@ final class FfmRowsA extends FfmRows {
     P1.set(rows, at, p1);
     slots[slot] = id;
     return id;
+  }
+
+  @Override
+  int rebuild(int from, int to) {
+    int[] dslots = tableOf(count);
+    int dmask = dslots.length - 1;
+    int[] rebuilt = new int[count];
+    int n = 0;
+    try (Arena tmp = Arena.ofConfined()) {
+      MemorySegment dst = tmp.allocate(ROW.byteSize() * Math.max(1, count), 64);
+      for (int id = 0; id < count; id++) {
+        long at = (long) id << 5;
+        int kind = (int) KIND.get(rows, at);
+        int c0 = remap((int) C0.get(rows, at), from, to, rebuilt);
+        int c1 = remap((int) C1.get(rows, at), from, to, rebuilt);
+        int c2 = remap((int) C2.get(rows, at), from, to, rebuilt);
+        long p0 = (long) P0.get(rows, at);
+        long p1 = (long) P1.get(rows, at);
+        int slot = hashRow(kind, c0, c1, c2, p0, p1) & dmask;
+        int found = -1;
+        while (true) {
+          int e = dslots[slot];
+          if (e < 0) {
+            break;
+          }
+          long eat = (long) e << 5;
+          if ((int) KIND.get(dst, eat) == kind && (int) C0.get(dst, eat) == c0
+              && (int) C1.get(dst, eat) == c1 && (int) C2.get(dst, eat) == c2
+              && (long) P0.get(dst, eat) == p0 && (long) P1.get(dst, eat) == p1) {
+            found = e;
+            break;
+          }
+          slot = (slot + 1) & dmask;
+        }
+        if (found < 0) {
+          found = n++;
+          long dat = (long) found << 5;
+          KIND.set(dst, dat, kind);
+          C0.set(dst, dat, c0);
+          C1.set(dst, dat, c1);
+          C2.set(dst, dat, c2);
+          P0.set(dst, dat, p0);
+          P1.set(dst, dat, p1);
+          dslots[slot] = found;
+        }
+        rebuilt[id] = found;
+      }
+    }
+    return n;
   }
 
   @Override

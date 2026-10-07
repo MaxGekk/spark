@@ -20,6 +20,7 @@
 # in each JVM, from IrLayoutBench, pinned to the fastest cores as dev/varka_bench_regen.sh does.
 #
 #   bench.sh VARIANT MODE OUTFILE [--samples N] [--arms "A B"] [--graphs "g1 g2"] [--seconds S]
+#            [--ops "build rebuild"] [--prewarm GRAPH]
 #
 #   VARIANT  jdk25  the sealed records, A, B and C, on the JDK that runs the build
 #            plain  the same records and V16 and V63 on the early-access JDK (EA_JAVA_HOME)
@@ -27,6 +28,10 @@
 #   MODE     cold   a fresh JVM for every sample, --samples of them (default 20)
 #            warm   one JVM for each measure: 3 warm-up and 5 measured iterations of --seconds (2)
 #            bytes  bytes a node, with a java agent for the records
+#            alloc  heap bytes allocated and GC time over 3,000 builds, once warm
+#
+#   --prewarm GRAPH   cold mode: build once on another graph first, paying the one-time costs
+#   --ops             warm mode: the measures to run (default: build intern analyze rebuild)
 #
 # The machine must be quiet: it refuses to start above a load of 0.8 unless FORCE=1.
 
@@ -39,6 +44,8 @@ shift 3
 
 samples=20
 seconds=2
+ops="build intern analyze rebuild"
+prewarm=""
 arms=""
 graphs="cheap_tails-22 wide_int-1 size_ladder-100 size_ladder-200 deep_chain-1024 grown_ladder-2000"
 while [ $# -gt 0 ]; do
@@ -47,6 +54,8 @@ while [ $# -gt 0 ]; do
     --seconds) seconds=$2; shift 2 ;;
     --arms) arms=$2; shift 2 ;;
     --graphs) graphs=$2; shift 2 ;;
+    --ops) ops=$2; shift 2 ;;
+    --prewarm) prewarm=$2; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -120,7 +129,8 @@ jvm+=(-Xss16m -Xmx4g -cp "$out/classes")
 {
   echo "# VARKA-291 step 5, variant $variant, mode $mode, $(date +%Y-%m-%d)"
   echo "# jdk: $("${bin}java" -version 2>&1 | head -1)"
-  echo "# pin: ${runner[*]:-none}; load average at start $load; samples $samples; seconds $seconds"
+  echo "# pin: ${runner[*]:-none}; load average at start $load; samples $samples; seconds $seconds;\
+prewarm ${prewarm:-none}"
   echo "# power: governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null \
 || echo n/a) profile=$(powerprofilesctl get 2>/dev/null || echo n/a)"
 } > "$outfile"
@@ -131,9 +141,10 @@ run() {
   local text line
   text=$(timeout 300 "${runner[@]}" "${jvm[@]}" "$main.IrLayoutBench" \
     --graphs "$here/graphs" "$@" 2>&1 || true)
-  line=$(echo "$text" | grep -E '^(COLD|WARM|BYTES)' || true)
+  line=$(echo "$text" | grep -E '^(COLD|WARM|BYTES|ALLOC)' || true)
   if [ -z "$line" ]; then
-    line="FAILURE $* :: $(echo "$text" | grep -m1 -E 'SIGSEGV|Exception|Error|Killed' | cut -c1-120)"
+    cause=$(echo "$text" | grep -m1 -E 'SIGSEGV|Exception|Error|Killed' | cut -c1-120 || true)
+    line="FAILURE $* :: $cause"
   fi
   echo "$line" >> "$outfile"
 }
@@ -141,8 +152,11 @@ run() {
 for graph in $graphs; do
   for arm in $arms; do
     case "$mode" in
-      cold) for _ in $(seq "$samples"); do run --arm "$arm" --graph "$graph" --mode cold; done ;;
-      warm) for op in build intern analyze; do
+      cold) for _ in $(seq "$samples"); do
+              run --arm "$arm" --graph "$graph" --mode cold ${prewarm:+--prewarm "$prewarm"}
+            done ;;
+      alloc) run --arm "$arm" --graph "$graph" --mode alloc ;;
+      warm) for op in $ops; do
               run --arm "$arm" --graph "$graph" --mode warm --op "$op" --seconds "$seconds"
             done ;;
       bytes) run --arm "$arm" --graph "$graph" --mode bytes ;;
