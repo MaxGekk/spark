@@ -905,7 +905,8 @@ segment loops are vectorized as well as the array ones, so the old rule that arr
 segments do not no longer holds for unit-stride access; what decides it is rows against columns.
 The Vector API adds nothing for heap columns and about 12% for off-heap ones. Most passes over an
 IR are dependency chains no vectorizer touches; the candidates are hashing every row and the
-rebuild's remap (`VARKA-291.md` 9.7, `spikes/ir-layout/vector-loops.sh`).
+rebuild's remap (`VARKA-291.md` 9.7; the script, `vector-loops.sh`, is in
+commit `f77e5fb9ea6`, removed since: `VARKA-291.md` 9.9).
 
 ## Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle
 

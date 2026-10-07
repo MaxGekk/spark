@@ -598,3 +598,12 @@ its slow build is mostly this harness's allocation (9.7), but nothing measured f
 migration of the IR from records to the owning class is item 85's work in milestone 8 and is not
 started or scheduled here, and no row is added for it.
 
+### 9.9 The experiment's code is removed, 7 October 2026
+
+At the owner's request the code left the tree once the verdict was written: the harness and its
+graphs and scripts under `sql/varka/spikes/ir-layout/`, and the exporter, `VarkaIrDescription` and
+its suite in `sql/catalyst/src/test`. They are in the history, and the last commit that has them
+all is `f77e5fb9ea6` (#654); the README beside `results/` gives the `git checkout` that restores
+them. `results/` stays, since every figure above traces to it and `dev/varka_quote_check.py`
+reads it. Sections 3, 4 and 9.1 to 9.8 describe files as they were and are left as written.
+
