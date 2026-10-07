@@ -115,7 +115,9 @@ private[sql] class VarkaFilterEvaluator(
       // nothing at all, and the two grow helpers in this file no longer answer the same hazard
       // two different ways - which is what let `grown` be written as a close-then-allocate and
       // still claim to follow this one.
-      val fresh = taskAllocator().buffer(needed)
+      // Room for the sanitizer's canary past the bitmaps, when it is on.
+      val room = if (VarkaMemorySanitizer.ENABLED) VarkaMemorySanitizer.CANARY_BYTES else 0
+      val fresh = taskAllocator().buffer(needed + room)
       val old = maskBuf
       maskBuf = fresh
       if (old != null) {
@@ -148,7 +150,7 @@ private[sql] class VarkaFilterEvaluator(
       val stride = ((len + 63) / 64) * 8L
       val buf = maskBuffer(stride * outputs)
       if (VarkaMemorySanitizer.ENABLED) {
-        VarkaMemorySanitizer.register("selection bitmaps", 0, buf)
+        VarkaMemorySanitizer.guard("selection bitmaps", 0, buf, stride * outputs)
       }
       for (o <- 0 until outputs) {
         runner.dstData(o) = 0L

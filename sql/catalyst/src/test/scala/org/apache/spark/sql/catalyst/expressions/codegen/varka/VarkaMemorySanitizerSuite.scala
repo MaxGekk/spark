@@ -16,6 +16,8 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import org.apache.arrow.memory.RootAllocator
+
 import org.apache.spark.SparkFunSuite
 
 /**
@@ -87,6 +89,32 @@ class VarkaMemorySanitizerSuite extends SparkFunSuite {
     // Catches: a window opened and never registered into, which would otherwise pass everything.
     val e = intercept[VarkaMemoryViolation] { new VarkaMemorySanitizer.Window().check(Base, 4L) }
     assert(e.getMessage.contains("0 buffers are registered"), e.getMessage)
+  }
+
+  test("a canary past a guarded buffer is intact until something writes past the nominal end") {
+    // Catches: a canary that is written and never read back, and one written at the wrong offset,
+    // which would pass a kernel that overran by exactly the bytes it covers.
+    val allocator = new RootAllocator()
+    val buf = allocator.buffer(64L)
+    try {
+      val w = new VarkaMemorySanitizer.Window
+      w.add("output data", 2, buf.memoryAddress(), 48L)
+      w.guard("output data", 2, buf, 48L)
+      w.verifyCanaries()
+      buf.setByte(47L, 1)
+      w.verifyCanaries()
+      buf.setByte(48L + VarkaMemorySanitizer.CANARY_BYTES - 1, 0)
+      val e = intercept[VarkaMemoryViolation] { w.verifyCanaries() }
+      assert(e.getMessage.contains("output data 2"), e.getMessage)
+      assert(e.getMessage.contains("48 bytes"), e.getMessage)
+    } finally {
+      buf.close()
+      allocator.close()
+    }
+  }
+
+  test("a window with no guarded buffer verifies nothing and passes") {
+    new VarkaMemorySanitizer.Window().verifyCanaries()
   }
 
   test("the facade checks inside a window only when the sanitizer is on, never outside one") {

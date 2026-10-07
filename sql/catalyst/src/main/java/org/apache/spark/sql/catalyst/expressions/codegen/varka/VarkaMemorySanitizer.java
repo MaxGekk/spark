@@ -52,6 +52,18 @@ public final class VarkaMemorySanitizer {
 
   private static final boolean ORIGINS = Boolean.getBoolean(PROPERTY + ".origins");
 
+  /** How many bytes past a buffer Varka owns the canary covers; an allocation makes room for it. */
+  public static final int CANARY_BYTES = 8;
+
+  /**
+   * Rows of spare room an output vector is allocated with under the sanitizer: past {@code len}
+   * values the data has {@code CANARY_ROWS} more, and the validity bitmap, which is in whole
+   * 64-bit words, at least {@link #CANARY_BYTES} more bytes.
+   */
+  public static final int CANARY_ROWS = 64;
+
+  private static final byte CANARY = (byte) 0xA5;
+
   private static final ThreadLocal<Window> ACTIVE = new ThreadLocal<>();
 
   private static final LongAdder CHECKED = new LongAdder();
@@ -97,6 +109,35 @@ public final class VarkaMemorySanitizer {
     }
   }
 
+  /**
+   * Registers the first {@code nominalBytes} of a buffer Varka allocated itself, and writes the
+   * canary just past them. The buffer must have been allocated with {@link #CANARY_BYTES} to
+   * spare, and one that has not is registered without a canary: a write past it is still caught
+   * by the mapping check, only not by the canary. An input buffer is never guarded, since the
+   * memory past it is Arrow's.
+   */
+  public static void guard(String role, int index, ArrowBuf buf, long nominalBytes) {
+    if (ENABLED) {
+      Window window = ACTIVE.get();
+      if (window != null) {
+        window.add(role, index, buf.memoryAddress(), nominalBytes);
+        if (buf.capacity() >= nominalBytes + CANARY_BYTES) {
+          window.guard(role, index, buf, nominalBytes);
+        }
+      }
+    }
+  }
+
+  /** Fails with a {@link VarkaMemoryViolation} when any canary of this window was overwritten. */
+  public static void verifyCanaries() {
+    if (ENABLED) {
+      Window window = ACTIVE.get();
+      if (window != null) {
+        window.verifyCanaries();
+      }
+    }
+  }
+
   /** Fails with a {@link VarkaMemoryViolation} when the mapping leaves every registered buffer. */
   public static void check(long address, long bytes) {
     if (ENABLED) {
@@ -129,6 +170,42 @@ public final class VarkaMemorySanitizer {
     private String[] roles = new String[16];
     private int[] indexes = new int[16];
     private Throwable[] origins = new Throwable[16];
+    private int canaries;
+    private ArrowBuf[] guarded = new ArrowBuf[4];
+    private long[] guardedAt = new long[4];
+    private String[] guardedRole = new String[4];
+    private int[] guardedIndex = new int[4];
+
+    /** Writes the canary just past {@code nominalBytes} of {@code buf}, to be checked later. */
+    void guard(String role, int index, ArrowBuf buf, long nominalBytes) {
+      if (canaries == guarded.length) {
+        int grown = canaries * 2;
+        guarded = Arrays.copyOf(guarded, grown);
+        guardedAt = Arrays.copyOf(guardedAt, grown);
+        guardedRole = Arrays.copyOf(guardedRole, grown);
+        guardedIndex = Arrays.copyOf(guardedIndex, grown);
+      }
+      for (int i = 0; i < CANARY_BYTES; i++) {
+        buf.setByte(nominalBytes + i, CANARY);
+      }
+      guarded[canaries] = buf;
+      guardedAt[canaries] = nominalBytes;
+      guardedRole[canaries] = role;
+      guardedIndex[canaries] = index;
+      canaries++;
+    }
+
+    void verifyCanaries() {
+      for (int c = 0; c < canaries; c++) {
+        for (int i = 0; i < CANARY_BYTES; i++) {
+          if (guarded[c].getByte(guardedAt[c] + i) != CANARY) {
+            throw new VarkaMemoryViolation("the canary " + i + " bytes past " + guardedRole[c]
+                + " " + guardedIndex[c] + ", whose " + guardedAt[c] + " bytes are the kernel's,"
+                + " was overwritten: something wrote past the buffer's nominal end");
+          }
+        }
+      }
+    }
 
     void add(String role, int index, long address, long capacity) {
       if (count == starts.length) {

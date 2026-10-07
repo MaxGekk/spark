@@ -284,16 +284,22 @@ private[sql] abstract class VarkaEvaluatorBase(
       val fixed = new Array[BaseFixedWidthVector](plan.outputs.size)
       val columns = new Array[ColumnVector](plan.outputs.size)
       var o = 0
+      // Under the sanitizer an output has a tail of rows past `len` for its canary to sit in; the
+      // vector's value count is still `len`, so nothing downstream sees them.
+      val rows = if (VarkaMemorySanitizer.ENABLED) len + VarkaMemorySanitizer.CANARY_ROWS else len
       plan.outputTypes.foreach { dataType =>
-        val vector = allocate(dataType, o, len, allocator)
+        val vector = allocate(dataType, o, rows, allocator)
         fixed(o) = vector
         columns(o) = new VarkaOwnedArrowColumnVector(vector)
         owned += columns(o)
         runner.dstData(o) = vector.getDataBuffer().memoryAddress()
         runner.dstValidity(o) = vector.getValidityBuffer().memoryAddress()
         if (VarkaMemorySanitizer.ENABLED) {
-          VarkaMemorySanitizer.register("output data", o, vector.getDataBuffer())
-          VarkaMemorySanitizer.register("output validity", o, vector.getValidityBuffer())
+          // The kernel's own bytes: `len` values, and the validity bitmap to its last whole word.
+          VarkaMemorySanitizer.guard("output data", o, vector.getDataBuffer(),
+            len.toLong * vector.getTypeWidth)
+          VarkaMemorySanitizer.guard("output validity", o, vector.getValidityBuffer(),
+            ((len + 63) / 64) * 8L)
         }
         o += 1
       }

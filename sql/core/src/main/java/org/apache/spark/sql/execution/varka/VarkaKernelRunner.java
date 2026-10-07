@@ -178,8 +178,8 @@ public final class VarkaKernelRunner {
         ArrowBuf data = scratch.derivedData(i);
         ArrowBuf validity = scratch.derivedValidity(i);
         if (VarkaMemorySanitizer.ENABLED) {
-          VarkaMemorySanitizer.register("derived data", i, data);
-          VarkaMemorySanitizer.register("derived validity", i, validity);
+          VarkaMemorySanitizer.guard("derived data", i, data, Math.max(len * 4L, 8L));
+          VarkaMemorySanitizer.guard("derived validity", i, validity, ((len + 63) / 64) * 8L);
         }
         // No default: a derived kind added to the enum is a compile error here, not a silent
         // trip down the weekday path.
@@ -230,7 +230,8 @@ public final class VarkaKernelRunner {
     // the per-batch machinery's, not the kernel's, and must not be marked as the kernel's.
     long scratchAddress = scratch.kernelScratchAddress(scratchBytesPerRow, len);
     if (VarkaMemorySanitizer.ENABLED && scratchAddress != 0L) {
-      VarkaMemorySanitizer.register("kernel scratch", 0, scratch.kernelScratchBuffer());
+      VarkaMemorySanitizer.guard("kernel scratch", 0, scratch.kernelScratchBuffer(),
+          (long) scratchBytesPerRow * len);
     }
     int status;
     try {
@@ -257,6 +258,9 @@ public final class VarkaKernelRunner {
       }
       throw new VarkaKernelFailure(e);
     }
+    // After the kernel has returned and not from a throw out of it, so that a canary does not
+    // replace the failure it follows; a no-op unless the sanitizer is on.
+    VarkaMemorySanitizer.verifyCanaries();
     if (sampled) {
       accounting.allocationSample(VarkaAllocationSampler.allocatedBytes() - before, len);
     }

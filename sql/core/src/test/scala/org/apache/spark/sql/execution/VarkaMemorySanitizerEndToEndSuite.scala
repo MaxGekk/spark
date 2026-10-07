@@ -94,6 +94,28 @@ class VarkaMemorySanitizerEndToEndSuite
     }
   }
 
+  test("an overwritten canary fails the check made when the kernel returns") {
+    withSanitizer {
+      val bytes = 64L
+      val buf = org.apache.spark.sql.util.ArrowUtils.rootAllocator.buffer(
+        bytes + VarkaMemorySanitizer.CANARY_BYTES)
+      try {
+        VarkaMemorySanitizer.begin()
+        try {
+          VarkaMemorySanitizer.guard("output data", 5, buf, bytes)
+          VarkaMemorySanitizer.verifyCanaries()
+          buf.setByte(bytes, 0)
+          val e = intercept[VarkaMemoryViolation] { VarkaMemorySanitizer.verifyCanaries() }
+          assert(e.getMessage.contains("output data 5"), e.getMessage)
+        } finally {
+          VarkaMemorySanitizer.end()
+        }
+      } finally {
+        buf.close()
+      }
+    }
+  }
+
   test("a violation is not a catchable kernel failure") {
     // Catches: the ghost fallback turning a memory violation into a row-engine answer.
     val violation = new VarkaMemoryViolation("test")
