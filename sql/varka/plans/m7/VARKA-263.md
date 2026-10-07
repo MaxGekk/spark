@@ -115,8 +115,8 @@ suites), each after one more step:
 | 4 | the leak check as `beforeAll`/`afterAll` | - | - | - | did not compile: `TPCBase` widens those to public |
 | 5 | the leak check wrapping `run` | 958 | 6 | 27 | the same; no suite aborted for a leak |
 
-All six failures are one pattern: a mapping of 80000 bytes where the nearest registered buffer, output
-data 0, holds 40000, and one of 40 bytes over 20, in `VarkaTimeArithmeticSuite` and
+All six failures are one pattern: a mapping of 80000 bytes where the nearest registered buffer,
+output data 0, holds 40000, and one of 40 bytes over 20, in `VarkaTimeArithmeticSuite` and
 `VarkaCoverageDifferentialSuite` (`hour(t)`, `minute(t2)`, `second(t)`, the `emit.useAVX` switch,
 the second-of-the-day sweep, an extract under another expression). The cause, read in
 `VarkaBodyEmitter.emitSizes`: `dataBytes = length * lane.byteStride` is the size of every data
