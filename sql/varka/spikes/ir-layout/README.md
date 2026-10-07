@@ -13,7 +13,7 @@ early-access Valhalla JDK (`run-ea.sh`, below):
 | layout B | FFM struct rows of 16 bytes: `head` (kind and packed scalars), then `c0, c1, c2` |
 | layout C | layout A's six fields as `int[]` and `long[]` columns, the plain-array baseline |
 | layout V16 | layout B's row and packing in a flat array of 16-byte value records (internal API) |
-| layout V63 | a `long` a node (kind, three 19-bit child ids) in a flat array, and an `int[]` of scalars |
+| layout V63 | a `long` a node (kind, three 19-bit child ids) in a flat array, and scalars in `int[]` |
 | value records | the real IR with `value` added to every record, generated at run time (arm 5) |
 
 A, B and C hash-cons rows in an open-addressing `int[]` table of row ids, and spill what does not
