@@ -621,7 +621,7 @@ public final class VarkaKernelWarmup {
     if (address == 0L) {
       return;
     }
-    MemorySegment src = MemorySegment.ofAddress(address).reinterpret((long) length * width);
+    MemorySegment src = VarkaSegments.map(address, (long) length * width);
     long done = 0;
     while (done < SNAPSHOT_ROWS) {
       long chunk = Math.min(length, SNAPSHOT_ROWS - done);
@@ -636,7 +636,7 @@ public final class VarkaKernelWarmup {
    * eight repeats at a bit offset; it runs once per shape over a thousand rows.
    */
   static void tileValidity(long address, int length, MemorySegment dst) {
-    MemorySegment src = MemorySegment.ofAddress(address).reinterpret((length + 7) / 8);
+    MemorySegment src = VarkaSegments.map(address, (length + 7) / 8);
     for (int r = 0; r < SNAPSHOT_ROWS; r++) {
       int s = r % length;
       if (((src.get(ValueLayout.JAVA_BYTE, s >>> 3) >>> (s & 7)) & 1) != 0) {

@@ -66,10 +66,10 @@ public final class IntRangeOps {
     if (length == 0 || srcNullCount == length) {
       return true;
     }
-    MemorySegment src = MemorySegment.ofAddress(srcData).reinterpret(length * 4L);
+    MemorySegment src = VarkaSegments.map(srcData, length * 4L);
     boolean hasNulls = srcNullCount > 0;
     MemorySegment validity = hasNulls
-        ? MemorySegment.ofAddress(srcValidity).reinterpret((length + 7) / 8L) : null;
+        ? VarkaSegments.map(srcValidity, (length + 7) / 8L) : null;
     IntVector loVec = IntVector.broadcast(SPECIES, lo);
     IntVector hiVec = IntVector.broadcast(SPECIES, hi);
 

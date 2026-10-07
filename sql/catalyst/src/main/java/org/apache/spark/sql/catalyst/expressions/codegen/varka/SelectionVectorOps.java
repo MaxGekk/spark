@@ -193,7 +193,7 @@ public final class SelectionVectorOps {
 
   /** {@code addr} as a segment of {@code bytes} bytes - the only bounds check a kernel gets. */
   private static MemorySegment segment(long addr, long bytes) {
-    return MemorySegment.ofAddress(addr).reinterpret(bytes);
+    return VarkaSegments.map(addr, bytes);
   }
 
   /**

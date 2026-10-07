@@ -88,8 +88,8 @@ public final class WeekdayLeaf {
    */
   public static int fill(ColumnVector names, int length, boolean failOnError, Parser parser,
       long dstData, long dstValidity) {
-    MemorySegment data = MemorySegment.ofAddress(dstData).reinterpret(length * 4L);
-    MemorySegment validity = MemorySegment.ofAddress(dstValidity).reinterpret((length + 7) / 8L);
+    MemorySegment data = VarkaSegments.map(dstData, length * 4L);
+    MemorySegment validity = VarkaSegments.map(dstValidity, (length + 7) / 8L);
     int nulls = 0;
     int bits = 0;
     for (int i = 0; i < length; i++) {

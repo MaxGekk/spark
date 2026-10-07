@@ -41,6 +41,12 @@ import jdk.incubator.vector.VectorMask;
  */
 public final class VarkaVectorSupport {
 
+  /**
+   * Whether every mapping is checked against the buffers the evaluator registered (VARKA-263),
+   * a test-only switch read once so that the check in {@link #ofAddress} is gone when it is off.
+   */
+  private static final boolean SANITIZE = Boolean.getBoolean("varka.sanitizeMemory");
+
   // Arrow validity buffers are not guaranteed to be aligned to the width they are read at, so
   // every multi-byte validity access uses an unaligned layout to skip the alignment check.
   private static final ValueLayout.OfShort UNALIGNED_SHORT = ValueLayout.JAVA_SHORT_UNALIGNED;
@@ -675,6 +681,9 @@ public final class VarkaVectorSupport {
    * to read, and the {@link MemorySegment} bounds check enforces it from there on.
    */
   public static MemorySegment ofAddress(long addr, long bytes) {
+    if (SANITIZE) {
+      MemorySanitizerBridge.check(addr, bytes);
+    }
     return MemorySegment.ofAddress(addr).reinterpret(bytes);
   }
 }

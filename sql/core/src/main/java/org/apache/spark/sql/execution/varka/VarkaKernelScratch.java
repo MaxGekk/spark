@@ -23,6 +23,8 @@ import java.util.function.Supplier;
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
+
 /**
  * A Varka evaluator's task-lifetime scratch: one data and one validity buffer per kernel input
  * the evaluator derives, and the scratch a kernel with a materialized calendar prefix takes
@@ -59,7 +61,7 @@ public final class VarkaKernelScratch {
     long needed = (long) bytesPerRow * len;
     if (kernelScratch == null || kernelScratch.capacity() < needed) {
       // Allocate, store, then release, for the reasons `growSlot` gives.
-      ArrowBuf fresh = allocator.get().buffer(needed);
+      ArrowBuf fresh = allocator.get().buffer(needed + canaryRoom());
       ArrowBuf old = kernelScratch;
       kernelScratch = fresh;
       if (old != null) {
@@ -67,6 +69,16 @@ public final class VarkaKernelScratch {
       }
     }
     return kernelScratch.memoryAddress();
+  }
+
+  /** The bytes past a buffer's need that the sanitizer's canary takes; none when it is off. */
+  private static int canaryRoom() {
+    return VarkaMemorySanitizer.ENABLED ? VarkaMemorySanitizer.CANARY_BYTES : 0;
+  }
+
+  /** The buffer {@link #kernelScratchAddress} last returned the address of, or null. */
+  public ArrowBuf kernelScratchBuffer() {
+    return kernelScratch;
   }
 
   /** Makes derived input {@code i}'s buffers hold {@code len} rows. */
@@ -118,7 +130,7 @@ public final class VarkaKernelScratch {
    * cleanup then closes the same buffer a second time and the reference count goes negative.
    */
   private void growSlot(ArrowBuf[] slots, int i, long needed) {
-    ArrowBuf fresh = allocator.get().buffer(needed);
+    ArrowBuf fresh = allocator.get().buffer(needed + canaryRoom());
     ArrowBuf old = slots[i];
     slots[i] = fresh;
     if (old != null) {
