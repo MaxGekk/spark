@@ -342,13 +342,18 @@ arms differ in where a field lives and how it is read. It is the plain-array bas
 are read against.
 
 **Agreement.** Records and layouts A, B and C agree on the committed graphs and on the full corpus,
-and C passes the six edge cases. C's sizes are A's, 32.06 bytes a node with 12.16 for the tables.
+and C passes the six edge cases. C's sizes are A's, 32.06 bytes a node with 12.16 for the tables,
+but that equality holds by formula: the harness computes bytes a node as rows times the row size
+plus the pool, for all three layouts, and does not measure the heap. C's real footprint also has six
+array headers a graph and arrays sized before deduplication.
 
 **One departure from the plan.** C shares the off-heap pool of lists with the FFM arms. Only
 `InRanges` has a list, so a heap pool would change one kind in 37; it is noted here so that step 5
 does not read C as free of `MemorySegment` altogether.
 
 **Not a measurement.** One cold pass, from `results/step3-full-corpus.txt`: records build 31 ms and
-analyze 91, A build 14 and analyze 8, B build 21 and analyze 8, C build 6 and analyze 5. Step 5
-measures on the quiet machine, with fresh JVMs.
-
+analyze 91, A build 14 and analyze 8, B build 21 and analyze 8, C build 6 and analyze 5. The order
+confounds them: each graph is built as records, then A, then B, then C in one JVM, so C runs on code
+the others have already warmed (the hash, the pool, the interval maths) and the JIT has seen it.
+Prediction 3, that FFM costs more than `int[]` only where a `VarHandle` is not folded, is therefore
+not scored here; it moves to step 5, which runs each arm in fresh JVMs.

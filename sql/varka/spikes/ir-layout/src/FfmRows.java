@@ -28,13 +28,12 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.KindTable.Kind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.KindTable.Scalar;
 
 /**
- * Arm 3 of the spike: the IR as rows of a flat store in an FFM {@link Arena}, one class for each
- * of the two layouts ({@link FfmRowsA} and {@link FfmRowsB}; {@link ColumnRows}, arm 2, is the same
- * contract over heap columns) so that neither pays for a switch on
- * the layout at every access. What they share is here: the pool of ints that holds what a row
- * cannot, interned so that equal content has one offset and equal rows stay equal; the hash and the
- * decoding of a row's scalars back to text, for the round trip through {@link VarkaIrDescription};
- * and the walk that builds a graph.
+ * Arms 2 and 3 of the spike, one class for each layout so that none pays for a switch on the layout
+ * at every access: the IR as rows of a flat store in an FFM {@link Arena} ({@link FfmRowsA} and
+ * {@link FfmRowsB}, arm 3), or as heap columns ({@link ColumnRows}, arm 2). What they share is
+ * here: the pool of ints that holds what a row cannot, interned so that equal content has one
+ * offset and equal rows stay equal; the hash and the decoding of a row's scalars back to text, for
+ * the round trip through {@link VarkaIrDescription}; and the walk that builds a graph.
  *
  * <p>A row is hash-consed on build: its words are hashed, an open-addressing table of row ids is
  * probed, and a row equal to an existing one is not added. The store is sized for the graph before
@@ -60,7 +59,7 @@ abstract class FfmRows implements AutoCloseable {
     poolMask = slots - 1;
   }
 
-  /** The layout's name, A or B. */
+  /** The layout's name, A, B or C. */
   abstract String layout();
 
   /** Bytes a row takes in the layout. */

@@ -31,7 +31,9 @@ Every graph goes through the same checks before any timing is read:
 indices, one index past B's limit (B must refuse), a long lane, the extremes of the wide scalars,
 lists, and a node with three children.
 
-The "one cold pass" line is a smoke timing, not a measurement. The measurement is step 5.
+The "one cold pass" line is a smoke timing, not a measurement: it varies from run to run, and the
+arms run in one JVM in a fixed order, so a later arm benefits from the earlier ones' warm-up.
+The measurement is step 5.
 
 ## Running
 
