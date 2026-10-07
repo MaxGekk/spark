@@ -7,7 +7,7 @@
       "fitted (VarkaEmitCostTable)" : {
         "bytes" : {
           "under 500 bytes" : {
-            "methods" : 20294,
+            "methods" : 20287,
             "median error %" : 8.5,
             "90th percentile %" : 27.9,
             "99th percentile %" : 77.1,
@@ -17,7 +17,7 @@
             "within 10% share" : 57.2
           },
           "500 to 1999 bytes" : {
-            "methods" : 26359,
+            "methods" : 26366,
             "median error %" : 3.5,
             "90th percentile %" : 10.2,
             "99th percentile %" : 20.7,
@@ -59,9 +59,9 @@
         },
         "call sites" : {
           "under 500 bytes" : {
-            "methods" : 19782,
+            "methods" : 19775,
             "median error %" : 4.8,
-            "90th percentile %" : 22.6,
+            "90th percentile %" : 22.7,
             "99th percentile %" : 71.2,
             "worst %" : 506.5,
             "under-predicted %" : 57.2,
@@ -69,7 +69,7 @@
             "within 10% share" : 69.9
           },
           "500 to 1999 bytes" : {
-            "methods" : 26359,
+            "methods" : 26366,
             "median error %" : 2.7,
             "90th percentile %" : 8.6,
             "99th percentile %" : 18.3,
@@ -113,7 +113,7 @@
       "register (VarkaEmitCostRegister)" : {
         "bytes" : {
           "under 500 bytes" : {
-            "methods" : 20294,
+            "methods" : 20287,
             "median error %" : 2.6,
             "90th percentile %" : 30.1,
             "99th percentile %" : 99.0,
@@ -123,13 +123,13 @@
             "within 10% share" : 64.0
           },
           "500 to 1999 bytes" : {
-            "methods" : 26359,
+            "methods" : 26366,
             "median error %" : 10.3,
             "90th percentile %" : 47.1,
             "99th percentile %" : 86.6,
             "worst %" : 128.9,
             "under-predicted %" : 33.9,
-            "under-predicted past the margin" : 866,
+            "under-predicted past the margin" : 865,
             "within 10% share" : 49.2
           },
           "2000 to 7999 bytes" : {
@@ -146,8 +146,8 @@
             "methods" : 120,
             "median error %" : 61.9,
             "90th percentile %" : 69.5,
-            "99th percentile %" : 76.8,
-            "worst %" : 78.2,
+            "99th percentile %" : 76.7,
+            "worst %" : 78.1,
             "under-predicted %" : 0.0,
             "under-predicted past the margin" : 0,
             "within 10% share" : 0.0
@@ -155,7 +155,7 @@
           "2000 bytes and over" : {
             "methods" : 7119,
             "median error %" : 10.5,
-            "90th percentile %" : 57.5,
+            "90th percentile %" : 57.4,
             "99th percentile %" : 78.6,
             "worst %" : 107.6,
             "under-predicted %" : 9.4,
@@ -165,7 +165,7 @@
         },
         "call sites" : {
           "under 500 bytes" : {
-            "methods" : 19782,
+            "methods" : 19775,
             "median error %" : 0.0,
             "90th percentile %" : 14.3,
             "99th percentile %" : 81.0,
@@ -175,7 +175,7 @@
             "within 10% share" : 85.5
           },
           "500 to 1999 bytes" : {
-            "methods" : 26359,
+            "methods" : 26366,
             "median error %" : 1.3,
             "90th percentile %" : 10.0,
             "99th percentile %" : 32.3,
@@ -250,7 +250,7 @@
           "worst %" : 15.6,
           "under-predicted %" : 43.9,
           "under-predicted past the margin" : 0,
-          "within 10% share" : 97.2
+          "within 10% share" : 97.3
         },
         "size ladder" : {
           "methods" : 1538,

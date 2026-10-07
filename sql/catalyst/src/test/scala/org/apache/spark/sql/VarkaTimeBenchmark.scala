@@ -183,11 +183,13 @@ object VarkaTimeBenchmark extends BenchmarkBase {
     def lit(i: Int) = new LiteralSlot(i, LaneType.LONG)
     def sub(a: VarkaVectorIR, b: VarkaVectorIR) = new IntArith(IntOp.SUB, Overflow.WRAP, a, b)
     def mul(a: VarkaVectorIR, b: VarkaVectorIR) = new IntArith(IntOp.MUL, Overflow.WRAP, a, b)
-    val hour = new ConstDivide(t, NANOS_PER_HOUR)
+    // The long lane's dividend bounds, as `VarkaTimeCompiler` states them: a TIME is under a day of
+    // nanoseconds, and what is left after the hours is under an hour, after the minutes a minute.
+    val hour = new ConstDivide(t, NANOS_PER_HOUR, NANOS_PER_DAY)
     val afterHours = sub(t, mul(hour, lit(0)))
-    val minute = new ConstDivide(afterHours, NANOS_PER_MINUTE)
+    val minute = new ConstDivide(afterHours, NANOS_PER_MINUTE, NANOS_PER_HOUR)
     val afterMinutes = sub(afterHours, mul(minute, lit(1)))
-    val second = new ConstDivide(afterMinutes, NANOS_PER_SECOND)
+    val second = new ConstDivide(afterMinutes, NANOS_PER_SECOND, NANOS_PER_MINUTE)
     Map("hour" -> hour, "minute" -> minute, "second" -> second)
   }
 
@@ -344,7 +346,7 @@ object VarkaTimeBenchmark extends BenchmarkBase {
             emit(boundedRoots, 1, intLits.length, loader, kernelId()), LaneType.INT, false))
       }
       val t = new ColumnRef(0, LaneType.LONG)
-      val seconds = new ConstDivide(t, NANOS_PER_SECOND)
+      val seconds = new ConstDivide(t, NANOS_PER_SECOND, NANOS_PER_DAY)
       val split = emit(Seq[VarkaVectorIR](seconds,
         new IntArith(IntOp.SUB, Overflow.WRAP, t,
           new IntArith(IntOp.MUL, Overflow.WRAP, seconds, new LiteralSlot(2, LaneType.LONG)))),

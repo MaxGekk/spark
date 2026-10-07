@@ -934,33 +934,33 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "9a4a2bb7eeba45f3",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "5864feb713d33763",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "1a8d26677428983b",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "dd63bc1adfea3db7",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "9a4a2bb7eeba45f3",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "5864feb713d33763"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "1a8d26677428983b",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "dd63bc1adfea3db7"
         },
         "minute(t2)" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "6b76a0d0248951d1",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "010929d1b64caea0",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "ed8b8bedec5aef7a",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "b0979edede985854",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "6b76a0d0248951d1",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "010929d1b64caea0"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "ed8b8bedec5aef7a",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "b0979edede985854"
         },
         "second(t)" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "c5f7bd03fce6b598",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "e8a1486bf92b1e68",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "525b351b1b030b5c",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "98d78d465434ffeb",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "c5f7bd03fce6b598",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "e8a1486bf92b1e68"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "525b351b1b030b5c",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "98d78d465434ffeb"
         },
         "time_to_millis(t)" : {
           "<class>" : "1a6be0d5ae87cd3c",
@@ -1028,7 +1028,7 @@
         "seed" : 20260919,
         "shapes" : 10000,
         "block_size" : 100,
-        "blocks" : [ "672ab4515407107e", "06baf5ceb5fbdd5e", "86e88623bd8f6c32", "837e8db032be62c7", "5af65b53bf41d0bd", "2ae212bd7283b51a", "4a5f64e3cd159132", "ef63463467e1d8a2", "a8edfb5a41b017dd", "67491f62e3b4c3d6", "72c0807f9a15a73d", "52080a29b3b34ab1", "cf1b00d5ccf1a646", "cb21f90bd40538d5", "646d4b6865f66e55", "a0ed25b8a6e71969", "25ae1ed321698af2", "8c43cd97f056c85d", "af25d0015eaf9fa8", "6284de48d29712af", "8b92420e3a38cd94", "bbada593e7b59ef1", "7dc0091562e9db2f", "ae282a9f7312ffc0", "6f22a0fb39bb9829", "50bbc43443e5434d", "a45a5f62c9d529be", "132cd70db1c7edae", "e6412d9168ab6de6", "0f8e0f0f7c4d0cf9", "3e17e5464d952cff", "2bb16116506d4c79", "dcee7f73d346adf8", "b4fe4ef226f35092", "b93b4b951d23388a", "445b5696ab8b4bfa", "badc50e9e7faddab", "78605b99577ab16e", "de558ebead94a271", "b5c79d8f26dc806e", "d8acdfefd216527d", "455dca87d7b93a29", "7769e4dfb8daba1d", "5ffa5fa44f7a1690", "0aad5d94b7d29969", "d9fcc272408d4b3a", "90ebcb139dd5b2b3", "fcd34602bfd8f092", "9e665620f739a7c5", "46b77f37871dfafd", "aa54bd3c04ad912c", "2e31bb90ba794251", "638cbfa01d1da61b", "b067ecde9ab576cc", "3b91b9361833b328", "26de3f5986460c03", "68e0a4c53ccc8421", "54d297a005af584f", "32bcad1ffa02e9ef", "e7aaeaef090e22d0", "0a0c7640c308ace3", "49b2b218e317c88e", "191c7b6100058ddb", "25b6c3c8df460cf7", "d9d574f03e2373a9", "59c18034d7351200", "d65a8f3d40029441", "b4fcfe63af9a3685", "031d625a5fcbe398", "1033caf0662601a9", "ed45f47714cc59a2", "c198d8a4ddfbbb14", "35fdbf77a518b463", "7f5eab1734fb424a", "15052403573571fd", "0a53abd5f336ac27", "c9f5c3df7ab1f875", "5a96b2bfe608b32e", "e3fa2853c5340f83", "cbd47221b78fc835", "0987790a3deb5e1b", "05223378197467ff", "5ea3b15381d08695", "a19e100287950609", "4edd57ce69bf0241", "5b0b6645bafe4294", "9857319388ac6187", "3deff932994de191", "3fd1d2326771e18b", "8e98155ac47230f9", "0d4a18b7fd8be5d8", "70f057dc8a42ebad", "6561d9d877bd460a", "08b5bfd11eeede19", "623d1f07674be9e1", "f254f416e9aaec88", "948f8243887ba140", "1d9f2550f5b3d21b", "e40389a77d2a0ec6", "7525694f2d551260" ]
+        "blocks" : [ "98ecc12b18fa478a", "bf12251d73b1caec", "70b41a0a619c080a", "6be0c47250abc17a", "ea125fb61e18cb17", "ffc398637a5be357", "45e9c9f6d4115a6b", "54400e0ba2fb39c7", "c4e3bc5a8f3c189b", "b9eecd78bfc5fa8a", "aa929ecce0c360f5", "a5e8aa190be08d87", "479702d7ba142a37", "baa2b055844bc476", "00a6c3dc236b205d", "c52c0c753dd578e4", "5a96e80f86606a56", "b4c287e4610dbadd", "af25d0015eaf9fa8", "1f4357f28031a97a", "0d78184dd0084181", "6866df065572abe8", "315a8a1b79378007", "17570c7fded260ba", "45c06f256e5c2f30", "e0c8b3386881d840", "13fb0e5ff3cdecf4", "ffe91b45f6ff0236", "9406c23bd9888b2d", "e6f3c200cd3dff3a", "0754e116d700bf8e", "54ab25f6812cfac6", "6fcc4d628df6468a", "9a08255c5abade22", "2ca51131b2bd2106", "3b67aab0c405ab43", "4299ed003a8d3bbd", "1f02693e52d5969b", "f2c979329e920bf0", "d3df0ba64208dc03", "8d9be03c92b21968", "468a35c18e862f31", "b3dde86ecd00a3bf", "bb624359286fc6d7", "38e36cbdbec75ada", "7510bbbc1261564f", "a03b7ef4d3899a90", "3b40224ff9ed5535", "4d62badcccf7451e", "1d1f8b5f93e2e893", "2be2d464adbb86f0", "e4c66080434ea311", "4b87c3ab59bb1708", "3d5279fb3e873597", "422d090f5862c059", "e9707250e2c25207", "b9aaf3a26330d0c8", "82bcdc6cb3cc6362", "6eb7e7df1058f052", "eab756561a19fd22", "027e607360bdf230", "c6d4062d9339d647", "010dc82b6a3f24e6", "8ba4d7261b6fcb37", "f69c8b4a846c8be3", "30bf866aceb11c54", "918e9be0bfe12197", "32a08db9e62d69b2", "f9753f760c5f41a9", "c7b4515188e95aec", "eff5aca67e19d759", "d44c0fa354897f2e", "4936c903a8f5adc7", "12fce66331ecf2ce", "ec4eb03dd2f4b38b", "fccef21d5d39c526", "8bdfa3f6fbee9d42", "dbdafe035e0c4723", "b06bfe8fd1329a05", "eb4539a65750cd10", "498881adcf4c5f1c", "9b31557e38668c91", "4f3f5ec22fd73c98", "b8f27549a6dc500a", "01ed6e3e56179dd2", "5d66ac87fd531c41", "4cf35381f0513fe4", "eaff06ce87dbde12", "d5ce656c3eb7064e", "5181738c5a8f31f5", "59213a17ff008b9c", "497dfb29fcc966cd", "308c4f01d086f9f2", "54e44e327de7fe01", "08f0f66efcff2be6", "72552af55fd2e9fa", "3c70941626117a7e", "b4f7bdb26989f788", "f769853f2ec501f5", "0dde9ea681aabadb" ]
       }
     },
     "16" : {
@@ -1962,33 +1962,33 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "dcf9310a9a85271e",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "4d14afb48606b62c",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "0008f9d3e824db60",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "53d7525f177abd6f",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "dcf9310a9a85271e",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "4d14afb48606b62c"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "0008f9d3e824db60",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "53d7525f177abd6f"
         },
         "minute(t2)" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "c65e1f332b4630c7",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "7a484783e85a2f37",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "cd75ad396bdd5085",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "1fa1c58f652b0728",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "c65e1f332b4630c7",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "7a484783e85a2f37"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "cd75ad396bdd5085",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "1fa1c58f652b0728"
         },
         "second(t)" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "cabc4748d03be71a",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "ce900df61adbcb5c",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "e95a148c2622fbe4",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "ebb9ae91316bf942",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "cabc4748d03be71a",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "ce900df61adbcb5c"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "e95a148c2622fbe4",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "ebb9ae91316bf942"
         },
         "time_to_millis(t)" : {
           "<class>" : "1a6be0d5ae87cd3c",
@@ -2056,30 +2056,30 @@
         "seed" : 20260919,
         "shapes" : 10000,
         "block_size" : 100,
-        "blocks" : [ "03eacdd35c67a75a", "b1251081378aa8ae", "fe3ce8e06fa304f9", "6e3bc5e8ecc67edb", "562186aa520c8e8a", "e4e88be4150fbad3", "fa98906846998cab", "1bab5229c7b8479d", "ce88ecf9a4a2a5da", "991518dbb08cfb9b", "909cc753468e40c6", "233c3c37afdb1ebe", "2e4ec831de1acea1", "6f4df932e771d2ca", "ba85bb7f55d4467b", "7293c77292de24ba", "6b8042728359926c", "e3cd28d94def99b6", "41184e1f409e91be", "b342ce7d687edb39", "b206470058ae7610", "bf9fe7faf2aade83", "60f7df6da0c279ba", "aaa2b6689efdf379", "e3123d38b686d101", "421cb310b7b92ba4", "85cffddb5bf2a1d4", "f7a3cb8686ab9019", "cffcb2c7c70f6535", "0fb2733f0c67122c", "94059004038ad013", "117f5b60f041d3da", "0ae5a94a17db0608", "2ce12c242fff3e9e", "197d6afa0ee8f42c", "e4f79763e1f15045", "8843bf852ec1a4bd", "1a511d04c78d7ee9", "1ad9ffb12215715e", "e21388af7d7eeb60", "2224c8e856c841d9", "9f776128ab0e7a91", "7e6bc4dc056f3e10", "9dfa7453e039627f", "0f32b452a5e50e28", "b792f786380b2388", "15d8c962d42ef277", "99a014ef42581485", "187eca54972fb774", "5e46c3b0743112fe", "e36dac3797f2e2d1", "84f85b66b0f67fb6", "b195bc127a40171a", "3bec98c20c3dbfd7", "0695c727ca425ca4", "a348f89c911c6455", "67994c10ee8d6c5c", "c9cd18194769c34e", "a5b22abded513ff6", "f14df83ce5d31e09", "c1cdf2c86238ec8e", "00e1f21646ef1219", "bef816e6e56d9990", "bfd6a7d0db5098ee", "2859a3c998b79dc9", "c5d5aa52afd677fa", "e2b472a2013ee770", "1a3ef05976a25828", "5e69e26355e82f89", "965748b3a5ab266f", "fee293b974b9345b", "7fcd300642a35581", "8cd17fa367008120", "4b558034c40cdaa1", "0a599bf5fb110d6a", "a4d426c7f89f4be0", "2b8b861d208b5f29", "b30966b450c6d589", "16eb2decc860f975", "6b5718d2b47c5586", "10f564acaf7f870f", "f8f6f8a5898ac686", "a46fee7ef327bf7e", "71c344407b9a2613", "edbdf7c15f7b8787", "9659a892a77b7512", "2a1f2acf710446b9", "0be6ee06a7ef8730", "832622dfe0f18a65", "17cd8cf6aea3f64f", "44348a1cffe0cf45", "9e87b87404a0610f", "884f280d0012f55f", "2f372372520d29b8", "eabd8f8946c6693e", "60be5c4406274940", "dc2b6b0843fd096b", "e110b5f48b77f105", "991a170f80a03dc4", "8dd0db656132b695" ]
+        "blocks" : [ "27b9974a6829d559", "c097e3b4d90c85eb", "17f0d8473972413f", "477769ecd48762a3", "ed47443e533893ac", "609605e920d25976", "bdfa1fcecd8f4076", "4fc31c803b897007", "08f797dc20e6a418", "ca783a24c1e5606b", "1a864f22bde62923", "a543092cfcb22942", "4b4f8fb680c81c43", "6e27fabdede7b918", "2de6e737a27ec063", "b84dd545863b85b5", "d4a9143fa10c72aa", "b79f7fce54d603de", "41184e1f409e91be", "27f7c8ed9a276422", "781855f5088f8c90", "8e750180c5baa9d2", "bfcae7cb9fdea143", "774f28cc757a69ef", "8f30e0f9778d43bd", "d27c176f8aab6bda", "05ee0d2ed0e9fcd7", "a4e20d18eb18e32d", "7d4bed595a2e984c", "cd70342723e2a9f6", "76fa02d6774fd338", "7aafb7d5fe6eee91", "ac5b06029315b230", "99d4f0a598d4e40b", "926b08f7d84f8067", "c3802c3c56b8cace", "a6bcfc33051a2215", "57f5c72adc20d7be", "030f67896edff8c0", "60fc161141ef648d", "baa2ffb047909d95", "9aaa098c59aaa762", "4c62cc3d792c8adb", "9d37c79072cc46c5", "169bfd5460cc1917", "dbee291da4336bdd", "03370e97d207538a", "e87c220a1dd8f789", "78490e3adad9875f", "63e62140893dfcd5", "128a0f06c5e59eb4", "846216f89b3b7858", "6f64abb63f11a79d", "268727e07739923e", "cb0afd284ec163ad", "bcb0a859ab7520a0", "6c9520b7769cc0c0", "859da4d9e8cda832", "711a665b94f69bcc", "8a464bc9a4aa434e", "6497a47a9efca41a", "937785e955002882", "dd2bccb882c12a9d", "e02074eb69160878", "6bd4c40fcc1a13b7", "92abdd38c978b373", "c808894df8ce88f6", "ac9d3b4209c79117", "0db46aa63bbaa7d0", "7a3c75314729275c", "c219b6fe1bddc9e1", "7704c63ca068fbf2", "b8dbb6d9e9e5d6af", "60082e2c7806d79d", "bc4258fc7d802f97", "a49de63fdb08f7a8", "197c07f8ad67e789", "80230ac15de496f9", "c20807098ac700ee", "990dca4e8a516731", "3dec22ab6fdd3f7f", "0621c8b3bc1dc3e3", "9af01205f6002ef1", "ae40d110374c6da7", "645f6d4033d48797", "a45e2d6d7715649c", "c602ec7f5abb08c7", "30b0af546a2c2a4b", "7e101500d4aaf7e9", "5915d4f9a07364ce", "9d992cdbfb4e7a84", "6a2893627320dff6", "1bc47de0cf842c07", "622ff8e81c947452", "44f398590b58f5d0", "df6455b2dbbd628e", "d1124ce645447a4c", "8c4498161ef90179", "5917010f3587bd02", "839d68c712c3b2c3" ]
       }
     }
   },
   "option_arms" : {
     "useAVX=-1" : {
-      "4" : "194d1d8270a02040",
-      "16" : "dc6c75efc54ffa40"
+      "4" : "0ce618c356eb4460",
+      "16" : "59ee81feb6099fa0"
     },
     "useAVX=0" : {
-      "4" : "58ecba81a6b7ca93",
-      "16" : "ac563395d1cbd247"
+      "4" : "5dad5ab5baade12b",
+      "16" : "a4dbdd614d4784ac"
     },
     "useAVX=1" : {
-      "4" : "58ecba81a6b7ca93",
-      "16" : "ac563395d1cbd247"
+      "4" : "5dad5ab5baade12b",
+      "16" : "a4dbdd614d4784ac"
     },
     "useAVX=2" : {
-      "4" : "58ecba81a6b7ca93",
-      "16" : "ac563395d1cbd247"
+      "4" : "5dad5ab5baade12b",
+      "16" : "a4dbdd614d4784ac"
     },
     "useAVX=3" : {
-      "4" : "194d1d8270a02040",
-      "16" : "dc6c75efc54ffa40"
+      "4" : "0ce618c356eb4460",
+      "16" : "59ee81feb6099fa0"
     }
   }
 }

@@ -173,7 +173,7 @@ final class VarkaEmitCostTable {
       Map.entry("Month",
           new double[] {19.573, 36.909, 19.692, 37.014, 2.731, 4.35, 2.874, 4.349}),
       Map.entry("NarrowLane",
-          new double[] {31.461, 28.633, 25.592, 25.949, 1.454, 2.815, 1.462, 2.807}),
+          new double[] {36.461, 33.633, 30.592, 30.949, 1.454, 2.815, 1.462, 2.807}),
       Map.entry("NextDay",
           new double[] {106.269, 103.518, 106.489, 103.614, 15.186, 15.27, 15.193, 15.269}),
       Map.entry("Not/INT",

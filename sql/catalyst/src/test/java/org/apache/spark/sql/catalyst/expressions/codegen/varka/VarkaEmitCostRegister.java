@@ -158,7 +158,7 @@ final class VarkaEmitCostRegister {
       Map.entry("Month",
           new double[] {20, 20, 20, 20, 3, 3, 3, 3}),
       Map.entry("NarrowLane",
-          new double[] {29, 29, 27, 27, 1, 1, 1, 1}),
+          new double[] {34, 34, 32, 32, 1, 1, 1, 1}),
       Map.entry("NextDay",
           new double[] {109, 109, 109, 109, 16, 16, 16, 16}),
       Map.entry("Not/INT",

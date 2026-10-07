@@ -270,7 +270,9 @@ final class VarkaBodyEmitter {
   private static void emitOutputSegments(CodeBuilder cb, boolean dense, BodyMode mode,
       List<VarkaVectorIR> outputs, List<Integer> prologueOutputs, Analysis analysis, Slots s) {
     for (int o : prologueOutputs) {
-      if (!(outputs.get(o) instanceof Cond)) {
+      if (outputs.get(o) instanceof NarrowLane) {
+        loadNarrowedSegment(cb, analysis, o, s.dstSeg[o]);
+      } else if (!(outputs.get(o) instanceof Cond)) {
         loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
       }
       // Under elideUnreadLocals a loop or epilogue body maps no validity segment for an output
@@ -1182,6 +1184,26 @@ final class VarkaBodyEmitter {
     cb.aload(P_NULL_COUNT);
     cb.loadConstant(i);
     cb.iaload();
+  }
+
+  /**
+   * The data segment of a {@link NarrowLane} root, {@code length * 4} bytes: its column is int32,
+   * and {@code dataBytes}, the lane's stride a row, would map it at twice its size, so that the
+   * bounds check on its upper half enforced nothing (VARKA-292, found by the memory sanitizer).
+   * The size comes from the length and not from {@code dataBytes}, so that it does not assume the
+   * lane's stride.
+   */
+  private static void loadNarrowedSegment(
+      CodeBuilder cb, Analysis analysis, int index, int destSlot) {
+    cb.aload(P_DST_DATA);
+    cb.loadConstant(index);
+    cb.laload();
+    cb.iload(analysis.lane.pLength);
+    cb.i2l();
+    cb.loadConstant(4L);
+    cb.lmul();
+    cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
+    cb.astore(destSlot);
   }
 
   /** {@code local = VarkaVectorSupport.ofAddress(param[index], lload(bytes))}. */
