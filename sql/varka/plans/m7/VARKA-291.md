@@ -404,3 +404,81 @@ a node, B's size, and V63 takes 13.04. Their tables are B's, 13.27 bytes a node.
 (section 3.3) are not taken here; the nodes' children are interface-typed fields, which stay
 pointers, so the heap footprint of the value records is a measurement, not a formula.
 
+### 9.6 Step 5, the measurement, 7 October 2026
+
+Run from `bench.sh` at commit `9d823364030` plus the identity-memo arm, on the laptop at the
+performance profile, pinned to the fastest cores (`taskset -c 0,12,13,14,15,1,2,3`), JDK
+25.0.4.1 and the early-access build `27-jep401ea3+1-1`. The load average was 0.49 when the chain
+started and about 1.0 for the later runs, which is the run itself; nothing else was running. The
+files are `results/step5-*.txt`, and `results/step5-summary.txt` is `summarize.py`'s reading of
+them. Six graphs: 46, 228, 502, 1,002 and 2,049 nodes (the last a chain 1,024 deep) and the
+10,002-node ladder. Cold is a fresh JVM for each of 20 samples, a median; warm is five two-second
+iterations after three of warm-up, a minimum, whose spread was at most 1.10 in every row. No run
+failed. The value variant ran with escape analysis on, as 9.5 asked.
+
+**The records baseline decides the cold result, so there are two.** `RecordsArm.analyze` memoizes by
+the records' structural `hashCode`, which walks the whole subtree on every lookup, and the real
+`VarkaRangeAnalysis` has no memo at all, so that arm is a stand-in and not the compiler's pass. A
+second arm, `records-id`, memoizes by node identity. Both are below; the second is the fairer
+reading, and no number is quoted from one without saying which.
+
+**Bytes a node.** Records are about 24 on every graph over 500 nodes (22.95 to 27.65 on the smaller
+ones), measured with `Instrumentation.getObjectSize`. Layouts A and C are 32.00, so larger than
+records; B and V16 are 16.00; V63 is 12.00, exactly half. The value records are 32.00, larger than
+plain records by a third. The flat layouts' sizes are computed, as in 9.4.
+
+**Warm.**
+- *analyze.* Against structural-memo records the flat layouts are 3.7 to 7 times faster up to 1,002
+  nodes and 2191.41 us against 8.88 us on the chain; against `records-id` they are 2.8 to 3.7
+  times faster up to 2,049 nodes and 6 to 7 times on the ladder. A, B and C are within 10% of each
+  other, so FFM costs nothing warm: the `VarHandle`s fold.
+- *build.* A and C are 0.71 to 1.01 of records. B and the two layouts that share its packing, V16
+  and V63, are 4.75 to 6.9 times slower than records; the cause is not isolated (the packing, the
+  pool, or the `int[]` the harness allocates for each node with a wide scalar), so B's build time
+  is a finding about this implementation of B, not about 16-byte rows.
+- *intern* (hash and equality of every node). Records walk the subtree: 4947.98 us on the chain
+  against 17.05 us for A, a factor that grows with depth; on the 10,002-node ladder A and C are
+  1.0 and 0.75 of records. The value records are 0.66 to 0.79 of plain records here and no
+  different on analyze.
+
+**Cold, build and analyze together, against `records-id`.**
+- *C (plain columns):* 1.31, 2.00, 1.15, 1.01, 0.86 and 0.74 of records from the smallest graph to
+  the ladder: slower on the small ones, equal at 1,002 nodes, 1.16 and 1.35 times faster on the
+  chain and the ladder.
+- *A and B (FFM):* 2.4 to 3.2 times slower at every size. The cost is in the build (7 to 8 ms on a
+  46-node graph against 2 for records), the first use of the FFM `VarHandle`s and the arena,
+  which the warm numbers do not see.
+- *V16, V63 and the value records* are compared with the plain records on their own JDK, in the
+  summary: V16 and V63 are 0.3 to 0.6 of structural-memo records up to 2,049 nodes and 0.74 and
+  1.20 on the ladder; the value records are 0.97 to 1.05.
+- One unexplained cold number: V63's analyze on the ladder is about 19.6 ms in all 20 samples,
+  against 3.1 for V16, and warm they are equal; the cause is not established.
+
+**Predictions.**
+1. *Flat at least twice as small a node as records.* Refuted for A and C (larger), B and V16 (a
+   third smaller); only V63 reaches it, and it needs the internal API.
+2. *Within 1.3x of records at a thousand nodes or fewer.* Refuted: warm analyze is 2.8 to 7 times
+   faster, and cold the FFM layouts are 2.4 to 3.2 times slower.
+3. *FFM costs more than `int[]` only where the `VarHandle` is not folded.* Supported: A and C are
+   within 10% warm and A is 2 to 3 times C cold, before the JIT has folded anything.
+4. *Value records smaller than records by less than half, within 1.3x in time.* Refuted on size
+   (a third larger); supported on time, with a 25 to 35% win on intern.
+5. *The owner's: a flat layout beats records at every size.* Supported warm for analyze and
+   intern at every size, and for build with A and C. Not supported cold, where against
+   `records-id` C ties on small graphs and the FFM layouts lose; it holds cold only against the
+   structural-memo records.
+
+**Against the gate of section 6.2.** The cold leg (1.3 times faster on the first compile of a
+representative projection) is met by none of the JDK 25 layouts against `records-id`: C reaches
+1.35 only on the ladder and 1.16 on the chain, A and B lose. The depth leg (a factor that grows
+with depth on hash and equality) is met by every flat layout against records' structural
+`hashCode` and `equals`, which matters only where the compiler hashes or compares deep nodes, and
+the range analysis does not. V16, V63 and the value records need the internal API or the preview,
+so by 6.2 they are findings about a later JDK, not candidates.
+
+**Threats to read it by.** One machine, one JDK build of each kind; the stand-in analysis, not
+`VarkaRangeAnalysis`; the cold samples are 20; the C2 crash of 9.5 means the value arm is the
+only one measured on a build that fails under other conditions; B's build time is partly the
+harness; and the graphs are Varka's corpus, whose cold compile is a few milliseconds for the
+records, small next to a Spark task.
+

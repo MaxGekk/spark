@@ -13,7 +13,7 @@ early-access Valhalla JDK (`run-ea.sh`, below):
 | layout B | FFM struct rows of 16 bytes: `head` (kind and packed scalars), then `c0, c1, c2` |
 | layout C | layout A's six fields as `int[]` and `long[]` columns, the plain-array baseline |
 | layout V16 | layout B's row and packing in a flat array of 16-byte value records (internal API) |
-| layout V63 | a `long` a node (kind, three 19-bit child ids) in a flat array, and scalars in `int[]` |
+| layout V63 | a `long` a node (kind, three 19-bit child ids) in a flat array, scalars in `int[]` |
 | value records | the real IR with `value` added to every record, generated at run time (arm 5) |
 
 A, B and C hash-cons rows in an open-addressing `int[]` table of row ids, and spill what does not
@@ -51,8 +51,8 @@ The measurement is step 5.
 ## Graphs
 
 `graphs/` holds samples small enough to commit: the size ladder, the make-date ladder, the cheap
-tails, the deep chain, 150 int and 150 long fuzz graphs, and four wide graphs of each lane. Between
-them they use all 37 node kinds.
+tails, the deep chain, the 10,002-node ladder, 150 int and 150 long fuzz graphs, and four wide
+graphs of each lane. Between them they use all 37 node kinds.
 
 ## The early-access JDK
 
@@ -69,4 +69,16 @@ row the VM did not flatten fails instead of being measured as if it were.
 
 Value records crash C2 of this build on the full corpus (`results/step4-ea-value-crash.txt`), so
 the value variant runs there with `JVM_OPTS=-XX:-DoEscapeAnalysis`. See plan section 9.5.
+
+## The measurement
+
+`bench.sh VARIANT MODE OUTFILE` runs `IrLayoutBench`, one arm, one graph and one measure in each
+JVM, pinned to the fastest cores and refusing to start on a busy machine (load above 0.8). The
+variants are `jdk25`, `plain` and `value` as above; the modes are `cold` (fresh JVMs), `warm`
+(two-second iterations) and `bytes`. The measures are `build`, `intern` (hash and equality of every
+node) and `analyze`. `summarize.py` turns `results/step5-*.txt` into the tables of plan section 9.6,
+each arm against the records on the same JDK, and against records that memoize by identity.
+
+    sql/varka/spikes/ir-layout/bench.sh jdk25 cold results/step5-cold-jdk25.txt
+    sql/varka/spikes/ir-layout/summarize.py
 

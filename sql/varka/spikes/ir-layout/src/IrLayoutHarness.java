@@ -151,6 +151,10 @@ public final class IrLayoutHarness {
       t = System.nanoTime();
       Facts expected = RecordsArm.analyze(records);
       recordsAnalyze += System.nanoTime() - t;
+      if (!"value".equals(System.getProperty("ir.variant"))) {
+        require(RecordsArm.analyzeByIdentity(records).sameAs(expected), g,
+            "the identity-memo analysis differs from the structural one");
+      }
       require(expected.distinct() == g.size(), g,
           "the records hold " + expected.distinct() + " distinct nodes, the description "
               + g.size());

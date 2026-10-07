@@ -1,0 +1,23 @@
+# VARKA-291 step 5, variant plain, mode bytes, 2026-10-07
+# jdk: openjdk version "27-jep401ea3" 2026-09-15
+# pin: taskset -c 0,12,13,14,15,1,2,3; load average at start 1.25; samples 20; seconds 2
+# power: governor=performance profile=performance
+BYTES records cheap_tails-22 nodes 46 measured 1272 bytes_per_node 27.65
+BYTES V16 cheap_tails-22 nodes 46 computed 736 bytes_per_node 16.00
+BYTES V63 cheap_tails-22 nodes 46 computed 552 bytes_per_node 12.00
+BYTES records wide_int-1 nodes 228 measured 5232 bytes_per_node 22.95
+BYTES V16 wide_int-1 nodes 228 computed 3904 bytes_per_node 17.12
+BYTES V63 wide_int-1 nodes 228 computed 2992 bytes_per_node 13.12
+BYTES records size_ladder-100 nodes 502 measured 12040 bytes_per_node 23.98
+BYTES V16 size_ladder-100 nodes 502 computed 8032 bytes_per_node 16.00
+BYTES V63 size_ladder-100 nodes 502 computed 6024 bytes_per_node 12.00
+BYTES records size_ladder-200 nodes 1002 measured 24040 bytes_per_node 23.99
+BYTES V16 size_ladder-200 nodes 1002 computed 16032 bytes_per_node 16.00
+BYTES V63 size_ladder-200 nodes 1002 computed 12024 bytes_per_node 12.00
+BYTES records deep_chain-1024 nodes 2049 measured 49176 bytes_per_node 24.00
+BYTES V16 deep_chain-1024 nodes 2049 computed 32784 bytes_per_node 16.00
+BYTES V63 deep_chain-1024 nodes 2049 computed 24588 bytes_per_node 12.00
+BYTES records grown_ladder-2000 nodes 10002 measured 240040 bytes_per_node 24.00
+BYTES V16 grown_ladder-2000 nodes 10002 computed 160032 bytes_per_node 16.00
+BYTES V63 grown_ladder-2000 nodes 10002 computed 120024 bytes_per_node 12.00
+# done, load average at end 1.23

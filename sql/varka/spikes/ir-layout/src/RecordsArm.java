@@ -163,7 +163,19 @@ final class RecordsArm {
    * a kind added to the IR is a compile error here, which is what a flat layout gives up.
    */
   static Facts analyze(List<VarkaVectorIR> roots) {
-    var memo = new HashMap<VarkaVectorIR, long[]>();
+    return analyze(roots, new HashMap<>());
+  }
+
+  /**
+   * The same pass with a memo keyed by node identity, the fairer reading of "records": a structural
+   * memo hashes the whole subtree on every lookup, which a pass over records need not do. Only for
+   * ordinary records, since a value record has no identity.
+   */
+  static Facts analyzeByIdentity(List<VarkaVectorIR> roots) {
+    return analyze(roots, new java.util.IdentityHashMap<>());
+  }
+
+  private static Facts analyze(List<VarkaVectorIR> roots, Map<VarkaVectorIR, long[]> memo) {
     var rootLo = new long[roots.size()];
     var rootHi = new long[roots.size()];
     for (int r = 0; r < roots.size(); r++) {

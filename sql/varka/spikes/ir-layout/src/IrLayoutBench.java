@@ -87,8 +87,11 @@ public final class IrLayoutBench {
     private VarkaVectorIR[] first;
     private VarkaVectorIR[] second;
 
-    RecordsCase(LoadedGraph g) {
+    private final boolean identity;
+
+    RecordsCase(LoadedGraph g, boolean identity) {
       super(g);
+      this.identity = identity;
     }
 
     @Override
@@ -119,7 +122,8 @@ public final class IrLayoutBench {
 
     @Override
     void analyze() {
-      sink += RecordsArm.analyze(roots).checksum();
+      sink += (identity ? RecordsArm.analyzeByIdentity(roots) : RecordsArm.analyze(roots))
+          .checksum();
     }
 
     @Override
@@ -226,7 +230,11 @@ public final class IrLayoutBench {
       IrLayoutHarness.registerEarlyAccessLayouts();
     }
     LoadedGraph g = find(graphs, graph);
-    Case c = arm.equals("records") ? new RecordsCase(g) : new RowsCase(g, arm);
+    Case c = switch (arm) {
+      case "records" -> new RecordsCase(g, false);
+      case "records-id" -> new RecordsCase(g, true);
+      default -> new RowsCase(g, arm);
+    };
     switch (mode) {
       case "cold" -> cold(c, arm);
       case "warm" -> warm(c, arm, op, seconds, warmup, iterations);
