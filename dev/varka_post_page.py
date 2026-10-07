@@ -95,19 +95,29 @@ FONTS = (
 )
 
 
+def figures_home(source_dir):
+    """The directory that holds `figures/`: beside the post, or, for a post in a milestone
+    folder (`plans/m6/`), in the plans directory above it, where the figures stayed."""
+    for candidate in (source_dir, os.path.dirname(source_dir)):
+        if os.path.isdir(os.path.join(candidate, "figures")):
+            return candidate
+    return source_dir
+
+
 def inline_figures(html, source_dir):
     """Replace each `<p><img src=...></p>` with the referenced SVG's own markup."""
 
     def one(match):
         alt, src = match.group(1), match.group(2)
-        path = os.path.join(source_dir, src)
+        path = os.path.join(figures_home(source_dir), src)
         if not src.endswith(".svg"):
             return match.group(0)
         if not os.path.exists(path):
             # Loudly: a figure whose SVG is absent used to pass through as an <img> pointing
             # at nothing, so the page shipped with a hole in it and the build still exited 0.
             raise SystemExit(
-                "missing figure %s - run the scripts in %s/figures" % (src, source_dir)
+                "missing figure %s - run the scripts in %s/figures"
+                % (src, figures_home(source_dir))
             )
         with open(path) as handle:
             svg = handle.read()
@@ -199,7 +209,7 @@ def render(source, out_dir, og_image=""):
         handle.write(page)
     # The SVGs travel too, so the page can be opened from the output directory alone even
     # though this build inlines them.
-    figures = os.path.join(source_dir, "figures", "svg")
+    figures = os.path.join(figures_home(source_dir), "figures", "svg")
     if os.path.isdir(figures):
         shutil.copytree(figures, os.path.join(out_dir, "figures"), dirs_exist_ok=True)
     return out, page
