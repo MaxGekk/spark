@@ -1,0 +1,13 @@
+# VARKA-291 vector loops, 2026-10-07, pin taskset -c 0,12,13,14,15,1,2,3
+# jdk: openjdk version "25.0.4.1" 2026-08-18
+# vector species: MaxVectorSize=64
+VLOOP heap-columns superword on ns_per_row 0.150
+VLOOP heap-columns superword off ns_per_row 0.799
+VLOOP segment-columns superword on ns_per_row 0.141
+VLOOP segment-columns superword off ns_per_row 1.018
+VLOOP segment-rows superword on ns_per_row 0.837
+VLOOP segment-rows superword off ns_per_row 0.837
+VLOOP vector-heap superword on ns_per_row 0.175
+VLOOP vector-heap superword off ns_per_row 0.162
+VLOOP vector-segment superword on ns_per_row 0.124
+VLOOP vector-segment superword off ns_per_row 0.131

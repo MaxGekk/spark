@@ -1,0 +1,23 @@
+# VARKA-291 step 5, variant plain, mode alloc, 2026-10-07
+# jdk: openjdk version "27-jep401ea3" 2026-09-15
+# pin: taskset -c 0,12,13,14,15,1,2,3; load average at start 1.38; samples 20; seconds 2;prewarm none
+# power: governor=performance profile=performance
+ALLOC records cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 3584 gc_count 0 gc_ms 0 ns_per_build 1128
+ALLOC V16 cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 28384 gc_count 1 gc_ms 0 ns_per_build 6110
+ALLOC V63 cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 28216 gc_count 1 gc_ms 1 ns_per_build 6282
+ALLOC records wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 9195 gc_count 1 gc_ms 1 ns_per_build 17515
+ALLOC V16 wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 143296 gc_count 3 gc_ms 1 ns_per_build 23735
+ALLOC V63 wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 164288 gc_count 3 gc_ms 1 ns_per_build 23172
+ALLOC records size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 21752 gc_count 1 gc_ms 1 ns_per_build 8907
+ALLOC V16 size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 304056 gc_count 2 gc_ms 2 ns_per_build 64601
+ALLOC V63 size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 302064 gc_count 3 gc_ms 2 ns_per_build 65287
+ALLOC records size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 43352 gc_count 3 gc_ms 2 ns_per_build 15372
+ALLOC V16 size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 606552 gc_count 4 gc_ms 4 ns_per_build 78951
+ALLOC V63 size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 698752 gc_count 5 gc_ms 3 ns_per_build 85391
+ALLOC records deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 106616 gc_count 2 gc_ms 3 ns_per_build 28150
+ALLOC V16 deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 1451056 gc_count 9 gc_ms 5 ns_per_build 184331
+ALLOC V63 deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 1311744 gc_count 8 gc_ms 5 ns_per_build 178808
+ALLOC records grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 432152 gc_count 7 gc_ms 5 ns_per_build 146276
+ALLOC V16 grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 6100632 gc_count 41 gc_ms 25 ns_per_build 791646
+ALLOC V63 grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 6060640 gc_count 41 gc_ms 22 ns_per_build 803124
+# done, load average at end 1.86

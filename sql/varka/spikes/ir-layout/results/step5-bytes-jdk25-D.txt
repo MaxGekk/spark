@@ -1,0 +1,11 @@
+# VARKA-291 step 5, variant jdk25, mode bytes, 2026-10-07
+# jdk: openjdk version "25.0.4.1" 2026-08-18
+# pin: taskset -c 0,12,13,14,15,1,2,3; load average at start 0.40; samples 20; seconds 2;prewarm none x1
+# power: governor=performance profile=performance
+BYTES D cheap_tails-22 nodes 46 computed 1472 bytes_per_node 32.00
+BYTES D wide_int-1 nodes 228 computed 7344 bytes_per_node 32.21
+BYTES D size_ladder-100 nodes 502 computed 16064 bytes_per_node 32.00
+BYTES D size_ladder-200 nodes 1002 computed 32064 bytes_per_node 32.00
+BYTES D deep_chain-1024 nodes 2049 computed 65568 bytes_per_node 32.00
+BYTES D grown_ladder-2000 nodes 10002 computed 320064 bytes_per_node 32.00
+# done, load average at end 0.52

@@ -1,0 +1,35 @@
+# VARKA-291 step 5, variant value, mode warm, 2026-10-07
+# jdk: openjdk version "27-jep401ea3" 2026-09-15
+# pin: taskset -c 0,12,13,14,15,1,2,3; load average at start 1.33; samples 20; seconds 2;prewarm none
+# power: governor=performance profile=performance
+WARM records cheap_tails-22 nodes 46 op rebuild iteration 0 ns_per_op 458.5
+WARM records cheap_tails-22 nodes 46 op rebuild iteration 1 ns_per_op 455.5
+WARM records cheap_tails-22 nodes 46 op rebuild iteration 2 ns_per_op 455.9
+WARM records cheap_tails-22 nodes 46 op rebuild iteration 3 ns_per_op 453.9
+WARM records cheap_tails-22 nodes 46 op rebuild iteration 4 ns_per_op 457.2
+WARM records wide_int-1 nodes 228 op rebuild iteration 0 ns_per_op 5667.6
+WARM records wide_int-1 nodes 228 op rebuild iteration 1 ns_per_op 5822.9
+WARM records wide_int-1 nodes 228 op rebuild iteration 2 ns_per_op 5728.1
+WARM records wide_int-1 nodes 228 op rebuild iteration 3 ns_per_op 5734.4
+WARM records wide_int-1 nodes 228 op rebuild iteration 4 ns_per_op 5758.3
+WARM records size_ladder-100 nodes 502 op rebuild iteration 0 ns_per_op 6749.0
+WARM records size_ladder-100 nodes 502 op rebuild iteration 1 ns_per_op 6757.5
+WARM records size_ladder-100 nodes 502 op rebuild iteration 2 ns_per_op 6653.4
+WARM records size_ladder-100 nodes 502 op rebuild iteration 3 ns_per_op 6671.9
+WARM records size_ladder-100 nodes 502 op rebuild iteration 4 ns_per_op 6776.8
+WARM records size_ladder-200 nodes 1002 op rebuild iteration 0 ns_per_op 13590.5
+WARM records size_ladder-200 nodes 1002 op rebuild iteration 1 ns_per_op 13449.0
+WARM records size_ladder-200 nodes 1002 op rebuild iteration 2 ns_per_op 13226.9
+WARM records size_ladder-200 nodes 1002 op rebuild iteration 3 ns_per_op 13255.5
+WARM records size_ladder-200 nodes 1002 op rebuild iteration 4 ns_per_op 13289.0
+WARM records deep_chain-1024 nodes 2049 op rebuild iteration 0 ns_per_op 20037.1
+WARM records deep_chain-1024 nodes 2049 op rebuild iteration 1 ns_per_op 19753.2
+WARM records deep_chain-1024 nodes 2049 op rebuild iteration 2 ns_per_op 19802.1
+WARM records deep_chain-1024 nodes 2049 op rebuild iteration 3 ns_per_op 19729.9
+WARM records deep_chain-1024 nodes 2049 op rebuild iteration 4 ns_per_op 19870.9
+WARM records grown_ladder-2000 nodes 10002 op rebuild iteration 0 ns_per_op 131889.2
+WARM records grown_ladder-2000 nodes 10002 op rebuild iteration 1 ns_per_op 132935.9
+WARM records grown_ladder-2000 nodes 10002 op rebuild iteration 2 ns_per_op 129304.2
+WARM records grown_ladder-2000 nodes 10002 op rebuild iteration 3 ns_per_op 131271.5
+WARM records grown_ladder-2000 nodes 10002 op rebuild iteration 4 ns_per_op 131965.9
+# done, load average at end 1.40

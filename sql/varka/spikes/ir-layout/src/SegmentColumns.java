@@ -16,13 +16,9 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
-import java.lang.foreign.MemoryLayout;
-import java.lang.foreign.MemoryLayout.PathElement;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.StructLayout;
-import java.lang.foreign.ValueLayout;
-import java.lang.invoke.VarHandle;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,53 +26,73 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.Intervals.Facts;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.KindTable.Kind;
 
 /**
- * Layout A: a fixed 32-byte row, the row of eight ints jegg issue #92 proposes.
- *
- * <pre>
- * byte   0       4       8       12      16              24              32
- *        +-------+-------+-------+-------+---------------+---------------+
- *        | kind  |  c0   |  c1   |  c2   |      p0       |      p1       |
- *        +-------+-------+-------+-------+---------------+---------------+
- * </pre>
- * {@code kind} is the {@link KindTable} index; {@code c0} to {@code c2} are child row ids, -1 when
- * absent; {@code p0} and {@code p1} are the scalars in component order, each widened to 64 bits, or
- * for a kind with more than two the ints packed two to a long. A list is the one use of the pool:
- * {@code p0} is its offset and {@code p1} its length.
+ * Layout D: layout A's six fields as off-heap columns, one {@link MemorySegment} for each field in
+ * the arena, so the unit-stride loops that auto-vectorize over heap columns (layout C) also do
+ * here, with the lifetime, alignment and native hand-off of an arena (layout A). The same packing
+ * and the same 32 bytes a node as A and C; what differs is only where the six fields live and
+ * how they are read (a segment's {@code getAtIndex}, no {@code VarHandle}).
  */
-final class FfmRowsA extends FfmRows {
+final class SegmentColumns extends FfmRows {
 
-  private static final StructLayout ROW = MemoryLayout.structLayout(
-      ValueLayout.JAVA_INT.withName("kind"), ValueLayout.JAVA_INT.withName("c0"),
-      ValueLayout.JAVA_INT.withName("c1"), ValueLayout.JAVA_INT.withName("c2"),
-      ValueLayout.JAVA_LONG.withName("p0"), ValueLayout.JAVA_LONG.withName("p1"));
-
-  // static final, so that the JIT folds the handles into plain loads and stores.
-  private static final VarHandle KIND = ROW.varHandle(PathElement.groupElement("kind"));
-  private static final VarHandle C0 = ROW.varHandle(PathElement.groupElement("c0"));
-  private static final VarHandle C1 = ROW.varHandle(PathElement.groupElement("c1"));
-  private static final VarHandle C2 = ROW.varHandle(PathElement.groupElement("c2"));
-  private static final VarHandle P0 = ROW.varHandle(PathElement.groupElement("p0"));
-  private static final VarHandle P1 = ROW.varHandle(PathElement.groupElement("p1"));
-
-  private final MemorySegment rows;
+  private final MemorySegment kindCol;
+  private final MemorySegment c0Col;
+  private final MemorySegment c1Col;
+  private final MemorySegment c2Col;
+  private final MemorySegment p0Col;
+  private final MemorySegment p1Col;
   private final int[] slots;
   private final int mask;
 
-  FfmRowsA(int nodes, int poolIntCapacity, int poolEntryCapacity) {
+  SegmentColumns(int nodes, int poolIntCapacity, int poolEntryCapacity) {
     super(poolIntCapacity, poolEntryCapacity);
-    rows = arena.allocate(ROW.byteSize() * Math.max(1, nodes), 64);
+    int n = Math.max(1, nodes);
+    kindCol = arena.allocate(4L * n, 64);
+    c0Col = arena.allocate(4L * n, 64);
+    c1Col = arena.allocate(4L * n, 64);
+    c2Col = arena.allocate(4L * n, 64);
+    p0Col = arena.allocate(8L * n, 64);
+    p1Col = arena.allocate(8L * n, 64);
     slots = tableOf(nodes);
     mask = slots.length - 1;
   }
 
+  private static int getInt(MemorySegment column, int index) {
+    return column.getAtIndex(ValueLayout.JAVA_INT, index);
+  }
+
+  private static long getLong(MemorySegment column, int index) {
+    return column.getAtIndex(ValueLayout.JAVA_LONG, index);
+  }
+
+  private static void putInt(MemorySegment column, int index, int value) {
+    column.setAtIndex(ValueLayout.JAVA_INT, index, value);
+  }
+
+  private static void putLong(MemorySegment column, int index, long value) {
+    column.setAtIndex(ValueLayout.JAVA_LONG, index, value);
+  }
+
+  /** The column for field {@code field}: kind, c0, c1, c2 (ints), then p0, p1 (longs). */
+  MemorySegment column(int field) {
+    return switch (field) {
+      case 0 -> kindCol;
+      case 1 -> c0Col;
+      case 2 -> c1Col;
+      case 3 -> c2Col;
+      case 4 -> p0Col;
+      case 5 -> p1Col;
+      default -> throw new IllegalArgumentException("no field " + field);
+    };
+  }
+
   @Override
   String layout() {
-    return "A";
+    return "D";
   }
 
   @Override
   int rowBytes() {
-    return (int) ROW.byteSize();
+    return 4 * Integer.BYTES + 2 * Long.BYTES;
   }
 
   @Override
@@ -116,22 +132,20 @@ final class FfmRowsA extends FfmRows {
       if (id < 0) {
         break;
       }
-      long at = (long) id << 5;
-      if ((int) KIND.get(rows, at) == kind && (int) C0.get(rows, at) == c0
-          && (int) C1.get(rows, at) == c1 && (int) C2.get(rows, at) == c2
-          && (long) P0.get(rows, at) == p0 && (long) P1.get(rows, at) == p1) {
+      if (getInt(kindCol, id) == kind && getInt(c0Col, id) == c0
+          && getInt(c1Col, id) == c1 && getInt(c2Col, id) == c2
+          && getLong(p0Col, id) == p0 && getLong(p1Col, id) == p1) {
         return id;
       }
       slot = (slot + 1) & mask;
     }
     int id = count++;
-    long at = (long) id << 5;
-    KIND.set(rows, at, kind);
-    C0.set(rows, at, c0);
-    C1.set(rows, at, c1);
-    C2.set(rows, at, c2);
-    P0.set(rows, at, p0);
-    P1.set(rows, at, p1);
+    putInt(kindCol, id, kind);
+    putInt(c0Col, id, c0);
+    putInt(c1Col, id, c1);
+    putInt(c2Col, id, c2);
+    putLong(p0Col, id, p0);
+    putLong(p1Col, id, p1);
     slots[slot] = id;
     return id;
   }
@@ -143,15 +157,20 @@ final class FfmRowsA extends FfmRows {
     int[] rebuilt = new int[count];
     int n = 0;
     try (Arena tmp = Arena.ofConfined()) {
-      MemorySegment dst = tmp.allocate(ROW.byteSize() * Math.max(1, count), 64);
+      long rows = Math.max(1, count);
+      MemorySegment dkind = tmp.allocate(4L * rows, 64);
+      MemorySegment dc0 = tmp.allocate(4L * rows, 64);
+      MemorySegment dc1 = tmp.allocate(4L * rows, 64);
+      MemorySegment dc2 = tmp.allocate(4L * rows, 64);
+      MemorySegment dp0 = tmp.allocate(8L * rows, 64);
+      MemorySegment dp1 = tmp.allocate(8L * rows, 64);
       for (int id = 0; id < count; id++) {
-        long at = (long) id << 5;
-        int kind = (int) KIND.get(rows, at);
-        int c0 = remap((int) C0.get(rows, at), from, to, rebuilt);
-        int c1 = remap((int) C1.get(rows, at), from, to, rebuilt);
-        int c2 = remap((int) C2.get(rows, at), from, to, rebuilt);
-        long p0 = (long) P0.get(rows, at);
-        long p1 = (long) P1.get(rows, at);
+        int kind = getInt(kindCol, id);
+        int c0 = remap(getInt(c0Col, id), from, to, rebuilt);
+        int c1 = remap(getInt(c1Col, id), from, to, rebuilt);
+        int c2 = remap(getInt(c2Col, id), from, to, rebuilt);
+        long p0 = getLong(p0Col, id);
+        long p1 = getLong(p1Col, id);
         int slot = hashRow(kind, c0, c1, c2, p0, p1) & dmask;
         int found = -1;
         while (true) {
@@ -159,10 +178,12 @@ final class FfmRowsA extends FfmRows {
           if (e < 0) {
             break;
           }
-          long eat = (long) e << 5;
-          if ((int) KIND.get(dst, eat) == kind && (int) C0.get(dst, eat) == c0
-              && (int) C1.get(dst, eat) == c1 && (int) C2.get(dst, eat) == c2
-              && (long) P0.get(dst, eat) == p0 && (long) P1.get(dst, eat) == p1) {
+          if (getInt(dkind, e) == kind
+              && getInt(dc0, e) == c0
+              && getInt(dc1, e) == c1
+              && getInt(dc2, e) == c2
+              && getLong(dp0, e) == p0
+              && getLong(dp1, e) == p1) {
             found = e;
             break;
           }
@@ -170,13 +191,12 @@ final class FfmRowsA extends FfmRows {
         }
         if (found < 0) {
           found = n++;
-          long dat = (long) found << 5;
-          KIND.set(dst, dat, kind);
-          C0.set(dst, dat, c0);
-          C1.set(dst, dat, c1);
-          C2.set(dst, dat, c2);
-          P0.set(dst, dat, p0);
-          P1.set(dst, dat, p1);
+          putInt(dkind, found, kind);
+          putInt(dc0, found, c0);
+          putInt(dc1, found, c1);
+          putInt(dc2, found, c2);
+          putLong(dp0, found, p0);
+          putLong(dp1, found, p1);
           dslots[slot] = found;
         }
         rebuilt[id] = found;
@@ -191,25 +211,24 @@ final class FfmRowsA extends FfmRows {
     var hi = new long[count];
     long checksum = 0;
     for (int id = 0; id < count; id++) {
-      long at = (long) id << 5;
-      int kind = (int) KIND.get(rows, at);
+      int kind = getInt(kindCol, id);
       long s0 = 0;
       long s1 = 0;
       switch (RowTransfer.CATEGORY[kind]) {
-        case RowTransfer.LEAF -> s1 = (long) P1.get(rows, at);
-        case RowTransfer.IARITH -> s0 = (long) P0.get(rows, at);
+        case RowTransfer.LEAF -> s1 = getLong(p1Col, id);
+        case RowTransfer.IARITH -> s0 = getLong(p0Col, id);
         case RowTransfer.GUARD -> {
-          s0 = (long) P0.get(rows, at);
-          s1 = (long) P1.get(rows, at);
+          s0 = getLong(p0Col, id);
+          s1 = getLong(p1Col, id);
         }
         case RowTransfer.DIV -> {
-          long p0 = (long) P0.get(rows, at);
+          long p0 = getLong(p0Col, id);
           s0 = isBounded(kind) ? (int) p0 : p0;
         }
         default -> { }
       }
-      RowTransfer.apply(kind, id, (int) C0.get(rows, at), (int) C1.get(rows, at),
-          (int) C2.get(rows, at), s0, s1, lo, hi);
+      RowTransfer.apply(kind, id, getInt(c0Col, id), getInt(c1Col, id),
+          getInt(c2Col, id), s0, s1, lo, hi);
       checksum += Intervals.mix(lo[id], hi[id]);
     }
     var rootLo = new long[roots.length];
@@ -225,10 +244,9 @@ final class FfmRowsA extends FfmRows {
   VarkaIrDescription.Graph toGraph(LoadedGraph g, int[] roots) {
     var nodes = new ArrayList<VarkaIrDescription.Node>(count);
     for (int id = 0; id < count; id++) {
-      long at = (long) id << 5;
-      Kind kind = table.kind((int) KIND.get(rows, at));
-      long p0 = (long) P0.get(rows, at);
-      long p1 = (long) P1.get(rows, at);
+      Kind kind = table.kind(getInt(kindCol, id));
+      long p0 = getLong(p0Col, id);
+      long p1 = getLong(p1Col, id);
       List<String> tokens;
       if (kind.hasList()) {
         tokens = poolTokens(kind, (int) p0);
@@ -256,7 +274,7 @@ final class FfmRowsA extends FfmRows {
         }
       }
       var children = new ArrayList<Integer>();
-      int[] ids = {(int) C0.get(rows, at), (int) C1.get(rows, at), (int) C2.get(rows, at)};
+      int[] ids = {getInt(c0Col, id), getInt(c1Col, id), getInt(c2Col, id)};
       for (int c = 0; c < kind.children(); c++) {
         children.add(ids[c]);
       }

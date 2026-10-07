@@ -404,3 +404,167 @@ a node, B's size, and V63 takes 13.04. Their tables are B's, 13.27 bytes a node.
 (section 3.3) are not taken here; the nodes' children are interface-typed fields, which stay
 pointers, so the heap footprint of the value records is a measurement, not a formula.
 
+### 9.6 Step 5, the measurement, 7 October 2026
+
+Run from `bench.sh` at commit `9d823364030` plus the identity-memo arm, on the laptop at the
+performance profile, pinned to the fastest cores (`taskset -c 0,12,13,14,15,1,2,3`), JDK
+25.0.4.1 and the early-access build `27-jep401ea3+1-1`. The load average was 0.49 when the chain
+started and about 1.0 for the later runs, which is the run itself; nothing else was running. The
+files are `results/step5-*.txt`, and `results/step5-summary.txt` is `summarize.py`'s reading of
+them. Six graphs: 46, 228, 502, 1,002 and 2,049 nodes (the last a chain 1,024 deep) and the
+10,002-node ladder. Cold is a fresh JVM for each of 20 samples, a median; warm is five two-second
+iterations after three of warm-up, a minimum, whose spread was at most 1.10 in every row. No run
+failed. The value variant ran with escape analysis on, as 9.5 asked.
+
+**The records baseline decides the cold result, so there are two.** `RecordsArm.analyze` memoizes by
+the records' structural `hashCode`, which walks the whole subtree on every lookup, and the real
+`VarkaRangeAnalysis` has no memo at all, so that arm is a stand-in and not the compiler's pass. A
+second arm, `records-id`, memoizes by node identity. Both are below; the second is the fairer
+reading, and no number is quoted from one without saying which.
+
+**Bytes a node.** Records are about 24 on every graph over 500 nodes (22.95 to 27.65 on the smaller
+ones), measured with `Instrumentation.getObjectSize`. Layouts A and C are 32.00, so larger than
+records; B and V16 are 16.00; V63 is 12.00, exactly half. The value records are 32.00, larger than
+plain records by a third. The flat layouts' sizes are computed, as in 9.4.
+
+**Warm.**
+- *analyze.* Against structural-memo records the flat layouts are 3.7 to 7 times faster up to 1,002
+  nodes and 2191.41 us against 8.88 us on the chain; against `records-id` they are 2.8 to 3.7
+  times faster up to 2,049 nodes and 6 to 7 times on the ladder. A, B and C are within 10% of each
+  other, so FFM costs nothing warm: the `VarHandle`s fold.
+- *build.* A and C are 0.71 to 1.01 of records. B and the two layouts that share its packing, V16
+  and V63, are 4.75 to 6.9 times slower than records; the cause is not isolated (the packing, the
+  pool, or the `int[]` the harness allocates for each node with a wide scalar), so B's build time
+  is a finding about this implementation of B, not about 16-byte rows.
+- *intern* (hash and equality of every node). Records walk the subtree: 4947.98 us on the chain
+  against 17.05 us for A, a factor that grows with depth; on the 10,002-node ladder A and C are
+  1.0 and 0.75 of records. The value records are 0.66 to 0.79 of plain records here and no
+  different on analyze.
+
+**Cold, build and analyze together, against `records-id`.**
+- *C (plain columns):* 1.31, 2.00, 1.15, 1.01, 0.86 and 0.74 of records from the smallest graph to
+  the ladder: slower on the small ones, equal at 1,002 nodes, 1.16 and 1.35 times faster on the
+  chain and the ladder.
+- *A and B (FFM):* 2.4 to 3.2 times slower at every size. The cost is in the build (7 to 8 ms on a
+  46-node graph against 2 for records), the first use of the FFM `VarHandle`s and the arena,
+  which the warm numbers do not see.
+- *V16, V63 and the value records* are compared with the plain records on their own JDK, in the
+  summary: V16 and V63 are 0.3 to 0.6 of structural-memo records up to 2,049 nodes and 0.74 and
+  1.20 on the ladder; the value records are 0.97 to 1.05.
+- One unexplained cold number: V63's analyze on the ladder is about 19.6 ms in all 20 samples,
+  against 3.1 for V16, and warm they are equal; the cause is not established.
+
+**Predictions.**
+1. *Flat at least twice as small a node as records.* Refuted for A and C (larger), B and V16 (a
+   third smaller); only V63 reaches it, and it needs the internal API.
+2. *Within 1.3x of records at a thousand nodes or fewer.* Refuted: warm analyze is 2.8 to 7 times
+   faster, and cold the FFM layouts are 2.4 to 3.2 times slower.
+3. *FFM costs more than `int[]` only where the `VarHandle` is not folded.* Supported: A and C are
+   within 10% warm and A is 2 to 3 times C cold, before the JIT has folded anything.
+4. *Value records smaller than records by less than half, within 1.3x in time.* Refuted on size
+   (a third larger); supported on time, with a 25 to 35% win on intern.
+5. *The owner's: a flat layout beats records at every size.* Supported warm for analyze and
+   intern at every size, and for build with A and C. Not supported cold, where against
+   `records-id` C ties on small graphs and the FFM layouts lose; it holds cold only against the
+   structural-memo records.
+
+**Against the gate of section 6.2.** The cold leg (1.3 times faster on the first compile of a
+representative projection) is met by none of the JDK 25 layouts against `records-id`: C reaches
+1.35 only on the ladder and 1.16 on the chain, A and B lose. The depth leg (a factor that grows
+with depth on hash and equality) is met by every flat layout against records' structural
+`hashCode` and `equals`, which matters only where the compiler hashes or compares deep nodes, and
+the range analysis does not. V16, V63 and the value records need the internal API or the preview,
+so by 6.2 they are findings about a later JDK, not candidates.
+
+**Threats to read it by.** One machine, one JDK build of each kind; the stand-in analysis, not
+`VarkaRangeAnalysis`; the cold samples are 20; the C2 crash of 9.5 means the value arm is the
+only one measured on a build that fails under other conditions; B's build time is partly the
+harness; and the graphs are Varka's corpus, whose cold compile is a few milliseconds for the
+records, small next to a Spark task.
+
+### 9.7 Step 5, continued: more backends, warm-up, Arrow, and the direction, 7 October 2026
+
+Raised by the owner after 9.6 and measured the same day with the same pinned setup. New files under
+`results/`: `step5-coldprewarm-*`, `step5-warmrebuild-*`, `step5-alloc-*`, `step5-coldwarmup-*`,
+`step5-vector-loops.txt`, `step5-arrow-spike.txt`, and the files for layout D; `step5-summary.txt`
+has the tables.
+
+**New measures.** The rebuild is what an e-graph does after a merge: remap every row's children,
+rehash, re-intern (the harness checks it against a build of the substituted graph, on 178 real
+substitutions). Prewarmed cold pays the one-time costs first. Alloc is heap bytes and GC over
+3,000 builds. Layout D is layout A's fields as one off-heap segment for each field.
+
+**Rebuild, warm.** A, B and C are 0.45 to 0.67 of the records' reconstruction (a lower bound: records
+are not deduplicated), and within 10% of each other. V16 and V63 are no better than records.
+
+**Allocation.** At 1,002 nodes a build allocates 13,408 bytes of heap in A, 45,496 in C and 43,352
+in records; at 10,002 nodes 179,488, 499,576 and 432,152, with no garbage collection over 3,000
+builds in A, one in C and two in records. B allocates 590,560 bytes at 1,002 nodes and 5,940,640
+at 10,002 (21 collections), and V16 and V63 606,552 to 698,752 and about 6.1 million (41
+collections): the per-node scratch arrays of this harness, which is why B's build was slow. D
+allocates what A does.
+
+**Cold, with the one-time costs paid first.** A 10-node warm-up graph removes the class
+initialization (A on the 46-node graph falls from 8,156 us to 337 us) but not the interpreted phase:
+against identity-memo records C is 0.13, 0.27, 0.35 and 0.30 of their time at 46, 1,002, 2,049 and
+10,002 nodes, A is 1.11, 2.53, 2.95 and 2.26. How much warm-up the first compile needs, from
+rounds of every measure on a 502-node graph (JDK 25, median of 10, ratio over `records-id`, at
+1,002 and 10,002 nodes):
+
+- 1 round: C 0.58 and 0.47, A 1.09 and 1.35, D 0.99 and 1.29.
+- 30 rounds: C 0.95 and 1.09, A 1.21 and 1.49, D 1.29 and 1.51.
+- 300 rounds: C 1.24 and 0.78, A 1.66 and 1.50, D 1.02 and 1.44.
+- 3,000 rounds: A 0.49 and 0.56, C 0.57 and 0.73, D 0.61 and 0.78.
+
+So the cold penalty of the FFM rows is a warm-up cost, not a property of the layout: with a thorough
+start-up warm-up all three flat layouts beat the records, A by the most. Between a little and a
+lot of warm-up there is a valley where A and D are 1.2 to 1.7 times slower than records; C is not
+in it after the first round. This replaces the cold verdict of 9.6 for the case of a warmed JVM.
+
+**Layout D (off-heap columns) is slower than A and C warm.** At 1,002 nodes build is 12.86 us
+against 9.51 (A) and 9.33 (C), analyze 6.49 against 4.47 and 4.51, rebuild 18.46 against 6.69 and
+6.44; at 10,002 nodes 132.75, 65.03 and 113.33 against 97.61, 44.03 and 67.32 for A. Six segments
+cost more per access than one segment or an array, and D's rebuild allocates six arena segments.
+Its sizes and heap allocation match A. The cause of the access cost is not isolated.
+
+**Which layouts the JVM vectorizes** (`step5-vector-loops.txt`, a per-row hash of four int fields over
+65,536 rows, ns a row, C2's auto-vectorizer on, then off): heap columns 0.150 and 0.799, off-heap
+columns 0.141 and 1.018, off-heap rows 32 bytes apart 0.837 and 0.837. Unit-stride columns are
+vectorized on JDK 25 in the heap and off it, by 5 to 7 times; rows are not, in either place. The
+Vector API adds nothing over the auto-vectorizer for heap columns (0.175) and about 12% for
+off-heap columns (0.124). The deciding factor is rows against columns, not heap against off-heap.
+Most of the compiler's passes are dependency chains that no vectorizer can touch; the candidates
+are hashing every row, the rebuild's remap, and table clears.
+
+**Arrow** (`step5-arrow-spike.txt`, layout D's six columns as an Arrow 19 batch; netty 4.1 is needed
+ahead of a Spark 4.2 distribution's 4.2, whose empty buffer has no address). The IPC stream is
+2,352 bytes for the 46-node graph (1,472 raw), 33,664 for 1,002 nodes (32,064) and 328,432 for
+10,002 nodes (320,064); writing it takes 3,094 to 45,014 ns and reading it 2,188 to 8,062 ns.
+Creating a batch costs 459,370 ns the first time and 1,871 to 12,265 ns warm, against 138 to 1,395
+ns for an arena. Reading through Arrow's `IntVector.get` is about 30 times slower than raw reads
+(5,321 ns against 171 for 1,002 rows); the raw buffer wrapped as a segment is as fast as an arena.
+Arrow suits the wire and the native boundary; as the working store it needs raw-buffer access, at
+which point it is layout D on Arrow-owned memory.
+
+**The direction, from the owner, 7 October 2026.**
+1. *Layout C, heap columns, is the primary store; layout A is the alternative.* They share their
+   fields and packing, so the choice is reversible.
+2. *Keep A open without an abstraction that costs anything:* one final class owns the columns and
+   every read of a node goes through its methods; nothing outside it touches a column. Swapping to
+   A is then a rewrite of that class's body with the same signatures, with no interface, no
+   runtime selection and no bimorphic call. Define the schema once, next to the class.
+3. *Do not build now* generated accessors, a configuration switch or two implementations in main;
+   they are worth it only if A is adopted. The harness keeps A and D alive for the differential
+   check.
+4. *Arrow is the wire and the native-boundary format*, not the working store. A wire format must
+   not depend on the in-memory layout, and needs stable kind ids and a schema version, since the
+   kind index in this harness comes from sorted names.
+5. *Native offload* (a Rust or C analysis called by downcall over the columns) was discussed and
+   not measured: the break-even size, below which a downcall costs more than the Java pass, is the
+   open question.
+
+**What 9.6's gate reads as now.** The cold leg is met by C against any warm-up, and by A and D only
+after a thorough one; the warm legs (analyze 2.8 to 7 times faster, rebuild about twice, the depth
+factor on structural hashing) hold for A, B and C alike. The remaining decision is the migration
+of the IR from records to the owning class, which is the work of item 85.
+

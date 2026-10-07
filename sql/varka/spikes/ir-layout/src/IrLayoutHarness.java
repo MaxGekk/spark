@@ -48,7 +48,7 @@ public final class IrLayoutHarness {
 
   public static void main(String[] args) throws IOException {
     Path graphs = Path.of("graphs");
-    String[] layouts = {"A", "B", "C"};
+    String[] layouts = {"A", "B", "C", "D"};
     for (int i = 0; i < args.length; i++) {
       if (args[i].equals("--graphs")) {
         graphs = Path.of(args[++i]);
@@ -110,7 +110,7 @@ public final class IrLayoutHarness {
   }
 
   /** The layouts of src-ea, which only the early-access JDK compiles, register themselves. */
-  private static void registerEarlyAccessLayouts() {
+  static void registerEarlyAccessLayouts() {
     try {
       Class.forName("org.apache.spark.sql.catalyst.expressions.codegen.varka.EaLayouts");
     } catch (ClassNotFoundException e) {
@@ -132,6 +132,7 @@ public final class IrLayoutHarness {
   static void run(KindTable table, List<LoadedGraph> loaded, String[] layouts) {
     long nodes = 0;
     var seen = new TreeSet<String>();
+    int substituted = 0;
     long recordsBuild = 0;
     long recordsAnalyze = 0;
     long[] build = new long[layouts.length];
@@ -151,6 +152,10 @@ public final class IrLayoutHarness {
       t = System.nanoTime();
       Facts expected = RecordsArm.analyze(records);
       recordsAnalyze += System.nanoTime() - t;
+      if (!"value".equals(System.getProperty("ir.variant"))) {
+        require(RecordsArm.analyzeByIdentity(records).sameAs(expected), g,
+            "the identity-memo analysis differs from the structural one");
+      }
       require(expected.distinct() == g.size(), g,
           "the records hold " + expected.distinct() + " distinct nodes, the description "
               + g.size());
@@ -168,6 +173,15 @@ public final class IrLayoutHarness {
           analyze[l] += System.nanoTime() - t;
           require(facts.sameAs(expected), g, "layout " + layouts[l] + " computes " + facts
               + " where the records compute " + expected);
+          int[] swap = g.substitution();
+          if (l == 0 && swap[0] != swap[1]) {
+            substituted++;
+          }
+          int rebuilt = rows.rebuild(swap[0], swap[1]);
+          require(rebuilt == distinctRows(g.substitute(swap[0], swap[1])), g,
+              "layout " + layouts[l] + " rebuilt to " + rebuilt + " rows, not the "
+                  + distinctRows(g.substitute(swap[0], swap[1])) + " a build of the substituted"
+                  + " graph holds");
           List<VarkaVectorIR> back =
               VarkaIrDescription.rebuild(rows.toGraph(g, roots));
           require(back.equals(records), g,
@@ -183,6 +197,11 @@ public final class IrLayoutHarness {
       throw new IllegalStateException("the graphs cover " + seen.size() + " of " + table.size()
           + " kinds, so the agreement above is incomplete");
     }
+    if (layouts.length > 0) {
+      System.out.println("rebuild: " + substituted + " of " + loaded.size()
+          + " graphs have a real substitution, and every layout rebuilt each to the rows a build"
+          + " of the substituted graph holds");
+    }
     System.out.println("agreement: records and layouts " + String.join(", ", layouts)
         + " agree on every graph (distinct nodes, interval facts, round trip)");
     for (int l = 0; l < layouts.length; l++) {
@@ -197,6 +216,14 @@ public final class IrLayoutHarness {
           analyze[l] / 1_000_000));
     }
     System.out.println("one cold pass, ms (not a measurement): " + cold);
+  }
+
+  /** The rows a hash-consed build of {@code g} holds, by layout C, which agreement has checked. */
+  private static int distinctRows(LoadedGraph g) {
+    try (FfmRows rows = FfmRows.create("C", g.size(), g.listInts(), g.listNodes())) {
+      rows.build(g);
+      return rows.count;
+    }
   }
 
   private static void require(boolean ok, LoadedGraph g, String message) {

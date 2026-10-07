@@ -158,6 +158,45 @@ final class RowsV63 extends FfmRows {
   }
 
   @Override
+  int rebuild(int from, int to) {
+    int[] dslots = tableOf(count);
+    int dmask = dslots.length - 1;
+    int[] rebuilt = new int[count];
+    Row[] dst = (Row[]) ValueClass.newNullRestrictedAtomicArray(
+        Row.class, Math.max(1, count), new Row(0L));
+    int[] daux = new int[Math.max(1, count)];
+    int n = 0;
+    for (int id = 0; id < count; id++) {
+      int c0 = remap(child(id, 0), from, to, rebuilt);
+      int c1 = remap(child(id, 1), from, to, rebuilt);
+      int c2 = remap(child(id, 2), from, to, rebuilt);
+      long word = word(kindOf(id), c0, c1, c2);
+      int payload = aux[id];
+      int slot = hashRow((int) word, (int) (word >>> 32), payload, 0, 0, 0) & dmask;
+      int found = -1;
+      while (true) {
+        int e = dslots[slot];
+        if (e < 0) {
+          break;
+        }
+        if (dst[e].word() == word && daux[e] == payload) {
+          found = e;
+          break;
+        }
+        slot = (slot + 1) & dmask;
+      }
+      if (found < 0) {
+        found = n++;
+        dst[found] = new Row(word);
+        daux[found] = payload;
+        dslots[slot] = found;
+      }
+      rebuilt[id] = found;
+    }
+    return n;
+  }
+
+  @Override
   Facts analyze(int[] roots) {
     var lo = new long[count];
     var hi = new long[count];

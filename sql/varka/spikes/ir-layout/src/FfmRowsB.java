@@ -22,6 +22,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.StructLayout;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.VarHandle;
+import java.lang.foreign.Arena;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -182,6 +183,50 @@ final class FfmRowsB extends FfmRows {
   private long poolLong(int offset) {
     return (pool.getAtIndex(ValueLayout.JAVA_INT, offset) & LOW32)
         | ((long) pool.getAtIndex(ValueLayout.JAVA_INT, offset + 1) << 32);
+  }
+
+  @Override
+  int rebuild(int from, int to) {
+    int[] dslots = tableOf(count);
+    int dmask = dslots.length - 1;
+    int[] rebuilt = new int[count];
+    int n = 0;
+    try (Arena tmp = Arena.ofConfined()) {
+      MemorySegment dst = tmp.allocate(ROW.byteSize() * Math.max(1, count), 64);
+      for (int id = 0; id < count; id++) {
+        long at = (long) id << 4;
+        int head = (int) HEAD.get(rows, at);
+        int c0 = remap((int) C0.get(rows, at), from, to, rebuilt);
+        int c1 = remap((int) C1.get(rows, at), from, to, rebuilt);
+        int c2 = remap((int) C2.get(rows, at), from, to, rebuilt);
+        int slot = hashRow(head, c0, c1, c2, 0, 0) & dmask;
+        int found = -1;
+        while (true) {
+          int e = dslots[slot];
+          if (e < 0) {
+            break;
+          }
+          long eat = (long) e << 4;
+          if ((int) HEAD.get(dst, eat) == head && (int) C0.get(dst, eat) == c0
+              && (int) C1.get(dst, eat) == c1 && (int) C2.get(dst, eat) == c2) {
+            found = e;
+            break;
+          }
+          slot = (slot + 1) & dmask;
+        }
+        if (found < 0) {
+          found = n++;
+          long dat = (long) found << 4;
+          HEAD.set(dst, dat, head);
+          C0.set(dst, dat, c0);
+          C1.set(dst, dat, c1);
+          C2.set(dst, dat, c2);
+          dslots[slot] = found;
+        }
+        rebuilt[id] = found;
+      }
+    }
+    return n;
   }
 
   @Override

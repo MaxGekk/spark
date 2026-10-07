@@ -36,6 +36,42 @@ record LoadedGraph(
     int[] roots,
     VarkaIrDescription.Graph source) {
 
+  /**
+   * The substitution the rebuild measure applies, as {from, to}: the last leaf that has an earlier
+   * leaf of the same kind and lane, and that earlier leaf, so that every node over {@code from}
+   * can be rebuilt over {@code to} and stay valid. {0, 0}, a rebuild that changes nothing, when
+   * the graph has no such pair.
+   */
+  int[] substitution() {
+    for (int from = size - 1; from > 0; from--) {
+      if (children[from].length != 0 || scalars[from].length < 2) {
+        continue;
+      }
+      for (int to = 0; to < from; to++) {
+        if (children[to].length == 0 && kind[to] == kind[from] && scalars[to].length >= 2
+            && scalars[to][1] == scalars[from][1]) {
+          return new int[] {from, to};
+        }
+      }
+    }
+    return new int[] {0, 0};
+  }
+
+  /** This graph with every reference to {@code from} replaced by one to {@code to}. */
+  LoadedGraph substitute(int from, int to) {
+    var mapped = new int[size][];
+    for (int i = 0; i < size; i++) {
+      mapped[i] = children[i].clone();
+      for (int c = 0; c < mapped[i].length; c++) {
+        if (mapped[i][c] == from) {
+          mapped[i][c] = to;
+        }
+      }
+    }
+    return new LoadedGraph(name, numInputs, numLiterals, size, kind, mapped, scalars, lists, roots,
+        source);
+  }
+
   /** How many ints a pool that holds only this graph's lists needs, layout A's. */
   int listInts() {
     int total = 0;

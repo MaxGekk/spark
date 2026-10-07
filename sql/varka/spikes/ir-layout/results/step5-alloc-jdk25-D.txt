@@ -1,0 +1,11 @@
+# VARKA-291 step 5, variant jdk25, mode alloc, 2026-10-07
+# jdk: openjdk version "25.0.4.1" 2026-08-18
+# pin: taskset -c 0,12,13,14,15,1,2,3; load average at start 1.09; samples 20; seconds 2;prewarm none x1
+# power: governor=performance profile=performance
+ALLOC D cheap_tails-22 nodes 46 builds 3000 heap_bytes_per_build 1648 gc_count 0 gc_ms 0 ns_per_build 1352
+ALLOC D wide_int-1 nodes 228 builds 3000 heap_bytes_per_build 4216 gc_count 0 gc_ms 0 ns_per_build 4011
+ALLOC D size_ladder-100 nodes 502 builds 3000 heap_bytes_per_build 7368 gc_count 1 gc_ms 1 ns_per_build 8089
+ALLOC D size_ladder-200 nodes 1002 builds 3000 heap_bytes_per_build 13864 gc_count 0 gc_ms 0 ns_per_build 13396
+ALLOC D deep_chain-1024 nodes 2049 builds 3000 heap_bytes_per_build 41840 gc_count 0 gc_ms 0 ns_per_build 32395
+ALLOC D grown_ladder-2000 nodes 10002 builds 3000 heap_bytes_per_build 179944 gc_count 0 gc_ms 0 ns_per_build 138807
+# done, load average at end 1.08
