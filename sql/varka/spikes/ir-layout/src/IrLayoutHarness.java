@@ -110,7 +110,7 @@ public final class IrLayoutHarness {
   }
 
   /** The layouts of src-ea, which only the early-access JDK compiles, register themselves. */
-  private static void registerEarlyAccessLayouts() {
+  static void registerEarlyAccessLayouts() {
     try {
       Class.forName("org.apache.spark.sql.catalyst.expressions.codegen.varka.EaLayouts");
     } catch (ClassNotFoundException e) {

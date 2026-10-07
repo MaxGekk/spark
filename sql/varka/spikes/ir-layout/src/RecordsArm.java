@@ -81,10 +81,20 @@ final class RecordsArm {
 
   /** The graph's outputs as records, built bottom-up by direct constructors. */
   static List<VarkaVectorIR> build(LoadedGraph g) {
+    return roots(g, buildAll(g));
+  }
+
+  /** Every node of the graph, one record for each description line, in description order. */
+  static VarkaVectorIR[] buildAll(LoadedGraph g) {
     var nodes = new VarkaVectorIR[g.size()];
     for (int i = 0; i < g.size(); i++) {
       nodes[i] = make(g, i, nodes);
     }
+    return nodes;
+  }
+
+  /** The graph's outputs among {@code nodes}. */
+  static List<VarkaVectorIR> roots(LoadedGraph g, VarkaVectorIR[] nodes) {
     var roots = new ArrayList<VarkaVectorIR>(g.roots().length);
     for (int root : g.roots()) {
       roots.add(nodes[root]);
