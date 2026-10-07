@@ -895,3 +895,24 @@ each row still pays a real call per refused method, with no optimisation across 
   grouping default is decided on the runner's reading, and with the margin the fit derives,
   never at the budget's edge. `predictGrouping` ships with `planSize` for this reason and
   neither alone (`VARKA-236.md` 9.3).
+
+## C2 vectorizes unit-stride columns in the heap and off it, and never rows 32 bytes apart
+
+A per-row hash of four int fields over 65,536 rows, on JDK 25, with the auto-vectorizer on and
+then off (`-XX:-UseSuperWord`): heap columns 0.150 and 0.799 ns a row, off-heap columns (one
+`MemorySegment` a field) 0.141 and 1.018, rows 32 bytes apart in one segment 0.837 and 0.837. The
+segment loops are vectorized as well as the array ones, so the old rule that arrays vectorize and
+segments do not no longer holds for unit-stride access; what decides it is rows against columns.
+The Vector API adds nothing for heap columns and about 12% for off-heap ones. Most passes over an
+IR are dependency chains no vectorizer touches; the candidates are hashing every row and the
+rebuild's remap (`VARKA-291.md` 9.7, `spikes/ir-layout/vector-loops.sh`).
+
+## Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle
+
+On `27-jep401ea3+1-1`, the real IR compiled with `value` on its 37 records crashes the JVM with a
+`SIGSEGV` in `ConnectionGraph::optimize_ideal_graph` once the run is long enough for C2 (the
+full corpus; the 321 small committed graphs did not, until the largest was added). The method
+being compiled is always a `LambdaForm$MH::invoke`; `-XX:-DoEscapeAnalysis` and C1 only avoid it,
+and the plain records on the same JDK do not crash. Value types lean on escape analysis, so
+measuring them with it off understates them: keep reflective code out of the measured JVM
+(`VARKA-291.md` 9.5).

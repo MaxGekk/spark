@@ -39,6 +39,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [An arm named for a form must set that form, not read it from the defaults](sql/varka/skills/benchmarking.md#an-arm-named-for-a-form-must-set-that-form-not-read-it-from-the-defaults)
 * [A drawing of an emitted class is a measurement at a commit, and the timing beside it has one too](sql/varka/skills/benchmarking.md#a-drawing-of-an-emitted-class-is-a-measurement-at-a-commit-and-the-timing-beside-it-has-one-too)
 * [A full-load night flips the power profile, and a regeneration after it measures the profile](sql/varka/skills/benchmarking.md#a-full-load-night-flips-the-power-profile-and-a-regeneration-after-it-measures-the-profile)
+* [A cold comparison prices two things, and a baseline that hashes its subtree flatters whatever replaces it](sql/varka/skills/benchmarking.md#a-cold-comparison-prices-two-things-and-a-baseline-that-hashes-its-subtree-flatters-whatever-replaces-it)
 
 #### [Build and environment](sql/varka/skills/build-and-environment.md)
 * [Classpath Shadowing (the stub trap)](sql/varka/skills/build-and-environment.md#classpath-shadowing-the-stub-trap)
@@ -88,6 +89,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A cost read off one node alone over-prices a wide group; fit it over groups of every width](sql/varka/skills/emitter-and-ir.md#a-cost-read-off-one-node-alone-over-prices-a-wide-group-fit-it-over-groups-of-every-width)
 * [Measure what a method spends its bytes on before designing a split of it](sql/varka/skills/emitter-and-ir.md#measure-what-a-method-spends-its-bytes-on-before-designing-a-split-of-it)
 * [An exact search that replaces a heuristic should keep the heuristic's answer where it is already best](sql/varka/skills/emitter-and-ir.md#an-exact-search-that-replaces-a-heuristic-should-keep-the-heuristics-answer-where-it-is-already-best)
+* [The IR's storage: flat columns behind one class, FFM rows as the alternative, Arrow at the edges](sql/varka/skills/emitter-and-ir.md#the-irs-storage-flat-columns-behind-one-class-ffm-rows-as-the-alternative-arrow-at-the-edges)
 
 #### [Testing and debugging](sql/varka/skills/testing-and-debugging.md)
 * [Buffer-Reuse Aliasing (UnsafeProjection)](sql/varka/skills/testing-and-debugging.md#buffer-reuse-aliasing-unsafeprojection)
@@ -140,6 +142,8 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A call-site budget keeps wide groups under C1, and a narrow heavy group runs under C2 alone](sql/varka/skills/the-jit.md#a-call-site-budget-keeps-wide-groups-under-c1-and-a-narrow-heavy-group-runs-under-c2-alone)
 * [Split methods compile, but C2 stops inlining their calls at the caller's budget](sql/varka/skills/the-jit.md#split-methods-compile-but-c2-stops-inlining-their-calls-at-the-callers-budget)
 * [A method filled to the byte budget by prediction cost thirteen times its neighbours on a four-core runner, and a margin is what bought it back](sql/varka/skills/the-jit.md#a-method-filled-to-the-byte-budget-by-prediction-cost-thirteen-times-its-neighbours-on-a-four-core-runner-and-a-margin-is-what-bought-it-back)
+* [C2 vectorizes unit-stride columns in the heap and off it, and never rows 32 bytes apart](sql/varka/skills/the-jit.md#c2-vectorizes-unit-stride-columns-in-the-heap-and-off-it-and-never-rows-32-bytes-apart)
+* [Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle](sql/varka/skills/the-jit.md#value-records-crash-c2s-escape-analysis-on-the-early-access-valhalla-build-and-the-crash-is-in-a-method-handle)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)

@@ -880,3 +880,16 @@ and hidden the real changes in the noise of equal-cost reshuffles.
 The same holds for any exact replacement of a heuristic here - output reordering is the next
 one: order ties by what the heuristic would do, and test that the two agree where the heuristic
 is optimal.
+
+## The IR's storage: flat columns behind one class, FFM rows as the alternative, Arrow at the edges
+
+Settled by `VARKA-291.md` (7 October 2026), not to be re-litigated without a new reason. Flat
+rows are not smaller than records (a record is about 24 bytes, rows 32 or 16) and the collector
+is not the payoff; the payoff is analysis 2.8 to 7 times faster than an identity-memoized records
+pass, a rebuild about twice as fast, and structural hash and equality that no longer walk a
+subtree. `int[]` columns are the primary store; FFM rows match them warm and pay a cold penalty a
+start-up warm-up removes; off-heap columns are slower than both; value records are larger than
+records and need the preview; Arrow is a good wire image (1.03 to 1.05 times the raw bytes) and a
+slow working store (its accessor is about 30 times raw reads). One final class owns the columns, so
+that swapping to A rewrites its body and nothing else; an interface over per-field access is
+exactly what would add the cost the benchmarks showed is absent.

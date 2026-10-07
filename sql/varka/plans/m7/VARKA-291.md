@@ -494,8 +494,8 @@ rehash, re-intern (the harness checks it against a build of the substituted grap
 substitutions). Prewarmed cold pays the one-time costs first. Alloc is heap bytes and GC over
 3,000 builds. Layout D is layout A's fields as one off-heap segment for each field.
 
-**Rebuild, warm.** A, B and C are 0.45 to 0.67 of the records' reconstruction (a lower bound: records
-are not deduplicated), and within 10% of each other. V16 and V63 are no better than records.
+**Rebuild, warm.** A, B and C are 0.45 to 0.67 of the records' reconstruction (a lower bound:
+records are not deduplicated), and within 10% of each other. V16 and V63 are no better than records.
 
 **Allocation.** At 1,002 nodes a build allocates 13,408 bytes of heap in A, 45,496 in C and 43,352
 in records; at 10,002 nodes 179,488, 499,576 and 432,152, with no garbage collection over 3,000
@@ -527,14 +527,14 @@ against 9.51 (A) and 9.33 (C), analyze 6.49 against 4.47 and 4.51, rebuild 18.46
 cost more per access than one segment or an array, and D's rebuild allocates six arena segments.
 Its sizes and heap allocation match A. The cause of the access cost is not isolated.
 
-**Which layouts the JVM vectorizes** (`step5-vector-loops.txt`, a per-row hash of four int fields over
-65,536 rows, ns a row, C2's auto-vectorizer on, then off): heap columns 0.150 and 0.799, off-heap
-columns 0.141 and 1.018, off-heap rows 32 bytes apart 0.837 and 0.837. Unit-stride columns are
-vectorized on JDK 25 in the heap and off it, by 5 to 7 times; rows are not, in either place. The
-Vector API adds nothing over the auto-vectorizer for heap columns (0.175) and about 12% for
-off-heap columns (0.124). The deciding factor is rows against columns, not heap against off-heap.
-Most of the compiler's passes are dependency chains that no vectorizer can touch; the candidates
-are hashing every row, the rebuild's remap, and table clears.
+**Which layouts the JVM vectorizes** (`step5-vector-loops.txt`, a per-row hash of four int fields
+over 65,536 rows, ns a row, C2's auto-vectorizer on, then off): heap columns 0.150 and 0.799,
+off-heap columns 0.141 and 1.018, off-heap rows 32 bytes apart 0.837 and 0.837. Unit-stride columns
+are vectorized on JDK 25 in the heap and off it, by 5 to 7 times; rows are not, in either place. The
+Vector API adds nothing over the auto-vectorizer for heap columns (0.175) and about 12% for off-heap
+columns (0.124). The deciding factor is rows against columns, not heap against off-heap. Most of the
+compiler's passes are dependency chains that no vectorizer can touch; the candidates are hashing
+every row, the rebuild's remap, and table clears.
 
 **Arrow** (`step5-arrow-spike.txt`, layout D's six columns as an Arrow 19 batch; netty 4.1 is needed
 ahead of a Spark 4.2 distribution's 4.2, whose empty buffer has no address). The IPC stream is
@@ -567,4 +567,34 @@ which point it is layout D on Arrow-owned memory.
 after a thorough one; the warm legs (analyze 2.8 to 7 times faster, rebuild about twice, the depth
 factor on structural hashing) hold for A, B and C alike. The remaining decision is the migration
 of the IR from records to the owning class, which is the work of item 85.
+
+### 9.8 Step 6, the verdict, 7 October 2026
+
+**By the gate of 6.2.** Of the layouts that need nothing beyond JDK 25, plain `int[]` columns (C)
+pass the cold leg, a 1.3 times win on the first compile, at every warm-up tried, and A, B and D
+pass it after a thorough warm-up (9.7). The depth leg, a factor that grows with depth on hash and
+equality, holds against records' structural `hashCode` and `equals` for every flat layout. Warm,
+analysis is 2.8 to 7 times faster than identity-memo records and the rebuild about twice as fast.
+The V layouts and the value records need the internal API or the preview and are findings about a
+later JDK, not candidates. The sealed `switch` is what is given up.
+
+**What is decided.** Layout C is the store, behind one final class that owns the columns; layout A
+is the alternative, reached by rewriting that class's body (9.7, the owner's direction). Arrow is
+the wire and the native-boundary format and not the working store. Layout B is not a candidate:
+its slow build is mostly this harness's allocation (9.7), but nothing measured favours it.
+
+**What is not decided, and is the owner's.**
+1. *Whose schema the rows are*: jegg's, generic over opcode, payload and child ids, or Varka's.
+   Nothing measured separates them: the rows measured are Varka's (a kind, three children, packed
+   scalars), which is already an e-graph row. Not filed as a jegg issue, as asked.
+2. *Whether rows 214 to 216 build nodes through factory methods.* It costs the ports nothing and
+   keeps the representation free to change, since a change under about seventy `new` expressions
+   would otherwise be written twice. Recommended; rows 214 to 216 stand as written until it is
+   decided.
+3. *Native offload* is unmeasured; the break-even size is the open question, and no spike is
+   queued.
+
+**What this is not.** The stand-in analysis is not `VarkaRangeAnalysis`, which has no memo; the
+migration of the IR from records to the owning class is item 85's work in milestone 8 and is not
+started or scheduled here, and no row is added for it.
 
