@@ -763,6 +763,12 @@ lookup had stopped finding the figures when the plans moved into milestone folde
 beside the plans directory too; the rendered text differs from what was live in those two places
 only.
 
+### 16.2 Shared on LinkedIn, 7 October 2026
+
+The owner posted it at https://lnkd.in/p/e3JkxgwS once the refreshed page (16.1) was live: the
+site's commit is `48e517d` in `vecbricks/vecbricks.github.io`, rendered from `m6/POST_GIVEUPS.md`
+at `6925373b7c1`.
+
 ## 17. The laptop runs, pinned and repeated, 2 October 2026
 
 Section 13.6's laptop runs, and 13.8's interpreter run, were not pinned: `build/sbt runMain`
