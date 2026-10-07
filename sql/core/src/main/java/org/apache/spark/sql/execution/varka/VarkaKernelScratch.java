@@ -69,6 +69,11 @@ public final class VarkaKernelScratch {
     return kernelScratch.memoryAddress();
   }
 
+  /** The buffer {@link #kernelScratchAddress} last returned the address of, or null. */
+  public ArrowBuf kernelScratchBuffer() {
+    return kernelScratch;
+  }
+
   /** Makes derived input {@code i}'s buffers hold {@code len} rows. */
   public void ensureDerived(int i, int len) {
     if (derivedData == null) {

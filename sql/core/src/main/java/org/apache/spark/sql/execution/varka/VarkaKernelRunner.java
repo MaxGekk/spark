@@ -27,6 +27,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaAllocationSa
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeEntry;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.WeekdayLeaf;
@@ -165,10 +167,20 @@ public final class VarkaKernelRunner {
         srcData[i] = v.getDataBuffer().memoryAddress();
         srcValidity[i] = nullCount == len ? 0L : v.getValidityBuffer().memoryAddress();
         srcNullCount[i] = nullCount;
+        if (VarkaMemorySanitizer.ENABLED) {
+          VarkaMemorySanitizer.register("input data", i, v.getDataBuffer());
+          if (nullCount != len) {
+            VarkaMemorySanitizer.register("input validity", i, v.getValidityBuffer());
+          }
+        }
       } else {
         scratch.ensureDerived(i, len);
         ArrowBuf data = scratch.derivedData(i);
         ArrowBuf validity = scratch.derivedValidity(i);
+        if (VarkaMemorySanitizer.ENABLED) {
+          VarkaMemorySanitizer.register("derived data", i, data);
+          VarkaMemorySanitizer.register("derived validity", i, validity);
+        }
         // No default: a derived kind added to the enum is a compile error here, not a silent
         // trip down the weekday path.
         int nulls = switch (kind) {
@@ -204,11 +216,12 @@ public final class VarkaKernelRunner {
 
   /**
    * Invokes the emitted loop, marking any catchable throw as {@link VarkaKernelFailure} so the
-   * exec nodes' catch can tell a genuine kernel error from a failure in the per-row machinery that
-   * shares the same try (VARKA-21 review). A fatal error passes unmarked. A non-zero status means
-   * the kernel met a value its lowering is not defined over and declined the batch: the outputs it
-   * wrote are not answers, and the batch takes the caller's fallback path, signalled by a throw
-   * because that is the one path every caller already routes to the fallback.
+   * exec nodes' catch can tell a genuine kernel error from a failure in the per-row machinery
+   * that shares the same try (VARKA-21 review). A fatal error, and a memory violation of the
+   * sanitizer, pass unmarked. A non-zero status means the kernel met a value its lowering is not
+   * defined over and declined the batch: the outputs it wrote are not answers, and the batch
+   * takes the caller's fallback path, signalled by a throw because that is the one path every
+   * caller already routes to the fallback.
    */
   public void invoke(int len) {
     boolean sampled = accounting.sampleDue(hooks.allocationSchedule());
@@ -216,6 +229,9 @@ public final class VarkaKernelRunner {
     // Grown outside the try below, as the derived inputs' buffers are: an allocator's failure is
     // the per-batch machinery's, not the kernel's, and must not be marked as the kernel's.
     long scratchAddress = scratch.kernelScratchAddress(scratchBytesPerRow, len);
+    if (VarkaMemorySanitizer.ENABLED && scratchAddress != 0L) {
+      VarkaMemorySanitizer.register("kernel scratch", 0, scratch.kernelScratchBuffer());
+    }
     int status;
     try {
       if (hooks.failKernel()) {
@@ -255,6 +271,9 @@ public final class VarkaKernelRunner {
    * raises.
    */
   public static boolean isCatchable(Throwable e) {
-    return scala.util.control.NonFatal.apply(e) || e instanceof LinkageError;
+    // A memory violation is the sanitizer's finding, never a kernel failure: falling back on it
+    // would let the row engine answer for a kernel that read outside its buffers.
+    return !(e instanceof VarkaMemoryViolation)
+        && (scala.util.control.NonFatal.apply(e) || e instanceof LinkageError);
   }
 }

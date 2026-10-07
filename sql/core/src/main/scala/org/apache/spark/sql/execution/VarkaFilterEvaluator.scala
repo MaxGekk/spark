@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, UnsafeP
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection,
   VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{SelectionVectorOps,
-  VarkaEmitOptions, VarkaSegments, VarkaSelectionBitmap}
+  VarkaEmitOptions, VarkaMemorySanitizer, VarkaSegments, VarkaSelectionBitmap}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.varka.VarkaBatchLedger
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -135,34 +135,44 @@ private[sql] class VarkaFilterEvaluator(
   def filterMask(input: ColumnarBatch): VarkaSelection = {
     val len = input.numRows()
     val runner = fusedRunner.get
-    runner.fill(input, len)
-    // One bitmap per output, whole words each, output 0's first. A mask output's data slot is
-    // unused by contract (the emitted body never touches it); its validity slot receives its
-    // selection bitmap.
-    val predicate = compiled.get
-    val outputs = predicate.fused.outputs.size
-    val stride = ((len + 63) / 64) * 8L
-    val buf = maskBuffer(stride * outputs)
-    for (o <- 0 until outputs) {
-      runner.dstData(o) = 0L
-      runner.dstValidity(o) = buf.memoryAddress() + o * stride
-    }
-    runner.invoke(len)
-    val base = VarkaSegments.map(buf.memoryAddress(), stride * outputs)
-    if (outputs > 1) {
-      // A split predicate (see `CompiledVarkaPredicate.clauses`): each clause's partial roots
-      // OR into its first bitmap, and the clauses AND into output 0's, which the first clause
-      // starts with.
-      def bitmap(o: Int): MemorySegment = base.asSlice(o * stride, stride)
-      predicate.clauses.foreach { clause =>
-        clause.tail.foreach(o => VarkaSelectionBitmap.orInto(bitmap(clause.head), bitmap(o), len))
+    // The memory sanitizer's window (VARKA-263): the bitmaps' buffer is registered below, and the
+    // mapping of it after the kernel runs is checked against its real capacity.
+    VarkaMemorySanitizer.begin()
+    try {
+      runner.fill(input, len)
+      // One bitmap per output, whole words each, output 0's first. A mask output's data slot is
+      // unused by contract (the emitted body never touches it); its validity slot receives its
+      // selection bitmap.
+      val predicate = compiled.get
+      val outputs = predicate.fused.outputs.size
+      val stride = ((len + 63) / 64) * 8L
+      val buf = maskBuffer(stride * outputs)
+      if (VarkaMemorySanitizer.ENABLED) {
+        VarkaMemorySanitizer.register("selection bitmaps", 0, buf)
       }
-      predicate.clauses.tail.foreach { clause =>
-        VarkaSelectionBitmap.andInto(bitmap(0), bitmap(clause.head), len)
+      for (o <- 0 until outputs) {
+        runner.dstData(o) = 0L
+        runner.dstValidity(o) = buf.memoryAddress() + o * stride
       }
+      runner.invoke(len)
+      val base = VarkaSegments.map(buf.memoryAddress(), stride * outputs)
+      if (outputs > 1) {
+        // A split predicate (see `CompiledVarkaPredicate.clauses`): each clause's partial roots
+        // OR into its first bitmap, and the clauses AND into output 0's, which the first clause
+        // starts with.
+        def bitmap(o: Int): MemorySegment = base.asSlice(o * stride, stride)
+        predicate.clauses.foreach { clause =>
+          clause.tail.foreach(o => VarkaSelectionBitmap.orInto(bitmap(clause.head), bitmap(o), len))
+        }
+        predicate.clauses.tail.foreach { clause =>
+          VarkaSelectionBitmap.andInto(bitmap(0), bitmap(clause.head), len)
+        }
+      }
+      val mask = base.asSlice(0, (len + 7) / 8)
+      VarkaSelection(mask, VarkaSelectionBitmap.countSet(mask, len))
+    } finally {
+      VarkaMemorySanitizer.end()
     }
-    val mask = base.asSlice(0, (len + 7) / 8)
-    VarkaSelection(mask, VarkaSelectionBitmap.countSet(mask, len))
   }
 
   // The generic-column compaction machinery, rebuilt only when the set of generic positions
@@ -314,17 +324,31 @@ private[sql] class VarkaFilterEvaluator(
     owned += wrapped
     if (count > 0) {
       val hasNulls = src.getNullCount() > 0
-      SelectionVectorOps.compactInts(
-        src.getDataBuffer().memoryAddress(),
-        if (hasNulls) src.getValidityBuffer().memoryAddress() else 0L,
-        hasNulls,
-        selection.mask,
-        len,
-        count,
-        dst.getDataBuffer().memoryAddress(),
-        dst.getDataBuffer().capacity(),
-        dst.getValidityBuffer().memoryAddress(),
-        dst.getValidityBuffer().capacity())
+      // The memory sanitizer's window for the compaction (VARKA-263), over its own four buffers.
+      VarkaMemorySanitizer.begin()
+      try {
+        if (VarkaMemorySanitizer.ENABLED) {
+          VarkaMemorySanitizer.register("compaction source data", 0, src.getDataBuffer())
+          if (hasNulls) {
+            VarkaMemorySanitizer.register("compaction source validity", 0, src.getValidityBuffer())
+          }
+          VarkaMemorySanitizer.register("compaction output data", 0, dst.getDataBuffer())
+          VarkaMemorySanitizer.register("compaction output validity", 0, dst.getValidityBuffer())
+        }
+        SelectionVectorOps.compactInts(
+          src.getDataBuffer().memoryAddress(),
+          if (hasNulls) src.getValidityBuffer().memoryAddress() else 0L,
+          hasNulls,
+          selection.mask,
+          len,
+          count,
+          dst.getDataBuffer().memoryAddress(),
+          dst.getDataBuffer().capacity(),
+          dst.getValidityBuffer().memoryAddress(),
+          dst.getValidityBuffer().capacity())
+      } finally {
+        VarkaMemorySanitizer.end()
+      }
     }
     dst.setValueCount(count)
     wrapped
