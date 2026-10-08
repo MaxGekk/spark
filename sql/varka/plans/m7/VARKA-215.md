@@ -135,8 +135,11 @@ it would move every row of a benchmark this task did not change (214 9).
 1. **Evaluation order.** A condition compiled early changes the input slot order or a decline
    text. The emitted bytes show the first and the decline comparison the second.
 2. **`CASE WHEN` stops at the first decline** in a careless port, where the Scala compiles every
-   branch. Covered by a decline text that depends on which branch noted first; the compiler suite
-   has cases with a declining branch in each position.
+   branch. *Correction, made in review:* this is not observable and no test can catch it. The
+   first decline note wins whichever branch compiles later, a declined entry's input and literal
+   tables are rolled back by the caller, and the lane check, whose note does depend on the order,
+   runs only when every branch compiled. The port compiles every branch to match the Scala
+   exactly, and `emitted_bytes.json` shows any slot-order change in a shape that fuses.
 3. **A class the coverage scan no longer finds**, dropping a Catalyst class from the published
    coverage without a failing test. The byte-identity of `coverage.json` catches it.
 4. **`rangeSet`'s merge**, the one place with real arithmetic: sorting by lower bound must stay
@@ -164,43 +167,67 @@ to 9% faster, growing with the output count, and the 128-bit file moved up to 10
 of the same tree. The cause is not the port: the benchmark never calls the compiler, which is also
 what undid 214's reading of the same rows (`VARKA-214.md` 9.1), where they moved the other way.
 
-**The measurement that does reach it.** `VarkaCompileBenchmark` (`sql/catalyst/benchmarks`,
-committed for the final form) times one `compile` or `compilePredicate` call per shape. Median of
-the runs, master against the final port, in nanoseconds a call, the same at both widths within 3%:
+**The measurement that does reach it.** `VarkaCompileBenchmark` times one `compile` or
+`compilePredicate` call per shape. Its results are committed twice, both generated on the idle
+laptop within minutes of each other: `VarkaCompileBenchmark-jdk25-master-results.txt` for master
+at `fe857dc6d4a`, and `VarkaCompileBenchmark-jdk25-results.txt` for this port, each with its
+128-bit companion and provenance. The 256-bit files, in nanoseconds a call:
 
 | shape | master | port | less time by |
 |---|---:|---:|---:|
-| calendar projection of six | 12293 | 12427 | within noise |
-| TIME projection of three | 10225 | 10035 | within noise |
-| conditionals (IF, coalesce, greatest, a six-branch CASE WHEN) | 23833 | 23598 | within noise |
-| a projection of sixty mixed outputs | 553185 | 544301 | within noise |
-| range, IS NOT NULL and an int comparison | 4319 | 3920 | 9% |
-| IN over eight dates | 2909 | 2490 | 14% |
-| a set of three date ranges | 3060 | 2210 | 28% |
-| NOT, OR and IS NULL over two dates | 2329 | 2140 | 8% |
+| calendar projection of six | 12389 | 12334 | within noise |
+| TIME projection of three | 10086 | 10117 | within noise |
+| conditionals (IF, coalesce, greatest, a six-branch CASE WHEN) | 25972 | 23374 | see below |
+| a projection of sixty mixed outputs | 563887 | 563576 | within noise |
+| range, IS NOT NULL and an int comparison | 4301 | 3987 | 7% |
+| IN over eight dates | 2823 | 2486 | 12% |
+| a set of three date ranges | 2831 | 2196 | 22% |
+| NOT, OR and IS NULL over two dates | 2306 | 2164 | 6% |
 
-Two runs of master differ by up to 3% on a row. The projections, which reach the arms only, do
-not move; the predicates, which reach `compileCond` and `rangeSet`, compile faster.
+The conditionals row of the master file is an outlier: it is 10% above the five other runs of
+master made that day, so it is not read as a speed-up. Every difference here is under 1.3 times,
+so the table is not the evidence alone: the minimum over six runs of master and three of the port
+(the repo's rule for such ratios) gives the same picture at both widths, the projections within
+3% of each other and the four predicate shapes taking 4 to 28% less time, the set of ranges the
+most. The projections reach the arms only and do not move; the predicates reach `compileCond`
+and `rangeSet` and compile faster.
 
-**What this took, and what the first reading got wrong.** The plain port was already faster on the
-predicates (6 to 16%). Two steps made it faster still, each measured against master in an
+**What this took, and what the first reading got wrong.** In that day's runs, which are not
+committed, the plain port was already faster on the predicates. Two steps made it faster still, each measured against master in an
 interleaved pair: `compileCond` as a chain of `instanceof` tests in place of a pattern `switch`,
 with `rangeSet` run once where the Scala ran it twice, and loops and a sorted set in place of
 streams in `rangeSet` and `compileInList`. The results were first read with the sign reversed
 (the diff tool's change column is a rate), and the "fixes" were first thought to be curing a 40%
 slowdown; the absolute times, read at last, showed they were widening a speed-up. A scratch loop
-that compiled one predicate over and over under JFR agreed with the direction: the port took 1749
-ns a call for the range set against master's 2593, and 2188 against 2534 for the IN list.
+that compiled one predicate over and over under JFR, not committed, agreed with the direction: the
+range set took about a third less time per call than on master, and the IN list about a seventh
+less.
 
 **Predictions scored.**
 
 1. **Held.** The bytes do not move.
 2. **Not scorable on the emission benchmark, held on the right one.** No shape compiles
-   reproducibly slower; four of the eight compile faster.
-3. **Refuted.** The Java file is 781 lines against the Scala 443 (1.8 times), not 480 to 560. 214's
+   reproducibly slower; four of the eight compile faster, by the minimums over the runs.
+3. **Refuted.** The Java file is 789 lines against the Scala 443 (1.8 times), not 480 to 560. 214's
    was 1.6 times. The `rangeSet` records, the early returns in `CASE WHEN` and the loops that
    replaced the streams account for it.
+
+**Review of the PR** (`/code-review high`) found no behaviour difference from the Scala, and
+these: the mixed-lane decline text was written in two places (now one); `andFold` and `orFold` ran
+over a view of a Scala list whose `get(i)` is linear (now a copy); `foldPick` used a stream (now
+a loop); a comment in the code carried a performance claim and narrated the code it replaced (now
+the code as it is, the claim here); and risk 2 below claimed tests the suite does not have.
 
 **Left for later.** Row 216 follows. `VarkaCompileBenchmark` serves 216, 217 and 222 (which asks
 for "compile time measured before and after"). A sixteen-branch `CASE WHEN` does not fuse as a
 whole, which is why the benchmark's has six; that is the compiler's cap, not this task's.
+`compileCond` asks `rangeSet` at every nested `OR`, so a long `OR` chain that is not a range set
+is re-flattened at each level and costs quadratic time; the Scala did the same, a failure cannot
+simply be remembered for the tree (a sub-disjunction may be a range set where its parent is not),
+and it is left to a row if a query ever shows it.
+
+**A finding on the way.** `VarkaWarmupEndToEndSuite`'s "a projection's first query takes the row
+path and its next one the compiled kernel" failed on the fork's CI in two of the first five runs
+this morning (#663's first run, #666's), each time with the warm-up in state `RELEASED` after
+about sixty seconds and never `COMPILED`, and passed on a rerun. The branches under test did not
+touch it. It is row 295.

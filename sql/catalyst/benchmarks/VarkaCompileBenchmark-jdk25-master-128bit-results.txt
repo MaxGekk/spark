@@ -1,44 +1,44 @@
 Narrow-width companion of VarkaCompileBenchmark-jdk25-results.txt: the same benchmark under
 -XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
   benchmark:   org.apache.spark.sql.VarkaCompileBenchmark
-  commit:      a58a5d26216
-  date:        2026-10-08T16:34:40Z
+  commit:      fe857dc6d4a
+  date:        2026-10-08T16:30:58Z
   jdk:         OpenJDK Runtime Environment (build 25.0.4.1+1-1-26.04.4-Ubuntu)
   kernel:      7.0.0-34-generic
   cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
   power:       governor=performance epp=performance profile=performance
   pinned to:   taskset -c 0,12,13,14,15,1,2,3
-  load at start: 0.64
-  canary:      ok (compute +0.1% cache -1.6% memory -1.6% )
+  load at start: 0.68
+  canary:      ok (compute +0.0% cache -1.0% memory -1.9% )
   wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaCompileBenchmark
   narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaCompileBenchmark"
 
 Running benchmark: one compile
   Running case: calendar: year, month, make_date, add_months, last_day, weekofyear
-  Stopped after 779 iterations, 2002 ms
+  Stopped after 794 iterations, 2001 ms
   Running case: TIME: hour, minute, second
-  Stopped after 952 iterations, 2000 ms
+  Stopped after 951 iterations, 2001 ms
   Running case: conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches
-  Stopped after 409 iterations, 2002 ms
+  Stopped after 399 iterations, 2000 ms
   Running case: a wide projection of 60 mixed outputs
-  Stopped after 18 iterations, 2048 ms
+  Stopped after 19 iterations, 2090 ms
   Running case: predicate: a range, IS NOT NULL and an int comparison
-  Stopped after 2446 iterations, 2000 ms
+  Stopped after 2286 iterations, 2000 ms
   Running case: predicate: IN over eight dates
-  Stopped after 3958 iterations, 2000 ms
+  Stopped after 3365 iterations, 2000 ms
   Running case: predicate: a set of three date ranges
-  Stopped after 4384 iterations, 2000 ms
+  Stopped after 3166 iterations, 2000 ms
   Running case: predicate: NOT, OR and IS NULL over two dates
-  Stopped after 4525 iterations, 2000 ms
+  Stopped after 4088 iterations, 2000 ms
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 --------------------------------------------------------------------------------------------------------------------------------------------------
-calendar: year, month, make_date, add_months, last_day, weekofyear              2              3           0          0.1       12436.9       1.0X
-TIME: hour, minute, second                                                      2              2           0          0.1       10130.7       1.2X
-conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   5              5           0          0.0       23424.7       0.5X
-a wide projection of 60 mixed outputs                                         113            114           1          0.0      562666.3       0.0X
-predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.3        3959.5       3.1X
-predicate: IN over eight dates                                                  0              1           0          0.4        2412.8       5.2X
-predicate: a set of three date ranges                                           0              0           0          0.5        2178.2       5.7X
-predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.5        2095.2       5.9X
+calendar: year, month, make_date, add_months, last_day, weekofyear              2              3           0          0.1       12041.7       1.0X
+TIME: hour, minute, second                                                      2              2           0          0.1        9987.8       1.2X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   5              5           0          0.0       23599.6       0.5X
+a wide projection of 60 mixed outputs                                         107            110           2          0.0      537227.9       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.2        4151.0       2.9X
+predicate: IN over eight dates                                                  1              1           0          0.4        2805.7       4.3X
+predicate: a set of three date ranges                                           1              1           0          0.3        2947.9       4.1X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.4        2321.2       5.2X
