@@ -35,7 +35,7 @@ object VarkaShrinker {
 
   /** What a shrink produced and what it cost. */
   final case class Shrunk(
-      small: VarkaFuzzCase, runs: Int, millis: Long, stoppedEarly: Boolean)
+      small: VarkaFuzzCase, runs: Int, millis: Long, stoppedEarly: Boolean, stable: Boolean)
 
   /** The number of IR nodes of a tree. */
   def size(node: VarkaVectorIR): Int = 1 + VarkaVectorIR.childrenOf(node).map(size).sum
@@ -108,7 +108,10 @@ object VarkaShrinker {
       best = shrinkBatch(best, stillFails)
       changed = !sameCase(before, best)
     }
-    Shrunk(best, runs, elapsed, stopped)
+    // A failure that depends on the JIT may not repeat: the result is run three times more, and
+    // is reported as unstable unless every run fails the same way.
+    val stable = (0 until 3).forall(_ => outcome(best).contains(signature))
+    Shrunk(best, runs, elapsed, stopped, stable)
   }
 
   private def sameCase(a: VarkaFuzzCase, b: VarkaFuzzCase): Boolean =

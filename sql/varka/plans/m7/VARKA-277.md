@@ -68,7 +68,10 @@ with the **same signature** (3.3), so that a reduction does not slide to a diffe
 
 1. **Roots.** ddmin over the root list: drop outputs. `numInputs` and the literal table do not
    shrink; indices stay valid and an unused column is harmless.
-2. **Tree**, roots first, then level by level, so the largest subtrees go first. Two moves per
+2. **Tree**, roots first, then level by level (*correction:* a node that is an operand whose
+   domain the grammar constrains, the month count of `add_months` and the level of a dynamic
+   truncation, is left alone with everything under it, since the data of those two columns is
+   drawn to fit them and a replacement would build a case outside the kernel's contract), so the largest subtrees go first. Two moves per
    node: *hoist* a child of the same kind (value for value, condition for condition) in the
    node's place, and *replace* the node by the smallest leaf of its lane, a `ColumnRef` or
    `LiteralSlot` of an index already present. A candidate is built with the new
@@ -114,8 +117,12 @@ new signature fails it with its shrunk case. **An entry that no run reproduces f
 check** (`VarkaKnownFailuresSuite` replays each), as the skip list's entries do, so the list can
 only shrink once a bug is fixed. It starts empty: at this master no fuzzer fails.
 
-The shrunk case is printed in a line `VarkaFuzzCase.parse` reads back, so a reproducer can be
-replayed without the generator. Saving them and replaying them in PR CI is row 262's.
+The shrunk case is printed in one line for a person. *Correction, made while building:* this
+section first said a `VarkaFuzzCase.parse` would read that line back. The IR has no text parser
+and writing one for forty node types is its own task, so an entry is replayed by its lane, seed
+and iteration instead: the generator redraws the case and the run must fail with the entry's
+signature. Saving shrunk reproducers as files, and replaying them in PR CI, is row 262's, and
+needs that parser.
 
 ### 3.5 What is deliberately unchanged
 
@@ -197,4 +204,36 @@ candidate count and wall time of each.
 
 ## 9. Outcome
 
-Filled in when the shrinker lands.
+Done on 8 October 2026.
+
+**What was built.** `VarkaFuzzCase` and a draw/run split of `VarkaIrFuzzSuite` (no behaviour
+change); `VarkaVectorIR.withChildren`; `VarkaShrinker` (ddmin over the roots, the trees, the
+options and the batch); `VarkaFailureSignature`; `VarkaKnownFailures` and
+`sql/varka/fuzz/known_failures.tsv`, empty, with a stale check. A failure in either lane of the IR
+fuzzer is now a test failure of its own with the shrunk case in the message, and it includes a
+failure out of the generated class, which used to end the suite as an uncaught error.
+
+**Predictions scored.** On the first failing draw of each planted bug, `VarkaIrFuzzSuite` at its
+default seed:
+
+1. **Held.** `misdescribeWordLiveness`: 15 nodes to 2 (`(isNotNull col:0)`), one root, the options
+   delta the injector alone, 7 rows to 1, in 15 runs and under 100 ms. The bound was 5 nodes,
+   at most two other options and 17 rows.
+2. **Held, with a note.** `misdescribeAdd`: 15 nodes to 5, `(cmp:EQ (addDays col:0 lit:0) col:0)`,
+   the injector alone, one row, in 36 runs, signature `NoSuchMethodError` on `IntVector.add`. It
+   stops at 5 and not at the addition's 3 because the root is a condition and a move keeps a
+   condition a condition: the result is 1-minimal under the moves, not the smallest tree there is.
+3. **Held.** Both took under 600 runs and under a second, and each replays three times of three.
+4. **Held.** The default suite's five tests pass, and the first failure under
+   `misdescribeWordLiveness` is character for character what it was before the split.
+
+**What the admission check had right.** Failures are not always assertions: the second injector
+escaped every `assert` and ended the suite before this task, and is now classified and shrunk.
+The third (`misdescribeDriverBytes`) is still not reached by the IR fuzzers.
+
+**What it did not do.** The composition fuzzer, which draws Catalyst expressions and not IR, is
+unshrunk; the core is written over a case and a move set so that it can follow. That is row 294.
+Saved reproducers need a text form of a case that parses (3.4's correction).
+
+**Run under the matrix.** The new suites pass under `cse=false`, `methodByteBudget=0` and
+`lanesOverride=4`.
