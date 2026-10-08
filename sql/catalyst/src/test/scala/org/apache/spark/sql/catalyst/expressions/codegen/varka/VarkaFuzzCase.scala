@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import java.util.Locale
+
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 
 /**
@@ -65,7 +67,7 @@ object VarkaFuzzCase {
       }
       shown.mkString("[", ",", if (c.length > 8) ",...]" else "]")
     }
-    s"lane=${c.lane.toString.toLowerCase} " +
+    s"lane=${c.lane.toString.toLowerCase(Locale.ROOT)} " +
       s"roots=${c.roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
       s"options=${optionDelta(c.options).mkString("{", ", ", "}")} " +
       s"length=${c.length} forceMasked=${c.forceMasked} " +
