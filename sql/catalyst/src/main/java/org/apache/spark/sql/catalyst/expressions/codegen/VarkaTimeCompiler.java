@@ -79,9 +79,9 @@ import org.apache.spark.unsafe.types.UTF8String;
  * the family does not claim, so that asking is side-effect free. {@code compileRoot} calls
  * {@link #compileTime} directly for the functions whose int result only an output can take.
  *
- * <p>The literal and input tables are the facade's {@code mutable.LinkedHashMap[Int, Int]}, taken
- * as {@code LinkedHashMap<?, ?>} at the boundary and cast once by {@link #table}; see
- * {@code VarkaIntervalCompiler}.
+ * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]},
+ * taken as {@code LinkedHashMap<?, ?>} at the boundary and cast once by
+ * {@link VarkaNodeCompiler#table}; see {@code VarkaNodeCompiler}.
  */
 final class VarkaTimeCompiler {
 

@@ -916,12 +916,14 @@ private[sql] object VarkaExpressionCompiler extends Logging {
    * choice for the date lane.
    */
   /**
-   * An output root: [[compileNode]], plus the one lowering only a root may take. The three
-   * `TIME` field extracts compute a 64-bit division and deliver an int, and the emitter narrows
-   * a lane at the kernel's store and nowhere else until VARKA-28 gives it a width conversion;
+   * An output root: `VarkaNodeCompiler.compileNode`, plus the one lowering only a root may take.
+   * The three `TIME` field extracts compute a 64-bit division and deliver an int, and the
+   * emitter narrows a lane at the kernel's store and nowhere else until VARKA-28 gives it a width
+   * conversion;
    * so `hour(t)` as an output fuses under a narrowing root, while `hour(t) + 1` and
    * `hour(t) = 12`, which put the narrowed value under another node, reach
-   * [[VarkaTimeCompiler.compileTime]] through [[compileNode]] and decline with that reason.
+   * [[VarkaTimeCompiler.compileTime]] through `VarkaNodeCompiler.compileNode` and decline with
+   * that reason.
    */
   private def compileRoot(
       expr: Expression,

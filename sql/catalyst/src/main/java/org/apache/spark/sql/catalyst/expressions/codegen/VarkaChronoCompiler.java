@@ -89,11 +89,11 @@ import org.apache.spark.unsafe.types.UTF8String;
  * dispatches through, in the form {@code VarkaIntervalCompiler} set: a {@code switch} that tests
  * and deconstructs a node and returns the lowering as a deferred call, or {@code null} for a node
  * the family does not claim. The helpers below it are this family's alone; the shared operand
- * helpers and the recursion are the facade's.
+ * helpers and the recursion are {@code VarkaNodeCompiler}'s.
  *
- * <p>The literal and input tables are the facade's {@code mutable.LinkedHashMap[Int, Int]}, taken
- * as {@code LinkedHashMap<?, ?>} at the boundary and cast once by {@link #table}; see
- * {@code VarkaIntervalCompiler}.
+ * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]},
+ * taken as {@code LinkedHashMap<?, ?>} at the boundary and cast once by
+ * {@link VarkaNodeCompiler#table}; see {@code VarkaNodeCompiler}.
  */
 final class VarkaChronoCompiler {
 

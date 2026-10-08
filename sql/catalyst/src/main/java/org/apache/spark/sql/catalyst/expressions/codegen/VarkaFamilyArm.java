@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 
 /**
  * A claimed node's lowering, which a compiler family written in Java returns from its {@code arm}
- * entry and the chain in {@code VarkaExpressionCompiler.familyChain} runs once it has chosen the
+ * entry and the chain in {@code VarkaNodeCompiler.FAMILIES} runs once it has chosen the
  * family. Deferring the call is what keeps the claim side-effect free, as a partial function's
  * {@code isDefinedAt} is.
  */

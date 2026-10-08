@@ -17,7 +17,6 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 
 import org.apache.spark.SparkEnv;
@@ -54,8 +53,9 @@ import org.apache.spark.util.Utils;
  * anywhere, driver included. Setting it with {@code --conf} (or on the builder that creates the
  * context) is the supported way.
  *
- * <p>The instance and the watch are created on first use, each behind its own holder class: the
- * class initialiser gives the once-per-JVM guarantee a {@code lazy val} gave.
+ * <p>The instance and the watch are created on first use under a lock, once per JVM as a
+ * {@code lazy val} gave; a creation that throws is retried by the next call, as a
+ * {@code lazy val}'s was.
  */
 public final class VarkaShapeCache {
 
@@ -71,9 +71,17 @@ public final class VarkaShapeCache {
   private VarkaShapeCache() {
   }
 
-  /** The cache, sized from the JVM's configuration the first time anything asks for it. */
-  private static final class Instance {
-    static final VarkaShapeCacheImpl CACHE = new VarkaShapeCacheImpl(maxEntries());
+  // The instance and the watch are created on first use and, unlike a class initialiser, retried
+  // if creating them threw: a bad capacity then surfaces as the same ordinary exception on every
+  // call, which the callers' handlers treat as a failure of the cache and not of the JVM.
+  private static VarkaShapeCacheImpl cache;
+  private static Optional<VarkaCompilationWatch> watch;
+
+  private static synchronized VarkaShapeCacheImpl cache() {
+    if (cache == null) {
+      cache = new VarkaShapeCacheImpl(maxEntries());
+    }
+    return cache;
   }
 
   /**
@@ -84,14 +92,16 @@ public final class VarkaShapeCache {
    * query would be a bug rather than an inefficiency.
    *
    * <p>When the flag is off this stays empty, so no stream is opened, no thread is started and no
-   * map is allocated: the cost of the feature to anyone who has not asked for it is the read of
-   * this holder.
+   * map is allocated: the cost of the feature to anyone who has not asked for it is a lock and a
+   * null check.
    */
-  private static final class Watch {
-    static final Optional<VarkaCompilationWatch> WATCH =
-        flag(StaticSQLConf.VARKA_COMPILATION_WATCH_ENABLED())
-            ? Optional.of(VarkaCompilationWatch.start())
-            : Optional.empty();
+  private static synchronized Optional<VarkaCompilationWatch> watch() {
+    if (watch == null) {
+      watch = flag(StaticSQLConf.VARKA_COMPILATION_WATCH_ENABLED())
+          ? Optional.of(VarkaCompilationWatch.start())
+          : Optional.empty();
+    }
+    return watch;
   }
 
   private static int maxEntries() {
@@ -112,12 +122,15 @@ public final class VarkaShapeCache {
    * than they did earlier in this JVM; 0 when the watch is off, which is the default.
    */
   public static long compilationDivergences() {
-    return Watch.WATCH.map(VarkaCompilationWatch::divergenceCount).orElse(0L);
+    return watch().map(VarkaCompilationWatch::divergenceCount).orElse(0L);
   }
 
-  /** Whether the watch is running - off by configuration and unavailable JFR both read false. */
+  /**
+   * Whether the watch is running - off by configuration and unavailable JFR both read false.
+   * Internal to Spark's SQL code and its tests; a Java class cannot say {@code private[sql]}.
+   */
   public static boolean compilationWatchRunning() {
-    return Watch.WATCH.map(VarkaCompilationWatch::isRunning).orElse(false);
+    return watch().map(VarkaCompilationWatch::isRunning).orElse(false);
   }
 
   /** The one rendering of the shape-named class name; every caller derives it here. */
@@ -142,11 +155,12 @@ public final class VarkaShapeCache {
   public static VarkaShapeLookup getOrEmit(VarkaShapeKey key, String execution) {
     // The watch has to be subscribed before the kernels it watches are compiled, and nothing on
     // the hot path would otherwise touch it: compilationDivergences is a reporting call, so
-    // making the holder's first load happen there would mean the watch only ever started for a
-    // caller already asking what it had seen. Touching it here costs a static read per lookup,
-    // and nothing else when the flag is off, since an empty Optional is what gets memoised.
-    Objects.requireNonNull(Watch.WATCH);
-    return Instance.CACHE.getOrEmit(Utils.getContextOrSparkClassLoader(), key, execution);
+    // making the watch's first creation happen there would mean the watch only ever started for a
+    // caller already asking what it had seen. Touching it here costs a lock and a null check
+    // per lookup, and nothing else when the flag is off, since an empty Optional is what gets
+    // memoised.
+    watch();
+    return cache().getOrEmit(Utils.getContextOrSparkClassLoader(), key, execution);
   }
 
   /**
@@ -155,31 +169,34 @@ public final class VarkaShapeCache {
    * bytes are also verified, so the tests catch a class the executors could not define.
    */
   public static void admit(VarkaShapeKey key) {
-    Instance.CACHE.admit(Utils.getContextOrSparkClassLoader(), key, Utils.isTesting());
+    cache().admit(Utils.getContextOrSparkClassLoader(), key, Utils.isTesting());
   }
 
   public static List<String> executionsFor(String shapeHash) {
-    return Instance.CACHE.executionsFor(shapeHash);
+    return cache().executionsFor(shapeHash);
   }
 
   public static long hitCount() {
-    return Instance.CACHE.hitCount();
+    return cache().hitCount();
   }
 
   public static long missCount() {
-    return Instance.CACHE.missCount();
+    return cache().missCount();
   }
 
   public static long buildCount() {
-    return Instance.CACHE.buildCount();
+    return cache().buildCount();
   }
 
   public static long size() {
-    return Instance.CACHE.size();
+    return cache().size();
   }
 
-  /** Test hook, mirroring {@code CodeGenerator.invalidateCodegenCache}. */
+  /**
+   * Test hook, mirroring {@code CodeGenerator.invalidateCodegenCache}. Internal to Spark's SQL
+   * code and its tests; a Java class cannot say {@code private[sql]}.
+   */
   public static void invalidateAll() {
-    Instance.CACHE.invalidateAll();
+    cache().invalidateAll();
   }
 }

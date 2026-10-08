@@ -175,3 +175,27 @@ its 128-bit companion).
 
 **What the port is.** The facade is 949 lines of Scala (the classifier and the data model) against
 1,367; row 300 ports what is left.
+
+**Review of the PR** (`/code-review high`) found the port faithful and these, fixed in the PR:
+
+* `VarkaShapeCache`'s holder classes would fail for good if their initialiser threw once (a
+  negative capacity, say), with a `LinkageError` that `NonFatal` handlers let through, where the
+  Scala `lazy val` re-ran and rethrew an ordinary exception. The instance and the watch are now
+  created under a lock and retried, as before.
+* **Corrections to this plan, which is a record and is not rewritten:** 3.1 says
+  `VarkaNodeCompiler` holds `compileRoot` and `MaxInLiterals`; `compileRoot` stays in the Scala
+  classifier (it calls the Java `compileNode`) and the constant is `MAX_IN_LITERALS`. Section 4
+  lists `VarkaExpressionCompilerSuite.scala` as changed; it is not. The facade is 946 lines, not 949.
+* The compile-time table above is the interleaved wide-run minimums. The committed single runs
+  differ: wide, 8763 / 9019 / 16677 / 476225 ns for the first four shapes against master's 12112 /
+  10093 / 22526 / 531407; 128 bits, 9720 / 9394 / 17478 / 521992 against 11584 / 10063 / 22378 /
+  490109. So the 60-output projection reads 6.5% slower in the committed 128-bit pair, a
+  single-run difference inside that shape's 8% spread across the three base runs (the benchmark
+  does not use the vector width), and the claim "no shape is slower beyond the spread" stands
+  with that stated; the other seven shapes are 2 to 24% faster at both widths.
+* Stale pointers to `familyChain` and "the facade's" helpers in the family docs, and a loop in
+  `truncateLong` that copied the key set (now `pollLastEntry`) and a second copy of the erased-table
+  cast in `DeclineSink` (now `VarkaNodeCompiler.table`).
+* `VarkaShapeCache` is `public` where the Scala object was `private[sql]`: a Java class cannot say
+  it, so the two internal methods (`invalidateAll`, `compilationWatchRunning`) say so in their docs.
+

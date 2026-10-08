@@ -112,12 +112,9 @@ final class DeclineSink {
 
   /** Drops the long literals interned since {@code mark} - a declining entry's. */
   void truncateLong(int mark) {
-    if (longLiterals.size() > mark) {
-      // Entries are in slot order, so the ones past the mark are the tail.
-      var keys = new ArrayList<>(longLiterals.keySet());
-      for (Long key : keys.subList(mark, keys.size())) {
-        longLiterals.remove(key);
-      }
+    // Entries are in slot order, so the ones past the mark are the tail.
+    while (longLiterals.size() > mark) {
+      longLiterals.pollLastEntry();
     }
   }
 
@@ -127,9 +124,8 @@ final class DeclineSink {
   }
 
   /** The noted bounds in kernel-input terms, given the accepted entries' input table. */
-  @SuppressWarnings("unchecked")
   Seq<VarkaInputBound> inputBounds(scala.collection.mutable.LinkedHashMap<?, ?> inputs) {
-    var table = (scala.collection.mutable.LinkedHashMap<Object, Object>) inputs;
+    var table = VarkaNodeCompiler.table(inputs);
     var distinct = new LinkedHashSet<VarkaInputBound>();
     for (Bound b : bounds) {
       Option<?> index = table.get(b.ordinal());

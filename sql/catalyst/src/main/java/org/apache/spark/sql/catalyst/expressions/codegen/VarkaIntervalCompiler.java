@@ -57,13 +57,14 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  * lowering as a deferred call, or {@code null} for a node the family does not claim. Testing has
  * no side effects, so the chain can ask a family whether it claims a node - which
  * {@code VarkaFamilyChainSuite} does for every family - before anything is compiled, and every
- * guard is written once. The shared operand helpers and the recursion are the facade's.
+ * guard is written once. The shared operand helpers and the recursion are
+ * {@code VarkaNodeCompiler}'s.
  *
- * <p>The literal and input tables are the facade's {@code mutable.LinkedHashMap[Int, Int]}. Java
- * sees their type arguments erased to {@code Object}, and Scala does not pass an
+ * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]}.
+ * Java sees their type arguments erased to {@code Object}, and Scala does not pass an
  * {@code [Int, Int]} map where an {@code [Object, Object]} one is declared, so the methods Scala
- * calls take them as {@code LinkedHashMap<?, ?>} and {@link #table} restores the declared type
- * once, for the facade's own methods.
+ * calls take them as {@code LinkedHashMap<?, ?>} and {@link VarkaNodeCompiler#table} restores the
+ * declared type once, for {@code VarkaNodeCompiler}'s own methods.
  */
 final class VarkaIntervalCompiler {
 

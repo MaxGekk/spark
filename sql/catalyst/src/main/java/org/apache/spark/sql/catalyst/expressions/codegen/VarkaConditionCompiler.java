@@ -74,9 +74,9 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  * the family does not claim. {@code compilePredicate} reaches {@link #compileCond} and the
  * balanced {@link #andFold} directly.
  *
- * <p>The literal and input tables are the facade's {@code mutable.LinkedHashMap[Int, Int]}, taken
- * as {@code LinkedHashMap<?, ?>} at the boundary and cast once by {@link #table}; see
- * {@code VarkaIntervalCompiler}.
+ * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]},
+ * taken as {@code LinkedHashMap<?, ?>} at the boundary and cast once by
+ * {@link VarkaNodeCompiler#table}; see {@code VarkaNodeCompiler}.
  */
 final class VarkaConditionCompiler {
 
