@@ -134,4 +134,44 @@ minimums over three interleaved runs of each.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Done on 8 October 2026 (217a; 217b is row 300).
+
+**The proof held.** The 47 Varka suites of `catalyst` pass (560 tests, 36 cancelled, the count of
+216), and so do the evaluator, warm-up and differential suites of `sql/core` that read the cache
+(114 tests). `emitted_bytes.json` and `coverage.json` are unchanged; the coverage scan needed
+`VarkaNodeCompiler` added to its list of Java files, as 216 predicted for any file that moves.
+`VarkaFamilyChainSuite` now reads the Java chain, and its duplicate-on-purpose test still fails the
+check when a group is claimed twice. Scalastyle, checkstyle and `dev/varka_precommit.sh` are clean.
+
+**What went.** The four copies of `decline`, `table` and the `FACADE` constant; the Scala
+`DeclineSink`, `VarkaShapeCache` and the node layer of the facade (about 420 lines); the
+per-node construction of six partial functions. `magnitude` returns an `OptionalLong`, `laneOf` an
+`Optional`, and `VarkaShapeCache.MAX_EXECUTION_IDENTITY_LENGTH` replaces the Scala val.
+
+**Compile times.** Three runs of the base (216's head: Java families on the Scala facade) and three
+of the port, interleaved on the idle laptop, by minimums, ns a call:
+
+| shape | base | port | change | spread of base |
+|---|---:|---:|---:|---:|
+| calendar projection of six | 11750 | 9407 | -20% | 6.5% |
+| TIME projection of three | 9726 | 9032 | -7% | 6.2% |
+| conditionals | 22358 | 17219 | -23% | 4.5% |
+| sixty mixed outputs | 518535 | 485855 | -6% | 8.0% |
+| predicate: range, IS NOT NULL, comparison | 3867 | 3438 | -11% | 2.1% |
+| predicate: IN over eight dates | 2500 | 2354 | -6% | 1.1% |
+| predicate: three date ranges | 2161 | 2194 | +2% | 1.4% |
+| predicate: NOT, OR, IS NULL | 2064 | 1864 | -10% | 3.1% |
+
+The committed files are regenerated from the port (`VarkaCompileBenchmark-jdk25-results.txt` and
+its 128-bit companion).
+
+**Predictions scored.**
+
+1. **Held.** The bytes do not move and `coverage.json` is byte-identical.
+2. **Held, and larger than predicted for two shapes.** The calendar and conditional projections
+   take 20 and 23% less; no shape is slower beyond the spread (the one +2%, on a call of 2 microseconds,
+   is as large as the noise of its neighbours).
+3. **Held.** `VarkaNodeCompiler` is 547 lines.
+
+**What the port is.** The facade is 949 lines of Scala (the classifier and the data model) against
+1,367; row 300 ports what is left.
