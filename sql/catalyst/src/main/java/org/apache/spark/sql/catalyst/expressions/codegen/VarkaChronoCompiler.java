@@ -21,6 +21,7 @@ import java.util.Optional;
 
 import scala.Option;
 import scala.collection.mutable.LinkedHashMap;
+import scala.util.control.NonFatal;
 
 import org.apache.spark.SparkIllegalArgumentException;
 import org.apache.spark.sql.catalyst.expressions.Add;
@@ -148,9 +149,8 @@ final class VarkaChronoCompiler {
       case DayOfWeek n ->
           () -> over(n.child(), VarkaVectorIR.DayOfWeek::new, inputs, literals, sink);
       case WeekDay n -> () -> over(n.child(), VarkaVectorIR.WeekDay::new, inputs, literals, sink);
-      case Add a when isDayOfWeekIso(a) -> () -> over(
-          a.left() instanceof WeekDay w ? w.child() : ((WeekDay) a.right()).child(),
-          DayOfWeekIso::new, inputs, literals, sink);
+      case Add a when dayOfWeekIsoChild(a).isPresent() -> () -> over(
+          dayOfWeekIsoChild(a).get(), DayOfWeekIso::new, inputs, literals, sink);
       // next_day: a foldable weekday is resolved at compile time and travels as a
       // runtime literal. An unrecognized or null one declines rather than throws - it is the
       // row engine's business, and it has two different behaviours for it depending on ANSI
@@ -346,8 +346,7 @@ final class VarkaChronoCompiler {
       // own bound the negation cannot overflow, so it is absorbed into SubDays - no
       // UnaryMinus node exists and none is needed. The offset is the same bounded column
       // `compileOffset` makes of the cast form.
-      Option<VarkaVectorIR> offset = dayIntervalColumn(negated.get(), inputs, sink);
-      return some(new SubDays(node.get(), offset.get()));
+      return some(new SubDays(node.get(), dayIntervalColumn(negated.get(), inputs, sink)));
     }
     Option<VarkaVectorIR> offset = compileOffset(days, inputs, literals, sink);
     return offset.isEmpty() ? offset : some(new AddDays(node.get(), offset.get()));
@@ -358,8 +357,18 @@ final class VarkaChronoCompiler {
    * arithmetic over a {@code weekday} output. Either operand order, exactly as that arm reads.
    */
   static boolean isDayOfWeekIso(Add a) {
-    return (a.left() instanceof WeekDay && isLiteralOne(a.right()))
-        || (isLiteralOne(a.left()) && a.right() instanceof WeekDay);
+    return dayOfWeekIsoChild(a).isPresent();
+  }
+
+  /** The {@code weekday} argument of the {@code DAYOFWEEK_ISO} shape, in either operand order. */
+  private static Optional<Expression> dayOfWeekIsoChild(Add a) {
+    if (a.left() instanceof WeekDay w && isLiteralOne(a.right())) {
+      return Optional.of(w.child());
+    }
+    if (isLiteralOne(a.left()) && a.right() instanceof WeekDay w) {
+      return Optional.of(w.child());
+    }
+    return Optional.empty();
   }
 
   private static boolean isLiteralOne(Expression e) {
@@ -429,7 +438,7 @@ final class VarkaChronoCompiler {
     // the row engine when a live lane is outside.
     Optional<BoundReference> interval = dayIntervalOffset(days);
     if (interval.isPresent()) {
-      return dayIntervalColumn(interval.get(), inputs, sink);
+      return some(dayIntervalColumn(interval.get(), inputs, sink));
     }
     if (days instanceof ExtractANSIIntervalDays e) {
       // A stored INTERVAL DAY column is int64 microseconds, which no int32 lane can read;
@@ -468,11 +477,11 @@ final class VarkaChronoCompiler {
   }
 
   /** The bounded int column a {@code CAST(i AS INTERVAL DAY)} offset reads. */
-  private static Option<VarkaVectorIR> dayIntervalColumn(
+  private static VarkaVectorIR.ColumnRef dayIntervalColumn(
       BoundReference br, LinkedHashMap<Object, Object> inputs, DeclineSink sink) {
     sink.bound(br.ordinal(), -VarkaChrono.INTERVAL_DAY_LIMIT_DAYS,
         VarkaChrono.INTERVAL_DAY_LIMIT_DAYS);
-    return some(FACADE.columnRef(br, inputs, LaneType.INT));
+    return FACADE.columnRef(br, inputs, LaneType.INT);
   }
 
   /**
@@ -724,8 +733,18 @@ final class VarkaChronoCompiler {
             a.runtime() || b.runtime());
       }
       // A leaf of the analysis, or a node it does not bound: nothing to descend into, and its
-      // own interval is whatever `dayRange` already says.
-      default -> new Rebuilt(node, false, false);
+      // own interval is whatever `dayRange` already says. Listed, not defaulted, so that a new
+      // IR node is a compile error here until it is classified as one that carries a day
+      // interval (above) or one that does not.
+      case VarkaVectorIR.ColumnRef _, LiteralSlot _, GuardedDay _, VarkaVectorIR.GuardedRange _,
+          VarkaVectorIR.NarrowLane _, VarkaVectorIR.DateDiff _, VarkaVectorIR.DayOfWeek _,
+          VarkaVectorIR.WeekDay _, DayOfWeekIso _, VarkaVectorIR.Year _, VarkaVectorIR.Month _,
+          VarkaVectorIR.DayOfMonth _, VarkaVectorIR.Quarter _, VarkaVectorIR.DayOfYear _,
+          VarkaVectorIR.TruncDateDynamic _, VarkaVectorIR.WeekOfYear _, VarkaVectorIR.MakeDate _,
+          VarkaVectorIR.Compare _, VarkaVectorIR.And _, VarkaVectorIR.Or _,
+          VarkaVectorIR.Not _, VarkaVectorIR.IsNotNull _, VarkaVectorIR.InRanges _,
+          VarkaVectorIR.IntArith _, IntNeg _, VarkaVectorIR.ConstDivide _,
+          VarkaVectorIR.BoundedDivide _ -> new Rebuilt(node, false, false);
     };
     VarkaValueRange.Range range =
         dayRange(rebuilt.node(), literals, VarkaRangeAnalysis.GuardPolicy.ARMED);
@@ -794,7 +813,7 @@ final class VarkaChronoCompiler {
       sink.note("next_day with an unrecognized weekday", dow);
       return java.util.OptionalInt.empty();
     } catch (Throwable t) {
-      if (isFatal(t)) {
+      if (!NonFatal.apply(t)) {
         throw t;
       }
       sink.note("next_day weekday failed to evaluate: " + t.getMessage(), dow);
@@ -825,20 +844,24 @@ final class VarkaChronoCompiler {
     if (target.isEmpty()) {
       return Option.empty();
     }
-    if (target.get() instanceof ToLevel l) {
-      Option<VarkaVectorIR> date = calendarInput(n.date(), n, inputs, literals, sink);
-      return date.isEmpty() ? date : some(new VarkaVectorIR.TruncDate(date.get(), l.level()));
-    }
-    Option<VarkaVectorIR> date = FACADE.compileNode(n.date(), inputs, literals, sink);
-    if (date.isEmpty()) {
-      return date;
-    }
-    LiteralSlot week = FACADE.intSlot(7, literals);
-    // next_day's slot holds dayOfWeek - 1; Monday through the same parser
-    // foldWeekday uses, so the constant is the definition's, not a retyped 3.
-    LiteralSlot monday = FACADE.intSlot(
-        DateTimeUtils.getDayOfWeekFromString(UTF8String.fromString("MONDAY")) - 1, literals);
-    return some(new VarkaVectorIR.NextDay(new SubDays(date.get(), week), monday));
+    return switch (target.get()) {
+      case ToLevel l -> {
+        Option<VarkaVectorIR> date = calendarInput(n.date(), n, inputs, literals, sink);
+        yield date.isEmpty() ? date : some(new VarkaVectorIR.TruncDate(date.get(), l.level()));
+      }
+      case ToWeek w -> {
+        Option<VarkaVectorIR> date = FACADE.compileNode(n.date(), inputs, literals, sink);
+        if (date.isEmpty()) {
+          yield date;
+        }
+        LiteralSlot week = FACADE.intSlot(7, literals);
+        // next_day's slot holds dayOfWeek - 1; Monday through the same parser
+        // foldWeekday uses, so the constant is the definition's, not a retyped 3.
+        LiteralSlot monday = FACADE.intSlot(
+            DateTimeUtils.getDayOfWeekFromString(UTF8String.fromString("MONDAY")) - 1, literals);
+        yield some(new VarkaVectorIR.NextDay(new SubDays(date.get(), week), monday));
+      }
+    };
   }
 
   /**
@@ -873,18 +896,12 @@ final class VarkaChronoCompiler {
       sink.note("trunc to a level below a day, which is null for a date", format);
       return Optional.empty();
     } catch (Throwable t) {
-      if (isFatal(t)) {
+      if (!NonFatal.apply(t)) {
         throw t;
       }
       sink.note("trunc format failed to evaluate: " + t.getMessage(), format);
       return Optional.empty();
     }
-  }
-
-  /** Scala's {@code NonFatal} complement: what a decline must not swallow. */
-  private static boolean isFatal(Throwable t) {
-    return t instanceof VirtualMachineError || t instanceof ThreadDeath
-        || t instanceof InterruptedException || t instanceof LinkageError;
   }
 
   /** Notes {@code reason} against {@code e} and declines it. */

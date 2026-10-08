@@ -60,8 +60,9 @@ the facade calls is `isDayOfWeekIso(Add)`, which keeps its name and meaning.
   calls the helper `compileOffset` reaches for that form (the bound on the column, then the column)
   directly. The sequence of notes and table entries is the same; no expression is built to be
   taken apart again.
-* **`NonFatal`** becomes a small `isFatal` (`VirtualMachineError`, `ThreadDeath`,
-  `InterruptedException`, `LinkageError`), Scala's definition less its control-flow case.
+* **`NonFatal`** is Scala's own, called from Java as `NonFatal.apply`. The first draft rewrote it
+  as a small `isFatal` without Scala's control-flow case and named `ThreadDeath`, which is
+  deprecated for removal; review caught both, and the port now keeps the exact semantics.
 * **The month and offset admission** is a chain of `instanceof` tests in Scala's order, since
   Catalyst's classes are not a sealed set.
 
@@ -165,6 +166,19 @@ noise of the run, not of the port.
 regenerated for the final form, all three ports together. Against `-master-results.txt`, which is
 master before 215 (`fe857dc6d4a`), the predicate rows are 4 to 24% faster (215's change) and the
 calendar projection reads 1% faster at 256 bits and 4% slower at 128, within the noise above.
+
+**Review of the PR** (`/code-review high`) found no semantic divergence from the Scala, and these,
+fixed in the PR: `truncFolded` consumed the sealed `TruncTarget` with `instanceof` and treated the
+rest as WEEK, where a third target would have compiled as WEEK (now an exhaustive `switch`);
+`rearm`'s switch over the sealed IR ended in a `default` that would swallow a new day-producing
+node (the passthrough nodes are listed, so a new node is a compile error until classified);
+`isFatal` (above); the `DAYOFWEEK_ISO` shape was tested in one place and unpacked with a blind cast
+in another (one helper returns the `weekday` argument); and `dateAdd` called `get()` on a helper
+that cannot decline today (it now returns the column). One finding is left as a row of the
+facade's: the four Java families each carry their own copy of `decline`, `table` and the `FACADE`
+constant, which row 217 removes with the boundary costs that make them necessary. And one is
+traceability: the benchmark provenance named a commit that rewriting the branch's history had
+dropped, so the committed results are regenerated from the final commit.
 
 **Predictions scored.**
 
