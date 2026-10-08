@@ -46,3 +46,31 @@ final case class VarkaFuzzCase(
     smallOrdinal: Int,
     levelOrdinal: Int,
     label: String)
+
+object VarkaFuzzCase {
+
+  /** The options that differ from the defaults, as `name=value`; empty for the defaults. */
+  def optionDelta(options: VarkaEmitOptions): Seq[String] = {
+    import scala.jdk.CollectionConverters._
+    VarkaEmitOption.TABLE.asScala.toSeq
+      .filter(o => o.text(options) != o.text(VarkaEmitOptions.DEFAULTS))
+      .map(o => s"${o.name}=${o.text(options)}")
+  }
+
+  /** The case on one line for a person: the trees, the delta from the defaults and the batch. */
+  def describe(c: VarkaFuzzCase): String = {
+    def rows(col: Int): String = {
+      val shown = (0 until c.length.min(8)).map { i =>
+        if (c.nulls(col)(i)) "null" else c.data(col)(i).toString
+      }
+      shown.mkString("[", ",", if (c.length > 8) ",...]" else "]")
+    }
+    s"lane=${c.lane.toString.toLowerCase} " +
+      s"roots=${c.roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
+      s"options=${optionDelta(c.options).mkString("{", ", ", "}")} " +
+      s"length=${c.length} forceMasked=${c.forceMasked} " +
+      s"literals=${c.lits.mkString("[", ",", "]")} " +
+      s"columns=${(0 until c.numInputs).map(rows).mkString(" ")}"
+  }
+}
+
