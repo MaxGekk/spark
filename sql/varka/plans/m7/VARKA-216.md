@@ -164,8 +164,10 @@ noise of the run, not of the port.
 
 **The committed files.** `VarkaCompileBenchmark-jdk25-results.txt` and its companions are
 regenerated for the final form, all three ports together. Against `-master-results.txt`, which is
-master before 215 (`fe857dc6d4a`), the predicate rows are 4 to 24% faster (215's change) and the
-calendar projection reads 1% faster at 256 bits and 4% slower at 128, within the noise above.
+master before 215 (`fe857dc6d4a`), the predicate rows take 8 to 26% less time (215's change), the
+TIME projection is unchanged and the calendar projection takes 2% less at 256 bits and 4% less at
+128, inside the noise above. The files were regenerated from the final commit after review, when
+their first provenance named a commit that rewriting the branch had dropped.
 
 **Review of the PR** (`/code-review high`) found no semantic divergence from the Scala, and these,
 fixed in the PR: `truncFolded` consumed the sealed `TruncTarget` with `instanceof` and treated the
