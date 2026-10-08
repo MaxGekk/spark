@@ -177,7 +177,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
     }
   }
 
-  private def runOne(iteration: Int): Unit = {
+  private def drawInt(iteration: Int): VarkaFuzzCase = {
     val rnd = shapeRandom(seed, iteration)
     // The shape itself comes from the shared draw, so this suite and the emitted-bytes oracle
     // run over one corpus; `rnd` is left where the lane values and null patterns below pick up.
@@ -211,16 +211,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
       s"length=$length patterns=${patternIds.map(patternNames).mkString(",")} " +
       s"literals=${lits.mkString(",")} forceMasked=$forceMasked"
 
-    val className =
-      s"org.apache.spark.sql.varka.execution.VarkaFusedFuzz${classCounter.addAndGet(1)}"
-    def emitWith(o: VarkaEmitOptions): Array[Byte] =
-      VarkaLoopEmitter.emitTraced(className, roots.asJava, numInputs, numLiterals, o, randomTrace)
-    val bytes = emitOrSkip(context, options)(emitWith) match {
-      case Some(b) => b
-      case None => return
-    }
-    VarkaKernelCheck.runAndCompare(context, className, bytes, roots, numInputs, lits,
-      VarkaKernelCheck.Batch(length, patterns, data, forceMasked))
+    VarkaFuzzCase(LaneType.INT, roots, numInputs, lits.map(_.toLong), length,
+      Array.tabulate(numInputs, length)((c, i) => patterns(c)(i)), data.map(_.map(_.toLong)),
+      forceMasked, options, smallOrdinal, levelOrdinal, context)
   }
 
   /**
@@ -231,7 +224,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
    * only a poisoned null lane can reach a condemning comparison, and a kernel that reads one
    * has to be caught reading it.
    */
-  private def runOneLong(iteration: Int): Unit = {
+  private def drawLong(iteration: Int): VarkaFuzzCase = {
     val rnd = shapeRandom(longSeed, iteration)
     val DrawnLong(roots, numInputs, numLiterals) = drawLongShape(rnd)
     // A floor modulus, so a negative draw lands inside the bound too: a signed `%` would put
@@ -251,17 +244,40 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
       s"length=$length patterns=${patternIds.map(patternNames).mkString(",")} " +
       s"literals=${lits.mkString(",")} forceMasked=$forceMasked"
 
-    val className =
-      s"org.apache.spark.sql.varka.execution.VarkaFusedFuzzLong${classCounter.addAndGet(1)}"
-    def emitWith(o: VarkaEmitOptions): Array[Byte] =
-      VarkaLoopEmitter.emitTraced(className, roots.asJava, numInputs, numLiterals, o, randomTrace)
-    val bytes = emitOrSkip(context, options)(emitWith) match {
+    VarkaFuzzCase(LaneType.LONG, roots, numInputs, lits, length,
+      Array.tabulate(numInputs, length)((c, i) => patterns(c)(i)), data, forceMasked, options,
+      -1, -1, context)
+  }
+
+  /**
+   * Emits the case's kernel and compares it with the reference evaluator, row by row. Throws
+   * what the check throws; returns quietly for a shape past the class-file cap, which
+   * `emitOrSkip` counts and skips.
+   */
+  private def run(c: VarkaFuzzCase): Unit = {
+    val long = c.lane == LaneType.LONG
+    val className = "org.apache.spark.sql.varka.execution.VarkaFusedFuzz" +
+      s"${if (long) "Long" else ""}${classCounter.addAndGet(1)}"
+    def emitWith(o: VarkaEmitOptions): Array[Byte] = VarkaLoopEmitter.emitTraced(
+      className, c.roots.asJava, c.numInputs, c.lits.length, o, randomTrace)
+    val bytes = emitOrSkip(c.label, c.options)(emitWith) match {
       case Some(b) => b
       case None => return
     }
-    VarkaKernelCheck.runAndCompareLong(context, className, bytes, roots, numInputs, lits,
-      VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked))
+    val patterns = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
+    if (long) {
+      VarkaKernelCheck.runAndCompareLong(c.label, className, bytes, c.roots, c.numInputs, c.lits,
+        VarkaKernelCheck.LongBatch(c.length, patterns, c.data, c.forceMasked))
+    } else {
+      VarkaKernelCheck.runAndCompare(c.label, className, bytes, c.roots, c.numInputs,
+        c.lits.map(_.toInt),
+        VarkaKernelCheck.Batch(c.length, patterns, c.data.map(_.map(_.toInt)), c.forceMasked))
+    }
   }
+
+  private def runOne(iteration: Int): Unit = run(drawInt(iteration))
+
+  private def runOneLong(iteration: Int): Unit = run(drawLong(iteration))
 
   /** The record node types of the sealed IR, by simple name. */
   private def recordNodeTypes: Set[Class[_]] = {
