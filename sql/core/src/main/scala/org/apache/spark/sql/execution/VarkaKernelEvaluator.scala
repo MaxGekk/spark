@@ -187,7 +187,7 @@ private[sql] class VarkaKernelEvaluator(
   private lazy val residualSchema: StructType =
     DataTypeUtils.fromAttributes(residualExprs.map(_.toAttribute))
   private lazy val residualProjection = UnsafeProjection.create(residualExprs, childOutput)
-  private lazy val residualConverter = new RowToColumnConverter(residualSchema)
+  private lazy val residualConverter = VarkaRowToColumn(residualSchema)
 
   /** The classified projection, for the row node's merge-at-row read-back (see 2.3). */
   private[execution] def partialPlan: Option[PartialVarkaProjection] = compiled

@@ -57,7 +57,7 @@ private[execution] class VarkaVectorProjection(
   private lazy val inputRows = new VarkaInputRows(projectList, childOutput)
   private lazy val direct = MutableProjection.create(projectList, inputRows.attributes)
   private lazy val unsafe = UnsafeProjection.create(projectList, inputRows.attributes)
-  private lazy val converter = new RowToColumnConverter(outputSchema)
+  private lazy val converter = VarkaRowToColumn(outputSchema)
 
   /**
    * Projects every row of `input` into `output`, from position 0, and returns the number of rows

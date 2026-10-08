@@ -192,7 +192,7 @@ private[sql] class VarkaFilterEvaluator(
       val attrs = positions.map(childOutput)
       genericSchema = DataTypeUtils.fromAttributes(attrs)
       genericProjection = UnsafeProjection.create(attrs, childOutput)
-      genericConverter = new RowToColumnConverter(genericSchema)
+      genericConverter = VarkaRowToColumn(genericSchema)
     }
   }
 

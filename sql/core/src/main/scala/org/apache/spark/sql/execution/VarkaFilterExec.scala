@@ -197,7 +197,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
     }
     private lazy val identityProjection = UnsafeProjection.create(childOutput, childOutput)
     private val outputSchema: StructType = DataTypeUtils.fromAttributes(childOutput)
-    private lazy val converter = new RowToColumnConverter(outputSchema)
+    private lazy val converter = VarkaRowToColumn(outputSchema)
     private var partitionIdx: Int = 0
 
     override def eval(

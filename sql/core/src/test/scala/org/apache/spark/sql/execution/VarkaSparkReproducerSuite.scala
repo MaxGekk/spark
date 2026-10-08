@@ -36,21 +36,36 @@ class VarkaSparkReproducerSuite extends VarkaSparkDifferential {
     else Files.list(dir).iterator().asScala.filter(_.toString.endsWith(".sql")).toSeq.sorted
   }
 
+  /** Why the reproducer is not what its status says, or None when it is. */
+  private def verdict(r: Reproducer): Option[String] = {
+    val now = disagreement(r.fixture, r.select, r.where, r.ansi, partitions = true)
+    if (r.status == "regression") {
+      now.map(kind => s"a regression disagrees again: $kind")
+    } else if (!r.status.startsWith("known ")) {
+      Some(s"status is 'regression' or 'known <row>': ${r.status}")
+    } else if (!now.contains(r.kind)) {
+      Some(s"a known disagreement is now ${now.getOrElse("agreement")}, not ${r.kind}: " +
+        "delete the file or mark it a regression")
+    } else {
+      None
+    }
+  }
+
   test("every saved reproducer is a regression that now agrees or a known one that still differs") {
     files.foreach { file =>
       val r = parse(new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8))
-      val now = disagreement(r.fixture, r.select, r.where, r.ansi, partitions = true)
-      withClue(s"$file: ") {
-        if (r.status == "regression") {
-          assert(now.isEmpty, s"a regression disagrees again: ${now.get}")
-        } else {
-          assert(r.status.startsWith("known "),
-            s"status is 'regression' or 'known <row>': ${r.status}")
-          assert(now.contains(r.kind),
-            s"a known disagreement is now ${now.getOrElse("agreement")}, not ${r.kind}: " +
-              "delete the file or mark it a regression")
-        }
-      }
+      assert(verdict(r).isEmpty, s"$file: ${verdict(r).getOrElse("")}")
     }
+  }
+
+  private val agreeing = Reproducer("regression", "a query that always agrees", ansi = false,
+    "values differ", "d AS c0", None,
+    fixtureSql(Seq(Seq.fill(2)("DATE'2024-01-31'") ++ Seq("3") ++ Seq.fill(9)("NULL"))))
+
+  test("a regression that agrees passes, and a known one that now agrees is stale") {
+    assert(verdict(agreeing).isEmpty)
+    val stale = verdict(agreeing.copy(status = "known VARKA-0"))
+    assert(stale.exists(_.contains("is now agreement")), stale)
+    assert(verdict(agreeing.copy(status = "wishful")).exists(_.contains("status is")))
   }
 }
