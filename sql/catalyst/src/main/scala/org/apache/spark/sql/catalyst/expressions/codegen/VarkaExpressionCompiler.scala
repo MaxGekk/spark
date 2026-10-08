@@ -1087,7 +1087,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Seq[(String, PartialFunction[Expression, Option[VarkaVectorIR]])] = Seq(
     "date leaves" -> leafArms(inputs, literals, sink),
-    "calendar" -> VarkaChronoCompiler.arms(inputs, literals, sink),
+    "calendar" -> javaFamily(VarkaChronoCompiler.arm(_, inputs, literals, sink)),
     "interval" -> javaFamily(VarkaIntervalCompiler.arm(_, inputs, literals, sink)),
     "time" -> javaFamily(VarkaTimeCompiler.arm(_, inputs, literals, sink)),
     "condition" -> javaFamily(VarkaConditionCompiler.arm(_, inputs, literals, sink)),

@@ -553,7 +553,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 252 | Comments that narrate history rewritten to explain the code as it is; and the comments the paper reading found wrong | item 74.7, `m7/READING.md` 11 | small, last |
 | 214 | Port `VarkaTimeCompiler` to Java. **Done** (`VARKA-214.md` 9, 8 October 2026). Proof: the coverage and family-chain oracles, and VARKA-191's emission times | item 81 | mechanical; an agent's |
 | 215 | Port `VarkaConditionCompiler` to Java. **Done** (`VARKA-215.md` 9, 8 October 2026). Proof: as 214's | item 81 | mechanical; an agent's |
-| 216 | Port `VarkaChronoCompiler` to Java. Proof: as 214's | item 81 | mechanical; an agent's |
+| 216 | Port `VarkaChronoCompiler` to Java. **Done** (`VARKA-216.md` 9, 8 October 2026). Proof: as 214's | item 81 | mechanical; an agent's |
 | 217 | Port the facade, `VarkaExpressionCompiler`, to Java with a result type, the size admission apart from node compilation, and `VarkaShapeCache.scala` with it. Proof: as 214's | items 81 and 74.4 | medium |
 | 224 | Benchmarks and tools in Java: the harness adapter and `VarkaEmitDump` | item 81 | small |
 | 267 | The evaluators to Java beside 251's components: `VarkaKernelEvaluator`, `VarkaFilterEvaluator`, `VarkaVectorProjection`, `VarkaFusionReport`, `VarkaExecMetrics`, and the Scala `VarkaEvaluatorBase` and `VarkaKernelPart` that 251 leaves; the exec nodes and the columnar rule stay thin Scala wrappers. Proof: as 251's | the plan review (2.3) | medium |
