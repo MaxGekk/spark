@@ -1006,7 +1006,8 @@ private[sql] object VarkaExpressionCompiler extends Logging {
   /**
    * The lowerings of the `TIME` expressions, keyed on the `DateTimeUtils` method each one's
    * replacement invokes - which is the one name that survives the optimizer (see
-   * `timeTargets`). The arithmetic is read off `DateTimeUtils` itself, not off the expression:
+   * `VarkaTimeCompiler.TIME_TARGETS`). The arithmetic is read off `DateTimeUtils` itself, not off
+   * the expression:
    *
    * {{{
    *   subtractTimes(end, start) = (end - start) / NANOS_PER_MICROS

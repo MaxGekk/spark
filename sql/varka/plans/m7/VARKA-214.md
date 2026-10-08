@@ -212,7 +212,17 @@ benchmark this task did not change. The comparisons are by `dev/varka_bench_diff
 3. **Refuted.** The Java file is 668 lines against the Scala 409, past the 400 to 480 predicted.
    The interval port was 409 against 250, a ratio of about 1.6, and this one is 1.6 again: the
    imports, `{@code}` in the javadoc, one statement per line and the early returns that replace
-   each `for` comprehension account for it. No line was added that the Scala did not have.
+   each `for` comprehension account for it. The Java also has pieces the Scala did not: the
+   `table()` cast helper, `timeAddInterval`, `narrowedOperand`, `literalUnit` and `timeToUnit`
+   extracted from the arms, the `TimeTarget` record and `Map.copyOf`.
+
+**What review of the PR found.** The first version looked a missing table key up with `Map.get`,
+where the Scala threw, so a node outside the table would have declined as "null is a TIME
+expression..."; it now fails as the Scala did. The class-initialisation error named
+`VarkaExpressionCompiler.timeTargets`, a member that no longer exists, in the Scala as well; it
+now names `TIME_TARGETS`, and so does the facade's comment. One finding is not the port's and
+became row 293: `Math.abs(Long.MIN_VALUE)` is negative, so the one-day guard on a literal interval
+lets that value through; the Scala had it too.
 
 **What the plan did not list.** The shared `VarkaFamilyArm` (3.1's correction). The benchmark has
 no TIME shape, so it could not have measured the lowering whatever the task did; the emitted

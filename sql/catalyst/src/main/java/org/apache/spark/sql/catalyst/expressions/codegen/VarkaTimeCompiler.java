@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.OptionalLong;
 
 import scala.Option;
@@ -262,7 +263,7 @@ final class VarkaTimeCompiler {
         throw new IllegalStateException(
             label + " no longer replaces into a StaticInvoke but into "
                 + replacement.getClass().getSimpleName()
-                + "; VarkaExpressionCompiler.timeTargets must be "
+                + "; VarkaTimeCompiler.TIME_TARGETS must be "
                 + "rewritten rather than quietly stop matching");
       }
     }
@@ -306,7 +307,11 @@ final class VarkaTimeCompiler {
       boolean atRoot) {
     LinkedHashMap<Object, Object> inputs = table(inputTable);
     LinkedHashMap<Object, Object> literals = table(literalTable);
-    String label = TIME_TARGETS.get(new TimeTarget(si.staticObject(), si.functionName()));
+    // A node outside the table fails here, as the Scala `timeTargets(key)` did, rather than
+    // reaching a decline text as "null".
+    String label = Objects.requireNonNull(
+        TIME_TARGETS.get(new TimeTarget(si.staticObject(), si.functionName())),
+        () -> si.staticObject().getName() + "." + si.functionName() + " is not a TIME target");
     List<Expression> args = CollectionConverters.asJava(si.arguments());
     switch (si.functionName()) {
       case "subtractTimes" -> {
