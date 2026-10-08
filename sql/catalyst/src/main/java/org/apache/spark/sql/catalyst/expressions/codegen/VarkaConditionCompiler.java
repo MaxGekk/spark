@@ -211,20 +211,20 @@ final class VarkaConditionCompiler {
     if (lanes.size() <= 1) {
       return true;
     }
-    sink.note("one kernel holds one lane, and this mixes the " + lanes.get(0) + " and "
-        + lanes.get(1) + " lanes", whole);
+    return notMixed(whole, sink, lanes.get(0), lanes.get(1));
+  }
+
+  /** Notes that {@code whole} mixes two lanes in one kernel, and returns false. */
+  private static boolean notMixed(Expression whole, DeclineSink sink, LaneType a, LaneType b) {
+    sink.note("one kernel holds one lane, and this mixes the " + a + " and " + b + " lanes",
+        whole);
     return false;
   }
 
   /** {@link #sameLane(Expression, DeclineSink, VarkaVectorIR...)} for the two a connective has. */
   private static boolean sameLane(
       Expression whole, DeclineSink sink, VarkaVectorIR a, VarkaVectorIR b) {
-    if (a.laneType() == b.laneType()) {
-      return true;
-    }
-    sink.note("one kernel holds one lane, and this mixes the " + a.laneType() + " and "
-        + b.laneType() + " lanes", whole);
-    return false;
+    return a.laneType() == b.laneType() || notMixed(whole, sink, a.laneType(), b.laneType());
   }
 
   /**
@@ -235,7 +235,8 @@ final class VarkaConditionCompiler {
    * logarithmic.
    */
   static Cond andFold(scala.collection.immutable.Seq<Cond> conds) {
-    return balancedFold(CollectionConverters.asJava(conds), VarkaVectorIR.And::new);
+    return balancedFold(
+        new ArrayList<>(CollectionConverters.asJava(conds)), VarkaVectorIR.And::new);
   }
 
   /**
@@ -243,7 +244,7 @@ final class VarkaConditionCompiler {
    * conjunction; the partial roots of a split predicate are folded with it.
    */
   static Cond orFold(scala.collection.immutable.Seq<Cond> conds) {
-    return balancedOr(CollectionConverters.asJava(conds));
+    return balancedOr(new ArrayList<>(CollectionConverters.asJava(conds)));
   }
 
   /**
@@ -289,16 +290,24 @@ final class VarkaConditionCompiler {
       scala.Function2<VarkaVectorIR, VarkaVectorIR, VarkaVectorIR> combine) {
     LinkedHashMap<Object, Object> inputs = table(inputTable);
     LinkedHashMap<Object, Object> literals = table(literalTable);
-    List<Option<VarkaVectorIR>> compiled = new ArrayList<>();
+    // Every operand is compiled, in order, even after one declines: the tables are rolled back by
+    // the caller, and a declined entry leaves them as it found them.
+    List<VarkaVectorIR> compiled = new ArrayList<>();
+    boolean all = true;
     for (Expression child : CollectionConverters.asJava(children)) {
-      compiled.add(FACADE.compileNode(child, inputs, literals, sink));
+      Option<VarkaVectorIR> node = FACADE.compileNode(child, inputs, literals, sink);
+      if (node.isDefined()) {
+        compiled.add(node.get());
+      } else {
+        all = false;
+      }
     }
-    if (compiled.isEmpty() || !compiled.stream().allMatch(Option::isDefined)) {
+    if (!all || compiled.isEmpty()) {
       return Option.empty();
     }
-    VarkaVectorIR folded = compiled.get(0).get();
+    VarkaVectorIR folded = compiled.get(0);
     for (int i = 1; i < compiled.size(); i++) {
-      folded = combine.apply(folded, compiled.get(i).get());
+      folded = combine.apply(folded, compiled.get(i));
     }
     return Option.apply(folded);
   }
@@ -316,10 +325,9 @@ final class VarkaConditionCompiler {
       DeclineSink sink) {
     LinkedHashMap<Object, Object> inputs = table(inputTable);
     LinkedHashMap<Object, Object> literals = table(literalTable);
-    // A chain of `instanceof` tests and not a pattern `switch`: Catalyst's expressions are not a
-    // sealed set, and this form compiled predicates faster than the switch it replaced in
-    // `VarkaCompileBenchmark` (VARKA-215 9). The classes are disjoint, so the order only
-    // matters where a guard falls through.
+    // A chain of `instanceof` tests: Catalyst's expressions are not a sealed set, so there is
+    // nothing for a pattern `switch` to be exhaustive over. The classes are disjoint, so the
+    // order only matters where a guard falls through.
     if (expr instanceof LessThan n) {
       return compare(CompareOp.LT, n.left(), n.right(), inputs, literals, sink);
     }
