@@ -19,11 +19,11 @@ package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
+import java.util.TreeSet;
 import java.util.function.BinaryOperator;
 
 import scala.Option;
@@ -216,6 +216,17 @@ final class VarkaConditionCompiler {
     return false;
   }
 
+  /** {@link #sameLane(Expression, DeclineSink, VarkaVectorIR...)} for the two a connective has. */
+  private static boolean sameLane(
+      Expression whole, DeclineSink sink, VarkaVectorIR a, VarkaVectorIR b) {
+    if (a.laneType() == b.laneType()) {
+      return true;
+    }
+    sink.note("one kernel holds one lane, and this mixes the " + a.laneType() + " and "
+        + b.laneType() + " lanes", whole);
+    return false;
+  }
+
   /**
    * Folds the fused conjuncts back into one root, <b>balanced</b> like {@link #orFold} and for
    * the same reason: Kleene AND is associative, so the shape is a canonicalization, and a left
@@ -305,89 +316,102 @@ final class VarkaConditionCompiler {
       DeclineSink sink) {
     LinkedHashMap<Object, Object> inputs = table(inputTable);
     LinkedHashMap<Object, Object> literals = table(literalTable);
-    return switch (expr) {
-      case LessThan n -> compare(CompareOp.LT, n.left(), n.right(), inputs, literals, sink);
-      case LessThanOrEqual n ->
-          compare(CompareOp.LE, n.left(), n.right(), inputs, literals, sink);
-      case GreaterThan n -> compare(CompareOp.GT, n.left(), n.right(), inputs, literals, sink);
-      case GreaterThanOrEqual n ->
-          compare(CompareOp.GE, n.left(), n.right(), inputs, literals, sink);
-      case EqualTo n -> compare(CompareOp.EQ, n.left(), n.right(), inputs, literals, sink);
-      // IN over date literals: an EQ chain joined by OR, which the mask algebra
-      // makes exactly SQL's IN inside a condition - a null value leaves every comparison
-      // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
-      case In in when isDateOrInterval(in.value().dataType()) -> {
-        List<OptionalInt> elements = new ArrayList<>();
-        for (Expression element : CollectionConverters.asJava(in.list())) {
-          elements.add(literalDays(element));
-        }
-        yield compileInList(in.value(), elements, in, inputs, literals, sink);
+    // A chain of `instanceof` tests and not a pattern `switch`: Catalyst's expressions are not a
+    // sealed set, and this form compiled predicates faster than the switch it replaced in
+    // `VarkaCompileBenchmark` (VARKA-215 9). The classes are disjoint, so the order only
+    // matters where a guard falls through.
+    if (expr instanceof LessThan n) {
+      return compare(CompareOp.LT, n.left(), n.right(), inputs, literals, sink);
+    }
+    if (expr instanceof LessThanOrEqual n) {
+      return compare(CompareOp.LE, n.left(), n.right(), inputs, literals, sink);
+    }
+    if (expr instanceof GreaterThan n) {
+      return compare(CompareOp.GT, n.left(), n.right(), inputs, literals, sink);
+    }
+    if (expr instanceof GreaterThanOrEqual n) {
+      return compare(CompareOp.GE, n.left(), n.right(), inputs, literals, sink);
+    }
+    if (expr instanceof EqualTo n) {
+      return compare(CompareOp.EQ, n.left(), n.right(), inputs, literals, sink);
+    }
+    // IN over date literals: an EQ chain joined by OR, which the mask algebra
+    // makes exactly SQL's IN inside a condition - a null value leaves every comparison
+    // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
+    if (expr instanceof In in && isDateOrInterval(in.value().dataType())) {
+      List<OptionalInt> elements = new ArrayList<>();
+      for (Expression element : CollectionConverters.asJava(in.list())) {
+        elements.add(literalDays(element));
       }
-      case InSet inSet when isDateOrInterval(inSet.child().dataType()) -> {
-        // InSet's set is unordered; compileInList sorts, which is what keeps the literal
-        // slots and the shape hash deterministic across runs.
-        List<OptionalInt> elements = new ArrayList<>();
-        for (Object element : CollectionConverters.asJava(inSet.hset())) {
-          elements.add(
-              element instanceof Integer days ? OptionalInt.of(days) : OptionalInt.empty());
-        }
-        yield compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
+      return compileInList(in.value(), elements, in, inputs, literals, sink);
+    }
+    if (expr instanceof InSet inSet && isDateOrInterval(inSet.child().dataType())) {
+      // InSet's set is unordered; compileInList sorts, which is what keeps the literal
+      // slots and the shape hash deterministic across runs.
+      List<OptionalInt> elements = new ArrayList<>();
+      for (Object element : CollectionConverters.asJava(inSet.hset())) {
+        elements.add(
+            element instanceof Integer days ? OptionalInt.of(days) : OptionalInt.empty());
       }
-      case And and -> {
-        Option<Cond> left = compileCond(and.left(), inputs, literals, sink);
-        if (left.isEmpty()) {
-          yield left;
-        }
-        Option<Cond> right = compileCond(and.right(), inputs, literals, sink);
-        if (right.isEmpty()) {
-          yield right;
-        }
-        if (!sameLane(expr, sink, left.get(), right.get())) {
-          yield Option.empty();
-        }
-        yield Option.apply(new VarkaVectorIR.And(left.get(), right.get()));
+      return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
+    }
+    if (expr instanceof And and) {
+      Option<Cond> left = compileCond(and.left(), inputs, literals, sink);
+      if (left.isEmpty()) {
+        return left;
       }
-      // A disjunction of ranges over one int or date column - the partition-key filter a BI tool
-      // writes for a set of date ranges - is one range set, whose code does not grow with the
-      // ranges, instead of a tree of comparisons whose code does.
-      case Or or when sink.rangeSets() && rangeSet(or).isPresent() -> {
-        RangeSet set = rangeSet(or).get();
-        yield Option.apply(new InRanges(FACADE.columnRef(set.column(), inputs, LaneType.INT),
-            set.bounds()));
+      Option<Cond> right = compileCond(and.right(), inputs, literals, sink);
+      if (right.isEmpty()) {
+        return right;
       }
-      case Or or -> {
-        Option<Cond> left = compileCond(or.left(), inputs, literals, sink);
-        if (left.isEmpty()) {
-          yield left;
+      if (!sameLane(expr, sink, left.get(), right.get())) {
+        return Option.empty();
+      }
+      return Option.apply(new VarkaVectorIR.And(left.get(), right.get()));
+    }
+    if (expr instanceof Or or) {
+      // A disjunction of ranges over one int or date column - the partition-key filter a BI
+      // tool writes for a set of date ranges - is one range set, whose code does not grow with
+      // the ranges, instead of a tree of comparisons whose code does.
+      if (sink.rangeSets()) {
+        Optional<RangeSet> set = rangeSet(or);
+        if (set.isPresent()) {
+          return Option.apply(new InRanges(
+              FACADE.columnRef(set.get().column(), inputs, LaneType.INT), set.get().bounds()));
         }
-        Option<Cond> right = compileCond(or.right(), inputs, literals, sink);
-        if (right.isEmpty()) {
-          yield right;
-        }
-        if (!sameLane(expr, sink, left.get(), right.get())) {
-          yield Option.empty();
-        }
-        yield Option.apply(new VarkaVectorIR.Or(left.get(), right.get()));
       }
-      case Not not -> {
-        Option<Cond> child = compileCond(not.child(), inputs, literals, sink);
-        yield child.isEmpty() ? child : Option.apply(new VarkaVectorIR.Not(child.get()));
+      Option<Cond> left = compileCond(or.left(), inputs, literals, sink);
+      if (left.isEmpty()) {
+        return left;
       }
-      // The validity predicates: IS NOT NULL is the IR's first total condition
-      // (never unknown), and IS NULL is its NOT - a slot swap in the emitter, no code.
-      case IsNotNull n -> compileValidity(n.child(), expr, inputs, literals, sink);
-      case IsNull n -> {
-        Option<Cond> validity = compileValidity(n.child(), expr, inputs, literals, sink);
-        yield validity.isEmpty() ? validity : Option.apply(new VarkaVectorIR.Not(validity.get()));
+      Option<Cond> right = compileCond(or.right(), inputs, literals, sink);
+      if (right.isEmpty()) {
+        return right;
       }
-      // Defensive, mirroring compileNode: hand-built Nvl/Nvl2 in tests and the fusion report
-      // arrive unreplaced; real queries never do.
-      case RuntimeReplaceable r -> compileCond(r.replacement(), inputs, literals, sink);
-      default -> {
-        sink.note("unsupported predicate", expr);
-        yield Option.empty();
+      if (!sameLane(expr, sink, left.get(), right.get())) {
+        return Option.empty();
       }
-    };
+      return Option.apply(new VarkaVectorIR.Or(left.get(), right.get()));
+    }
+    if (expr instanceof Not not) {
+      Option<Cond> child = compileCond(not.child(), inputs, literals, sink);
+      return child.isEmpty() ? child : Option.apply(new VarkaVectorIR.Not(child.get()));
+    }
+    // The validity predicates: IS NOT NULL is the IR's first total condition
+    // (never unknown), and IS NULL is its NOT - a slot swap in the emitter, no code.
+    if (expr instanceof IsNotNull n) {
+      return compileValidity(n.child(), expr, inputs, literals, sink);
+    }
+    if (expr instanceof IsNull n) {
+      Option<Cond> validity = compileValidity(n.child(), expr, inputs, literals, sink);
+      return validity.isEmpty() ? validity : Option.apply(new VarkaVectorIR.Not(validity.get()));
+    }
+    // Defensive, mirroring compileNode: hand-built Nvl/Nvl2 in tests and the fusion report
+    // arrive unreplaced; real queries never do.
+    if (expr instanceof RuntimeReplaceable r) {
+      return compileCond(r.replacement(), inputs, literals, sink);
+    }
+    return decline("unsupported predicate", expr, sink);
   }
 
   private static boolean isDateOrInterval(DataType dataType) {
@@ -425,11 +449,18 @@ final class VarkaConditionCompiler {
       LinkedHashMap<Object, Object> inputs,
       LinkedHashMap<Object, Object> literals,
       DeclineSink sink) {
-    if (elements.isEmpty() || elements.stream().anyMatch(OptionalInt::isEmpty)) {
+    TreeSet<Integer> days = new TreeSet<>();
+    for (OptionalInt element : elements) {
+      if (element.isEmpty()) {
+        sink.note("IN list has a null or non-literal element", whole);
+        return Option.empty();
+      }
+      days.add(element.getAsInt());
+    }
+    if (days.isEmpty()) {
       sink.note("IN list has a null or non-literal element", whole);
       return Option.empty();
     }
-    List<Integer> days = elements.stream().map(OptionalInt::getAsInt).distinct().sorted().toList();
     if (days.size() > FACADE.MaxInLiterals()) {
       sink.note("IN list longer than the fused cap of " + FACADE.MaxInLiterals(), whole);
       return Option.empty();
@@ -533,21 +564,26 @@ final class VarkaConditionCompiler {
     for (Expression part : parts) {
       range(part).ifPresent(ranges::add);
     }
-    if (parts.size() < 2 || ranges.size() != parts.size()
-        || distinctColumns(ranges) != 1) {
+    if (parts.size() < 2 || ranges.size() != parts.size() || !oneColumn(ranges)) {
       return Optional.empty();
     }
+    List<Range> nonEmpty = new ArrayList<>(ranges.size());
+    for (Range r : ranges) {
+      if (r.lo() <= r.hi()) {
+        nonEmpty.add(r);
+      }
+    }
+    // A stable sort by lower bound, as the merge below needs.
+    nonEmpty.sort(Comparator.comparingLong(Range::lo));
     List<long[]> merged = new ArrayList<>();
-    ranges.stream().filter(r -> r.lo() <= r.hi())
-        .sorted(Comparator.comparingLong(Range::lo))
-        .forEach(r -> {
-          long[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
-          if (last != null && r.lo() <= last[1] + 1) {
-            last[1] = Math.max(last[1], r.hi());
-          } else {
-            merged.add(new long[] {r.lo(), r.hi()});
-          }
-        });
+    for (Range r : nonEmpty) {
+      long[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
+      if (last != null && r.lo() <= last[1] + 1) {
+        last[1] = Math.max(last[1], r.hi());
+      } else {
+        merged.add(new long[] {r.lo(), r.hi()});
+      }
+    }
     if (merged.isEmpty()) {
       return Optional.empty();
     }
@@ -565,13 +601,16 @@ final class VarkaConditionCompiler {
     return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, v));
   }
 
-  /** The number of distinct (ordinal, data type) pairs among the ranges' columns. */
-  private static int distinctColumns(List<Range> ranges) {
-    var seen = new HashSet<List<Object>>();
+  /** Whether every range is over the same (ordinal, data type) column as the first. */
+  private static boolean oneColumn(List<Range> ranges) {
+    BoundReference first = ranges.get(0).column();
     for (Range r : ranges) {
-      seen.add(List.of(r.column().ordinal(), r.column().dataType()));
+      if (r.column().ordinal() != first.ordinal()
+          || !r.column().dataType().equals(first.dataType())) {
+        return false;
+      }
     }
-    return seen.size();
+    return true;
   }
 
   private static void disjuncts(Expression e, List<Expression> out) {
@@ -622,13 +661,18 @@ final class VarkaConditionCompiler {
       Expression l, Expression r, boolean columnIsLower, boolean strict) {
     long step = strict ? 1L : 0L;
     Optional<BoundReference> left = column(l);
-    if (left.isPresent() && bound(r, left.get()).isPresent()) {
-      return Optional.of(sideOf(left.get(), bound(r, left.get()).getAsLong(), columnIsLower, step));
+    if (left.isPresent()) {
+      OptionalLong v = bound(r, left.get());
+      if (v.isPresent()) {
+        return Optional.of(sideOf(left.get(), v.getAsLong(), columnIsLower, step));
+      }
     }
     Optional<BoundReference> right = column(r);
-    if (right.isPresent() && bound(l, right.get()).isPresent()) {
-      return Optional.of(
-          sideOf(right.get(), bound(l, right.get()).getAsLong(), !columnIsLower, step));
+    if (right.isPresent()) {
+      OptionalLong v = bound(l, right.get());
+      if (v.isPresent()) {
+        return Optional.of(sideOf(right.get(), v.getAsLong(), !columnIsLower, step));
+      }
     }
     return Optional.empty();
   }
