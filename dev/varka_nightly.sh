@@ -17,12 +17,14 @@
 #
 # The checks that need volume or an idle machine, in one command that leaves a
 # dated log: the machine canary, the IR fuzzer at ten thousand iterations with
-# a fresh seed, the exhaustive calendar sweeps, the deoptimization-cycle guard
-# and the inlining-cliff guard. Optionally the whole gate.
+# a fresh seed, the random differential against vanilla Spark (VARKA-262), the
+# exhaustive calendar sweeps, the deoptimization-cycle guard and the
+# inlining-cliff guard. Optionally the whole gate.
 #
-#   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), sweeps, deopt, cliff
+#   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000), sweeps, deopt, cliff
 #   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-cliff   # a quick trial
 #   dev/varka_nightly.sh --gate           # the standing gate as well
+#   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-cliff
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
 # make_date kernel and fails if any of them enters the C2 deoptimization cycle, reading the
@@ -47,11 +49,13 @@ usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 
 root="$(git rev-parse --show-toplevel)"; cd "$root"
 iterations=10000; seed="$(date +%Y%m%d)"; sweep=1; deopt=1; cliff=1; gate=0
+sparkfuzz=50000
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
     --iterations) iterations="$2"; shift 2 ;;
     --seed) seed="$2"; shift 2 ;;
+    --sparkfuzz-iterations) sparkfuzz="$2"; shift 2 ;;
     --skip-sweep) sweep=0; shift ;;
     --skip-deopt) deopt=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
@@ -80,6 +84,13 @@ fuzz_opts="set Test/javaOptions ++= Seq(\"-Dvarka.fuzz.iterations=$iterations\",
 
 run_step canary dev/varka_bench_canary.sh
 run_step fuzz build/sbt -batch "project catalyst" "$fuzz_opts" 'testOnly *VarkaIrFuzzSuite'
+# Random compositions of the coverage rows over random data, Varka off against on (VARKA-262).
+# A disagreement leaves its shrunk reproducer under sql/core/target/varka-sparkfuzz/ and its text in the log.
+if [ "$sparkfuzz" -gt 0 ]; then
+  run_step sparkfuzz build/sbt -batch "project sql" \
+    "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.iterations=$sparkfuzz\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \
+    'testOnly *VarkaSparkFuzzSuite *VarkaSparkReproducerSuite'
+fi
 if [ "$sweep" -eq 1 ]; then
   run_step sweep build/sbt -batch "project catalyst" \
     'set Test/javaOptions += "-Dvarka.sweep=true"' \
@@ -94,12 +105,12 @@ fi
 [ "$gate" -eq 1 ] && run_step gate dev/varka_gate.sh
 
 echo
-echo "fuzzer seed $seed, $iterations iterations"
-printf '%-8s %-7s %6s  %s\n' step status secs log
+echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz compositions"
+printf '%-9s %-7s %6s  %s\n' step status secs log
 bad=0
-for s in canary fuzz sweep deopt cliff gate; do
+for s in canary fuzz sparkfuzz sweep deopt cliff gate; do
   [ -n "${status[$s]:-}" ] || continue
-  printf '%-8s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
+  printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))
 done
 exit "$bad"

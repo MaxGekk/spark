@@ -121,6 +121,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A skip list without reasons rots; a marker that fails when its claim stops being true cannot](sql/varka/skills/testing-and-debugging.md#a-skip-list-without-reasons-rots-a-marker-that-fails-when-its-claim-stops-being-true-cannot)
 * [A long opt-in run needs the suite timeout raised, or it fails as a hang](sql/varka/skills/testing-and-debugging.md#a-long-opt-in-run-needs-the-suite-timeout-raised-or-it-fails-as-a-hang)
 * [A fuzz failure arrives shrunk, so read the shrunk case and replay by seed](sql/varka/skills/testing-and-debugging.md#a-fuzz-failure-arrives-shrunk-so-read-the-shrunk-case-and-replay-by-seed)
+* [The random differential against Spark: read the shrunk reproducer, check the pool, mind the fixture](sql/varka/skills/testing-and-debugging.md#the-random-differential-against-spark-read-the-shrunk-reproducer-check-the-pool-mind-the-fixture)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
 * [C2 Compile Latency Is the Wide-Vector-Loop Cliff (root cause, proven)](sql/varka/skills/the-jit.md#c2-compile-latency-is-the-wide-vector-loop-cliff-root-cause-proven)
