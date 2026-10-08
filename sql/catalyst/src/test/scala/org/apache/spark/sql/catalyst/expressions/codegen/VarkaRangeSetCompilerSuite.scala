@@ -17,6 +17,9 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen
 
+import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
+
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{And, BoundReference, EqualTo, Expression,
   GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual, Literal, Or}
@@ -41,7 +44,8 @@ class VarkaRangeSetCompilerSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   private def or(es: Expression*): Or = es.reduceLeft(Or(_, _)).asInstanceOf[Or]
 
-  private def bounds(e: Or): Option[Seq[Int]] = VarkaConditionCompiler.rangeSet(e).map(_._2)
+  private def bounds(e: Or): Option[Seq[Int]] =
+    VarkaConditionCompiler.rangeSet(e).map(_.bounds.asScala.toSeq.map(_.intValue)).toScala
 
   test("ranges are sorted and merged where they overlap or touch") {
     assert(bounds(or(between(k, 90, 101), between(k, -5, 0), between(k, 1, 4),
