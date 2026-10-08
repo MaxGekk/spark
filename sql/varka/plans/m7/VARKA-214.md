@@ -68,6 +68,13 @@ The recipe is VARKA-175's, unchanged, and this task adds no decision to it:
   reached through `VarkaExpressionCompiler$.MODULE$`: the four costs VARKA-175 9 priced, which
   go away with the facade (row 217), not here.
 
+*Correction, made while porting.* The arm's return type was a nested interface of
+`VarkaIntervalCompiler`, and `javaFamily` took exactly that type, so the time family could not
+return its own. Rows 215 and 216 would have borrowed the interval family's type in turn, so the
+interface became one package-private `VarkaFamilyArm` that the three families and `javaFamily`
+share. This touches `VarkaIntervalCompiler` (one nested interface removed, one return type
+renamed), which 3.2 did not list.
+
 ### 3.2 What is deliberately unchanged
 
 * **The decline texts, the order in which arguments are compiled, and the shapes that fall
@@ -107,6 +114,8 @@ scan still sees the family is `coverage.json` byte-identical.
 |---|---|
 | `sql/catalyst/src/main/java/.../codegen/VarkaTimeCompiler.java` | the port |
 | `sql/catalyst/src/main/scala/.../codegen/VarkaTimeCompiler.scala` | deleted |
+| `sql/catalyst/src/main/java/.../codegen/VarkaFamilyArm.java` | the arm type every Java family returns, hoisted out of the interval family |
+| `sql/catalyst/src/main/java/.../codegen/VarkaIntervalCompiler.java` | its nested arm interface replaced by `VarkaFamilyArm` |
 | `sql/catalyst/src/main/scala/.../codegen/VarkaExpressionCompiler.scala` | the `"time"` chain entry; `compileRoot`'s call and its `timeTargets` read |
 | `sql/catalyst/src/test/scala/.../varka/VarkaCoverageSuite.scala` | the file moves from the Scala list to the Java one |
 | `sql/catalyst/src/test/scala/.../codegen/VarkaExpressionCompilerSuite.scala` | the `timeTargets` and `timeAddIntervalTruncates` readers |
@@ -169,4 +178,46 @@ must clear.
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Done on 8 October 2026. The port is `VarkaTimeCompiler.java`; the Scala file is deleted.
+
+**The proof held.** `VarkaEmittedBytesSuite`, `VarkaCoverageSuite`, `VarkaFamilyChainSuite` and
+`VarkaExpressionCompilerSuite` pass (145 tests, one cancelled, the option audit that is opt-in),
+with `emitted_bytes.json` and `coverage.json` unchanged and nothing regenerated. The 44 Varka
+suites of `catalyst` pass (542 tests, 36 cancelled). A comparison of the string constants of the
+two files finds every decline text in the Java file.
+
+**The emission times** were taken four times on the idle laptop the same morning, two of master
+and two of the port, each a full `dev/varka_bench_regen.sh catalyst VarkaEmissionBenchmark` at
+both widths. They are not committed: the committed file is master's from 29 September and reads
+about a third slower than master does today, so a regenerated file would move every row of a
+benchmark this task did not change. The comparisons are by `dev/varka_bench_diff.py`.
+
+* Two runs of master agree to within 3% on every row at both widths. Two runs of the port differ
+  by up to 6% on a row, so the benchmark's noise is wider than that pair alone showed.
+* At 128 bits the port is within 4% of master on every row, in both pairs.
+* At 256 bits the port reads faster, not slower: in the first pair five of the kernel-wide rows
+  are 4 to 12% faster, growing with the output count, and in the second pair most rows are 3 to 6%
+  faster. A row that reads slower in one pair (3 to 6%, a different one each time) does not read
+  slower in the other.
+
+**Predictions scored.**
+
+1. **Held.** The bytes do not move.
+2. **Half held.** No row is reproducibly slower, but "within the noise on every row" is not what
+   the 256-bit file shows: it shows the port consistently a few percent faster. Nothing in this
+   task explains it. Reading the code, the chain's `"time"` entry now builds a little more per
+   node, not less, so the cause may be the JIT's treatment of the emitter around a different
+   class layout rather than the port's own work; that was not checked. It is recorded as
+   measured and not claimed as an improvement.
+3. **Refuted.** The Java file is 668 lines against the Scala 409, past the 400 to 480 predicted.
+   The interval port was 409 against 250, a ratio of about 1.6, and this one is 1.6 again: the
+   imports, `{@code}` in the javadoc, one statement per line and the early returns that replace
+   each `for` comprehension account for it. No line was added that the Scala did not have.
+
+**What the plan did not list.** The shared `VarkaFamilyArm` (3.1's correction). The benchmark has
+no TIME shape, so it could not have measured the lowering whatever the task did; the emitted
+bytes are the proof of that, as 2 said.
+
+**Left for later.** Rows 215 and 216 follow the same recipe and now share the arm type.
+Row 217 removes the boundary costs (`scala.Option`, the erased tables, the module access) from
+all four families at once.
