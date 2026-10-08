@@ -232,4 +232,14 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(warmedName.substring(prefixLength) ===
       VarkaShapeCacheImpl.WARMED_MARK + plainName.substring(prefixLength))
   }
+
+  test("the JIT state a released warm-up reports names the compilers, the cache and the queue") {
+    // What VARKA-295 needs from the next failure on CI: whether C2 was off, the code cache full,
+    // or the queue backed up behind other methods. Read here on a JVM that has compiled a little.
+    val state = VarkaKernelWarmup.jitState()
+    assert(state.startsWith("JIT: "), state)
+    assert(state.contains("compile time"), state)
+    assert(state.contains("CodeHeap"), state)
+    assert(state.contains("compile queue of"), state)
+  }
 }

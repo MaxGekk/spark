@@ -20,12 +20,16 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
+
+import javax.management.ObjectName;
 
 import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
@@ -278,6 +282,47 @@ public final class VarkaKernelWarmup {
     return true;
   }
 
+  // What the JIT was doing when the last warm-up was released at its deadline; see jitState.
+  private static volatile String lastReleaseJitState = "";
+
+  /**
+   * The JIT's state when the most recent warm-up ran out of its {@link #DEADLINE_SECONDS}, or
+   * empty if none has: the compile queue, the compilers' total time and the code cache's use.
+   * A release at the deadline means C2 never finished the kernel, and this is what says whether
+   * the queue was backed up behind other methods, the compilers were off, or the cache was full
+   * (VARKA-295).
+   */
+  public static String lastReleaseJitState() {
+    return lastReleaseJitState;
+  }
+
+  static String jitState() {
+    var state = new StringBuilder("JIT: ");
+    var compilation = ManagementFactory.getCompilationMXBean();
+    if (compilation != null && compilation.isCompilationTimeMonitoringSupported()) {
+      state.append("compile time ").append(compilation.getTotalCompilationTime()).append(" ms; ");
+    }
+    for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+      if (pool.getName().startsWith("CodeHeap")) {
+        state.append(pool.getName()).append(' ').append(pool.getUsage().getUsed() >> 20)
+            .append('/').append(pool.getUsage().getMax() >> 20).append(" MB; ");
+      }
+    }
+    try {
+      Object queue = ManagementFactory.getPlatformMBeanServer().invoke(
+          new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerQueue",
+          new Object[] {null}, new String[] {String[].class.getName()});
+      String[] lines = String.valueOf(queue).split("\\R");
+      state.append("compile queue of ").append(lines.length).append(" lines: ");
+      for (int i = 0; i < Math.min(lines.length, 12); i++) {
+        state.append(lines[i].strip()).append(" | ");
+      }
+    } catch (Exception | LinkageError e) {
+      state.append("compile queue unavailable: ").append(e);
+    }
+    return state.toString();
+  }
+
   /** The most recent warm-ups' outcomes, oldest first. */
   public static List<Outcome> recentOutcomes() {
     synchronized (OUTCOMES) {
@@ -516,7 +561,8 @@ public final class VarkaKernelWarmup {
           }
           if (System.nanoTime() - deadline > 0) {
             warmth.release();
-            why = "no compile after " + DEADLINE_SECONDS + " seconds";
+            lastReleaseJitState = jitState();
+            why = "no compile after " + DEADLINE_SECONDS + " seconds; " + lastReleaseJitState;
             break;
           }
         }
