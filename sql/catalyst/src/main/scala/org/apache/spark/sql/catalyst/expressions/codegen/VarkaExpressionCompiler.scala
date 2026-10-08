@@ -1006,7 +1006,8 @@ private[sql] object VarkaExpressionCompiler extends Logging {
   /**
    * The lowerings of the `TIME` expressions, keyed on the `DateTimeUtils` method each one's
    * replacement invokes - which is the one name that survives the optimizer (see
-   * `timeTargets`). The arithmetic is read off `DateTimeUtils` itself, not off the expression:
+   * `VarkaTimeCompiler.TIME_TARGETS`). The arithmetic is read off `DateTimeUtils` itself, not off
+   * the expression:
    *
    * {{{
    *   subtractTimes(end, start) = (end - start) / NANOS_PER_MICROS
@@ -1040,9 +1041,8 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       literals: mutable.LinkedHashMap[Int, Int],
       sink: DeclineSink): Option[VarkaVectorIR] = expr match {
     case r: RuntimeReplaceable => compileRoot(r.replacement, inputs, literals, sink)
-    case si: StaticInvoke
-        if VarkaTimeCompiler.timeTargets.contains((si.staticObject, si.functionName)) =>
-      VarkaTimeCompiler.compileTime(si, inputs, literals, sink, atRoot = true)
+    case si: StaticInvoke if VarkaTimeCompiler.isTimeTarget(si) =>
+      VarkaTimeCompiler.compileTime(si, inputs, literals, sink, true)
     case other => compileNode(other, inputs, literals, sink)
   }
 
@@ -1089,7 +1089,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
     "date leaves" -> leafArms(inputs, literals, sink),
     "calendar" -> VarkaChronoCompiler.arms(inputs, literals, sink),
     "interval" -> javaFamily(VarkaIntervalCompiler.arm(_, inputs, literals, sink)),
-    "time" -> VarkaTimeCompiler.arms(inputs, literals, sink),
+    "time" -> javaFamily(VarkaTimeCompiler.arm(_, inputs, literals, sink)),
     "condition" -> VarkaConditionCompiler.arms(inputs, literals, sink),
     "int arithmetic" -> arithmeticArms(inputs, literals, sink))
 
@@ -1099,7 +1099,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
    * none does; the arm's `compile()` runs only once the chain has chosen it, which keeps the
    * matching side-effect free the way a partial function's `isDefinedAt` is.
    */
-  private def javaFamily(claim: Expression => VarkaIntervalCompiler.Arm)
+  private def javaFamily(claim: Expression => VarkaFamilyArm)
       : PartialFunction[Expression, Option[VarkaVectorIR]] =
     Function.unlift((e: Expression) => Option(claim(e))).andThen(_.compile())
 
