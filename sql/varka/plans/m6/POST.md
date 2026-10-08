@@ -311,8 +311,8 @@ C2 inlines at most 8000 bytes of bytecode into one compilation,
 JDK lets you change. At 16 branches it inlines five of six split methods; at 300,
 11 of 101. Each refused method is compiled on its own, so the code is compiled
 and still pays a call per method for every row. The same refusals show inside a
-stage on apache/spark#59069, SPARK-33301's split of `CASE WHEN` there, still in
-review. Varka's calls are per batch, not per row, and the numbers in the next
+stage on apache/spark#59225, SPARK-33301's split of `CASE WHEN` there, merged on
+8 October 2026 for 4.4.0. Varka's calls are per batch, not per row, and the numbers in the next
 section include every one of them.
 
 *A second limit sits below 8000 bytes. C1, HotSpot's first compiler, refuses a
