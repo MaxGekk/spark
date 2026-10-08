@@ -1,6 +1,6 @@
 -- VARKA-262 reproducer
--- status: known VARKA-299
--- note: found by the first 20000-composition run (seed 20261008, iteration 93); a relation with a VOID column and a batch the kernel declines
+-- status: regression
+-- note: found by the first 20000-composition run (seed 20261008, iteration 93), fixed by VARKA-299: a relation with a VOID column and a batch the kernel declines
 -- ansi: false
 -- kind: only Varka throws: UNSUPPORTED_DATATYPE
 -- select: greatest(l, l2) AS c0, date_add(d, i) AS c1
