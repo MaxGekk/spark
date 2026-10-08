@@ -231,3 +231,25 @@ bytes are the proof of that, as 2 said.
 **Left for later.** Rows 215 and 216 follow the same recipe and now share the arm type.
 Row 217 removes the boundary costs (`scala.Option`, the erased tables, the module access) from
 all four families at once.
+
+### 9.1 Correction, 8 October 2026 (made in VARKA-215)
+
+Two statements in 9 are wrong, and the scoring of prediction 2 rests on them.
+
+* **The sign.** `dev/varka_bench_diff.py` compares the benchmark's *rate*, so a minus is slower.
+  The 256-bit kernel-wide rows that 9 calls "4 to 12% faster" were 4 to 11% *slower* in the first
+  pair of the port against master and 4 to 6% slower in the second; at 128 bits the second pair
+  read 3 to 4% slower on several rows. The absolute times, which should have been read first, say
+  the same.
+* **What the benchmark measures.** `VarkaEmissionBenchmark` builds IR by hand and times only
+  `VarkaLoopEmitter.emit`. It never calls `VarkaExpressionCompiler`, so no change to a family
+  compiler can move it, and 2 and 6 were wrong to say it measures "the chain's `time` entry". The
+  rows moved between builds for a reason that is not the port's code (the next port moved the
+  same rows the other way), and the benchmark cannot score prediction 2 either way.
+
+The instrument that does reach the family is `VarkaCompileBenchmark`, added by VARKA-215. Run on
+the commit before this port and on master after it, two runs each, interleaved on the idle laptop:
+the TIME shape (`hour`, `minute`, `second`) compiles in about 10,100 ns a call before and after,
+1.5% and 2% apart at the two widths, inside the 3 to 9% that two runs of one tree differ by, and
+no shape moves reproducibly. **Prediction 2 held**, on the right benchmark.
+

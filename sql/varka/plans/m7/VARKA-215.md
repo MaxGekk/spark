@@ -29,10 +29,12 @@ of 214, fixed before the code:
   one test that calls `rangeSet` directly) and the fuzzers that compose conditions.
 * **The decline texts**: every string constant of the Scala file found in the Java file, by a
   comparison of the two.
-* **Emission times**: unlike 214's, this benchmark does reach the family. `VarkaEmissionBenchmark`
-  emits `a predicate: d < d2 AND d IS NOT NULL`, and every other shape passes through the
-  chain's `"condition"` entry, so the pair measures the family's matching and not only the chain.
-  Two runs of master and two of the port, the same morning on an idle machine, both widths.
+* **Emission times**: two runs of master and two of the port of `VarkaEmissionBenchmark`, the same
+  morning on an idle machine, both widths. *Correction, made while measuring:* this bullet first
+  said the benchmark reaches the family, because it emits a predicate shape. It does not: it
+  builds IR by hand and times only the emitter, so it cannot see this class (see 9, and the
+  correction to 214 in `VARKA-214.md` 9.1). The instrument that does is
+  `VarkaCompileBenchmark`, added with this port.
 
 Baseline, taken on `origin/master` at `fe857dc6d4a` on 8 October 2026 before the port, on the idle
 laptop with `dev/varka_bench_regen.sh catalyst VarkaEmissionBenchmark` (both widths, twice, the
@@ -148,4 +150,57 @@ it would move every row of a benchmark this task did not change (214 9).
 
 ## 9. Outcome
 
-Filled in when the measurement lands.
+Done on 8 October 2026.
+
+**The proof held.** `VarkaEmittedBytesSuite`, `VarkaCoverageSuite`, `VarkaFamilyChainSuite`,
+`VarkaExpressionCompilerSuite` and `VarkaRangeSetCompilerSuite` pass (151 tests, one cancelled,
+the opt-in option audit), with `emitted_bytes.json` and `coverage.json` unchanged and nothing
+regenerated; the 44 Varka suites of `catalyst` pass (542 tests, 36 cancelled); and every decline
+text of the Scala file is in the Java file.
+
+**The emission benchmark could not measure this class.** It was run as planned, twice on master and
+twice on the port. In all four port-against-master comparisons the 256-bit kernel-wide rows read 3
+to 9% faster, growing with the output count, and the 128-bit file moved up to 10% between two runs
+of the same tree. The cause is not the port: the benchmark never calls the compiler, which is also
+what undid 214's reading of the same rows (`VARKA-214.md` 9.1), where they moved the other way.
+
+**The measurement that does reach it.** `VarkaCompileBenchmark` (`sql/catalyst/benchmarks`,
+committed for the final form) times one `compile` or `compilePredicate` call per shape. Median of
+the runs, master against the final port, in nanoseconds a call, the same at both widths within 3%:
+
+| shape | master | port | less time by |
+|---|---:|---:|---:|
+| calendar projection of six | 12293 | 12427 | within noise |
+| TIME projection of three | 10225 | 10035 | within noise |
+| conditionals (IF, coalesce, greatest, a six-branch CASE WHEN) | 23833 | 23598 | within noise |
+| a projection of sixty mixed outputs | 553185 | 544301 | within noise |
+| range, IS NOT NULL and an int comparison | 4319 | 3920 | 9% |
+| IN over eight dates | 2909 | 2490 | 14% |
+| a set of three date ranges | 3060 | 2210 | 28% |
+| NOT, OR and IS NULL over two dates | 2329 | 2140 | 8% |
+
+Two runs of master differ by up to 3% on a row. The projections, which reach the arms only, do
+not move; the predicates, which reach `compileCond` and `rangeSet`, compile faster.
+
+**What this took, and what the first reading got wrong.** The plain port was already faster on the
+predicates (6 to 16%). Two steps made it faster still, each measured against master in an
+interleaved pair: `compileCond` as a chain of `instanceof` tests in place of a pattern `switch`,
+with `rangeSet` run once where the Scala ran it twice, and loops and a sorted set in place of
+streams in `rangeSet` and `compileInList`. The results were first read with the sign reversed
+(the diff tool's change column is a rate), and the "fixes" were first thought to be curing a 40%
+slowdown; the absolute times, read at last, showed they were widening a speed-up. A scratch loop
+that compiled one predicate over and over under JFR agreed with the direction: the port took 1749
+ns a call for the range set against master's 2593, and 2188 against 2534 for the IN list.
+
+**Predictions scored.**
+
+1. **Held.** The bytes do not move.
+2. **Not scorable on the emission benchmark, held on the right one.** No shape compiles
+   reproducibly slower; four of the eight compile faster.
+3. **Refuted.** The Java file is 781 lines against the Scala 443 (1.8 times), not 480 to 560. 214's
+   was 1.6 times. The `rangeSet` records, the early returns in `CASE WHEN` and the loops that
+   replaced the streams account for it.
+
+**Left for later.** Row 216 follows. `VarkaCompileBenchmark` serves 216, 217 and 222 (which asks
+for "compile time measured before and after"). A sixteen-branch `CASE WHEN` does not fuse as a
+whole, which is why the benchmark's has six; that is the compiler's cap, not this task's.

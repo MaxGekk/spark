@@ -101,6 +101,9 @@ object VarkaCompileBenchmark extends BenchmarkBase {
 
   private val callsPerIteration = 200
 
+  /** Keeps the compiler's results live. */
+  @volatile private var blackhole = 0
+
   override def runBenchmarkSuite(mainArgs: Array[String]): Unit = {
     var sink = 0
     runBenchmark("compiling an expression into the IR") {
@@ -136,7 +139,6 @@ object VarkaCompileBenchmark extends BenchmarkBase {
       }
       benchmark.run()
     }
-    // Keeps the compiler's results live.
-    if (sink == Int.MinValue) println(sink)
+    blackhole = sink
   }
 }
