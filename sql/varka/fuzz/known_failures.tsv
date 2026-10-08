@@ -1,0 +1,6 @@
+# The fuzz failures that are known (VARKA-277; VarkaKnownFailures).
+# Tab separated: lane (int or long), seed, iteration, signature kind, signature text, reason.
+# A fuzzer's failure with a listed signature does not fail the run; a listed entry that its
+# lane, seed and iteration no longer reproduce fails as stale, so the list only shrinks.
+# The reason names the plan row or ticket that owns the bug. At the master that added this file
+# no fuzzer fails, so it holds no entries.

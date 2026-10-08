@@ -650,3 +650,24 @@ passing.
   `-Dvarka.test.watchdog.minutes=<minutes>` for the watchdog's, set by the script that launches
   the run, with the expected duration written beside it. A run that will take hours is also
   better split by its natural unit - a divisor, a seed - so each piece stays inside the caps.
+
+## A fuzz failure arrives shrunk, so read the shrunk case and replay by seed
+
+`VarkaIrFuzzSuite` shrinks its own failures (VARKA-277): the test fails with the drawn case and
+then `shrunk to lane=int roots=[...] options={...} length=1 ...`, with the signature (the kind of
+failure and its message with the numbers taken out) and the number of runs it cost. Read the
+shrunk line first; the options named are the delta from the defaults and the roots are the
+smallest tree that still fails the same way. Replay the drawn case with `-Dvarka.fuzz.seed` and
+`-Dvarka.fuzz.only`, as before; `-Dvarka.fuzz.shrink=false` leaves a failure as drawn.
+
+* A result is **1-minimal under the moves, not the smallest case there is**: a condition root stays
+  a condition, and the two operands whose domain the grammar constrains (the month count of
+  `add_months`, the level of a dynamic truncation) are left alone, so a shrunk tree can be larger
+  than the one you would write by hand.
+* **Any `Throwable` is a failure.** An error out of the generated class (`NoSuchMethodError`,
+  `VerifyError`) used to end the suite as an uncaught error and is now a failure of one test
+  with its own signature.
+* A failure that is known goes in `sql/varka/fuzz/known_failures.tsv` with the lane, seed,
+  iteration, signature and the row that owns it; the run then does not fail on it, and the list
+  fails when an entry stops reproducing. Prove a change to the shrinker on the planted bugs
+  (`misdescribeWordLiveness`, `misdescribeAdd`), not on a bug that may be fixed next week.

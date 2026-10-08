@@ -177,8 +177,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
     }
   }
 
-  private def runOne(iteration: Int): Unit = {
-    val rnd = shapeRandom(seed, iteration)
+  private def drawInt(iteration: Int, drawSeed: Long = seed): VarkaFuzzCase = {
+    val rnd = shapeRandom(drawSeed, iteration)
     // The shape itself comes from the shared draw, so this suite and the emitted-bytes oracle
     // run over one corpus; `rnd` is left where the lane values and null patterns below pick up.
     val Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal) = drawShape(rnd)
@@ -205,22 +205,15 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
       }
     }
 
-    val context = s"seed=$seed iteration=$iteration " +
+    val context = s"seed=$drawSeed iteration=$iteration " +
       s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
       s"options=${if (options.isDefault) "(defaults)" else options.canonical()} " +
       s"length=$length patterns=${patternIds.map(patternNames).mkString(",")} " +
       s"literals=${lits.mkString(",")} forceMasked=$forceMasked"
 
-    val className =
-      s"org.apache.spark.sql.varka.execution.VarkaFusedFuzz${classCounter.addAndGet(1)}"
-    def emitWith(o: VarkaEmitOptions): Array[Byte] =
-      VarkaLoopEmitter.emitTraced(className, roots.asJava, numInputs, numLiterals, o, randomTrace)
-    val bytes = emitOrSkip(context, options)(emitWith) match {
-      case Some(b) => b
-      case None => return
-    }
-    VarkaKernelCheck.runAndCompare(context, className, bytes, roots, numInputs, lits,
-      VarkaKernelCheck.Batch(length, patterns, data, forceMasked))
+    VarkaFuzzCase(LaneType.INT, roots, numInputs, lits.map(_.toLong), length,
+      Array.tabulate(numInputs, length)((c, i) => patterns(c)(i)), data.map(_.map(_.toLong)),
+      forceMasked, options, smallOrdinal, levelOrdinal, context)
   }
 
   /**
@@ -231,8 +224,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
    * only a poisoned null lane can reach a condemning comparison, and a kernel that reads one
    * has to be caught reading it.
    */
-  private def runOneLong(iteration: Int): Unit = {
-    val rnd = shapeRandom(longSeed, iteration)
+  private def drawLong(iteration: Int, drawSeed: Long = longSeed): VarkaFuzzCase = {
+    val rnd = shapeRandom(drawSeed, iteration)
     val DrawnLong(roots, numInputs, numLiterals) = drawLongShape(rnd)
     // A floor modulus, so a negative draw lands inside the bound too: a signed `%` would put
     // it as far as three bounds below zero, outside every guard the grammar drew.
@@ -245,22 +238,144 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
     val options = randomOptions(rnd)
     val data = Array.tabulate(numInputs, length)((_, _) => draw(longColumnBound))
 
-    val context = s"lane=long seed=$longSeed iteration=$iteration " +
+    val context = s"lane=long seed=$drawSeed iteration=$iteration " +
       s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
       s"options=${if (options.isDefault) "(defaults)" else options.canonical()} " +
       s"length=$length patterns=${patternIds.map(patternNames).mkString(",")} " +
       s"literals=${lits.mkString(",")} forceMasked=$forceMasked"
 
-    val className =
-      s"org.apache.spark.sql.varka.execution.VarkaFusedFuzzLong${classCounter.addAndGet(1)}"
-    def emitWith(o: VarkaEmitOptions): Array[Byte] =
-      VarkaLoopEmitter.emitTraced(className, roots.asJava, numInputs, numLiterals, o, randomTrace)
-    val bytes = emitOrSkip(context, options)(emitWith) match {
+    VarkaFuzzCase(LaneType.LONG, roots, numInputs, lits, length,
+      Array.tabulate(numInputs, length)((c, i) => patterns(c)(i)), data, forceMasked, options,
+      -1, -1, context)
+  }
+
+  /**
+   * Emits the case's kernel and compares it with the reference evaluator, row by row. Throws
+   * what the check throws; returns quietly for a shape past the class-file cap, which
+   * `emitOrSkip` counts and skips.
+   */
+  private def run(c: VarkaFuzzCase): Unit = {
+    val long = c.lane == LaneType.LONG
+    val className = "org.apache.spark.sql.varka.execution.VarkaFusedFuzz" +
+      s"${if (long) "Long" else ""}${classCounter.addAndGet(1)}"
+    def emitWith(o: VarkaEmitOptions): Array[Byte] = VarkaLoopEmitter.emitTraced(
+      className, c.roots.asJava, c.numInputs, c.lits.length, o, randomTrace)
+    val bytes = emitOrSkip(c.label, c.options)(emitWith) match {
       case Some(b) => b
       case None => return
     }
-    VarkaKernelCheck.runAndCompareLong(context, className, bytes, roots, numInputs, lits,
-      VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked))
+    val patterns = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
+    if (long) {
+      VarkaKernelCheck.runAndCompareLong(c.label, className, bytes, c.roots, c.numInputs, c.lits,
+        VarkaKernelCheck.LongBatch(c.length, patterns, c.data, c.forceMasked))
+    } else {
+      VarkaKernelCheck.runAndCompare(c.label, className, bytes, c.roots, c.numInputs,
+        c.lits.map(_.toInt),
+        VarkaKernelCheck.Batch(c.length, patterns, c.data.map(_.map(_.toInt)), c.forceMasked))
+    }
+  }
+
+  /** What `run(c)` threw as a signature; None when the case passes or is skipped. */
+  private def outcomeOf(c: VarkaFuzzCase): Option[VarkaFailureSignature] =
+    try {
+      run(c)
+      None
+    } catch {
+      case e: VirtualMachineError => throw e
+      case e: InterruptedException => throw e
+      case t: Throwable => Some(VarkaFailureSignature.of(t, c.label))
+    }
+
+  /** Off with `-Dvarka.fuzz.shrink=false`, which leaves a failure as the generator drew it. */
+  private val shrinkFailures = !sys.props.get("varka.fuzz.shrink").contains("false")
+
+  /**
+   * Runs the case. A failure - any `Throwable`, a mismatch or an error out of the generated
+   * class - is shrunk (VARKA-277) and rethrown as a test failure whose message has the original
+   * and the smaller case.
+   */
+  private def runChecked(c: VarkaFuzzCase): Unit = {
+    try run(c) catch {
+      case e: VirtualMachineError => throw e
+      case e: InterruptedException => throw e
+      case t: Throwable if shrinkFailures =>
+        val signature = VarkaFailureSignature.of(t, c.label)
+        if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
+          logWarning(s"known fuzz failure, not shrunk: $signature")
+          return
+        }
+        val shrunk = VarkaShrinker.shrink(c, signature, x => outcomeOf(x.copy(label = "case")))
+        val early = (if (shrunk.stoppedEarly) ", budget reached" else "") +
+          (if (shrunk.stable) "" else ", UNSTABLE: it did not fail the same way three times")
+        fail(Option(t.getMessage).getOrElse(t.getClass.getName) +
+          s"\n  shrunk to ${VarkaFuzzCase.describe(shrunk.small)}" +
+          s"\n  (${shrunk.runs} runs, ${shrunk.millis} ms$early); signature: $signature", t)
+    }
+  }
+
+  private def runOne(iteration: Int): Unit = runChecked(drawInt(iteration))
+
+  private def runOneLong(iteration: Int): Unit = runChecked(drawLong(iteration))
+
+  /** `c` with the planted-bug option `name` on. */
+  private def planted(c: VarkaFuzzCase, name: String): VarkaFuzzCase =
+    c.copy(options = VarkaEmitOption.named(name) match {
+      case flag: VarkaEmitOption.Flag => flag.`with`(c.options, true)
+      case count: VarkaEmitOption.Count => count.`with`(c.options, 1)
+      case other => fail(s"$name is not a planted-bug option: $other")
+    })
+
+  /** A planted-bug case's failure, shrunk: the first of the first 200 draws that fails. */
+  private def shrunkPlanted(name: String): (VarkaFuzzCase, VarkaFailureSignature,
+      VarkaShrinker.Shrunk) = {
+    val found = (0 until 200).iterator.map(k => planted(drawInt(k), name))
+      .map(c => (c, outcomeOf(c))).collectFirst { case (c, Some(sig)) => (c, sig) }
+    val (c, sig) = found.getOrElse(fail(s"$name: no failing case in 200 draws"))
+    (c, sig, VarkaShrinker.shrink(c, sig, x => outcomeOf(x.copy(label = "case"))))
+  }
+
+  private def nodes(c: VarkaFuzzCase): Int = c.roots.map(VarkaShrinker.size).sum
+
+  private def contains(node: VarkaVectorIR, cls: Class[_]): Boolean =
+    cls.isInstance(node) || VarkaVectorIR.childrenOf(node).exists(contains(_, cls))
+
+  test("a planted liveness bug shrinks to one small root, the option alone and one row") {
+    val (c, sig, shrunk) = shrunkPlanted("misdescribeWordLiveness")
+    val small = shrunk.small
+    assert(small.roots.size == 1 && nodes(small) <= 5, VarkaFuzzCase.describe(small))
+    assert(VarkaFuzzCase.optionDelta(small.options).contains("misdescribeWordLiveness=true"))
+    assert(VarkaFuzzCase.optionDelta(small.options).size <= 3)
+    assert(small.length <= 17)
+    assert(sig.kind == "emitter rejection", sig)
+    assert(shrunk.runs <= 600 && shrunk.millis < 60000L && !shrunk.stoppedEarly)
+    assert(shrunk.stable)
+    assert(nodes(small) < nodes(c))
+  }
+
+  test("a planted bug in the generated class is classified and shrunk, not left to escape") {
+    val (_, sig, shrunk) = shrunkPlanted("misdescribeAdd")
+    val small = shrunk.small
+    assert(sig.kind == "generated class: NoSuchMethodError", sig)
+    assert(small.roots.exists(contains(_, classOf[AddDays])), VarkaFuzzCase.describe(small))
+    assert(VarkaFuzzCase.optionDelta(small.options).contains("misdescribeAdd=true"))
+    assert(shrunk.runs <= 600 && shrunk.millis < 60000L && shrunk.stable)
+  }
+
+  test("a failure of the generated class fails its test with the smaller case in the message") {
+    val c = planted(drawInt(0), "misdescribeWordLiveness")
+    val e = intercept[org.scalatest.exceptions.TestFailedException](runChecked(c))
+    assert(e.getMessage.contains("shrunk to lane=int"), e.getMessage)
+    assert(e.getMessage.contains("signature: emitter rejection"), e.getMessage)
+  }
+
+  test("every known failure still reproduces") {
+    val replay = (e: VarkaKnownFailures.Entry) => e.lane match {
+      case "int" => outcomeOf(drawInt(e.iteration, e.seed))
+      case _ => outcomeOf(drawLong(e.iteration, e.seed))
+    }
+    val stale = VarkaKnownFailures.stale(VarkaKnownFailures.entries, replay)
+    assert(stale.isEmpty, "these known fuzz failures no longer reproduce; delete them from " +
+      s"${VarkaKnownFailures.PATH}: ${stale.mkString(", ")}")
   }
 
   /** The record node types of the sealed IR, by simple name. */

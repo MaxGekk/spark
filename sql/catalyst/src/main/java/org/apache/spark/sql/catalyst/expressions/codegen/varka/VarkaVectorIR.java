@@ -1198,6 +1198,75 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * {@code node} rebuilt over {@code children}, in the order {@link #childrenOf} lists them, with
+   * every other field kept: the inverse of {@code childrenOf}, which a shrinker uses to put a
+   * smaller subtree in a node's place. A leaf takes none.
+   *
+   * <p>The constructors check what they always check, so a tree that does not type - a calendar
+   * node over a long, a value where a condition goes - is refused with an
+   * {@code IllegalArgumentException}, which is how a caller learns a replacement is not
+   * well typed. What is kept is the node's own claim about its operands (a division's bound, a
+   * guard's range), which the new children may not honour; that is the caller's to check. The
+   * switch is exhaustive over the sealed interface, so a new node type refuses to compile until
+   * it says how it is rebuilt.
+   */
+  static VarkaVectorIR withChildren(VarkaVectorIR node, VarkaVectorIR... children) {
+    int expected = childrenOf(node).length;
+    if (children.length != expected) {
+      throw new IllegalArgumentException(node.getClass().getSimpleName() + " has " + expected
+          + " children, not " + children.length);
+    }
+    return switch (node) {
+      case ColumnRef n -> n;
+      case LiteralSlot n -> n;
+      case AddDays n -> new AddDays(children[0], children[1]);
+      case SubDays n -> new SubDays(children[0], children[1]);
+      case GuardedDay n -> new GuardedDay(children[0]);
+      case GuardedRange n -> new GuardedRange(children[0], n.lo(), n.hi());
+      case NarrowLane n -> new NarrowLane(children[0]);
+      case DateDiff n -> new DateDiff(children[0], children[1]);
+      case DayOfWeek n -> new DayOfWeek(children[0]);
+      case WeekDay n -> new WeekDay(children[0]);
+      case DayOfWeekIso n -> new DayOfWeekIso(children[0]);
+      case NextDay n -> new NextDay(children[0], children[1]);
+      case ThursdayOf n -> new ThursdayOf(children[0]);
+      case Year n -> new Year(children[0]);
+      case Month n -> new Month(children[0]);
+      case DayOfMonth n -> new DayOfMonth(children[0]);
+      case Quarter n -> new Quarter(children[0]);
+      case DayOfYear n -> new DayOfYear(children[0]);
+      case LastDay n -> new LastDay(children[0]);
+      case TruncDate n -> new TruncDate(children[0], n.level());
+      case TruncDateDynamic n -> new TruncDateDynamic(children[0], children[1]);
+      case WeekOfYear n -> new WeekOfYear(children[0]);
+      case AddMonths n -> new AddMonths(children[0], children[1]);
+      case MakeDate n -> new MakeDate(children[0], children[1], children[2], n.failOnError());
+      case Greatest n -> new Greatest(children[0], children[1]);
+      case Least n -> new Least(children[0], children[1]);
+      case IfElse n -> new IfElse(asCond(children[0]), children[1], children[2]);
+      case Compare n -> new Compare(n.op(), children[0], children[1]);
+      case And n -> new And(asCond(children[0]), asCond(children[1]));
+      case Or n -> new Or(asCond(children[0]), asCond(children[1]));
+      case Not n -> new Not(asCond(children[0]));
+      case IsNotNull n -> new IsNotNull(children[0]);
+      case InRanges n -> new InRanges(children[0], n.bounds());
+      case IntArith n -> new IntArith(n.op(), n.mode(), children[0], children[1]);
+      case IntNeg n -> new IntNeg(n.mode(), children[0]);
+      case ConstDivide n -> new ConstDivide(children[0], n.divisor(), n.dividendBound());
+      case BoundedDivide n -> new BoundedDivide(
+          children[0], n.divisor(), n.bound(), n.multiplier(), n.shift());
+    };
+  }
+
+  private static Cond asCond(VarkaVectorIR node) {
+    if (node instanceof Cond cond) {
+      return cond;
+    }
+    throw new IllegalArgumentException(
+        "a condition goes here, not a " + node.getClass().getSimpleName());
+  }
+
+  /**
    * The node kinds a {@code date_add}/{@code date_sub} day offset may be. Public because
    * `VarkaExpressionCompiler` gates its offset arm on exactly this: the compiler deciding what
    * to build and the emitter deciding what to accept are one rule, and stating it twice is how
