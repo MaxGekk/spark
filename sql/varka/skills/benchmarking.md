@@ -559,7 +559,7 @@ rethrown rather than run through its row-by-row operators (`WholeStageCodegenExe
 fallback with `!Utils.isTesting`), and a refused subexpression or aggregate split is an
 internal error rather than an INFO line. So Spark's own benchmarks never measure the
 production fallback past 64 KB, and a benchmark written to measure it dies at the first
-rung that crosses: `CaseWhenCodegenBenchmark`'s first runner dispatch did (`VARKA-210.md`
+rung that crosses: `CaseWhenCliffBenchmark`'s first runner dispatch did (`VARKA-210.md`
 8). The class now clears the property at the start of its suite, since the fallback is what it
 measures. Under sbt the same flag is also the `SPARK_TESTING` environment variable, which a
 JVM cannot clear, so such a rung still throws there; the runners' `spark-submit` path is where

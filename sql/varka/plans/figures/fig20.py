@@ -20,7 +20,7 @@ enough branches that method passes 8000 bytes itself and runs interpreted. Two p
 last two rungs of the ladder, each with the calling method's size and the time per row.
 
 The sizes and times are read from the committed results file when the script runs
-(sql/core/benchmarks/CaseWhenCodegenBenchmark-jdk25-results.txt), so the figure cannot drift
+(sql/core/benchmarks/CaseWhenCliffBenchmark-jdk25-results.txt), so the figure cannot drift
 from it (VARKA-210.md 9.3)."""
 
 import os
@@ -30,7 +30,7 @@ from rough import Rough, finish
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BENCH = os.path.join(HERE, "..", "..", "..", "core", "benchmarks")
-RESULTS = os.path.join(BENCH, "CaseWhenCodegenBenchmark-jdk25-results.txt")
+RESULTS = os.path.join(BENCH, "CaseWhenCliffBenchmark-jdk25-results.txt")
 OFF = "whole-stage codegen off"
 GREY = "#5c5f66"
 RED = "#e03131"
