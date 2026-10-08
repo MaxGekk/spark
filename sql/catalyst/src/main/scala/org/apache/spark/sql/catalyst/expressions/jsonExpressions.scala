@@ -1886,10 +1886,9 @@ case class JsonToStructs(
   private val nullableSchema: DataType = schema.asNullable
 
   override def nullable: Boolean = true
+  override def nullIntolerant: Boolean = true
 
   final override def nodePatternsInternal(): Seq[TreePattern] = Seq(JSON_TO_STRUCT)
-
-  override def nullIntolerant: Boolean = true
 
   // Used in `FunctionRegistry`
   def this(child: Expression, schema: Expression, options: Map[String, String]) =
@@ -1939,7 +1938,9 @@ case class JsonToStructs(
     options, nullableSchema, nameOfCorruptRecord, timeZoneId, variantAllowDuplicateKeys)
   override def stateful: Boolean = true
 
-  override def nullSafeEval(json: Any): Any = evaluator.evaluate(json.asInstanceOf[UTF8String])
+  override def nullSafeEval(json: Any): Any = {
+    evaluator.evaluate(json.asInstanceOf[UTF8String])
+  }
 
   override def inputTypes: Seq[AbstractDataType] =
     StringTypeWithCollation(supportsTrimCollation = true) :: Nil
@@ -2103,7 +2104,7 @@ case class SchemaOfJson(
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_NULL",
         messageParameters = Map("exprName" -> "json"))
-    } else if (child.dataType != StringType) {
+    } else if (!child.dataType.isInstanceOf[StringType]) {
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_INPUT_TYPE",
         messageParameters = Map(

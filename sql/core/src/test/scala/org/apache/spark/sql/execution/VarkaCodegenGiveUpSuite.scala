@@ -287,11 +287,15 @@ class VarkaCodegenGiveUpSuite extends QueryTest with VarkaSharedSessions with Va
     // `spark.testing` it throws, which is what this asserts.
     val branches = (1 to 3000).map(k => s"WHEN id = $k THEN id * $k").mkString(" ")
     val df = spark.range(0, 10).selectExpr(s"CASE $branches ELSE 0 END AS v")
+    // Released Spark's behaviour: since SPARK-33301 (apache/spark#59225, 4.4.0) a stage splits such
+    // an expression into methods by default, so the stage compiles; the conf restores the old one.
     val lines = logged(Seq(classOf[WholeStageCodegenExec].getName), Level.INFO) {
       noAqe {
-        val e = intercept[Throwable](df.write.format("noop").mode("overwrite").save())
-        val chain = Iterator.iterate(e)(_.getCause).takeWhile(_ != null).map(_.toString).toSeq
-        assert(chain.exists(_.contains("64 KB")), chain.take(3))
+        withSQLConf(SQLConf.WHOLESTAGE_SPLIT_EXPRESSIONS.key -> "false") {
+          val e = intercept[Throwable](df.write.format("noop").mode("overwrite").save())
+          val chain = Iterator.iterate(e)(_.getCause).takeWhile(_ != null).map(_.toString).toSeq
+          assert(chain.exists(_.contains("64 KB")), chain.take(3))
+        }
       }
     }
     assert(!lines.exists(_._2.contains("Found too long generated codes")))
@@ -556,7 +560,10 @@ class VarkaCodegenGiveUpSuite extends QueryTest with VarkaSharedSessions with Va
         assert(!whole.exists(_._2.contains("Found too long generated codes")))
       }
     }
-    withSessionConf(disabledSpark, SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "true", limitAt8000) {
+    // The stage's expressions are not split, as in the releases before SPARK-33301 (G24's note).
+    val stageUnsplit = SQLConf.WHOLESTAGE_SPLIT_EXPRESSIONS.key -> "false"
+    withSessionConf(disabledSpark, SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "true", limitAt8000,
+        stageUnsplit) {
       val staged = logged(stageLogger, Level.INFO)(run(disabledSpark))
       assert(staged.exists(_._2.contains("Found too long generated codes")), staged.map(_._2))
     }

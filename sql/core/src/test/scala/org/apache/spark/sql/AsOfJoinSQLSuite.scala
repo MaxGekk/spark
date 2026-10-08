@@ -105,6 +105,18 @@ class AsOfJoinSQLSuite extends QueryTest with SharedSparkSession {
     assert(asOfJoin.matchLeftOperand.isEmpty)
   }
 
+  test("INNER ASOF JOIN keeps NOT NULL right columns; LEFT ASOF JOIN makes them nullable") {
+    def rightValueNullable(joinType: String): Boolean =
+      sql(
+        s"""
+           |SELECT l.k, r.v
+           |FROM VALUES (2) AS l(k) $joinType ASOF JOIN VALUES (1, 'a') AS r(k, v)
+           |  MATCH_CONDITION (l.k >= r.k)
+           |""".stripMargin).schema("v").nullable
+    assert(!rightValueNullable(""))
+    assert(rightValueNullable("LEFT"))
+  }
+
   test("SQL ASOF JOIN uses sort-merge without DataFrame sort-merge conf") {
     setupTradeQuoteViews()
     val sqlText =
@@ -511,11 +523,11 @@ class AsOfJoinSQLSuite extends QueryTest with SharedSparkSession {
     assert(asOfJoin.asOfCondition.resolved)
   }
 
-  test("MATCH_CONDITION rejects empty STRUCT operands") {
+  test("MATCH_CONDITION rejects an empty STRUCT paired with a non-empty STRUCT") {
     val sqlText =
       """
         |SELECT *
-        |FROM VALUES (named_struct()) AS t(s) ASOF JOIN VALUES (named_struct()) AS r(s)
+        |FROM VALUES (named_struct()) AS t(s) ASOF JOIN VALUES (named_struct('a', 1)) AS r(s)
         |  MATCH_CONDITION (t.s >= r.s)
         |""".stripMargin
     checkError(
@@ -524,12 +536,12 @@ class AsOfJoinSQLSuite extends QueryTest with SharedSparkSession {
       sqlState = Some("42K09"),
       parameters = Map(
         "type1" -> "\"STRUCT<>\"",
-        "type2" -> "\"STRUCT<>\""),
+        "type2" -> "\"STRUCT<a: INT NOT NULL>\""),
       queryContext = Array(
         ExpectedContext(
-          fragment = """ASOF JOIN VALUES (named_struct()) AS r(s)
+          fragment = """ASOF JOIN VALUES (named_struct('a', 1)) AS r(s)
                        |  MATCH_CONDITION (t.s >= r.s)""".stripMargin,
           start = 47,
-          stop = 118)))
+          stop = 124)))
   }
 }

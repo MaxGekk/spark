@@ -22,7 +22,7 @@ the interpreted path grows about with the square of the branches, and faster pas
 hundred.
 
 Every value is read from the committed results file when the script runs
-(sql/core/benchmarks/CaseWhenCodegenBenchmark-jdk25-results.txt), so the figure cannot drift
+(sql/core/benchmarks/CaseWhenCliffBenchmark-jdk25-results.txt), so the figure cannot drift
 from it (VARKA-210.md 9.2)."""
 
 import math
@@ -33,8 +33,8 @@ from rough import Rough, finish
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BENCH = os.path.join(HERE, "..", "..", "..", "core", "benchmarks")
-RESULTS = os.path.join(BENCH, "CaseWhenCodegenBenchmark-jdk25-results.txt")
-PROVENANCE = os.path.join(BENCH, "CaseWhenCodegenBenchmark-jdk25-provenance.txt")
+RESULTS = os.path.join(BENCH, "CaseWhenCliffBenchmark-jdk25-results.txt")
+PROVENANCE = os.path.join(BENCH, "CaseWhenCliffBenchmark-jdk25-provenance.txt")
 
 ON = "whole-stage codegen on"
 OFF = "whole-stage codegen off"

@@ -69,7 +69,6 @@ case class CsvToStructs(
   with ExpectsInputTypes {
 
   override def nullable: Boolean = child.nullable
-
   override def nullIntolerant: Boolean = true
 
   // Used in `FunctionRegistry`
@@ -183,7 +182,7 @@ case class SchemaOfCsv(
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_NULL",
         messageParameters = Map("exprName" -> "csv"))
-    } else if (child.dataType != StringType) {
+    } else if (!child.dataType.isInstanceOf[StringType]) {
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_INPUT_TYPE",
         messageParameters = Map(
