@@ -1,5 +1,10 @@
 # VARKA-210: The first post, where Spark's code generation gives up
 
+*Note, 8 October 2026: this task's benchmark was `CaseWhenCodegenBenchmark`. When apache/spark
+master, which now has its own `CaseWhenCodegenBenchmark` from SPARK-33301, was merged into Varka's,
+the two classes met at one path, and this task's became `CaseWhenCliffBenchmark` with its results
+and provenance files; the names below are the new ones.*
+
 *Opened 25 September 2026 by splitting VARKA-181's outline in two. This plan
 carries the outline of the first post only. The draft is written when the
 outline's owed items are in, and it will live beside this file as
@@ -166,7 +171,7 @@ Varka.
 
 | Owed | For | State on 25 September | Needed? |
 | :-- | :-- | :-- | :-- |
-| A committed vanilla benchmark of the large `CASE WHEN`: inside a stage, outside one, and outside one with the calls grouped | 3.5 | **done for the first two arms, section 9.2**: `CaseWhenCodegenBenchmark-jdk25-results.txt` on the 9V74; the grouped arm waits for SPARK-59783; *done 26 September 2026, 9.6* | The grouped arm, when the fork carries it |
+| A committed vanilla benchmark of the large `CASE WHEN`: inside a stage, outside one, and outside one with the calls grouped | 3.5 | **done for the first two arms, section 9.2**: `CaseWhenCliffBenchmark-jdk25-results.txt` on the 9V74; the grouped arm waits for SPARK-59783; *done 26 September 2026, 9.6* | The grouped arm, when the fork carries it |
 | `factoryMode=NO_CODEGEN` against the default on the same shape | 3.4 | **done, sections 7.2 and 9.2**: the runner's file carries the arm; 52.6 times the outside-a-stage cost at 1000 branches | No longer owed |
 | The field count: JIRAs carrying "grows beyond 64 KB", by year | 3.1 | **done, section 7.1**: 44 tickets, peaking in 2016 and 2017, four open | No longer owed |
 | The wide-cache trap measured on vanilla: a one-column query over a 101-column cached table, rows against batches; and the upstream ticket if none exists | 3.5 | not started; the mechanism is pinned on Varka's side (`VarkaSchemaWidthSuite`) | **Yes.** A trap without a number is an anecdote |
@@ -296,7 +301,7 @@ artifact committed by hand beside a `-runner-provenance.txt`, as
 `VarkaSizeLadderBenchmark`'s was). Neither mentions Varka, so either can go
 upstream as it is.
 
-**`CaseWhenCodegenBenchmark`.** The `CASE WHEN` of section 7.2 at 30, 60, 100,
+**`CaseWhenCliffBenchmark`.** The `CASE WHEN` of section 7.2 at 30, 60, 100,
 300 and 1000 branches over 200,000 rows, three cases per rung - whole-stage
 codegen on, off, and `factoryMode=NO_CODEGEN` - and, above each rung's table,
 the stage's largest method from Spark's own compile of it, or "fails to
@@ -335,7 +340,7 @@ Both classes print their verdict lines through the benchmark's own output
 stream, so they are in the results file and a reader of the file sees which
 path each timing measured without opening the plan.
 
-**The first runner dispatch of `CaseWhenCodegenBenchmark` failed, and the
+**The first runner dispatch of `CaseWhenCliffBenchmark` failed, and the
 reason is a finding.** `BenchmarkBase.main` sets `spark.testing` "so the
 behavior between running benchmark via spark-submit or SBT will be
 consistent", and under that flag `WholeStageCodegenExec` rethrows a compile
@@ -375,7 +380,7 @@ were taken from a run rather than typed.
 
 | Owed | Where | Comes from |
 | :-- | :-- | :-- |
-| The `CASE WHEN` ladder's numbers: whole-stage on and off at 100, 300 and 1000 branches, and the interpreted case at 300 and 1000 | 4, 5 | `CaseWhenCodegenBenchmark`'s runner file, dispatched 25 September after the `spark.testing` fix (section 8) |
+| The `CASE WHEN` ladder's numbers: whole-stage on and off at 100, 300 and 1000 branches, and the interpreted case at 300 and 1000 | 4, 5 | `CaseWhenCliffBenchmark`'s runner file, dispatched 25 September after the `spark.testing` fix (section 8) |
 | The link to the second post | closing | VARKA-181 |
 | Three figures: the step on three JDKs, the tracker's years, the cached table's six bars | 1, 5 | scripts under `figures/`, in `m5/POST.md`'s form |
 | The trailer | a `_SHORT` file, as milestone 5's | written last |
@@ -427,7 +432,7 @@ ratio within a third.
 ### 9.2 The ladder's file, and the predictions scored, 25 September 2026
 
 The rerun after the `spark.testing` fix completed
-(`CaseWhenCodegenBenchmark-jdk25-9v74-results.txt`, with its provenance file), on an
+(`CaseWhenCliffBenchmark-jdk25-9v74-results.txt`, with its provenance file), on an
 AMD EPYC 9V74, not the 9V45 the predictions were written for. The one rung both
 machines measured, 300 branches, says how the two compare: inside and outside
 a stage they agree within a tenth (7439.8 and 893.7 ns a row on the 9V74
@@ -568,7 +573,7 @@ branch-4.x, fixed in 4.4.0), and the fork now carries it. It has no switch:
 past the JIT limit it groups the calls to the split functions, and below it
 leaves the code as it was. So the fourth case of section 4 is the same
 benchmark rerun on the fork with the fix, compared with its committed file
-without it (`CaseWhenCodegenBenchmark-jdk25-results.txt`, the EPYC 7763), and
+without it (`CaseWhenCliffBenchmark-jdk25-results.txt`, the EPYC 7763), and
 the grouped file is committed under its own name beside it. Predictions for a
 runner run, in ns a row, against the 7763's file, a factor of 1.5 on a runner
 of another CPU:
@@ -589,8 +594,8 @@ of another CPU:
 ### 9.6 The grouped case, scored, 26 September 2026
 
 The runner run landed on an EPYC 7763, the CPU of the file without the fix,
-so the two compare directly (`CaseWhenCodegenBenchmark-jdk25-grouped-results.txt`
-against `CaseWhenCodegenBenchmark-jdk25-results.txt`), in ns a row:
+so the two compare directly (`CaseWhenCliffBenchmark-jdk25-grouped-results.txt`
+against `CaseWhenCliffBenchmark-jdk25-results.txt`), in ns a row:
 
 | Branches | Whole-stage on | with the fix | Whole-stage off | with the fix |
 | --: | --: | --: | --: | --: |

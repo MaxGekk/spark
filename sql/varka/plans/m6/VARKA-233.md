@@ -70,7 +70,7 @@ and `get_json_object` generate code. So the everyday way to lose a stage silentl
 ## 3. Investigation 2: what the silent ones cost
 
 **What.** `CodegenFallbackCostBenchmark`, a Spark-style benchmark under `sql/core`'s benchmark
-package with no Varka arm, in the form of VARKA-210's `CaseWhenCodegenBenchmark`, run on a
+package with no Varka arm, in the form of VARKA-210's `CaseWhenCliffBenchmark`, run on a
 GitHub-hosted runner through `benchmark.yml` and committed with provenance. Two cases:
 
 * **One fallback expression in a projection** (G4). The size ladder's shape at 16, 32 and 48
