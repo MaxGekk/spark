@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 import org.json4s.{DefaultFormats, JString}
 import org.json4s.jackson.JsonMethods.parse
@@ -25,23 +26,23 @@ import org.json4s.jackson.JsonMethods.parse
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, BindReferences,
   Expression, RuntimeReplaceable}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaSqlResolve, VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSqlResolve
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 
 /**
  * The compiler's family chain is disjoint (VARKA-173, scope item 41).
  *
- * `VarkaExpressionCompiler.compileNode` dispatches a node through a chain of groups - the date
+ * `VarkaNodeCompiler.compileNode` dispatches a node through a chain of groups - the date
  * leaves, the calendar, interval, time and condition families, then the int arithmetic - and
  * the first group whose arms are defined at the node compiles it. The chain is order-safe only
  * if no node is claimed by two groups; that was an argument in `VARKA-159.md`, and a fifth
  * family or a widened guard would break it silently, the first group winning. This suite holds
  * it as a fact: every node of every expression of the coverage table, and of a few shapes the
- * compiler suite watches, is asked of each group's `isDefinedAt`, and at most one answers. A
+ * compiler suite watches, is asked of each group whether it claims it, and at most one does. A
  * node no group claims is the fallback's, which is allowed; two claims is the defect.
  *
- * The chain is read from `VarkaExpressionCompiler.familyChain`, the list `compileNode` itself
+ * The chain is read from `VarkaNodeCompiler.families`, the list `compileNode` itself
  * dispatches through, so a group added there is checked here without this file changing. The
  * last test duplicates a group on purpose and asserts the check catches it, which is what makes
  * a green run mean something.
@@ -85,25 +86,25 @@ class VarkaFamilyChainSuite extends SparkFunSuite with VarkaTestWatchdog {
     case _ => e +: e.children.flatMap(nodes)
   }
 
-  private type Chain = Seq[(String, PartialFunction[Expression, Option[VarkaVectorIR]])]
+  private type Chain = Seq[VarkaNodeCompiler.Family]
 
-  private def freshChain(): Chain = {
-    val inputs = mutable.LinkedHashMap.empty[Int, Int]
-    val literals = mutable.LinkedHashMap.empty[Int, Int]
-    VarkaExpressionCompiler.familyChain(inputs, literals, new DeclineSink(columns, true))
-  }
+  private def freshChain(): Chain = VarkaNodeCompiler.families().asScala.toSeq
 
   /**
    * The nodes of `sqls` claimed by more than one group of `chain`, each with its claimants, and
-   * how many nodes each group claimed. Asking `isDefinedAt` runs only the arms' guards, which
-   * test the expression class and its data type and build nothing.
+   * how many nodes each group claimed. Asking a group to claim a node runs only the arms' guards,
+   * which test the expression class and its data type and build nothing.
    */
   private def claims(chain: Chain, sqls: Seq[String])
       : (Seq[(String, Expression, Seq[String])], Map[String, Int]) = {
-    val counts = mutable.LinkedHashMap(chain.map(_._1 -> 0): _*)
+    val counts = mutable.LinkedHashMap(chain.map(_.name() -> 0): _*)
     val doubles = Seq.newBuilder[(String, Expression, Seq[String])]
+    val inputs = mutable.LinkedHashMap.empty[Int, Int]
+    val literals = mutable.LinkedHashMap.empty[Int, Int]
+    val sink = new DeclineSink(columns, true)
     for (sql <- sqls; node <- nodes(bound(sql))) {
-      val claimants = chain.collect { case (name, arms) if arms.isDefinedAt(node) => name }
+      val claimants = VarkaNodeCompiler.claimants(chain.asJava, node, inputs, literals, sink)
+        .asScala.toSeq
       claimants.foreach(name => counts(name) += 1)
       if (claimants.size > 1) doubles += ((sql, node, claimants))
     }
@@ -125,7 +126,8 @@ class VarkaFamilyChainSuite extends SparkFunSuite with VarkaTestWatchdog {
     // A copy of the calendar family appended to the chain claims every calendar node twice.
     // If this test ever passes with the duplicate in place, the check above proves nothing.
     val chain = freshChain()
-    val (doubles, _) = claims(chain :+ ("calendar again" -> chain(1)._2), rows)
+    val again = new VarkaNodeCompiler.Family("calendar again", chain(1).claim())
+    val (doubles, _) = claims(chain :+ again, rows)
     assert(doubles.nonEmpty)
     assert(doubles.forall(_._3 == Seq("calendar", "calendar again")), doubles.take(3))
   }

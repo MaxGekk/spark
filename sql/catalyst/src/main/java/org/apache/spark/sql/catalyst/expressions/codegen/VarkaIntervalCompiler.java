@@ -67,12 +67,6 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  */
 final class VarkaIntervalCompiler {
 
-  /**
-   * The facade, whose helpers the arms call. It is a Scala {@code private[sql] object}, which
-   * scalac compiles to its module class alone, with no class of static forwarders, so Java
-   * reaches its methods through the module's one instance.
-   */
-  private static final VarkaExpressionCompiler$ FACADE = VarkaExpressionCompiler$.MODULE$;
 
   /** {@code INTERVAL YEAR}, which the YEAR casts compare against. */
   private static final YearMonthIntervalType YEAR_INTERVAL = new YearMonthIntervalType(
@@ -94,8 +88,8 @@ final class VarkaIntervalCompiler {
       LinkedHashMap<?, ?> inputTable,
       LinkedHashMap<?, ?> literalTable,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = table(inputTable);
-    LinkedHashMap<Object, Object> literals = table(literalTable);
+    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
+    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     return switch (e) {
       // A year-month interval column, on the same lane. Its value is a count of months in every
       // unit, so nothing about the lowering changes; what makes widening the leaf safe rather
@@ -106,13 +100,13 @@ final class VarkaIntervalCompiler {
       // DateType or IntegerType. So an interval in a date position is a type error the analyzer
       // rejected before the compiler ran, and the leaf cannot put one there.
       case BoundReference br when br.dataType() instanceof YearMonthIntervalType ->
-          () -> Option.apply(FACADE.columnRef(br, inputs, LaneType.INT));
+          () -> Option.apply(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
       // The interval literal, beside the date literal and for the same reason: the value is
       // already the int the lane holds, so `ym > INTERVAL '6' MONTH` and
       // `coalesce(ym, INTERVAL '0' MONTH)` become a slot rather than a decline.
       case Literal l when l.value() instanceof Integer
           && l.dataType() instanceof YearMonthIntervalType ->
-          () -> Option.apply(FACADE.intSlot((Integer) l.value(), literals));
+          () -> Option.apply(VarkaNodeCompiler.intSlot((Integer) l.value(), literals));
       // The interval relabels, on `unix_date`'s pattern: a cast that returns its operand
       // unchanged is the child alone, with no node emitted. `intToYearMonthInterval` returns `v`
       // for a MONTH end field and `yearMonthIntervalToInt` returns `v` for a MONTH-ended
@@ -123,7 +117,7 @@ final class VarkaIntervalCompiler {
       // division by twelve, which is not supported yet - it belongs with the year-month extracts.
       case Cast c when endsIn(c, YearMonthIntervalType.MONTH())
           && c.child().dataType().equals(DataTypes.IntegerType) ->
-          () -> FACADE.compileIntOperand(
+          () -> VarkaNodeCompiler.compileIntOperand(
               c.child(), "the month count", inputs, literals, sink);
       // The unit relabel between two year-month intervals, which is not a cast a user writes but
       // the one type coercion inserts whenever two units meet - `ymm + ymy` widens both operands
@@ -135,7 +129,7 @@ final class VarkaIntervalCompiler {
       // direction drops the remainder, which is a division by twelve, and declines below.
       case Cast c when endsIn(c, YearMonthIntervalType.MONTH())
           && c.child().dataType() instanceof YearMonthIntervalType ->
-          () -> FACADE.compileNode(c.child(), inputs, literals, sink);
+          () -> VarkaNodeCompiler.compileNode(c.child(), inputs, literals, sink);
       // `CAST(i AS INTERVAL YEAR)` in a value position, which is `12 * i` with an interval
       // output. `IntervalUtils.intToYearMonthInterval` computes it with `Math.multiplyExact`
       // whatever the session's ANSI mode, so the multiply is checked and the bound is the only
@@ -151,12 +145,11 @@ final class VarkaIntervalCompiler {
       // belonging with `extract(YEAR FROM ym)` and `ym / k`.
       case Cast c when endsIn(c, YearMonthIntervalType.YEAR())
           && c.child().dataType() instanceof YearMonthIntervalType ->
-          () -> decline(
-              "year-month interval narrowed to a YEAR-ended unit, which divides by twelve", c,
-              sink);
+          () -> sink.decline(
+              "year-month interval narrowed to a YEAR-ended unit, which divides by twelve", c);
       case Cast c when c.dataType().equals(DataTypes.IntegerType)
           && c.child().dataType().equals(MONTH_INTERVAL) ->
-          () -> FACADE.compileNode(c.child(), inputs, literals, sink);
+          () -> VarkaNodeCompiler.compileNode(c.child(), inputs, literals, sink);
       // Group A: the year-month interval algebra, on the int32 arithmetic nodes with an
       // interval-typed output. The int arms keep their `IntegerType` gate and these are siblings
       // rather than a widening of it, because int arithmetic is an int-typed concept and a
@@ -188,7 +181,7 @@ final class VarkaIntervalCompiler {
       // Varka has neither a byte lane nor an Arrow vector to store one into. It declines until a
       // narrowing store exists, which is its own question (m5/PLAN.md 2.20).
       case ExtractANSIIntervalMonths x ->
-          () -> decline("extract(MONTH FROM ym) returns a byte, which has no lane", x, sink);
+          () -> sink.decline("extract(MONTH FROM ym) returns a byte, which has no lane", x);
       case MultiplyYMInterval m -> () -> multiply(m, inputs, literals, sink);
       default -> null;
     };
@@ -208,10 +201,11 @@ final class VarkaIntervalCompiler {
       LinkedHashMap<?, ?> literals,
       DeclineSink sink) {
     if (!(e.dataType() instanceof YearMonthIntervalType)) {
-      return decline(position + " of type " + e.dataType().simpleString()
-          + " is not a year-month interval", e, sink);
+      return sink.decline(position + " of type " + e.dataType().simpleString()
+          + " is not a year-month interval", e);
     }
-    return FACADE.compileNode(e, table(inputs), table(literals), sink);
+    return VarkaNodeCompiler.compileNode(
+        e, VarkaNodeCompiler.table(inputs), VarkaNodeCompiler.table(literals), sink);
   }
 
   /**
@@ -219,7 +213,7 @@ final class VarkaIntervalCompiler {
    * casts.
    */
   static LiteralSlot twelve(LinkedHashMap<?, ?> literals) {
-    return FACADE.intSlot(12, table(literals));
+    return VarkaNodeCompiler.intSlot(12, VarkaNodeCompiler.table(literals));
   }
 
   /**
@@ -231,12 +225,12 @@ final class VarkaIntervalCompiler {
       LinkedHashMap<?, ?> inputTable,
       LinkedHashMap<?, ?> literalTable,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = table(inputTable);
-    LinkedHashMap<Object, Object> literals = table(literalTable);
+    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
+    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     int mark = literals.size();
-    Option<VarkaVectorIR> built = FACADE.intOperand(c.child(), inputs, literals, sink);
+    Option<VarkaVectorIR> built = VarkaNodeCompiler.intOperand(c.child(), inputs, literals, sink);
     if (built.isDefined()) {
-      built = FACADE.arithOver(
+      built = VarkaNodeCompiler.arithOver(
           IntOp.MUL, Overflow.FAIL, built.get(), twelve(literals), c, literals, mark, sink);
     }
     return rolledBack(built, literals, mark);
@@ -269,7 +263,7 @@ final class VarkaIntervalCompiler {
       LinkedHashMap<Object, Object> literals,
       DeclineSink sink) {
     return intervalOperand(child, "the absolute interval", inputs, literals, sink).map(x -> {
-      LiteralSlot zero = FACADE.intSlot(0, literals);
+      LiteralSlot zero = VarkaNodeCompiler.intSlot(0, literals);
       return (VarkaVectorIR) new IfElse(new Compare(CompareOp.LT, x, zero),
           new IntNeg(negationMode(x, literals), x), x);
     });
@@ -281,9 +275,8 @@ final class VarkaIntervalCompiler {
    * negate and {@code abs}, and the calendar family's negated month count.
    */
   static Overflow negationMode(VarkaVectorIR x, LinkedHashMap<?, ?> literals) {
-    Option<Object> magnitude = FACADE.magnitude(x, table(literals));
-    boolean checked = magnitude.isEmpty() || (Long) magnitude.get() > Integer.MAX_VALUE;
-    return checked ? Overflow.FAIL : Overflow.WRAP;
+    boolean bounded = VarkaNodeCompiler.boundedByIntMax(x, VarkaNodeCompiler.table(literals));
+    return bounded ? Overflow.WRAP : Overflow.FAIL;
   }
 
   /**
@@ -299,21 +292,21 @@ final class VarkaIntervalCompiler {
       DeclineSink sink) {
     int mark = literals.size();
     Option<VarkaVectorIR> years =
-        FACADE.intOperand(m.years(), inputs, literals, sink);
+        VarkaNodeCompiler.intOperand(m.years(), inputs, literals, sink);
     if (years.isEmpty()) {
       return rolledBack(years, literals, mark);
     }
     Option<VarkaVectorIR> months =
-        FACADE.intOperand(m.months(), inputs, literals, sink);
+        VarkaNodeCompiler.intOperand(m.months(), inputs, literals, sink);
     if (months.isEmpty()) {
       return rolledBack(months, literals, mark);
     }
-    Option<VarkaVectorIR> scaled = FACADE.arithOver(
+    Option<VarkaVectorIR> scaled = VarkaNodeCompiler.arithOver(
         IntOp.MUL, Overflow.FAIL, years.get(), twelve(literals), m, literals, mark, sink);
     if (scaled.isEmpty()) {
       return rolledBack(scaled, literals, mark);
     }
-    return rolledBack(FACADE.arithOver(
+    return rolledBack(VarkaNodeCompiler.arithOver(
         IntOp.ADD, Overflow.FAIL, months.get(), scaled.get(), m, literals, mark, sink),
         literals, mark);
   }
@@ -333,8 +326,8 @@ final class VarkaIntervalCompiler {
       LinkedHashMap<Object, Object> literals,
       DeclineSink sink) {
     if (!m.num().dataType().equals(DataTypes.IntegerType)) {
-      return decline("interval multiplier of type " + m.num().dataType().simpleString()
-          + " is not an int32 lane", m, sink);
+      return sink.decline("interval multiplier of type " + m.num().dataType().simpleString()
+          + " is not an int32 lane", m);
     }
     int mark = literals.size();
     Option<VarkaVectorIR> x =
@@ -342,11 +335,11 @@ final class VarkaIntervalCompiler {
     if (x.isEmpty()) {
       return rolledBack(x, literals, mark);
     }
-    Option<VarkaVectorIR> k = FACADE.intOperand(m.num(), inputs, literals, sink);
+    Option<VarkaVectorIR> k = VarkaNodeCompiler.intOperand(m.num(), inputs, literals, sink);
     if (k.isEmpty()) {
       return rolledBack(k, literals, mark);
     }
-    return rolledBack(FACADE.arithOver(
+    return rolledBack(VarkaNodeCompiler.arithOver(
         IntOp.MUL, Overflow.FAIL, x.get(), k.get(), m, literals, mark, sink), literals, mark);
   }
 
@@ -377,19 +370,13 @@ final class VarkaIntervalCompiler {
     if (y.isEmpty()) {
       return rolledBack(y, literals, mark);
     }
-    return rolledBack(FACADE.arithOver(
+    return rolledBack(VarkaNodeCompiler.arithOver(
         op, Overflow.FAIL, x.get(), y.get(), whole, literals, mark, sink), literals, mark);
   }
 
   /** Whether {@code c} casts to a year-month interval whose end field is {@code endField}. */
   private static boolean endsIn(Cast c, byte endField) {
     return c.dataType() instanceof YearMonthIntervalType ym && ym.endField() == endField;
-  }
-
-  /** Notes {@code reason} against {@code e} and declines it. */
-  private static Option<VarkaVectorIR> decline(String reason, Expression e, DeclineSink sink) {
-    sink.note(reason, e);
-    return Option.empty();
   }
 
   /**
@@ -399,14 +386,8 @@ final class VarkaIntervalCompiler {
   private static Option<VarkaVectorIR> rolledBack(
       Option<VarkaVectorIR> built, LinkedHashMap<Object, Object> literals, int mark) {
     if (built.isEmpty()) {
-      FACADE.truncate(literals, mark);
+      VarkaNodeCompiler.truncate(literals, mark);
     }
     return built;
-  }
-
-  /** A facade table as the facade's own methods declare it; see the class doc. */
-  @SuppressWarnings("unchecked")
-  private static LinkedHashMap<Object, Object> table(LinkedHashMap<?, ?> table) {
-    return (LinkedHashMap<Object, Object>) table;
   }
 }

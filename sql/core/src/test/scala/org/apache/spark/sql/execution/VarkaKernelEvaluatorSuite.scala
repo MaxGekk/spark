@@ -21,6 +21,8 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
+import scala.jdk.CollectionConverters._
+
 import org.apache.arrow.memory.{BufferAllocator, OutOfMemoryException}
 import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYearVector, IntVector, VarCharVector}
 
@@ -259,7 +261,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       assert(VarkaDebugInfoReader.planFragment(bytes) === s"shape $hash")
       // The per-execution identity - operator, stage, and the whole projection with the
       // residual entry included - lives in the cache's side table, joined by the hash.
-      val executions = VarkaShapeCache.executionsFor(hash)
+      val executions = VarkaShapeCache.executionsFor(hash).asScala
       assert(executions.exists { e =>
         e.startsWith(s"Varka_Test_Stage${TaskContext.get().stageId()}") &&
           e.contains("date_add") && e.contains("inc")
