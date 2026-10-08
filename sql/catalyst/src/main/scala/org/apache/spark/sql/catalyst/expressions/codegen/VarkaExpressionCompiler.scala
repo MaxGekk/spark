@@ -1090,7 +1090,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
     "calendar" -> VarkaChronoCompiler.arms(inputs, literals, sink),
     "interval" -> javaFamily(VarkaIntervalCompiler.arm(_, inputs, literals, sink)),
     "time" -> javaFamily(VarkaTimeCompiler.arm(_, inputs, literals, sink)),
-    "condition" -> VarkaConditionCompiler.arms(inputs, literals, sink),
+    "condition" -> javaFamily(VarkaConditionCompiler.arm(_, inputs, literals, sink)),
     "int arithmetic" -> arithmeticArms(inputs, literals, sink))
 
   /**
