@@ -56,11 +56,21 @@ Three things follow, and the second and third change the design.
 What the check would have rejected: a draw that is uniform over the rows, or data drawn only from
 the unsafe pool.
 
+*Correction, made while building the real harness.* The throwaway fixture of this check lacked
+the three interval columns the coverage table names (`ymm`, `ymy`, `ym`), so every composition
+that read one failed to analyze, identically on both sides, and was counted as a double error.
+The claim in 3 above that all 1682 double errors were in the ANSI-on half was an assumption I did
+not check, and was wrong; and the harness was blind to a quarter of the table. The numbers that
+stand are the real harness's, in 9. The two design conclusions survive them, the stratified draw
+(a planted bug waited 254 compositions under a uniform one) and the safe pool, which makes the
+ANSI-on arm compare values (it errors on both sides in none of 10,000 cases, where the full pool
+does in 16%).
+
 ## 3. The design
 
 ### 3.1 A case
 
-`SparkFuzzCase`: a list of outputs (SQL strings, from the coverage rows' `executable` column), a
+`Case`: a list of outputs (SQL strings, from the coverage rows' `executable` column), a
 list of conjuncts joined by `AND` or `OR` (each possibly negated), the data (twelve columns by
 `n` rows, each cell a SQL literal or `NULL`) and the ANSI setting. It renders to one SQL
 query and one fixture `SELECT ... FROM VALUES`, so a case is text and needs no serialisation.
@@ -81,7 +91,12 @@ shows.
 
 A seeded `Random` per composition, as the other fuzzers. Stratified as 2 requires: composition
 `k` of a pass includes row `k mod 92` of a shuffled order as one of its outputs or conjuncts, the
-rest drawn uniformly. The data pool is `safe` or `full`, alternating by seed.
+rest drawn uniformly. The data is `safe` or `full`, alternating by iteration: a safe case is only
+rows inside every guard and ANSI check; a full one adds up to two hostile rows, each with one to
+three cells at an extreme (a first draw made every row hostile, and 70% of the full cases failed
+on both engines, which compares the class of an error and nothing else). A null is typed, as the
+fixtures of `VarkaCoverageDifferentialSuite` type theirs: a bare `NULL` in every row of a column is
+`VOID`, which found the bug of 9 and then hid it behind an accident of the fixture.
 
 ### 3.4 The shrinker and the reproducers
 
@@ -181,4 +196,59 @@ planted bug of 2.2 once the draw is stratified.
 
 ## 9. Outcome
 
-Filled in when the harness lands.
+Done on 8 October 2026.
+
+**What was built.** `VarkaSparkFuzz` (the case, the stratified draw, the comparison, the shrinker
+and the reproducer text), `VarkaSparkDifferential` (the check both suites share),
+`VarkaSparkFuzzSuite` (the PR-CI arm and the entry for long runs), `VarkaSparkReproducerSuite`
+(the replay with its stale rule), `sql/varka/fuzz/spark/` (one known reproducer), a `sparkfuzz`
+step in `dev/varka_nightly.sh`, and the skill note. No product code changed.
+
+**It found a bug on its first long run.** `sql/varka/fuzz/spark/void-column-fallback.sql`,
+shrunk by the harness from iteration 93: `SELECT greatest(l, l2) AS c0, date_add(d, i) AS c1 FROM
+fz WHERE NOT (i = 5)` over four rows, ANSI off, where two columns are `VOID` (all `NULL`) and one
+row's `i` is 100000, which takes `date_add` past the kernel's guard so that the batch is declined.
+Spark answers; Varka raises `UNSUPPORTED_DATATYPE: Unsupported data type "VOID"` out of the
+filter's row fallback, `VarkaFilterEvaluatorFactory.PartitionFilterEvaluator.converter`
+(`VarkaFilterExec.scala:200`), which builds a `RowToColumnConverter` over the child's schema and
+has no converter for `NullType`. A relation can carry a `NullType` column (`SELECT NULL AS x`), so
+this is a crash of the fallback the evaluator relies on to be safe, not an artifact. It is row 299,
+and the reproducer is `status: known VARKA-299`, so the replay suite fails when it is fixed and the
+file must be turned into a regression.
+
+**The harness's yield**, with the typed fixture, at `c6cf8e9831c` (the master with 215):
+
+| run | compositions | fused | errored on both sides | disagreements | time |
+|---|---:|---:|---:|---:|---:|
+| seed 20261008 | 20000 | 18736 (94%) | 1592 (8%) | 0 | 21 minutes |
+
+By pool: the safe cases (10,000) errored on both sides in none, and the full ones in 16% (803 of
+5073 with ANSI off, 789 of 4927 with ANSI on). 200 compositions, the PR-CI arm, take about ten
+seconds.
+
+**Predictions scored.**
+
+1. **Refuted.** Stratified, the planted `datediff` swap was found at iteration 102 on the first
+   pool and 93 on the second, not within one pass of 92: the first time a pass forces the row the
+   data may not show the difference (all `NULL`, or `d` equal to `d2`). It is still two and a half
+   times faster than the uniform draw's 254.
+2. **Held, on the right numbers.** The safe pool's ANSI-on arm errors on both sides in none of
+   5003 cases. The baseline of 56% in 2 was the blind fixture's.
+3. **Refuted, usefully.** The first 20,000 found a disagreement at iteration 93 (the bug above).
+   With NULLs typed, and the bug recorded, the same run finds none.
+4. **Held for the planted failure, not for the real one.** The planted bug shrank to one output,
+   no conjunct and one row. The real one shrank to two outputs, a conjunct and four rows: each of
+   those is needed (the second output's `date_add` is what declines the batch, the conjunct is what
+   makes the plan a filter, and the rows carry the `VOID` columns), so it is 1-minimal, not
+   within the three rows predicted.
+
+**What the work taught.** A comparison that cannot fail looks like agreement: the first harness
+counted unanalyzable queries as agreeing errors. The safe pool and the typed NULLs are as much
+the harness as the draw is, and the suite now reports the both-errored count by pool so that a
+pool that has stopped comparing values shows. And the stratified draw needs more than one pass to
+be sure of a data-dependent bug; the nightly's 50,000 compositions are about 540 passes.
+
+**Left for later.** Rows 296 to 298, as planned. Row 299, the bug. The shrinker reduces the parts
+of a composition and not the expressions inside a coverage row. A composition's data is twelve
+rows, so a bug that needs a larger batch or a particular lane position is out of reach; the
+nightly's seed varies the draw but not the batch size.

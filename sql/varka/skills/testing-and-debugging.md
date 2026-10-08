@@ -671,3 +671,29 @@ smallest tree that still fails the same way. Replay the drawn case with `-Dvarka
   iteration, signature and the row that owns it; the run then does not fail on it, and the list
   fails when an entry stops reproducing. Prove a change to the shrinker on the planted bugs
   (`misdescribeWordLiveness`, `misdescribeAdd`), not on a bug that may be fixed next week.
+
+## The random differential against Spark: read the shrunk reproducer, check the pool, mind the fixture
+
+`VarkaSparkFuzzSuite` (VARKA-262) composes random outputs and filters from the rows of
+`sql/varka/coverage.json`, runs them over random data with Varka off and on, ANSI off and on, and
+compares the answers, or the class of the error when a side throws. A disagreement is shrunk
+(the outputs, the conjuncts, the rows of data) and written to `sql/core/target/varka-sparkfuzz/`
+as a file of three parts that `spark-sql` can run: a header, the fixture, the query. Read that
+file first; it is the whole case.
+
+* **Keep a reviewed reproducer** in `sql/varka/fuzz/spark/`, marked `status: regression` once the
+  bug is fixed (the replay suite then requires agreement) or `status: known <row>` while it is
+  open (the replay requires the disagreement to remain, so the file cannot outlive the bug).
+* **The data pool matters more than the count.** A pool of hostile values (far dates, the bounds
+  of an int or a long) made 70% of the cases fail on *both* engines, which compares the class of
+  an error and says nothing about the other rows. Half the cases draw only safe rows, so that the
+  ANSI-on arm compares values; the other half add up to two hostile rows. Read the suite's
+  `info` lines: a pool whose both-errored count is above a third has stopped comparing values.
+* **A fixture that omits a column the table names fails every row that reads it, identically on
+  both sides**, and reads as agreement. The first harness of the task lacked the three interval
+  columns (`ymm`, `ymy`, `ym`) and counted every row using them as a double error; the numbers
+  looked plausible and the harness was blind to a quarter of the table. Build the fixture with
+  the table's own column list, and count the errors by cause.
+* **Stratify the draw.** A uniform draw over the 92 rows found a planted bug in one row after 254
+  of 300 compositions; forcing row `k mod 92` into composition `k` finds it in the second pass.
+
