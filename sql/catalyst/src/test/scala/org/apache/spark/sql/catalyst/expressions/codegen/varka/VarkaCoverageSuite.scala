@@ -386,8 +386,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    */
   private lazy val admittedByCompiler: Set[String] = {
     val scalaFiles = Seq("VarkaExpressionCompiler", "VarkaChronoCompiler",
-      "VarkaTimeCompiler", "VarkaConditionCompiler")
-    val javaFiles = Seq("VarkaIntervalCompiler")
+      "VarkaConditionCompiler")
+    val javaFiles = Seq("VarkaIntervalCompiler", "VarkaTimeCompiler")
     def read(language: String, name: String): String =
       withoutComments(Files.readString(
         getWorkspaceFilePath("sql", "catalyst", "src", "main", language,

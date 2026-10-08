@@ -85,17 +85,11 @@ final class VarkaIntervalCompiler {
   private VarkaIntervalCompiler() {
   }
 
-  /** A claimed node's lowering, run when the chain applies the arm. */
-  @FunctionalInterface
-  interface Arm {
-    Option<VarkaVectorIR> compile();
-  }
-
   /**
    * The arm that claims {@code e}, or {@code null}: the year-month interval arms of
    * {@code compileNode}, in their original order.
    */
-  static Arm arm(
+  static VarkaFamilyArm arm(
       Expression e,
       LinkedHashMap<?, ?> inputTable,
       LinkedHashMap<?, ?> literalTable,

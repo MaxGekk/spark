@@ -785,11 +785,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
         .asInstanceOf[Project].projectList.head.asInstanceOf[Alias].child
       rewritten match {
         case si: StaticInvoke =>
-          // The pair is not bound to a val: `Class[_]` in a tuple infers an existential the
-          // compiler refuses without the language import, and the table's own key type is the
-          // one that matters.
           assert(
-            VarkaTimeCompiler.timeTargets.contains((si.staticObject, si.functionName)),
+            VarkaTimeCompiler.isTimeTarget(si),
             s"$label rewrote to ${si.staticObject.getName}.${si.functionName}, which the table " +
               "does not hold - a rename upstream, or a new expression")
         case other =>
@@ -802,7 +799,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   test("the table holds every TIME expression and keys them distinctly") {
     // Coverage in both directions: nothing in the list is missing from the table, and no two
     // expressions share a key - a collision would silently make one of them report as the other.
-    assert(VarkaTimeCompiler.timeTargets.size === everyTimeExpression.size,
+    assert(VarkaTimeCompiler.timeTargetCount() === everyTimeExpression.size,
       "the table and the list of TIME expressions disagree in size, so one has a duplicate key")
   }
 
