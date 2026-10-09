@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * lanes, each against Java's `/` over the range it is exact on, with the op counts that tell the
  * forms apart.
  */
-class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase {
+class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   // -------------------------------------------------------------------------------------------
   // VARKA-88: the calendar prefix's constant divisions through the double lane.

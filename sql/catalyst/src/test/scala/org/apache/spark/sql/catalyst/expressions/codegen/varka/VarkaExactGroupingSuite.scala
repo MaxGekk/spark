@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.
  * measurement's regroup. How it compares with the best partition over the whole corpus is
  * `VarkaGroupingBoundSuite`'s. See `VARKA-200.md`.
  */
-class VarkaExactGroupingSuite extends VarkaEmitterTestBase {
+class VarkaExactGroupingSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   // Pinned to sixteen lanes: the lane count changes the prefix's ops, and with them where the
   // groups close, so the counts below hold on every machine only at one lane count.

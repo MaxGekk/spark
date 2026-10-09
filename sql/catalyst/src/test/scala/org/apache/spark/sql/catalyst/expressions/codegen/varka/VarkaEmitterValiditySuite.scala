@@ -31,7 +31,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * the width-specialised validity helpers - byte-identical bitmaps under every setting, at every
  * length and width.
  */
-class VarkaEmitterValiditySuite extends VarkaEmitterTestBase {
+class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("the masked body agrees with the dense body on null-free data") {
     // forceMasked reports one null over a full-set bitmap, which the dispatcher sends down

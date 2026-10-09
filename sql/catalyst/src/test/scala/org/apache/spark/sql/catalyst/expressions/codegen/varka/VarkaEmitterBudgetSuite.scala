@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * budget change regroups, the calendar weights against what the emitter emits, and the emitted
  * methods against `HugeMethodLimit`.
  */
-class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase {
+class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("fitsBudgets mirrors the analysis caps, distinct ops across outputs") {
     def chain(base: Int, depth: Int): VarkaVectorIR =
