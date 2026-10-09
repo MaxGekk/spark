@@ -23,6 +23,9 @@ rows that moved there from milestones 5 and 6 keep their task numbers.
 11), added rows 273 to 281 and refined rows 81, 138, 240 to 245, 248, 252, 257, 262, 265, 266, 269
 and 272. Row 273 is a bug the reading found, reproduced the same day.*
 
+*9 October 2026: a read of Polars (`m7/READING_POLARS.md`) added row 301 and refined row 252; the
+rest of what it found is `m8/SCOPE.md` item 89.*
+
 ## 1. The question, and what "done" means
 
 Six milestones built vocabulary and then a foundation under it, and each was checked as it
@@ -554,12 +557,13 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 298 | Nested Catalyst trees with neighbouring types, so the analyzer inserts casts (`VarkaCatalystGrammar`, beside `VarkaIrGrammar`), and the shrinker reaching inside a row's own expression | VARKA-262 3.4, `m7/PLAN.md` 2.2 | medium |
 | 299 | **Done** (`VARKA-299.md` 9, 8 October 2026): `VarkaRowToColumn`. Varka's filter fallback raises `UNSUPPORTED_DATATYPE` on a `NullType` (VOID) column: `VarkaFilterEvaluatorFactory.PartitionFilterEvaluator.converter` builds a `RowToColumnConverter` over the child's schema, which has no converter for `NullType` (`VarkaFilterExec.scala:200`), so a batch the kernel declines under a filter over a relation with a `SELECT NULL` column fails where Spark answers. Reproducer: `sql/varka/fuzz/spark/void-column-fallback.sql`. Fix it, check the projection fallback and the other converter uses for the same, then turn the file into a regression. Found by VARKA-262's first long run | VARKA-262 9 | small |
 | 251 | **Done** (`VARKA-251.md` 9.2, 6 October 2026): six Java components under `sql/core/.../execution/varka/` - the batch ledger, the scratch, the kernel runner, the warm-up gate, the fallback accounting, the class dump - and `VarkaEvaluatorBase` a Scala composition of them, from 1079 lines to 549; per batch the same as the unchanged evaluators over ten runs at each width, every case's range overlapping and no minimum more than 7% higher. Planned in two pull requests: the per-batch benchmark and its baseline, then the six components. `VarkaEvaluatorBase` split into Java components: runner, batch ledger, scratch, warm-up, fallback accounting, dumping. Proof: a before-and-after benchmark of per-batch overhead | item 74.5 | medium |
-| 252 | Comments that narrate history rewritten to explain the code as it is; and the comments the paper reading found wrong | item 74.7, `m7/READING.md` 11 | small, last |
+| 252 | Comments that narrate history rewritten to explain the code as it is; and the comments the paper reading found wrong; and the rule kept - a sentence in `sql/varka/CLAUDE.md` that a comment describes the code as it is, and a pre-commit check on added lines for `used to` and `the old` | item 74.7, `m7/READING.md` 11, `m7/READING_POLARS.md` 9 | small, last |
 | 214 | Port `VarkaTimeCompiler` to Java. **Done** (`VARKA-214.md` 9, 8 October 2026). Proof: the coverage and family-chain oracles, and VARKA-191's emission times | item 81 | mechanical; an agent's |
 | 215 | Port `VarkaConditionCompiler` to Java. **Done** (`VARKA-215.md` 9, 8 October 2026). Proof: as 214's | item 81 | mechanical; an agent's |
 | 216 | Port `VarkaChronoCompiler` to Java. **Done** (`VARKA-216.md` 9, 8 October 2026). Proof: as 214's | item 81 | mechanical; an agent's |
 | 217 | **Done as 217a** (`VARKA-217.md`), cut in two on 8 October 2026 at the owner's choice: the node compiler the families call (`VarkaNodeCompiler`), `DeclineSink` and `VarkaShapeCache` are Java, with no consumer changes. The classifier, the result type, the size admission apart from node compilation and the data model are row 300. Proof: as 214's | items 81 and 74.4 | medium |
 | 300 | 217b: the facade's classifier (`compilePartial`, the kernel rounds, the size admission, `compilePredicate`) and the data model (`CompiledVarkaProjection`, the output specs, the declines) to Java with the result type and without `Option` or the Scala tables, when their consumers, the evaluators of row 267, are Java too. Proof: as 214's, and the evaluators' own suites | VARKA-217 2 | medium |
+| 301 | Batch size as an axis of the suites: the Spark differential, and the end-to-end suites that can take it, rerun with the Arrow cache's batch size at 1, 3 and 17 rows (`spark.sql.execution.arrow.maxRecordsPerBatch`; `spark.sql.inMemoryColumnarStorage.batchSize` is ignored by the Arrow cache), a skip list with reasons for tests that assert batch counts, and a check that the setting really splits the cached batches so the axis cannot pass vacuously; and the two `VarkaDifferentialSuite` tests that set the ignored knob to 32, whose `batches > 1` holds through the second partition, corrected. Admission check on 9 October 2026: 0 disagreements at sizes 1, 3, 5, 7 and 17 over 1,500 compositions each | `m7/READING_POLARS.md` 4 | small |
 | 224 | Benchmarks and tools in Java: the harness adapter and `VarkaEmitDump` | item 81 | small |
 | 267 | **Planned** (`VARKA-267.md`), in three pull requests - the leaves (the metrics, the selection, the fusion report, the vector projection), the base with the filter evaluator and the kernel part, then the projection evaluator. The evaluators to Java beside 251's components: `VarkaKernelEvaluator`, `VarkaFilterEvaluator`, `VarkaVectorProjection`, `VarkaFusionReport`, `VarkaExecMetrics`, and the Scala `VarkaEvaluatorBase` and `VarkaKernelPart` that 251 leaves; the exec nodes and the columnar rule stay thin Scala wrappers. Proof: as 251's | the plan review (2.3) | medium |
 | 268 | *Optional.* `VarkaEmitterTestBase`'s helpers to Java, the suites thin wrappers over them | the plan review (2.3) | medium |
@@ -668,6 +672,9 @@ anything rows 262, 263 and 269 find is weighed against the milestone's scope (se
 * Item 51, a mapping type per IR node: it lands with the first operator that is not
   element-wise.
 * Item 36, the math family's ULP contract: a decision for a family Varka does not lower yet.
+* What `m8/SCOPE.md` item 89 collects from the Polars reading beyond rows 252 and 301: the double lane,
+  strings, aggregation, decimals, time zones and the Parquet reader wait for the milestone that
+  builds them.
 * Porting the exec nodes and the columnar rule to Java: they stay thin Scala wrappers, since
   `SparkPlan` case classes are the interop surface the owner's Java rule exempts (2.3).
 * Row 218 (optional JIT research), rows 207, 208 and 213 (range-set and warm-up tuning), row

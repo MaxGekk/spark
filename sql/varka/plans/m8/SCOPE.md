@@ -478,6 +478,12 @@ plus a validity `trueCount` - and `avg` is a `sum` and a `count` divided once
 per group at the end. `stddev_samp` needs sum and sum-of-squares, which is free
 once both exist.
 
+*Corrected on 9 October 2026 (item 89, `m7/READING_POLARS.md` 8): Spark's variance and standard
+deviation keep `(n, avg, m2)` as their partial buffer, with a Chan-style merge, and not a sum and a
+sum of squares (`CentralMomentAgg.scala`). The final phase is Spark's, so a columnar partial emits
+that triple; a sum of squares converted at the flush is a different number and cancels badly when
+the mean squared is much larger than the variance.*
+
 ### Item 6. `CASE WHEN` inside `sum()`
 
 **Spark surface.** 127 `CASE WHEN`s, and the specific shape milestone 3's survey
@@ -2951,6 +2957,11 @@ takes the dividend's sign, `pmod` the divisor's, which is one masked add over th
 remainder. Whoever builds `%` should build it, and the two should not be
 discovered separately a second time.
 
+*Corrected on 9 October 2026 (item 89, `m7/READING_POLARS.md` 7): `pmod` takes the divisor's sign
+only for a positive divisor. Spark computes `r = a % n`, adds `n` when `r` is negative and takes the
+remainder again (`MathUtils.scala:105-113`), so `pmod(7, -3)` is 1 where a floor-mod gives -2; the
+masked add is right for `n > 0` and the negative divisor needs its own case.*
+
 **`div` (`IntegralDivide`).** Int32 in, **int64 out**, so it is a *widening*
 kernel - the mirror of the `TIME` field extracts, which narrow. Milestone 5's
 section 2.39 covers `div` over `bigint` and says it takes 2.19's rule, exact
@@ -4682,6 +4693,104 @@ The experiment is to swap or pad the allocations and re-measure the pair; if the
 placement, the harness allocates its streams with a fixed stride from then on. It was not re-run
 by the sweep that moved it here, and the band files (VARKA-77, 90) mark the rows whose spread
 exceeds a move in the meantime.
+
+### Item 89. What Polars adds: ideas for later milestones
+
+*Added on 9 October 2026 from `m7/READING_POLARS.md`, which carries the evidence, the file and line
+of each claim and how well it was checked. What serves milestone 7's goal became its row 301 and a
+refinement of row 252; this is the rest, grouped by the items it feeds. A bullet becomes a row when
+the milestone that builds the thing it informs is planned. Nothing here is a measurement of
+Varka: where the reading quotes a speed, it is a source comment in Polars.*
+
+1. **Spark's double comparison, as formulas** (items 35, 82). Polars's total-order kernels give
+   Spark's answers for NaN and both zeros: `=` is `(l != l & r != r) | l == r`, `<` is
+   `!(l != l | l >= r)`, `<=` is `r != r | l <= r`, `>` and `>=` swap the operands, `!=` negates `=`
+   (`polars-compute/src/comparisons/simd.rs:176-252`; Spark's `genEqual` and `compareDoubles`).
+   For a constant operand the emitter can do better than Polars: a constant that is not NaN gives
+   the bare IEEE compares for `=`, `<` and `<=` and one negation for `>`, `>=` and `!=`; a NaN
+   constant gives `isNaN(x)` forms; and NOT becomes plain mask negation, which removes item 82's
+   swap hazard. `min` over doubles needs "take b if a is NaN or b < a" where `max` may propagate,
+   because Spark's `min` ignores NaN and its `max` does not; a sum starts at `+0.0`.
+   **Done when** item 35's first double comparison lands with a table test (NaN, both zeros, both
+   infinities, the extremes, one ordinary pair) of every operator against
+   `SQLOrderingUtil.compareDoubles`, the constant-specialised forms checked over the same table, and
+   `least`, `greatest` and `min` fuzzed over NaN and the two zeros.
+2. **One load path for a short record** (items 3, 8). `bytes_eq` reads a value of 8 to 16 bytes as
+   two unaligned 8-byte loads, at the start and at `n - 8` (`polars-expr/src/key_rows/layout.rs:
+   559-577`): no mask, no byte outside the value, no padding. Windows `[0, 8)` and `[2, 10)` cover
+   all of `yyyy-MM-dd`, so the date cast and a `CHAR(n)` compare can share one load, which is what
+   item 3's open question asks for. **Done when** a benchmark prices the overlapping loads against a
+   padded block load with a scalar tail and against per-row assembly, for `yyyy-MM-dd` and for
+   `CHAR(n)` up to 16, on an offsets-plus-bytes vector, and item 3 records the verdict.
+3. **Aggregation** (items 4, 5). Spark's variance buffer is `(n, avg, m2)` (corrected in item 5).
+   For at most 64 groups, replicate each accumulator across lanes and keep a "group seen" bit mask in
+   a register, so that consecutive rows in one group do not chain a store to a load (TPC-H q1)
+   (`polars-expr/src/reduce/mod.rs:46,54-136,418-430,552-575`). For the partial phase, a bounded
+   table that evicts and emits instead of growing or spilling (`hot_groups/fixed_index_table.rs`);
+   this fork's `HashAggregateExec` already allows duplicate partials per key through its adaptive
+   pass-through. Multi-column keys packed into fixed-stride words and hashed one column at a time
+   (`key_rows/layout.rs:54-125`), with Spark's `NormalizeNaNAndZero` for float keys. **Done when**
+   item 4's dense step is built with the replicated accumulators or a measurement says it need not
+   be.
+4. **The Arrow-native Parquet reader** (the owner's planned reader). Definition levels become the
+   Arrow validity bitmap by a copy when the maximum repetition level is 0 and the maximum
+   definition level is 1, where Spark writes a byte per row; decode driven by a selection mask that
+   skips RLE runs and bit-packed words (Spark's `readNextGroup` unpacks a whole group first) and a
+   page with no selected row never decompressed; a predicate evaluated once on the dictionary, with
+   pages that cannot match skipped; one explicit Vector API unpack kernel per bit width; a staged
+   prefilter planned from measured selectivity. For the writer, a compatibility checklist Polars
+   fails: a `created_by` that parquet-mr's `VersionParser` accepts (or BINARY and FLBA statistics are
+   ignored), Spark's INT96 default, the footer keys that drive rebase, field ids, decimal
+   representations. Tests with Spark's own vectorized reader as the oracle over files with tiny
+   pages. **Done when** the reader's plan cites each and records yes or no.
+5. **Strings** (items 3, 66). A canonical 16-byte slot for equality, `IN`, hash and group key, with
+   the caveat that Spark pads a `CHAR(n)` literal to `n`, so TPC-DS equality is a 50-byte compare
+   and the inline path rarely fires; `LIKE '%a%b%'` as a literal chain (two of eight LIKEs in this
+   fork's TPC SQL); a code-point count as a byte compare per vector, exact only under an ASCII or
+   valid-UTF-8 guard, because Spark never validates UTF-8 and counts a stray continuation byte as one
+   character. The fork reads Arrow Utf8View already and nothing writes it; the kernels take
+   `VarCharVector`.
+6. **Decimal** (items 1, 2). Admit wider types on a runtime bound: if both unscaled operands fit
+   `int32` in the batch the long product is exact, which admits TPC-H q6 at the spec's
+   `DECIMAL(15,2)` that item 2's static rule refuses; skip the overflow checks the result type
+   already proves; compare across scales by `clamp(x, -B, B) * 10^d`; two limbs for `+`, `-` and
+   compare above 18 digits. Polars's rules are not Spark's (half-even rounding, precision always
+   38): port the primitives, not the rules. Its test grid (scales 0, 1, 6, 18, 37 and 38 cubed against
+   `bigdecimal`) is worth importing against Spark's `Decimal`.
+7. **Time zones** (item 31). A survey experiment, to be repeated before a design leans on it:
+   `LT[i] = T[i] + max(O[i-1], O[i])` is strictly increasing in every zone, and
+   `instant = l - O[#{LT <= l}]` matched `LocalDateTime.atZone` over 875,000 gap and overlap points;
+   transitions are at least 601,200 s apart, so a bucket of 2^39 microseconds holds at most one; and
+   using the batch as the bucket (a scalar lookup, then compare, blend and add) declines only a batch
+   that spans two transitions.
+8. **Kernel experiments to price** (the filter node and the emitter), each an A/B on the idle
+   laptop with its verdict recorded, "no" included: compaction for the non-four-byte lanes by 64-bit
+   mask word (skip a zero word, copy an all-ones word, walk up to 16 set bits, otherwise store and
+   advance); output validity written from a register in 56-bit windows instead of a byte
+   read-modify-write; the vector tail as a zero-padded copy through the same body, which deletes the
+   epilogue methods and is row 87's alternative; skipping the zero-fill that Arrow-java's
+   `allocateNew` does over up to 64 KiB an output; a word-wise `countSet`.
+9. **Cuts and pins** (items 75, 28). A min-cut for item 75's spill point, with Polars's objective
+   replaced by item 75's (both sides under `GROUP_BUDGET`, duplicated prefixes not free); pin the
+   fallback target so that a declining generator cannot be re-entered through the backend it fell
+   back to, with a decline-everything test that asserts termination (Polars hit an infinite recursion
+   and a SIGSEGV); unset-versus-zero in the fallback counters, and a test that every executed Varka
+   node still resolves to its decline reason after each re-plan.
+10. **Process** (rows 248, 252, 275). Land row 275's blanket second oracle in the shape of Polars's
+    schema check: the check, its opt-out marker, meta-tests and every violator's fix in one pull
+    request, with an output-nullability check at the exec nodes; pin the JDK patch in the jobs whose
+    results are committed (bands, canary baselines, nightly fuzz verdicts) and bump it in a named task
+    that reruns them; when a default flips, keep the old engine as a permanent CI variant.
+11. **Guard scoping through `AND` and `OR`** (the emitter). A range guard is scoped only by the arms
+    of an `IfElse` (`Analysis.java:409-436`), so a guard in a conjunct condemns lanes a sibling
+    conjunct already rejected. A probe on `master` (one hostile row among a hundred ordinary ones, an offset far past the narrowed calendar range) confirmed it: for `WHERE i < 1000 AND year(date_add(d, i)) = 2021` the batch holding the row falls back to the row engine although `i < 1000` rejects the row, as it does for the `OR` form, for the guard as the left operand and with no sibling at all, with equal answers; a projection above a filter, which sees only the selected rows, does not decline. The cost is speed on data with extreme values, not answers. **Done when** the emitter scopes the right operand of
+    `AND` by "not known false" on the left and of `OR` by "not known true", with a test that a
+    hostile row rejected by the left operand no longer declines the batch, or a recorded reason
+    that it cannot.
+
+*Corrections made by this reading* (also noted under the items they correct): item 5's variance
+buffer is `(n, avg, m2)`, and item 33's `pmod` takes the divisor's sign only for a positive
+divisor.
 
 ## 5. Ordering
 
