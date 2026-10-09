@@ -32,8 +32,8 @@ import java.nio.file.Files
  */
 object VarkaKnownFailures {
 
-  /** The fuzzers a lane names: the IR fuzzer's two lanes and the composition fuzzer's three. */
-  val lanes = Set("int", "long", "projection", "predicate", "wide")
+  /** The fuzzers a lane names: the IR fuzzer's two lanes and the composition fuzzer's four. */
+  val lanes = Set("int", "long", "projection", "predicate", "wide", "forced")
 
   /** The committed list, relative to `spark.test.home`. */
   val PATH = "sql/varka/fuzz/known_failures.tsv"

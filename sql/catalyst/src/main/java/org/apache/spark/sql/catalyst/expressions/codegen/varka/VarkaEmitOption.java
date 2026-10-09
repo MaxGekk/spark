@@ -385,7 +385,13 @@ public sealed interface VarkaEmitOption
           VarkaEmitOptions::planSize, Builder::planSize, new FlagTag("planSize", true)),
       new Count("misdescribeDriverBytes", Reason.FAULT_INJECTOR, 0,
           VarkaEmitOptions::misdescribeDriverBytes, Builder::misdescribeDriverBytes,
-          new CountTag("misdescribeDriverBytes="), List.of(), List.of()));
+          new CountTag("misdescribeDriverBytes="), List.of(), List.of()),
+      new Count("forceResidualAt", Reason.FAULT_INJECTOR, 0,
+          VarkaEmitOptions::forceResidualAt, Builder::forceResidualAt,
+          new CountTag("forceResidualAt="), List.of(), List.of()),
+      new Count("misdescribeRollback", Reason.FAULT_INJECTOR, 0,
+          VarkaEmitOptions::misdescribeRollback, Builder::misdescribeRollback,
+          new CountTag("misdescribeRollback="), List.of(), List.of()));
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {
