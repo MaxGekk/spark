@@ -79,3 +79,12 @@ Done on 9 October 2026. Prediction 1 held: the compiler test failed on the old g
 SparkArithmeticException to be thrown, but no exception was thrown" from the Varka session; both
 pass after, with 146 compiler, emitted-bytes, coverage and family-chain tests and 105 TIME and
 coverage-differential tests passing, scalastyle and checkstyle clean.
+
+Review of #686 (`/code-review high`): the same `Math.abs` edge was in `Analysis`'s check that a
+constant division's guard admits no more than the claimed dividend bound; no caller is exposed (the
+compilers write those bounds) but the check was unsound for one that was, so it takes the widest
+bound as `Long.MAX_VALUE` for `Long.MIN_VALUE`. The one-day bound is one constant now, shared by
+the literal's range check and the column's guard. A `Long.MIN_VALUE` literal behind a cast reaches
+the column path, which the existing test of that path pins (the guard is `[-day, day]` over the
+interval's slot, which range analysis does not elide for the long lane).
+

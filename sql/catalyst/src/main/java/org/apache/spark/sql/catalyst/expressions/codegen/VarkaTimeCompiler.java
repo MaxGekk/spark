@@ -96,6 +96,13 @@ final class VarkaTimeCompiler {
   private static final long DAY_OF_NANOS = DateTimeConstants.NANOS_PER_DAY;
 
   /**
+   * The longest interval {@code timeAddInterval} lowers, in microseconds, either way: the literal's
+   * range check and the column's runtime guard are this one bound, so the two paths admit the same
+   * intervals.
+   */
+  private static final long ONE_DAY_MICROS = DateTimeConstants.MICROS_PER_DAY;
+
+  /**
    * The nanoseconds in each unit {@code time_diff} and {@code time_trunc} accept, spelled as
    * {@code DateTimeUtils.getNanosPerTimeUnit} and {@code parseTimeTruncLevel} spell them - the
    * same five names, and nothing coarser than an hour, because a {@code TIME} has no day.
@@ -490,7 +497,7 @@ final class VarkaTimeCompiler {
       // A range and not `Math.abs(micros) > day`: the absolute value of Long.MIN_VALUE is
       // negative, so that guard let the one interval whose multiply by 1000 wraps to zero
       // through to a kernel that then added nothing, where Spark's multiplyExact throws.
-      if (micros < -DateTimeConstants.MICROS_PER_DAY || micros > DateTimeConstants.MICROS_PER_DAY) {
+      if (micros < -ONE_DAY_MICROS || micros > ONE_DAY_MICROS) {
         nanos = sink.decline(label + ": the interval is longer than a day, so every time crosses "
             + "midnight and the row engine raises the error", si);
       } else {
@@ -501,8 +508,7 @@ final class VarkaTimeCompiler {
       if (dt.isEmpty()) {
         nanos = dt;
       } else {
-        var guarded = new GuardedRange(dt.get(), -DateTimeConstants.MICROS_PER_DAY,
-            DateTimeConstants.MICROS_PER_DAY);
+        var guarded = new GuardedRange(dt.get(), -ONE_DAY_MICROS, ONE_DAY_MICROS);
         nanos = Option.apply(new IntArith(IntOp.MUL, Overflow.WRAP, guarded,
             sink.longSlot(DateTimeConstants.NANOS_PER_MICROS)));
       }
