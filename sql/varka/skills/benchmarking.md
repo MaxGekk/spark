@@ -186,6 +186,25 @@ the obvious guess:
   surface. It was the onset of this cliff. A smooth-looking exponent fitted across a
   discontinuity will mislead confidently.
 
+## Regenerate the section you changed, and ask a pair of runs, not one, whether it moved
+
+A runner regeneration rewrites every section of a class's results file on whichever CPU the pool
+hands out, and one regeneration on one machine cannot tell a change from the machine's day.
+Two tools (VARKA-256):
+
+* `dev/varka_bench_regen.sh <module> <Class> --sections "title one,title two"` runs the class and
+  keeps only the named sections, spliced into the committed file by
+  `dev/varka_bench_sections.py`; every other section stays the committed bytes, each on the machine
+  that measured it. The whole class still runs, and the 128-bit companion (which has no section
+  rules) is not regenerated with it. The benchmark workflow takes the same list as its `sections`
+  input. A misspelt title is an error that lists the file's titles, since it would otherwise keep
+  the old numbers without a word.
+* `dev/varka_bench_pair.sh <module> <Class>` runs the class on the merge base and on the head in
+  alternating rounds (the order swaps each round), takes each side's median per row and prints the
+  change (+ faster, - slower, the diff tool's sign); it exits 1 if any row is slower by 10% and
+  stops early within 3%. Reach for it for a claim of "no row moves", which a single regeneration
+  cannot make, and for a claim near the noise (under about 1.3, the repo's own rule).
+
 ## A benchmark number is reproducible within a run and not between runs
 
 Two regenerations of `VarkaEmitterParityBenchmark` with no code change between

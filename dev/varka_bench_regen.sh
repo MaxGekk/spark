@@ -24,6 +24,7 @@
 #   dev/varka_bench_regen.sh core VarkaLongLaneThroughputBenchmark --width=32
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --no-pin
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --pin=0-3
+#   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --sections "single op: emitted loop vs hand-written kernel"
 #
 # Writes three files beside each other under sql/<module>/benchmarks/:
 #   <Class>-jdk25-results.txt          the wide run, exactly as Spark's harness
@@ -57,9 +58,21 @@ module="$1"; klass="$2"; shift 2
 # --width=N takes the MaxVectorSize in BYTES, as the JVM does, and the companion is named
 # after the bits it produces: 16 is the 128-bit file every benchmark commits, 32 the
 # 256-bit one a result earns when it depends on the width (VARKA-144.md 9.4).
-narrow=1; wide_run=1; force=0; pin=auto; width=16
+narrow=1; wide_run=1; force=0; pin=auto; width=16; sections=""
+# `--sections "a,b"` as two words is `--sections=a,b`.
+args=()
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--sections" ] && [ "$#" -ge 2 ]; then args+=("--sections=$2"); shift 2
+  else args+=("$1"); shift; fi
+done
+set -- "${args[@]}"
 for a in "$@"; do
   case "$a" in
+    # Only these sections (titles, comma separated) of the wide file are replaced by the run;
+    # every other section stays the committed bytes, each on the machine that measured it
+    # (VARKA-256, m8/SCOPE.md item 72). The whole class still runs. The narrow companion has no
+    # section rules to splice on, so it is not regenerated with this option.
+    --sections=*) sections="${a#--sections=}"; narrow=0 ;;
     --no-narrow) narrow=0 ;;
     --narrow-only) wide_run=0 ;;
     --width=*) width="${a#--width=}" ;;
@@ -184,6 +197,17 @@ if [ "$wide_run" -eq 1 ]; then
   SPARK_GENERATE_BENCHMARK_FILES=1 "${runner[@]}" build/sbt -batch \
     "$module/Test/runMain $fqcn" > /dev/null
   [ -f "$wide" ] || { echo "the wide run wrote no $wide" >&2; exit 1; }
+  if [ -n "$sections" ]; then
+    # The run wrote every section; keep only the named ones, spliced into the committed file.
+    git cat-file -e "HEAD:$wide" 2>/dev/null \
+      || { echo "--sections needs a committed $wide to splice into" >&2; exit 1; }
+    old_file="$(mktemp)"; new_file="$(mktemp)"
+    git show "HEAD:$wide" > "$old_file"; cp "$wide" "$new_file"
+    "$(dirname "$0")/varka_bench_sections.py" splice "$old_file" "$new_file" \
+      --sections "$sections" --out "$wide"
+    rm -f "$old_file" "$new_file"
+    echo "sections: $sections (the rest of $wide is as committed)" >> "$prov"
+  fi
 fi
 
 if [ "$narrow" -eq 1 ]; then

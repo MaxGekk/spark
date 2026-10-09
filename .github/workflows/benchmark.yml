@@ -66,6 +66,11 @@ on:
         description: 'Expected CPU model (e.g. "AMD EPYC 7763"). If set, the job fails early when the runner CPU does not match.'
         required: false
         default: ''
+      sections:
+        type: string
+        description: 'Only these sections of the results files (titles, comma separated; blank for all) replace the committed ones; the others stay as committed, each on the machine that measured it. The whole class still runs.'
+        required: false
+        default: ''
       extra-java-options:
         type: string
         description: 'Extra JVM options for the benchmark driver (e.g. "-XX:MaxVectorSize=32"). Runs with and without a flag are directly comparable only on the same runner CPU, so pin expected-cpu when using this.'
@@ -148,6 +153,7 @@ jobs:
       SPARK_BENCHMARK_CUR_SPLIT: ${{ matrix.split }}
       SPARK_GENERATE_BENCHMARK_FILES: 1
       EXTRA_JAVA_OPTIONS: ${{ inputs.extra-java-options }}
+      BENCHMARK_SECTIONS: ${{ inputs.sections }}
       SPARK_LOCAL_IP: localhost
       # To prevent spark.test.home not being set. See more detail in SPARK-36007.
       SPARK_HOME: ${{ github.workspace }}
@@ -221,6 +227,11 @@ jobs:
           --jars "`find . -name '*-SNAPSHOT-tests.jar' -o -name '*avro*-SNAPSHOT.jar' -o -name 'varka-engine_*-SNAPSHOT.jar' | paste -sd ',' -`,`find ~/.cache/coursier -name 'curator-test-*.jar'`" \
           "`find . -name 'spark-core*-SNAPSHOT-tests.jar'`" \
           "${{ inputs.class }}"
+        # Keep the committed sections the run was not asked to replace (VARKA-256): a run on
+        # whichever CPU the pool assigns would otherwise rewrite every section of the file.
+        if [ -n "$BENCHMARK_SECTIONS" ]; then
+          python3 dev/varka_bench_sections.py restore --sections "$BENCHMARK_SECTIONS"
+        fi
         # To keep the directory structure and file permissions, tar them
         # See also https://github.com/actions/upload-artifact#maintaining-file-permissions-and-case-sensitive-files
         echo "Preparing the benchmark results:"

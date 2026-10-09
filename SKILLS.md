@@ -21,6 +21,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Flipping a default silently retires every A/B built on `DEFAULTS`](sql/varka/skills/benchmarking.md#flipping-a-default-silently-retires-every-ab-built-on-defaults)
 * [Write the Prediction Down, Then Measure](sql/varka/skills/benchmarking.md#write-the-prediction-down-then-measure)
 * [A benchmark guard that fails in one direction gets satisfied by the failure in the other](sql/varka/skills/benchmarking.md#a-benchmark-guard-that-fails-in-one-direction-gets-satisfied-by-the-failure-in-the-other)
+* [Regenerate the section you changed, and ask a pair of runs, not one, whether it moved](sql/varka/skills/benchmarking.md#regenerate-the-section-you-changed-and-ask-a-pair-of-runs-not-one-whether-it-moved)
 * [A benchmark number is reproducible within a run and not between runs](sql/varka/skills/benchmarking.md#a-benchmark-number-is-reproducible-within-a-run-and-not-between-runs)
 * [A count of calls on an owner is not a count of the work you mean](sql/varka/skills/benchmarking.md#a-count-of-calls-on-an-owner-is-not-a-count-of-the-work-you-mean)
 * [An inventory made by reading is not an inventory made by counting](sql/varka/skills/benchmarking.md#an-inventory-made-by-reading-is-not-an-inventory-made-by-counting)
