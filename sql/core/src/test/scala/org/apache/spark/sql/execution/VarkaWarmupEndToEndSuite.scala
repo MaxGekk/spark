@@ -117,7 +117,7 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
       val outcome = VarkaKernelWarmup.recentOutcomes().asScala.last
       logInfo(s"The warm-up of `$query`: $outcome; the first run took $firstMillis ms")
       assert(outcome.state() === VarkaKernelWarmth.State.COMPILED,
-        s"$outcome; the first run took $firstMillis ms")
+        s"$outcome; the first run took $firstMillis ms; ${VarkaKernelWarmup.lastReleaseJitState()}")
       assert(outcome.firstProbeBytes() > outcome.lastProbeBytes(), outcome)
 
       val second = varkaSpark.sql(query)

@@ -232,4 +232,38 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(warmedName.substring(prefixLength) ===
       VarkaShapeCacheImpl.WARMED_MARK + plainName.substring(prefixLength))
   }
+
+  test("the JIT state a released warm-up reports names the compilers, the cache and the queue") {
+    // What VARKA-295 needs from the next failure on CI: whether C2 was off, the code cache full,
+    // or the queue backed up behind other methods. Read here on a JVM that has compiled a little.
+    val state = VarkaKernelWarmup.jitState()
+    assert(state.startsWith("JIT: "), state)
+    assert(state.contains("compile time"), state)
+    assert(state.contains("Code"), state)
+    assert(state.contains("compile queue of"), state)
+  }
+
+  test("a block is clean within the allowance and a quarter of the first, or far below it") {
+    val allowance = 9216L
+    val first = 5858064L
+    // The uncompiled rate: boxing on every operation.
+    assert(!VarkaKernelWarmup.clean(first, allowance, first))
+    assert(!VarkaKernelWarmup.clean(first / 2, allowance, first))
+    // Within the allowance and a quarter of the first or less: the usual compiled kernel.
+    assert(VarkaKernelWarmup.clean(800L, allowance, first))
+    assert(VarkaKernelWarmup.clean(allowance, allowance, first))
+    // Over the allowance but far below the first, as VARKA-295's kernel on CI: 20720 bytes
+    // against 5858064 is 283 times lower, and only C2 gets there.
+    assert(VarkaKernelWarmup.clean(20720L, allowance, first))
+    // Over the allowance and only a little below the first: still boxing, however it got there.
+    assert(!VarkaKernelWarmup.clean(first / 4, allowance, first))
+    assert(!VarkaKernelWarmup.clean(first / 31, allowance, first))
+    assert(VarkaKernelWarmup.clean(first / 32, allowance, first))
+    // A first block that is itself small: the drop cannot be shown, so only the allowance decides
+    // and the quarter still applies.
+    assert(!VarkaKernelWarmup.clean(2000L, allowance, 4000L))
+    assert(VarkaKernelWarmup.clean(500L, allowance, 4000L))
+    // No overflow on absurd inputs.
+    assert(!VarkaKernelWarmup.clean(Long.MaxValue, allowance, first))
+  }
 }

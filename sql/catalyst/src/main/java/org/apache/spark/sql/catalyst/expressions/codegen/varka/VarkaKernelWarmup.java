@@ -20,12 +20,16 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
+
+import javax.management.ObjectName;
 
 import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
@@ -53,7 +57,13 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth
  * species-pollution check's allowance ({@link VarkaAllocationSampler}) and allocates at most a
  * quarter ({@link #COMPILED_DROP}) of what the first block did; {@link #CLEAN_PROBES} clean blocks
  * in a row are the verdict. The per-column term keeps a wide kernel's segments from reading as
- * boxing, and the drop keeps a narrow kernel's boxing from reading as segments.
+ * boxing, and the drop keeps a narrow kernel's boxing from reading as segments. A block that falls
+ * {@link #DRAMATIC_DROP} times or more below the first is clean whatever it allocates: nothing
+ * short of C2 takes boxing down by that much (the interpreter and C1 box every operation), and a
+ * compiled kernel in a JVM whose profiles other kernels have shaped can leave more calls out of
+ * line than the allowance counts (VARKA-295: 20.7 KB a block after 5.9 MB, 283 times lower,
+ * against an allowance of 9.2 KB, and the warm-up ran its sixty seconds for a kernel that had
+ * compiled).
  *
  * <p>The probe's calls are long - the whole snapshot, {@link #PROBE_ROWS} rows - where the spin's
  * are short, because boxing grows with the rows a call runs and segments with the calls. A
@@ -148,6 +158,25 @@ public final class VarkaKernelWarmup {
 
   /** How far below the first probe block a clean block must be. */
   static final int COMPILED_DROP = 4;
+
+  /**
+   * How far below the first probe block a block is clean whatever the allowance says; see the
+   * class doc. Far under the drops seen (283 times in the polluted JVM, thousands in a clean
+   * one) and far over what a partial compile gives.
+   */
+  static final int DRAMATIC_DROP = 32;
+
+  /**
+   * Whether a probe block of {@code allocated} bytes shows the kernel compiled, given the
+   * {@code allowance} for a block that size and the {@code first} block's bytes.
+   */
+  static boolean clean(long allocated, long allowance, long first) {
+    if (allocated > Long.MAX_VALUE / DRAMATIC_DROP) {
+      return false;
+    }
+    return allocated * DRAMATIC_DROP <= first
+        || (allocated <= allowance && allocated * COMPILED_DROP <= first);
+  }
 
   /**
    * Calls after which the warm-up stops spinning: 8000 per driver, well past JDK 25's tier-4
@@ -276,6 +305,48 @@ public final class VarkaKernelWarmup {
       Thread.sleep(5);
     }
     return true;
+  }
+
+  // What the JIT was doing when the last warm-up was released at its deadline; see jitState.
+  private static volatile String lastReleaseJitState = "";
+
+  /**
+   * The JIT's state when the most recent warm-up ran out of its {@link #DEADLINE_SECONDS}, or
+   * empty if none has: the compile queue, the compilers' total time and the code cache's use.
+   * A release at the deadline means C2 never finished the kernel, and this is what says whether
+   * the queue was backed up behind other methods, the compilers were off, or the cache was full
+   * (VARKA-295).
+   */
+  public static String lastReleaseJitState() {
+    return lastReleaseJitState;
+  }
+
+  static String jitState() {
+    var state = new StringBuilder("JIT: ");
+    var compilation = ManagementFactory.getCompilationMXBean();
+    if (compilation != null && compilation.isCompilationTimeMonitoringSupported()) {
+      state.append("compile time ").append(compilation.getTotalCompilationTime()).append(" ms; ");
+    }
+    for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+      // With the code cache unsegmented (under 240 MB) there is one pool, "CodeCache".
+      if (pool.getName().startsWith("CodeHeap") || pool.getName().equals("CodeCache")) {
+        state.append(pool.getName()).append(' ').append(pool.getUsage().getUsed() >> 20)
+            .append('/').append(pool.getUsage().getMax() >> 20).append(" MB; ");
+      }
+    }
+    try {
+      Object queue = ManagementFactory.getPlatformMBeanServer().invoke(
+          new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerQueue",
+          new Object[] {null}, new String[] {String[].class.getName()});
+      String[] lines = String.valueOf(queue).split("\\R");
+      state.append("compile queue of ").append(lines.length).append(" lines: ");
+      for (int i = 0; i < Math.min(lines.length, 12); i++) {
+        state.append(lines[i].strip()).append(" | ");
+      }
+    } catch (Exception | LinkageError e) {
+      state.append("compile queue unavailable: ").append(e);
+    }
+    return state.toString();
   }
 
   /** The most recent warm-ups' outcomes, oldest first. */
@@ -504,7 +575,7 @@ public final class VarkaKernelWarmup {
               why = "it allocates nothing to wait for";
               break;
             }
-          } else if (allocated > allowance || allocated * COMPILED_DROP > firstProbeBytes) {
+          } else if (!clean(allocated, allowance, firstProbeBytes)) {
             clean = 0;
           } else if (++clean >= CLEAN_PROBES) {
             if (warmth.markCompiled()) {
@@ -516,7 +587,8 @@ public final class VarkaKernelWarmup {
           }
           if (System.nanoTime() - deadline > 0) {
             warmth.release();
-            why = "no compile after " + DEADLINE_SECONDS + " seconds";
+            lastReleaseJitState = jitState();
+            why = "no compile after " + DEADLINE_SECONDS + " seconds; " + lastReleaseJitState;
             break;
           }
         }
