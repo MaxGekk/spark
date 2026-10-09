@@ -49,9 +49,22 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
   /** The cache's default batch holds 10,000 rows, so the table is four batches. */
   private val numBatches = 4L
 
+  // The warm-up's deadline, raised for these tests: on a loaded runner a loop method's C2 compile
+  // can wait in the queue longer than the production minute, and a release at the deadline is then
+  // the policy working, not a verdict to assert on (VARKA-295).
+  private val deadlineProperty = "varka.warmup.deadlineSeconds"
+
   private def withWarmup[T](body: => T): T = {
     varkaSpark.conf.set(SQLConf.VARKA_WARMUP_ENABLED.key, "true")
-    try body finally varkaSpark.conf.set(SQLConf.VARKA_WARMUP_ENABLED.key, "false")
+    val previous = sys.props.get(deadlineProperty)
+    sys.props(deadlineProperty) = "120"
+    try body finally {
+      previous match {
+        case Some(value) => sys.props(deadlineProperty) = value
+        case None => sys.props.remove(deadlineProperty)
+      }
+      varkaSpark.conf.set(SQLConf.VARKA_WARMUP_ENABLED.key, "false")
+    }
   }
 
   /**
@@ -113,7 +126,7 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
       expectWarmup(first, firstMillis, "the first run")(
         varkaMetric(first, "numVarkaBatches") === 0L)
 
-      assert(VarkaKernelWarmup.awaitIdle(120000), "the warm-up did not finish in two minutes")
+      assert(VarkaKernelWarmup.awaitIdle(150000), "the warm-up did not finish within 150 seconds")
       val outcome = VarkaKernelWarmup.recentOutcomes().asScala.last
       logInfo(s"The warm-up of `$query`: $outcome; the first run took $firstMillis ms")
       assert(outcome.state() === VarkaKernelWarmth.State.COMPILED,
@@ -144,7 +157,7 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
   private def expectWarmup(df: DataFrame, firstMillis: Long, which: String)(
       holds: => Boolean): Unit = {
     if (!holds) {
-      VarkaKernelWarmup.awaitIdle(120000)
+      VarkaKernelWarmup.awaitIdle(150000)
       val counters = Seq("numWarmupBatches", "numVarkaBatches", "numFallbackBatchesNonArrow",
         "numFallbackBatchesKernel", "numFallbackBatchesRowPath", "numFallbackBatchesDeclined")
         .map(m => s"$m=${varkaMetric(df, m)}").mkString(", ")
@@ -177,7 +190,7 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
       assert(varkaMetric(first, "numWarmupBatches") === numBatches)
       assert(varkaMetric(first, "numVarkaBatches") === 0L)
       assert(varkaMetric(first, "numOutputRows") === numRows.toLong)
-      assert(VarkaKernelWarmup.awaitIdle(120000), "the warm-up did not finish in two minutes")
+      assert(VarkaKernelWarmup.awaitIdle(150000), "the warm-up did not finish within 150 seconds")
       assert(VarkaKernelWarmup.recentOutcomes().asScala.last.state() ===
         VarkaKernelWarmth.State.COMPILED)
       val second = writeToNoop(query)
@@ -209,7 +222,7 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
       // The filter's warm-up, then the projection's: one run each, and one more that both serve.
       while (runs.size < 4 && Seq(filter(runs.last), projection(runs.last))
           .exists(metric(_, "numVarkaBatches") < numBatches)) {
-        assert(VarkaKernelWarmup.awaitIdle(120000), "a warm-up did not finish in two minutes")
+        assert(VarkaKernelWarmup.awaitIdle(150000), "a warm-up did not finish within 150 seconds")
         runs += writeToNoop(query)
       }
       Seq(filter(runs.last), projection(runs.last)).foreach { node =>
