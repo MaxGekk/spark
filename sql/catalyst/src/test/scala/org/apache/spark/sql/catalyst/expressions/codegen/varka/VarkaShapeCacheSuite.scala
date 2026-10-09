@@ -446,7 +446,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     // The second lookup's identity overshoots the side-table bound, so this also pins the
     // task-21 review fix: the event must carry the same abbreviated string the side table
     // stores, or the advertised join between the two never matches.
-    val longIdentity = "jfr-exec-b-" + ("x" * (VarkaShapeCache.maxExecutionIdentityLength * 2))
+    val longIdentity = "jfr-exec-b-" + ("x" * (VarkaShapeCache.MAX_EXECUTION_IDENTITY_LENGTH * 2))
     val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(
       classOf[VarkaEmissionEvent], classOf[VarkaCacheLookupEvent]) {
       assert(!cache.getOrEmit(parent, key, "jfr-exec-a").hit)
@@ -465,7 +465,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     val executions = lookups.map(_.getString("execution")).toSet
     assert(executions.contains("jfr-exec-a"))
     val bounded = (executions - "jfr-exec-a").head
-    assert(bounded.length <= VarkaShapeCache.maxExecutionIdentityLength,
+    assert(bounded.length <= VarkaShapeCache.MAX_EXECUTION_IDENTITY_LENGTH,
       "the lookup event must carry the bounded identity, not the raw one")
     assert(executionsOf(cache, hash).contains(bounded),
       "the event's identity must equal the side table's entry, or the join breaks")

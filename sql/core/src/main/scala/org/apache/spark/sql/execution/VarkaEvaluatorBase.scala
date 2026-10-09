@@ -190,14 +190,14 @@ private[sql] abstract class VarkaEvaluatorBase(
   /**
    * The identity recorded in the cache's side table: the execution name, then as much of the
    * evaluator's entries as the table keeps
-   * ([[VarkaShapeCache.maxExecutionIdentityLength]]). Bounded while building: rendering all
+   * ([[VarkaShapeCache.MAX_EXECUTION_IDENTITY_LENGTH]]). Bounded while building: rendering all
    * of a wide projection on every task's setup path would be paid only to be truncated on
    * arrival, or discarded outright when the cache is disabled.
    */
   private def executionIdentity(): String = {
     val sb = new StringBuilder(executionName).append(": ")
     val it = identityEntries
-    while (it.hasNext && sb.length <= VarkaShapeCache.maxExecutionIdentityLength) {
+    while (it.hasNext && sb.length <= VarkaShapeCache.MAX_EXECUTION_IDENTITY_LENGTH) {
       sb.append(it.next())
       if (it.hasNext) sb.append(", ")
     }

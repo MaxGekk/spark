@@ -371,9 +371,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   /**
    * The Catalyst expression classes the compiler matches on, read from its source because there
    * is no runtime list to ask: the arms are a `match`, not a registry. The arms live in
-   * `VarkaExpressionCompiler` and the four families it chains, so all five files are read, each
-   * in its own language: a family ported to Java matches in a `switch`, whose type patterns
-   * (`case Add a`) and `instanceof` tests are what name its classes there.
+   * `VarkaExpressionCompiler`, in `VarkaNodeCompiler` (the date leaves and the int arithmetic)
+   * and in the four families it chains, so all six files are read, each in its own language: a
+   * file ported to Java matches in a `switch`, whose type patterns (`case Add a`) and
+   * `instanceof` tests are what name its classes there.
    *
    * Every pattern naming a capitalised type is collected, then kept only if it names a real
    * class in `org.apache.spark.sql.catalyst.expressions`. That filter is what removes the IR
@@ -386,8 +387,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    */
   private lazy val admittedByCompiler: Set[String] = {
     val scalaFiles = Seq("VarkaExpressionCompiler")
-    val javaFiles = Seq("VarkaIntervalCompiler", "VarkaTimeCompiler", "VarkaConditionCompiler",
-      "VarkaChronoCompiler")
+    val javaFiles = Seq("VarkaNodeCompiler", "VarkaIntervalCompiler", "VarkaTimeCompiler",
+      "VarkaConditionCompiler", "VarkaChronoCompiler")
     def read(language: String, name: String): String =
       withoutComments(Files.readString(
         getWorkspaceFilePath("sql", "catalyst", "src", "main", language,

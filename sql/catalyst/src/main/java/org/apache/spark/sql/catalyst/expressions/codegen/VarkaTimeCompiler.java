@@ -79,18 +79,12 @@ import org.apache.spark.unsafe.types.UTF8String;
  * the family does not claim, so that asking is side-effect free. {@code compileRoot} calls
  * {@link #compileTime} directly for the functions whose int result only an output can take.
  *
- * <p>The literal and input tables are the facade's {@code mutable.LinkedHashMap[Int, Int]}, taken
- * as {@code LinkedHashMap<?, ?>} at the boundary and cast once by {@link #table}; see
- * {@code VarkaIntervalCompiler}.
+ * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]},
+ * taken as {@code LinkedHashMap<?, ?>} at the boundary and cast once by
+ * {@link VarkaNodeCompiler#table}; see {@code VarkaNodeCompiler}.
  */
 final class VarkaTimeCompiler {
 
-  /**
-   * The facade, whose recursion and helpers the arms call. It is a Scala {@code private[sql]
-   * object}, compiled to its module class alone, so Java reaches it through the module's one
-   * instance.
-   */
-  private static final VarkaExpressionCompiler$ FACADE = VarkaExpressionCompiler$.MODULE$;
 
   private static final String TIMESTAMP_OUT_OF_MILESTONE =
       "a timestamp column is outside milestone 5";
@@ -153,23 +147,23 @@ final class VarkaTimeCompiler {
       LinkedHashMap<?, ?> inputTable,
       LinkedHashMap<?, ?> literalTable,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = table(inputTable);
-    LinkedHashMap<Object, Object> literals = table(literalTable);
+    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
+    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     return switch (e) {
       // The long lane's column leaf: a `bigint`, a `TIME(p)` and a day-time interval are one
       // eight-byte lane, holding the value, nanoseconds of day and microseconds respectively (task
       // 29). As with the interval leaf, Spark's own typing decides where such a value may
       // appear - never in a date or an int position - so the leaf cannot put one there, and the
       // IR's constructors refuse a tree that mixes it with the int lane anyway.
-      case BoundReference br when FACADE.laneOf(br.dataType()).contains(LaneType.LONG) ->
-          () -> Option.apply(FACADE.columnRef(br, inputs, LaneType.LONG));
+      case BoundReference br when VarkaNodeCompiler.onLongLane(br.dataType()) ->
+          () -> Option.apply(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));
       // Ahead of the generic "non-date column" decline, so the reason is the decision.
       case BoundReference br when isTimestamp(br.dataType()) ->
-          () -> decline(TIMESTAMP_OUT_OF_MILESTONE, br, sink);
+          () -> sink.decline(TIMESTAMP_OUT_OF_MILESTONE, br);
       // The long lane's literals, beside the int ones: the value is already the long the lane
       // holds, so `l > 5000000000`, `t < TIME'12:00'` and `dt > INTERVAL '1' DAY` take a slot.
       case Literal l when l.value() instanceof Long
-          && FACADE.laneOf(l.dataType()).contains(LaneType.LONG) ->
+          && VarkaNodeCompiler.onLongLane(l.dataType()) ->
           () -> Option.apply(sink.longSlot((Long) l.value()));
       // TIME's precision cast. A `TIME(p)` value is stored truncated to `p` digits and
       // `Cast.castToTime` truncates again to the target precision, so a cast to an equal or wider
@@ -181,10 +175,10 @@ final class VarkaTimeCompiler {
       case Cast c when c.dataType() instanceof TimeType to
           && c.child().dataType() instanceof TimeType from
           && to.precision() >= from.precision() ->
-          () -> FACADE.compileNode(c.child(), inputs, literals, sink);
+          () -> VarkaNodeCompiler.compileNode(c.child(), inputs, literals, sink);
       case Cast c when c.dataType() instanceof TimeType
           && c.child().dataType() instanceof TimeType ->
-          () -> decline("TIME narrowed to a lower precision, which truncates", c, sink);
+          () -> sink.decline("TIME narrowed to a lower precision, which truncates", c);
       // The day-time interval's unit relabel, the twin of the year-month MONTH arm: type
       // coercion casts `INTERVAL '0' SECOND` to the column's DAY TO SECOND before comparing, and
       // `castToDayTimeInterval` keeps the microseconds whole for a SECOND end field
@@ -194,11 +188,11 @@ final class VarkaTimeCompiler {
       case Cast c when c.dataType() instanceof DayTimeIntervalType to
           && to.endField() == DayTimeIntervalType.SECOND()
           && c.child().dataType() instanceof DayTimeIntervalType ->
-          () -> FACADE.compileNode(c.child(), inputs, literals, sink);
+          () -> VarkaNodeCompiler.compileNode(c.child(), inputs, literals, sink);
       case Cast c when c.dataType() instanceof DayTimeIntervalType
           && c.child().dataType() instanceof DayTimeIntervalType ->
-          () -> decline(
-              "day-time interval narrowed to a coarser end field, which truncates", c, sink);
+          () -> sink.decline(
+              "day-time interval narrowed to a coarser end field, which truncates", c);
       // A TIME expression, which arrives as the StaticInvoke its RuntimeReplaceable rewrote
       // itself into (see `TIME_TARGETS`). The lowered ones are matched by the method they
       // invoke; the rest decline by name through the same table.
@@ -305,8 +299,8 @@ final class VarkaTimeCompiler {
       LinkedHashMap<?, ?> literalTable,
       DeclineSink sink,
       boolean atRoot) {
-    LinkedHashMap<Object, Object> inputs = table(inputTable);
-    LinkedHashMap<Object, Object> literals = table(literalTable);
+    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
+    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     // A node outside the table fails here, as the Scala `timeTargets(key)` did, rather than
     // reaching a decline text as "null".
     String label = Objects.requireNonNull(
@@ -455,12 +449,12 @@ final class VarkaTimeCompiler {
         }
       }
       case "getSecondsOfTimeWithFraction", "timeToSeconds" ->
-          { return decline(decimalColumnNotYet(label), si, sink); }
+          { return sink.decline(decimalColumnNotYet(label), si); }
       default -> { }
     }
     // A function of the table whose arguments are not the shape its arm takes, or one with no
     // arm yet: declined by name, never reported as unsupported.
-    return decline(timeNotLoweredYet(label), si, sink);
+    return sink.decline(timeNotLoweredYet(label), si);
   }
 
   /**
@@ -483,8 +477,8 @@ final class VarkaTimeCompiler {
     if (timeAddIntervalTruncates(time.dataType(), interval.dataType(), target)) {
       // Not reachable for any type Spark admits today; a decline rather than a wrong
       // answer if that ever changes.
-      return decline(label + ": the precision truncation is not the identity for these types",
-          si, sink);
+      return sink.decline(label + ": the precision truncation is not the identity for these types",
+          si);
     }
     Option<VarkaVectorIR> t = longOperand(time, inputs, literals, sink);
     if (t.isEmpty()) {
@@ -494,8 +488,8 @@ final class VarkaTimeCompiler {
     if (interval instanceof Literal literal && literal.value() instanceof Long micros
         && literal.dataType() instanceof DayTimeIntervalType) {
       if (Math.abs(micros) > DateTimeConstants.MICROS_PER_DAY) {
-        nanos = decline(label + ": the interval is longer than a day, so every time crosses "
-            + "midnight and the row engine raises the error", si, sink);
+        nanos = sink.decline(label + ": the interval is longer than a day, so every time crosses "
+            + "midnight and the row engine raises the error", si);
       } else {
         nanos = Option.apply(sink.longSlot(micros * DateTimeConstants.NANOS_PER_MICROS));
       }
@@ -528,7 +522,7 @@ final class VarkaTimeCompiler {
       LinkedHashMap<Object, Object> inputs,
       LinkedHashMap<Object, Object> literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> compiled = FACADE.compileNode(e, inputs, literals, sink);
+    Option<VarkaVectorIR> compiled = VarkaNodeCompiler.compileNode(e, inputs, literals, sink);
     if (compiled.isDefined() && compiled.get().laneType() != LaneType.LONG) {
       return Option.empty();
     }
@@ -551,8 +545,8 @@ final class VarkaTimeCompiler {
     if (atRoot) {
       return longOperand(time, inputs, literals, sink);
     }
-    return decline(label + " is an int computed in the long lane, which the kernel narrows at "
-        + "its store: only an output can take it until VARKA-28 narrows inside a tree", si, sink);
+    return sink.decline(label + " is an int computed in the long lane, which the kernel narrows at "
+        + "its store: only an output can take it until VARKA-28 narrows inside a tree", si);
   }
 
   /** The nanoseconds of the unit a literal names, or empty after noting why it cannot. */
@@ -657,17 +651,5 @@ final class VarkaTimeCompiler {
   private static long quotientBound(ConstDivide x) {
     long d = Math.abs(x.divisor());
     return Math.max(1L, (x.dividendBound() + d - 1) / d);
-  }
-
-  /** Notes {@code reason} against {@code e} and declines it. */
-  private static Option<VarkaVectorIR> decline(String reason, Expression e, DeclineSink sink) {
-    sink.note(reason, e);
-    return Option.empty();
-  }
-
-  /** A facade table as the facade's own methods declare it; see the class doc. */
-  @SuppressWarnings("unchecked")
-  private static LinkedHashMap<Object, Object> table(LinkedHashMap<?, ?> table) {
-    return (LinkedHashMap<Object, Object>) table;
   }
 }
