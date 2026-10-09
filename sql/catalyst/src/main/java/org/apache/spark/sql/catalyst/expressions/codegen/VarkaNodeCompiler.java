@@ -303,8 +303,12 @@ final class VarkaNodeCompiler {
     return laneOf(dataType).filter(lane -> lane == LaneType.LONG).isPresent();
   }
 
-  /** Spark's evaluation mode as the IR spells it. */
-  static Overflow overflowOf(scala.Enumeration.Value mode) {
+  /**
+   * Spark's evaluation mode ({@code EvalMode.Value}, typed {@code Object} because scaladoc, which
+   * Maven runs over the Java sources, cannot resolve a type nested in a Scala object) as the IR
+   * spells it.
+   */
+  static Overflow overflowOf(Object mode) {
     var modes = EvalMode$.MODULE$;
     if (modes.LEGACY().equals(mode)) {
       return Overflow.WRAP;
@@ -429,7 +433,7 @@ final class VarkaNodeCompiler {
    */
   private static Option<VarkaVectorIR> intArith(
       IntOp op,
-      scala.Enumeration.Value mode,
+      Object mode,
       Expression l,
       Expression r,
       Expression whole,
