@@ -2655,7 +2655,8 @@ object SQLConf {
         "a V2 data source that reports a KeyedPartitioning but does not report explicit ordering " +
         "via SupportsReportOrdering, or reports one that Spark ignores because it references a " +
         "column that cannot be resolved. Within a single partition all rows share the same key " +
-        s"value, so the data is trivially sorted by those expressions. Requires " +
+        "value, so the data is trivially sorted by those expressions. Partition transforms such " +
+        "as `days(ts)` or `bucket(8, id)` are left out of the ordering. Requires " +
         s"${V2_BUCKETING_ENABLED.key} to be enabled.")
       .version("4.2.0")
       .withBindingPolicy(ConfigBindingPolicy.SESSION)
@@ -2667,9 +2668,10 @@ object SQLConf {
       .doc("When enabled, Spark preserves sort orders over partition key expressions when " +
         "GroupPartitionsExec coalesces multiple input partitions into one output partition. " +
         "Because all merged partitions share the same partition key value, sort orders over " +
-        "those key expressions remain valid after the merge. This applies to both key-derived " +
-        "ordering (from SupportsReportOrdering) and ordering derived from " +
-        s"${V2_BUCKETING_PARTITION_KEY_ORDERING_ENABLED.key}. Requires " +
+        "those key expressions remain valid after the merge. This applies to both the ordering " +
+        "reported via SupportsReportOrdering and the ordering derived from " +
+        s"${V2_BUCKETING_PARTITION_KEY_ORDERING_ENABLED.key}. Sort orders over partition " +
+        "transforms such as `days(ts)` or `bucket(8, id)` are left out. Requires " +
         s"${V2_BUCKETING_ENABLED.key} to be enabled.")
       .version("4.2.0")
       .withBindingPolicy(ConfigBindingPolicy.SESSION)
@@ -5599,6 +5601,33 @@ object SQLConf {
         "The value of spark.sql.execution.python.udf.maxBytesPerBatch should " +
           "be -1 (no limit) or greater than zero and less than or equal to INT_MAX.")
       .createWithDefault(-1)
+
+  val PYTHON_UDF_ROW_SIZE_GUARD_ENABLED =
+    buildConf("spark.sql.execution.python.udf.rowSizeGuard.enabled")
+      .internal()
+      .doc("When true, guard pickle-serialized (non-Arrow) Python UDF evaluation against " +
+        "top-level string and binary argument payloads whose combined size exceeds " +
+        "rowSizeGuard.maxRowHeapFraction of executor heap. The guard checks the projected " +
+        "arguments before conversion and pickling. Nested inputs are not estimated.")
+      .version("4.4.0")
+      .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+      .booleanConf
+      .createWithDefault(false)
+
+  val PYTHON_UDF_ROW_SIZE_GUARD_MAX_ROW_HEAP_FRACTION =
+    buildConf("spark.sql.execution.python.udf.rowSizeGuard.maxRowHeapFraction")
+      .internal()
+      .doc("Maximum combined byte size of one projected input row's top-level string and " +
+        "binary Python UDF arguments, as a fraction of executor max heap. The default 0.083 " +
+        "is approximately 1/12 of the executor heap; conversion and pickling can require " +
+        "multiple copies of the argument bytes.")
+      .version("4.4.0")
+      .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+      .doubleConf
+      .checkValue(v => v > 0.0 && v <= 1.0,
+        "The value of spark.sql.execution.python.udf.rowSizeGuard.maxRowHeapFraction " +
+          "must be in (0.0, 1.0].")
+      .createWithDefault(0.083)
 
   val PYTHON_UDF_BUFFER_SIZE =
     buildConf("spark.sql.execution.python.udf.buffer.size")
