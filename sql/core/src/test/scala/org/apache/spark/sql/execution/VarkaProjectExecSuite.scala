@@ -534,7 +534,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     val maxRounds = 8
     val column = (0 until 1024).map(Int.box)
     val specs = Seq.fill(batchesPerRound)(BatchSpec("arrow", Seq(column)))
-    VarkaKernelEvaluator.allocationSchedule = new VarkaAllocationSampler.Schedule(1, 1)
+    VarkaEvaluatorBase.allocationSchedule = new VarkaAllocationSampler.Schedule(1, 1)
     val (plans, recorded) = try {
       VarkaJfrTestSupport.withJfrRecording(classOf[VarkaKernelAllocationEvent]) {
         val plans = Seq.newBuilder[VarkaProjectExec]
@@ -551,7 +551,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
         plans.result()
       }
     } finally {
-      VarkaKernelEvaluator.allocationSchedule = VarkaAllocationSampler.Schedule.DEFAULT
+      VarkaEvaluatorBase.allocationSchedule = VarkaAllocationSampler.Schedule.DEFAULT
     }
     val samples = recorded
       .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaKernelAllocationEvent]))

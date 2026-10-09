@@ -324,13 +324,13 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
     // (task-21 review, both passes) and routes every degradation to the fallback.
     private def process(input: ColumnarBatch): Iterator[InternalRow] = {
-      kernels.serveBatch(input) {
-        val rows = runKernels(input)
-        VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
-        rows
-      } {
-        fallback(input)
-      }
+      kernels.serveBatch[Iterator[InternalRow]](input,
+        () => {
+          val rows = runKernels(input)
+          VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
+          rows
+        },
+        () => fallback(input))
     }
 
     private def fallback(input: ColumnarBatch): Iterator[InternalRow] = {

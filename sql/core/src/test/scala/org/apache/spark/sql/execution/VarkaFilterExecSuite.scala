@@ -164,8 +164,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
       val batch = new ColumnarBatch(Array(arrowBatch.column(0), onheap))
       batch.setNumRows(3)
       val kernels = new VarkaFilterEvaluator(
-        dLess10, Seq(attrD, intAttr), offHeapColumnVectorEnabled = false,
-        operatorName = "Filter")
+        dLess10, Seq(attrD, intAttr), false, "Filter")
       assert(kernels.canRun(batch))
       val out = kernels.filterCompact(batch)
       assert(out.numRows() === 2)
