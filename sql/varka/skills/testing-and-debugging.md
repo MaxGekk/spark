@@ -699,7 +699,9 @@ A suite that must run at another width mixes in `VarkaOwnJvm`, last. In a shared
 their names and tags, and the first to run starts a child JVM running the suite and reading its
 JUnit report; the others take their result from it. A name filter (`-z`) selects the tests it
 names, but the child runs the whole suite. To run one test directly, set
-`-Dvarka.ownJvm=true` (the guard is off there). The child is ended after the shortest per-test cap
+`-Dvarka.ownJvm=true` (the guard is off there). That is also the only way to time one: in the
+replay every test reads a millisecond or so and the first carries the child's whole run, which put
+VARKA-240's eleven exhaustive sweeps at a millisecond each in the nightly's log. The child is ended after the shortest per-test cap
 less a minute (`-Dvarka.ownJvm.timeoutMinutes` overrides), so a hung child is reported before a cap
 halts the parent. Run a new width-dependent test at all three widths a runner may have
 (`-XX:MaxVectorSize=64`, `32`, `16`): a 16-lane override is the preferred width at 512 bits and a

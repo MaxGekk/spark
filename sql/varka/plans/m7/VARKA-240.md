@@ -373,12 +373,14 @@ So the sweep and the proof agree on every divisor, on one commit: the JVM runnin
 ### 9.5 Corrections
 
 * **The sweep's cost.** Sections 1 and 3.6 quoted item 58's thirteen and a half minutes for the
-  sweep. Row 283 had already made it five seconds a divisor on 4 October (`VARKA-283.md` 9), and
-  the forked division suite now runs the eleven sweeps, the census and its other tests in about two
-  minutes (2 minutes 1 second in the cycle, and 2 minutes 0 and 15 seconds in two runs after). So
-  the proof saves the nightly little; what it adds is that every pull request runs it, in the
-  linters' job, that the theorem's assertion covers every divisor rather than eleven, and a second
-  implementation for the sweep to agree with.
+  sweep. Row 283 had already made it five seconds a divisor on 4 October (`VARKA-283.md` 9).
+  Timed one test at a time with `-Dvarka.ownJvm=true`, each of the eleven sweeps takes five and a
+  half seconds and the census 29 seconds on 24 threads, so the multiply-high's share of the sweep
+  step is a minute and a half. (The nightly's log puts each sweep at a millisecond: the suite runs
+  in a JVM of its own, whose results the parent replays, charging the child's whole run to its
+  first test.) So the proof saves the nightly little; what it adds is that every pull request runs
+  it, in the linters' job, that the theorem's assertion covers every divisor rather than eleven,
+  and a second implementation for the sweep to agree with.
 * **Prediction 3** assumed a wrong constant would reach the sweep; the assertion stops it first,
   which is the stronger result.
 
