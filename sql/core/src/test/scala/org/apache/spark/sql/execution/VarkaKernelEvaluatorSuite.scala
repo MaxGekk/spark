@@ -232,7 +232,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       val byDefault = evaluator()
       byDefault.release(byDefault.project(input))
       val atTwo = new VarkaKernelEvaluator(mixedList, childOutput,
-        offHeapColumnVectorEnabled = false, operatorName = "Test", None, VarkaExecMetrics(),
+        offHeapColumnVectorEnabled = false, operatorName = "Test", None, VarkaExecMetrics.NONE,
         emitUseAVX = 2)
       atTwo.release(atTwo.project(input))
       val defaultBytes = byDefault.emittedClassBytes.get

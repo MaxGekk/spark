@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.execution
 
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkException}
@@ -77,7 +78,7 @@ case class VarkaProjectExec(
   }
 
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.projectionMetrics(sparkContext)
+    VarkaExecMetrics.projectionMetrics(sparkContext).asScala.toMap
 
   // One driver-side compilation serves both EXPLAIN and the residual-entry count below
   // (task-21 review: the node used to re-run the same pure compile per consumer).
@@ -235,12 +236,12 @@ private[sql] class VarkaProjectEvaluatorFactory(
       // with the ones it refused, because nothing fell back.
       case Some(ordinals) =>
         val batch = kernels.forwardColumns(input, ordinals)
-        varkaMetrics.varkaBatches.foreach(_ += 1)
+        VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
         batch
       case None =>
         kernels.serveBatch(input) {
           val batch = kernels.project(input)
-          varkaMetrics.varkaBatches.foreach(_ += 1)
+          VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
           batch
         } {
           fallback(input)
