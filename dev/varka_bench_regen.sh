@@ -24,7 +24,7 @@
 #   dev/varka_bench_regen.sh core VarkaLongLaneThroughputBenchmark --width=32
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --no-pin
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --pin=0-3
-#   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --sections "single op: emitted loop vs hand-written kernel"
+#   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --sections "single op: emitted loop vs hand-written kernel|datediff: emitted loop vs hand-written kernel"
 #
 # Writes three files beside each other under sql/<module>/benchmarks/:
 #   <Class>-jdk25-results.txt          the wide run, exactly as Spark's harness
@@ -59,7 +59,7 @@ module="$1"; klass="$2"; shift 2
 # after the bits it produces: 16 is the 128-bit file every benchmark commits, 32 the
 # 256-bit one a result earns when it depends on the width (VARKA-144.md 9.4).
 narrow=1; wide_run=1; force=0; pin=auto; width=16; sections=""
-# `--sections "a,b"` as two words is `--sections=a,b`.
+# `--sections "a|b"` as two words is `--sections=a|b`.
 args=()
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--sections" ] && [ "$#" -ge 2 ]; then args+=("--sections=$2"); shift 2
@@ -68,7 +68,7 @@ done
 set -- "${args[@]}"
 for a in "$@"; do
   case "$a" in
-    # Only these sections (titles, comma separated) of the wide file are replaced by the run;
+    # Only these sections (titles separated by `|`, since titles hold commas) of the wide file are replaced by the run;
     # every other section stays the committed bytes, each on the machine that measured it
     # (VARKA-256, m8/SCOPE.md item 72). The whole class still runs. The narrow companion has no
     # section rules to splice on, so it is not regenerated with this option.
@@ -198,14 +198,22 @@ if [ "$wide_run" -eq 1 ]; then
     "$module/Test/runMain $fqcn" > /dev/null
   [ -f "$wide" ] || { echo "the wide run wrote no $wide" >&2; exit 1; }
   if [ -n "$sections" ]; then
-    # The run wrote every section; keep only the named ones, spliced into the committed file.
+    # The run wrote every section; keep only the named ones, spliced into the committed file. A
+    # splice that fails (a misspelt title) must not leave the whole run on this machine in place
+    # of the committed file, which is what --sections exists to prevent: the file is restored.
     git cat-file -e "HEAD:$wide" 2>/dev/null \
       || { echo "--sections needs a committed $wide to splice into" >&2; exit 1; }
-    old_file="$(mktemp)"; new_file="$(mktemp)"
+    old_file="$(mktemp)"; new_file="$(mktemp)"; spliced="$(mktemp)"
     git show "HEAD:$wide" > "$old_file"; cp "$wide" "$new_file"
-    "$(dirname "$0")/varka_bench_sections.py" splice "$old_file" "$new_file" \
-      --sections "$sections" --out "$wide"
-    rm -f "$old_file" "$new_file"
+    if "$(dirname "$0")/varka_bench_sections.py" splice "$old_file" "$new_file" \
+        --sections "$sections" --out "$spliced"; then
+      cp "$spliced" "$wide"
+    else
+      git checkout -- "$wide" "$prov" 2>/dev/null || true
+      rm -f "$old_file" "$new_file" "$spliced"
+      echo "the splice failed; $wide is as committed" >&2; exit 1
+    fi
+    rm -f "$old_file" "$new_file" "$spliced"
     echo "sections: $sections (the rest of $wide is as committed)" >> "$prov"
   fi
 fi

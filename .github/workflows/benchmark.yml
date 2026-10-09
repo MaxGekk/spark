@@ -68,7 +68,7 @@ on:
         default: ''
       sections:
         type: string
-        description: 'Only these sections of the results files (titles, comma separated; blank for all) replace the committed ones; the others stay as committed, each on the machine that measured it. The whole class still runs.'
+        description: 'Only these sections of the results files (titles separated by `|`, since titles hold commas; blank for all) replace the committed ones; the others stay as committed, each on the machine that measured it. The whole class still runs.'
         required: false
         default: ''
       extra-java-options:

@@ -59,11 +59,7 @@ def rates(paths):
 
 def medians(runs, which):
     """{key: median of column `which` (0 the rate, 1 the ns a row) over the runs with the row}."""
-    keys = []
-    for r in runs:
-        for k in r[which]:
-            if k not in keys:
-                keys.append(k)
+    keys = dict.fromkeys(k for r in runs for k in r[which])
     return {k: statistics.median([r[which][k] for r in runs if k in r[which]]) for k in keys}
 
 
@@ -139,6 +135,12 @@ def main():
     if args.cmd == "settled":
         print("settled" if settled(ch, args.within) else "open")
         return
+    if not ch:
+        print("no row is common to both sides: nothing was compared", file=sys.stderr)
+        sys.exit(2)
+    only = len(medians(rates(args.base), 0).keys() ^ medians(rates(args.head), 0).keys())
+    if only:
+        print(f"warning: {only} rows are on one side only and were not compared", file=sys.stderr)
     slower, faster = verdicts(ch, args.threshold)
     for key, c in sorted(ch.items(), key=lambda kv: kv[1]):
         mark = "  <-- slower" if key in slower else ("  <-- faster" if key in faster else "")

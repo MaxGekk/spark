@@ -44,7 +44,7 @@ dashes not opening a section.
 
 ### 3.2 `--sections` for `dev/varka_bench_regen.sh` and `sections` for the workflow
 
-`--sections "a,b"` splices after the wide run, records the list in the provenance file, and implies
+`--sections "a|b"` splices after the wide run, records the list in the provenance file, and implies
 `--no-narrow`: the companion has no section rules. The benchmark workflow gains a `sections` input
 and runs `restore` before it tars the results, so the commit holds only the named sections.
 
@@ -146,3 +146,21 @@ cannot get a settled machine says so and does not publish numbers from an unsett
 `--sections` skips it; the section filter does not stop the rest of the class from running;
 and the workflow's `sections` input is untested on a runner (it needs a dispatch, which is the
 owner's to trigger).
+
+### 9.1 Review of #683 (`/code-review high`), 9 October 2026
+
+Findings fixed in the PR. **The separator was wrong, and the plan had called it rare**: 126 of the
+480 committed section titles hold a comma, so `--sections` named by commas could not name most
+sections of most classes (the usage example's own class has seven); titles are separated by `|` now
+(none holds one). `restore` swallowed a misspelt title and the workflow went green with nothing kept;
+it now fails when no regenerated file holds a requested title or one holds only some of them (a
+file holding none, the 128-bit companion or another class's under a wildcard, goes back to HEAD).
+A failed splice in `varka_bench_regen.sh` left the whole run on this machine in place of the
+committed file; it restores the file. Sections are matched by title with the occurrences of a repeated
+title replaced together, and a title named twice is placed once. `varka_bench_pair.sh` aborted when
+the base ref did not track the results or provenance file, and left both trees dirty on a failure or
+an interrupt; both files are restored on any exit (checked out where tracked, removed where not), the
+merge base is read after a fetch, and the script says a new base worktree needs a build.
+`varka_bench_pair.py` exited 0 with nothing compared; it exits 2 then, and warns about rows on one
+side only. Risk 2 of section 7 ("a title with a comma") was the common case.
+

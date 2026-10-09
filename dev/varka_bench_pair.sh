@@ -72,19 +72,39 @@ prov="$bdir/$klass-jdk25-provenance.txt"
 
 out="$(mktemp -d -t varka-pair.XXXXXX)"
 made_worktree=0
+# The regeneration script overwrites the results file and its provenance in the tree it runs in.
+# They are put back after every run, and on any exit or interrupt: a file tracked at the tree's
+# commit is checked out, one that is not (a base older than the benchmark) is removed.
+restore_files() {
+  local tree="$1" path
+  for path in "$wide" "$prov"; do
+    if git -C "$tree" cat-file -e "HEAD:$path" 2> /dev/null; then
+      git -C "$tree" checkout -- "$path" 2> /dev/null || true
+    else
+      rm -f "$tree/$path"
+    fi
+  done
+}
 cleanup() {
+  [ -z "${base_dir:-}" ] || restore_files "$base_dir"
+  restore_files "$head_dir"
   if [ "$made_worktree" -eq 1 ] && [ "$keep" -eq 0 ]; then
     git -C "$head_dir" worktree remove --force "$base_dir" > /dev/null 2>&1 || true
   fi
   if [ "$keep" -eq 0 ]; then rm -rf "$out"; else echo "results kept in $out"; fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 if [ -z "$base_dir" ]; then
+  # The merge base is read from a fresh origin/master, or the pair compares with an older commit
+  # than the pull request's real base.
+  git fetch -q origin master 2> /dev/null || echo "warning: could not fetch origin/master" >&2
   [ -n "$base_ref" ] || base_ref="$(git merge-base HEAD origin/master)"
   base_dir="/tmp/varka-pair-base-$$"
   git worktree add --detach "$base_dir" "$base_ref" > /dev/null
   made_worktree=1
+  echo "note: $base_dir is a new worktree and has no build; its first round compiles it" >&2
 fi
 echo "base: $(git -C "$base_dir" log -1 --format='%h %s' | cut -c1-80) ($base_dir)"
 echo "head: $(git -C "$head_dir" log -1 --format='%h %s' | cut -c1-80) ($head_dir)"
@@ -117,7 +137,7 @@ run_side() {  # side tree round
     if (cd "$tree" && "$here/varka_bench_regen.sh" "$module" "$klass" --no-narrow \
         "${passthru[@]}" > "$out/$side-$r.log" 2>&1); then
       cp "$tree/$wide" "$out/$side-$r.txt"
-      git -C "$tree" checkout -- "$wide" "$prov"
+      restore_files "$tree"
       return 0
     fi
     if grep -q "the machine is not idle\|not in its baseline state" "$out/$side-$r.log"; then

@@ -192,7 +192,7 @@ A runner regeneration rewrites every section of a class's results file on whiche
 hands out, and one regeneration on one machine cannot tell a change from the machine's day.
 Two tools (VARKA-256):
 
-* `dev/varka_bench_regen.sh <module> <Class> --sections "title one,title two"` runs the class and
+* `dev/varka_bench_regen.sh <module> <Class> --sections "title one|title two"` runs the class and
   keeps only the named sections, spliced into the committed file by
   `dev/varka_bench_sections.py`; every other section stays the committed bytes, each on the machine
   that measured it. The whole class still runs, and the 128-bit companion (which has no section
